@@ -230,8 +230,10 @@ again.
 Desktop pairing and workspace selection happen in the desktop bootstrap UI.
 `terminal start` runs fully in the CLI; use `--yes` only for automation that
 should approve each startup request once. It reports a heartbeat while the host
-is preparing and stops after 10 minutes by default; override that deadline with
-`--timeout 30s`, `--timeout 20m`, and similar durations.
+is preparing and waits until the terminal is ready; pass `--timeout 30s`,
+`--timeout 20m`, or a similar duration to stop this CLI from waiting earlier.
+The workspace supervisor owns activation, so it continues startup if the CLI
+wait ends.
 
 CLI credentials and agent sessions are stored below
 `${XDG_CONFIG_HOME:-~/.config}/vibestudio` with file mode `0600` for credential
@@ -392,6 +394,13 @@ unexpected tool failures while still returning the run ID. Local metadata and
 mode-`0600` artifacts default to
 `${XDG_CONFIG_HOME:-~/.config}/vibestudio/system-test-runs/<run-id>/`; pass
 `--out-dir` to choose another artifact root; each run gets its own subdirectory.
+When a failed run reaches its terminal summary (`run`, `rerun`, or a `status`
+that observes completion), the CLI also keeps its inspection packet, per-test
+inspection, and bounded and full trajectories of every failed test under
+`failure-evidence/` in that directory, trajectories gzipped. `inspect RUN_ID`
+(including `--test TEST`) and `trajectory RUN_ID TEST` (including `--full`)
+read that retained evidence first, so they keep working after the instance
+that ran the test is gone.
 
 The CLI control plane never holds one RPC open for a suite's lifetime. A sealed
 runner starts the durable eval and returns immediately; status, live inspection,

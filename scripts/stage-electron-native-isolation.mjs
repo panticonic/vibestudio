@@ -18,12 +18,6 @@ import path from "node:path";
 import { Arch } from "electron-builder";
 import { prepareNativeDependencyFiles } from "./native-host-dependencies.mjs";
 import {
-  stagePhononRuntime,
-  assertPhononRuntimeArtifacts,
-  phononRuntimeTarget,
-  PHONON_VENDOR_ID,
-} from "./phonon-runtime-artifacts.mjs";
-import {
   nativeIsolationTarget,
   nativeIsolationBinaryDigest,
   assertNativeIsolationArtifacts,
@@ -56,13 +50,6 @@ export function publishNativeArtifact(source, destination, executable) {
 export default async function stageElectronNativeIsolation(context) {
   if (typeof Arch[context.arch] !== "string")
     throw new Error("Unknown Electron packaging architecture");
-  phononRuntimeTarget(context.electronPlatformName, Arch[context.arch]);
-  await stagePhononRuntime(context.packager.projectDir);
-  const speechCopy = context.packager.config.extraResources?.find(
-    (entry) => typeof entry === "object" && entry.from === "dist/phonon"
-  );
-  if (!speechCopy) throw new Error("Electron packaging must copy installed speech resources");
-  speechCopy.filter = ["runtime.json", `${PHONON_VENDOR_ID}/**/*`];
   await stageNodeRuntime(
     context.packager.projectDir,
     nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch])
@@ -85,10 +72,6 @@ export default async function stageElectronNativeIsolation(context) {
 
 /** afterPack runs before signing changes the executable bytes. */
 export async function assertPackagedNativeIsolation(resources, context) {
-  await assertPhononRuntimeArtifacts(
-    path.join(resources, "app.asar.unpacked"),
-    phononRuntimeTarget(context.electronPlatformName, Arch[context.arch])
-  );
   await assertNodeRuntimeArtifacts(
     path.join(resources, "app.asar.unpacked"),
     nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch])

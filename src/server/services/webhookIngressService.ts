@@ -34,6 +34,7 @@ import {
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import type { RelayWebhookFrame, WebhookAck } from "./relayBackhaulClient.js";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
+import { sendJson } from "../hostCore/httpResponses.js";
 
 /**
  * Skew tolerance for the authenticated backhaul frame timestamp. Generous fail-loud backstop:
@@ -980,14 +981,6 @@ function sendAccepted(
     return;
   }
   sendJson(res, subscription.response.successStatus, body);
-}
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-  });
-  res.end(JSON.stringify(body));
 }
 
 async function verifyOidcJwt(

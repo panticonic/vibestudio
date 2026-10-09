@@ -167,7 +167,7 @@ export interface WorkspaceTemplateOverride {
   source: string;
 }
 
-/** Exact source declarations used to resolve this installed workspace offline. */
+/** Exact installed baselines held by the source service at publication events. */
 export interface WorkspaceTemplateInstallation {
   sources: Array<{ pin: WorkspaceTemplatePin; manifest: string }>;
   upstream?: WorkspaceTemplatePin;
@@ -268,8 +268,6 @@ export interface WorkspaceSingletonObjectDecl {
   className: string;
   /** Stable singleton object key (e.g. `"workspace-model-settings"`). */
   key: string;
-  /** Optional context binding (free-form; e.g. workspace id). */
-  contextId?: string;
 }
 
 export type WorkspaceServiceBinding = "consent" | "declared" | { declaredFor: string[] };
@@ -325,6 +323,16 @@ export type WorkspaceServiceDecl = {
     }
   | { worker: { routePath: string }; durableObject?: never }
 );
+
+/** A service exported by its owning repository's package manifest. */
+type WithoutServiceSource<T> = T extends { source: string } ? Omit<T, "source"> : never;
+export type WorkspaceServiceExport = WithoutServiceSource<WorkspaceServiceDecl>;
+
+/** Workspace selection of a named repository service export. */
+export interface WorkspaceServiceSelection {
+  source: string;
+  name: string;
+}
 
 /** One policy projection for every host path that admits a workspace service. */
 export function workspaceServiceBindingTier(
@@ -490,7 +498,6 @@ export interface WorkspaceConfig {
    */
   defaultRepo?: string;
   /** Workspace Git remote declarations */
-  git?: GitConfig;
   /**
    * Panels to create on first initialization (when panel tree is empty).
    * These panels are created as root panels in the specified order.

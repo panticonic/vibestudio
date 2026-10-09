@@ -1,24 +1,6 @@
 /** Pure bounded filesystem values shared by semantic reads and the native disk worker. */
 import path from "node:path";
 
-export interface BinaryEnvelope {
-  __bin: true;
-  data: string; // base64
-}
-
-export function isBinaryEnvelope(v: unknown): v is BinaryEnvelope {
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    (v as any).__bin === true &&
-    typeof (v as any).data === "string"
-  );
-}
-
-export function encodeBinary(buf: Buffer): BinaryEnvelope {
-  return { __bin: true, data: buf.toString("base64") };
-}
-
 export interface GrepOptions {
   /** Directory (or single file) to search, relative to the context root. */
   path?: string;

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import {
   attachedHostChildAcceptanceSchema,
   attachedHostApprovalChallengeSchema,
@@ -24,6 +24,7 @@ import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { AttachedHostBootstrapPort, AttachedHostRoutePort } from "./attachedHostController.js";
 import { AttachedHostEndpoint } from "./attachedHostProtocol.js";
 import type { AttachedHostApprovalPresenter } from "./attachedHostApprovalPresenter.js";
+import { readBoundedBody, sendJson } from "../hostCore/httpResponses.js";
 
 const MAX_ROUTE_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -428,24 +429,10 @@ async function postApprovalChallenge(
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  let size = 0;
-  const chunks: Buffer[] = [];
-  for await (const raw of req) {
-    const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-    size += chunk.length;
-    if (size > MAX_ROUTE_BODY_BYTES) {
-      throw transportError("EATTACHED_ENVELOPE", "Attached-host route body exceeds its bound");
-    }
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-}
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json");
-  res.setHeader("Cache-Control", "no-store");
-  res.end(JSON.stringify(body));
+  const body = await readBoundedBody(req, MAX_ROUTE_BODY_BYTES, () =>
+    transportError("EATTACHED_ENVELOPE", "Attached-host route body exceeds its bound")
+  );
+  return JSON.parse(body.toString("utf8")) as unknown;
 }
 
 function statusFor(code: string): number {

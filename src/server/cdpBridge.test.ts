@@ -134,7 +134,6 @@ async function createHarness(
   const port = (server.address() as AddressInfo).port;
   const bridge = new CdpBridge({
     adminToken: "admin-token",
-    externalHost: "127.0.0.1",
     port,
     ...options,
   });
@@ -233,17 +232,28 @@ describe("CdpBridge authentication", () => {
     await connectInspectionClient(harness, endpoint);
   });
 
-  it("builds public wss endpoints from the configured gateway host", async () => {
-    const harness = await createHarness({
-      protocol: "https",
-      externalHost: "vibestudio.example.com",
-      port: 443,
-    });
+  it("waits for a slow target registration and rejects when its host disconnects", async () => {
+    const harness = await createHarness();
+    const provider = await connectHostProviderOnly(harness, "desktop-host");
+    await vi.waitFor(() => expect(harness.bridge.isProviderConnected("desktop-host")).toBe(true));
+
+    const registered = harness.bridge.awaitTargetRegistered("panel:tree/slow", "desktop-host");
+    provider.send(JSON.stringify({ type: "cdp:register", targetId: "panel:tree/slow", tabId: 7 }));
+    await expect(registered).resolves.toBeUndefined();
+
+    const orphaned = harness.bridge.awaitTargetRegistered("panel:tree/never", "desktop-host");
+    const rejection = expect(orphaned).rejects.toMatchObject({ code: "cdp_host_unavailable" });
+    provider.close();
+    await rejection;
+  });
+
+  it("builds loopback ws endpoints on the gateway port", async () => {
+    const harness = await createHarness();
     await connectHostProvider(harness, "desktop-host");
 
     const endpoint = await waitForEndpoint(harness);
 
-    expect(endpoint.wsEndpoint).toBe("wss://vibestudio.example.com:443/cdp/panel:tree/browser-1");
+    expect(endpoint.wsEndpoint).toBe(`ws://127.0.0.1:${harness.port}/cdp/panel:tree/browser-1`);
   });
 
   it("does not accept legacy query-token authentication", async () => {

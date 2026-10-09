@@ -24,11 +24,15 @@ describe("runtime surface schemaRef parity", () => {
     expect(portableExports["runtime"]?.members).toContain("supervision.logs");
     expect(portableExports["runtime"]?.members).toContain("supervision.health");
   });
-  it("distinguishes a CDP refresh receipt from its replacement session", () => {
-    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("let session = await handle.cdp.session()");
-    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("session = (await session.refresh()).session");
-    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("reacquire `session.page`");
-    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("not the session itself");
+  it("documents stable CDP page rebinding and session replacement receipts", () => {
+    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain(
+      "const session = await handle.cdp.session(); const page = session.page"
+    );
+    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain(
+      "Keep the stable page across rebuild/navigation"
+    );
+    expect(PANEL_HANDLE_AUTOMATION_GUIDE).toContain("session.receipt");
+    expect(PANEL_HANDLE_AUTOMATION_GUIDE).not.toContain("session.refresh()");
   });
 
   it("every schemaRef resolves to a service-schemas source file", () => {
@@ -92,8 +96,9 @@ describe("runtime surface schemaRef parity", () => {
   it("derives the documented VCS namespace from the canonical semantic registry", () => {
     const vcs = portableExports["vcs"];
     if (!vcs) throw new Error("missing VCS runtime surface");
-    expect(VCS_MEMBERS).toEqual(Object.keys(vcsMethods));
-    expect(vcs.members).toEqual(Object.keys(vcsMethods));
+    expect(VCS_MEMBERS).toEqual([...Object.keys(vcsMethods), "publish"]);
+    expect(vcs.members).toEqual(VCS_MEMBERS);
+    expect(Object.keys(vcs.methodCatalog ?? {})).toEqual(["publish"]);
     expect(vcs.members).toContain("merge");
     expect(vcs.members).toContain("move");
     expect(vcs.members).toContain("neighbors");

@@ -43,7 +43,7 @@ test("opens publishing and installed sources in the selected workspace", async (
           ? requireE2eRootTemplate().defaultTemplates.system
           : requireE2eRootTemplate().defaultTemplates.personal;
       expect(document.template.dependencies).toEqual([{ url: expectedTemplate.url }]);
-      expect(document.template.repositories).toEqual(["meta"]);
+      expect(document.template).not.toHaveProperty("repositories");
       expect(document.template.installation.upstream).toBeUndefined();
     }
     const panels = await getPanelTree(app);

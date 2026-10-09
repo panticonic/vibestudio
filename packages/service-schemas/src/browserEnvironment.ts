@@ -124,6 +124,8 @@ const SensitiveImportStatusSchema = z
     state: z.enum(["running", "applying", "application_failed", "complete", "cancelled", "failed"]),
     counts: z.array(SensitiveImportCountSchema),
     error: z.string().optional(),
+    /** Opaque status version; pass it back as `afterVersion` to await the next change. */
+    version: z.string().min(1).max(200),
   })
   .strict();
 const ImportCategoryBreakdownSchema = z.object({
@@ -455,8 +457,15 @@ export const browserEnvironmentMethods = defineServiceMethods({
       family: "browserEnvironment.read",
       rationale: "Reads aggregate progress from the durable host import ledger.",
     },
-    description: "Observe aggregate progress or the terminal receipt for a sensitive import.",
-    args: z.tuple([z.string().min(1).max(200)]),
+    description:
+      "Observe aggregate progress or the terminal receipt for a sensitive import. With `afterVersion`, a running or applying import resolves on its next status change; any other state, or a different version, returns immediately.",
+    args: z.tuple([
+      z.string().min(1).max(200),
+      z
+        .object({ afterVersion: z.string().min(1).max(200) })
+        .strict()
+        .optional(),
+    ]),
     returns: SensitiveImportStatusSchema,
     access: { sensitivity: "read" },
     ...reviewedProviderPolicy("observeSensitiveImport", {

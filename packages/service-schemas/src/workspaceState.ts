@@ -1,3 +1,4 @@
+import { JsonObjectSchema } from "@vibestudio/shared/wireValues";
 /**
  * workspace-state service method schemas — read/write surface over slot.* and
  * entity.* on WorkspaceDO. Pure-data wire contract shared by the server
@@ -229,10 +230,7 @@ export const PanelDetailSchema = z
       .string()
       .regex(/^[0-9a-f]{64}$/u)
       .optional(),
-    iconState: z
-      .string()
-      .regex(STATE_HASH_RE)
-      .optional(),
+    iconState: z.string().regex(STATE_HASH_RE).optional(),
     slot: SlotRowSchema,
     currentHistory: SlotHistoryRowSchema,
     entity: EntityRecordSchema,
@@ -268,10 +266,7 @@ const PanelTreeNodeSchema = RawPanelTreeNodeSchema.omit({ options: true })
       .string()
       .regex(/^[0-9a-f]{64}$/u)
       .optional(),
-    iconState: z
-      .string()
-      .regex(STATE_HASH_RE)
-      .optional(),
+    iconState: z.string().regex(STATE_HASH_RE).optional(),
     kind: z.enum(["workspace", "browser"]).optional(),
     ref: z.string().nullable().optional(),
     placement: z
@@ -739,7 +734,7 @@ export const workspaceStateMethods = defineServiceMethods({
     access: { sensitivity: "write" },
     returns: SlotCommitPreparedNavigationResultSchema,
   },
-  "slot.updateCurrentStateArgs": {
+  "slot.patchCurrentStateArgs": {
     website: {
       kind: "closed",
       reason:
@@ -754,20 +749,21 @@ export const workspaceStateMethods = defineServiceMethods({
       residency: "transport",
       family: "workspace-state.builtin-rpc",
       rationale:
-        "Exact typed proxy to the builtin topology owner for one receiver-validated current-entry update",
+        "Exact typed proxy to the builtin topology owner, which merges and validates one current-entry patch",
     },
-    args: z.tuple([z.string(), z.unknown()]),
-    description: "Mutate the stateArgs for a slot's current history entry.",
+    args: z.tuple([z.string(), JsonObjectSchema]),
+    description:
+      "Apply an RFC 7386 JSON merge patch (null deletes a key) to the stateArgs of a slot's current history entry, validated against the active build's schema. Returns the resulting stateArgs.",
     authority: contextBoundaryAuthority({
       service: "workspace-state",
-      method: "slot.updateCurrentStateArgs",
+      method: "slot.patchCurrentStateArgs",
       primaryCapability: "workspace.runtime-state.manage",
       principals: ["user", "code", "host"],
       operation: "updatePanelState",
       tier: "gated",
     }),
     access: { sensitivity: "write" },
-    returns: z.void(),
+    returns: JsonObjectSchema,
   },
   "slot.move": {
     website: {

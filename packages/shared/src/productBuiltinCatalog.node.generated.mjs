@@ -688,7 +688,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         }
       },
-      "slot.updateCurrentStateArgs": {
+      "slot.patchCurrentStateArgs": {
         "website": {
           "kind": "closed",
           "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
@@ -713,7 +713,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         },
         "prepared": {
-          "resolver": "workspace-state.slot.updateCurrentStateArgs.contextBoundary",
+          "resolver": "workspace-state.slot.patchCurrentStateArgs.contextBoundary",
           "contextBoundary": {
             "operation": "updatePanelState",
             "targetArgument": 0
@@ -1595,7 +1595,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "keyMode": "workspace-scoped"
     },
     "workerd": {
-      "injectWorkspaceId": true,
       "bootstrapPhase": "first",
       "staticAuthorityProjection": true,
       "unsafeEval": false
@@ -3261,7 +3260,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         }
       },
-      "slotUpdateCurrentStateArgs": {
+      "slotPatchCurrentStateArgs": {
         "website": {
           "kind": "closed",
           "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
@@ -3286,7 +3285,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         },
         "prepared": {
-          "resolver": "workspace-state.slot.updateCurrentStateArgs.contextBoundary",
+          "resolver": "workspace-state.slot.patchCurrentStateArgs.contextBoundary",
           "contextBoundary": {
             "operation": "updatePanelState",
             "targetArgument": 0
@@ -3794,7 +3793,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "keyMode": "verified-user-workspace"
     },
     "workerd": {
-      "injectWorkspaceId": true,
       "bootstrapPhase": "normal",
       "staticAuthorityProjection": true,
       "unsafeEval": false
@@ -4511,7 +4509,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "keyMode": "caller-supplied"
     },
     "workerd": {
-      "injectWorkspaceId": true,
       "bootstrapPhase": "normal",
       "staticAuthorityProjection": true,
       "unsafeEval": true
@@ -4992,7 +4989,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "keyMode": "caller-supplied"
     },
     "workerd": {
-      "injectWorkspaceId": true,
       "bootstrapPhase": "normal",
       "staticAuthorityProjection": true,
       "unsafeEval": false

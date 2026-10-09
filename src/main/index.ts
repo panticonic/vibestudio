@@ -1,4 +1,5 @@
 import { RpcBoundaryError } from "@vibestudio/rpc/errors";
+import { CLOSE_TOKEN_REVOKED } from "@vibestudio/rpc/protocol/closeCodes";
 import { problemReportingConversation } from "@vibestudio/shared/problemReportingConversation";
 import { createAnonymousStartupCounter } from "./anonymousStartup.js";
 const countAnonymousStartup = createAnonymousStartupCounter();
@@ -71,7 +72,7 @@ import {
   peekPendingConnectLinkError,
   registerProtocol,
 } from "./protocolHandler.js";
-import { installRelaunchHandler, type RelaunchOptions } from "./relaunchApp.js";
+import { installRelaunchHandler, relaunchApp, type RelaunchOptions } from "./relaunchApp.js";
 import { requestDeveloperRelaunch } from "./developerRelaunch.js";
 import {
   startEventLoopResponsivenessMonitor,
@@ -178,7 +179,16 @@ import type { AppAvailableEvent } from "./appOrchestrator.js";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { isElectronShellChromeCaller, resolveElectronViewCaller } from "./callerResolution.js";
 import { getCentralDataPath } from "@vibestudio/env-paths";
-import { setMenuWorkspaceResolver, setMenuEventService, setMenuPanelCycler } from "./menu.js";
+import {
+  setMenuWorkspaceResolver,
+  setMenuEventService,
+  setMenuPanelCycler,
+  setMenuAboutNavigator,
+} from "./menu.js";
+import {
+  aboutPageWorkspaceRole,
+  aboutPanelSource,
+} from "@vibestudio/workspace-contracts/aboutNamespace";
 import { createPanelCycler } from "./panelCycleController.js";
 import { getAppRoot } from "./paths.js";
 import { loadCentralEnv } from "@vibestudio/workspace/loader";
@@ -397,6 +407,9 @@ const desktopWorkspaceRuntimes = new Map<string, Promise<DesktopUiWorkspaceRunti
 let abortPendingSystemRuntimeStartup: ((error: unknown) => Promise<void>) | null = null;
 let closeWorkspaceCatalogWatch: (() => Promise<void>) | null = null;
 const openNativeControllers = new Map<string, DesktopUiWorkspaceRuntime>();
+let ensureAboutOwnerWorkspace:
+  | ((role: "personal" | "system") => Promise<DesktopUiWorkspaceRuntime>)
+  | null = null;
 const adBlockManager = new AdBlockManager();
 
 let serverSession: SessionConnection | null = null;
@@ -756,7 +769,45 @@ function dispatchShellSurface(
       });
       return;
     case "about":
-      workspaceEvents?.emit("navigate-about", { page: target.page });
+      void (async () => {
+        const role = aboutPageWorkspaceRole(target.page);
+        const runtime = role
+          ? await ensureAboutOwnerWorkspace?.(role)
+          : workspaceId
+            ? openNativeControllers.get(workspaceId)
+            : undefined;
+        if (!runtime) throw new Error(`The workspace for “${target.page}” is unavailable`);
+        if (applicationWindow.focusedWorkspace !== runtime.workspaceId) {
+          applicationWindow.focusWorkspace(runtime.workspaceId);
+          const chromeWorkspaceId = serverSession?.workspaceId;
+          if (chromeWorkspaceId) {
+            activeIpcDispatcher?.sendEventToShell(chromeWorkspaceId, "workspace-focused", {
+              workspaceId: runtime.workspaceId,
+            });
+          }
+        }
+        await runtime.orchestrator.createPanel(
+          "shell",
+          aboutPanelSource(target.page),
+          target.page === "new"
+            ? {
+                isRoot: true,
+                slug: `new-${randomUUID().slice(0, 8)}`,
+                placement: { disposition: "side-if-room" },
+                focus: true,
+              }
+            : { isRoot: true, focus: true }
+        );
+      })().catch((error: unknown) => {
+        const detail = formatUnknownError(error);
+        log.warn(`[shell surface] Could not open about/${target.page}: ${detail}`);
+        if (!IS_HEADLESS_HOST && Notification.isSupported()) {
+          new Notification({
+            title: "Couldn't open page",
+            body: detail,
+          }).show();
+        }
+      });
       return;
     case "command-agent": {
       const { kind: _kind, ...request } = target;
@@ -1087,7 +1138,6 @@ async function handleCredentialSessionCaptureRequest(
 
       const completionPattern =
         typeof msg.completionUrlPattern === "string" ? msg.completionUrlPattern : undefined;
-      const timeout = 300_000;
 
       // Helper to check if cookies are captured
       const tryCaptureCredentials = async (): Promise<Record<string, unknown> | null> => {
@@ -1143,8 +1193,9 @@ async function handleCredentialSessionCaptureRequest(
           (!!webContents.getURL() && globMatches(completionPattern, webContents.getURL()));
         let captureInFlight: Promise<void> | null = null;
 
+        // A person may take as long as they need to sign in; the capture settles
+        // on success, a capture error, or the sign-in window closing.
         const cleanup = () => {
-          clearTimeout(timeoutId);
           webContents.session.cookies.off("changed", onCookiesChanged);
           webContents.off("did-navigate", onNavigate);
           webContents.off("did-navigate-in-page", onNavigate);
@@ -1194,7 +1245,6 @@ async function handleCredentialSessionCaptureRequest(
           details: Electron.Event<Electron.WebContentsDidRedirectNavigationEventParams>
         ) => markCompletionIfMatched(details.url);
         const onDestroyed = () => finish({ error: "user closed sign-in window" });
-        const timeoutId = setTimeout(() => finish({ error: "session capture timed out" }), timeout);
 
         webContents.session.cookies.on("changed", onCookiesChanged);
         webContents.on("did-navigate", onNavigate);
@@ -1212,7 +1262,7 @@ async function handleCredentialSessionCaptureRequest(
 
       return captureResult;
     } finally {
-      // Always close the panel on exit (success, timeout, or user close)
+      // Always close the panel on exit (success, capture error, or user close)
       await panelOrchestrator
         .closePanel(panel.id)
         .catch((error: unknown) =>
@@ -1690,7 +1740,7 @@ function installBootstrapConnectionHandlers(): void {
     const knownWorkspaces = centralData.listWorkspaces();
     if (knownWorkspaces.length > 0 && !centralData.hasWorkspace(name)) {
       throw new Error(
-        `No workspace named “${name}”. Choose an existing workspace; create new workspaces from the workspace manager.`
+        `No workspace named “${name}”. Pick one from the list; once it is open, create new workspaces from Switch Workspace….`
       );
     }
     log.info(`[bootstrap] Launching local workspace "${name}" by user request`);
@@ -2313,6 +2363,17 @@ app.on("ready", async () => {
     });
     return opening;
   };
+  ensureAboutOwnerWorkspace = async (role) => {
+    const session = assertPresent(serverSession);
+    const members = (await session.hubControlClient.call(
+      "hubControl",
+      "listWorkspaces",
+      []
+    )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
+    const owner = members.find((entry) => entry.privateRole === role);
+    if (!owner) throw new Error(`This server does not have a ${role} workspace`);
+    return ensureDesktopWorkspace(owner.workspaceId);
+  };
   const systemEvents: NonNullable<
     Parameters<
       typeof import("./workspaceRuntimeController.js").createDesktopWorkspaceRuntime
@@ -2363,15 +2424,15 @@ app.on("ready", async () => {
         confirmExistingLocalHub: async (lease) => {
           const { response } = await dialog.showMessageBox({
             type: "question",
-            buttons: ["Start fresh", "Connect to existing", "Cancel"],
+            buttons: ["Stop it and start over", "Reconnect", "Cancel"],
             defaultId: 1,
             cancelId: 2,
-            title: "A Vibestudio server is already running",
-            message: "Choose which local server this session should use.",
+            title: "Vibestudio is already running",
+            message: "Vibestudio is still running in the background.",
             detail:
-              `A detached Vibestudio hub is already running (PID ${lease.pid}, ` +
-              `port ${lease.gatewayPort}). Connecting to it may reuse its workspace ` +
-              "and loaded builds. Start fresh to terminate its complete process tree.",
+              "Reconnect to pick up where it left off, including any tasks that are still " +
+              "running. Stopping it ends those tasks before starting a fresh session. " +
+              `(Background process ${lease.pid}, port ${lease.gatewayPort}.)`,
           });
           if (response === 0) return "replace";
           if (response === 1) return "attach";
@@ -2401,6 +2462,18 @@ app.on("ready", async () => {
           const message = error.message || "The paired server ended this session.";
           log.error(`[connection] paired workspace session ended: ${message}`);
           workspaceConnection.end();
+          // The server revoked this device (from here or from another device):
+          // its credential can never authenticate again, so forget it and
+          // return to the chooser instead of offering a dead reconnect.
+          if ((error as { code?: unknown }).code !== CLOSE_TOKEN_REVOKED) return;
+          if (isRemoteSession) clearStoredRemotePairing();
+          if (!IS_HEADLESS_HOST) {
+            void relaunchApp().catch((relaunchError: unknown) => {
+              log.error(
+                `[connection] relaunch after device revocation failed: ${formatUnknownError(relaunchError)}`
+              );
+            });
+          }
         },
         onConnectionStatusChanged: (status) => {
           const wasRecovering = workspaceConnection.snapshot().phase === "reconnecting";
@@ -2760,6 +2833,7 @@ app.on("ready", async () => {
       return id ? (openNativeControllers.get(id) ?? null) : null;
     });
     setMenuEventService(eventService);
+    setMenuAboutNavigator((page) => dispatchShellSurface({ kind: "about", page }));
     setMenuPanelCycler(
       createPanelCycler({
         orderedWorkspaceIds: () =>
@@ -3273,17 +3347,16 @@ app.on("before-quit", (event) => {
   void (async () => {
     const { response, checkboxChecked } = await dialog.showMessageBox({
       type: "question",
-      buttons: ["Keep running", "Stop server"],
+      buttons: ["Keep running", "Quit and stop"],
       defaultId: 0,
       // Escape / closing the dialog keeps the server — never kill work on a
       // stray keypress.
       cancelId: 0,
       title: "Quit Vibestudio",
-      message: "Keep the Vibestudio hub running in the background?",
+      message: "Keep Vibestudio running in the background?",
       detail:
-        "The hub and its workspace children can keep running after you close the app so background " +
-        "tasks (like agent runs) finish and the next launch reattaches instantly — " +
-        "or stop it now. You can change this any time.",
+        "Background tasks, like agent runs, can keep going after you close the window, and " +
+        "reopening Vibestudio will be instant. Or stop everything now. You can change this any time.",
       checkboxLabel: "Remember my choice",
     });
     // A system shutdown can supersede an already-open ordinary quit dialog.

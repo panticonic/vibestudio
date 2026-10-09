@@ -1,7 +1,6 @@
 import type { RpcDestination } from "../types.js";
 import { workspaceRpcDestination } from "../destination.js";
 import {
-  decodeJsonFrame,
   IROH_WIRE_VERSION,
   IROH_CATASTROPHIC_ACTIVE_REQUEST_CEILING,
   IROH_CATASTROPHIC_LOGICAL_SESSION_CEILING,
@@ -54,6 +53,15 @@ import type {
   OAuthCallbackMode,
 } from "../protocol/wsProtocol.js";
 import { secureRandomUuid } from "../randomId.js";
+import { decodeRpcJson, encodeRpcJson } from "../wireJson.js";
+
+function decodeEnvelopeFrame(bytes: Uint8Array): unknown {
+  try {
+    return decodeRpcJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch (error) {
+    throw new Error("Invalid Iroh JSON frame", { cause: error });
+  }
+}
 
 const IROH_PROTOCOL_CLOSE_CODE = 0x200n;
 const IROH_SESSION_CLOSE_CODE = 0x201n;
@@ -289,7 +297,7 @@ class ClientSession implements IrohClientSession {
       });
       await writeFrame(
         stream.send,
-        new TextEncoder().encode(JSON.stringify(envelope)),
+        new TextEncoder().encode(encodeRpcJson(envelope)),
         MAX_ENVELOPE_FRAME_BYTES
       );
       // A request without caller cancellation ends at its bounded envelope.
@@ -479,7 +487,7 @@ class ClientSession implements IrohClientSession {
     inbound.settled = true;
     await writeChunked(
       inbound.stream.send,
-      new TextEncoder().encode(JSON.stringify(envelope)),
+      new TextEncoder().encode(encodeRpcJson(envelope)),
       MAX_STREAM_CHUNK_BYTES
     );
     await inbound.stream.send.finish();
@@ -568,7 +576,7 @@ class ClientSession implements IrohClientSession {
       });
       await writeFrame(
         stream.send,
-        new TextEncoder().encode(JSON.stringify(envelope)),
+        new TextEncoder().encode(encodeRpcJson(envelope)),
         MAX_ENVELOPE_FRAME_BYTES
       );
       requestBodyReader = body?.getReader();
@@ -694,7 +702,7 @@ class ClientSession implements IrohClientSession {
   ): Promise<void> {
     try {
       const bytes = await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES);
-      const value = decodeJsonFrame(bytes);
+      const value = decodeEnvelopeFrame(bytes);
       assertEnvelope(value);
       this.emit(value);
     } catch (error) {
@@ -1016,13 +1024,13 @@ class ClientPipe implements IrohClientPipe {
       });
       return;
     }
-    const value = decodeJsonFrame(await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES));
+    const value = decodeEnvelopeFrame(await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES));
     assertEnvelope(value);
     await session.acceptEnvelope(stream, value);
   }
 
   private async acceptMessage(session: ClientSession, stream: IrohPhysicalBiStream): Promise<void> {
-    const value = decodeJsonFrame(await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES));
+    const value = decodeEnvelopeFrame(await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES));
     assertEnvelope(value);
     await session.acceptEnvelope(stream, value);
   }

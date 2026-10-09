@@ -642,7 +642,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
-      "slot.updateCurrentStateArgs": {
+      "slot.patchCurrentStateArgs": {
         website: {
           kind: "closed",
           reason:
@@ -664,7 +664,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
         prepared: {
-          resolver: "workspace-state.slot.updateCurrentStateArgs.contextBoundary",
+          resolver: "workspace-state.slot.patchCurrentStateArgs.contextBoundary",
           contextBoundary: {
             operation: "updatePanelState",
             targetArgument: 0,
@@ -1521,7 +1521,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
       keyMode: "workspace-scoped",
     },
     workerd: {
-      injectWorkspaceId: true,
       bootstrapPhase: "first",
       staticAuthorityProjection: true,
       unsafeEval: false,
@@ -3153,7 +3152,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
-      slotUpdateCurrentStateArgs: {
+      slotPatchCurrentStateArgs: {
         website: {
           kind: "closed",
           reason:
@@ -3175,7 +3174,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
         prepared: {
-          resolver: "workspace-state.slot.updateCurrentStateArgs.contextBoundary",
+          resolver: "workspace-state.slot.patchCurrentStateArgs.contextBoundary",
           contextBoundary: {
             operation: "updatePanelState",
             targetArgument: 0,
@@ -3670,7 +3669,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
       keyMode: "verified-user-workspace",
     },
     workerd: {
-      injectWorkspaceId: true,
       bootstrapPhase: "normal",
       staticAuthorityProjection: true,
       unsafeEval: false,
@@ -4354,7 +4352,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
       keyMode: "caller-supplied",
     },
     workerd: {
-      injectWorkspaceId: true,
       bootstrapPhase: "normal",
       staticAuthorityProjection: true,
       unsafeEval: true,
@@ -4795,7 +4792,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
       keyMode: "caller-supplied",
     },
     workerd: {
-      injectWorkspaceId: true,
       bootstrapPhase: "normal",
       staticAuthorityProjection: true,
       unsafeEval: false,

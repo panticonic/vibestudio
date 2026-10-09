@@ -8,12 +8,17 @@
  */
 
 import { z } from "zod";
+import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import {
   channelEnvelopePageSchema,
   ChannelEnvelopePageRequestSchema,
 } from "@vibestudio/shared/channelEnvelopePaging";
 import type { GadRuntimeMethodName } from "@vibestudio/shared/gadRuntimeMethods";
 import { ChannelInviteSchema } from "@vibestudio/shared/channelInvites";
+import {
+  AgentInspectionRequestSchema,
+  AgentInspectionResultSchema,
+} from "@vibestudio/shared/agentInspection";
 import {
   defineServiceMethods,
   type MethodSchema,
@@ -594,11 +599,21 @@ export const AgentHealthInspectionSchema = z
     channelId: z.string(),
     branchId: z.string(),
     generatedAt: z.string(),
+    /**
+     * The calling execution's own invocation and turn in this channel, from
+     * its host-attested admission. Both are excluded from `activity`, the
+     * activity counters, and the turn/invocation rows; null when the caller
+     * is not executing inside this channel's trajectory.
+     */
+    caller: z
+      .object({ invocationId: z.string(), turnId: z.string().nullable() })
+      .strict()
+      .nullable(),
     summary: z
       .object({
-        ok: z.boolean(),
+        /** Publication, duplicate-turn, and storage invariants hold. */
         durableIntegrityOk: z.boolean(),
-        inFlightOnly: z.boolean(),
+        /** Other work open in the channel, excluding `caller`. */
         activity: z.enum(["idle", "in-flight"]),
         publicationIssues: z.number().int().nonnegative(),
         turnIntegrityIssues: z.number().int().nonnegative(),
@@ -884,6 +899,11 @@ export const InspectAgentHealthInputSchema = z
   })
   .strict();
 export type InspectAgentHealthInput = z.infer<typeof InspectAgentHealthInputSchema>;
+
+export const InspectAgentInputSchema = AgentInspectionRequestSchema.extend({
+  channelId: z.string().trim().min(1),
+}).strict();
+export type InspectAgentInput = z.infer<typeof InspectAgentInputSchema>;
 
 /** Ergonomic, portable runtime facade. Its `status` naming and scalar
  * notification results intentionally differ from the DO's
@@ -1312,6 +1332,17 @@ export const gadMethods = defineServiceMethods({
     returns: AgentHealthInspectionSchema,
     access: readAccess,
   },
+  inspectAgent: {
+    website: {
+      kind: "closed",
+      reason: "Agent inspection is admitted by the inspected channel's own channel.admin gate.",
+    } as const,
+    description:
+      "Read one agent's activation-local inspection (getDebugState, getAgentSettings, or inspectMethodSuspensions) through the channel's read-only inspectAgent receiver. participantId defaults to the channel's sole agent participant. Never invokes onMethodCall or hydrates GAD state; use chat.callMethod for in-channel RPC.",
+    args: z.tuple([InspectAgentInputSchema]),
+    returns: AgentInspectionResultSchema,
+    access: adminAccess,
+  },
   listAgentDirectory: {
     website: {
       kind: "closed",
@@ -1399,6 +1430,8 @@ const {
   listUserNotificationsForMe: publicListUserNotificationsForMe,
   acknowledgeUserNotification: publicAcknowledgeUserNotification,
   deleteUserNotification: publicDeleteUserNotification,
+  // Composed by the runtime client from the channel's own inspectAgent receiver.
+  inspectAgent: _channelInspectAgent,
   ...directGadWireMethods
 } = gadMethods;
 
@@ -1606,6 +1639,7 @@ const workspaceInitializationInputSchema = z
     commandId: nonemptyText,
     pin: workspacePinSchema,
     repositories: z.array(workspaceSnapshotRepositorySchema),
+    installation: WorkspaceTemplateInstallationSchema,
     acknowledgement: semanticAcknowledgementSchema.optional(),
   })
   .strict();
@@ -1816,6 +1850,16 @@ const forkLogResultSchema = z
 const channelInviteKeySchema = z.object({ channelId: nonemptyText, userId: nonemptyText }).strict();
 
 const gadInternalWireMethods = defineServiceMethods({
+  workspaceSourceTemplateInstallation: {
+    website: {
+      kind: "closed",
+      reason: "Installation provenance requires a reviewed source consumer.",
+    } as const,
+    description: "Read installation provenance at an exact workspace publication event.",
+    args: z.tuple([z.object({ eventId: nonemptyText }).strict()]),
+    returns: WorkspaceTemplateInstallationSchema.nullable(),
+    agentFacing: false,
+  },
   workspaceSourceInitializeExactSnapshot: {
     website: {
       kind: "closed",
@@ -2578,6 +2622,7 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
       "workspaceSourceResolve",
       "workspaceSourceCurrent",
       "workspaceSourceInspectInitialization",
+      "workspaceSourceTemplateInstallation",
       "workspaceSourceHealth",
       "vcsPendingSemanticEffects",
       "vcsContentGcRoots",

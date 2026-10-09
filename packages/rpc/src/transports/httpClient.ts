@@ -1,6 +1,7 @@
 import type { EnvelopeRpcTransport, RpcEnvelope, RpcRequest } from "../types.js";
 import { responseEnvelopeFor } from "../envelope.js";
 import { decodeFramedResponseToStreaming } from "../protocol/streamCodec.js";
+import { decodeRpcJson, encodeRpcJson } from "../wireJson.js";
 
 // Do not capture ambient network authority at module evaluation time. Library
 // bundles are routinely loaded inside confined eval realms even when the
@@ -78,10 +79,9 @@ function describeFetchCause(cause: unknown): string {
   return parts.join(" ");
 }
 
-function rpcFetchError(url: string, error: unknown, attempts?: number): Error {
-  const retryText = attempts && attempts > 1 ? ` after ${attempts} attempts` : "";
+function rpcFetchError(url: string, error: unknown): Error {
   const wrapped = new Error(
-    `RPC fetch to ${url} failed${retryText}: ${describeFetchFailure(error)}`
+    `RPC fetch to ${url} failed: ${describeFetchFailure(error)}`
   ) as Error & { cause?: unknown };
   wrapped.cause = error;
   return wrapped;
@@ -108,45 +108,33 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
   const rpcUrl = `${config.serverUrl}/rpc`;
   const streamUrl = `${config.serverUrl}/rpc/stream`;
 
+  // One POST per envelope. A request that reached the server may have taken
+  // effect, so the transport never replays it; the first failure propagates.
   async function postEnvelope(envelope: RpcEnvelope, signal?: AbortSignal): Promise<unknown> {
-    const maxRetries = 3;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      let response: Response;
-      try {
-        response = await fetchImpl(rpcUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${config.authToken}`,
-            [runtimeIdHeader]: config.selfId,
-          },
-          body: JSON.stringify(envelope),
-          signal: signal as RequestInit["signal"],
-        });
-      } catch (error) {
-        if (signal?.aborted) {
-          throw abortError(signal);
-        }
-        if (attempt < maxRetries - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 100 * Math.pow(2, attempt)));
-          continue;
-        }
-        throw rpcFetchError(rpcUrl, error, maxRetries);
+    let response: Response;
+    try {
+      response = await fetchImpl(rpcUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.authToken}`,
+          [runtimeIdHeader]: config.selfId,
+        },
+        body: encodeRpcJson(envelope),
+        signal: signal as RequestInit["signal"],
+      });
+    } catch (error) {
+      if (signal?.aborted) {
+        throw abortError(signal);
       }
-      if (response.status >= 500 && attempt < maxRetries - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 100 * Math.pow(2, attempt)));
-        continue;
-      }
-      if (response.status === 401) throw new Error("RPC authentication failed");
-      if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(
-          `RPC endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`
-        );
-      }
-      return response.json();
+      throw rpcFetchError(rpcUrl, error);
     }
-    throw new Error("RPC request failed after retries");
+    if (response.status === 401) throw new Error("RPC authentication failed");
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`RPC endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+    }
+    return decodeRpcJson(await response.text());
   }
 
   function deliverToListeners(envelope: RpcEnvelope): void {
@@ -266,7 +254,7 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
             Authorization: `Bearer ${config.authToken}`,
             [runtimeIdHeader]: config.selfId,
           },
-          body: JSON.stringify(envelope),
+          body: encodeRpcJson(envelope),
           // Cast bridges the DOM vs React-Native `AbortSignal` identity clash when this
           // module is typechecked under the RN-lib mobile program; identity under host lib.
           signal: (signal ?? undefined) as RequestInit["signal"],

@@ -1,4 +1,10 @@
-import { responseEnvelopeFor, type RpcEnvelope, type AuthenticatedCaller } from "@vibestudio/rpc";
+import {
+  decodeRpcJson,
+  encodeRpcJson,
+  responseEnvelopeFor,
+  type RpcEnvelope,
+  type AuthenticatedCaller,
+} from "@vibestudio/rpc";
 import {
   FRAME_DATA,
   FRAME_END,
@@ -118,7 +124,7 @@ export class WebSocketSessionChannel implements RpcSessionChannel {
         : data.byteLength;
       let message: WsClientMessage;
       try {
-        message = JSON.parse(data.toString()) as WsClientMessage;
+        message = decodeRpcJson(data.toString()) as WsClientMessage;
       } catch {
         this.close(4004, "Invalid message");
         return;
@@ -141,7 +147,7 @@ export class WebSocketSessionChannel implements RpcSessionChannel {
   }
 
   sendMessage(message: WsServerMessage): void {
-    this.socket.send(JSON.stringify(message));
+    this.socket.send(encodeRpcJson(message));
   }
 
   takeInboundBody(_requestId: string): undefined {

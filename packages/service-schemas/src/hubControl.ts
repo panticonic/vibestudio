@@ -185,6 +185,13 @@ export const HubDeviceSchema = z
   })
   .strict();
 
+/** Terminal outcome of one device invite's pairing lifecycle. */
+export const HubPairingOutcomeSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("paired"), device: HubDeviceSchema }).strict(),
+  z.object({ status: z.literal("expired") }).strict(),
+  z.object({ status: z.literal("cancelled") }).strict(),
+]);
+
 export const HubPresenceWorkspaceSchema = z
   .object({
     workspace: z.string(),
@@ -724,6 +731,65 @@ export const hubControlMethods = defineServiceMethods({
     returns: z.object({ serverId: z.string(), devices: z.array(HubDeviceSchema) }),
     access: readAccess,
   },
+  awaitPairing: {
+    website: {
+      kind: "closed",
+      reason:
+        "The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    capability: "devices.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View connected devices",
+      action: "view connected devices",
+      description: "See which devices are connected to your account.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "see",
+      },
+    },
+    description:
+      "Wait for a pending device invite's lifecycle to end: resolves with the paired device when the invite is redeemed, or with expired/cancelled when it ends unredeemed.",
+    args: z.tuple([z.object({ code: z.string().regex(PAIRING_CODE_PATTERN) }).strict()]),
+    returns: HubPairingOutcomeSchema,
+    access: readAccess,
+  },
+  cancelPairing: {
+    website: {
+      kind: "closed",
+      reason:
+        "The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    capability: "devices.pair",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.control",
+      rationale:
+        "G3: retiring a pending device invite changes account authority; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Cancel a device invite",
+      action: "cancel a device invite",
+      description: "Cancel a pending device invite so it can no longer be redeemed.",
+      group: "accounts",
+      authorityCategory: { domain: "people", verb: "manage" },
+    },
+    description:
+      "Cancel the pending device invite identified by its code. Resolves only after the invite has been disarmed; returns false if it was already terminal.",
+    args: z.tuple([z.object({ code: z.string().regex(PAIRING_CODE_PATTERN) }).strict()]),
+    returns: z.object({ cancelled: z.boolean() }).strict(),
+    access: writeAccess,
+  },
   revokeDevice: {
     website: {
       kind: "closed",
@@ -907,5 +973,6 @@ export const hubControlMethods = defineServiceMethods({
 export type HubWorkspaceRoute = z.infer<typeof HubWorkspaceRouteSchema>;
 export type HubDevice = z.infer<typeof HubDeviceSchema>;
 export type HubPairingInvite = z.infer<typeof HubPairingInviteSchema>;
+export type HubPairingOutcome = z.infer<typeof HubPairingOutcomeSchema>;
 export type HubReadyPayload = z.infer<typeof HubReadyPayloadSchema>;
 export type HubUserPresence = z.infer<typeof HubUserPresenceSchema>;

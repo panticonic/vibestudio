@@ -83,6 +83,8 @@ export function createProblemReportsService(deps: {
   ) => Promise<{ status: number; headerPairs: [string, string][]; body: string }>;
 }): ServiceDefinition {
   const { store, workspaceId } = deps;
+  const isHuman = (ctx: ServiceContext) =>
+    deps.isHuman ? deps.isHuman(ctx) : ctx.caller.runtime.kind === "shell";
   const checkHuman = (ctx: ServiceContext) => {
     if (deps.isHuman) {
       if (!deps.isHuman(ctx)) throw new Error("Use trusted reporting UI");
@@ -256,6 +258,36 @@ export function createProblemReportsService(deps: {
       update: (ctx, [id, revision, value]) => {
         return store.update(owner(ctx), workspaceId, id, revision, value);
       },
+      appendNarrative: (ctx, [id, revision, sections]) => {
+        const current = store.get(owner(ctx), workspaceId, id);
+        if (current.revision !== revision)
+          throw new Error("Report changed; refresh before editing");
+        const author = isHuman(ctx) ? ("user" as const) : ("agent" as const);
+        const added = sections.map((section) => ({ ...section, id: randomUUID(), author }));
+        const content = reportDraftContent(current.value);
+        const updated = store.update(owner(ctx), workspaceId, id, revision, {
+          ...content,
+          narrative: [...content.narrative, ...added],
+        });
+        return { ...updated, sectionIds: added.map((section) => section.id) };
+      },
+      patchNarrative: (ctx, [id, revision, sectionId, patch]) => {
+        const current = store.get(owner(ctx), workspaceId, id);
+        if (current.revision !== revision)
+          throw new Error("Report changed; refresh before editing");
+        const content = reportDraftContent(current.value);
+        const existing = content.narrative.find((section) => section.id === sectionId);
+        if (!existing) throw new Error("Narrative section unavailable");
+        // Authorship is provenance: an agent may revise its own sections, never the user's words.
+        if (existing.author === "user" && !isHuman(ctx))
+          throw new Error("User-written narrative can only be edited by the user");
+        return store.update(owner(ctx), workspaceId, id, revision, {
+          ...content,
+          narrative: content.narrative.map((section) =>
+            section.id === sectionId ? { ...section, ...patch } : section
+          ),
+        });
+      },
       prepare: async (ctx, [id, revision]) => {
         const report = store.get(owner(ctx), workspaceId, id);
         if (report.revision !== revision) throw new Error("Report changed; refresh preview");
@@ -298,18 +330,16 @@ export function createProblemReportsService(deps: {
           }
         }
         await decodeReport(new TextEncoder().encode(encodeReport(sanitized)));
-        // Sanitization creates the reviewed draft revision instead of changing frozen bytes behind the UI.
-        if (canonicalJson(sanitized) !== canonicalJson(report.value)) {
-          sanitized.reportRevision = revision + 1;
-          sanitized.submissionId = randomUUID();
-          store.update(owner(ctx), workspaceId, id, revision, reportDraftContent(sanitized));
-          throw new Error(
-            "Sensitive text was removed. Refresh the revised report and prepare its preview again."
-          );
-        }
-        const result = store.prepare(owner(ctx), workspaceId, id, revision);
+        // Sanitization saves the sanitized draft as its own revision, so the frozen bytes
+        // are always exactly a stored revision; that revision is what preview and send bind to.
+        const frozenRevision =
+          canonicalJson(sanitized) === canonicalJson(report.value)
+            ? revision
+            : store.update(owner(ctx), workspaceId, id, revision, reportDraftContent(sanitized))
+                .revision;
+        const result = store.prepare(owner(ctx), workspaceId, id, frozenRevision);
         deps.usage?.record(owner(ctx), "report-preview");
-        return result;
+        return { revision: frozenRevision, ...result };
       },
       send: async (ctx, [id, revision, digest]) => {
         const report = store.get(owner(ctx), workspaceId, id);
@@ -317,8 +347,7 @@ export function createProblemReportsService(deps: {
         const frozen = store.submission(owner(ctx), workspaceId, report.value.submissionId);
         if (frozen["digest"] !== digest || frozen["state"] !== "prepared")
           throw new Error("Exact prepared report unavailable");
-        const isHuman = deps.isHuman ? deps.isHuman(ctx) : ctx.caller.runtime.kind === "shell";
-        if (!isHuman) {
+        if (!isHuman(ctx)) {
           if (!deps.approveSend) throw new Error("Human reporting approval unavailable");
           if (!(await deps.approveSend(ctx, report.value, digest)))
             throw new Error("Report submission was not approved");

@@ -137,3 +137,20 @@ describe("resolveTemplate — no templates directory at all", () => {
     expect(resolved).toEqual({ htmlPath: null, framework: "vanilla" });
   });
 });
+
+describe("resolveTemplate — explicit template errors", () => {
+  it("reports a missing named template instead of falling back", () => {
+    const panel = makePanel("typo", false);
+    expect(() => resolveTemplate({ template: "svlete" }, {}, panel, sourceRoot)).toThrow(
+      /Panel declares template "svlete"/
+    );
+  });
+
+  it("reports a malformed template.json instead of guessing the framework", () => {
+    fs.writeFileSync(path.join(sourceRoot, "templates", "svelte", "template.json"), "{ nope");
+    const panel = makePanel("broken", false);
+    expect(() => resolveTemplate({ template: "svelte" }, {}, panel, sourceRoot)).toThrow(
+      /templates\/svelte\/template.json is not valid JSON/
+    );
+  });
+});

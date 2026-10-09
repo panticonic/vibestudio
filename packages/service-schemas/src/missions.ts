@@ -26,7 +26,7 @@ const executionImageSchema = z
 
 export const authorityPlanReferenceSchema = z
   .object({
-    schemaVersion: z.union([z.literal(1), z.literal(2)]),
+    schemaVersion: z.literal(2),
     digest: hex64,
     artifactRef: authorityPlanRef,
     compilerVersion: z.string().min(1).max(128),
@@ -72,11 +72,6 @@ export const missionCharterSchema = z
     trigger: triggerSchema,
   })
   .strict();
-
-/** Newly installed plans must bind their exact author and operation intent. */
-export const newAuthorityPlanReferenceSchema = authorityPlanReferenceSchema.extend({
-  schemaVersion: z.literal(2),
-});
 
 const authorityProjectionSchema = z
   .object({
@@ -249,7 +244,7 @@ const createInputSchema = z
   .object({
     name: z.string().min(1).max(200),
     charter: missionCharterSchema,
-    authorityPlan: newAuthorityPlanReferenceSchema,
+    authorityPlan: authorityPlanReferenceSchema,
   })
   .strict();
 const READERS: ServiceAuthorityPolicy = {
@@ -358,7 +353,7 @@ export const missionsMethods = defineReceiverServiceMethods({
         .object({
           name: z.string().min(1).optional(),
           charter: missionCharterSchema.optional(),
-          authorityPlan: newAuthorityPlanReferenceSchema.optional(),
+          authorityPlan: authorityPlanReferenceSchema.optional(),
         })
         .strict(),
     ]),

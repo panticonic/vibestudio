@@ -26,7 +26,7 @@ describe("panelAccessPolicy", () => {
       "openDevTools",
       "rebuildPanel",
       "updatePanelState",
-      "stateArgs.set",
+      "stateArgs.patch",
     ] as const) {
       expect(isOpenPanelOperation(op)).toBe(false);
     }

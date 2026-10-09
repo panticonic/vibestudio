@@ -125,7 +125,7 @@ export interface RpcStreamRequest {
 
 /**
  * One frame of a streaming RPC response. `frameType` is one of the
- * codes from `@vibestudio/credential-client/streamFraming`
+ * codes from `@vibestudio/rpc/protocol/streamCodec`
  * (0x01 HEAD, 0x02 DATA, 0x03 END, 0x04 ERROR). DATA payloads are
  * base64-encoded so binary content survives JSON-over-WS / IPC
  * transport. HEAD/END/ERROR payloads are JSON strings.

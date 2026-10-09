@@ -69,6 +69,8 @@ export type PairedDeviceCredential = IssuedDeviceCredential;
 export interface PairingInvite {
   code: string;
   expiresAt: number;
+  /** Account the redeemed device will belong to; absent for root bootstrap. */
+  userId?: string;
 }
 
 export interface DeviceAuthStoreOptions {
@@ -120,7 +122,7 @@ export class DeviceAuthStore {
       expiresAt,
       ...(opts?.userId ? { userId: opts.userId } : {}),
     });
-    return { code, expiresAt };
+    return { code, expiresAt, ...(opts?.userId ? { userId: opts.userId } : {}) };
   }
 
   cancelPairingInvite(code: string): boolean {

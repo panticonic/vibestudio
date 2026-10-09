@@ -167,6 +167,40 @@ describe("author-bound authority plan lifecycle", () => {
     ).rejects.toThrow(/context read authority|reachable context graph/);
   });
 
+  it("binds an omitted context-bound argument to the author's context in compile and verify", async () => {
+    const f = fixture();
+    const explicit = await f.compile();
+    const implicit: MissionExecution = {
+      ...f.execution,
+      operations: [{ service: "vcs", method: "status", use: "action" }],
+    };
+    const plan = (await f.service.handler(f.ctx, "compileAuthorityPlan", [
+      { execution: implicit },
+    ])) as { digest: string };
+    expect(plan.digest).toBe(explicit.digest);
+    const controller = createVerifiedCaller("do:workers/missions:MissionsDO:workspace", "do");
+    await expect(
+      f.verify(plan.digest, implicit, { caller: controller, invokingCaller: f.caller })
+    ).resolves.toMatchObject({ digest: plan.digest });
+    await expect(
+      f.verify(
+        plan.digest,
+        {
+          ...f.execution,
+          operations: [
+            {
+              service: "vcs",
+              method: "status",
+              args: [{ contextId: "context:foreign" }],
+              use: "action",
+            },
+          ],
+        },
+        { caller: controller, invokingCaller: f.caller }
+      )
+    ).rejects.toMatchObject({ code: "EACCES" });
+  });
+
   it("matches the immediate EvalDO author rather than the root review initiator", async () => {
     const f = fixture();
     const rootPlan = await f.compile();
@@ -299,11 +333,8 @@ describe("author-bound authority plan lifecycle", () => {
     await expect(f.verify(plan.digest, f.execution, ctx)).rejects.toMatchObject({ code: "EACCES" });
   });
 
-  it("does not accept unknown or unbound historical artifacts for a new definition", async () => {
+  it("does not accept an unknown plan", async () => {
     const f = fixture();
     await expect(f.verify("f".repeat(64))).rejects.toMatchObject({ code: "EACCES" });
-    const historical = vi.spyOn(f.store, "get").mockReturnValue({ schemaVersion: 1 } as never);
-    await expect(f.verify("a".repeat(64))).rejects.toMatchObject({ code: "EACCES" });
-    historical.mockRestore();
   });
 });

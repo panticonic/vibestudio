@@ -43,6 +43,7 @@ export class WorkspaceRpcCatalogWorkerClient {
       provider: string;
       authority: UnitAuthorityManifest;
       rpcSchemas?: Readonly<Record<string, Readonly<Record<string, WorkspaceRpcSchemaMetadata>>>>;
+      durableObjects?: boolean;
     }
   ): Promise<WorkspaceRpcMethodDoc[]> {
     const worker = this.ensureWorker();

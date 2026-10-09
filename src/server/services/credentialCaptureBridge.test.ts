@@ -1,8 +1,8 @@
 /**
  * credentialCaptureBridge unit tests — the server→shell credential-capture
  * roundtrip: happy-path emit + complete, the immediate `desktop-attachment-
- * required` failure when no shell is attached, shell-reported errors, timeout
- * (with pending-entry cleanup), abort, and unknown-id completion.
+ * required` failure when no shell is attached, shell-reported errors, shell
+ * disconnect (with pending-entry cleanup), abort, and unknown-id completion.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -13,11 +13,35 @@ import {
 } from "./credentialCaptureBridge.js";
 
 function makeEventService() {
-  const emit = vi.fn(() => true);
-  return { eventService: { emitToUser: emit } as unknown as EventService, emit };
+  const emit = vi.fn((): (() => void) | null => () => undefined);
+  return { eventService: { requestUser: emit } as unknown as EventService, emit };
 }
 
 describe("createCredentialCaptureBridge", () => {
+  it("propagates delivery failure and retires the pending capture", async () => {
+    const original = new Error("shell transport failed");
+    let captureId = "";
+    const eventService = new EventService();
+    const release = eventService.registerTransportSession({
+      callerId: "alice-desktop",
+      connectionId: "1",
+      userId: "alice",
+      callerKind: "shell",
+      send: (_event, payload) => {
+        captureId = (payload as { captureId: string }).captureId;
+        throw original;
+      },
+    });
+    try {
+      const bridge = createCredentialCaptureBridge({ eventService });
+      await expect(bridge.captureSessionCredential("alice", {})).rejects.toBe(original);
+      expect(() => bridge.completeCapture("alice", captureId, {})).toThrow(
+        "No pending credential capture"
+      );
+    } finally {
+      release();
+    }
+  });
   it("delivers only to the owner's shell, never another user or the owner's workspace code", async () => {
     const eventService = new EventService();
     const aliceShell = vi.fn();
@@ -93,7 +117,7 @@ describe("createCredentialCaptureBridge", () => {
       eventService,
     });
 
-    emit.mockReturnValue(false);
+    emit.mockReturnValue(null);
     const err = await bridge
       .captureSessionCredential("alice", { url: "x" })
       .then(() => null)
@@ -119,22 +143,34 @@ describe("createCredentialCaptureBridge", () => {
     await expect(promise).rejects.toThrow("denied");
   });
 
-  it("rejects on timeout and clears the pending entry", async () => {
+  it("waits for the person and rejects only when the addressed shell disconnects", async () => {
     vi.useFakeTimers();
+    const eventService = new EventService();
+    const shell = vi.fn();
+    const release = eventService.registerTransportSession({
+      callerId: "alice-desktop",
+      connectionId: "1",
+      userId: "alice",
+      callerKind: "shell",
+      send: shell,
+    });
     try {
-      const { eventService, emit } = makeEventService();
-      const bridge = createCredentialCaptureBridge({
-        eventService,
-        timeoutMs: 1000,
-      });
-
+      const bridge = createCredentialCaptureBridge({ eventService });
+      let settled = false;
       const promise = bridge.captureSessionCredential("alice", {});
-      const captureId = ((emit.mock.calls[0] as unknown[])![2] as Record<string, unknown>)[
-        "captureId"
-      ] as string;
+      void promise.then(
+        () => (settled = true),
+        () => (settled = true)
+      );
+      const captureId = shell.mock.calls[0]![1].captureId as string;
 
-      const assertion = expect(promise).rejects.toThrow("timed out");
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(settled).toBe(false);
+
+      const assertion = expect(promise).rejects.toMatchObject({
+        code: DESKTOP_ATTACHMENT_REQUIRED,
+      });
+      release();
       await assertion;
 
       // Pending entry is gone: completing the same id now throws.
@@ -142,6 +178,7 @@ describe("createCredentialCaptureBridge", () => {
         "No pending credential capture"
       );
     } finally {
+      release();
       vi.useRealTimers();
     }
   });

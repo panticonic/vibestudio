@@ -10,7 +10,7 @@
  *   - the parity test asserts `Object.keys(createHostedRuntime(host))` equals
  *     these keys.
  *
- * Includes `callMain` + `parent`/`getParent`/`getParentWithContract` (portable as
+ * Includes `callMain` + `getParent`/`getParentWithContract` (portable as
  * of the surface-harmonization). Does NOT include `expose` (use `rpc.expose`) or
  * the removed approval APIs. Authority acquisition is receiver-owned and is
  * not exposed as an advisory runtime namespace.
@@ -30,6 +30,7 @@ import webhooksRuntimeCatalog from "./generated/webhooksRuntimeCatalog.json";
 import workspaceServiceResolutionSchema from "./generated/workspaceServiceResolution.json";
 import { GAD_RUNTIME_METHOD_NAMES } from "@vibestudio/shared/gadRuntimeMethods";
 import { runtimeMethods } from "../runtime.js";
+import { problemReportsMethods } from "../problemReports.js";
 import {
   BLOBSTORE_METHOD_NAMES,
   GIT_INTEROP_METHOD_NAMES,
@@ -44,7 +45,7 @@ export const CREATE_PANEL_SLOT_SIGNATURE =
 
 export const PANEL_HANDLE_AUTOMATION_GUIDE =
   "The returned PanelHandle is the complete lifecycle and inspection API. " +
-  "Use `let session = await handle.cdp.session(); const page = session.page` for multi-step automation. The session records the immutable panel generation; after rebuild/navigation call `session = (await session.refresh()).session` and reacquire `session.page` instead of replaying an uncertain action. refresh() returns a receipt with status (current, reconnected, or replaced) and session, not the session itself. For a one-off read, `await handle.cdp.page()` remains available and returns a Promise, not a page proxy. " +
+  "Use `const session = await handle.cdp.session(); const page = session.page` for automation. Keep the stable page across rebuild/navigation; its next awaited operation rebinds without replaying the interrupted action. `session.receipt` reports acquired, reconnected, or replaced generations. " +
   'For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. ' +
   "For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate).";
 
@@ -286,6 +287,7 @@ export const CREDENTIALS_MEMBERS = [
   "store",
   "connect",
   "beginWebsitePublication",
+  "recordWebsitePublication",
   "configureClient",
   "requestCredentialInput",
   "getClientConfigStatus",
@@ -307,14 +309,42 @@ export const BROWSER_DATA_MEMBERS = Object.keys(browserDataRuntimeCatalog);
 
 export const GIT_MEMBERS = [...GIT_INTEROP_METHOD_NAMES];
 
-export const VCS_MEMBERS = [...VCS_METHOD_NAMES];
+export const VCS_MEMBERS = [...VCS_METHOD_NAMES, "publish"];
+
+/** Runtime-only VCS composite documented beside the semantic service schema. */
+const VCS_RUNTIME_ONLY_METHOD_CATALOG = {
+  publish: {
+    signature:
+      'publish(input?: { contextId?, message?, intentSummary? }): Promise<{ status: "published", contextId, commit, push } | { status: "integration-required", code: "IntegrationRequired", contextId, mainRelation, mainEventId, compare: { target, source } }>',
+    description:
+      "Read status once, commit the uncommitted chain when there is one, and push the committed event against the observed protected main. Push keeps its build gate and publication approval. When main is behind or diverged it returns IntegrationRequired with the compare to review and changes nothing; it never merges.",
+    argumentNames: ["input"],
+  },
+};
 
 export const VCS_DESCRIPTION =
   "Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, directly walkable provenance, and atomic external-snapshot acknowledgements containing the committed event/application/work-unit/repository/snapshot tuple.";
 
-export const GAD_MEMBERS = [...GAD_RUNTIME_METHOD_NAMES];
+export const GAD_MEMBERS = [...GAD_RUNTIME_METHOD_NAMES, "collectChannelEnvelopePages"];
 
-export const BLOBSTORE_MEMBERS = [...BLOBSTORE_METHOD_NAMES, "putBytes", "getBytes", "readText"];
+/** Runtime-only GAD helper documented beside the generated service catalog. */
+const GAD_RUNTIME_ONLY_METHOD_CATALOG = {
+  collectChannelEnvelopePages: {
+    signature:
+      'collectChannelEnvelopePages(input: { channelId, window?, payloadKind? }, options: { maximumItems: number | "all"; pageSize?: number }, readPage: gad.inspectChannelEnvelopes | gad.readChannelEnvelopes): Promise<Array<{ items, pageInfo }>>',
+    description:
+      "Follow pageInfo.previous (tail/before) or pageInfo.next (after) through bounded pages until maximumItems are collected or the window is exhausted, returning the pages in ascending sequence order. Forward collection stays bound to the first page's snapshot watermark; a store that claims more data without progress fails instead of looping.",
+    argumentNames: ["input", "options", "readPage"],
+  },
+};
+
+export const BLOBSTORE_MEMBERS = [
+  ...BLOBSTORE_METHOD_NAMES,
+  "putBytes",
+  "getBytes",
+  "readText",
+  "putPathTree",
+];
 
 export const WEBHOOKS_MEMBERS = [
   "createSubscription",
@@ -323,7 +353,7 @@ export const WEBHOOKS_MEMBERS = [
   "rotateSecret",
 ];
 
-export const EXTENSIONS_MEMBERS = ["use", "invoke", "invokeProvider", "on"];
+export const EXTENSIONS_MEMBERS = ["use", "invoke", "invokeProvider", "on", "status", "update"];
 export const NOTIFICATIONS_MEMBERS = ["show", "dismiss"];
 export const PANEL_TREE_MEMBERS = [
   "self",
@@ -333,6 +363,7 @@ export const PANEL_TREE_MEMBERS = [
   "rootsForOwner",
   "children",
   "page",
+  "walk",
   "path",
   "search",
   "parent",
@@ -550,6 +581,27 @@ export const PANEL_TREE_METHOD_CATALOG = {
       additionalProperties: false,
     },
   },
+  walk: {
+    signature:
+      "walk(rootSlotId: string, options: { limit: number }): AsyncIterableIterator<PanelRuntimeTreeWalkEntry>",
+    description:
+      "Breadth-first async iterator over the descendants of rootSlotId (root excluded), yielding at most `limit` entries of { node, handle, depth }. It follows cursors itself and, when the tree revision changes mid-walk, restarts from the root without yielding a slot twice. Receiving `limit` entries means the subtree may hold more.",
+    argumentNames: ["rootSlotId", "options"],
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        { type: "string", description: "Exact slot id of the subtree root." },
+        {
+          type: "object",
+          properties: { limit: { type: "integer", minimum: 1 } },
+          required: ["limit"],
+          additionalProperties: false,
+        },
+      ],
+      minItems: 2,
+      maxItems: 2,
+    },
+  },
   path: {
     signature: "path(id: string): Promise<PanelRuntimeTreePath | null>",
     argumentNames: ["id"],
@@ -640,7 +692,8 @@ export const PANEL_TREE_METHOD_CATALOG = {
             stateArgs: { type: "object", additionalProperties: true },
             signal: {
               type: "object",
-              description: "AbortSignal that cancels readiness observation after navigation commits.",
+              description:
+                "AbortSignal that cancels readiness observation after navigation commits.",
             },
           },
           additionalProperties: false,
@@ -694,7 +747,6 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "Per-context filesystem sandbox. Paths are context-root-relative. The semantic workspace records managed mutations before projection; moves preserve file identity and copies mint a new identity with exact copy provenance. Tracked-to-scratch renames, managed empty-directory mkdir, and open with write flags are rejected. Scratch mkdir and utimes remain direct filesystem operations. Platform-excluded paths and paths outside reserved workspace source roots are local scratch."
   ),
   callMain: valueEntry('Call a `main` (server) service method: callMain("fs.readFile", path).'),
-  parent: valueEntry("This runtime's parent panel handle (a no-panel handle when there is none)."),
   getParent: valueEntry("Get the parent panel handle, or null when there is no parent."),
   getParentWithContract: valueEntry("Get the parent handle typed by a panel contract, or null."),
   doTargetId: valueEntry("Build a unified RPC target ID for a Durable Object reference."),
@@ -751,12 +803,12 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "gitInterop",
     gitRuntimeCatalog
   ),
-  vcs: namespaceEntry(VCS_MEMBERS, VCS_DESCRIPTION, "vcs"),
+  vcs: namespaceEntry(VCS_MEMBERS, VCS_DESCRIPTION, "vcs", VCS_RUNTIME_ONLY_METHOD_CATALOG),
   gad: namespaceEntry(
     GAD_MEMBERS,
     "Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging.",
     undefined,
-    gadRuntimeCatalog
+    { ...gadRuntimeCatalog, ...GAD_RUNTIME_ONLY_METHOD_CATALOG }
   ),
   images: namespaceEntry(
     [
@@ -778,9 +830,28 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     ],
     "Workspace image assets and durable generation jobs. generate({requestId,prompt,references?,artDirection?}) returns a job; wait(job.id) observes completion. Store the resulting immutable asset reference in application state. GeneratedImage from @workspace/react displays assets in running panels without rebuilding. getBytes performs authenticated reads for custom renderers. retain/release manage application ownership; art direction versions provide reusable style briefs and reference assets."
   ),
+  missions: namespaceEntry(
+    [
+      "overview",
+      "list",
+      "get",
+      "getDefault",
+      "listRuns",
+      "getRun",
+      "launch",
+      "provisionDefault",
+      "edit",
+      "runNow",
+      "cancel",
+      "pause",
+      "resume",
+      "retire",
+    ],
+    "Durable automations (vibestudio.missions.v1). launch({name, charter}) and edit(missionId, {name?, charter?}) compile the charter's authority plan as the calling author, then call the missions controller, which verifies that plan; never compile by hand. edit recompiles only when the execution changes or a seeded default is customized. overview/list/get/listRuns/getRun read the ledger; runNow/cancel/pause/resume/retire control one automation. Agents launching work for themselves use the launch_automation tool instead."
+  ),
   blobstore: namespaceEntry(
     BLOBSTORE_MEMBERS,
-    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string | null. Runtime-only putBytes(Uint8Array | ArrayBuffer) and getBytes(digest) losslessly bridge the wire's base64 representation; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees.",
+    'Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string | null. Runtime-only putBytes(Uint8Array | ArrayBuffer) and getBytes(digest) losslessly bridge the wire\'s base64 representation; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putPathTree({ "a/b.txt": text | bytes | { digest } }, opts?) stores a nested tree in one call; putTree/getTree store and read single tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees.',
     "blobstore"
   ),
   webhooks: namespaceEntry(
@@ -799,9 +870,14 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     templatesRuntimeCatalog
   ),
   notifications: namespaceEntry(NOTIFICATIONS_MEMBERS, undefined, "notification"),
+  problemReports: namespaceEntry(
+    Object.keys(problemReportsMethods),
+    "Local problem reports owned by the calling user. create a manual draft, appendNarrative/patchNarrative with host-assigned section IDs and caller-derived authorship, prepare to freeze sanitized bytes (returns { revision, submissionId, digest, bytes }), and send(reportId, revision, digest) to request upload; agent callers wait for a one-time human approval of that exact report. Consent and other trusted-human controls reject agent callers.",
+    "problemReports"
+  ),
   panelTree: namespaceEntry(PANEL_TREE_MEMBERS, undefined, undefined, PANEL_TREE_METHOD_CATALOG),
   services: valueEntry(
-    "Portable dynamic service namespace. Rich runtime clients are available by name; other services dispatch through the caller-scoped main service boundary. The client contract is shared by panels, workers, Durable Objects, and eval; Durable Objects bind clients to their own instance RPC."
+    "Portable raw service namespace: services.<svc>.<method>(...) is always the server service <svc>, dispatched through the caller-scoped main service boundary, even when a runtime binding shares the name (services.blobstore is the raw blobstore service, the blobstore binding is the curated client). The client contract is shared by panels, workers, Durable Objects, and eval; Durable Objects bind clients to their own instance RPC."
   ),
   hosts: valueEntry("Portable owner-scoped attached-host access for development sessions."),
   runtime: namespaceEntry(

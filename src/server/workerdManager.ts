@@ -65,7 +65,6 @@ import type { WorkerdPerformanceSnapshot } from "@vibestudio/service-schemas/hos
 import { UNIVERSAL_DO_UNIQUE_KEY, internalDoUniqueKey } from "./workerdStorageIdentity.js";
 
 const log = createDevLogger("WorkerdManager");
-const DEFAULT_WORKERD_STARTUP_READY_TIMEOUT_MS = 15_000;
 // Process signals normally settle immediately. These are catastrophic
 // containment fallbacks, not lifecycle budgets: give workerd ample time to
 // drain durable work before escalating, and ample time for the kernel to reap
@@ -148,6 +147,32 @@ function forwardDiagnosticEnv(env: Record<string, unknown>): void {
     const value = process.env[key];
     if (value) env[key] = value;
   }
+}
+
+/** The workerd runtime target every user worker and DO module is built for. */
+const USER_CODE_COMPATIBILITY = {
+  compatibilityDate: "2025-12-01",
+  compatibilityFlags: ["nodejs_compat"],
+  mainModule: "worker.js",
+} as const;
+
+/** Env every loaded user worker and DO receives regardless of its kind. */
+function addSharedRuntimeEnv(
+  env: Record<string, unknown>,
+  gatewayAliases: readonly string[]
+): void {
+  if (process.env["VIBESTUDIO_TEST_MODE"]) {
+    env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
+    if (
+      process.env["VIBESTUDIO_TEST_MODE"] === "1" &&
+      process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"]
+    ) {
+      env["VIBESTUDIO_TEST_MODEL_SCRIPT"] = process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"];
+    }
+  }
+  forwardDiagnosticEnv(env);
+  // Loaded code receives parsed values, matching workerd `json` bindings.
+  if (gatewayAliases.length > 0) env["GATEWAY_URL_ALIASES"] = [...gatewayAliases];
 }
 
 function explicitScopeRef(explicitRef?: string): string | undefined {
@@ -434,8 +459,6 @@ export interface WorkerdManagerDeps {
   /** Process-owned secret bound into worker hosts and checked by shared egress. */
   egressSecret: string;
   getWorkerdGatewayToken: () => string;
-  /** Override for tests; production uses the default router readiness window. */
-  workerdStartupReadyTimeoutMs?: number;
   /** Overrides for tests; production uses the default SIGTERM/SIGKILL windows. */
   workerdStopTimeoutsMs?: { sigtermMs?: number; sigkillMs?: number };
   cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
@@ -1909,23 +1932,10 @@ export class WorkerdManager {
       GATEWAY_URL: this.deps.getServerUrl(),
       WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
     };
-    if (process.env["VIBESTUDIO_TEST_MODE"]) {
-      env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
-      if (
-        process.env["VIBESTUDIO_TEST_MODE"] === "1" &&
-        process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"]
-      ) {
-        env["VIBESTUDIO_TEST_MODEL_SCRIPT"] = process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"];
-      }
-    }
-    forwardDiagnosticEnv(env);
+    addSharedRuntimeEnv(env, this.deps.getServerAliasUrls?.() ?? []);
     if (instance.parentId) env["PARENT_ID"] = instance.parentId;
     if (instance.parentEntityId) env["PARENT_ENTITY_ID"] = instance.parentEntityId;
     if (instance.parentKind) env["PARENT_KIND"] = instance.parentKind;
-    const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
-    if (gatewayAliases.length > 0) {
-      env["GATEWAY_URL_ALIASES"] = [...gatewayAliases];
-    }
     if (instance.stateArgs && Object.keys(instance.stateArgs).length > 0) {
       env["STATE_ARGS"] = instance.stateArgs;
     }
@@ -1940,9 +1950,8 @@ export class WorkerdManager {
     }
 
     return {
-      compatibilityDate: "2025-12-01",
-      compatibilityFlags: ["nodejs_compat"],
-      mainModule: "worker.js",
+      ...USER_CODE_COMPATIBILITY,
+      compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
       modules,
       env,
       callerId: instance.callerId,
@@ -2079,9 +2088,8 @@ export class WorkerdManager {
     const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
     if (probe && probe.source === source && probe.className === className) {
       return {
-        compatibilityDate: "2025-12-01",
-        compatibilityFlags: ["nodejs_compat"],
-        mainModule: "worker.js",
+        ...USER_CODE_COMPATIBILITY,
+        compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
         modules: probe.modules,
         ...(probe.wasmModules ? { wasmModules: probe.wasmModules } : {}),
         env: {
@@ -2150,29 +2158,15 @@ export class WorkerdManager {
       | undefined;
     if (schemaDescriptor)
       env["VIBESTUDIO_SCHEMA_DESCRIPTOR"] = JSON.parse(schemaDescriptor.descriptor_json);
-    if (process.env["VIBESTUDIO_TEST_MODE"]) {
-      env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
-      if (
-        process.env["VIBESTUDIO_TEST_MODE"] === "1" &&
-        process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"]
-      ) {
-        env["VIBESTUDIO_TEST_MODEL_SCRIPT"] = process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"];
-      }
-    }
-    forwardDiagnosticEnv(env);
+    addSharedRuntimeEnv(env, this.deps.getServerAliasUrls?.() ?? []);
     if (this.port) env["WORKERD_URL"] = `http://127.0.0.1:${this.port}`;
-    const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
-    if (gatewayAliases.length > 0) {
-      env["GATEWAY_URL_ALIASES"] = JSON.stringify(gatewayAliases);
-    }
     if (objectBuild?.stateArgs && Object.keys(objectBuild.stateArgs).length > 0) {
       env["STATE_ARGS"] = objectBuild.stateArgs;
     }
 
     return {
-      compatibilityDate: "2025-12-01",
-      compatibilityFlags: ["nodejs_compat"],
-      mainModule: "worker.js",
+      ...USER_CODE_COMPATIBILITY,
+      compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
       modules,
       ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
       env,
@@ -2268,11 +2262,8 @@ export class WorkerdManager {
         // Session ID for restart detection (changes on each WorkerdManager lifetime)
         { name: "WORKERD_SESSION_ID", text: this.sessionId },
         { name: "WORKERD_BOOT_GENERATION", text: String(this.configBootGeneration()) },
+        { name: "WORKSPACE_ID", text: this.deps.workspaceId },
       ];
-
-      if (builtin.workerd.injectWorkspaceId) {
-        bindings.push({ name: "WORKSPACE_ID", text: this.deps.workspaceId });
-      }
 
       // Gateway URL for RPC bridge (DOs use HttpRpcBridge via POST /rpc)
       bindings.push({ name: "GATEWAY_URL", text: this.deps.getServerUrl() });
@@ -3033,8 +3024,10 @@ export class WorkerdManager {
     // must not race ahead until the router accepts HTTP.
     await new Promise<void>((resolve, reject) => {
       let settled = false;
+      const readinessAbort = new AbortController();
 
       const onExit = (code: number | null, signal: string | null) => {
+        readinessAbort.abort(new Error(`workerd exited before readiness (${code}, ${signal})`));
         this.logWorkerdExit(code, signal, spawnedPid);
         if (this.process === spawnedProcess) this.process = null;
         if (!settled) {
@@ -3048,6 +3041,7 @@ export class WorkerdManager {
       };
 
       const onError = (err: Error) => {
+        readinessAbort.abort(err);
         log.error("workerd process error:", err);
         if (this.process === spawnedProcess) this.process = null;
         if (!settled) {
@@ -3059,9 +3053,9 @@ export class WorkerdManager {
       spawnedProcess.on("exit", onExit);
       spawnedProcess.on("error", onError);
 
-      this.waitForHttpReady(
-        this.deps.workerdStartupReadyTimeoutMs ?? DEFAULT_WORKERD_STARTUP_READY_TIMEOUT_MS
-      ).then(
+      // Probe until the router answers; the process exiting or erroring is
+      // the only terminal failure, so a slow start is never misreported.
+      this.waitForHttpReady(() => settled, readinessAbort.signal).then(
         () => {
           if (settled) return;
           settled = true;
@@ -3647,33 +3641,36 @@ export class WorkerdManager {
     await this.ensureDOClass(source, className, { scopeRef, objectKey });
   }
 
-  private async waitForHttpReady(timeoutMs = 5_000): Promise<void> {
+  /** Probe the router until it accepts HTTP or `abandoned()` reports the spawn settled. */
+  private async waitForHttpReady(abandoned: () => boolean, signal: AbortSignal): Promise<void> {
     if (!this.port) {
       throw new Error("workerd has no assigned port");
     }
-    const deadline = Date.now() + timeoutMs;
-    let lastError: unknown;
-    while (Date.now() < deadline) {
+    while (!abandoned()) {
+      let response: Response;
       try {
-        const response = await fetch(`http://127.0.0.1:${this.port}/__vibestudio_workerd_ready`, {
+        response = await fetch(`http://127.0.0.1:${this.port}/__vibestudio_workerd_ready`, {
           method: "GET",
+          signal,
           headers: {
             Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
           },
         });
-        await response.arrayBuffer().catch(() => undefined);
-        if (response.ok) return;
-        lastError = new Error(`workerd readiness returned HTTP ${response.status}`);
-      } catch (err) {
-        lastError = err;
+      } catch {
+        // Not accepting connections yet; exit/error settle the spawn instead.
+        if (abandoned()) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        continue;
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await response.arrayBuffer().catch(() => undefined);
+      if (response.status !== 204) {
+        // Receiving an HTTP response means the listener is up, so a response
+        // other than the router's readiness status is a configuration or
+        // routing failure rather than a reason to keep probing indefinitely.
+        throw new Error(`workerd readiness returned HTTP ${response.status} (expected 204)`);
+      }
+      return;
     }
-    throw new Error(
-      `workerd did not accept HTTP on port ${this.port} within ${timeoutMs}ms; last readiness error: ${
-        lastError ? errorMessage(lastError) : "none"
-      }`
-    );
   }
 
   /** Admit the schema of the exact executable before its first entity activation. */

@@ -393,7 +393,7 @@ describe("initWorkspace", () => {
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.writeFileSync(path.join(workspaceDir, "operator-data.txt"), "keep");
 
-    expect(() => resolveOrCreateWorkspace({ name: "partial", appRoot: root, init: true })).toThrow(
+    expect(() => resolveOrCreateWorkspace({ name: "partial", appRoot: root })).toThrow(
       /vibestudio\.yml is missing.*existing files were not changed/i
     );
     expect(fs.readFileSync(path.join(workspaceDir, "operator-data.txt"), "utf-8")).toBe("keep");
@@ -626,7 +626,6 @@ describe("resolveOrCreateWorkspace", () => {
       const resolved = resolveOrCreateWorkspace({
         name: "interrupted",
         appRoot: root,
-        init: true,
       });
 
       expect(resolved.created).toBe(true);
@@ -645,7 +644,7 @@ describe("resolveOrCreateWorkspace", () => {
       fs.writeFileSync(recoveryFile, "important\n");
 
       expect(() =>
-        resolveOrCreateWorkspace({ name: "occupied", appRoot: root, init: true })
+        resolveOrCreateWorkspace({ name: "occupied", appRoot: root })
       ).toThrow(/existing files were not changed/);
       expect(fs.readFileSync(recoveryFile, "utf8")).toBe("important\n");
     }

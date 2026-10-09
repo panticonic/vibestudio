@@ -1,129 +1,67 @@
 import { WorkspaceAppCompatibilitySchema } from "@vibestudio/workspace-contracts/appCompatibility";
-import { mergeTemplateManifests, type TemplateManifestLayer } from "./templateManifestMerge.js";
+import {
+  mergeTemplateManifests,
+  MERGED_RECORD_SETTINGS,
+  type TemplateManifestLayer,
+} from "./templateManifestMerge.js";
 import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
 import YAML from "yaml";
+import { discoverRepos } from "@vibestudio/shared/runtime/repoDiscovery";
+import { normalizeWorkspaceRepoPath, splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { sortForCanonicalJson } from "@vibestudio/content-addressing";
 import {
   WorkspaceTemplateAuthoringMetadataSchema,
   WorkspaceConfigTopLayerSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
-  WorkspaceConfig,
   WorkspaceTemplateOverride,
   WorkspaceTemplateInstallation,
   WorkspaceTemplateDependency,
   WorkspaceTemplatePresentation,
 } from "@vibestudio/workspace-contracts/types";
 import { TEMPLATE_SOURCE_MANIFEST_PATH } from "./templateCoordinates.js";
-import { normalizeRemoteUrl, validateWorkspaceGitConfig } from "./remotes.js";
 
 type ParsedTopLayer = ReturnType<typeof WorkspaceConfigTopLayerSchema.parse>;
 
-export interface TemplateRepositoryInventory {
-  repositories: string[];
-}
-
 export interface ParsedTemplateManifest {
   top: ParsedTopLayer;
-  inventory: TemplateRepositoryInventory;
   /** Templates this one is built on, in declaration order. Empty when it stands alone. */
   dependencies: WorkspaceTemplateDependency[];
   overrides?: WorkspaceTemplateOverride[];
-  installation?: WorkspaceTemplateInstallation;
   presentation?: WorkspaceTemplatePresentation;
 }
 
-function uniqueSortedPaths(paths: readonly string[], label: string): string[] {
-  const unique = new Set(paths);
-  if (unique.size !== paths.length) throw new Error(`${label} contains duplicate paths`);
-  return [...unique].sort();
-}
-
-/**
- * Prove that every released byte has exactly one manifest owner. The source
- * manifest is intrinsic to the format; all other paths must belong to one
- * declared semantic repository.
- */
-export function validateTemplateSnapshotInventory(
-  inventory: TemplateRepositoryInventory,
-  snapshotPaths: readonly string[]
-): void {
-  for (const [index, repository] of inventory.repositories.entries()) {
-    for (const other of inventory.repositories.slice(index + 1)) {
-      if (repository.startsWith(`${other}/`) || other.startsWith(`${repository}/`)) {
-        throw new Error(`template.repositories overlap: ${repository} and ${other}`);
-      }
-    }
-  }
-  const paths = new Set(snapshotPaths);
-  if (!paths.has(TEMPLATE_SOURCE_MANIFEST_PATH)) {
+/** Validate the exact source layout and derive its repository membership. */
+export function templateRepositories(snapshotPaths: readonly string[]): string[] {
+  if (!snapshotPaths.includes(TEMPLATE_SOURCE_MANIFEST_PATH))
     throw new Error(`template snapshot is missing required ${TEMPLATE_SOURCE_MANIFEST_PATH}`);
-  }
-  for (const repository of inventory.repositories) {
-    const prefix = `${repository}/`;
-    if (![...paths].some((file) => file.startsWith(prefix))) {
-      throw new Error(`template.repositories declares empty or missing repository ${repository}`);
-    }
-  }
-  const unowned = [...paths].filter(
+  const unowned = snapshotPaths.filter(
     (file) =>
-      file !== TEMPLATE_SOURCE_MANIFEST_PATH &&
-      !inventory.repositories.some((repository) => file.startsWith(`${repository}/`))
+      file.startsWith("/") ||
+      file.includes("\\") ||
+      file.includes("\0") ||
+      file.split("/").some((segment) => segment === "" || segment === "." || segment === "..") ||
+      !splitRepoPath(file)?.repoRelPath
   );
-  if (unowned.length > 0) {
-    throw new Error(`template snapshot contains undeclared paths: ${unowned.sort().join(", ")}`);
-  }
+  if (unowned.length)
+    throw new Error(
+      `template snapshot contains paths outside repository layout: ${unowned.sort().join(", ")}`
+    );
+  return discoverRepos([...snapshotPaths]).map(({ repoPath }) =>
+    normalizeWorkspaceRepoPath(repoPath)
+  );
 }
 
 export function canonicalTemplateYaml(value: unknown): string {
   return YAML.stringify(sortForCanonicalJson(value), { lineWidth: 0, sortMapEntries: true });
 }
 
-function runtimeManifest(top: ParsedTopLayer): Omit<WorkspaceConfig, "id"> {
-  const { template: _template, git, ...accepted } = top;
-  const upstreams =
-    git?.upstreams === undefined
-      ? undefined
-      : Object.fromEntries(
-          Object.entries(git.upstreams).map(([section, repositories]) => [
-            section,
-            Object.fromEntries(
-              Object.entries(repositories).map(([repo, upstream]) => {
-                const {
-                  authorEmail: _authorEmail,
-                  authorName: _authorName,
-                  ...portable
-                } = upstream;
-                return [repo, portable];
-              })
-            ),
-          ])
-        );
-  return {
-    ...accepted,
-    ...(git === undefined
-      ? {}
-      : {
-          git: {
-            ...(git.remotes === undefined ? {} : { remotes: git.remotes }),
-            ...(upstreams === undefined ? {} : { upstreams }),
-          },
-        }),
-  } as Omit<WorkspaceConfig, "id">;
-}
-
-/** Project one self-contained source manifest into its runtime form. */
+/** Project authored workspace settings into the resolved runtime document. */
 export function rootRuntimeFromTemplateManifest(
   manifest: ParsedTemplateManifest
-): Omit<WorkspaceConfig, "id"> {
-  const projected = structuredClone(runtimeManifest(effectiveTemplateManifest(manifest).top));
-  validateWorkspaceGitConfig(projected.git);
-  for (const repositories of Object.values(projected.git?.remotes ?? {})) {
-    for (const remotes of Object.values(repositories)) {
-      for (const remote of Object.values(remotes)) remote.url = normalizeRemoteUrl(remote.url);
-    }
-  }
-  return projected;
+): Omit<ParsedTopLayer, "template"> {
+  const { template: _template, ...runtime } = manifest.top;
+  return structuredClone(runtime);
 }
 
 export function parseTemplateManifestContent(
@@ -135,8 +73,9 @@ export function parseTemplateManifestContent(
     throw new Error("template manifest must be a mapping");
   }
   const raw = document as Record<string, unknown>;
-  const authoring = WorkspaceTemplateAuthoringMetadataSchema.parse(raw["template"]);
-  const repositories = uniqueSortedPaths(authoring.repositories, "template.repositories");
+  const authoring = WorkspaceTemplateAuthoringMetadataSchema.parse(
+    raw["template"] === undefined ? {} : raw["template"]
+  );
   const top = WorkspaceConfigTopLayerSchema.parse({
     ...raw,
     template: {
@@ -152,10 +91,8 @@ export function parseTemplateManifestContent(
   }
   return {
     top,
-    inventory: { repositories },
     dependencies: authoring.dependencies ?? [],
     overrides: authoring.overrides ?? [],
-    ...(authoring.installation ? { installation: authoring.installation } : {}),
     ...(top.template === undefined ? {} : { presentation: top.template }),
   };
 }
@@ -172,24 +109,6 @@ export function readTemplateManifest(input: {
   );
 }
 
-/** The authoritative document contains authored settings plus exact dependency declarations.
- * Effective settings are calculated, never written over the authored layer. */
-export function effectiveTemplateManifest(
-  manifest: ParsedTemplateManifest
-): ParsedTemplateManifest {
-  if (!manifest.installation) return manifest;
-  const { upstream } = manifest.installation;
-  const layers = installedDependencyLayers(manifest);
-  const merged = mergeTemplateManifests([
-    ...layers,
-    { label: upstream?.url ?? "workspace", manifest },
-  ]);
-  return parseTemplateManifestContent(
-    canonicalTemplateYaml(merged.document),
-    manifest.top.systemEpoch
-  );
-}
-
 export function templateManifestDocument(
   manifest: ParsedTemplateManifest
 ): Record<string, unknown> {
@@ -197,7 +116,6 @@ export function templateManifestDocument(
     ...manifest.top,
     template: {
       ...manifest.presentation,
-      repositories: manifest.inventory.repositories,
       ...(manifest.dependencies.length ? { dependencies: manifest.dependencies } : {}),
       ...(manifest.overrides?.length ? { overrides: manifest.overrides } : {}),
     },
@@ -206,9 +124,9 @@ export function templateManifestDocument(
 
 /** Walk the authored dependency graph against its exact installed declarations, offline. */
 export function installedDependencyLayers(
-  manifest: ParsedTemplateManifest
+  manifest: ParsedTemplateManifest,
+  installation: WorkspaceTemplateInstallation | null
 ): TemplateManifestLayer[] {
-  const installation = manifest.installation;
   if (!installation) return [];
   const entries = new Map<string, (typeof installation.sources)[number]>();
   for (const source of installation.sources) {
@@ -238,8 +156,6 @@ export function installedDependencyLayers(
       );
     if (visited.has(key)) return;
     const parsed = parseTemplateManifestContent(source.manifest, manifest.top.systemEpoch);
-    if (parsed.installation)
-      throw new Error("Installed source declarations cannot contain nested installations");
     visiting.add(key);
     for (const parent of parsed.dependencies) visit(parent);
     visiting.delete(key);
@@ -248,4 +164,65 @@ export function installedDependencyLayers(
   };
   for (const dependency of manifest.dependencies) visit(dependency);
   return layers;
+}
+
+/** Export only the desired settings that differ from installed dependencies. */
+export function authoredTemplateManifest(
+  manifest: ParsedTemplateManifest,
+  installation: WorkspaceTemplateInstallation | null
+): ParsedTemplateManifest {
+  const inheritedLayers = installedDependencyLayers(manifest, installation);
+  if (!inheritedLayers.length) return manifest;
+  const inherited = mergeTemplateManifests(inheritedLayers).document;
+  const document = templateManifestDocument(manifest);
+  const same = (a: unknown, b: unknown) => canonicalTemplateYaml(a) === canonicalTemplateYaml(b);
+  for (const [key, value] of Object.entries(document)) {
+    if (key === "template" || key === "systemEpoch") continue;
+    const baseline = inherited[key];
+    if (same(value, baseline)) {
+      delete document[key];
+      continue;
+    }
+    if (
+      ["services", "routes", "singletonObjects", "extensions", "apps"].includes(key) &&
+      Array.isArray(value)
+    ) {
+      const prior = Array.isArray(baseline) ? baseline : [];
+      const own = value.filter((entry) => !prior.some((candidate) => same(candidate, entry)));
+      if (own.length) document[key] = own;
+      else delete document[key];
+    } else if (
+      (MERGED_RECORD_SETTINGS as readonly string[]).includes(key) &&
+      value &&
+      typeof value === "object"
+    ) {
+      const prior =
+        baseline && typeof baseline === "object" ? (baseline as Record<string, unknown>) : {};
+      const own = Object.fromEntries(
+        Object.entries(value).filter(([slot, setting]) => !same(setting, prior[slot]))
+      );
+      if (Object.keys(own).length) document[key] = own;
+      else delete document[key];
+    }
+  }
+  const authored = parseTemplateManifestContent(
+    canonicalTemplateYaml(document),
+    manifest.top.systemEpoch
+  );
+  const restored = mergeTemplateManifests([
+    ...inheritedLayers,
+    { label: "workspace", manifest: authored },
+  ]).document;
+  if (
+    !same(
+      rootRuntimeFromTemplateManifest(
+        parseTemplateManifestContent(canonicalTemplateYaml(restored), manifest.top.systemEpoch)
+      ),
+      rootRuntimeFromTemplateManifest(manifest)
+    )
+  )
+    throw new Error(
+      "Template dependencies cannot reproduce the desired workspace settings; edit the dependency or declare a whole-repository override before publishing"
+    );
+  return authored;
 }

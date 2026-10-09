@@ -1,3 +1,10 @@
+/**
+ * Contract version between a React Native workspace app bundle and the shipped
+ * native mobile shell. The build provider rejects apps that declare another
+ * value; the mobile shell rejects bundles built for another value.
+ */
+export const RN_HOST_ABI = "rn-host-5";
+
 export type BuildProviderTarget = "react-native" | "terminal";
 export type BuildProviderArtifactRole = "primary" | "asset" | "html" | "css" | "map";
 export type BuildProviderArtifactEncoding = "utf8" | "base64";

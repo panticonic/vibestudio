@@ -177,4 +177,36 @@ describe("exact userland provider catalogs", () => {
     });
     expect(changed.digest).not.toBe(first.digest);
   });
+
+  it("rejects module-level runtime clients while resolving a Durable Object catalog", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vibestudio-userland-do-runtime-"));
+    ownedRoots.add(root);
+    mkdirSync(join(root, "workers/notes"), { recursive: true });
+    const manifestAuthority = authority("Delete note");
+    writeFileSync(
+      join(root, "workers/notes/package.json"),
+      JSON.stringify({ vibestudio: { authority: manifestAuthority } })
+    );
+    writeFileSync(
+      join(root, "workers/notes/provider.ts"),
+      `import { blobstore } from "@workspace/runtime";
+class NotesDO {
+  async deleteNote(): Promise<void> { void blobstore; }
+}`
+    );
+
+    const input = {
+      stateHash: "state:do-module-runtime",
+      provider: providerNode(root, manifestAuthority),
+      effectiveVersion: "ev-notes-module-runtime",
+      className: "NotesDO",
+      graph: {} as PackageGraph,
+      workspaceRoot: root,
+      source: directorySourceProvider(root),
+    };
+
+    await expect(resolveProviderRpcCatalog(input)).rejects.toThrow(
+      /imports a module-level runtime client from "@workspace\/runtime"/u
+    );
+  });
 });

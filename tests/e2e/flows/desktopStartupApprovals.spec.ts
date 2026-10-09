@@ -286,28 +286,6 @@ async function callHostedShellService(
   );
 }
 
-async function bootstrapLaunchGateHasCredentialApproval(testApp: TestApp): Promise<boolean> {
-  return testApp.app.evaluate(async ({ webContents }) => {
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const result = await contents.executeJavaScript(
-          `(() => {
-            const bodyText = document.body?.innerText ?? "";
-            return Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
-              && /credential|OpenAI|ChatGPT Codex model credential/i.test(bodyText);
-          })()`,
-          true
-        );
-        if (result) return true;
-      } catch {
-        // Ignore non-DOM webContents.
-      }
-    }
-    return false;
-  });
-}
-
 async function clickShellButton(
   testApp: TestApp,
   label: RegExp,
@@ -1205,13 +1183,6 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
     await attachStartupDiagnostics(testApp);
     throw error;
   }
-
-  await expect
-    .poll(() => bootstrapLaunchGateHasCredentialApproval(testApp), {
-      timeout: 10_000,
-      intervals: [500, 1000],
-    })
-    .toBe(false);
 
   for (const panel of await getPanelTree(testApp)) {
     await startPanelDiagnostics(testApp, panel.id).catch(() => {});

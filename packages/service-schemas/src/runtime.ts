@@ -13,6 +13,18 @@ import {
   defineServiceMethods,
   fixedPreparedAuthorityRequirement,
 } from "@vibestudio/shared/typedServiceClient";
+import {
+  RuntimeSupervisionEntityKeySchema,
+  RuntimeSupervisionKindSchema,
+} from "./runtime/supervision.js";
+export {
+  RuntimeSupervisionEntityKeySchema,
+  RuntimeSupervisionKindSchema,
+} from "./runtime/supervision.js";
+export type {
+  RuntimeSupervisionEntityKey,
+  RuntimeSupervisionKind,
+} from "./runtime/supervision.js";
 import { AuthorityResourceScopeSchema, UnitAuthorityRequestSchema } from "./build.js";
 import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
 import { vcsStateNodeRefSchema } from "./vcs.js";
@@ -190,16 +202,20 @@ const RuntimeAgentBindingSchema = z
     "Host-verified binding input for runtimes that relay an external agent/session. The host derives context from the bound entity."
   );
 
-export const RuntimeSupervisionKindSchema = z.enum(["panel", "worker", "do", "app", "extension"]);
-export type RuntimeSupervisionKind = z.infer<typeof RuntimeSupervisionKindSchema>;
-
-export const RuntimeSupervisionEntityKeySchema = z
+export const RuntimeSupervisionReleaseKeySchema = z
   .object({
-    kind: RuntimeSupervisionKindSchema,
-    entityId: z.string().min(1),
+    kind: z.enum(["worker", "app", "extension"]),
+    releaseId: z.string().min(1),
   })
   .strict();
-export type RuntimeSupervisionEntityKey = z.infer<typeof RuntimeSupervisionEntityKeySchema>;
+export type RuntimeSupervisionReleaseKey = z.infer<typeof RuntimeSupervisionReleaseKeySchema>;
+
+/** Read selector: one exact live entity, or every live entity of one release. */
+export const RuntimeSupervisionTargetSchema = z.union([
+  RuntimeSupervisionEntityKeySchema,
+  RuntimeSupervisionReleaseKeySchema,
+]);
+export type RuntimeSupervisionTarget = z.infer<typeof RuntimeSupervisionTargetSchema>;
 
 export const RuntimeExecutionRecoveryRequestSchema = z
   .object({
@@ -227,6 +243,7 @@ export type RuntimeExecutionRecoveryResult = z.infer<typeof RuntimeExecutionReco
 export const RuntimeSupervisionDescriptionSchema = z
   .object({
     identity: RuntimeSupervisionEntityKeySchema,
+    release: RuntimeSupervisionReleaseKeySchema.nullable(),
     source: z.string(),
     displayName: z.string().optional(),
     status: z.enum(["starting", "running", "stopped", "error"]),
@@ -378,14 +395,6 @@ const RuntimeSupervisionLogOptionsSchema = z
     errorLimit: z.number().int().positive().max(500).optional(),
   })
   .strict();
-
-export const RuntimeSupervisionReleaseKeySchema = z
-  .object({
-    kind: z.enum(["worker", "app", "extension"]),
-    releaseId: z.string().min(1),
-  })
-  .strict();
-export type RuntimeSupervisionReleaseKey = z.infer<typeof RuntimeSupervisionReleaseKeySchema>;
 
 export const RuntimeSupervisionReleaseVersionSchema = z
   .object({
@@ -1469,12 +1478,13 @@ export const runtimeMethods = defineServiceMethods({
       session: "family",
       residency: "supervision",
       family: "runtime.supervision",
-      rationale: "Read-only description of one exact driver-owned executable entity.",
+      rationale:
+        "Read-only description of driver-owned executable entities selected by exact entity or release identity.",
     },
     description:
-      "Describe one supervised entity, including immutable artifact identity and supported facets.",
-    args: z.tuple([RuntimeSupervisionEntityKeySchema]),
-    returns: RuntimeSupervisionDescriptionSchema.nullable(),
+      "Describe live supervised entities, including release key, immutable artifact identity, and supported facets. Pass an entity identity for that one entity, or a release key ({ kind, releaseId }; for workspace apps and extensions the declared unit name) for every live entity of that release. Returns an empty array when nothing selected is live.",
+    args: z.tuple([RuntimeSupervisionTargetSchema]),
+    returns: z.array(RuntimeSupervisionDescriptionSchema),
     authority: RUNTIME_AGENT_READ_POLICY,
     access: READ_ACCESS,
   },
@@ -1512,14 +1522,12 @@ export const runtimeMethods = defineServiceMethods({
       session: "family",
       residency: "observability",
       family: "runtime.supervision-observability",
-      rationale: "Bounded retained-log read from one exact executable-unit driver.",
+      rationale:
+        "Bounded retained-log read from executable-unit drivers, selected by exact entity or release identity.",
     },
     description:
-      "Read only retained log records for one exact supervised entity. This array does not include the separate error buffer or buffer counts; use supervision.health to inspect those.",
-    args: z.tuple([
-      RuntimeSupervisionEntityKeySchema,
-      RuntimeSupervisionLogOptionsSchema.optional(),
-    ]),
+      "Read only retained log records for one supervised entity identity, or for every live entity of a release key ({ kind, releaseId }), merged in timestamp order; each record carries its entity identity. Fails when nothing selected is live. This array does not include the separate error buffer or buffer counts; use supervision.health to inspect those.",
+    args: z.tuple([RuntimeSupervisionTargetSchema, RuntimeSupervisionLogOptionsSchema.optional()]),
     returns: z.array(RuntimeSupervisionLogRecordSchema),
     authority: RUNTIME_AGENT_READ_POLICY,
     access: READ_ACCESS,

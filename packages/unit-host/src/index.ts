@@ -653,9 +653,9 @@ export class UnitHost<
     }
   }
 
-  async whenSettled(): Promise<void> {
-    await this.reconciling;
-    await this.backgroundFlow;
+  async whenSettled(signal?: AbortSignal): Promise<void> {
+    await joinUnlessAborted(this.reconciling, signal);
+    await joinUnlessAborted(this.backgroundFlow, signal);
   }
 
   async whenReconciled(): Promise<void> {
@@ -685,31 +685,7 @@ export class UnitHost<
 
   /** Join this unit's queued or running application, preserving its failure. */
   async whenApplied(name: string, signal?: AbortSignal): Promise<void> {
-    signal?.throwIfAborted();
-    const application = this.applications.get(name);
-    if (!application) return;
-    if (!signal) {
-      await application;
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => signal.removeEventListener("abort", onAbort);
-      const onAbort = () => {
-        cleanup();
-        reject(signal.reason);
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      void application.then(
-        () => {
-          cleanup();
-          resolve();
-        },
-        (error: unknown) => {
-          cleanup();
-          reject(error);
-        }
-      );
-    });
+    await joinUnlessAborted(this.applications.get(name), signal);
   }
 
   /**
@@ -1632,4 +1608,35 @@ function canonicalize(value: unknown): unknown {
     if (nested !== undefined) out[key] = canonicalize(nested);
   }
   return out;
+}
+
+/** Await owned work, or settle the waiting caller (not the work) on its abort. */
+async function joinUnlessAborted(
+  work: Promise<unknown> | null | undefined,
+  signal: AbortSignal | undefined
+): Promise<void> {
+  signal?.throwIfAborted();
+  if (!work) return;
+  if (!signal) {
+    await work;
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void work.then(
+      () => {
+        cleanup();
+        resolve();
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      }
+    );
+  });
 }

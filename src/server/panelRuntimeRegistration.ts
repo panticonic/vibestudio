@@ -6,7 +6,6 @@
  */
 
 import { createDevLogger } from "@vibestudio/dev-log";
-import type { CdpBridge } from "./cdpBridge.js";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import {
   createHostCaller,
@@ -16,7 +15,6 @@ import {
   type ServiceDispatcher,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { Workspace, WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import type { HostConfig } from "@vibestudio/shared/hostConfig";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
 import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
@@ -34,21 +32,6 @@ import {
 import { panelAccessTargetFromDetail } from "./services/panelAccessPermission.js";
 
 const log = createDevLogger("PanelRuntimeRegistration");
-
-async function waitForCdpTargetRegistered(
-  bridge: CdpBridge,
-  panelId: string,
-  hostConnectionId: string,
-  timeoutMs = 30_000
-): Promise<void> {
-  if (bridge.isTargetRegisteredForHost(panelId, hostConnectionId)) return;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    if (bridge.isTargetRegisteredForHost(panelId, hostConnectionId)) return;
-  }
-  throw new Error(`CDP endpoint unavailable for panel: ${panelId}`);
-}
 
 type PanelAccessMetadata =
   import("./services/panelAccessPermission.js").PanelAccessPermissionTarget;
@@ -117,7 +100,6 @@ export interface CommonDeps {
   ) => Promise<{ changed: boolean; resultDigest: string; config: WorkspaceConfig }>;
   treeScanner?: import("./vcsHost/workspaceTreeScanner.js").WorkspaceTreeScanner;
   adminToken: string;
-  hostConfig: HostConfig;
   tokenManager?: import("@vibestudio/shared/tokenManager").TokenManager;
   cdpGrants?: import("@vibestudio/shared/cdpGrants").CdpGrantService;
   eventService?: import("@vibestudio/shared/eventsService").EventService;
@@ -141,7 +123,7 @@ export interface CommonDeps {
   ensureDefaultHeadlessHost?: () => Promise<boolean>;
   /** Reload one exact current panel entity through the canonical unit driver. */
   reloadPanel?: (ctx: ServiceContext, panelId: string, runtimeEntityId: string) => Promise<void>;
-  getGatewayPort?: () => number | null;
+  getGatewayPort: () => number | null;
   /** Materialize a context's working folder; backs `workspace.ensureContextFolder`. */
   ensureContextFolder?: (contextId: string) => Promise<{ source: string; scratch: string }>;
   approvalQueue?: ApprovalQueue;
@@ -157,7 +139,7 @@ export interface CommonDeps {
 }
 
 export async function registerPanelServices(deps: CommonDeps): Promise<void> {
-  const { container, workspace, workspaceConfig, adminToken, hostConfig } = deps;
+  const { container, workspace, workspaceConfig, adminToken } = deps;
   const isKnownPanelSlot = createKnownPanelSlotResolver(deps.dispatcher);
 
   // Durable slot mutations are performed by several callers (desktop, mobile,
@@ -365,13 +347,15 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             server: import("./panelHttpServer.js").PanelHttpServer;
           }>("panelHttpServer")
         );
+        const gatewayPort = deps.getGatewayPort();
+        if (gatewayPort == null) {
+          throw new Error("Gateway port not finalized before CDP bridge startup");
+        }
         const { CdpBridge } = await import("./cdpBridge.js");
         const cdpBridge = new CdpBridge({
           adminToken,
           cdpGrants: deps.cdpGrants,
-          port: deps.getGatewayPort?.() ?? hostConfig.gatewayPort,
-          protocol: hostConfig.protocol,
-          externalHost: hostConfig.externalHost,
+          port: gatewayPort,
           authenticateHostProvider: (token, hostConnectionId) => {
             if (deps.tokenManager?.validateAdminToken(token)) return true;
             const entry = deps.tokenManager?.validateToken(token);
@@ -541,29 +525,17 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               if (error) throw error;
             }
           }
-          if (holder && !bridge.isProviderConnected(holder.hostConnectionId)) {
-            throw Object.assign(new Error(`CDP host provider unavailable for panel: ${panelId}`), {
-              code: "cdp_host_unavailable",
-            });
-          }
-          if (holder && bridge.isTargetRegisteredForHost(panelId, holder.hostConnectionId)) return;
-          if (!holder && bridge.isTargetRegistered(panelId)) return;
           if (holder) {
-            await waitForCdpTargetRegistered(bridge, panelId, holder.hostConnectionId);
-          } else {
-            throw Object.assign(
-              new Error(`No presentation host is available for panel: ${panelId}`),
-              {
-                code: "cdp_no_default_host",
-              }
-            );
+            await bridge.awaitTargetRegistered(panelId, holder.hostConnectionId);
+            return;
           }
-          if (holder && !bridge.isTargetRegisteredForHost(panelId, holder.hostConnectionId)) {
-            throw new Error(`CDP endpoint unavailable for panel: ${panelId}`);
-          }
-          if (!holder && !bridge.isTargetRegistered(panelId)) {
-            throw new Error(`CDP endpoint unavailable for panel: ${panelId}`);
-          }
+          if (bridge.isTargetRegistered(panelId)) return;
+          throw Object.assign(
+            new Error(`No presentation host is available for panel: ${panelId}`),
+            {
+              code: "cdp_no_default_host",
+            }
+          );
         }
         return hostProviderChannel;
       },

@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
@@ -9,9 +10,23 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 const appCtx: ServiceContext = { caller: createVerifiedCaller("@workspace-apps/shell", "app") };
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel:chat", "panel") };
 
+const FIND = { forward: true, findNext: false };
+
+/** WebContents stand-in that emits Electron's find events on demand. */
+class FakeFindContents extends EventEmitter {
+  private nextRequestId = 1;
+  readonly stopFindInPage = vi.fn();
+  isDestroyed = (): boolean => false;
+  findInPage = vi.fn((): number => this.nextRequestId++);
+  result(requestId: number, matches: number, finalUpdate = true): void {
+    this.emit("found-in-page", {}, { requestId, matches, activeMatchOrdinal: 1, finalUpdate });
+  }
+}
+
 function createServiceHarness(
   appCapabilities: string[] = [],
-  browserFailure?: "summary" | "clear"
+  browserFailure?: "summary" | "clear",
+  contents?: FakeFindContents
 ) {
   const setCurrentTheme = vi.fn();
   const broadcastTheme = vi.fn();
@@ -83,12 +98,15 @@ function createServiceHarness(
       throw new Error("Native partition /private/session-secret could not be cleared");
     }
   });
-  const getWebContents = vi.fn(() => ({
-    isDestroyed: () => false,
-    getURL: () => "https://example.com/page",
-    getTitle: () => "Example",
-    session: { clearData },
-  }));
+  const getWebContents = vi.fn(
+    () =>
+      contents ?? {
+        isDestroyed: (): boolean => false,
+        getURL: () => "https://example.com/page",
+        getTitle: () => "Example",
+        session: { clearData },
+      }
+  );
   const serverClient = {
     call: vi.fn(),
     callAs: vi.fn(),
@@ -169,6 +187,46 @@ function createServiceHarness(
 }
 
 describe("PanelShellService", () => {
+  it("propagates a native find failure and releases its lifetime observers", async () => {
+    const contents = new FakeFindContents();
+    const original = new Error("native find failed");
+    contents.findInPage.mockImplementation(() => {
+      throw original;
+    });
+    const harness = createServiceHarness(["panel-hosting"], undefined, contents);
+    await expect(
+      harness.service.handler(appCtx, "findInPage", ["panel-1", "needle", FIND])
+    ).rejects.toBe(original);
+    expect(contents.listenerCount("found-in-page")).toBe(0);
+    expect(contents.listenerCount("destroyed")).toBe(0);
+  });
+  it("answers a find with its own final result, however long the page takes", async () => {
+    const contents = new FakeFindContents();
+    const harness = createServiceHarness(["panel-hosting"], undefined, contents);
+    const find = harness.service.handler(appCtx, "findInPage", ["panel-1", "needle", FIND]);
+    await vi.waitFor(() => expect(contents.findInPage).toHaveBeenCalledTimes(1));
+    contents.result(1, 2, false);
+    contents.result(1, 3);
+    await expect(find).resolves.toEqual({ activeMatchOrdinal: 1, matches: 3 });
+  });
+
+  it("settles a superseded or stopped find instead of leaving it pending", async () => {
+    const contents = new FakeFindContents();
+    const harness = createServiceHarness(["panel-hosting"], undefined, contents);
+    const first = harness.service.handler(appCtx, "findInPage", ["panel-1", "nee", FIND]);
+    const second = harness.service.handler(appCtx, "findInPage", ["panel-1", "needle", FIND]);
+    await vi.waitFor(() => expect(contents.findInPage).toHaveBeenCalledTimes(2));
+    contents.result(2, 4);
+    await expect(first).resolves.toEqual({ activeMatchOrdinal: 0, matches: 0 });
+    await expect(second).resolves.toEqual({ activeMatchOrdinal: 1, matches: 4 });
+
+    const stopped = harness.service.handler(appCtx, "findInPage", ["panel-1", "x", FIND]);
+    await vi.waitFor(() => expect(contents.findInPage).toHaveBeenCalledTimes(3));
+    await harness.service.handler(appCtx, "stopFindInPage", ["panel-1"]);
+    await expect(stopped).resolves.toEqual({ activeMatchOrdinal: 0, matches: 0 });
+    expect(contents.listenerCount("found-in-page")).toBe(0);
+  });
+
   it("keeps native site-data diagnostics out of shell-visible errors", async () => {
     const nativeLog = vi.spyOn(console, "error").mockImplementation(() => {});
     const summary = createServiceHarness(["panel-hosting"], "summary");

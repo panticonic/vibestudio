@@ -508,7 +508,11 @@ state; terminality does not depend on the renderer's event loop or the build
 pipeline being polite. Yes, "fixed cadence × threshold" is time-shaped; the
 honest framing is that this is the sanctioned narrow exception (same category
 as SA1), scoped to non-terminal attempts under active supervision, and it
-produces a typed failure with full diagnostics rather than a silent hang.
+produces a typed failure with full diagnostics rather than a silent hang. The
+threshold is deliberately catastrophic (ten minutes without a revision advance,
+`ATTEMPT_STALL_ROUNDS` in `panelRuntimeCoordinator.ts`): slow machines and heavy
+initialization are valid states, and the detector exists only so a wedged boot
+cannot wait forever.
 
 ### 3.7 Builds carry a protocol fingerprint
 

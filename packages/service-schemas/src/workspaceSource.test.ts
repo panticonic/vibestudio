@@ -86,10 +86,9 @@ describe("GAD runtime schema", () => {
         channelId: "channel-1",
         branchId: "main",
         generatedAt: "2026-07-13T00:00:00.000Z",
+        caller: null,
         summary: {
-          ok: true,
           durableIntegrityOk: true,
-          inFlightOnly: false,
           activity: "idle",
           publicationIssues: 0,
           turnIntegrityIssues: 0,
@@ -191,6 +190,18 @@ describe("GAD runtime schema", () => {
           files: [],
         },
       ],
+      installation: {
+        sources: [
+          {
+            pin: {
+              url: "https://example.invalid/workspace.git",
+              ref: "refs/heads/main",
+              commit: "1".repeat(40),
+            },
+            manifest: "systemEpoch: 1\n",
+          },
+        ],
+      },
     };
 
     expect(

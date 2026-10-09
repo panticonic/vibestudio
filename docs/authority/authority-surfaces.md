@@ -298,7 +298,7 @@ Do these as replacements, not additions:
 5. **One provenance/decision record shape** across capability, version, and
    mission decisions, so Recent Decisions, item-page activity, and audit
    are one store queried three ways.
-6. **`ConsentDialog`/`ApprovalCard`/`ApprovalSheet` render subjects**, not
+6. **`ApprovalCard`/`ApprovalSheet` render subjects**, not
    per-kind bespoke layouts: one card shell (identity header, domain-grouped
    rows or single row, side-sections, decision row) parameterized by
    subject kind on desktop and mobile alike.

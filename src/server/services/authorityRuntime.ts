@@ -6,11 +6,7 @@ import type {
 } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { randomUUID } from "node:crypto";
-import {
-  evaluateAuthority,
-  requirementForPrincipals,
-  scopeCovers,
-} from "@vibestudio/shared/authorization";
+import { requirementForPrincipals, scopeCovers } from "@vibestudio/shared/authorization";
 import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
 import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import {
@@ -23,21 +19,7 @@ import type { WorkspaceServiceBinding } from "@vibestudio/workspace-contracts/ty
 import { getProductBootManifest } from "../internalDOs/productBootManifest.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { productAuthorityGrants } from "./productAuthorityGrants.js";
-
-/** The exact blessed conduit allowed to create an orchestrator test session. */
-export function isBlessedSystemTestConduit(
-  caller: VerifiedCaller,
-  isConduitBlessed: (identity: NonNullable<VerifiedCaller["code"]>) => boolean
-): boolean {
-  const code = caller.code;
-  return Boolean(
-    caller.runtime.kind === "do" &&
-    caller.runtime.id.startsWith("do:workers/system-test-runner:SystemTestRunnerDO:") &&
-    code?.repoPath === "workers/system-test-runner" &&
-    code.executionDigest &&
-    isConduitBlessed(code)
-  );
-}
+import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 
 /**
  * The trust predicate for hidden headless-test seams after session admission.
@@ -377,23 +359,6 @@ export function authorizeVerifiedCaller(
   return { context, grants, locks };
 }
 
-/** Evaluate an out-of-band host workflow with the same canonical vocabulary. */
-export function verifiedCallerHasAuthority(
-  caller: VerifiedCaller,
-  facts: AuthorityFacts,
-  principals: readonly PrincipalKind[]
-): boolean {
-  const resolved = authorizeVerifiedCaller(caller, facts);
-  return evaluateAuthority({
-    context: resolved.context,
-    grants: resolved.grants,
-    locks: resolved.locks,
-    requirement: requirementForPrincipals(principals, facts.capability),
-    resourceKey: facts.resourceKey,
-    now: facts.now,
-  }).allowed;
-}
-
 export function directAuthorityCapability(method: string): string {
   return method.startsWith("__event:")
     ? `event:${method.slice("__event:".length)}`
@@ -405,7 +370,7 @@ export function directAuthorityAudience(
   className: string,
   objectKey: string
 ): string {
-  return `do:${source}:${className}:${objectKey}`;
+  return doTargetId({ source, className, objectKey });
 }
 
 export function attestDirectRpc(input: {

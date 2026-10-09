@@ -145,7 +145,7 @@ function verbFor(op: PanelAccessOperation): string {
     case "rebuildPanel":
       return "Rebuild panel in";
     case "updatePanelState":
-    case "stateArgs.set":
+    case "stateArgs.patch":
       return "Change panel state in";
     default:
       return "Act on";

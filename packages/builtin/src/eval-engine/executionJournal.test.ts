@@ -571,7 +571,7 @@ describe("execution-owned native operation evidence", () => {
   it("retains native bounded health counts independently of guest summaries and rejects foreign identity", () => {
     const owner = new ExecutionJournal();
     const identity = { kind: "extension" as const, entityId: "extension:one" };
-    const health = { entity: { identity, source: "extensions/one", status: "running",
+    const health = { entity: { identity, release: { kind: "extension" as const, releaseId: identity.entityId }, source: "extensions/one", status: "running",
       lastError: null, artifact: { effectiveVersion: null, buildKey: null, executionDigest: null },
       facets: { activation: true, release: false, inspector: false } },
       state: "healthy", summary: "private diagnostic prose", logs: [{ identity, timestamp: 1, level: "info", message: "private log prose" }],

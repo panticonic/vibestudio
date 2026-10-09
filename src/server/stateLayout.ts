@@ -29,6 +29,7 @@ export function stateLayout(statePath: string) {
     logsDir: path.join(statePath, "logs"),
     credentialsAuditDir: path.join(statePath, "credentials-audit"),
     credentialUseGrantsFile: path.join(statePath, "credential-use-grants.json"),
+    websitePublicationsFile: path.join(statePath, "website-publications.json"),
     gitCheckoutsDir: gitCheckoutsPath(statePath),
     runtimeImagesFile: path.join(statePath, "runtime-images.json"),
     runtimeDiagnosticsDir: path.join(statePath, "runtime-diagnostics"),

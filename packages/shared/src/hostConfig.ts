@@ -1,54 +1,18 @@
 /**
- * HostConfig — resolved host/port configuration for a Vibestudio server.
- *
- * The gateway serves loopback HTTP only. Remote access is Iroh (Endpoint ID-encrypted,
- * paired by QR), so there is no HTTPS/TLS branch, no remote-server URL, and no
- * public-URL/protocol negotiation here. All panel-facing URL construction flows
- * through this config.
+ * The server gateway is loopback HTTP only. Remote devices reach a server over
+ * Iroh (Endpoint ID-authenticated), so there is no public host, bind address,
+ * or TLS protocol to configure. All gateway URL construction flows through here.
  */
 
-export interface HostConfig {
-  /** Protocol for panel-facing URLs — always http (the gateway is loopback). */
-  protocol: "http";
-  /** Address to bind server sockets to (127.0.0.1 loopback; 0.0.0.0 for LAN dev). */
-  bindHost: string;
-  /** The hostname panels are served on (e.g. "localhost", "127.0.0.1"). */
-  externalHost: string;
-  /** Internal host for server-to-server communication (always 127.0.0.1). */
-  internalHost: "127.0.0.1";
-  /** The gateway port that multiplexes HTTP/WS/git/workerd. */
-  gatewayPort: number;
-  /** The workerd port. */
-  workerdPort: number;
+/** The only address a gateway binds and advertises. */
+export const GATEWAY_HOST = "127.0.0.1";
+
+/** `http://127.0.0.1:<port>` — the gateway origin for HTTP callers. */
+export function gatewayHttpUrl(port: number): string {
+  return `http://${GATEWAY_HOST}:${port}`;
 }
 
-/**
- * Resolve host config from environment or explicit values. The gateway
- * multiplexes panel HTTP, RPC, git, and workerd ingress on a single port.
- *
- * Environment variables:
- * - VIBESTUDIO_HOST / --host: external hostname (sets bindHost to "0.0.0.0")
- * - VIBESTUDIO_BIND_HOST / --bind-host: explicit bind address
- * - VIBESTUDIO_GATEWAY_PORT / --gateway-port: gateway ingress port
- */
-export function resolveHostConfig(opts: {
-  workerdPort: number;
-  gatewayPort?: number;
-  host?: string;
-  bindHost?: string;
-}): HostConfig {
-  const envHost = process.env["VIBESTUDIO_HOST"] ?? opts.host;
-  const envBindHost = process.env["VIBESTUDIO_BIND_HOST"] ?? opts.bindHost;
-
-  const externalHost = envHost ?? "localhost";
-  const bindHost = envBindHost ?? (envHost ? "0.0.0.0" : "127.0.0.1");
-
-  return {
-    protocol: "http",
-    bindHost,
-    externalHost,
-    internalHost: "127.0.0.1",
-    gatewayPort: opts.gatewayPort ?? 0,
-    workerdPort: opts.workerdPort,
-  };
+/** `ws://127.0.0.1:<port>` — the gateway origin for WebSocket callers. */
+export function gatewayWsUrl(port: number): string {
+  return `ws://${GATEWAY_HOST}:${port}`;
 }

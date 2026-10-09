@@ -1,4 +1,3 @@
-import type { DORefParam } from "@vibestudio/shared/workspaceServiceRpc";
 import type {
   WorkspaceDeclarations,
   SingletonRegistry,
@@ -108,16 +107,5 @@ function buildResolution(
     authority,
     routePath,
     routeBasePath: `/_r/w/${source}${routePath === "/" ? "" : routePath}`,
-  };
-}
-
-export function toDORef(resolution: ResolvedWorkspaceService): DORefParam {
-  if (resolution.kind !== "durable-object") {
-    throw new Error(`Workspace service ${resolution.name} is not Durable Object-backed`);
-  }
-  return {
-    source: resolution.source,
-    className: resolution.className,
-    objectKey: resolution.objectKey,
   };
 }

@@ -146,7 +146,7 @@ describe("pair-server runner", () => {
         prepareSourceServer: () => undefined,
         developmentWorkspaceTemplateEnv: () => ({}),
         spawnServer({ env, serverArgs }: { env: NodeJS.ProcessEnv; serverArgs: string[] }) {
-          expect(env.VIBESTUDIO_HOST).toBe("127.0.0.1");
+          expect(env.VIBESTUDIO_HOST).toBeUndefined();
           expect(env.VIBESTUDIO_IROH_RELAYS).toBe("https://one.example/,https://two.example/");
           expect(serverArgs).toContain("--ready-file");
           expect(serverArgs).not.toContain("--require-electron-ready");

@@ -8,12 +8,10 @@ import {
   SERVER_RUNTIME_ARTIFACTS,
   stageNativeIsolationArtifacts,
   stageNodeRuntimeInstaller,
-  stageSpeechRuntime,
   stagePackageDependencies,
   stagePinnedRootDependencies,
   stagePublishedPackage,
 } from "../scripts/build-server-npm-package.mjs";
-import { assertPhononRuntimeArtifacts } from "../scripts/phonon-runtime-artifacts.mjs";
 import { createRequire } from "node:module";
 import { NATIVE_ISOLATION_TARGETS } from "../scripts/native-isolation-artifacts.mjs";
 
@@ -117,20 +115,7 @@ describe("npm CLI packaging", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
-  it("ships the verified offline speech runtime and rejects altered code", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "vibestudio-speech-stage-"));
-    try {
-      await stageSpeechRuntime(root);
-      const code = await assertPhononRuntimeArtifacts(root);
-      expect(fs.existsSync(path.join(code, "runner.mjs"))).toBe(true);
-      fs.writeFileSync(path.join(code, "runner.mjs"), "tampered");
-      await expect(assertPhononRuntimeArtifacts(root)).rejects.toThrow(
-        /Invalid installed Phonon resource/
-      );
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
+
   it("stages every standalone server boot artifact", () => {
     expect(SERVER_RUNTIME_ARTIFACTS).toEqual([
       "dist/server.mjs",

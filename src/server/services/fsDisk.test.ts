@@ -77,9 +77,9 @@ describe("native filesystem handle lifetime", () => {
     await disk.call(scope, "rename", ["original.txt", "renamed.txt"]);
     await disk.call(scope, "writeFile", ["renamed.txt", "after!", "utf8"]);
     const read = (await disk.call(scope, "handleRead", [handleId, 6, 0])) as {
-      buffer: { data: string };
+      buffer: Uint8Array;
     };
-    expect(Buffer.from(read.buffer.data, "base64").toString()).toBe("after!");
+    expect(Buffer.from(read.buffer).toString()).toBe("after!");
     await disk.call(scope, "handleClose", [handleId]);
     await expect(disk.call(scope, "handleStat", [handleId])).rejects.toThrow(/Invalid file handle/);
   });

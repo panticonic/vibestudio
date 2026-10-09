@@ -57,7 +57,8 @@ interface ImportEndpoint {
     operationId: string
   ): SensitiveBrowserImportStatus | Promise<SensitiveBrowserImportStatus>;
   observeSensitiveImport(
-    operationId: string
+    operationId: string,
+    options: { afterVersion?: string; signal?: AbortSignal }
   ): SensitiveBrowserImportStatus | Promise<SensitiveBrowserImportStatus>;
   cancelSensitiveImport(
     operationId: string
@@ -233,10 +234,14 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
 
   async observeSensitiveImport(
     ctx: ServiceContext,
-    operationId: string
+    operationId: string,
+    options?: { afterVersion?: string }
   ): Promise<SensitiveBrowserImportStatus> {
     const entry = this.requireSensitive(ctx, operationId);
-    return entry.endpoint.observeSensitiveImport(operationId);
+    return entry.endpoint.observeSensitiveImport(operationId, {
+      ...options,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
+    });
   }
 
   async cancelSensitiveImport(
@@ -312,7 +317,8 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
       listOpenTabs: (sourceId, signal) => provider.listOpenTabs(sourceId, signal),
       startSensitiveImport: (sourceId, dataTypes, operationId) =>
         provider.startSensitiveImport(sourceId, dataTypes, operationId),
-      observeSensitiveImport: (operationId) => provider.observeSensitiveImport(operationId),
+      observeSensitiveImport: (operationId, options) =>
+        provider.observeSensitiveImport(operationId, options),
       cancelSensitiveImport: (operationId) => provider.cancelSensitiveImport(operationId),
     };
   }
@@ -345,7 +351,12 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
       listOpenTabs: (sourceId) => call("listImportOpenTabs", hostId, sourceId),
       startSensitiveImport: (sourceId, dataTypes, operationId) =>
         call("startSensitiveImport", hostId, sourceId, dataTypes, operationId),
-      observeSensitiveImport: (operationId) => call("observeSensitiveImport", operationId),
+      observeSensitiveImport: (operationId, { afterVersion, signal }) =>
+        connection.call(
+          "browserEnvironment.observeSensitiveImport",
+          afterVersion === undefined ? [operationId] : [operationId, { afterVersion }],
+          signal ? { signal } : undefined
+        ) as Promise<SensitiveBrowserImportStatus>,
       cancelSensitiveImport: (operationId) => call("cancelSensitiveImport", operationId),
     };
   }

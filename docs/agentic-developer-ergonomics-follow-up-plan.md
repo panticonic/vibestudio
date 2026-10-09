@@ -632,7 +632,7 @@ until an agent task demonstrates that exact need.
 ### 6.4 Replace the in-memory journal
 
 The current `runtime.journal` records only `open`, `reload`, `close`, and
-`stateArgs.set` in process-local arrays so eval can render a footer. It cannot
+`stateArgs.patch` in process-local arrays so eval can render a footer. It cannot
 see cross-runtime cleanup, does not carry actor identity, and disappears at the
 end of the scope.
 

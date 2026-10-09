@@ -72,16 +72,14 @@ describe("WorkerdInspectorBridge", () => {
     expect(globalThis.fetch).toHaveBeenCalledWith("http://127.0.0.1:9229/json/list");
   });
 
-  it("mints endpoints on the external host with encoded target paths", () => {
+  it("mints loopback gateway endpoints with encoded target paths", () => {
     bridge = new WorkerdInspectorBridge({
       getInspectorUrl: () => "http://127.0.0.1:9229",
-      protocol: "https",
-      externalHost: "vibestudio.local",
       port: 4100,
     });
     const endpoint = bridge.getEndpoint("core:user/worker host", "panel:x");
     expect(endpoint?.wsEndpoint).toBe(
-      "wss://vibestudio.local:4100/workerd-inspector/core%3Auser%2Fworker%20host"
+      "ws://127.0.0.1:4100/workerd-inspector/core%3Auser%2Fworker%20host"
     );
     expect(endpoint?.token).toMatch(/^[0-9a-f]{64}$/);
   });

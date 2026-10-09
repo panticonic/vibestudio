@@ -19,6 +19,7 @@ import { randomBytes } from "crypto";
 import { connect as connectNet } from "net";
 import type { Duplex } from "stream";
 import { createDevLogger } from "@vibestudio/dev-log";
+import { GATEWAY_HOST } from "@vibestudio/shared/hostConfig";
 import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RouteRegistry, LookupResult } from "./routeRegistry.js";
@@ -162,10 +163,6 @@ export interface GatewayDeps {
    *  (`/_workercode/{name}`, `/_workerversion/{name}`). The workerd manager
    *  satisfies this; absent until workerd is wired. */
   getWorkerHost?: () => WorkerHostCodeProvider | null | undefined;
-  /** External hostname for origin checks (loopback only). */
-  externalHost: string;
-  /** Bind host (loopback only; default "127.0.0.1") */
-  bindHost?: string;
   /** Called by /healthz to produce the JSON body */
   healthProvider?: (detailed: boolean) => Record<string, unknown>;
   /** Admin token — when provided and presented as Bearer, /healthz returns detailed fields */
@@ -488,7 +485,7 @@ export class Gateway {
         rpcHandler
       ) {
         const origin = req.headers.origin;
-        const allowedOrigins = buildOriginAllowList(this.deps.externalHost);
+        const allowedOrigins = buildOriginAllowList();
         if (!isOriginAllowed(origin, allowedOrigins)) {
           res.writeHead(403, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Disallowed RPC admission origin" }));
@@ -553,7 +550,7 @@ export class Gateway {
       const rpcHandler = this.deps.getRpcHandler?.() ?? this.deps.rpcHandler;
       const panelHttpHandler = this.deps.getPanelHttpHandler?.() ?? this.deps.panelHttpHandler;
       const workerdPort = this.deps.getWorkerdPort?.() ?? this.deps.workerdPort;
-      const allowedOrigins = buildOriginAllowList(this.deps.externalHost);
+      const allowedOrigins = buildOriginAllowList();
 
       // Origin allow-list (audit #30). Bearer auth still gates the actual
       // RPC, but rejecting cross-site browser connects defends against the
@@ -646,12 +643,11 @@ export class Gateway {
       socket.destroy();
     });
 
-    const bindHost = this.deps.bindHost ?? "127.0.0.1";
     return new Promise((resolve, reject) => {
-      server.listen(port, bindHost, () => {
+      server.listen(port, GATEWAY_HOST, () => {
         const addr = server.address();
         const assignedPort = typeof addr === "object" && addr ? addr.port : port;
-        log.info(`Gateway listening on ${bindHost}:${assignedPort}`);
+        log.info(`Gateway listening on ${GATEWAY_HOST}:${assignedPort}`);
         resolve(assignedPort);
       });
       server.on("error", reject);
@@ -704,13 +700,10 @@ export class Gateway {
  * Override / extension: set `VIBESTUDIO_WS_ALLOWED_ORIGINS` to a comma list
  * of additional origins (e.g. `http://my-dev-host:5173,chrome-extension://xyz`).
  */
-function buildOriginAllowList(externalHost: string): { exact: Set<string>; suffix: Set<string> } {
+function buildOriginAllowList(): { exact: Set<string>; suffix: Set<string> } {
   const exact = new Set<string>();
   const suffix = new Set<string>();
-  // Bare host on http/https.
-  exact.add(`http://${externalHost}`);
-  exact.add(`https://${externalHost}`);
-  // Loopback dev origins.
+  // Loopback origins.
   for (const h of ["localhost", "127.0.0.1", "[::1]"]) {
     exact.add(`http://${h}`);
     exact.add(`https://${h}`);

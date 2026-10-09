@@ -93,6 +93,23 @@ export interface WebsitePublicationIntent {
   environment: "preview" | "production";
 }
 
+/** Completed phases of one host-journaled website publication, in order. */
+export type WebsitePublicationPhase = "prepared" | "destination-ready" | "uploaded" | "submitted";
+
+export interface WebsitePublicationProgress {
+  phase: Exclude<WebsitePublicationPhase, "prepared">;
+  deploymentId?: string;
+  url?: string;
+}
+
+/** Host-owned receipt of a website publication's last completed phase. */
+export interface WebsitePublicationReceipt extends WebsitePublicationIntent {
+  phase: WebsitePublicationPhase;
+  deploymentId?: string;
+  url?: string;
+  updatedAt: string;
+}
+
 export type CredentialGrantResourceHint =
   | { type: "audience" }
   | { type: "url-path-prefix"; segmentCount: number };
@@ -776,11 +793,4 @@ export interface IntegrationManifest {
 export interface EndpointDeclaration {
   url: string;
   methods: string[] | "*";
-}
-
-export interface RetryConfig {
-  maxAttempts?: number;
-  initialDelayMs?: number;
-  maxDelayMs?: number;
-  idempotentOnly?: boolean;
 }

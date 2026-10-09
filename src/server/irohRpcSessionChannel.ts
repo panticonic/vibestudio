@@ -10,7 +10,13 @@ import {
   type IrohPhysicalBiStream,
   type IrohPhysicalConnection,
 } from "@vibestudio/iroh-transport";
-import { responseEnvelopeFor, type RpcEnvelope, type RpcMessage } from "@vibestudio/rpc";
+import {
+  decodeRpcJson,
+  encodeRpcJson,
+  responseEnvelopeFor,
+  type RpcEnvelope,
+  type RpcMessage,
+} from "@vibestudio/rpc";
 import { encodeIrohStreamResponseHead } from "@vibestudio/rpc/protocol/irohStreamResponse";
 import {
   IROH_SESSION_CLOSED,
@@ -276,7 +282,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
 
   private deliver(message: WsClientMessage): void {
     if (this.state !== OPEN) return;
-    const encodedBytes = Buffer.byteLength(JSON.stringify(message));
+    const encodedBytes = Buffer.byteLength(encodeRpcJson(message));
     for (const handler of [...this.messageHandlers]) handler(message, encodedBytes);
   }
 
@@ -343,7 +349,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     if (typeof requestId === "string" && envelope.message.type === "response") {
       const route = this.requests.get(requestId);
       if (route && !route.settled) {
-        const encoded = new TextEncoder().encode(JSON.stringify(envelope));
+        const encoded = new TextEncoder().encode(encodeRpcJson(envelope));
         if (encoded.byteLength > MAX_ENVELOPE_FRAME_BYTES) {
           this.options.log?.(
             `Streaming large unary response for ${route.method}: ${encoded.byteLength} bytes`
@@ -358,7 +364,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       }
     }
 
-    const encoded = new TextEncoder().encode(JSON.stringify(envelope));
+    const encoded = new TextEncoder().encode(encodeRpcJson(envelope));
     if (encoded.byteLength > MAX_ENVELOPE_FRAME_BYTES) {
       this.options.log?.(
         `Streaming large ${envelope.message.type} message for ${envelopeOperation(envelope)}: ${encoded.byteLength} bytes`
@@ -431,7 +437,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
   }
 
   private async readOutboundResponse(stream: IrohPhysicalBiStream, routed: boolean): Promise<void> {
-    const envelope = JSON.parse(
+    const envelope = decodeRpcJson(
       new TextDecoder("utf-8", { fatal: true }).decode(
         await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES)
       )

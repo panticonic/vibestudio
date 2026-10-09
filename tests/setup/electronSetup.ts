@@ -235,6 +235,11 @@ function getWorkspaceInfo(workspaceDir: string): ManagedWorkspaceInfo {
   };
 }
 
+/** Return the case-owned root for fixture files and configuration. */
+export function getManagedTestWorkspaceRoot(workspaceDir: string): string {
+  return getWorkspaceInfo(workspaceDir).testRoot;
+}
+
 export async function createManagedTestWorkspace(
   options: {
     configureSource?: (sourceRoot: string) => void;

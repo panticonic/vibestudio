@@ -26,17 +26,6 @@ export interface AddressNavigationModifiers {
   altKey?: boolean;
 }
 
-/**
- * Browser-familiar application accelerators for panel lifecycle.
- *
- * @deprecated Read the binding from `desktopKeymap`, which is what the menu
- * registers. These literals are kept only for callers not yet converted.
- */
-export const PANEL_KEYBOARD_ACCELERATORS = {
-  newPanel: "CmdOrCtrl+T",
-  closePanel: "CmdOrCtrl+W",
-} as const;
-
 /** Mouse button 1 is the browser-standard auxiliary action for closing a tab-like item. */
 export function isPanelClosePointerButton(button: number): boolean {
   return button === 1;

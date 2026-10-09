@@ -72,7 +72,7 @@ OverlaySurfaceHost,overlayBridge}.tsx`, `shell/useShellContentOverlay.ts`,
 - **`AppCommandPalette`** (`base/apps/shell/components/AppCommandPalette.tsx`)
   exists but is a DOM dialog + `useShellOverlay(true)`, which _hides every
   panel view_ while open. It will be replaced by the new surface.
-- **`HostCommandRegistry`** (`packages/shell-core/src/panelCommandRegistry.ts`)
+- **`HostCommandRegistry`** (`createHostCommandRegistry` in `packages/shared/src/hostCommands.ts`)
   is the existing panel-contributed-command channel, already shared with
   mobile. It carries flat `{id, title}` items; this plan extends the schema
   with arguments and metadata.
@@ -229,7 +229,7 @@ long-press on the tab strip.
 ┌────────────────────────────────────────────────────────────────────┐
 │ Host repo (/home/werg/vibestudio)                                  │
 │                                                                    │
-│  packages/shell-core/src/panelCommandRegistry.ts  ← extend schema  │
+│  packages/shared/src/hostCommands.ts              ← extend schema  │
 │  src/server/services/panelContextService.ts       ← NEW (§5.2)     │
 │  src/server/services/runtimeResourceBindings.ts   ← generic bind   │
 │  src/main/menu.ts                                 ← accelerators   │
@@ -445,7 +445,7 @@ slate is defined in the shell chrome and its `availability`/`suggest`/
 `validate` functions never cross a process boundary.
 
 Panel-contributed commands are different: they arrive as **serialized event
-payloads** (`HostCommandRegistry.accept` runtime-validates them), so
+payloads** (the shared `HostCommandRegistry` runtime-validates them), so
 functions cannot round-trip. Today's wire shape is `HostCommand = {id,
 label, description?, group?}` (`packages/shared/src/hostCommands.ts`).
 Contributions therefore use a declarative subset:
@@ -477,8 +477,7 @@ panel, not functions on the wire.) Legacy `{id, label}` contributions are
 accepted unchanged and wrapped as arg-less specs. Registry
 `list(focusedPanelId)` keeps sorting the focused panel's contributions
 first. Changes land in `packages/shared/src/hostCommands.ts` (additive
-optional fields) + `packages/shell-core/src/panelCommandRegistry.ts`
-validation.
+optional fields), including the registry's validation.
 
 ### 3.2 Built-in slate (v1 — complete list)
 

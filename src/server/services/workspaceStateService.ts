@@ -30,6 +30,7 @@ import type {
   SlotCommitPreparedNavigationResult,
 } from "@vibestudio/service-schemas/workspaceState";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
+import type { StateArgsSchema } from "@vibestudio/shared/stateArgs";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type {
   PanelAccessPermissionDeps,
@@ -37,6 +38,7 @@ import type {
 } from "./panelAccessPermission.js";
 import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
 import { verifiedInitiatingUserId } from "@vibestudio/shared/serviceDispatcher";
+import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 
 export const WORKSPACE_DO_CLASS = "WorkspaceDO";
 
@@ -91,6 +93,11 @@ export interface WorkspaceStateServiceDeps {
   onPresentationChanged?: (panelIds: string[]) => void;
   /** Refresh the host's synchronous security-attribution projection after Base commits a title. */
   onEntityTitleChanged?: (entityId: string, title: string | undefined) => void;
+  /**
+   * The stateArgs schema declared by one exact build. Returns undefined when
+   * that build declares none and throws when the build record is unavailable.
+   */
+  stateArgsSchemaForBuild(buildKey: string): StateArgsSchema | undefined;
   panelAccess: PanelAccessPermissionDeps;
 }
 
@@ -307,8 +314,8 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           payload: null,
         };
       },
-      "workspace-state.slot.updateCurrentStateArgs.contextBoundary": (ctx, [slotId]) =>
-        preparePanelMutation(ctx, "stateArgs.set", String(slotId)),
+      "workspace-state.slot.patchCurrentStateArgs.contextBoundary": (ctx, [slotId]) =>
+        preparePanelMutation(ctx, "stateArgs.patch", String(slotId)),
       "workspace-state.slot.commitPreparedNavigation.contextBoundary": async (ctx, [input]) => {
         const navigation = input as SlotCommitPreparedNavigationInput;
         const target = await panelTarget(navigation.slotId);
@@ -472,9 +479,25 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         }
         return result;
       },
-      "slot.updateCurrentStateArgs": async (_ctx, [slotId, stateArgs]) => {
-        await dispatch<undefined>("slotUpdateCurrentStateArgs", [slotId, stateArgs]);
+      "slot.patchCurrentStateArgs": async (_ctx, [slotId, patch]) => {
+        // WorkspaceDO serializes the merge and validation. The schema comes
+        // from the active build this read observed; the owner refuses the
+        // patch with a typed conflict if the entry or build moved meanwhile.
+        const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [slotId]);
+        if (!detail?.slot.current_entry_key) throw new Error(`Panel not found: ${slotId}`);
+        const activeBuildKey = detail.entity.activeBuildKey ?? null;
+        const schema = activeBuildKey ? deps.stateArgsSchemaForBuild(activeBuildKey) : undefined;
+        const next = await dispatch<Record<string, unknown>>("slotPatchCurrentStateArgs", [
+          slotId,
+          patch,
+          {
+            entryKey: detail.slot.current_entry_key,
+            activeBuildKey,
+            ...(schema ? { schema } : {}),
+          },
+        ]);
         deps.onSlotStateChanged?.();
+        return next;
       },
       "slot.move": async (ctx, [slotId, parentSlotId, placement]) => {
         // Ownership attribution comes from the verified caller, never a
@@ -636,7 +659,7 @@ function assertOwnLifecycleKey(
   verb: string
 ): void {
   if (caller.hostOriginated) return;
-  const ownerId = `do:${key.source}:${key.className}:${key.objectKey}`;
+  const ownerId = doTargetId(key);
   if (caller.runtime.kind !== "do" || caller.runtime.id !== ownerId) {
     throw new Error(`${caller.runtime.id} cannot ${verb} ${ownerId}`);
   }

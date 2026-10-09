@@ -1,6 +1,6 @@
 import "./polyfills.js";
 
-export { RN_HOST_ABI, activateApprovedWorkspaceApp } from "./bundleDelivery.js";
+export { activateApprovedWorkspaceApp } from "./bundleDelivery.js";
 export type {
   BundleDeliveryRpc,
   BundleDeliveryTransport,

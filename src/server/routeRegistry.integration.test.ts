@@ -60,8 +60,6 @@ async function startHarness(): Promise<Harness> {
   });
 
   const gateway = new Gateway({
-    externalHost: "127.0.0.1",
-    bindHost: "127.0.0.1",
     workerdPort,
     getWorkerdDispatchSecret: () => "workerd-dispatch-secret",
     ensureDORoute,

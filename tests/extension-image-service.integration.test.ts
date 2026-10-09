@@ -52,7 +52,6 @@ maybeDescribe("image-service extension server smoke", () => {
         serverPath,
         "--bootstrap-workspace",
         "extension-image-service-integration",
-        "--serve-panels",
         "--ready-file",
         readyFile,
       ],
@@ -97,7 +96,7 @@ maybeDescribe("image-service extension server smoke", () => {
         rpc(ready, shellToken, "extensions.invoke", [
           "@workspace-extensions/image-service",
           "detectMimeType",
-          [[137, 80, 78, 71, 13, 10, 26, 10]],
+          [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])],
         ])
       ).resolves.toBe("image/png");
       await waitForExtensionRunning(ready, shellToken, "@workspace-extensions/image-service");

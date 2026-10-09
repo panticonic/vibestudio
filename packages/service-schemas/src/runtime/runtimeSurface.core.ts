@@ -5,7 +5,7 @@
  * (workspace / openPanel / getPanelHandle / panelTree), which the
  * per-target manifests re-add with their own wording.
  *
- * The portable surface now includes `callMain` + `parent`/`getParent`/
+ * The portable surface now includes `callMain` + `getParent`/
  * `getParentWithContract` (real on eval too) and NO longer includes `expose`
  * (use `rpc.expose`) or any advisory approval API.
  */

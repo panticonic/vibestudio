@@ -215,7 +215,7 @@ them — add a one-line ambient shim so type-checking resolves the import:
 declare module "*.svelte";
 ```
 
-`panels/hello-svelte` is the canonical, working reference.
+The Examples template's `panels/hello-svelte` is the canonical, working reference (its `templates/svelte` supplies the shell).
 
 ### Vanilla
 
@@ -445,28 +445,26 @@ import { openPanel, openExternal, panelTree } from "@workspace/runtime";
 
 // panelTree is a top-level export, not workspace.panelTree.
 const handle = await openPanel("https://example.com", { focus: true });
-const page = await handle.cdp.page();
+// The panel's one stable session; its page follows panel generations.
+const session = await handle.cdp.session();
+const page = session.page;
 
 await page.locator("input[name=query]").fill("Vibestudio");
 await page.locator(".search-button").click();
 const text = await page.locator(".results .first").textContent();
 const currentUrl = page.url(); // string, synchronous like Playwright
 
-await handle.cdp.navigate("https://other.com");
-await handle.cdp.goBack();
-await handle.cdp.reload();
+await page.goto("https://other.com"); // browser panels only
+await page.goBack();
+await handle.reload(); // lifecycle: the next page operation binds the result
 
 // Existing panels: discover or get by slot id.
 const parent = panelTree.self().parent();
-await parent?.cdp.page();
-
-const allPanels = await panelTree.list();
-const existing = allPanels.find((panel) => panel.source === "panels/spectrolite");
-const existingPage = await existing?.cdp.page();
+const parentSession = await parent?.cdp.session();
 
 const known = panelTree.get("panel-slot-id");
-await known.refresh(); // hydrate metadata when you start from a known slot id
-await known.cdp.page();
+await known.observe(); // exact attempt and phase before acting
+const knownSession = await known.cdp.session();
 
 // Or open in system browser (no CDP access)
 await openExternal("https://docs.example.com");
@@ -485,26 +483,28 @@ import { getPanelHandle, onChildCreated } from "@workspace/runtime";
 
 onChildCreated(({ childId, url }) => {
   const handle = getPanelHandle(childId);
-  // Now use handle.cdp.getCdpEndpoint(), handle.cdp.navigate(), etc.
+  // Now use handle.cdp.session(), handle.navigate(), etc.
 });
 window.open("https://example.com");
 ```
 
 #### PanelHandle CDP methods
 
-| Method                 | Description                                                            |
-| ---------------------- | ---------------------------------------------------------------------- |
-| `cdp.page()`           | Connect the canonical CDP automation client and return the active page |
-| `cdp.getCdpEndpoint()` | Get CDP WebSocket URL and token for Playwright                         |
-| `cdp.navigate(url)`    | Load a URL                                                             |
-| `cdp.goBack()`         | Navigate back                                                          |
-| `cdp.goForward()`      | Navigate forward                                                       |
-| `cdp.reload()`         | Reload page                                                            |
-| `cdp.stop()`           | Stop loading                                                           |
-| `close()`              | Close browser panel                                                    |
+| Method                              | Description                                                     |
+| ----------------------------------- | --------------------------------------------------------------- |
+| `cdp.session()`                     | Bind and return the panel's stable generation-fenced session    |
+| `cdp.getCdpEndpoint()`              | Get the CDP WebSocket URL and token for raw `CdpConnection`     |
+| `cdp.consoleHistory()`              | Host-captured console history since panel creation              |
+| `cdp.screenshot()`                  | One-call host capture                                           |
+| `cdp.stop()`                        | Stop loading                                                    |
+| `navigate()`/`reload()`/`rebuild()` | Panel lifecycle; the session page binds the new generation next |
+| `archive()`                         | Archive the panel and its subtree                               |
 
-Use `handle.ensureLoaded()` before RPC calls to an unloaded panel. CDP access
-loads targets automatically after approval.
+CDP access loads targets automatically after approval. An operation in flight
+when the generation changes rejects with `panel_cdp_generation_changed`; it is
+never replayed. Listeners, `consoleEvents()`, and locators do not carry across
+a generation. The full reference is the Base workspace's
+`skills/workspace-dev/BROWSER.md`.
 
 The CDP page API follows Playwright's sync/async split: actions and
 DOM reads are async, while `page.url()` returns the cached current URL as a
@@ -567,7 +567,7 @@ const stateArgs = useStateArgs<{ channelName: string; mode: string }>();
 const args = panel.stateArgs.get<{ channelName: string }>();
 
 // Update state (persists to DB + triggers re-render via WebSocket)
-await panel.stateArgs.set({ mode: "expanded" });
+await panel.stateArgs.patch({ mode: "expanded" });
 ```
 
 ---
@@ -580,7 +580,7 @@ storage. To persist state from a panel, dispatch to a worker DO that owns the
 schema. See `docs/architecture/storage.md` for the storage primitive and
 `workspace/skills/workspace-dev/WORKERS.md` for the canonical worker/DO pattern.
 
-For ephemeral or per-panel state, prefer `useStateArgs`/`panel.stateArgs.set` (above)
+For ephemeral or per-panel state, prefer `useStateArgs`/`panel.stateArgs.patch` (above)
 or the panel scope persistence (`scope` RPC service) used by the agentic-chat
 REPL.
 

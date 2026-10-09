@@ -27,6 +27,8 @@ import type { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 import { resourcePhrase } from "@vibestudio/shared/authority/authorityRows";
 import { acquisitionInvocationProjection } from "./acquisitionInvocationProjection.js";
+import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
+import { bindContextArgs } from "@vibestudio/service-schemas/clients/contextBinding";
 
 export function createAuthorityService(deps: {
   dispatcher: ServiceDispatcher;
@@ -188,7 +190,12 @@ export function createAuthorityService(deps: {
           operations.push(
             await deps.dispatcher.compileAuthorityPlanOperation(ctx, {
               ...operation,
-              args: operation.args ?? [],
+              args: bindContextArgs(
+                operation.service,
+                operation.method,
+                operation.args ?? [],
+                author.contextId
+              ),
             })
           );
         }
@@ -237,7 +244,12 @@ export function createAuthorityService(deps: {
             { caller: invokingCaller },
             {
               ...operation,
-              args: operation.args ?? [],
+              args: bindContextArgs(
+                operation.service,
+                operation.method,
+                operation.args ?? [],
+                author.contextId
+              ),
             }
           )
         );
@@ -271,8 +283,7 @@ export function createAuthorityService(deps: {
             target.agentBinding.channelId !== continuation.channelId ||
             target.className !== input.execution.image.className ||
             target.key !== input.execution.image.objectKey ||
-            continuation.executorId !==
-              `do:${input.execution.image.source}:${input.execution.image.className}:${input.execution.image.objectKey}` ||
+            continuation.executorId !== doTargetId(input.execution.image) ||
             targetCode.repoPath !== input.execution.image.source ||
             targetCode.effectiveVersion !== input.execution.image.effectiveVersion
           )

@@ -826,8 +826,19 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
   slotCommitPreparedNavigation: {
     ...workspaceStateMethods["slot.commitPreparedNavigation"],
   },
-  slotUpdateCurrentStateArgs: {
-    ...workspaceStateMethods["slot.updateCurrentStateArgs"],
+  slotPatchCurrentStateArgs: {
+    ...workspaceStateMethods["slot.patchCurrentStateArgs"],
+    args: z.tuple([
+      z.string(),
+      z.record(z.string(), z.unknown()),
+      z
+        .object({
+          entryKey: z.string().min(1),
+          activeBuildKey: z.string().nullable(),
+          schema: z.record(z.string(), z.unknown()).optional(),
+        })
+        .strict(),
+    ]),
   },
   slotMove: { ...workspaceStateMethods["slot.move"] },
   slotClose: { ...workspaceStateMethods["slot.close"] },

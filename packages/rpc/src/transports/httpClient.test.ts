@@ -68,9 +68,9 @@ describe("httpClientTransport", () => {
     });
 
     await expect(transport.send(requestEnvelope())).rejects.toThrow(
-      /RPC fetch to http:\/\/127\.0\.0\.1:65530\/rpc failed after 3 attempts: fetch failed \(cause: Error: connect ECONNREFUSED 127\.0\.0\.1:65530 code=ECONNREFUSED syscall=connect address=127\.0\.0\.1 port=65530\)/
+      /RPC fetch to http:\/\/127\.0\.0\.1:65530\/rpc failed: fetch failed \(cause: Error: connect ECONNREFUSED 127\.0\.0\.1:65530 code=ECONNREFUSED syscall=connect address=127\.0\.0\.1 port=65530\)/
     );
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("respond() resolves a rejecting error envelope on timeout (not null)", async () => {

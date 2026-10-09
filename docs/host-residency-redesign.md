@@ -307,7 +307,7 @@ from which every touch point is generated or read:
 - Catalog entry gains fields: the typed method-table import (H4), `builtinBecause`
   (H1's builtin test — exactly one of `feeds-authority | durable-data | recovery-path`,
   required, no default), `hostCapabilityRequests`, `durableObject.keyVersion`, and
-  `workerd` properties (`injectWorkspaceId`, `bootstrapPhase: "first" | "normal"`,
+  `workerd` properties (`bootstrapPhase: "first" | "normal"`,
   `staticAuthorityProjection`).
 - **`hostCapabilityRequests` are part of the builtin artifact's execution identity**
   (input to the recipe/execution digest, like the reviewed authority manifest today)
@@ -467,11 +467,13 @@ Two layers, in order:
    façade H6 prohibits — a `{kind, id}` switch over unrelated managers is **not**
    acceptable as the implementation.
 2. **One public surface over that contract**: `runtime.supervision.*` (residency
-   `supervision`), with **two key spaces, never mixed**: core verbs (`list`,
-   `describe`, `health`, `logs`, `restart`) address a **runtime entity**
-   (`{kind, entityId}`); release verbs (`versions`, `rollback`) address a **release**
-   (`{kind, releaseId}`), and there is no entity-keyed rollback at all. The surface
-   is semantically uniform because the contract underneath is.
+   `supervision`), with **two key spaces, never conflated**: entity verbs
+   (`health`, `restart`, `retire`) address a **runtime entity** (`{kind, entityId}`);
+   release verbs (`versions`, `rollback`) address a **release** (`{kind, releaseId}`),
+   and there is no entity-keyed rollback at all. Every row carries its entity key and,
+   for kinds with releases, its release key; the read verbs `describe` and `logs` accept either: a release key fans out to that
+   release's live entities. The surface is semantically uniform because the
+   contract underneath is.
 
 Deleted in the same change:
 

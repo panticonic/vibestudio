@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import {
   workspaceFileMethodAuthority,
   type WorkspaceFileEffect,
@@ -64,7 +65,9 @@ const externalSourceUri = nonEmptyText.max(2_048).superRefine((value, context) =
     });
   }
 });
-const commandId = id("Stable idempotency identity. Reuse it for an uncertain retry.");
+const commandId = id(
+  "Semantic command identity and idempotency key. The runtime vcs client mints one per call and reuses it only for its own transport retries; an explicit value names a caller-owned command such as a bound tool invocation."
+);
 const contextId = id("Workspace context identity.");
 const snapshotDigest = z
   .string()
@@ -871,6 +874,11 @@ export const vcsCommitInputSchema = z
   .object({
     ...mutationEnvelope,
     message: nonEmptyText.optional(),
+    concludes: vcsMergeSourceSchema
+      .describe(
+        "A source whose comparison is complete but not concluded (convergent or net-zero). Commit atomically records its decision-only application and refuses with IntegrationIncomplete if it is incomplete."
+      )
+      .optional(),
   })
   .strict();
 export type VcsCommitInput = z.infer<typeof vcsCommitInputSchema>;
@@ -1085,6 +1093,7 @@ export const vcsPushInputSchema = z
     expectedCommittedEventId: id("Exact context commit to publish."),
     expectedMainEventId: id("Observed protected main event."),
     epochTransition: z.literal(true).optional(),
+    templateInstallation: WorkspaceTemplateInstallationSchema.optional(),
   })
   .strict();
 export type VcsPushInput = z.infer<typeof vcsPushInputSchema>;
@@ -1267,9 +1276,15 @@ export const vcsMergeCoordinateSchema = z
 
 export const vcsMergeResolutionStateSchema = z
   .object({
-    complete: z.boolean(),
+    complete: z
+      .boolean()
+      .describe("Every coordinate the source touched is satisfied or decided."),
     remainingCoordinateCount: z.number().int().nonnegative(),
-    concluded: z.boolean(),
+    concluded: z
+      .boolean()
+      .describe(
+        "A reachable decision names the source, or it is already an ancestor. complete:true with concluded:false is a convergent or net-zero source: conclude it with commit({ concludes: source })."
+      ),
   })
   .strict()
   .superRefine((value, context) => {
@@ -2012,19 +2027,21 @@ export const vcsReadMemoryArrivalSchema = z
   .strict();
 
 /** Exact causal coordinates plus bounded statement evidence from the journal. */
-export const vcsReadMemoryCauseSchema = z.object({
-  invocation: vcsTrajectoryInvocationRefSchema,
-  nativeInvocation: nativeInvocationIdentitySchema.nullable(),
-  originatingInput: nativeOriginatingInputSchema.nullable(),
-  turn: vcsTrajectoryTurnRefSchema.nullable(),
-  message: vcsTrajectoryMessageRefSchema.nullable(),
-  toolName: nonEmptyText.nullable(),
-  terminalOutcome: nonEmptyText.nullable(),
-  requestRef: vcsTrajectoryRequestRefSchema.nullable(),
-  turnSummary: z.string().max(600).nullable(),
-  triggerText: z.string().max(1_200).nullable(),
-  sender: vcsTrajectorySenderRefSchema.nullable(),
-}).strict();
+export const vcsReadMemoryCauseSchema = z
+  .object({
+    invocation: vcsTrajectoryInvocationRefSchema,
+    nativeInvocation: nativeInvocationIdentitySchema.nullable(),
+    originatingInput: nativeOriginatingInputSchema.nullable(),
+    turn: vcsTrajectoryTurnRefSchema.nullable(),
+    message: vcsTrajectoryMessageRefSchema.nullable(),
+    toolName: nonEmptyText.nullable(),
+    terminalOutcome: nonEmptyText.nullable(),
+    requestRef: vcsTrajectoryRequestRefSchema.nullable(),
+    turnSummary: z.string().max(600).nullable(),
+    triggerText: z.string().max(1_200).nullable(),
+    sender: vcsTrajectorySenderRefSchema.nullable(),
+  })
+  .strict();
 
 export const vcsReadMemoryEpisodeSchema = z
   .object({
@@ -2301,6 +2318,14 @@ export const vcsErrorSchema = z.discriminatedUnion("code", [
   z.object({ code: z.literal("CommandIdReuse"), ...errorBase, commandId }).strict(),
   z
     .object({
+      code: z.literal("SourceIsAncestor"),
+      ...errorBase,
+      target: vcsStateNodeRefSchema,
+      source: vcsStateNodeRefSchema,
+    })
+    .strict(),
+  z
+    .object({
       code: z.literal("ScopeTooLarge"),
       ...errorBase,
       scope: nonEmptyText,
@@ -2386,6 +2411,8 @@ const ERROR_DESCRIPTIONS: Record<VcsErrorCode, string> = {
   IntegrationIncomplete: "An integration commit still has unaccounted source coordinates.",
   WorkingChangesPresent: "The operation requires a clean context.",
   CommandIdReuse: "The command identity was reused with a different request.",
+  SourceIsAncestor:
+    "The compare source is already in the target's history, so it has nothing to integrate; compare the local working state against main instead.",
   ScopeTooLarge: "The bounded operation requires a narrower request or page.",
   ExternalEffectFailed: "A requested host effect failed.",
   BuildGateFailed: "The exact candidate build/typecheck gate failed.",
@@ -2679,12 +2706,16 @@ const vcsSemanticMethods = defineVcsMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Commit the complete local application chain; derive every integration parent from recorded merge decisions.",
+      "Commit the complete local application chain; derive every integration parent from recorded merge decisions. `concludes` atomically records the decision-only conclusion of one complete convergent or net-zero source.",
     args: z.tuple([vcsCommitInputSchema]),
     returns: vcsCommitResultSchema,
     access: WRITE_ACCESS,
     operationClass: "context-write",
-    references: commonMutationRefs,
+    references: [
+      ...commonMutationRefs,
+      ref("event", "source", "concludes", "eventId"),
+      ref("external-delta", "source", "concludes", "deltaId"),
+    ],
     errors: [...MUTATION_ERRORS, ...methodErrors("IntegrationIncomplete")],
     seeAlso: ["vcs.status", "vcs.push"],
   },
@@ -2925,7 +2956,7 @@ const vcsSemanticMethods = defineVcsMethods({
       ref("event", "source", "source", "eventId"),
       ref("external-delta", "source", "source", "deltaId"),
     ],
-    errors: READ_ERRORS,
+    errors: [...READ_ERRORS, ...methodErrors("SourceIsAncestor")],
     seeAlso: ["vcs.merge", "vcs.inspect"],
   },
   inspect: {

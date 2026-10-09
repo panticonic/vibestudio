@@ -537,13 +537,13 @@ function connectionHandoffFor(actionId: string): { title: string; detail: string
   if (actionId.startsWith("local:")) {
     return {
       title: "Launching local workspace",
-      detail: "Preparing the selected workspace and startup approval gate...",
+      detail: "Opening the workspace. You may be asked to approve its apps first.",
     };
   }
   if (actionId === "pair") {
     return {
       title: "Pairing server",
-      detail: "Redeeming the pairing link over Iroh and connecting...",
+      detail: "Using the pairing link to connect securely to your server...",
     };
   }
   return null;
@@ -555,7 +555,8 @@ function renderConnectionHandoff(): void {
   setHeader(
     "Starting",
     connectionHandoff?.title ?? "Starting workspace",
-    connectionHandoff?.detail ?? "Preparing the selected workspace and startup approval gate..."
+    connectionHandoff?.detail ??
+      "Opening the workspace. You may be asked to approve its apps first."
   );
   approvalsContainer.className = "launch-body";
   approvalsContainer.replaceChildren();
@@ -632,7 +633,7 @@ function appendPairRemote(parent: HTMLElement): void {
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent =
-    "Paste the vibestudio:// pairing link from the server. Pairing connects over Iroh and opens the remote workspace in this window.";
+    "Paste the pairing link your server printed (or that another device shared). Vibestudio connects securely and opens the server's workspace in this window.";
   const fields = document.createElement("div");
   fields.className = "field-grid";
 
@@ -657,7 +658,7 @@ function appendPairRemote(parent: HTMLElement): void {
     connectionButton("Pair server", "pair", async () => {
       if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
       const link = pairLinkValue.trim();
-      if (!link) throw new Error("Paste a vibestudio:// pairing link");
+      if (!link) throw new Error("Paste the pairing link from your server first");
       const result = await bootstrapApi.pairRemote({ link });
       // On success the host accepts the pairing and connects in this process;
       // only a failed parse returns an { ok: false } result for us to surface.
@@ -720,28 +721,31 @@ function appendLocalWorkspaces(parent: HTMLElement, state: BootstrapConnectionSt
     card.append(meta);
   }
 
-  const form = document.createElement("form");
-  form.className = "inline-form";
-  const input = document.createElement("input");
-  input.type = "text";
-  input.placeholder = state.lastLocalWorkspaceName ?? "default";
-  input.value = localWorkspaceValue;
-  input.autocomplete = "off";
-  input.oninput = () => {
-    localWorkspaceValue = input.value;
-  };
-  const launchLabel = state.localWorkspaces.length > 0 ? "Launch existing" : "Create and launch";
-  const launchButton = connectionButton(launchLabel, "local:new", async () => {
-    if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
-    const name = localWorkspaceValue.trim() || state.lastLocalWorkspaceName || "default";
-    await bootstrapApi.launchLocalWorkspace(name);
-  });
-  form.onsubmit = (event) => {
-    event.preventDefault();
-    launchButton.click();
-  };
-  form.append(input, launchButton);
-  card.append(form);
+  // Existing workspaces launch from their rows; new ones are created from the
+  // workspace switcher once a workspace is open. Only a first run names one here.
+  if (state.localWorkspaces.length === 0) {
+    const form = document.createElement("form");
+    form.className = "inline-form";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = state.lastLocalWorkspaceName ?? "default";
+    input.value = localWorkspaceValue;
+    input.autocomplete = "off";
+    input.oninput = () => {
+      localWorkspaceValue = input.value;
+    };
+    const launchButton = connectionButton("Create and launch", "local:new", async () => {
+      if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
+      const name = localWorkspaceValue.trim() || state.lastLocalWorkspaceName || "default";
+      await bootstrapApi.launchLocalWorkspace(name);
+    });
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      launchButton.click();
+    };
+    form.append(input, launchButton);
+    card.append(form);
+  }
 
   parent.append(card);
 }
@@ -789,9 +793,9 @@ function formatEndpointId(endpointId: string): string {
 }
 
 /**
- * The DELIGHTFUL pairing confirmation (bug 1): a reassuring card, NOT a scary
- * blocker. Shows the server label + authenticated Endpoint ID to compare, with a
- * one-tap Trust / Cancel. Trust pairs; Cancel drops back to the normal chooser.
+ * Pairing confirmation: a reassuring card, not a blocker. Shows the server label
+ * and authenticated Endpoint ID to compare, with a one-tap Trust / Cancel. Trust
+ * pairs; Cancel drops back to the normal chooser.
  */
 function appendPairConfirmation(parent: HTMLElement, link: string): void {
   const card = document.createElement("article");
@@ -818,7 +822,7 @@ function appendPairConfirmation(parent: HTMLElement, link: string): void {
   }
 
   meta.textContent =
-    "You opened a pairing link. Confirm the Endpoint ID matches the one shown on the server before connecting.";
+    "You opened a pairing link. Check that this Endpoint ID matches the one your server printed when it started, then connect.";
 
   const details = document.createElement("div");
   details.className = "field-grid";

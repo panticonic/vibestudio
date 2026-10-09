@@ -1,6 +1,8 @@
 import { writeHttpBytes } from "../httpStreamWrite.js";
+import * as codec from "@vibestudio/rpc/protocol/streamCodec";
 import {
   BRIDGE_STREAM_CHUNK_BYTES,
+  decodeRpcJson,
   rpcErrorDataOf,
   rpcDiagnosticIdOf,
   rpcErrorKindOf,
@@ -186,7 +188,7 @@ export class StreamingRelay {
 
     let envelope: RpcEnvelope;
     try {
-      envelope = JSON.parse(Buffer.concat(chunks).toString()) as RpcEnvelope;
+      envelope = decodeRpcJson(Buffer.concat(chunks).toString()) as RpcEnvelope;
     } catch {
       writeJson(res, 400, { error: "Invalid JSON body" });
       return;
@@ -672,7 +674,6 @@ export class StreamingRelay {
       response = result;
     } catch (error) {
       res.writeHead(200, STREAM_HEADERS);
-      const codec = await import("@vibestudio/credential-client/streamFraming");
       await writeHttpBytes(
         res,
         codec.encodeErrorFrame({
@@ -722,7 +723,6 @@ export class StreamingRelay {
   private async httpFrameWriter(
     res: ServerResponse
   ): Promise<(frame: StreamFrame) => Promise<void>> {
-    const codec = await import("@vibestudio/credential-client/streamFraming");
     return async (frame): Promise<void> => {
       if (frame.kind === "head") {
         await writeHttpBytes(

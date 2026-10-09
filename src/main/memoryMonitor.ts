@@ -7,7 +7,6 @@ const log = createDevLogger("MemoryMonitor");
 
 const DEFAULT_LOG_INTERVAL_MS = 60_000;
 
-let monitorTimer: ReturnType<typeof setInterval> | null = null;
 let monitorStarted = false;
 let _viewManager: ViewManager | null = null;
 let pressureHandler: ((summary: string) => void) | null = null;
@@ -129,7 +128,7 @@ export function startMemoryMonitor(): void {
   }
 
   const effectiveInterval = intervalMs > 0 ? intervalMs : DEFAULT_LOG_INTERVAL_MS;
-  monitorTimer = setInterval(() => {
+  setInterval(() => {
     void logMemorySnapshot({
       reason: "interval",
       thresholdMb,
@@ -146,12 +145,4 @@ export function startMemoryMonitor(): void {
       silent: intervalMs <= 0,
     });
   }
-}
-
-export function stopMemoryMonitor(): void {
-  if (monitorTimer) {
-    clearInterval(monitorTimer);
-    monitorTimer = null;
-  }
-  monitorStarted = false;
 }

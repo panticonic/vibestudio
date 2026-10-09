@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { ByteArraySchema } from "@vibestudio/shared/binary";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import {
   workspaceFileMethodAuthority,
@@ -34,14 +35,7 @@ const DESTRUCTIVE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "destructive",
 };
 
-export const fsBinaryEnvelopeSchema = z.object({
-  __bin: z.literal(true).describe("Discriminant marking this object as a base64 binary payload."),
-  data: z.string().describe("The file/buffer bytes, base64-encoded for JSON-RPC transport."),
-});
-
-export type FsBinaryEnvelope = z.infer<typeof fsBinaryEnvelopeSchema>;
-
-const fsDataSchema = z.union([z.string(), fsBinaryEnvelopeSchema]);
+const fsDataSchema = z.union([z.string(), ByteArraySchema]);
 const fsReadEncodingSchema = z.preprocess(
   (value) =>
     value && typeof value === "object" && !Array.isArray(value)
@@ -290,12 +284,12 @@ export const fsMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Read a file's contents. Managed workspace files are resolved through the semantic authority at the context's exact working head, so projected disk bytes are never treated as authoritative; scratch paths read directly from the context filesystem. Overloaded: with an encoding string (or Node-style `{ encoding: \"utf8\" }`) the bytes are decoded and returned as a string; without one, raw bytes are returned base64-encoded in a binary envelope. (Server/shell callers prepend a contextId as the first argument.)",
+      "Read a file's contents. Managed workspace files are resolved through the semantic authority at the context's exact working head, so projected disk bytes are never treated as authoritative; scratch paths read directly from the context filesystem. Overloaded: with an encoding string (or Node-style `{ encoding: \"utf8\" }`) the bytes are decoded and returned as a string; without one, raw bytes are returned as Uint8Array. (Server/shell callers prepend a contextId as the first argument.)",
     args: z.union([
       z.tuple([z.string(), fsReadEncodingSchema.optional()]),
       z.tuple([z.string(), z.string(), fsReadEncodingSchema.optional()]),
     ]),
-    returns: z.union([z.string(), fsBinaryEnvelopeSchema]),
+    returns: z.union([z.string(), ByteArraySchema]),
     access: READ_ACCESS,
     examples: [
       { args: ["/notes/todo.md", "utf8"] },
@@ -366,7 +360,7 @@ export const fsMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. Managed workspace files are recorded as semantic VCS operations before the accepted working head is projected; platform-excluded paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope.",
+      "Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. Managed workspace files are recorded as semantic VCS operations before the accepted working head is projected; platform-excluded paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or bytes (Uint8Array).",
     args: z.union([
       z.tuple([z.string(), fsDataSchema]),
       z.tuple([z.string(), z.string(), fsDataSchema]),
@@ -393,7 +387,7 @@ export const fsMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. Managed workspace files are recorded as attributed semantic VCS operations before projection; platform-excluded paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope.",
+      "Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. Managed workspace files are recorded as attributed semantic VCS operations before projection; platform-excluded paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or bytes (Uint8Array).",
     args: z.union([
       z.tuple([z.string(), fsDataSchema]),
       z.tuple([z.string(), z.string(), fsDataSchema]),
@@ -705,9 +699,11 @@ export const fsMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Materialize the given workspace path(s)/repo(s) (or 'all') into the context working folder. Context folders are SPARSE — only what is materialized exists on disk — so call this for the narrowest scope you need (a repo path like 'panels/chat', a section like 'panels', or specific paths) before reading them OUTSIDE the fs.* API (e.g. a grep/find subprocess). fs.* reads materialize on demand automatically.",
+      "Scoped native extensions only: provision the caller's complete context projection on disk and return its absolute source root. Pass the narrowest scope the extension will read (a repo path like 'panels/chat', a section like 'panels', specific paths, or 'all') before reading it OUTSIDE the fs.* API (e.g. a grep/find subprocess); the scope records read intent while the projection is always complete. fs.* reads provision on demand automatically.",
     args: z.tuple([z.union([z.string(), z.array(z.string()), z.literal("all")])]),
-    returns: voidSchema,
+    returns: z
+      .string()
+      .describe("Absolute on-disk source root of the caller's context projection."),
     access: READ_ACCESS,
   },
   truncate: {
@@ -918,14 +914,14 @@ export const fsMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Read up to `length` bytes from an open handle at the given position (null reads from the current offset), returning the bytes base64-encoded plus the count actually read.",
+      "Read up to `length` bytes from an open handle at the given position (null reads from the current offset), returning the bytes plus the count actually read.",
     args: z.union([
       z.tuple([z.number(), z.number(), z.number().nullable()]),
       z.tuple([z.string(), z.number(), z.number(), z.number().nullable()]),
     ]),
     returns: z.object({
       bytesRead: z.number().describe("Number of bytes actually read into the buffer."),
-      buffer: fsBinaryEnvelopeSchema.describe("The bytes read, base64-encoded."),
+      buffer: ByteArraySchema.describe("The bytes read."),
     }),
     access: READ_ACCESS,
     examples: [{ args: [1, 4096, null] }],
@@ -945,7 +941,7 @@ export const fsMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Write data (UTF-8 string or base64 binary envelope) to a write-capable handle at the given position (null uses the current offset), returning the byte count written. Context-bound callers cannot open GAD-tracked workspace-repo paths with write-capable flags, so their handle writes are scratch-only.",
+      "Write data (UTF-8 string or Uint8Array bytes) to a write-capable handle at the given position (null uses the current offset), returning the byte count written. Context-bound callers cannot open GAD-tracked workspace-repo paths with write-capable flags, so their handle writes are scratch-only.",
     args: z.union([
       z.tuple([z.number(), fsDataSchema, z.number().nullable()]),
       z.tuple([z.string(), z.number(), fsDataSchema, z.number().nullable()]),

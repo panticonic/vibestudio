@@ -18,7 +18,7 @@ export interface TerminalLaunchGateOptions {
   target?: HostTarget;
   yes?: boolean;
   json?: boolean;
-  /** Overall wait deadline. Defaults to ten minutes. */
+  /** Optional deadline for this CLI's wait; startup remains owned by the workspace supervisor. */
   timeoutMs?: number;
 }
 
@@ -42,7 +42,10 @@ export async function runTerminalLaunchGate(
     rpc.call(`${service}.${method}`, args)
   );
   const startedAt = Date.now();
-  const timeoutMs = options.timeoutMs ?? 10 * 60_000;
+  // Building and starting the terminal can legitimately take a while; only an
+  // explicit `--timeout` bounds this CLI's wait. Activation is owned by the
+  // workspace supervisor and may continue after this client disconnects.
+  const timeoutMs = options.timeoutMs ?? Number.POSITIVE_INFINITY;
   let approvalsResolved = 0;
   let lastProgress = "";
 

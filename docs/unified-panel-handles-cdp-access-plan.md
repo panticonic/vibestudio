@@ -150,7 +150,7 @@ accessDecision(op, requester, target) -> {
   - _automate_ (`panel.automate`): `cdp.*`, `navigate`, `reload`, `goBack`, `goForward`,
     `stop`.
   - _structural_ (`panel.structural`): `archive`, `close`, `unload`, `movePanel`, `takeOver`,
-    `openDevTools`, `rebuildPanel`, `rebuildAndReload`, `updatePanelState`/`stateArgs.set`.
+    `openDevTools`, `rebuildPanel`, `rebuildAndReload`, `updatePanelState`/`stateArgs.patch`.
 - **Severity:** `severe` iff target is privileged (`shell:true`), else `standard`.
 - **Bypass (allow, no capability):** requester is the trusted shell/host
   (`CallerKind` `shell`, or a requester whose own panel is `shell:true`).
@@ -272,7 +272,7 @@ Define one type in `workspace/packages/runtime/src/core/types.ts` (merging today
   `getParentWithContract` as a thin alias (`= parent.withContract(contract, "parent")`).
 - **Tree:** `children()`, `parent()`.
 - **Lifecycle:** `ensureLoaded()`, `isLoaded()`, `reload()`, `close()`, `focus()`.
-- **State + introspection:** `stateArgs.get/set`, `snapshot()`, `tree()`, `state()`,
+- **State + introspection:** `stateArgs.get/patch`, `snapshot()`, `tree()`, `state()`,
   `routes()`, `setMode()`.
 - **Automation:** `cdp: CdpAutomation` (renamed from `browser`, see §7).
 
@@ -346,7 +346,7 @@ Export `panelTree` + `PanelHandle` from `workspace/packages/runtime/src/panel/in
 
 Most of the handle is **host/registry-served** and works while the target is unloaded
 (`panelCall` → `shell.panel[method]`): metadata, `children()`/`parent()` (`list`),
-`stateArgs.get/set` (host-persisted), `close()`, `isLoaded()`. Only **live-only** ops need the
+`stateArgs.get/patch` (host-persisted), `close()`, `isLoaded()`. Only **live-only** ops need the
 target's runtime: `cdp.*`, RPC `call`/`emit`, and `_agent` introspection
 (`tree`/`state`/`routes`/`setMode`, `handle.ts:89-92`).
 

@@ -300,7 +300,6 @@ domain padlocked.
 | `governance.read` / `governance.list`                          | see    | mission governance is human-only                                    |
 | `mission.approve/edit/pause/resume/retire` (and `missions.*`)  | manage | charter changes require human review                                |
 | `content.trust.policy.manage` / `content.trust.vouch`          | manage | trust policy must not be self-modifiable                            |
-| `security.audit.read` / `audit.query`                          | see    | audit is the user's record of the agent, not vice versa             |
 | `credentials.audit`                                            | see    | as above                                                            |
 
 Note on `user-approval.request`: agents cause approval requests implicitly by

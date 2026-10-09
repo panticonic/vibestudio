@@ -3760,47 +3760,27 @@ function createTerminalWorkerAliasPlugin(resolveDir: string): esbuild.Plugin {
 }
 
 // yoga.wasm is identical for a given yoga-layout install; extract once per path.
-const yogaWasmCache = new Map<string, Promise<Buffer>>();
+const yogaWasmCache = new Map<string, Buffer>();
 
-/**
- * Extract yoga's raw wasm bytes from its base64-inlined emscripten module by
- * importing the factory and capturing the binary it hands to
- * `WebAssembly.instantiate`. Format-independent. The global patch is held only
- * for our single `factory()` call (workers don't instantiate wasm at build time).
- */
+/** Yoga's raw wasm bytes, decoded from its base64-inlined emscripten module. */
 async function extractYogaWasm(resolveDir: string): Promise<Buffer> {
   const { wasmEsm } = resolveYogaPaths(resolveDir);
-  let cached = yogaWasmCache.get(wasmEsm);
+  const cached = yogaWasmCache.get(wasmEsm);
   if (cached) return cached;
-  cached = (async () => {
-    const mod = await import(pathToFileURL(wasmEsm).href);
-    const factory = mod.default as (opts?: unknown) => Promise<unknown>;
-    const orig = WebAssembly.instantiate;
-    let captured: Buffer | null = null;
-    (WebAssembly as { instantiate: unknown }).instantiate = function (
-      src: BufferSource,
-      imports?: WebAssembly.Imports
-    ) {
-      if (src instanceof ArrayBuffer) captured = Buffer.from(new Uint8Array(src));
-      else if (ArrayBuffer.isView(src)) {
-        captured = Buffer.from(new Uint8Array(src.buffer, src.byteOffset, src.byteLength));
-      }
-      return (orig as typeof WebAssembly.instantiate).call(
-        WebAssembly,
-        src as BufferSource,
-        imports as WebAssembly.Imports
-      );
-    };
-    try {
-      await factory();
-    } finally {
-      (WebAssembly as { instantiate: unknown }).instantiate = orig;
-    }
-    if (!captured) throw new Error("terminal worker build: failed to extract yoga.wasm bytes");
-    return captured;
-  })();
-  yogaWasmCache.set(wasmEsm, cached);
-  return cached;
+  // yoga-layout's base64 ESM binary inlines its module as exactly one
+  // `data:application/octet-stream;base64,` literal; read it from the source.
+  const source = await fs.promises.readFile(wasmEsm, "utf8");
+  const payloads = [
+    ...source.matchAll(/"data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)"/g),
+  ];
+  const wasm = payloads.length === 1 ? Buffer.from(payloads[0]![1]!, "base64") : null;
+  if (!wasm || wasm.subarray(0, 4).toString("binary") !== "\0asm") {
+    throw new Error(
+      `terminal worker build: ${wasmEsm} does not inline exactly one yoga.wasm module`
+    );
+  }
+  yogaWasmCache.set(wasmEsm, wasm);
+  return wasm;
 }
 
 /**
@@ -3930,6 +3910,7 @@ async function buildWorker(
     provider: node.relativePath,
     authority,
     rpcSchemas,
+    durableObjects: (extractedManifest.durable?.classes ?? []).length > 0,
   });
   const rpcCatalogReadyAt = Date.now();
   const exposeModules = normalizeManifestSpecList(extractedManifest.exposeModules);

@@ -9,6 +9,7 @@
  * spreads, so output is byte-identical for methods that don't declare them.
  */
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
+import { renderBytesJsonSchema } from "@vibestudio/shared/binary";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { MethodSchema } from "@vibestudio/shared/typedServiceClient";
 
@@ -30,14 +31,15 @@ export function serializeMethod(method: MethodSchema) {
     ...(method.errors ? { errors: method.errors } : {}),
     ...(method.seeAlso ? { seeAlso: method.seeAlso } : {}),
     ...(method.argumentNames ? { argumentNames: method.argumentNames } : {}),
-    argsSchema: convertZodToJsonSchema(method.args, { target: "openApi3" }) as Record<
-      string,
-      unknown
-    >,
+    argsSchema: convertZodToJsonSchema(method.args, {
+      target: "openApi3",
+      postProcess: renderBytesJsonSchema,
+    }) as Record<string, unknown>,
     ...(method.returns
       ? {
           returnsSchema: convertZodToJsonSchema(method.returns, {
             target: "openApi3",
+            postProcess: renderBytesJsonSchema,
           }) as Record<string, unknown>,
         }
       : {}),

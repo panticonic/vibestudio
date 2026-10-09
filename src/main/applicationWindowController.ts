@@ -76,7 +76,7 @@ interface ApplicationWindowLifetime {
   closed: boolean;
 }
 
-export function chromeWindowColors(dark: boolean): { background: string; symbol: string } {
+function chromeWindowColors(dark: boolean): { background: string; symbol: string } {
   return dark
     ? { background: "#111419", symbol: "#b1bbcb" }
     : { background: "#edf1f6", symbol: "#445166" };
@@ -445,7 +445,6 @@ export class ApplicationWindowController {
         ...(services.browserFaviconObserver
           ? { browserFaviconObserver: services.browserFaviconObserver }
           : {}),
-        autofillPreloadPath: path.join(__dirname, "autofillPreload.cjs"),
         panelPreloadPath: path.join(__dirname, "panelPreload.cjs"),
         appPreloadPath: path.join(__dirname, "appPreload.cjs"),
         browserPreloadPath: path.join(__dirname, "browserPreload.cjs"),

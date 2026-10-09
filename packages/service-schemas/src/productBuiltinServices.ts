@@ -21,7 +21,6 @@ interface BuiltinBase {
     keyMode: "workspace-scoped" | "verified-user-workspace" | "caller-supplied";
   };
   workerd: {
-    injectWorkspaceId: boolean;
     bootstrapPhase: "first" | "normal";
     staticAuthorityProjection: boolean;
     unsafeEval: boolean;
@@ -82,7 +81,6 @@ export const PRODUCT_BUILTINS = [
     directMethods: workspaceStateEngineMethods,
     durableObject: { keyVersion: 1, objectKey: "workspace", keyMode: "workspace-scoped" },
     workerd: {
-      injectWorkspaceId: true,
       bootstrapPhase: "first",
       staticAuthorityProjection: true,
       unsafeEval: false,
@@ -105,7 +103,6 @@ export const PRODUCT_BUILTINS = [
       keyMode: "verified-user-workspace",
     },
     workerd: {
-      injectWorkspaceId: true,
       bootstrapPhase: "normal",
       staticAuthorityProjection: true,
       unsafeEval: false,
@@ -123,7 +120,6 @@ export const PRODUCT_BUILTINS = [
     builtinBecause: "feeds-authority",
     durableObject: { keyVersion: 1, objectKey: "owner", keyMode: "caller-supplied" },
     workerd: {
-      injectWorkspaceId: true,
       bootstrapPhase: "normal",
       staticAuthorityProjection: true,
       unsafeEval: true,
@@ -150,7 +146,6 @@ export const PRODUCT_BUILTINS = [
     builtinBecause: "feeds-authority",
     durableObject: { keyVersion: 1, objectKey: "subscription", keyMode: "caller-supplied" },
     workerd: {
-      injectWorkspaceId: true,
       bootstrapPhase: "normal",
       staticAuthorityProjection: true,
       unsafeEval: false,

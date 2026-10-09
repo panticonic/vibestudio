@@ -850,7 +850,7 @@ const remoteCommands: CliCommand[] = [
     name: "terminal",
     summary: "Review approvals and start the selected terminal app",
     usage:
-      "vibestudio remote terminal [--pair <link>] [--workspace <name>] [--yes] [--timeout 10m]",
+      "vibestudio remote terminal [--pair <link>] [--workspace <name>] [--yes] [--timeout <duration>]",
     flags: [
       {
         name: "pair",
@@ -867,7 +867,7 @@ const remoteCommands: CliCommand[] = [
       {
         name: "timeout",
         takesValue: true,
-        description: "Stop waiting after this duration (default 10m)",
+        description: "Stop waiting after this duration (default: wait until ready)",
       },
       JSON_FLAG,
     ],
@@ -929,7 +929,8 @@ const terminalCommands: CliCommand[] = [
     group: "terminal",
     name: "start",
     summary: "Review approvals and start the selected terminal app",
-    usage: "vibestudio terminal start [--pair <link>] [--workspace <name>] [--yes] [--timeout 10m]",
+    usage:
+      "vibestudio terminal start [--pair <link>] [--workspace <name>] [--yes] [--timeout <duration>]",
     flags: [
       {
         name: "pair",
@@ -946,7 +947,7 @@ const terminalCommands: CliCommand[] = [
       {
         name: "timeout",
         takesValue: true,
-        description: "Stop waiting after this duration (default 10m)",
+        description: "Stop waiting after this duration (default: wait until ready)",
       },
       JSON_FLAG,
     ],
@@ -1033,24 +1034,26 @@ const commandRegistry: CliCommand[] = [
   ...storageCommands,
 ];
 
-const GROUP_ORDER = [
-  "remote",
-  "terminal",
-  "mobile",
-  "model",
-  "agent",
-  "approvals",
-  "fs",
-  "vcs",
-  "templates",
-  "workspace",
-  "eval",
-  "channel",
-  "context",
-  "panel",
-  "system-test",
-  "storage",
-];
+/** Every command group, in help order, with its one-line description. */
+const GROUP_DESCRIPTIONS: Record<string, string> = {
+  remote: "pairing, servers, workspaces, and remote hosts",
+  terminal: "launch the terminal workspace app",
+  mobile: "develop, install, inspect, and pair mobile clients",
+  model: "connect and renew model-provider credentials",
+  agent: "sessions, diagnostics, services, and workspace skills",
+  approvals: "list, decide, and follow pending approval requests",
+  fs: "read and edit files in the active agent context",
+  vcs: "inspect, commit, merge, and push workspace repositories",
+  templates: "discover, inspect, author, and publish workspace templates",
+  workspace: "maintain checked-in workspace source declarations",
+  eval: "run sandboxed code in the active agent context",
+  channel: "list, read, send, and follow conversation channels",
+  context: "materialize and watch remote context folders",
+  panel: "inspect and capture workspace panels",
+  "system-test": "run and inspect headless agentic system tests on a paired instance",
+  storage: "inspect and prune regenerable caches",
+};
+const GROUP_ORDER = Object.keys(GROUP_DESCRIPTIONS);
 
 export async function main(argv: string[]): Promise<number> {
   const [group, ...rest] = argv;
@@ -1174,7 +1177,7 @@ function normalizePassthroughArgs(argv: string[]): string[] {
 function printHelp(): void {
   const sections = GROUP_ORDER.map(
     (group) =>
-      `\n${group} — ${GROUP_DESCRIPTIONS[group] ?? "Commands"}\n${renderGroupHelp(commandRegistry, group)}`
+      `\n${group} — ${GROUP_DESCRIPTIONS[group]}\n${renderGroupHelp(commandRegistry, group)}`
   ).join("\n");
   console.log(`vibestudio
 
@@ -1192,22 +1195,6 @@ Piped output is JSON by default; pass --plain to keep readable output.
 Credentials are stored as a 0600 JSON file at ${credentialPath()}.
 `);
 }
-
-const GROUP_DESCRIPTIONS: Record<string, string> = {
-  remote: "pairing, servers, workspaces, and remote hosts",
-  terminal: "launch the terminal workspace app",
-  mobile: "develop, install, inspect, and pair mobile clients",
-  model: "connect and renew model-provider credentials",
-  agent: "sessions, diagnostics, services, and workspace skills",
-  fs: "read and edit files in the active agent context",
-  vcs: "inspect, commit, merge, and push workspace repositories",
-  templates: "discover, inspect, author, and publish workspace templates",
-  workspace: "maintain checked-in workspace source declarations",
-  eval: "run sandboxed code in the active agent context",
-  channel: "list, read, send, and follow conversation channels",
-  context: "materialize and watch remote context folders",
-  panel: "inspect and capture workspace panels",
-};
 
 function printGroupHelp(group: string): void {
   console.log(`vibestudio ${group}

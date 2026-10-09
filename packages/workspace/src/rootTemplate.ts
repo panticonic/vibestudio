@@ -1,8 +1,7 @@
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import {
   readTemplateManifest,
-  effectiveTemplateManifest,
-  validateTemplateSnapshotInventory,
+  templateRepositories,
   type ParsedTemplateManifest,
 } from "./templateManifest.js";
 
@@ -29,23 +28,18 @@ export function validateRootTemplateSource(input: {
     readFile: (filePath) => input.readFile(filePath),
     expectedSystemEpoch: input.expectedSystemEpoch,
   });
-  const inventory = effectiveTemplateManifest(manifest).inventory;
-  validateTemplateSnapshotInventory(inventory, input.snapshotPaths);
+  const repositories = templateRepositories(input.snapshotPaths).filter((repo) => repo !== "meta");
   const discoveredRepositories = input.repositories
     .filter(({ repoPath }) => repoPath !== "meta")
     .map(({ repoPath }) => repoPath)
     .sort(compareUtf16CodeUnits);
   if (
-    discoveredRepositories.length !==
-      inventory.repositories.filter((repo) => repo !== "meta").length ||
-    discoveredRepositories.some(
-      (repository, index) =>
-        repository !== inventory.repositories.filter((repo) => repo !== "meta")[index]
-    )
+    discoveredRepositories.length !== repositories.length ||
+    discoveredRepositories.some((repository, index) => repository !== repositories[index])
   ) {
     throw new Error(
-      `Root semantic repositories do not match template.repositories: ` +
-        `declared ${inventory.repositories.filter((repo) => repo !== "meta").join(", ")}; discovered ${discoveredRepositories.join(", ")}`
+      `Root semantic repositories do not match source layout: ` +
+        `source ${repositories.join(", ")}; discovered ${discoveredRepositories.join(", ")}`
     );
   }
 

@@ -12,9 +12,6 @@ import {
   type GrepResult,
   type GlobOptions,
   type GrepOptions,
-  encodeBinary,
-  isBinaryEnvelope,
-  type BinaryEnvelope,
 } from "./fsValues.js";
 import type { FsDiskPort } from "./fsDisk.js";
 /** Protected filesystem receiver. Semantic reads/edits retain verified caller
@@ -805,8 +802,8 @@ function bytesToVcsContent(bytes: Buffer): FsVcsContent {
 }
 
 function dataToVcsContent(data: unknown): FsVcsContent {
-  if (isBinaryEnvelope(data)) return bytesToVcsContent(Buffer.from(data.data, "base64"));
-  return { kind: "text", text: data as string };
+  if (typeof data === "string") return { kind: "text", text: data };
+  return bytesToVcsContent(Buffer.from(data as Uint8Array));
 }
 
 function appendVcsContent(existing: FsVcsContent | null, data: unknown): FsVcsContent {
@@ -1294,10 +1291,10 @@ export class FsService {
         throw codedError("EEXIST", `copyFile: managed destination exists: ${destinationRel}`);
       }
       const snapshotRead = (await this.callDisk(ctx, scope, "snapshot", [sourceRel])) as {
-        buffer: BinaryEnvelope;
+        buffer: Uint8Array;
         mode: number;
       };
-      const bytes = Buffer.from(snapshotRead.buffer.data, "base64");
+      const bytes = Buffer.from(snapshotRead.buffer);
       const sourceStat = { mode: snapshotRead.mode };
       await bridge.edit(
         {
@@ -1420,7 +1417,7 @@ export class FsService {
         const encoding = requestedReadEncoding(args[1]);
         return {
           handled: true,
-          result: encoding ? bytes.toString(encoding) : encodeBinary(bytes),
+          result: encoding ? bytes.toString(encoding) : bytes,
         };
       }
       case "readText": {
@@ -1544,10 +1541,7 @@ export class FsService {
           if (!(await tracked(srcRel))) return { handled: false };
           const content = await readWsFile(srcRel, true);
           if (!content) throw codedError("ENOENT", `copyFile: source not found: ${srcRel}`);
-          await this.callDisk(ctx, scope, "writeFile", [
-            dstRel,
-            encodeBinary(contentToBuffer(content)),
-          ]);
+          await this.callDisk(ctx, scope, "writeFile", [dstRel, contentToBuffer(content)]);
           return { handled: true };
         }
         if (await tracked(srcRel)) {
@@ -2020,11 +2014,16 @@ export class FsService {
       return { source: scope.sourceRoot, scratch: scope.root };
     }
 
-    // Explicit projection request for consumers that read disk OUTSIDE fs.*
-    // (for example, grep/find in an extension). The argument declares the
-    // narrowest read intent while the authority still publishes one complete
-    // context projection.
+    // Explicit projection request for native extensions that read disk OUTSIDE
+    // fs.* (for example, grep/find). The argument declares the narrowest read
+    // intent while the authority still publishes one complete context
+    // projection; the result is that projection's on-disk source root.
     if (method === "ensureMaterialized") {
+      if (!scope.exposeHostPaths)
+        throw codedError(
+          "EACCES",
+          "ensureMaterialized is available only to scoped native extensions"
+        );
       if (scope.contextId && bridge) {
         const arg = args[0];
         let repos: RepoPath[] | "all";
@@ -2040,12 +2039,12 @@ export class FsService {
             if (s === "all") any = true;
             else for (const r of s) set.add(r);
           }
-          if (!any && set.size === 0) return undefined;
+          if (!any && set.size === 0) return scope.sourceRoot;
           repos = any ? "all" : [...set];
         }
         await bridge.ensureMaterialized(scope.contextId, repos);
       }
-      return undefined;
+      return scope.sourceRoot;
     }
 
     // Sandboxed context mutations + single-file tracked reads commit/read through

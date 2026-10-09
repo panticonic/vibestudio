@@ -29,6 +29,14 @@ export const agentActionSchema = z.discriminatedUnion("kind", [
       reset: z.boolean().optional(),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("notify"),
+      text: z.string().min(1).max(4_000),
+      title: z.string().min(1).max(200).optional(),
+      alert: z.enum(["inbox", "interrupt"]).optional(),
+    })
+    .strict(),
 ]);
 
 export const triggerSchema = z.discriminatedUnion("kind", [

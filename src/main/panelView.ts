@@ -154,7 +154,6 @@ export class PanelView implements PanelViewLike {
   private formFillManager?: FormFillManagerLike;
   private browserFaviconObserver?: BrowserFaviconObserverLike;
   private browserFaviconCleanup = new Map<string, () => void>();
-  private autofillPreloadPath?: string;
   private panelPreloadPath?: string;
   private appPreloadPath?: string;
   private browserPreloadPath?: string;
@@ -202,7 +201,6 @@ export class PanelView implements PanelViewLike {
     onPanelDocumentCommitted?: (panelId: string, url: string) => void;
     formFillManager?: FormFillManagerLike;
     browserFaviconObserver?: BrowserFaviconObserverLike;
-    autofillPreloadPath?: string;
     panelPreloadPath?: string;
     appPreloadPath?: string;
     browserPreloadPath?: string;
@@ -227,7 +225,6 @@ export class PanelView implements PanelViewLike {
     this.onPanelDocumentCommitted = deps.onPanelDocumentCommitted;
     this.formFillManager = deps.formFillManager;
     this.browserFaviconObserver = deps.browserFaviconObserver;
-    this.autofillPreloadPath = deps.autofillPreloadPath;
     this.panelPreloadPath = deps.panelPreloadPath;
     this.appPreloadPath = deps.appPreloadPath;
     this.browserPreloadPath = deps.browserPreloadPath;
@@ -585,17 +582,13 @@ export class PanelView implements PanelViewLike {
       id: panelId,
       type: "panel",
       browser: true,
-      preload: this.browserPreloadPath ?? this.autofillPreloadPath ?? null,
+      preload: this.browserPreloadPath ?? null,
       parentId: parentId ?? undefined,
       partition,
       injectHostThemeVariables: false,
     });
 
-    this.setupBrowserStateTracking(
-      panelId,
-      view.webContents,
-      this.browserPreloadPath ?? this.autofillPreloadPath ?? null
-    );
+    this.setupBrowserStateTracking(panelId, view.webContents, this.browserPreloadPath ?? null);
 
     // Register immediately so CDP access checks pass before dom-ready.
     // Root panels are CDP targets too; parentage is no longer an auth input.

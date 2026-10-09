@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 import { DEFAULT_ANDROID_AVD, ensureAndroidAvd } from "./lib/android-avd.mjs";
+import { flagValue } from "./lib/args.mjs";
 
 function parseArgs(argv) {
   const options = {
@@ -18,11 +19,11 @@ function parseArgs(argv) {
       options.passthroughArgs.push(...argv.slice(i + 1));
       break;
     } else if (arg === "--platform") {
-      options.platform = argv[++i] ?? options.platform;
+      options.platform = flagValue(argv, ++i, arg);
     } else if (arg === "--avd") {
-      options.avd = argv[++i] ?? null;
+      options.avd = flagValue(argv, ++i, arg);
     } else if (arg === "--simulator") {
-      options.simulator = argv[++i] ?? options.simulator;
+      options.simulator = flagValue(argv, ++i, arg);
     } else if (arg === "--help") {
       options.help = true;
     } else {

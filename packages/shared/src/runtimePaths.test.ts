@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   collectInstalledRuntimeReadRoots,
-  getInstalledSpeechRuntime,
   getExistingAppNodeModulesRoots,
 } from "./runtimePaths.js";
 
@@ -17,23 +16,6 @@ function fixture(): string {
   fixtures.push(root);
   return root;
 }
-
-it("resolves an immutable installed speech coordinate and rejects path traversal", () => {
-  const root = fixture();
-  const appRoot = path.join(root, "app.asar");
-  const resources = path.join(root, "app.asar.unpacked", "dist/phonon");
-  mkdirSync(resources, { recursive: true });
-  const vendor = "a".repeat(64),
-    code = "b".repeat(64);
-  const pointer = path.join(resources, "runtime.json");
-  writeFileSync(pointer, JSON.stringify({ version: 1, vendor, code }));
-  expect(getInstalledSpeechRuntime(appRoot)).toEqual({
-    readRoot: path.join(resources, vendor),
-    entryRoot: path.join(resources, vendor, "code", code),
-  });
-  writeFileSync(pointer, JSON.stringify({ version: 1, vendor: "../outside", code }));
-  expect(() => getInstalledSpeechRuntime(appRoot)).toThrow(/coordinate/);
-});
 
 it("uses one physical dependency realm even when Electron exposes an ASAR alias", () => {
   const root = fixture();

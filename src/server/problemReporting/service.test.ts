@@ -79,12 +79,67 @@ it("makes sanitization reviewable and rejects an outdated preview", async () => 
     ...reportFixture().problem,
     symptom: "registered-sensitive-token at https://example.com/?password=secret",
   });
-  await expect(f.human.prepare(draft.id, 1)).rejects.toThrow("Sensitive text");
+  const preview = await f.human.prepare(draft.id, 1);
+  expect(preview.revision).toBe(2);
   const revised = await f.human.get(draft.id);
+  expect(revised.revision).toBe(preview.revision);
   expect(revised.value.problem.symptom).not.toContain("registered-sensitive-token");
-  const preview = await f.human.prepare(draft.id, revised.revision);
-  await expect(f.human.send(draft.id, 1, preview.digest)).rejects.toThrow();
+  expect(revised.value.submissionId).toBe(preview.submissionId);
   expect(preview.bytes).not.toContain("password=secret");
+  expect(preview.bytes).not.toContain("registered-sensitive-token");
+  await expect(f.human.send(draft.id, 1, preview.digest)).rejects.toThrow();
+  await f.human.send(draft.id, preview.revision, preview.digest);
+  expect(f.store.submission("alice", "ws", preview.submissionId)["state"]).toBe("queued");
+});
+it("appends narrative with host-assigned IDs and caller-derived authorship, and patches by section ID", async () => {
+  const f = fixture();
+  const draft = await f.agent.create(reportFixture().problem);
+  const section = {
+    section: "findings" as const,
+    authorLabel: "Agent",
+    claims: "inferred" as const,
+    markdown: "The ordering step likely compared case-folded keys.",
+    evidenceIds: [],
+  };
+  const appended = await f.agent.appendNarrative(draft.id, draft.revision, [
+    section,
+    { ...section, section: "questions", claims: "unverified", markdown: "Is it reproducible?" },
+  ]);
+  expect(appended.revision).toBe(2);
+  expect(appended.sectionIds).toHaveLength(2);
+  const human = await f.human.appendNarrative(draft.id, appended.revision, [
+    { ...section, section: "symptom", claims: "observed", markdown: "It sorted wrongly." },
+  ]);
+  const current = await f.agent.get(draft.id);
+  expect(current.value.narrative.map((n) => [n.id, n.author])).toEqual([
+    [appended.sectionIds[0], "agent"],
+    [appended.sectionIds[1], "agent"],
+    [human.sectionIds[0], "user"],
+  ]);
+  await expect(f.agent.appendNarrative(draft.id, appended.revision, [section])).rejects.toThrow(
+    "changed"
+  );
+  const patched = await f.agent.patchNarrative(draft.id, human.revision, appended.sectionIds[0]!, {
+    claims: "observed",
+    markdown: "Verified: keys were case-folded.",
+  });
+  const after = await f.agent.get(draft.id);
+  expect(after.value.narrative[0]).toMatchObject({
+    id: appended.sectionIds[0],
+    author: "agent",
+    section: "findings",
+    claims: "observed",
+    markdown: "Verified: keys were case-folded.",
+  });
+  await expect(
+    f.agent.patchNarrative(draft.id, patched.revision, human.sectionIds[0]!, { markdown: "x" })
+  ).rejects.toThrow("only be edited by the user");
+  await expect(
+    f.agent.patchNarrative(draft.id, patched.revision, randomUUID(), { markdown: "x" })
+  ).rejects.toThrow("unavailable");
+  await f.human.patchNarrative(draft.id, patched.revision, human.sectionIds[0]!, {
+    markdown: "It sorted gamma before beta.",
+  });
 });
 it("imports a selected frozen server snapshot once, preserves agent narrative, and never enrolls or sends", async () => {
   const f = fixture();

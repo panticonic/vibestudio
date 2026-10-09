@@ -25,6 +25,7 @@ import { parseAndroidDeviceAbi, resolveAdbInstallTarget } from "./lib/mobile-and
 import { buildAndroidApp, internalAndroidApkPath } from "./lib/mobile-native-android.mjs";
 import { bootedIosSimulator, iosBuildTarget } from "./lib/mobile-ios.mjs";
 import { readIosSigningConfig } from "./lib/mobile-ios-signing.mjs";
+import { flagValue } from "./lib/args.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const androidDir = path.join(repoRoot, "apps", "mobile", "android");
@@ -70,30 +71,30 @@ function parseArgs(argv) {
     if (arg === "--") {
       continue;
     } else if (arg === "--platform") {
-      options.platform = argv[++i] ?? "android";
+      options.platform = flagValue(argv, ++i, arg);
     } else if (arg === "--device") {
-      options.device = argv[++i] ?? null;
+      options.device = flagValue(argv, ++i, arg);
     } else if (arg === "--simulator") {
       options.simulator = true;
     } else if (arg === "--artifact-url") {
-      options.artifactUrl = argv[++i] ?? "";
+      options.artifactUrl = flagValue(argv, ++i, arg);
     } else if (arg === "--checksum-url") {
-      options.checksumUrl = argv[++i] ?? "";
+      options.checksumUrl = flagValue(argv, ++i, arg);
     } else if (arg === "--artifact-sha256") {
-      options.artifactSha256 = argv[++i] ?? "";
+      options.artifactSha256 = flagValue(argv, ++i, arg);
     } else if (arg === "--package") {
-      options.packageName = argv[++i] ?? "";
+      options.packageName = flagValue(argv, ++i, arg);
     } else if (arg === "--no-build") {
       options.noBuild = true;
       options.fromSource = true;
     } else if (arg === "--from-source") {
       options.fromSource = true;
     } else if (arg === "--configuration") {
-      options.configuration = argv[++i] ?? options.configuration;
+      options.configuration = flagValue(argv, ++i, arg);
     } else if (arg === "--team-id") {
-      options.teamId = argv[++i] ?? null;
+      options.teamId = flagValue(argv, ++i, arg);
     } else if (arg === "--bundle-id") {
-      options.bundleId = argv[++i] ?? options.bundleId;
+      options.bundleId = flagValue(argv, ++i, arg);
     } else if (arg === "--launch") {
       options.launch = true;
     } else if (arg === "--reset-app") {

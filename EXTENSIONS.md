@@ -493,7 +493,7 @@ One route namespace is available to an extension that exposes `fetch`:
 
 - `request` and the returned `Response` use the standard Fetch API types.
 - The `ExtensionFetchContext` passed to `fetch` is the same activated `ExtensionContext` the extension received at `activate`, plus a `waitUntil(promise)` method for fire-and-forget background work the host should wait on before considering the response complete. The activated `ctx` and the fetch `ctx` are not different objects; this is one long-lived context, not a per-request one.
-- The host marshals each Request to the extension process over the existing WebSocket as a structured "fetch envelope" frame, awaits the Response, and proxies bytes back to the caller. Small bodies travel inline as base64; larger bodies are transferred through file-backed envelopes so they do not hit the old 10 MB frame cap. Fully live chunk streaming over the WebSocket envelope is still future work.
+- The host marshals each Request to the extension process over the existing WebSocket as a structured "fetch envelope" frame, awaits the Response, and proxies bytes back to the caller. Bodies cross as native bytes: an empty body inline, any other body as a pull stream that the receiving side reads in bounded chunks over RPC, so no single frame carries the whole body.
 - Fetch handlers also run under `ctx.invocation.current()`. Auto-prefix requests get the authenticated caller in the envelope and `userlandCaller` when that caller is a panel/worker.
 - A request that arrives before the extension finishes `activate`, while it's in `pending-approval`, or while it's in `error` gets a 503 with a descriptive body. No queueing.
 - The fetch handler runs in the same process as `activate` — they share state, can call each other's helpers, can share connection pools. If you want a route to call into the extension's RPC API for free, just call your API methods directly inside `fetch`.
@@ -877,7 +877,7 @@ Listed here so future readers don't waste time considering them:
 - **Panel orchestration** (`workspace-sync`, `PanelStoreDO`).
 - **Core services other services use** (`blobstoreService`, `scopeService`, `metaService`, `notificationService`).
 - **Credential storage** (`credentialService`, `credentialLifecycle`) — host-rooted trust. Additional credential _backends_ (hardware tokens, etc.) could be extensions; the core stays.
-- **`auditService`** — security audit log. Could technically be an extension, but making auditing optional weakens it as a property. Keep in-host.
+- **Credential audit log** (`AuditLog`, written by the credential services) — could technically be an extension, but making auditing optional weakens it as a property. Keep in-host.
 
 ### Gaps surfaced by the migration plan
 

@@ -13,6 +13,7 @@ describe("wireCredentialService", () => {
     const inert = {};
 
     const service = wireCredentialService({
+      statePath: "/nonexistent/vibestudio-credential-bootstrap-test",
       container,
       routeRegistry: new RouteRegistry(),
       eventService: new EventService(),

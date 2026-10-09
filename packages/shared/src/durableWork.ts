@@ -3,8 +3,6 @@ import type { DORef } from "./doDispatcher.js";
 export const DURABLE_WORK_QUEUES = [
   "channel-delivery",
   "workspace-publication",
-  "agent-wake",
-  "agent-effect",
 ] as const;
 
 export type DurableWorkQueue = (typeof DURABLE_WORK_QUEUES)[number];

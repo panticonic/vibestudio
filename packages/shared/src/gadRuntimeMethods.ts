@@ -40,6 +40,7 @@ export const GAD_RUNTIME_METHOD_NAMES = [
   "diagnoseInvocation",
   "inspectChannelRoster",
   "inspectAgentHealth",
+  "inspectAgent",
   "listAgentDirectory",
   "searchAgentDirectory",
   "describeChannels",

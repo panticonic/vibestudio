@@ -11,14 +11,12 @@ import { verifyExecutionArtifactRef } from "@vibestudio/shared/execution/retenti
 
 export const DEVELOPMENT_RUN_MARKER = ".vibestudio-development-run.json";
 const RUN_ID = /^[A-Za-z0-9._-]{1,160}$/u;
-type MarkerV1 = { version: 1; runId: string; snapshotDigest: string };
-type MarkerV2 = {
+type Marker = {
   version: 2;
   runId: string;
   snapshotDigest: string;
   artifact: ExecutionArtifactRefV1 | null;
 };
-type Marker = MarkerV1 | MarkerV2;
 
 /** Durable owner of native development run roots and their exact build references. */
 export class DevelopmentRunRoots implements ExecutionRootProvider {
@@ -31,7 +29,6 @@ export class DevelopmentRunRoots implements ExecutionRootProvider {
       root: string;
       workspaceId: string;
       publicationJournal: ExecutionPublicationPort;
-      legacyRoots?: (epoch: number) => Promise<readonly ExecutionRoot[]>;
     }
   ) {}
 
@@ -111,11 +108,11 @@ export class DevelopmentRunRoots implements ExecutionRootProvider {
     await fs.rm(this.runRoot(runId), { recursive: true, force: true });
   }
 
-  async snapshotRoots(epoch: number): Promise<readonly ExecutionRoot[]> {
-    return this.exclusive(() => this.snapshotRootsUnlocked(epoch));
+  async snapshotRoots(): Promise<readonly ExecutionRoot[]> {
+    return this.exclusive(() => this.snapshotRootsUnlocked());
   }
 
-  private async snapshotRootsUnlocked(epoch: number): Promise<readonly ExecutionRoot[]> {
+  private async snapshotRootsUnlocked(): Promise<readonly ExecutionRoot[]> {
     let entries: import("node:fs").Dirent[];
     try {
       entries = await fs.readdir(this.deps.root, { withFileTypes: true });
@@ -130,39 +127,8 @@ export class DevelopmentRunRoots implements ExecutionRootProvider {
     const markers = await Promise.all(
       runIds.map(async (runId) => ({ runId, marker: await this.read(runId) }))
     );
-    const legacyMarkers = markers.filter(
-      (entry): entry is { runId: string; marker: MarkerV1 } => entry.marker.version === 1
-    );
-    const migrated = new Map<string, ExecutionArtifactRefV1 | null>();
-    if (legacyMarkers.length > 0) {
-      if (!this.deps.legacyRoots)
-        throw new Error(
-          "Legacy development run markers require the development service migration source"
-        );
-      const legacyRoots = await this.deps.legacyRoots(epoch);
-      for (const { runId, marker } of legacyMarkers) {
-        const matches = legacyRoots.filter(
-          (root) =>
-            root.owner === "development-run" &&
-            root.ownerId === runId &&
-            root.artifact.buildKey === marker.snapshotDigest &&
-            root.artifact.sourceState.workspaceId === this.deps.workspaceId
-        );
-        if (matches.length > 1)
-          throw new Error(`Legacy development run ${runId} has ambiguous retained artifacts`);
-        const artifact = matches[0]?.artifact ?? null;
-        if (artifact) this.verifyArtifact(artifact, marker.snapshotDigest);
-        await this.write(runId, {
-          version: 2,
-          runId,
-          snapshotDigest: marker.snapshotDigest,
-          artifact,
-        });
-        migrated.set(runId, artifact);
-      }
-    }
     return markers.flatMap(({ runId, marker }) => {
-      const artifact = marker.version === 2 ? marker.artifact : (migrated.get(runId) ?? null);
+      const artifact = marker.artifact;
       return artifact
         ? [
             {
@@ -188,21 +154,18 @@ export class DevelopmentRunRoots implements ExecutionRootProvider {
     if (!raw || typeof raw !== "object") throw this.ownershipError(runId);
     const marker = raw as Record<string, unknown>;
     if (
-      (marker["version"] !== 1 && marker["version"] !== 2) ||
+      marker["version"] !== 2 ||
       marker["runId"] !== runId ||
       typeof marker["snapshotDigest"] !== "string" ||
-      (marker["version"] === 2 && !("artifact" in marker))
+      !("artifact" in marker) ||
+      (marker["artifact"] !== null && typeof marker["artifact"] !== "object")
     )
       throw this.ownershipError(runId);
-    if (marker["version"] === 2) {
-      if (marker["artifact"] !== null && typeof marker["artifact"] !== "object")
-        throw this.ownershipError(runId);
-      if (marker["artifact"])
-        this.verifyArtifact(
-          marker["artifact"] as ExecutionArtifactRefV1,
-          marker["snapshotDigest"] as string
-        );
-    }
+    if (marker["artifact"])
+      this.verifyArtifact(
+        marker["artifact"] as ExecutionArtifactRefV1,
+        marker["snapshotDigest"] as string
+      );
     return marker as Marker;
   }
 
@@ -233,7 +196,7 @@ export class DevelopmentRunRoots implements ExecutionRootProvider {
     );
   }
 
-  private async write(runId: string, marker: MarkerV2): Promise<void> {
+  private async write(runId: string, marker: Marker): Promise<void> {
     const file = path.join(this.runRoot(runId), DEVELOPMENT_RUN_MARKER);
     const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {

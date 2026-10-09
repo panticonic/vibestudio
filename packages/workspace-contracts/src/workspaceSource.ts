@@ -3,7 +3,7 @@ import {
   WorkspaceTemplateDependencySchema,
   WorkspaceTemplatePinSchema,
 } from "./workspaceConfigSchema.js";
-import type { WorkspaceTemplatePin } from "./types.js";
+import type { WorkspaceTemplatePin, WorkspaceTemplateInstallation } from "./types.js";
 
 /**
  * Narrow host/workspace ABI for bootstrapping an exact workspace snapshot.
@@ -108,5 +108,6 @@ export interface InitializeExactWorkspaceSnapshotInput {
   commandId: string;
   pin: WorkspaceSourceExactPin;
   repositories: readonly WorkspaceSourceSnapshotRepository[];
+  installation: WorkspaceTemplateInstallation;
   acknowledgement?: WorkspaceSourceEffectAcknowledgement;
 }

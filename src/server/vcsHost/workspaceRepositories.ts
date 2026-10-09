@@ -7,7 +7,7 @@ import type { ProtectedRefStore } from "../services/protectedRefStore.js";
 import type { PackageGraph } from "../buildV2/packageGraph.js";
 import { EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { normalizeRepositoryPath } from "./paths.js";
-import { discoverRepos, type DiscoveredRepo } from "./repoDiscovery.js";
+import { discoverRepos, type DiscoveredRepo } from "@vibestudio/shared/runtime/repoDiscovery";
 import { collectTreeFiles, type ContentProjectionStore } from "./contentProjectionStore.js";
 
 export interface WorkspaceRepositoriesDeps {

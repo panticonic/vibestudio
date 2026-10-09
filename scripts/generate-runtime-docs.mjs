@@ -85,6 +85,10 @@ async function updateRuntimeCatalog(schemaFile, exportName, catalogFile, checkOn
     catalogFile
   );
   const module = await tsImport(schemaPath, import.meta.url);
+  const { renderBytesJsonSchema } = await tsImport(
+    path.join(repoRoot, "packages/shared/src/binary.ts"),
+    import.meta.url
+  );
   const methods = module[exportName];
   if (!methods || typeof methods !== "object") {
     throw new Error(`Failed to load ${exportName} for runtime catalog generation`);
@@ -102,11 +106,15 @@ async function updateRuntimeCatalog(schemaFile, exportName, catalogFile, checkOn
               },
             }
           : {}),
-        argsSchema: convertZodToJsonSchema(method.args, { target: "openApi3" }),
+        argsSchema: convertZodToJsonSchema(method.args, {
+          target: "openApi3",
+          postProcess: renderBytesJsonSchema,
+        }),
         ...(method.returns
           ? {
               returnsSchema: convertZodToJsonSchema(method.returns, {
                 target: "openApi3",
+                postProcess: renderBytesJsonSchema,
               }),
             }
           : {}),
@@ -237,5 +245,28 @@ updateDoc(
   userlandRoot,
   "skills/workspace-dev/WORKERS.md",
   [["worker-runtime-surface", renderSurfaceTable(workerSurface)]],
+  checkOnly
+);
+
+const { EVAL_IMPORTABLE_KEYS } = await tsImport(
+  path.join(repoRoot, "packages/service-schemas/src/runtime/runtimeSurface.eval.ts"),
+  import.meta.url
+);
+if (!Array.isArray(EVAL_IMPORTABLE_KEYS) || EVAL_IMPORTABLE_KEYS.length === 0) {
+  throw new Error("Failed to load EVAL_IMPORTABLE_KEYS from runtimeSurface.eval.ts");
+}
+
+updateDoc(
+  userlandRoot,
+  "skills/sandbox/EVAL.md",
+  [
+    [
+      "eval-importable",
+      // Blank lines keep the paragraph stable under Prettier's Markdown formatting.
+      `\nImportable members (generated from \`EVAL_IMPORTABLE_KEYS\` in \`runtimeSurface.eval.ts\`): ${EVAL_IMPORTABLE_KEYS.map(
+        (key) => `\`${key}\``
+      ).join(", ")}.\n`,
+    ],
+  ],
   checkOnly
 );

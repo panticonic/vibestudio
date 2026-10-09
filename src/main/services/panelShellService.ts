@@ -13,6 +13,11 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { BrowserVaultNativeClient } from "./browserVaultNativeClient.js";
 
+type FindInPageResult = { activeMatchOrdinal: number; matches: number };
+const NO_FIND_MATCHES: FindInPageResult = { activeMatchOrdinal: 0, matches: 0 };
+/** Cancellers for in-flight finds, so `stopFindInPage` settles them. */
+const pendingFinds = new WeakMap<Electron.WebContents, Set<() => void>>();
+
 function requirePanelHostingAppCapability(
   ctx: ServiceContext,
   viewManager: ViewManager,
@@ -142,32 +147,51 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
       const vm = deps.getViewManager();
       requirePanelHostingAppCapability(ctx, vm, "findInPage");
       const contents = deps.panelView.getWebContents(panelId);
-      if (!contents || contents.isDestroyed() || !text) {
-        return { activeMatchOrdinal: 0, matches: 0 };
-      }
-      return new Promise<{ activeMatchOrdinal: number; matches: number }>((resolve) => {
-        const timeout = setTimeout(() => {
+      if (!contents || contents.isDestroyed() || !text) return NO_FIND_MATCHES;
+      return new Promise<FindInPageResult>((resolve, reject) => {
+        let requestId = -1;
+        const cleanup = () => {
           contents.off("found-in-page", onResult);
-          resolve({ activeMatchOrdinal: 0, matches: 0 });
-        }, 2_000);
+          contents.off("destroyed", onDestroyed);
+          pendingFinds.get(contents)?.delete(cancel);
+        };
+        const settle = (result: FindInPageResult) => {
+          cleanup();
+          resolve(result);
+        };
+        const cancel = () => settle(NO_FIND_MATCHES);
+        const onDestroyed = cancel;
         const onResult = (_event: Electron.Event, result: Electron.FoundInPageResult) => {
-          if (!result.finalUpdate) return;
-          clearTimeout(timeout);
-          contents.off("found-in-page", onResult);
-          resolve({
-            activeMatchOrdinal: result.activeMatchOrdinal,
-            matches: result.matches,
-          });
+          // A newer find on the same page supersedes this one; Chromium sends no
+          // final update for the superseded request.
+          if (result.requestId > requestId) return cancel();
+          if (result.requestId !== requestId || !result.finalUpdate) return;
+          settle({ activeMatchOrdinal: result.activeMatchOrdinal, matches: result.matches });
         };
         contents.on("found-in-page", onResult);
-        contents.findInPage(text, options);
+        contents.once("destroyed", onDestroyed);
+        let finds = pendingFinds.get(contents);
+        if (!finds) {
+          finds = new Set();
+          pendingFinds.set(contents, finds);
+        }
+        finds.add(cancel);
+        try {
+          requestId = contents.findInPage(text, options);
+        } catch (error) {
+          cleanup();
+          reject(error);
+        }
       });
     },
     stopFindInPage: (ctx, [panelId]) => {
       const vm = deps.getViewManager();
       requirePanelHostingAppCapability(ctx, vm, "stopFindInPage");
       const contents = deps.panelView.getWebContents(panelId);
-      if (contents && !contents.isDestroyed()) contents.stopFindInPage("clearSelection");
+      if (contents && !contents.isDestroyed()) {
+        contents.stopFindInPage("clearSelection");
+        for (const cancel of [...(pendingFinds.get(contents) ?? [])]) cancel();
+      }
       return;
     },
     getBrowserPageIdentity: async (ctx, [panelId]) => {

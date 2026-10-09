@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type { SessionScope } from "./agent/sessionContext.js";
+import {
+  loadSystemTestArtifact,
+  saveSystemTestRun,
+  systemTestRunDir,
+  type StoredSystemTestRun,
+} from "./systemTestStore.js";
 import {
   isRetryableSystemTestStatusReadFailure,
   settleSystemTestDoctor,
@@ -7,6 +17,7 @@ import {
   readSystemTestDriverState,
   failedSummary,
   resultValue,
+  retainFailedRunEvidence,
   unavailableTrajectory,
 } from "./systemTestCommands.js";
 import { RpcError } from "./rpcClient.js";
@@ -458,5 +469,106 @@ describe("system-test trajectory with neither source", () => {
     expect(error.message).toContain("No durable system-test record exists for st_abc");
     expect(error.message).toContain("may omit live inspection too");
     expect(error.message).toContain("vibestudio system-test inspect st_abc --test browser-panel");
+  });
+});
+
+describe("system-test failure evidence retention", () => {
+  const original = process.env["XDG_CONFIG_HOME"];
+  const roots: string[] = [];
+  afterEach(() => {
+    if (original === undefined) delete process.env["XDG_CONFIG_HOME"];
+    else process.env["XDG_CONFIG_HOME"] = original;
+    for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  function storedRun(): StoredSystemTestRun {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "system-test-retention-"));
+    roots.push(root);
+    process.env["XDG_CONFIG_HOME"] = root;
+    const runId = "run-retention-test";
+    const run: StoredSystemTestRun = {
+      schemaVersion: 2,
+      runId,
+      createdAt: Date.now(),
+      serverUrl: "http://127.0.0.1:1",
+      sessionName: "test",
+      ownerId: "owner",
+      contextId: "context",
+      runnerEntityId: "runner",
+      runnerTargetId: "target",
+      artifactDir: systemTestRunDir(runId),
+      config: { names: ["alpha", "beta"], all: false, concurrency: 1 },
+    };
+    saveSystemTestRun(run);
+    return run;
+  }
+
+  function scopeFor(calls: Array<{ method: string; args: unknown[] }>): SessionScope {
+    const trajectories: Record<string, string> = {
+      alpha: JSON.stringify({ test: "alpha", events: ["x".repeat(300_000)] }),
+      beta: JSON.stringify({ test: "beta", events: [] }),
+    };
+    return {
+      client: {
+        callTarget: async (_target: string, method: string, args: unknown[]) => {
+          calls.push({ method, args });
+          if (method === "inspectSystemTestRun") return { diagnostics: ["alpha failed"] };
+          if (method === "readSystemTestTrajectoryPage") {
+            const [, name, , offset, limit] = args as [string, string, boolean, number, number];
+            const text = trajectories[name]!;
+            return {
+              length: text.length,
+              encoding: "plain-string",
+              chunk: text.slice(offset, offset + limit),
+            };
+          }
+          throw new Error(`unexpected ${method}`);
+        },
+      },
+    } as unknown as SessionScope;
+  }
+
+  it("keeps the inspection packet and failed tests' full trajectories privately", async () => {
+    const run = storedRun();
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const summary = {
+      failed: 1,
+      failedTests: ["alpha"],
+      testsWithUnexpectedToolFailures: ["beta"],
+    };
+    await retainFailedRunEvidence(scopeFor(calls), run, summary);
+    const dir = path.join(run.artifactDir, "failure-evidence");
+    expect(loadSystemTestArtifact(run.runId, "inspect", dir)).toEqual({
+      diagnostics: ["alpha failed"],
+    });
+    expect(loadSystemTestArtifact(run.runId, "trajectory-alpha-full", dir)).toMatchObject({
+      test: "alpha",
+    });
+    expect(loadSystemTestArtifact(run.runId, "trajectory-beta-full", dir)).toEqual({
+      test: "beta",
+      events: [],
+    });
+    expect(loadSystemTestArtifact(run.runId, "inspect-alpha", dir)).toEqual({
+      diagnostics: ["alpha failed"],
+    });
+    expect(loadSystemTestArtifact(run.runId, "trajectory-alpha", dir)).toMatchObject({
+      test: "alpha",
+    });
+    for (const file of fs.readdirSync(dir)) {
+      expect(fs.statSync(path.join(dir, file)).mode & 0o777).toBe(0o600);
+    }
+    expect(fs.existsSync(path.join(dir, "trajectory-alpha-full.json.gz"))).toBe(true);
+
+    const before = calls.length;
+    await retainFailedRunEvidence(scopeFor(calls), run, summary);
+    expect(calls).toHaveLength(before);
+  });
+
+  it("retains nothing for a passing run", async () => {
+    const run = storedRun();
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    await retainFailedRunEvidence(scopeFor(calls), run, { passed: 2, failed: 0, errored: 0 });
+    expect(calls).toEqual([]);
+    expect(fs.existsSync(path.join(run.artifactDir, "failure-evidence"))).toBe(false);
   });
 });

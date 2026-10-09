@@ -6,24 +6,47 @@ const outputUrl = new URL(
   import.meta.url
 );
 
+// [generated constant, schema module, method-table export, service name]
 const sources = [
-  ["RUNTIME_METHOD_NAMES", "../packages/service-schemas/src/runtime.ts", "runtimeMethods"],
-  ["WORKSPACE_METHOD_NAMES", "../packages/service-schemas/src/workspace.ts", "workspaceMethods"],
-  ["BLOBSTORE_METHOD_NAMES", "../packages/service-schemas/src/blobstore.ts", "blobstoreMethods"],
-  ["EXTENSIONS_METHOD_NAMES", "../packages/service-schemas/src/extensions.ts", "extensionsMethods"],
+  ["RUNTIME_METHOD_NAMES", "../packages/service-schemas/src/runtime.ts", "runtimeMethods", "runtime"],
+  [
+    "WORKSPACE_METHOD_NAMES",
+    "../packages/service-schemas/src/workspace.ts",
+    "workspaceMethods",
+    "workspace",
+  ],
+  [
+    "BLOBSTORE_METHOD_NAMES",
+    "../packages/service-schemas/src/blobstore.ts",
+    "blobstoreMethods",
+    "blobstore",
+  ],
+  [
+    "EXTENSIONS_METHOD_NAMES",
+    "../packages/service-schemas/src/extensions.ts",
+    "extensionsMethods",
+    "extensions",
+  ],
   [
     "BROWSER_DATA_METHOD_NAMES",
     "../packages/service-schemas/src/browserData.ts",
     "browserDataMethods",
+    "browserData",
   ],
   [
     "GIT_INTEROP_METHOD_NAMES",
     "../packages/service-schemas/src/gitInterop.ts",
     "gitInteropMethods",
+    "gitInterop",
   ],
-  ["VCS_METHOD_NAMES", "../packages/service-schemas/src/vcs.ts", "vcsMethods"],
-  ["GAD_METHOD_NAMES", "../packages/service-schemas/src/workspaceSource.ts", "gadMethods"],
-  ["GAD_WIRE_METHOD_NAMES", "../packages/service-schemas/src/workspaceSource.ts", "gadWireMethods"],
+  ["VCS_METHOD_NAMES", "../packages/service-schemas/src/vcs.ts", "vcsMethods", "vcs"],
+  ["GAD_METHOD_NAMES", "../packages/service-schemas/src/workspaceSource.ts", "gadMethods", "gad"],
+  [
+    "GAD_WIRE_METHOD_NAMES",
+    "../packages/service-schemas/src/workspaceSource.ts",
+    "gadWireMethods",
+    "gadWire",
+  ],
 ];
 
 const declarations = [];
@@ -31,10 +54,33 @@ const renderStringTuple = (values) =>
   values.length === 0
     ? "[]"
     : `[\n${values.map((value) => `  ${JSON.stringify(value)},`).join("\n")}\n]`;
-let vcsModule;
-for (const [constant, relativeModule, exportName] of sources) {
+/** A method is context-bound when its schema declares its top-level
+ * `contextId` input field as a context reference; portable runtime wrappers
+ * and the authority-plan compiler both supply that field from the caller's
+ * bound context. */
+const isContextBound = (definition) =>
+  Array.isArray(definition?.references) &&
+  definition.references.some(
+    (reference) =>
+      reference.kind === "context" &&
+      reference.path.length === 1 &&
+      reference.path[0] === "contextId"
+  );
+/** A method is command-bound when its schema declares its top-level
+ * `commandId` input field as a semantic command reference; the runtime client
+ * mints that identity once per logical call. */
+const isCommandBound = (definition) =>
+  Array.isArray(definition?.references) &&
+  definition.references.some(
+    (reference) =>
+      reference.kind === "command" &&
+      reference.path.length === 1 &&
+      reference.path[0] === "commandId"
+  );
+const contextBound = [];
+const commandBound = [];
+for (const [constant, relativeModule, exportName, service] of sources) {
   const module = await import(new URL(relativeModule, import.meta.url).href);
-  if (exportName === "vcsMethods") vcsModule = module;
   const methods = module[exportName];
   if (!methods || typeof methods !== "object") {
     throw new Error(`${relativeModule} does not export an object named ${exportName}`);
@@ -42,20 +88,27 @@ for (const [constant, relativeModule, exportName] of sources) {
   declarations.push(
     `export const ${constant} = ${renderStringTuple(Object.keys(methods))} as const;`
   );
+  const bound = Object.entries(methods)
+    .filter(([, definition]) => isContextBound(definition))
+    .map(([method]) => method);
+  if (bound.length > 0) contextBound.push([service, bound]);
+  const commands = Object.entries(methods)
+    .filter(([, definition]) => isCommandBound(definition))
+    .map(([method]) => method);
+  if (commands.length > 0) commandBound.push([service, commands]);
 }
 
-const vcsContextBoundMethods = Object.entries(vcsModule.vcsOperationRegistry)
-  .filter(([, operation]) =>
-    operation.references.some(
-      (reference) =>
-        reference.kind === "context" &&
-        reference.path.length === 1 &&
-        reference.path[0] === "contextId"
+const renderServiceTable = (constant, entries) =>
+  `export const ${constant} = {\n${entries
+    .map(
+      ([service, methods]) =>
+        `  ${service}: ${renderStringTuple(methods).replaceAll("\n", "\n  ")},`
     )
-  )
-  .map(([method]) => method);
+    .join("\n")}\n} as const;`;
+
 declarations.push(
-  `export const VCS_CONTEXT_BOUND_METHOD_NAMES = ${renderStringTuple(vcsContextBoundMethods)} as const;`
+  renderServiceTable("CONTEXT_BOUND_METHOD_NAMES", contextBound),
+  renderServiceTable("COMMAND_BOUND_METHOD_NAMES", commandBound)
 );
 
 const content = `/**

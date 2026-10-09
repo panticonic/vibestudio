@@ -198,7 +198,7 @@ function schemaType(schema: unknown, depth = 0): string {
   }
   const type = value["type"];
   if (Array.isArray(type)) return type.map(String).join(" | ");
-  if (type === "string") return "string";
+  if (type === "string") return value["format"] === "binary" ? "Uint8Array" : "string";
   if (type === "integer" || type === "number") return jsonSchemaNumericType(type, value);
   if (type === "boolean") return "boolean";
   if (type === "null") return "null";
@@ -215,10 +215,7 @@ function schemaType(schema: unknown, depth = 0): string {
   const hasAdditionalProperties =
     additionalProperties === true ||
     (additionalProperties !== null && typeof additionalProperties === "object");
-  if (
-    hasAdditionalProperties &&
-    (!properties || typeof properties !== "object")
-  ) {
+  if (hasAdditionalProperties && (!properties || typeof properties !== "object")) {
     return `Record<string, ${schemaType(additionalProperties, depth + 1)}>`;
   }
   if (properties && typeof properties === "object") {
@@ -420,9 +417,8 @@ export function describeEvalBindingSurface(
     surface: "injected-runtime",
     note:
       `Methods on the injected \`${name}\` binding — what eval code calls directly. The raw ` +
-      `\`${serviceName}\` RPC service (via \`rpc.call("main", "${serviceName}.…", [...])\`) may differ. ` +
-      `When a service name also exists as a runtime binding, \`services.${name}\` is this ` +
-      `ergonomic client; use \`rpc.call\` for raw service-only methods. Low-level wire methods ` +
+      `\`${serviceName}\` RPC service (via \`services.${serviceName}\` or ` +
+      `\`rpc.call("main", "${serviceName}.…", [...])\`) may differ. Low-level wire methods ` +
       `are intentionally hidden behind these wrappers.`,
     methods,
   };
@@ -455,25 +451,25 @@ export function describeEvalBindingIndex(
 }
 
 /** Resolve one named help request without confusing a qualified service method with a service name. */
-export async function describeEvalHelpName(serviceName: string, deps: {
-  bindings: Record<string, unknown>;
-  runtimeModuleName: string;
-  describeBinding: (name: string, binding: Record<string, unknown>) => Promise<unknown | null>;
-  docs: {
-    describe: (id: string) => Promise<unknown | null>;
-    describeService: (name: string) => Promise<unknown | null>;
-  };
-}): Promise<unknown> {
+export async function describeEvalHelpName(
+  serviceName: string,
+  deps: {
+    bindings: Record<string, unknown>;
+    runtimeModuleName: string;
+    describeBinding: (name: string, binding: Record<string, unknown>) => Promise<unknown | null>;
+    docs: {
+      describe: (id: string) => Promise<unknown | null>;
+      describeService: (name: string) => Promise<unknown | null>;
+    };
+  }
+): Promise<unknown> {
   const dot = serviceName.indexOf(".");
   if (dot > 0) {
     const bindingName = serviceName.slice(0, dot);
     const methodName = serviceName.slice(dot + 1);
     const binding = deps.bindings[bindingName];
     if (binding && typeof binding === "object") {
-      const described = await deps.describeBinding(
-        bindingName,
-        binding as Record<string, unknown>
-      );
+      const described = await deps.describeBinding(bindingName, binding as Record<string, unknown>);
       if (described && typeof described === "object") {
         const surface = described as { methods?: Record<string, unknown> };
         if (surface.methods?.[methodName]) {
@@ -519,9 +515,7 @@ export async function describeEvalHelpName(serviceName: string, deps: {
         injected as Record<string, unknown>
       );
       if (described && typeof described === "object") {
-        return describeEvalBindingIndex(
-          described as InjectedSurfaceDescription
-        );
+        return describeEvalBindingIndex(described as InjectedSurfaceDescription);
       }
     }
     // Runtime functions and opaque values carry canonical source signatures in
@@ -570,8 +564,5 @@ export async function describeEvalHelpName(serviceName: string, deps: {
   // Not a rich runtime binding — a plain RPC service. It is reachable as
   // `services.${serviceName}.<method>(...)` (dynamic proxy) or, always, via
   // `rpc.call("main", "${serviceName}.<method>", [...])`.
-  return (
-    (await deps.docs.describeService(serviceName)) ??
-    unknownHelpNameResponse(serviceName)
-  );
+  return (await deps.docs.describeService(serviceName)) ?? unknownHelpNameResponse(serviceName);
 }

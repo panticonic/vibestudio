@@ -564,7 +564,9 @@ export const gitPublishRepoResultSchema = z
       .optional(),
     exported: nonNegativeIntegerSchema,
     headCommit: z.string().nullable(),
-    pushed: z.boolean(),
+    pushed: z
+      .boolean()
+      .describe("The remote branch holds headCommit, whether this call or an earlier one pushed it."),
   })
   .strict();
 export type GitPublishRepoResult = z.infer<typeof gitPublishRepoResultSchema>;
@@ -596,7 +598,7 @@ export const gitInteropMethods = defineServiceMethods({
       },
     },
     description:
-      "Declare or update the external Git remote shared across workspace contexts for a unit, persisting it to meta/vibestudio.yml, syncing it into the repo's git config, and queueing immediate provider reconciliation; may prompt for capability approval. Durable URLs must be credential-free HTTP(S) URLs without query parameters or fragments.",
+      "Declare or update the external Git remote shared across workspace contexts for a unit, persisting it in Git service state, syncing it into the repo's git config, and queueing immediate provider reconciliation; may prompt for capability approval. Durable URLs must be credential-free HTTP(S) URLs without query parameters or fragments.",
     args: z.tuple([
       z.string().describe("Workspace-relative repo/unit path the remote applies to."),
       gitRemoteSchema,
@@ -673,7 +675,7 @@ export const gitInteropMethods = defineServiceMethods({
       },
     },
     description:
-      "Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. The optional credential is a portable logical name resolved by the host for this workspace and remote URL.",
+      "Declare or update upstream tracking for a workspace repo, persisting it in Git service state and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. The optional credential is a portable logical name resolved by the host for this workspace and remote URL.",
     args: z.tuple([
       z.string().describe("Workspace-relative repo/unit path the upstream applies to."),
       gitUpstreamWriteSchema,
@@ -927,7 +929,7 @@ export const gitInteropMethods = defineServiceMethods({
       },
     },
     description:
-      "Resolve exactly one GitHub credential (explicit credentialId, or the sole active GitHub credential; refuse ambiguity), resolve the destination owner from explicit organization, persisted credential target, or authenticated user, preflight live account and publish permissions, create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider.",
+      "Resolve exactly one GitHub credential (explicit credentialId, or the sole active GitHub credential; refuse ambiguity), resolve the destination owner from explicit organization, persisted credential target, or authenticated user, preflight live account and publish permissions, resolve or create the provider repository, configure tracking, export protected main, and push through the configured gitInterop provider. Every step is idempotent: calling it again with the same input resumes after a failed or interrupted step and returns the same publication.",
     args: z.tuple([gitPublishRepoInputSchema]),
     returns: gitPublishRepoResultSchema,
     access: UPSTREAM_OPERATION_ACCESS,

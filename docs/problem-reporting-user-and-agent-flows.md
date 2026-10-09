@@ -72,7 +72,7 @@ a prerequisite for saving the report.
 
 Reporting actions open the existing command-agent conversation through typed `app.openShellSurface` calls. Selected messages and errors become persisted drafts; `problemReports.forConversation` copies a device draft to the connected server where the agent executes, or returns the existing ID when already there. Full evidence and narrative stay in the draft service; the small launch prompt carries only its ID and revision. It never truncates a report to fit the prompt limit.
 
-The agent asks conversationally for missing context, investigates authorized evidence, and writes substantial narrative through `create`, `get`, `update`, `collect`, and `prepare`. Users do not fill out a submission form. Settings keep consent, local incident/history, cancellation, remote deletion, and receipt controls. The settings reporting button begins a conversation; incident and history actions continue selected evidence.
+The agent asks conversationally for missing context, investigates authorized evidence, and writes substantial narrative through `create`, `get`, `appendNarrative`, `patchNarrative`, `update`, `collect`, and `prepare` on the `problemReports` runtime client (an eval global). Users do not fill out a submission form. Settings keep consent, local incident/history, cancellation, remote deletion, and receipt controls. The settings reporting button begins a conversation; incident and history actions continue selected evidence.
 
 For an explicit reporting request, the agent summarizes the report and calls `send(id, revision, digest)`. The host requests a one-time approval showing destination, symptom, expected result, narrative, diagnostics, attachment metadata and disclosure, exact digest, and retention. Approval is bound to that report, not future reports or automatic reporting. Rejection, dismissal, cancellation, or a changed revision prevents queuing. After approval the existing signed outbox delivers the exact prepared bundle. A save-only request leaves a draft without requesting submission. A proactive draft during unrelated work is recommended to the user without opening a report form or launching another agent.
 
@@ -125,7 +125,7 @@ Define these skill instructions concretely:
    credentials, or change reporting preferences merely to report the problem.
    A small existing reproduction check is useful when authorized; reporting
    remains deliverable if reproduction fails or model/credentials are unavailable.
-7. Prepare the exact revision and explain what evidence and narrative will be included. Call `send` when the user wants to share it; the host pauses for targeted approval. The agent cannot grant consent or approve its own upload. Do not open a form or invent a second confirmation after host approval.
+7. Prepare the exact revision and explain what evidence and narrative will be included; `prepare` returns the frozen revision and digest that `send` takes. Call `send` when the user wants to share it; the host pauses for targeted approval. The agent cannot grant consent or approve its own upload. Do not open a form or invent a second confirmation after host approval.
 8. If asked about delivery, inspect canonical status and report queued/received/
    paused/rejected accurately. Preserve report and receipt IDs. Never claim a
    developer saw or fixed the issue simply because intake accepted it.

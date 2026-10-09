@@ -16,6 +16,7 @@ import {
   WorkspaceTemplateDependencySchema,
   WorkspaceGitCommitSchema,
   WorkspaceTemplatePinSchema,
+  WorkspaceTemplateInstallationSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 export { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 
@@ -168,6 +169,7 @@ export const templatePublicationSchema = z
 export const templateSourceTreeSchema = z
   .object({
     sources: z.array(WorkspaceTemplatePinSchema).min(1),
+    installation: WorkspaceTemplateInstallationSchema,
     repositories: z.array(
       z
         .object({
@@ -464,7 +466,7 @@ export const templatesMethods = defineServiceMethods({
           z
             .object({
               repoPath: z.string(),
-              ownership: z.enum(["authored", "inherited", "unlisted"]),
+              ownership: z.enum(["authored", "inherited"]),
               inheritedFrom: z.string().optional(),
             })
             .strict()
@@ -550,6 +552,24 @@ export const templatesMethods = defineServiceMethods({
 
 /** Host-owned exact-source acquisition used by reviewed source consumers. */
 export const workspaceTemplateSourceMethods = defineServiceMethods({
+  readInstallation: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale: "Reviewed template workflows read their exact installed baseline.",
+    },
+    authority: { principals: ["user", "code"] },
+    description: "Read installation provenance at an exact published workspace event.",
+    website: {
+      kind: "closed",
+      reason: "Installation history belongs to the reviewed template workflow.",
+    } as const,
+    args: z.tuple([z.object({ eventId: z.string().min(1) }).strict()]),
+    returns: WorkspaceTemplateInstallationSchema.nullable(),
+    access: READ,
+  },
   composeExact: {
     tier: {
       tier: "open",

@@ -266,8 +266,18 @@ export class BrowserImportHostProvider {
     return status;
   }
 
-  observeSensitiveImport(operationId: string): SensitiveBrowserImportStatus {
-    return this.sensitiveImportLedger.observe(operationId);
+  /** Aggregate status; with `afterVersion`, resolves on the next change of an active import. */
+  async observeSensitiveImport(
+    operationId: string,
+    options: { afterVersion?: string; signal?: AbortSignal } = {}
+  ): Promise<SensitiveBrowserImportStatus> {
+    if (options.afterVersion === undefined) return this.sensitiveImportLedger.observe(operationId);
+    if (this.stopping) throw new Error("Desktop import provider stopped");
+    return this.sensitiveImportLedger.observeAfter(
+      operationId,
+      options.afterVersion,
+      options.signal
+    );
   }
 
   cancelSensitiveImport(operationId: string): SensitiveBrowserImportStatus {
@@ -334,6 +344,7 @@ export class BrowserImportHostProvider {
     for (const operation of this.sensitiveOperations.values()) {
       operation.abort.abort(new Error("Desktop import provider stopped"));
     }
+    this.sensitiveImportLedger.releaseWaiters(new Error("Desktop import provider stopped"));
     await Promise.allSettled(
       [...publicOperations, ...this.sensitiveOperations.values()].map(
         (operation) => operation.promise

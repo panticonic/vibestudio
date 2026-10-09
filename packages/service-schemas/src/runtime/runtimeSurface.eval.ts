@@ -5,7 +5,7 @@
  * `createHostedRuntime` returns and what `import { … } from "@workspace/runtime"`
  * resolves to inside eval. It is now LITERALLY `portableRuntimeSurface` (the
  * single source of truth shared with panel/worker), so eval has the full portable
- * surface including `callMain` and `parent`/`getParent`/`getParentWithContract`.
+ * surface including `callMain` and `getParent`/`getParentWithContract`.
  *
  * `EVAL_AMBIENT_ONLY` are the eval-only ambient globals injected as free
  * variables. EvalDO also mirrors available ones onto its owner-local runtime

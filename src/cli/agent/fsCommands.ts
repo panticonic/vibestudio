@@ -1,30 +1,9 @@
 import * as fs from "node:fs/promises";
-import {
-  fsMethods,
-  type FsBinaryEnvelope,
-  type FsDirentWire,
-  type FsGrepResult,
-} from "@vibestudio/service-schemas/fs";
+import { fsMethods, type FsDirentWire, type FsGrepResult } from "@vibestudio/service-schemas/fs";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import { jsonMode, printError, printResult, UsageError } from "../output.js";
 import { resolveSessionScope, SCOPE_FLAGS } from "./sessionContext.js";
 import { typedClient } from "../typedClients.js";
-
-/** JSON-RPC binary envelope used by fs.readFile/writeFile (see fsService.ts). */
-type BinaryEnvelope = FsBinaryEnvelope;
-
-function isBinaryEnvelope(value: unknown): value is BinaryEnvelope {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { __bin?: unknown }).__bin === true &&
-    typeof (value as { data?: unknown }).data === "string"
-  );
-}
-
-function encodeBinary(buf: Buffer): BinaryEnvelope {
-  return { __bin: true, data: buf.toString("base64") };
-}
 
 type DirentEntry = FsDirentWire;
 type GrepResult = FsGrepResult;
@@ -84,10 +63,10 @@ async function read(inv: ParsedInvocation): Promise<number> {
     const { client, contextId } = resolveSessionScope(inv);
     const fsClient = typedClient("fs", fsMethods, client);
     const result = await fsClient.readFile(contextId, target);
-    if (!isBinaryEnvelope(result)) {
-      throw new Error("unexpected fs.readFile response (missing binary envelope)");
+    if (!(result instanceof Uint8Array)) {
+      throw new Error("unexpected fs.readFile response (missing bytes)");
     }
-    const buf = Buffer.from(result.data, "base64");
+    const buf = Buffer.from(result);
     const out = typeof inv.flags["out"] === "string" ? inv.flags["out"] : undefined;
     if (out) {
       await fs.writeFile(out, buf);
@@ -137,9 +116,9 @@ async function write(inv: ParsedInvocation): Promise<number> {
     const fsClient = typedClient("fs", fsMethods, client);
     const append = inv.flags["append"] === true;
     if (append) {
-      await fsClient.appendFile(contextId, target, encodeBinary(data));
+      await fsClient.appendFile(contextId, target, data);
     } else {
-      await fsClient.writeFile(contextId, target, encodeBinary(data));
+      await fsClient.writeFile(contextId, target, data);
     }
     printResult(
       { path: target, bytes: data.length, appended: append },

@@ -2,26 +2,25 @@
  * credentialCaptureBridge — server→shell roundtrip for interactive session
  * credential capture (browser sign-in flows).
  *
- * Replaces the deleted Electron-IPC `credential-session-capture-request`
- * channel: the server emits a `credential:capture-request` event to connected
- * shell principals and awaits the shell's `credentials.completeCapture`
- * RPC with the same `captureId`. If no desktop shell is attached the request
- * fails IMMEDIATELY with a typed `desktop-attachment-required` error so
- * background agents get an actionable failure instead of a 5-minute hang.
+ * The server sends a `credential:capture-request` to the user's connected
+ * shells and awaits the shell's `credentials.completeCapture` RPC with the same
+ * `captureId`. A person may take as long as they need to sign in: the request
+ * settles only on completion, the caller's abort, or every addressed shell
+ * disconnecting. If no desktop shell is attached it fails immediately with a
+ * typed `desktop-attachment-required` error so background agents get an
+ * actionable failure.
  */
 
 import { randomUUID } from "node:crypto";
 import type { EventService } from "@vibestudio/shared/eventsService";
-
-const DEFAULT_CAPTURE_TIMEOUT_MS = 300_000;
 
 export const DESKTOP_ATTACHMENT_REQUIRED = "desktop-attachment-required";
 
 export interface CredentialCaptureBridge {
   /**
    * Ask the attached desktop shell to run an interactive capture. Resolves with
-   * the shell's result payload; rejects on timeout, abort, shell-reported
-   * error, or when no shell is attached (`code: "desktop-attachment-required"`).
+   * the shell's result payload; rejects on abort, shell-reported error, shell
+   * disconnect, or when no shell is attached (`code: "desktop-attachment-required"`).
    */
   captureSessionCredential<T extends Record<string, unknown>>(
     userId: string,
@@ -38,11 +37,13 @@ interface PendingCapture {
   reject: (error: Error) => void;
 }
 
+function desktopAttachmentRequired(message: string): Error {
+  return Object.assign(new Error(message), { code: DESKTOP_ATTACHMENT_REQUIRED });
+}
+
 export function createCredentialCaptureBridge(deps: {
-  eventService: Pick<EventService, "emitToUser">;
-  timeoutMs?: number;
+  eventService: Pick<EventService, "requestUser">;
 }): CredentialCaptureBridge {
-  const timeoutMs = deps.timeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS;
   const pending = new Map<string, PendingCapture>();
 
   return {
@@ -58,11 +59,11 @@ export function createCredentialCaptureBridge(deps: {
       }
       const captureId = randomUUID();
       return new Promise<T>((resolve, reject) => {
-        let timer: NodeJS.Timeout | null = null;
+        let releaseAddressees: (() => void) | null = null;
         const finish = (fn: () => void) => {
           if (!pending.has(captureId)) return;
           pending.delete(captureId);
-          if (timer) clearTimeout(timer);
+          releaseAddressees?.();
           signal?.removeEventListener("abort", onAbort);
           fn();
         };
@@ -72,30 +73,36 @@ export function createCredentialCaptureBridge(deps: {
           resolve: (value) => finish(() => resolve(value as T)),
           reject: (error) => finish(() => reject(error)),
         });
-        timer = setTimeout(
-          () => finish(() => reject(new Error("Session credential capture timed out"))),
-          timeoutMs
-        );
-        timer.unref?.();
         signal?.addEventListener("abort", onAbort, { once: true });
-        const delivered = deps.eventService.emitToUser(
-          userId,
-          "credential:capture-request",
-          {
-            ...payload,
-            captureId,
+        try {
+          releaseAddressees = deps.eventService.requestUser(
             userId,
-          } as never,
-          ["shell"]
-        );
-        if (!delivered) {
+            "credential:capture-request",
+            { ...payload, captureId, userId } as never,
+            ["shell"],
+            () =>
+              finish(() =>
+                reject(
+                  desktopAttachmentRequired(
+                    "Your desktop app disconnected before the sign-in finished"
+                  )
+                )
+              )
+          );
+        } catch (error) {
+          finish(() => reject(error));
+          return;
+        }
+        // Delivery may synchronously complete, abort, or close its recipients.
+        if (!pending.has(captureId)) {
+          releaseAddressees?.();
+          return;
+        }
+        if (!releaseAddressees) {
           finish(() =>
             reject(
-              Object.assign(
-                new Error(
-                  "Session credential capture requires your desktop app to be attached to Personal"
-                ),
-                { code: DESKTOP_ATTACHMENT_REQUIRED }
+              desktopAttachmentRequired(
+                "Session credential capture requires your desktop app to be attached to Personal"
               )
             )
           );

@@ -1,5 +1,7 @@
-import type { DORefParam } from "@vibestudio/shared/workspaceServiceRpc";
+import { doTargetId, type DORefParam } from "@vibestudio/shared/workspaceServiceRpc";
 import {
+  decodeRpcJson,
+  encodeRpcJson,
   envelopeFromMessage,
   RemoteRpcError,
   type CallerKind,
@@ -159,11 +161,6 @@ export function doRefUrl(ref: DORef, method: string): string {
   return `/_w/${sourcePath}/${encodeURIComponent(ref.className)}/${encodeURIComponent(ref.objectKey)}/${methodPath}`;
 }
 
-/** Canonical RPC target string for a DO (cosmetic on the wire; the DO reads its identity from the URL). */
-export function doTargetString(ref: DORef): string {
-  return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
-}
-
 export interface DurableObjectRelayDeps {
   workerdUrl: string;
   workerdGatewayToken: string;
@@ -270,7 +267,7 @@ async function fetchEnvelopeFromDO(
           ? { "X-Vibestudio-Dispatch-Secret": deps.workerdDispatchSecret }
           : {}),
       },
-      body: JSON.stringify(envelope),
+      body: encodeRpcJson(envelope),
       ...(signal ? { signal } : {}),
       dispatcher: getWorkerdConnectionDispatcher(url),
     } as RequestInit);
@@ -307,7 +304,7 @@ async function postEnvelopeToDO(
   const res = await fetchEnvelopeFromDO(ref, envelope, deps, signal);
   await assertDurableObjectResponseOk(ref, res);
 
-  return res.json();
+  return decodeRpcJson(await res.text());
 }
 
 async function assertDurableObjectResponseOk(ref: DORef, res: Response): Promise<void> {
@@ -315,7 +312,7 @@ async function assertDurableObjectResponseOk(ref: DORef, res: Response): Promise
   const text = await res.text();
   const identity = `${ref.source}:${ref.className}/${ref.objectKey}`;
   try {
-    const parsed = JSON.parse(text) as {
+    const parsed = decodeRpcJson(text) as {
       error?: unknown;
       errorKind?: unknown;
       errorCode?: unknown;
@@ -371,14 +368,14 @@ export async function postToDurableObject(
   deps: DurableObjectRelayDeps,
   signal?: AbortSignal
 ): Promise<unknown> {
-  const targetId = doTargetString(ref);
+  const targetId = doTargetId(ref);
   const finishRelay = beginDurableObjectRelay(targetId);
   try {
     const caller = callerFromDeps(deps);
     const envelope = envelopeFromMessage({
       selfId: caller.callerId,
       from: caller.callerId,
-      target: doTargetString(ref),
+      target: doTargetId(ref),
       caller,
       ...(deps.idempotencyKey ? { idempotencyKey: deps.idempotencyKey } : {}),
       ...(deps.readOnly ? { readOnly: true } : {}),
@@ -406,13 +403,13 @@ export async function streamFromDurableObject(
   deps: DurableObjectRelayDeps,
   signal: AbortSignal
 ): Promise<Response> {
-  const targetId = doTargetString(ref);
+  const targetId = doTargetId(ref);
   const finishRelay = beginDurableObjectRelay(targetId);
   const caller = callerFromDeps(deps);
   const envelope = envelopeFromMessage({
     selfId: caller.callerId,
     from: caller.callerId,
-    target: doTargetString(ref),
+    target: doTargetId(ref),
     caller,
     ...(deps.idempotencyKey ? { idempotencyKey: deps.idempotencyKey } : {}),
     ...(deps.readOnly ? { readOnly: true } : {}),
@@ -481,12 +478,12 @@ export async function postEventToDurableObject(
   deps: DurableObjectRelayDeps,
   signal?: AbortSignal
 ): Promise<void> {
-  const finishRelay = beginDurableObjectRelay(doTargetString(ref));
+  const finishRelay = beginDurableObjectRelay(doTargetId(ref));
   const caller = callerFromDeps(deps);
   const envelope = envelopeFromMessage({
     selfId: caller.callerId,
     from: caller.callerId,
-    target: doTargetString(ref),
+    target: doTargetId(ref),
     caller,
     message: { type: "event", fromId: caller.callerId, event, payload },
   });

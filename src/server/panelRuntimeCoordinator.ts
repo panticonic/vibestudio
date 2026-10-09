@@ -33,8 +33,15 @@ import type {
 const LEASE_RECONNECT_GRACE_MS = 3000;
 
 const ATTEMPT_HISTORY_LIMIT = 8;
-const ATTEMPT_STALL_PROBE_MS = 1_000;
-const ATTEMPT_STALL_ROUNDS = 12;
+/**
+ * Boot-stall supervision (docs/panel-boot-lifecycle-redesign.md §3.6) guarantees
+ * that a bundle which evaluates without ever reporting ready or throwing still
+ * reaches a terminal state. It is a catastrophic backstop, not a performance
+ * expectation: slow machines and heavy panel initialization are valid states,
+ * so only ten minutes without any boot-phase advance count as a stall.
+ */
+export const ATTEMPT_STALL_PROBE_MS = 1_000;
+export const ATTEMPT_STALL_ROUNDS = 600;
 const PHASE_RANK: Record<Exclude<AttemptPhase, "failed">, number> = {
   pending: 0,
   loading: 1,

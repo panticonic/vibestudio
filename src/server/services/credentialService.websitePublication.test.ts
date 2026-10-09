@@ -1,6 +1,8 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
 import { createCredentialService } from "./credentialService.js";
+import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
+import { WebsitePublicationJournal } from "./websitePublicationJournal.js";
 
 const caller = createVerifiedCaller("worker:publisher", "worker");
 const publication = {
@@ -18,6 +20,52 @@ const request = {
 };
 
 describe("credentialService website publication grant", () => {
+  it("retains the reviewed intent, retires caller grants, and never reopens a submitted operation", async () => {
+    const sessionGrantStore = new CredentialSessionGrantStore();
+    const publicationJournal = new WebsitePublicationJournal();
+    const service = createCredentialService({ sessionGrantStore, publicationJournal });
+    await expect(
+      service.handler({ caller }, "beginWebsitePublication", [publication])
+    ).resolves.toMatchObject({ phase: "prepared" });
+    await expect(
+      service.handler({ caller }, "beginWebsitePublication", [
+        { ...publication, artifactDigest: `sha256:${"b".repeat(64)}` },
+      ])
+    ).rejects.toMatchObject({ code: "WEBSITE_PUBLICATION_INTENT_CONFLICT" });
+    const other = createVerifiedCaller("worker:other", "worker");
+    await expect(
+      service.handler({ caller: other }, "recordWebsitePublication", [
+        publication,
+        { phase: "uploaded" },
+      ])
+    ).rejects.toThrow("has not been reviewed");
+    sessionGrantStore.dropForCaller(caller.runtime.id);
+    await expect(
+      service.handler({ caller }, "recordWebsitePublication", [publication, { phase: "uploaded" }])
+    ).rejects.toThrow("has not been reviewed");
+    await service.handler({ caller }, "beginWebsitePublication", [publication]);
+    await service.handler({ caller }, "recordWebsitePublication", [
+      publication,
+      { phase: "uploaded" },
+    ]);
+    await expect(
+      service.handler({ caller }, "beginWebsitePublication", [publication])
+    ).resolves.toMatchObject({ phase: "uploaded" });
+    await service.handler({ caller }, "recordWebsitePublication", [
+      publication,
+      { phase: "submitted", deploymentId: "deployment-1" },
+    ]);
+    await expect(
+      service.handler({ caller }, "beginWebsitePublication", [publication])
+    ).resolves.toMatchObject({ phase: "submitted", deploymentId: "deployment-1" });
+    expect(
+      sessionGrantStore.hasWebsitePublication(caller.runtime.id, publication.operationId)
+    ).toBe(false);
+    await expect(
+      service.handler({ caller }, "publishFetch", [request, publication])
+    ).rejects.toThrow("has not been reviewed");
+  });
+
   it("allows provider requests only after the exact caller-bound intent was reviewed", async () => {
     const forwardProxyFetch = vi.fn(async () => ({
       status: 200,
@@ -49,6 +97,6 @@ describe("credentialService website publication grant", () => {
         request,
         { ...publication, destination: "account/other-site" },
       ])
-    ).rejects.toThrow("differs from the reviewed operation");
+    ).rejects.toMatchObject({ code: "WEBSITE_PUBLICATION_INTENT_CONFLICT" });
   });
 });

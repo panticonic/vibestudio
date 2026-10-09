@@ -1,4 +1,4 @@
-import { RuntimeSupervisionEntityKeySchema } from "./runtime";
+import { RuntimeSupervisionEntityKeySchema } from "./runtime/supervision.js";
 import { z } from "zod";
 import { UsagePingSchema } from "./usageAnalytics";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
@@ -6,6 +6,8 @@ import {
   ProblemReportReceiptSchema,
   ProblemReportBundleSchema,
   ReportDraftContentSchema,
+  ReportNarrativeInputSchema,
+  ReportNarrativePatchSchema,
   ReportProblemSchema,
 } from "./problemReportBundle";
 const id = z.string().uuid();
@@ -205,17 +207,42 @@ export const problemReportsMethods = defineServiceMethods({
   update: {
     ...local,
     description:
-      "Revision-checked replacement of a manual draft including selected agent narrative and evidence. The host assigns revisions and submission IDs.",
+      "Revision-checked replacement of a manual draft's editable content. The host assigns revisions and submission IDs. Agents add and edit narrative with appendNarrative and patchNarrative.",
     args: z.tuple([id, z.number().int().positive(), ReportDraftContentSchema]),
+    returns: z.object({ id, revision: z.number().int() }),
+    access: { sensitivity: "write" },
+  },
+  appendNarrative: {
+    ...local,
+    description:
+      "Revision-checked append of narrative sections to a manual draft. The host assigns each section ID (returned in order) and records the author from the verified caller: agents write agent sections.",
+    args: z.tuple([
+      id,
+      z.number().int().positive(),
+      z.array(ReportNarrativeInputSchema).min(1).max(100),
+    ]),
+    returns: z.object({ id, revision: z.number().int(), sectionIds: z.array(id) }),
+    access: { sensitivity: "write" },
+  },
+  patchNarrative: {
+    ...local,
+    description:
+      "Revision-checked edit of one narrative section by its host-assigned ID. Omitted fields are kept; the section's ID and author never change.",
+    args: z.tuple([id, z.number().int().positive(), id, ReportNarrativePatchSchema]),
     returns: z.object({ id, revision: z.number().int() }),
     access: { sensitivity: "write" },
   },
   prepare: {
     ...local,
     description:
-      "Sanitize and freeze an exact revision for preview/download. Returns exact canonical bytes and digest. Never sends.",
+      "Sanitize and freeze a draft revision for preview, download, and send. When sanitization changes content, the host saves the sanitized draft as the next revision and freezes that. Returns the frozen revision with its exact canonical bytes, submission ID, and digest. Never sends.",
     args: z.tuple([id, z.number().int().positive()]),
-    returns: z.object({ submissionId: id, digest: z.string(), bytes: z.string() }),
+    returns: z.object({
+      revision: z.number().int().positive(),
+      submissionId: id,
+      digest: z.string().regex(/^[a-f0-9]{64}$/),
+      bytes: z.string(),
+    }),
     access: { sensitivity: "write" },
   },
   send: {

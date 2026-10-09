@@ -499,6 +499,7 @@ describe("vibestudio agent commands", () => {
     const { main } = await import("../client.js");
     const entity = {
       identity: { kind: "worker", entityId: "worker:foo" },
+      release: null,
       source: "workers/foo",
       displayName: "foo",
       status: "error",
@@ -541,6 +542,7 @@ describe("vibestudio agent commands", () => {
     const { main } = await import("../client.js");
     const entity = {
       identity: { kind: "worker", entityId: "worker:foo" },
+      release: null,
       source: "workers/foo",
       displayName: "foo",
       status: "running",

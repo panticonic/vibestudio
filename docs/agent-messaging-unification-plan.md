@@ -137,7 +137,7 @@ follows is the state after that pass.
   expandable list, Reply / Open / Dismiss, and an invite for the same channel
   is retired when its message is opened.
 - **Chat UI** — `focusMessageId` stateArg (set by every open path, including an
-  already-open panel via `stateArgs.set`) scrolls to and highlights the
+  already-open panel via `stateArgs.patch`) scrolls to and highlights the
   envelope; the dispatch card has `[Open ▸]`, expands through
   `useForeignEnvelope` (observes, never copies), and shows
   queued/delivered/read/replied; the guest chip is the origin link; the

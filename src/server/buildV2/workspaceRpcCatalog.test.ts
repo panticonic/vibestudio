@@ -42,6 +42,39 @@ describe("workspace RPC build catalog", () => {
     metadata["overview"]!.argsSchema = changed;
     expect(collect().inputContractDigest).not.toBe(original.inputContractDigest);
   });
+  it("rejects module-level runtime clients in Durable Object packages", () => {
+    const root = ownedTempRoot("vibestudio-do-module-runtime-");
+    writeFileSync(
+      join(root, "index.ts"),
+      `import type { SqlStorage } from "@workspace/runtime/worker";
+import { type WorkspaceConfig, PanelDurableObjectBase } from "@workspace/runtime/worker";
+import { DurableObjectBase } from "@workspace/runtime/worker/kernel";
+import { blobstore } from "@workspace/runtime";
+export { fs } from "@workspace/runtime/worker";
+export class NotesDO extends DurableObjectBase {}`
+    );
+    const collect = (durableObjects: boolean) =>
+      collectWorkspaceRpcCatalog(root, {
+        provider: "workers/notes",
+        authority: { requests: [], provides: [] },
+        durableObjects,
+      });
+    expect(collect(false)).toEqual([]);
+    let caught: unknown;
+    try {
+      collect(true);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BuildDiagnosticsError);
+    expect(
+      (caught as BuildDiagnosticsError).diagnostics.map(({ line, source }) => ({ line, source }))
+    ).toEqual([
+      { line: 2, source: "authority" },
+      { line: 4, source: "authority" },
+      { line: 5, source: "authority" },
+    ]);
+  });
   it("reports all independent declaration defects across methods without exposing a partial catalog", () => {
     const root = ownedTempRoot("vibestudio-rpc-all-errors-");
     writeFileSync(
@@ -69,11 +102,11 @@ describe("workspace RPC build catalog", () => {
       expect(diagnostics).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            message: expect.stringContaining(`${name} requires a literal website`),
+            message: expect.stringContaining(`${name} requires a static website`),
             suggestion: expect.stringContaining('kind: "closed"'),
           }),
           expect.objectContaining({
-            message: expect.stringContaining(`${name} must declare a literal RPC effect`),
+            message: expect.stringContaining(`${name} must declare a static RPC effect`),
             suggestion: expect.stringContaining('kind: "userland-capability"'),
           }),
         ])
@@ -210,6 +243,81 @@ describe("workspace RPC build catalog", () => {
         inputContractDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
       }),
     ]);
+  });
+
+  it("resolves module-level policy constants and rejects anything not statically resolvable", () => {
+    const root = ownedTempRoot("vibestudio-rpc-const-policy-");
+    writeFileSync(
+      join(root, "provider.ts"),
+      `
+        const privateSite = { kind: "closed", reason: "Private notes." } as const;
+        const READ = { website: privateSite, effect: { kind: "open" }, tier: "open" } as const;
+        const sensitivity = "read";
+        class NotesDO {
+          @rpc({ ...READ, sensitivity })
+          list() {}
+          @rpc({ ...READ, principals: ["code"], sensitivity: "write" })
+          save() {}
+        }
+      `
+    );
+    expect(
+      collectWorkspaceRpcCatalog(root, {
+        provider: "workers/notes",
+        authority: { requests: [], provides: [] },
+      }).map(({ name, website, effect, access }) => ({ name, website, effect, access }))
+    ).toEqual([
+      {
+        name: "list",
+        website: { kind: "closed", reason: "Private notes." },
+        effect: { kind: "open" },
+        access: { tier: "open", sensitivity: "read" },
+      },
+      {
+        name: "save",
+        website: { kind: "closed", reason: "Private notes." },
+        effect: { kind: "open" },
+        access: { principals: ["code"], tier: "open", sensitivity: "write" },
+      },
+    ]);
+
+    writeFileSync(
+      join(root, "provider.ts"),
+      `
+        import { shared } from "./policy";
+        let mutable = { kind: "open" } as const;
+        function principals() { return ["code"]; }
+        class NotesDO {
+          @rpc({ website: shared, effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+          imported() {}
+          @rpc({ website: { kind: "closed", reason: "x" }, effect: mutable, tier: "open", sensitivity: "read" })
+          notConst() {}
+          @rpc({ website: { kind: "closed", reason: "x" }, effect: { kind: "open" }, principals: principals(), tier: "open", sensitivity: "read" })
+          computed() {}
+        }
+      `
+    );
+    writeFileSync(
+      join(root, "policy.ts"),
+      `export const shared = { kind: "closed", reason: "x" };`
+    );
+    let caught: unknown;
+    try {
+      collectWorkspaceRpcCatalog(root, {
+        provider: "workers/notes",
+        authority: { requests: [], provides: [] },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BuildDiagnosticsError);
+    expect((caught as BuildDiagnosticsError).diagnostics.map((entry) => entry.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("imported references shared, which is not a module-level const"),
+        expect.stringContaining("notConst references mutable, which is not a module-level const"),
+        expect.stringContaining("computed principals must be a static array"),
+      ])
+    );
   });
 
   it("resolves receiver capabilities against the sealed manifest and binds method contracts", async () => {

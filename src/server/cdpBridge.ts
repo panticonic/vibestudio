@@ -22,6 +22,7 @@ import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
 import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
 import { CDP_INTERNAL_GRANT_HEADER, CdpGrantService } from "@vibestudio/shared/cdpGrants";
+import { gatewayWsUrl } from "@vibestudio/shared/hostConfig";
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { parseWebSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
@@ -35,16 +36,6 @@ export const CDP_TARGET_LIFECYCLE_REASONS = {
   hostChanged: "CDP target host changed",
   runtimeChanged: "CDP target runtime changed",
 } as const;
-
-/**
- * A command can lose the target it was reading while the same panel slot
- * moves between hosts or runtime incarnations. That invalidates the command's
- * snapshot, not the panel lifecycle itself.
- */
-export function isCdpTargetLifecycleTransitionError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return Object.values(CDP_TARGET_LIFECYCLE_REASONS).some((reason) => reason === message);
-}
 
 interface CdpBridgeOptions {
   adminToken: string;
@@ -65,8 +56,6 @@ interface CdpBridgeOptions {
    * CDP-automated panel loaded (and eviction-exempt) for the duration.
    */
   onTargetClientPinChange?: (targetId: string, pinned: boolean) => void;
-  protocol?: "http" | "https";
-  externalHost?: string;
   port: number;
 }
 
@@ -157,8 +146,6 @@ export class CdpBridge {
   ) => CdpTargetInfo | null | Promise<CdpTargetInfo | null>;
   private isPanelKnown: (targetId: string) => boolean | Promise<boolean>;
   private onTargetClientPinChange?: (targetId: string, pinned: boolean) => void;
-  private protocol: "http" | "https";
-  private externalHost: string;
   private port: number;
 
   /** Host provider connections: stable hostConnectionId → provider transport */
@@ -166,6 +153,14 @@ export class CdpBridge {
 
   /** Registered targets from providers: targetId → provider metadata */
   private targetRegistry = new Map<string, RegisteredTarget>();
+
+  /** Callers awaiting a target's registration on one host. */
+  private registrationWaiters = new Set<{
+    targetId: string;
+    hostConnectionId: string;
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }>();
 
   /** Active client connections: targetId → Set<WebSocket> */
   private clientConnections = new Map<string, Set<WebSocket>>();
@@ -191,8 +186,6 @@ export class CdpBridge {
     this.getTargetInfo = options.getTargetInfo;
     this.isPanelKnown = options.isPanelKnown ?? (() => true);
     this.onTargetClientPinChange = options.onTargetClientPinChange;
-    this.protocol = options.protocol ?? "http";
-    this.externalHost = options.externalHost ?? "127.0.0.1";
     this.port = options.port;
   }
 
@@ -288,9 +281,8 @@ export class CdpBridge {
     }
 
     const { token } = this.cdpGrants.grant(requesterId, targetId);
-    const wsProtocol = this.protocol === "https" ? "wss" : "ws";
     return {
-      wsEndpoint: `${wsProtocol}://${this.externalHost}:${this.port}/cdp/${targetId}`,
+      wsEndpoint: `${gatewayWsUrl(this.port)}/cdp/${targetId}`,
       token,
     };
   }
@@ -454,6 +446,51 @@ export class CdpBridge {
     return this.targetRegistry.get(targetId)?.hostConnectionId === hostConnectionId;
   }
 
+  /**
+   * Resolve once `hostConnectionId` registers `targetId`. A slow panel load is a
+   * valid state, so this waits without a deadline; it rejects only when that
+   * host can no longer register the target: its provider disconnects, the
+   * panel's lease moves off the host, or the bridge stops.
+   */
+  awaitTargetRegistered(targetId: string, hostConnectionId: string): Promise<void> {
+    if (this.isTargetRegisteredForHost(targetId, hostConnectionId)) return Promise.resolve();
+    if (!this.isProviderConnected(hostConnectionId)) {
+      return Promise.reject(this.hostUnavailableError(targetId));
+    }
+    return new Promise<void>((resolve, reject) => {
+      const waiter = {
+        targetId,
+        hostConnectionId,
+        resolve: () => {
+          this.registrationWaiters.delete(waiter);
+          resolve();
+        },
+        reject: (error: Error) => {
+          this.registrationWaiters.delete(waiter);
+          reject(error);
+        },
+      };
+      this.registrationWaiters.add(waiter);
+    });
+  }
+
+  private settleRegistrationWaiters(
+    matches: (waiter: { targetId: string; hostConnectionId: string }) => boolean,
+    outcome: "registered" | Error
+  ): void {
+    for (const waiter of [...this.registrationWaiters]) {
+      if (!matches(waiter)) continue;
+      if (outcome === "registered") waiter.resolve();
+      else waiter.reject(outcome);
+    }
+  }
+
+  private hostUnavailableError(targetId: string): Error {
+    return Object.assign(new Error(`CDP host provider unavailable for panel: ${targetId}`), {
+      code: "cdp_host_unavailable",
+    });
+  }
+
   handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
     if (!event.previous && !event.next) return;
     const sameRuntimeLease =
@@ -473,6 +510,12 @@ export class CdpBridge {
       this.detachTargetFromHost(event.slotId, event.previous.hostConnectionId, reason);
     }
     this.closeTargetConnections(event.slotId, reason);
+    this.settleRegistrationWaiters(
+      (waiter) =>
+        waiter.targetId === event.slotId &&
+        waiter.hostConnectionId !== event.next?.hostConnectionId,
+      this.hostUnavailableError(event.slotId)
+    );
   }
 
   /**
@@ -508,6 +551,7 @@ export class CdpBridge {
     this.providers.clear();
 
     this.targetRegistry.clear();
+    this.settleRegistrationWaiters(() => true, new Error("CDP bridge shutting down"));
     this.cdpGrants.stop();
     log.info("CdpBridge stopped");
   }
@@ -554,6 +598,11 @@ export class CdpBridge {
       for (const [targetId, registration] of this.targetRegistry) {
         if (registration.hostConnectionId === hostConnectionId) {
           this.targetRegistry.delete(targetId);
+        }
+      }
+      for (const waiter of [...this.registrationWaiters]) {
+        if (waiter.hostConnectionId === hostConnectionId) {
+          waiter.reject(this.hostUnavailableError(waiter.targetId));
         }
       }
     });
@@ -652,6 +701,11 @@ export class CdpBridge {
           source: msg.source,
         };
         this.targetRegistry.set(msg.targetId, registration);
+        this.settleRegistrationWaiters(
+          (waiter) =>
+            waiter.targetId === msg.targetId && waiter.hostConnectionId === hostConnectionId,
+          "registered"
+        );
         if ((this.clientConnections.get(msg.targetId)?.size ?? 0) > 0) {
           providerWs.send(
             JSON.stringify({ type: "cdp:control", targetId: msg.targetId, active: true })

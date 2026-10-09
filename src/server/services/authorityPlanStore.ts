@@ -84,7 +84,7 @@ export class AuthorityPlanStore {
     if (!row) return null;
     const artifact = JSON.parse(row.artifact_json) as CompiledAuthorityPlanArtifact;
     if (
-      (artifact.schemaVersion !== 1 && artifact.schemaVersion !== 2) ||
+      artifact.schemaVersion !== 2 ||
       artifact.bodyDigest !== digestValue ||
       artifact.bodyDigest !==
         digest({
@@ -93,12 +93,8 @@ export class AuthorityPlanStore {
           catalogDigest: artifact.catalogDigest,
           executionImageDigest: artifact.executionImageDigest,
           leaves: artifact.leaves,
-          ...(artifact.schemaVersion === 2
-            ? {
-                executionIntentDigest: artifact.executionIntentDigest,
-                author: artifact.author,
-              }
-            : {}),
+          executionIntentDigest: artifact.executionIntentDigest,
+          author: artifact.author,
         }) ||
       artifact.compilerVersion !== row.compiler_version ||
       artifact.catalogDigest !== row.catalog_digest

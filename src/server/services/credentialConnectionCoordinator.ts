@@ -52,7 +52,12 @@ import {
   renderApiKeyMaterialTemplate,
   validateApiKeyMaterialTemplate,
 } from "./credentialMechanisms/apiKey.js";
-import { OAuthConnectionError, oauthConnectionError } from "./credentialMechanisms/errors.js";
+import {
+  formatOAuthTokenExchangeError,
+  OAuthConnectionError,
+  oauthConnectionError,
+  sanitizeOAuthErrorText,
+} from "./credentialMechanisms/errors.js";
 import { oauth1AuthorizationHeader } from "./credentialMechanisms/oauth1.js";
 import {
   applyOAuthClientAssertion,
@@ -3604,39 +3609,4 @@ function parseJsonObject(
     throw new Error("OAuth token exchange returned a non-object JSON response");
   }
   return parsed as Record<string, unknown>;
-}
-
-function formatOAuthTokenExchangeError(
-  status: number,
-  data: Record<string, unknown> | null,
-  text: string
-): string {
-  const details: string[] = [];
-  const providerError = data?.["error"];
-  const providerDescription = data?.["error_description"];
-  if (typeof providerError === "string" && providerError.trim()) {
-    details.push(providerError.trim());
-  }
-  if (typeof providerDescription === "string" && providerDescription.trim()) {
-    details.push(providerDescription.trim());
-  }
-  if (details.length) {
-    return `OAuth token exchange failed: ${status} ${details.join(": ")}`;
-  }
-  const sanitizedText = sanitizeOAuthErrorText(text);
-  return sanitizedText
-    ? `OAuth token exchange failed: ${status}; response: ${sanitizedText}`
-    : `OAuth token exchange failed: ${status}`;
-}
-
-function sanitizeOAuthErrorText(text: string): string {
-  return text
-    .replace(
-      /("(?:access_token|refresh_token|id_token|client_secret)"\s*:\s*")[^"]*(")/gi,
-      "$1[redacted]$2"
-    )
-    .replace(/((?:access_token|refresh_token|id_token|client_secret)=)[^&\s]+/gi, "$1[redacted]")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 300);
 }

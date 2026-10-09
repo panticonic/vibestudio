@@ -20,6 +20,7 @@ export function createExtensionUnitDriver(
       .filter((row) => row.status === "running");
   const describeRow = (row: ReturnType<typeof rows>[number]): RuntimeSupervisionDescription => ({
     identity: { kind: "extension", entityId: row.name },
+    release: { kind: "extension", releaseId: row.name },
     source: row.source,
     displayName: row.displayName,
     status: row.lastError ? "error" : "running",

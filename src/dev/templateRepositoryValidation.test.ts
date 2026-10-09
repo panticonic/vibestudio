@@ -15,7 +15,7 @@ function fixture(name: string) {
   fs.mkdirSync(path.join(root, "panels/welcome"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "meta/vibestudio.yml"),
-    `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: Fixture\n  repositories:\n    - panels/welcome\n`
+    `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: Fixture\n`
   );
   fs.writeFileSync(
     path.join(root, "panels/welcome/package.json"),

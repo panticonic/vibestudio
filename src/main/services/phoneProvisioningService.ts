@@ -19,7 +19,10 @@ import {
   type PhonePlatform,
   type PhoneProvisionArgs,
 } from "@vibestudio/service-schemas/phoneProvisioning";
-import { HubDeviceSchema } from "@vibestudio/service-schemas/hubControl";
+import {
+  HubPairingOutcomeSchema,
+  type HubPairingOutcome,
+} from "@vibestudio/service-schemas/hubControl";
 import { z } from "zod";
 import {
   hasCompleteAndroidSourceProject,
@@ -52,9 +55,35 @@ export interface PhoneProvisioningServiceDeps {
   hubControlClient: {
     call(service: string, method: string, args: unknown[]): Promise<unknown>;
   };
-  now?: () => number;
-  sleep?: (milliseconds: number) => Promise<void>;
-  pairingTimeoutMs?: number;
+}
+
+/**
+ * Join the hub-owned invite's lifecycle. Aborting cancels the invite, which
+ * settles this same wait, so an aborted setup still returns only after the
+ * invite is terminal.
+ */
+async function awaitPairingOrCancel(
+  client: PhoneProvisioningServiceDeps["hubControlClient"],
+  code: string,
+  signal: AbortSignal,
+  cancelInvite: () => Promise<void>
+): Promise<HubPairingOutcome> {
+  let onAbort: (() => void) | undefined;
+  try {
+    const outcome = await new Promise<HubPairingOutcome>((resolve, reject) => {
+      client
+        .call("hubControl", "awaitPairing", [{ code }])
+        .then((value) => HubPairingOutcomeSchema.parse(value))
+        .then(resolve, reject);
+      onAbort = () => void cancelInvite().catch(reject);
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    });
+    signal.throwIfAborted();
+    return outcome;
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
 }
 
 function defaultRunner(deps: PhoneProvisioningServiceDeps) {
@@ -171,11 +200,6 @@ export function createPhoneProvisioningService(
         )
   );
   const localProviderId = "desktop-local";
-  const now = deps.now ?? Date.now;
-  const sleep =
-    deps.sleep ??
-    ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
-  const pairingTimeoutMs = deps.pairingTimeoutMs ?? 45_000;
 
   async function discover(
     platform?: PhonePlatform,
@@ -318,13 +342,9 @@ export function createPhoneProvisioningService(
       phase: "pairing",
       message: "Connecting your phone securely. Keep it unlocked…",
     });
-    const beforePairing = z
-      .object({ devices: z.array(HubDeviceSchema) })
-      .parse(await deps.hubControlClient.call("hubControl", "listDevices", []));
-    const knownDeviceIds = new Set(beforePairing.devices.map((device) => device.deviceId));
     const invite = z
       .object({
-        pairing: z.object({ deepLink: z.string().min(1) }),
+        pairing: z.object({ code: z.string().min(1), deepLink: z.string().min(1) }),
       })
       .parse(await deps.hubControlClient.call("hubControl", "pairDevice", []));
 
@@ -338,40 +358,65 @@ export function createPhoneProvisioningService(
       selected.deviceId,
       "--json",
     ];
-    await runScript("mobile-device.mjs", connectArgs, { sensitive: true, signal });
+    let inviteCancellation: Promise<void> | undefined;
+    const cancelInvite = (): Promise<void> =>
+      (inviteCancellation ??= Promise.resolve()
+        .then(() =>
+          deps.hubControlClient.call("hubControl", "cancelPairing", [{ code: invite.pairing.code }])
+        )
+        .then((value) => z.object({ cancelled: z.boolean() }).parse(value))
+        .then(() => undefined));
+    let outcome: HubPairingOutcome;
+    try {
+      await runScript("mobile-device.mjs", connectArgs, { sensitive: true, signal });
 
-    const deadline = now() + pairingTimeoutMs;
-    while (now() < deadline) {
-      signal.throwIfAborted();
-      const current = z
-        .object({ devices: z.array(HubDeviceSchema) })
-        .parse(await deps.hubControlClient.call("hubControl", "listDevices", []));
-      const pairedDevice = current.devices.find(
-        (device) => !device.revokedAt && !knownDeviceIds.has(device.deviceId)
+      // The hub settles this wait on the invite's own lifecycle: redemption,
+      // protocol expiry, or cancellation (which aborting setup requests).
+      outcome = await awaitPairingOrCancel(
+        deps.hubControlClient,
+        invite.pairing.code,
+        signal,
+        cancelInvite
       );
-      if (pairedDevice) {
-        return PhoneProvisioningResultSchema.parse({
-          providerId: input.providerId ?? localProviderId,
-          platform: input.platform,
-          workspace: deps.workspaceName,
-          attachedDeviceId: selected.deviceId,
-          installStatus,
-          compatibleAppInstalled: true,
-          pairingStatus: "paired",
-          workspaceStatus: "opening",
-          pairedDevice: {
-            deviceId: pairedDevice.deviceId,
-            label: pairedDevice.label,
-            ...(pairedDevice.platform ? { platform: pairedDevice.platform } : {}),
-            createdAt: pairedDevice.createdAt,
-          },
-        });
+    } catch (error) {
+      // The invite is hub-owned, so retire it if connecting failed before the
+      // phone redeemed it. This also covers cancellation during the local CLI
+      // step, before an awaitPairing RPC exists to join.
+      try {
+        await cancelInvite();
+      } catch (cancelError) {
+        throw new AggregateError(
+          [error, cancelError],
+          "Phone setup failed and its pairing invite could not be retired",
+          { cause: error }
+        );
       }
-      await sleep(500);
+      throw error;
     }
-    throw new Error(
-      "The phone did not join the current account before the pairing invite timed out"
-    );
+    if (outcome.status !== "paired") {
+      throw new Error(
+        outcome.status === "expired"
+          ? "The phone did not join the current account before the pairing invite expired"
+          : "The pairing invite was cancelled before the phone joined"
+      );
+    }
+    const pairedDevice = outcome.device;
+    return PhoneProvisioningResultSchema.parse({
+      providerId: input.providerId ?? localProviderId,
+      platform: input.platform,
+      workspace: deps.workspaceName,
+      attachedDeviceId: selected.deviceId,
+      installStatus,
+      compatibleAppInstalled: true,
+      pairingStatus: "paired",
+      workspaceStatus: "opening",
+      pairedDevice: {
+        deviceId: pairedDevice.deviceId,
+        label: pairedDevice.label,
+        ...(pairedDevice.platform ? { platform: pairedDevice.platform } : {}),
+        createdAt: pairedDevice.createdAt,
+      },
+    });
   }
 
   return {

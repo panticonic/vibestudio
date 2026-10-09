@@ -73,8 +73,6 @@ export type WorkspacePanelTopologyNode = Omit<
   PanelTreeNode,
   "title" | "icon" | "kind" | "ref" | "placement"
 > & { options?: string | null };
-/** @deprecated Internal raw topology alias retained for the Base presentation composer. */
-export type WorkspacePanelTreeNode = WorkspacePanelTopologyNode;
 export interface WorkspacePanelTopologyPage {
   revision: number;
   group: import("./treeIndex.js").PanelTreeGroup;

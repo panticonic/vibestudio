@@ -1,73 +1,68 @@
 import { describe, expect, it } from "vitest";
-import { planServiceMutation, type ServiceRegistration } from "./serviceMutation.js";
+import { planServiceMutation, type ServiceMutationState } from "./serviceMutation.js";
 
-const registration: ServiceRegistration = {
+const service = {
   name: "notes-store",
-  source: "workers/notes-store",
   title: "Notes Store",
   action: "Manage notes",
   description: "Retained notes",
-  notability: "everyday",
-  presentation: { domain: "files", verb: "manage" },
+  notability: "everyday" as const,
+  presentation: { domain: "files" as const, verb: "manage" as const },
   protocols: ["notes.v1"],
-  principals: ["user", "code"],
-  binding: { declaredFor: ["panels/notes"] },
-  transport: { kind: "durable-object", className: "NotesStore", objectKey: "main" },
+  authority: { principals: ["user", "code"] as ("user" | "code")[], binding: { declaredFor: ["panels/notes"] } },
+  durableObject: { className: "NotesStore" },
 };
+const registration = { source: "workers/notes-store", service, singletonKey: "main" };
+const empty = (): ServiceMutationState => ({ services: [], singletonObjects: [], providerServices: [] });
+
 describe("planServiceMutation", () => {
-  it("creates matching declarations without mutating its input", () => {
-    const config = { services: [], singletonObjects: [] };
-    const result = planServiceMutation(config, { ...registration, operation: "create" });
-    expect(config).toEqual({ services: [], singletonObjects: [] });
-    expect(result.services[0]).toMatchObject({
-      protocols: ["notes.v1"],
-      authority: { binding: { declaredFor: ["panels/notes"] } },
-      durableObject: { className: "NotesStore" },
-    });
+  it("creates strict root selection and provider export without mutating input", () => {
+    const state = empty();
+    const result = planServiceMutation(state, { ...registration, operation: "upsert" });
+    expect(state).toEqual(empty());
+    expect(result.services).toEqual([{ source: "workers/notes-store", name: "notes-store" }]);
+    expect(result.providerServices).toEqual([service]);
     expect(result.singletonObjects).toEqual([
       { source: "workers/notes-store", className: "NotesStore", key: "main" },
     ]);
   });
-  it.each(["name", "protocol", "singleton"])("rejects a create collision by %s", (collision) => {
-    const config = planServiceMutation({}, { ...registration, operation: "create" });
-    const candidate = {
-      ...registration,
-      operation: "create" as const,
-      name: collision === "name" ? registration.name : "other",
-      protocols: collision === "protocol" ? registration.protocols : ["other.v1"],
-      source: collision === "singleton" ? registration.source : "workers/other",
-    };
-    expect(() => planServiceMutation(config, candidate)).toThrow("already declared");
+
+  it("replaces one provider export while retaining other exports", () => {
+    const other = { ...service, name: "other", protocols: ["other.v1"] };
+    const result = planServiceMutation({
+      ...empty(),
+      services: [{ source: registration.source, name: service.name }],
+      providerServices: [service, other],
+    }, { ...registration, operation: "upsert", service: { ...service, description: "Updated" } });
+    expect(result.services).toEqual([{ source: registration.source, name: service.name }]);
+    expect(result.providerServices).toEqual([{ ...service, description: "Updated" }, other]);
   });
-  it("leaves a shared singleton unchanged on removal", () => {
-    const config = planServiceMutation({}, { ...registration, operation: "create" });
-    const shared = planServiceMutation(config, {
-      ...registration,
+
+  it("does not let connected-app creation overwrite an existing service identity", () => {
+    const state = planServiceMutation(empty(), { ...registration, operation: "create" });
+    expect(() => planServiceMutation(state, { ...registration, operation: "create" }))
+      .toThrow("service name is already declared");
+  });
+
+  it("removes root selection and its provider export, preserving a shared singleton", () => {
+    const state = planServiceMutation(empty(), { ...registration, operation: "upsert" });
+    const shared = planServiceMutation(state, {
+      source: registration.source,
+      service: { ...service, name: "second", protocols: ["second.v1"] },
       operation: "upsert",
-      name: "second",
-      protocols: ["second.v1"],
     });
-    expect(
-      planServiceMutation(shared, {
-        operation: "remove",
-        name: registration.name,
-        removeSingleton: true,
-      })
-    ).toEqual({ ...shared, diagnostic: "singleton-still-used" });
-    expect(
-      planServiceMutation(config, {
-        operation: "remove",
-        name: registration.name,
-        removeSingleton: true,
-      })
-    ).toEqual({ services: [], singletonObjects: [] });
+    expect(planServiceMutation(shared, {
+      operation: "remove", source: registration.source, name: service.name, removeSingleton: true,
+    })).toEqual({ ...shared, diagnostic: "singleton-still-used" });
+    expect(planServiceMutation(state, {
+      operation: "remove", source: registration.source, name: service.name, removeSingleton: true,
+    })).toEqual(empty());
   });
-  it("rejects malformed lists rather than discarding declarations", () => {
-    expect(() =>
-      planServiceMutation({ services: [null] } as never, { ...registration, operation: "upsert" })
-    ).toThrow("malformed");
-    expect(() =>
-      planServiceMutation({ services: {} } as never, { ...registration, operation: "upsert" })
-    ).toThrow("arrays");
+
+  it("requires the exact provider selected for removal and rejects malformed state", () => {
+    const state = planServiceMutation(empty(), { ...registration, operation: "upsert" });
+    expect(planServiceMutation(state, { operation: "remove", source: "workers/other", name: service.name })).toMatchObject({ diagnostic: "not-found" });
+    expect(() => planServiceMutation({ ...empty(), services: [null] } as never, { ...registration, operation: "upsert" })).toThrow("malformed");
+    expect(() => planServiceMutation({ ...empty(), services: {} } as never, { ...registration, operation: "upsert" })).toThrow("arrays");
   });
 });

@@ -804,23 +804,16 @@ export class PanelManager {
     };
   }
 
-  async updateStateArgs(
+  /**
+   * Apply an RFC 7386 JSON merge patch (`null` deletes a key) to the panel's
+   * current stateArgs. The workspace-state owner merges and validates it
+   * against the active build's schema and returns the authoritative result.
+   */
+  async patchStateArgs(
     slotId: PanelSlotId,
-    updates: Record<string, unknown>
+    patch: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    const panel = await this.requireStoredPanel(slotId);
-    const schema = await this.loadPanelSchema(panel);
-    const merged = Object.fromEntries(
-      Object.entries({ ...(getPanelStateArgs(panel) ?? {}), ...updates }).filter(
-        ([, value]) => value !== null
-      )
-    );
-    const validation = validateStateArgs(merged, schema as never);
-    if (!validation.success) {
-      throw new Error(`Invalid stateArgs: ${validation.error}`);
-    }
-    const nextStateArgs = validation.data as Record<string, unknown>;
-    await this.workspaceState.updateCurrentStateArgs(slotId, nextStateArgs);
+    const nextStateArgs = await this.workspaceState.patchCurrentStateArgs(slotId, patch);
     const livePanel = this.registry.getPanel(slotId);
     if (livePanel) {
       const currentSnapshot = getCurrentSnapshot(livePanel);
@@ -1530,13 +1523,6 @@ export class PanelManager {
       throw new Error(`Invalid stateArgs for ${source}: ${validation.error}`);
     }
     return validation.data as Record<string, unknown>;
-  }
-
-  private async loadPanelSchema(panel: Panel): Promise<unknown> {
-    const source = getPanelSource(panel);
-    if (source.startsWith("browser:")) return undefined;
-    return (await this.resolveManifest(source, true, getPanelRef(panel), this.panelMetadata))
-      .stateArgs;
   }
 
   /** Hydrate derived chrome without blocking panel reads or runtime startup. */

@@ -1,4 +1,4 @@
-import { missionExecutionSchema, newAuthorityPlanReferenceSchema } from "./missions.js";
+import { missionExecutionSchema, authorityPlanReferenceSchema } from "./missions.js";
 import { AUTHORITY_FAILURE_REASON_CODES, AUTHORITY_REMEDIATION_KINDS } from "@vibestudio/rpc";
 import { z } from "zod";
 import { rpcCausalParentSchema } from "./rpcCausality.js";
@@ -400,7 +400,7 @@ export const authorityMethods = defineServiceMethods({
     },
     description: "Compile and publish one immutable content-addressed authority plan.",
     args: z.tuple([z.object({ execution: missionExecutionSchema }).strict()]),
-    returns: newAuthorityPlanReferenceSchema,
+    returns: authorityPlanReferenceSchema,
     authority: { principals: ["code"] },
     access: { sensitivity: "write" },
   },
@@ -427,7 +427,7 @@ export const authorityMethods = defineServiceMethods({
         })
         .strict(),
     ]),
-    returns: newAuthorityPlanReferenceSchema,
+    returns: authorityPlanReferenceSchema,
     authority: { principals: ["code"] },
     access: { sensitivity: "read" },
   },

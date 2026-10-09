@@ -57,29 +57,23 @@ function discovery(deviceId = "android-1", compatibleAppInstalled = false): stri
 }
 
 function hubControlClient(platform: "android" | "ios" = "android") {
-  let listCount = 0;
   return {
     call: vi.fn(async (_service: string, method: string) => {
       if (method === "pairDevice") {
         return {
-          pairing: { deepLink: "vibestudio://connect?test" },
+          pairing: { code: "pairing-code", deepLink: "vibestudio://connect?test" },
         };
       }
-      if (method === "listDevices") {
-        listCount += 1;
+      if (method === "awaitPairing") {
         return {
-          devices:
-            listCount === 1
-              ? []
-              : [
-                  {
-                    deviceId: "paired-mobile",
-                    userId: "user-1",
-                    label: "Test phone",
-                    platform,
-                    createdAt: 1,
-                  },
-                ],
+          status: "paired",
+          device: {
+            deviceId: "paired-mobile",
+            userId: "user-1",
+            label: "Test phone",
+            platform,
+            createdAt: 1,
+          },
         };
       }
       throw new Error(`Unexpected hub method ${method}`);
@@ -286,6 +280,106 @@ describe("desktop phone provisioning service", () => {
       pairedDevice: { deviceId: "paired-mobile" },
     });
     expect(hub.call).toHaveBeenCalledWith("hubControl", "pairDevice", []);
+    expect(hub.call).toHaveBeenCalledWith("hubControl", "awaitPairing", [{ code: "pairing-code" }]);
+  });
+
+  it("cancels and joins the hub pairing lifecycle when phone setup is cancelled", async () => {
+    let finishPairing!: (value: unknown) => void;
+    const hub = {
+      call: vi.fn(async (_service: string, method: string) => {
+        if (method === "pairDevice") {
+          return {
+            pairing: { code: "pairing-code", deepLink: "vibestudio://connect?test" },
+          };
+        }
+        if (method === "awaitPairing") {
+          return new Promise((resolve) => {
+            finishPairing = resolve;
+          });
+        }
+        if (method === "cancelPairing") {
+          finishPairing({ status: "cancelled" });
+          return { cancelled: true };
+        }
+        throw new Error(`Unexpected hub method ${method}`);
+      }),
+    };
+    let discoveries = 0;
+    const definition = createPhoneProvisioningService({
+      appRoot: sourceRoot(),
+      appVersion: "0.1.5",
+      workspaceName: "current-workspace",
+      resolveScriptPath: (name) => name,
+      runScript: async (name, args) => {
+        const isDiscovery = name === "mobile-device.mjs" && args[0] === "devices";
+        if (isDiscovery) discoveries += 1;
+        return {
+          stdout: isDiscovery ? discovery("android-1", discoveries > 1) : "",
+          stderr: "",
+        };
+      },
+      hubControlClient: hub,
+    });
+    const response = (await definition.handler({} as never, "provision", [
+      { platform: "android", deviceId: "android-1", mode: "auto" },
+    ])) as Response;
+
+    await vi.waitFor(() =>
+      expect(hub.call).toHaveBeenCalledWith("hubControl", "awaitPairing", [
+        { code: "pairing-code" },
+      ])
+    );
+    await response.body!.cancel();
+
+    expect(hub.call).toHaveBeenCalledWith("hubControl", "cancelPairing", [
+      { code: "pairing-code" },
+    ]);
+    expect(finishPairing).toBeDefined();
+  });
+
+  it("retires the hub invite when launching the phone connection command fails", async () => {
+    const hub = {
+      call: vi.fn(async (_service: string, method: string) => {
+        if (method === "pairDevice") {
+          return {
+            pairing: { code: "pairing-code", deepLink: "vibestudio://connect?test" },
+          };
+        }
+        if (method === "cancelPairing") return { cancelled: true };
+        throw new Error(`Unexpected hub method ${method}`);
+      }),
+    };
+    let discoveries = 0;
+    const definition = createPhoneProvisioningService({
+      appRoot: sourceRoot(),
+      appVersion: "0.1.5",
+      workspaceName: "current-workspace",
+      resolveScriptPath: (name) => name,
+      runScript: async (name, args) => {
+        const isDiscovery = name === "mobile-device.mjs" && args[0] === "devices";
+        if (isDiscovery) discoveries += 1;
+        if (name === "mobile-device.mjs" && args[0] === "connect") {
+          throw new Error("phone command failed");
+        }
+        return {
+          stdout: isDiscovery ? discovery("android-1", discoveries > 1) : "",
+          stderr: "",
+        };
+      },
+      hubControlClient: hub,
+    });
+    await expect(
+      provision(definition, {
+        platform: "android",
+        deviceId: "android-1",
+        mode: "auto",
+      })
+    ).rejects.toThrow("phone command failed");
+
+    expect(hub.call).toHaveBeenCalledWith("hubControl", "cancelPairing", [
+      { code: "pairing-code" },
+    ]);
+    expect(hub.call).not.toHaveBeenCalledWith("hubControl", "awaitPairing", expect.anything());
   });
 
   it("honors an explicit release request even when mobile source is available", async () => {

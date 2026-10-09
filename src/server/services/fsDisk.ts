@@ -13,9 +13,6 @@ import {
   type GrepMatch,
   type GlobOptions,
   type GrepOptions,
-  encodeBinary,
-  isBinaryEnvelope,
-  type BinaryEnvelope,
 } from "./fsValues.js";
 import * as fs from "fs/promises";
 import * as fsSync from "fs";
@@ -216,10 +213,6 @@ async function canonicalContextRelativePath(
 async function ensureDirectWriteParent(scope: FsDiskScope, absolutePath: string): Promise<void> {
   if (absolutePath === scope.root) return;
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-}
-
-function decodeBinary(envelope: BinaryEnvelope): Buffer {
-  return Buffer.from(envelope.data, "base64");
 }
 
 function serializeStat(stats: fsSync.Stats) {
@@ -617,7 +610,7 @@ export class FsDisk implements FsDiskPort {
             size += read.bytesRead;
           }
           if (size > maximum) throw codedError("ELIMIT", "Native import exceeds 16 MiB");
-          return { buffer: encodeBinary(bytes.subarray(0, size)), mode: stat.mode };
+          return { buffer: bytes.subarray(0, size), mode: stat.mode };
         } finally {
           await handle.close();
         }
@@ -629,7 +622,7 @@ export class FsDisk implements FsDiskPort {
           return fs.readFile(p, encoding as BufferEncoding);
         }
         const buf = await fs.readFile(p);
-        return encodeBinary(buf);
+        return buf;
       }
 
       case "readText": {
@@ -645,7 +638,7 @@ export class FsDisk implements FsDiskPort {
       case "writeFile": {
         const resolvedPath = await resolveFsFilePathInfo(scope, args[0] as string);
         const p = resolvedPath.path;
-        const data = isBinaryEnvelope(args[1]) ? decodeBinary(args[1]) : (args[1] as string);
+        const data = typeof args[1] === "string" ? args[1] : (args[1] as Uint8Array);
         await ensureDirectWriteParent(scope, p);
         await fs.writeFile(p, data);
         return;
@@ -653,7 +646,7 @@ export class FsDisk implements FsDiskPort {
 
       case "appendFile": {
         const p = await resolveFsFilePath(scope, args[0] as string);
-        const data = isBinaryEnvelope(args[1]) ? decodeBinary(args[1]) : (args[1] as string);
+        const data = typeof args[1] === "string" ? args[1] : (args[1] as Uint8Array);
         await ensureDirectWriteParent(scope, p);
         await fs.appendFile(p, data);
         return;
@@ -854,15 +847,13 @@ export class FsDisk implements FsDiskPort {
 
         return {
           bytesRead: result.bytesRead,
-          buffer: encodeBinary(buf.subarray(0, result.bytesRead)),
+          buffer: buf.subarray(0, result.bytesRead),
         };
       }
 
       case "handleWrite": {
         const tracked = this.getTrackedHandle(args[0] as number, panelId);
-        const data = isBinaryEnvelope(args[1])
-          ? decodeBinary(args[1])
-          : Buffer.from(args[1] as string);
+        const data = typeof args[1] === "string" ? Buffer.from(args[1]) : (args[1] as Uint8Array);
         const position = (args[2] as number | null) ?? null;
         const result = await tracked.handle.write(data, 0, data.length, position);
         return { bytesWritten: result.bytesWritten };

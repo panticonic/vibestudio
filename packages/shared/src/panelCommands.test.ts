@@ -8,15 +8,10 @@ import {
   getBrowserNavigationIntentForCommand,
   isPanelClosePointerButton,
   PANEL_CONTEXT_MENU_SECTIONS,
-  PANEL_KEYBOARD_ACCELERATORS,
 } from "./panelCommands.js";
 
 describe("panelCommands", () => {
-  it("uses browser-familiar panel lifecycle commands and middle-click close semantics", () => {
-    expect(PANEL_KEYBOARD_ACCELERATORS).toEqual({
-      newPanel: "CmdOrCtrl+T",
-      closePanel: "CmdOrCtrl+W",
-    });
+  it("uses browser-standard middle-click close semantics", () => {
     expect(isPanelClosePointerButton(0)).toBe(false);
     expect(isPanelClosePointerButton(1)).toBe(true);
     expect(isPanelClosePointerButton(2)).toBe(false);

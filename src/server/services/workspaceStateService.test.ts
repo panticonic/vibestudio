@@ -41,6 +41,7 @@ function makeService(opts: {
   dispatchReturns?: Record<string, unknown>;
   panelAccess?: Partial<PanelAccessPermissionDeps>;
   presentationDispatch?: (method: string, args: unknown[]) => Promise<unknown>;
+  stateArgsSchemaForBuild?: (buildKey: string) => Record<string, unknown> | undefined;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const presentationCalls: Array<{ method: string; args: unknown[] }> = [];
@@ -76,6 +77,7 @@ function makeService(opts: {
       ...opts.panelAccess,
       controlsLifecycleContext: opts.panelAccess?.controlsLifecycleContext ?? (async () => false),
     },
+    stateArgsSchemaForBuild: opts.stateArgsSchemaForBuild ?? (() => undefined),
     ...(opts.onSlotStateChanged ? { onSlotStateChanged: opts.onSlotStateChanged } : {}),
     ...(opts.onPresentationChanged ? { onPresentationChanged: opts.onPresentationChanged } : {}),
     ...(opts.onEntityTitleChanged ? { onEntityTitleChanged: opts.onEntityTitleChanged } : {}),
@@ -731,7 +733,6 @@ describe("workspaceStateService — slot-state change hook", () => {
 
   const mutating: Array<[method: string, args: unknown[]]> = [
     ["slot.create", [{ slotId: "s1", parentSlotId: null }]],
-    ["slot.updateCurrentStateArgs", ["s1", {}]],
     ["slot.move", ["s1", null, { afterSlotId: "s0" }]],
     ["slot.close", ["s1"]],
   ];
@@ -744,6 +745,50 @@ describe("workspaceStateService — slot-state change hook", () => {
       expect(onSlotStateChanged).toHaveBeenCalledTimes(1);
     });
   }
+
+  it("patches stateArgs through the owner with the active build's schema and entry guard", async () => {
+    const onSlotStateChanged = vi.fn();
+    const buildKey = "a".repeat(64);
+    const schema = { type: "object", properties: { mode: { type: "string" } } };
+    const schemaLookups: string[] = [];
+    const { svc, calls } = makeService({
+      onSlotStateChanged,
+      stateArgsSchemaForBuild: (key) => {
+        schemaLookups.push(key);
+        return schema;
+      },
+      dispatchReturns: {
+        panelTreeDetail: {
+          slot: { slot_id: "s1", current_entry_key: "entry-1" },
+          currentHistory: { state_args: JSON.stringify({ mode: "a" }) },
+          entity: { id: "panel:s1", activeBuildKey: buildKey },
+        },
+        slotPatchCurrentStateArgs: { mode: "b" },
+      },
+    });
+
+    await expect(
+      svc.handler(makeCtx() as never, "slot.patchCurrentStateArgs", ["s1", { mode: "b" }])
+    ).resolves.toEqual({ mode: "b" });
+
+    expect(schemaLookups).toEqual([buildKey]);
+    expect(calls).toContainEqual({
+      method: "slotPatchCurrentStateArgs",
+      args: ["s1", { mode: "b" }, { entryKey: "entry-1", activeBuildKey: buildKey, schema }],
+    });
+    expect(onSlotStateChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a stateArgs patch for a missing panel without dispatching a write", async () => {
+    const onSlotStateChanged = vi.fn();
+    const { svc, calls } = makeService({ onSlotStateChanged });
+
+    await expect(
+      svc.handler(makeCtx() as never, "slot.patchCurrentStateArgs", ["s1", { mode: "b" }])
+    ).rejects.toThrow(/Panel not found: s1/);
+    expect(calls.map((call) => call.method)).not.toContain("slotPatchCurrentStateArgs");
+    expect(onSlotStateChanged).not.toHaveBeenCalled();
+  });
 
   it("publishes the committed durable desired entity for presentation reconciliation", async () => {
     const onSlotStateChanged = vi.fn();

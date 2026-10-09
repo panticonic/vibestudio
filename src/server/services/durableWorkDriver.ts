@@ -312,22 +312,6 @@ export function createDurableWorkHandlers(
         return outcome;
       },
     },
-    "agent-wake": {
-      ...common("agent-wake"),
-      execute: (owner, claim, signal) =>
-        doDispatch.dispatchHeldWithSignal(owner, signal, "executeWakeClaim", {
-          itemId: claim.itemId,
-          generation: claim.generation,
-        }),
-    },
-    "agent-effect": {
-      ...common("agent-effect"),
-      execute: (owner, claim, signal) =>
-        doDispatch.dispatchHeldWithSignal(owner, signal, "executeEffectClaim", {
-          itemId: claim.itemId,
-          generation: claim.generation,
-        }),
-    },
   };
 }
 

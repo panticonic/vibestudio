@@ -15,11 +15,11 @@ vi.mock("./connect.js", () => ({
   }),
 }));
 
+import { RN_HOST_ABI } from "@vibestudio/shared/buildProvider";
 import {
   streamArtifactToNative,
   selectPlatformArtifacts,
   activateApprovedWorkspaceApp,
-  RN_HOST_ABI,
   type BundleDeliveryRpc,
   type NativeBundleHost,
 } from "./bundleDelivery.js";

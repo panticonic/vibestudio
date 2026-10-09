@@ -2204,6 +2204,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         }),
         createPanelRuntime: () => ({ getPanelHandle: () => null }),
         createRuntimeSelfHandle: () => ({}),
+        createRuntimeScopeRehydrators: () => ({}),
         createGatewayFetch: (config: {
           rpc?: { stream(target: string, method: string, args: unknown[]): Promise<Response> };
         }) => {
@@ -2393,6 +2394,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         }),
         createPanelRuntime: () => ({ getPanelHandle: () => null }),
         createRuntimeSelfHandle: () => ({}),
+        createRuntimeScopeRehydrators: () => ({}),
         createGatewayFetch: () => () => {},
         createRpcFs: () => ({}),
         createRuntimeParentHandle: () => null,
@@ -2610,6 +2612,340 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).toHaveLength(1);
   });
 
+  it.each(["success", "failure", "cancel"] as const)(
+    "joins invocation panel retirement after %s and preserves session panels",
+    async (outcome) => {
+      const { instance, sql } = await createTestDO(EvalDO);
+      const archived: string[] = [];
+      setPriv(instance, "clearLifecycleRelease", async () => {});
+      let ownerOptions!: Record<string, unknown>;
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const support = {
+        createPanelRuntime: (options: Record<string, unknown>) => {
+          ownerOptions = options;
+          return {
+            getPanelHandle: (id: string) => ({
+              archive: async () => {
+                expect(options["rpc"]).toBe(priv(instance, "rpc"));
+                expect(options["operationSignal"]).toBeUndefined();
+                archived.push(id);
+                (options["onClose"] as (id: string) => void)(id);
+              },
+            }),
+          };
+        },
+      };
+      setPriv(instance, "ensureRuntimeSupport", async () => support);
+      const active = priv<{ run<T>(execution: unknown, callback: () => T): T }>(
+        instance,
+        "activeEvalExecution"
+      );
+      setPriv(instance, "runLocked", async (_args: unknown, signal: AbortSignal, runId: string) => {
+        priv<(support: unknown, context: string, parent: null, journal: () => void) => unknown>(
+          instance,
+          "createEvalPanelRuntime"
+        ).call(instance, support, "ctx", null, () => {});
+        const open = ownerOptions["onOpen"] as (entry: unknown) => void;
+        const claim = ownerOptions["claimPanelLifetime"] as (entry: unknown) => void;
+        active.run({ runId, signal, contextId: "ctx" }, () => {
+          for (const lifetime of ["invocation", "session"] as const) {
+            open({ id: lifetime, source: "panels/example", kind: "workspace" });
+            claim({ id: lifetime, lifetime });
+          }
+        });
+        if (outcome === "cancel") {
+          let markUnwound!: () => void;
+          const unwound = new Promise<void>((resolve) => {
+            markUnwound = resolve;
+          });
+          priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+            runId,
+            new Set([
+              async () => {
+                await unwound;
+                expect(
+                  priv<Map<string, unknown>>(instance, "openPanelResources").has("invocation")
+                ).toBe(true);
+              },
+            ])
+          );
+          return new Promise<RunResult>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                reject(signal.reason);
+                markUnwound();
+              },
+              { once: true }
+            );
+            markStarted();
+          });
+        }
+        if (outcome === "failure") throw new Error("Guest failed after panel commit");
+        return { success: true, console: "" };
+      });
+      seedPendingRun(sql, "owned-panels", { code: "open panels" });
+      const running = instance.executeRun("owned-panels");
+      if (outcome === "cancel") {
+        await started;
+        await instance.cancel("owned-panels");
+      }
+      const result = await running;
+      expect(result.success).toBe(outcome === "success");
+      expect(archived).toEqual(["invocation"]);
+      const resources = priv<Map<string, unknown>>(instance, "openPanelResources");
+      expect([...resources.keys()]).toEqual(["session"]);
+      // The ownership survives cold hydration and planned suspension.
+      resources.clear();
+      priv<() => void>(instance, "afterSchemaReady").call(instance);
+      expect([...resources.keys()]).toEqual(["session"]);
+      await instance.releaseForLifecycle({
+        epoch: "suspend",
+        mode: "suspend",
+        reason: "test",
+        deadlineMs: 0,
+      });
+      expect(archived).toEqual(["invocation"]);
+      await instance.releaseForLifecycle({
+        epoch: "retire",
+        mode: "retire",
+        reason: "test",
+        deadlineMs: 0,
+      });
+      expect(archived).toEqual(["invocation", "session"]);
+      expect(resources.size).toBe(0);
+    }
+  );
+
+  it("propagates panel retirement failure and keeps ownership until cleanup succeeds", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const resources = priv<Map<string, unknown>>(instance, "openPanelResources");
+    let fail = true;
+    setPriv(instance, "clearLifecycleRelease", async () => {});
+    setPriv(instance, "ensureRuntimeSupport", async () => ({
+      createPanelRuntime: (options: Record<string, unknown>) => ({
+        getPanelHandle: (id: string) => ({
+          archive: async () => {
+            (options["onClose"] as (id: string) => void)(id);
+            if (fail) throw new Error("Entity retirement failed");
+          },
+        }),
+      }),
+    }));
+    setPriv(instance, "runLocked", async () => {
+      resources.set("owned", {
+        id: "owned",
+        source: "panel",
+        kind: "workspace",
+        lifetime: "invocation",
+        runId: "cleanup-failed",
+      });
+      return { success: true, console: "" };
+    });
+    seedPendingRun(sql, "cleanup-failed", { code: "open panel" });
+    const result = await instance.executeRun("cleanup-failed");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("panel lifetime cleanup failed");
+    expect(resources.has("owned")).toBe(true);
+    await expect(
+      instance.releaseForLifecycle({
+        epoch: "failed-retire",
+        mode: "retire",
+        reason: "test",
+        deadlineMs: 0,
+      })
+    ).rejects.toThrow("panel lifetime cleanup failed");
+    expect(resources.has("owned")).toBe(true);
+    fail = false;
+    await instance.releaseForLifecycle({
+      epoch: "retire",
+      mode: "retire",
+      reason: "test",
+      deadlineMs: 0,
+    });
+    expect(resources.size).toBe(0);
+  });
+
+  it("propagates owned panel cleanup failure to the cancellation owner", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const resources = priv<Map<string, unknown>>(instance, "openPanelResources");
+    const { runLocked, started } = blockUntilAborted();
+    setPriv(instance, "runLocked", runLocked);
+    setPriv(instance, "ensureRuntimeSupport", async () => ({
+      createPanelRuntime: () => ({
+        getPanelHandle: () => ({
+          archive: async () => {
+            throw new Error("Owned entity retirement failed");
+          },
+        }),
+      }),
+    }));
+    seedPendingRun(sql, "cancel-owned-panel");
+    const running = instance.executeRun("cancel-owned-panel");
+    await started;
+    resources.set("owned", {
+      id: "owned",
+      source: "panel",
+      kind: "workspace",
+      lifetime: "invocation",
+      runId: "cancel-owned-panel",
+    });
+    await expect(instance.cancel("cancel-owned-panel")).rejects.toThrow(
+      "Owned entity retirement failed"
+    );
+    await expect(running).resolves.toMatchObject({ success: false, failureKind: "cancelled" });
+    expect(resources.has("owned")).toBe(true);
+    expect(sql.exec("SELECT status FROM runs WHERE run_id = 'cancel-owned-panel'").one()).toEqual({
+      status: "cancelled",
+    });
+  });
+
+  it("drains interrupted invocation panel ownership before the next cell", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const resources = priv<Map<string, unknown>>(instance, "openPanelResources");
+    resources.set("interrupted", {
+      id: "interrupted",
+      source: "panel",
+      kind: "workspace",
+      lifetime: "invocation",
+      runId: "crashed-run",
+    });
+    const archived: string[] = [];
+    setPriv(instance, "ensureRuntimeSupport", async () => ({
+      createPanelRuntime: () => ({
+        getPanelHandle: (id: string) => ({
+          archive: async () => {
+            archived.push(id);
+          },
+        }),
+      }),
+    }));
+    setPriv(instance, "runLocked", async () => {
+      expect(archived).toEqual(["interrupted"]);
+      return { success: true, console: "" };
+    });
+    seedPendingRun(sql, "next-cell");
+    await expect(instance.executeRun("next-cell")).resolves.toMatchObject({ success: true });
+    expect(resources.size).toBe(0);
+  });
+
+  it("keeps a failed panel owner when a later owned panel archives successfully", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const resources = priv<Map<string, unknown>>(instance, "openPanelResources");
+    const archived: string[] = [];
+    let failFirst = true;
+    setPriv(instance, "clearLifecycleRelease", async () => {});
+    setPriv(instance, "ensureRuntimeSupport", async () => ({
+      createPanelRuntime: (options: Record<string, unknown>) => ({
+        getPanelHandle: (id: string) => ({
+          archive: async () => {
+            archived.push(id);
+            (options["onClose"] as (id: string) => void)(id);
+            if (id === "first" && failFirst) {
+              throw new Error("First panel retirement failed");
+            }
+          },
+        }),
+      }),
+    }));
+    setPriv(instance, "runLocked", async () => {
+      resources.set("first", {
+        id: "first",
+        source: "panels/example",
+        kind: "workspace",
+        lifetime: "invocation",
+        runId: "multi-owned-panels",
+      });
+      resources.set("second", {
+        id: "second",
+        source: "panels/example",
+        kind: "workspace",
+        lifetime: "invocation",
+        runId: "multi-owned-panels",
+      });
+      return { success: true, console: "" };
+    });
+    seedPendingRun(sql, "multi-owned-panels", { code: "open panels" });
+
+    const result = await instance.executeRun("multi-owned-panels");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("First panel retirement failed");
+    expect(archived).toEqual(["first", "second"]);
+    expect([...resources.keys()]).toEqual(["first"]);
+
+    failFirst = false;
+    await instance.releaseForLifecycle({
+      epoch: "retry-retire",
+      mode: "retire",
+      reason: "test",
+      deadlineMs: 0,
+    });
+    expect(archived).toEqual(["first", "second", "first"]);
+    expect(resources.size).toBe(0);
+  });
+
+  it("rehydrates scope handles without borrowing the maintenance invocation", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const maintenanceRpc = { call: vi.fn(async () => "maintenance") };
+    const runRpc = { call: vi.fn(async () => "active-run") };
+    const maintenance = { contextId: "ctx", rpc: maintenanceRpc };
+    const execution = { contextId: "ctx", rpc: runRpc };
+    const persistence = {};
+    type Handle = { rebuild(): Promise<unknown> };
+    const support = {
+      createPanelRuntime: (options: Record<string, unknown>) => {
+        const rpc = options["rpc"] as {
+          call(target: string, method: string, args: unknown[]): Promise<unknown>;
+        };
+        return {
+          getPanelHandle: (id: string): Handle => ({
+            rebuild: () => rpc.call("main", "panel.rebuild", [id]),
+          }),
+        };
+      },
+      createRuntimeScopeRehydrators: (lookup: (id: string) => unknown) => ({ panel: lookup }),
+    };
+    setPriv(instance, "ensureRuntimeSupport", async () => support);
+    const engine = {
+      ScopeManager: class {
+        current: Record<string, unknown> = {};
+        constructor(private options: { rehydrators: Record<string, (id: string) => unknown> }) {}
+        async hydrate(input: unknown) {
+          expect(input).toBe(persistence);
+          this.current["handle"] = this.options.rehydrators["panel"]!("tree/saved");
+          return { restored: ["handle"], lost: [] };
+        }
+      },
+    };
+    const manager = await priv<
+      (
+        engine: unknown,
+        generation: number,
+        persistence: unknown,
+        execution: unknown
+      ) => Promise<{ current: Record<string, unknown> }>
+    >(instance, "ensureScopeManager").call(instance, engine, 0, persistence, maintenance);
+    const handle = manager.current["handle"] as Handle;
+    expect(maintenanceRpc.call).not.toHaveBeenCalled();
+    expect(() => handle.rebuild()).toThrow(/actively executing/);
+    const active = priv<{ run<T>(execution: unknown, callback: () => T): T }>(
+      instance,
+      "activeEvalExecution"
+    );
+    await expect(active.run(execution, () => handle.rebuild())).resolves.toBe("active-run");
+    expect(runRpc.call).toHaveBeenCalledExactlyOnceWith(
+      "main",
+      "panel.rebuild",
+      ["tree/saved"],
+      undefined
+    );
+    expect(maintenanceRpc.call).not.toHaveBeenCalled();
+  });
+
   it("routes a retained cell-A panel handle through cell B's active execution", async () => {
     const { instance } = await createTestDO(EvalDO);
     const env = (instance as unknown as { env: Record<string, unknown> }).env;
@@ -2641,7 +2977,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         };
         return {
           getPanelHandle: () => ({
-            cdp: { page: () => retainedLoadModule("@workspace/cdp-client") },
+            cdp: { session: () => retainedLoadModule("@workspace/cdp-client") },
             rebuild: () => retainedRpc.call("main", "panel.rebuild", []),
           }),
         };
@@ -2654,6 +2990,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         };
       },
       createRuntimeSelfHandle: () => ({}),
+      createRuntimeScopeRehydrators: () => ({}),
       createGatewayFetch: () => () => undefined,
       createRpcFs: () => ({}),
       createRuntimeParentHandle: () => null,
@@ -2674,7 +3011,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         parent: null
       ) => {
         getPanelHandle(id: string): {
-          cdp: { page(): Promise<unknown> };
+          cdp: { session(): Promise<unknown> };
           rebuild(): Promise<unknown>;
         };
       }
@@ -2692,7 +3029,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       receipt: { delivery: "dispatched" },
     };
     expect(() => recordOperation(receipt)).toThrow(/actively executing/);
-    await expect(retainedHandle.cdp.page()).rejects.toThrow(/actively executing/);
+    await expect(retainedHandle.cdp.session()).rejects.toThrow(/actively executing/);
     expect(() => retainedHandle.rebuild()).toThrow(/actively executing/);
     const activeExecution = priv<{
       run<T>(store: unknown, callback: () => T): T;
@@ -2700,7 +3037,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     activeExecution.run(executionB, () => recordOperation(receipt));
     expect(journalA.append).not.toHaveBeenCalled();
     expect(journalB.append).toHaveBeenCalledExactlyOnceWith(receipt);
-    await expect(activeExecution.run(executionB, () => retainedHandle.cdp.page())).resolves.toBe(
+    await expect(activeExecution.run(executionB, () => retainedHandle.cdp.session())).resolves.toBe(
       loaded
     );
     await expect(activeExecution.run(executionB, () => retainedHandle.rebuild())).resolves.toBe(
@@ -2736,6 +3073,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         openExternal: host["openExternal"],
       }),
       createRuntimeSelfHandle: () => ({}),
+      createRuntimeScopeRehydrators: () => ({}),
       createGatewayFetch: () => () => undefined,
       createRpcFs: (rpc: { call: (...args: unknown[]) => Promise<unknown> }) => ({
         exists: () => rpc.call("main", "fs.exists", ["workers/vibe-board-agent"]),
@@ -2827,6 +3165,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         }),
         createPanelRuntime: () => ({ getPanelHandle: () => null }),
         createRuntimeSelfHandle: () => ({}),
+        createRuntimeScopeRehydrators: () => ({}),
         createGatewayFetch: () => () => {},
         createRpcFs: () => ({}),
         createRuntimeParentHandle: () => null,

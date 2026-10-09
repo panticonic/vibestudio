@@ -33,6 +33,58 @@
           }
         }
       },
+      "awaitPairing": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.read",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "devices.read",
+        "presentation": {
+          "title": "View connected devices",
+          "action": "view connected devices",
+          "description": "See which devices are connected to your account.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "see"
+          }
+        }
+      },
+      "cancelPairing": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.control",
+          "rationale": "G3: retiring a pending device invite changes account authority; §2 default {code, session} family"
+        },
+        "capability": "devices.pair",
+        "presentation": {
+          "title": "Cancel a device invite",
+          "action": "cancel a device invite",
+          "description": "Cancel a pending device invite so it can no longer be redeemed.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
+        }
+      },
       "createWorkspace": {
         "authority": {
           "requirement": {

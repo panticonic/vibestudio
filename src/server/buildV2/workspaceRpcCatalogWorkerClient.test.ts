@@ -47,9 +47,9 @@ describe("WorkspaceRpcCatalogWorkerClient", () => {
         file,
         line: 2,
         column: 7,
-        message: "provider.ts:getNote requires a literal website exposure decision",
+        message: "provider.ts:getNote requires a static website exposure decision",
         suggestion:
-          'Declare a literal website policy: { kind: "closed", reason: "..." } or { kind: "eligible", rationale: "..." }. Choose the exposure intentionally; see skills/workspace-dev/WORKERS.md.',
+          'Declare a static website policy: { kind: "closed", reason: "..." } or { kind: "eligible", rationale: "..." }, inline or as a module-level const. Choose the exposure intentionally; see skills/workspace-dev/WORKERS.md.',
       },
     ]);
   });

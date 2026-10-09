@@ -1,3 +1,4 @@
+import { formatOAuthTokenExchangeError } from "./credentialMechanisms/errors.js";
 import { refreshModelProviderCredential } from "./credentialMechanisms/modelProvider.js";
 import type { Credential } from "@vibestudio/credential-client/types";
 import type { CredentialStore } from "@vibestudio/credential-client/store";
@@ -284,28 +285,4 @@ function signJwtAssertion(params: {
 
 function base64UrlJson(value: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
-}
-
-function formatOAuthTokenExchangeError(
-  status: number,
-  data: Record<string, unknown> | null,
-  text: string
-): string {
-  const error = typeof data?.["error"] === "string" ? data["error"] : undefined;
-  const description =
-    typeof data?.["error_description"] === "string" ? data["error_description"] : undefined;
-  const suffix = error
-    ? `${error}${description ? `: ${description}` : ""}`
-    : sanitizeOAuthErrorText(text);
-  return `OAuth token exchange failed: ${status}${suffix ? ` ${suffix}` : ""}`;
-}
-
-function sanitizeOAuthErrorText(text: string): string {
-  return text
-    .replace(
-      /("(?:access_token|refresh_token|id_token|client_secret)"\s*:\s*")[^"]*(")/gi,
-      "$1[redacted]$2"
-    )
-    .replace(/((?:access_token|refresh_token|id_token|client_secret)=)[^&\s]+/gi, "$1[redacted]")
-    .slice(0, 500);
 }

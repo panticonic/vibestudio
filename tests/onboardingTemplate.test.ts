@@ -9,10 +9,19 @@ import {
 } from "@vibestudio/workspace/templateManifest";
 import { mergeTemplateManifests } from "@vibestudio/workspace/templateManifestMerge";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
-import { exactTemplateRoots } from "./exactUserlandRoot";
+import { exactAllTemplateRoots, exactTemplateRoots } from "./exactUserlandRoot";
 
 const basePath = (...parts: string[]) => path.join(exactTemplateRoots.base, ...parts);
 const personalPath = (...parts: string[]) => path.join(exactTemplateRoots.personal, ...parts);
+const readServiceManifest = (source: string): string | null => {
+  const candidates = exactAllTemplateRoots
+    .map((root) => path.join(root, source, "package.json"))
+    .filter((candidate) => fs.existsSync(candidate));
+  if (candidates.length !== 1) return null;
+  return fs.readFileSync(candidates[0]!, "utf8");
+};
+const parseWorkspace = (content: string, id: string) =>
+  parseWorkspaceConfigContentWithId(content, id, readServiceManifest);
 const baseRuntime = fs.readFileSync(basePath("meta/vibestudio.yml"), "utf8");
 const personalRuntime = fs.readFileSync(personalPath("meta/vibestudio.yml"), "utf8");
 const baseManifest = parseTemplateManifestContent(baseRuntime, WORKSPACE_SYSTEM_EPOCH);
@@ -32,10 +41,10 @@ const composedRuntime = canonicalTemplateYaml(
 describe("shipped Personal first-run workspace", () => {
   it("is valid as its own source and with development layers", () => {
     expect(() =>
-      parseWorkspaceConfigContentWithId(personalRuntime, "personal-layer")
+      parseWorkspace(personalRuntime, "personal-layer")
     ).not.toThrow();
     expect(() =>
-      parseWorkspaceConfigContentWithId(composedRuntime, "personal-workspace")
+      parseWorkspace(composedRuntime, "personal-workspace")
     ).not.toThrow();
     expect(personalManifest.dependencies.map(({ url }) => url)).toEqual([
       "git+https://github.com/panticonic/vibestudio-base.git",
@@ -67,7 +76,7 @@ describe("shipped Personal first-run workspace", () => {
         }),
       }),
     ]);
-    const effective = parseWorkspaceConfigContentWithId(composedRuntime, "personal-workspace");
+    const effective = parseWorkspace(composedRuntime, "personal-workspace");
     expect(effective.initPanels).toEqual(manifest.initPanels);
     const systemPrompt = manifest.initPanels?.[0]?.stateArgs?.["systemPrompt"];
     expect(systemPrompt).toEqual(expect.stringContaining("executeOnboardingSelection"));
@@ -78,29 +87,19 @@ describe("shipped Personal first-run workspace", () => {
   });
 
   it("owns only Personal additions and receives common runtime from Base", () => {
-    expect(personalManifest.inventory.repositories).toEqual(
-      expect.arrayContaining([
-        "skills/onboarding",
-        "about/credentials",
-        "about/permissions",
-        "about/local-models",
-        "about/browser-import-inspector",
-        "panels/tour",
-      ])
+    expect(personalManifest.dependencies.map(({ url }) => url)).toContain(
+      "git+https://github.com/panticonic/vibestudio-base.git"
     );
-    expect(personalManifest.inventory.repositories).not.toContain("panels/chat");
-    expect(baseManifest.inventory.repositories).toEqual(
-      expect.arrayContaining(["panels/chat", "packages/agentic-chat", "packages/runtime"])
-    );
-    expect(
-      personalManifest.inventory.repositories.some((repository) => repository.startsWith("apps/"))
-    ).toBe(false);
     for (const source of [
       "skills/onboarding/SKILL.md",
       "skills/onboarding/SetupHub.tsx",
       "panels/tour/index.tsx",
     ]) {
       expect(fs.existsSync(personalPath(source))).toBe(true);
+    }
+    for (const source of ["panels/chat", "packages/agentic-chat", "packages/runtime"]) {
+      expect(fs.existsSync(basePath(source))).toBe(true);
+      expect(fs.existsSync(personalPath(source))).toBe(false);
     }
   });
 

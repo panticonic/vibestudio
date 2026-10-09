@@ -19,7 +19,11 @@ describe("SensitiveBrowserImportLedger", () => {
     ]);
 
     const restarted = new SensitiveBrowserImportLedger(ledgerPath);
-    expect(restarted.begin("operation", input)).toEqual(terminal);
+    const { version: _version, ...receipt } = terminal;
+    expect(restarted.begin("operation", input)).toEqual({
+      ...receipt,
+      version: expect.any(String),
+    });
     expect(restarted.running()).toEqual([]);
   });
 
@@ -63,6 +67,7 @@ describe("SensitiveBrowserImportLedger", () => {
       operationId: "operation",
       state: "cancelled",
       counts: [{ dataType: "passwords", read: 10, stored: 8, skipped: 2, errors: 0 }],
+      version: expect.any(String),
     });
   });
   it("retains saved counts across application failure and restart", () => {
@@ -81,6 +86,49 @@ describe("SensitiveBrowserImportLedger", () => {
       operationId: "operation",
       state: "complete",
       counts,
+      version: expect.any(String),
     });
+  });
+
+  it("resolves a versioned observation on the next change, not before", async () => {
+    const ledger = new SensitiveBrowserImportLedger(file());
+    const input = { sourceId: "source", dataTypes: ["passwords" as const] };
+    const started = ledger.begin("operation", input);
+    let settled = false;
+    const next = ledger.observeAfter("operation", started.version).then((status) => {
+      settled = true;
+      return status;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    const progressed = ledger.progress("operation", input, {
+      dataType: "passwords",
+      read: 4,
+      stored: 3,
+      skipped: 1,
+      errors: 0,
+    });
+    await expect(next).resolves.toEqual(progressed);
+    expect(progressed.version).not.toBe(started.version);
+    await expect(ledger.observeAfter("operation", started.version)).resolves.toEqual(progressed);
+  });
+
+  it("answers at once for terminal imports and settles waits on abort or release", async () => {
+    const ledger = new SensitiveBrowserImportLedger(file());
+    const input = { sourceId: "source", dataTypes: ["passwords" as const] };
+    const started = ledger.begin("operation", input);
+
+    const aborted = new AbortController();
+    const abandoned = ledger.observeAfter("operation", started.version, aborted.signal);
+    aborted.abort(new Error("caller left"));
+    await expect(abandoned).rejects.toThrow("caller left");
+
+    const released = ledger.observeAfter("operation", started.version);
+    ledger.releaseWaiters(new Error("host stopped"));
+    await expect(released).rejects.toThrow("host stopped");
+
+    const cancelled = ledger.cancel("operation");
+    await expect(ledger.observeAfter("operation", cancelled.version)).resolves.toEqual(cancelled);
   });
 });

@@ -33,6 +33,7 @@ import {
   startPanelDiagnostics,
   type TestApp,
 } from "../../setup/electronSetup";
+import { declineFirstRunReporting } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -75,6 +76,7 @@ async function launchMobileTestApp(
       launchTimeout: 240_000,
     });
     await approvePendingStartupUnits(testApp);
+    await declineFirstRunReporting(testApp);
     await approvePendingWorkspaceCreationReview(testApp);
     const initialPanel = panels[0];
     if (initialPanel) {
@@ -919,12 +921,12 @@ test.describe("Mobile Panels", () => {
       })
       .toBe(true);
     await expect
-      .poll(() => shellElementVisibleByLabel(testApp!, "Select panel Help"), {
+      .poll(() => shellElementVisibleByLabel(testApp!, "Help"), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
       .toBe(true);
-    expect(await shellClickByLabel(testApp!, "Select panel Help")).toBe(true);
+    expect(await shellClickByLabel(testApp!, "Help")).toBe(true);
 
     await expect
       .poll(() => isPanelReady(testApp!, helpPanel.id).catch(() => false), {

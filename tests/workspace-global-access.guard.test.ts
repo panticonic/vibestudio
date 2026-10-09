@@ -25,6 +25,7 @@ const ALLOWLIST = new Set([
   "eval/src/sandbox.ts", // sandbox engine — implements the require
   "eval/src/execute.ts", // sandbox engine — implements the require
   "agentic-core/src/message-type-doctor.ts", // installs a shim require (diagnostics/util)
+  "agentic-chat/components/panelModules.testing.ts", // test fixture installs and restores the panel's sandbox module registry; it never resolves a host runtime
 ]);
 
 // The property-ACCESS form, `(...)["__vibestudioRequire__"]` — deliberately NOT a

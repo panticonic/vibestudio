@@ -7,13 +7,13 @@
     "buildProfile": "source-only"
   },
   "exports": {
+    "./binary": "./src/binary.ts",
     "./releaseDownloads": "./src/releaseDownloads.ts",
     "./jsonSchemaNumericType": "./src/jsonSchemaNumericType.ts",
     "./problemReportingConversation": "./src/problemReportingConversation.ts",
     "./mediaRecording": "./src/mediaRecording.ts",
     "./webAddress": "./src/webAddress.ts",
     "./webSearch": "./src/webSearch.ts",
-    "./actorIdentity": "./src/actorIdentity.ts",
     "./agentInspection": "./src/agentInspection.ts",
     "./appArtifacts": "./src/appArtifacts.ts",
     "./approvalContract": "./src/approvalContract.ts",
@@ -76,7 +76,6 @@
     "./httpUrl": "./src/httpUrl.ts",
     "./keyedSerializer": "./src/keyedSerializer.ts",
     "./lazyTypedServiceClient": "./src/lazyTypedServiceClient.ts",
-    "./lexorank": "./src/lexorank.ts",
     "./lineDiff": "./src/lineDiff.ts",
     "./managedService": "./src/managedService.ts",
     "./nativeRuntimeResources": "./src/nativeRuntimeResources.ts",

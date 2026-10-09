@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { flagValue } from "./lib/args.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const defaultOutput = path.join(
@@ -22,9 +23,9 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--output") {
-      options.output = path.resolve(argv[++i] ?? "");
+      options.output = path.resolve(flagValue(argv, ++i, arg));
     } else if (arg === "--configuration") {
-      options.configuration = argv[++i] ?? options.configuration;
+      options.configuration = flagValue(argv, ++i, arg);
     } else if (arg === "--help") {
       options.help = true;
     } else {

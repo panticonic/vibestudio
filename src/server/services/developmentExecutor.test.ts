@@ -402,7 +402,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const stored = getBuild(plan.snapshot.snapshotDigest);
 
     expect(artifact.buildKey).toBe(plan.snapshot.snapshotDigest);
-    await expect(executor.runRoots.snapshotRoots(1)).resolves.toEqual([
+    await expect(executor.runRoots.snapshotRoots()).resolves.toEqual([
       {
         owner: "development-run",
         ownerId: plan.runId,

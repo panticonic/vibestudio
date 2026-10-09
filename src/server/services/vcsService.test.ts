@@ -124,6 +124,32 @@ function service(options?: {
 }
 
 describe("canonical vcsService", () => {
+  it("keeps installation provenance restricted to reviewed source consumers", async () => {
+    const { definition, semanticPublishCall } = service({ context: "context:own" });
+    await expect(
+      definition.handler(workerContext(), "push", [
+        {
+          contextId: "context:own",
+          commandId: "command:push",
+          expectedCommittedEventId: "event:next",
+          expectedMainEventId: "event:main",
+          templateInstallation: {
+            sources: [
+              {
+                pin: {
+                  url: "https://example.test/base.git",
+                  ref: "refs/heads/main",
+                  commit: "a".repeat(40),
+                },
+                manifest: "sourceVersion: 1\nsystemEpoch: 0\n",
+              },
+            ],
+          },
+        },
+      ])
+    ).rejects.toThrow(/reviewed source consumer/);
+    expect(semanticPublishCall).not.toHaveBeenCalled();
+  });
   it("registers its authority preparers with the production dispatcher", () => {
     const { definition } = service();
     const dispatcher = new ServiceDispatcher();

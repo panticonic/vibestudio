@@ -582,26 +582,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "audit.query": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "observability",
-      family: "audit.read",
-      rationale: "G4: privacy or authority-map read; §2 default {code, session} family",
-    },
-    capability: "security.audit.read",
-    presentation: {
-      title: "View the security activity log",
-      action: "view the security activity log",
-      description: "Allows {requesterKind} to view the security activity log.",
-      group: "approvals",
-      authorityCategory: {
-        domain: "safety",
-        verb: "see",
-      },
-    },
-  },
   "auth.getConnectionInfo": {
     tier: {
       tier: "open",
@@ -2654,6 +2634,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "credentials.recordWebsitePublication": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "website.publish",
+      rationale:
+        "The handler requires the same live caller-bound grant as publishFetch and only advances the host journal of that reviewed operation",
+    },
+    capability: null,
+    presentation: null,
+  },
   "credentials.requestCredentialInput": {
     tier: {
       tier: "open",
@@ -3470,6 +3462,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "extensions.status": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "extensions.control",
+      rationale:
+        "Read-only projection of one declared extension's build and supervision state; grants no invocation or lifecycle authority",
+    },
+    capability: null,
+    presentation: null,
+  },
   "extensions.streamingMethods": {
     tier: {
       tier: "open",
@@ -3478,6 +3482,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "extensions.control",
       rationale:
         "Streaming-method discovery is required by the extension invocation router and shares its admitted execution-session scope; it returns manifest metadata and grants no invocation authority",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "extensions.update": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "extensions.control",
+      rationale:
+        "Re-reconciles one existing declaration at its published source; any new build identity still requires the user's install/update review before it runs",
     },
     capability: null,
     presentation: null,
@@ -4260,6 +4276,48 @@ export const HOST_AUTHORITY_METHODS = {
       title: "Add a workspace member",
       action: "add a workspace member",
       description: "Give someone access to a workspace.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "hubControl.awaitPairing": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    capability: "devices.read",
+    presentation: {
+      title: "View connected devices",
+      action: "view connected devices",
+      description: "See which devices are connected to your account.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "see",
+      },
+    },
+  },
+  "hubControl.cancelPairing": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.control",
+      rationale:
+        "G3: retiring a pending device invite changes account authority; §2 default {code, session} family",
+    },
+    capability: "devices.pair",
+    presentation: {
+      title: "Cancel a device invite",
+      action: "cancel a device invite",
+      description: "Cancel a pending device invite so it can no longer be redeemed.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -5806,6 +5864,18 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "problemReports.appendNarrative": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "problemReports.availability": {
     tier: {
       tier: "open",
@@ -5963,6 +6033,18 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: null,
   },
   "problemReports.incidents": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "problemReports.local",
+      rationale:
+        "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "problemReports.patchNarrative": {
     tier: {
       tier: "open",
       session: "family",
@@ -6608,7 +6690,8 @@ export const HOST_AUTHORITY_METHODS = {
       session: "family",
       residency: "supervision",
       family: "runtime.supervision",
-      rationale: "Read-only description of one exact driver-owned executable entity.",
+      rationale:
+        "Read-only description of driver-owned executable entities selected by exact entity or release identity.",
     },
     capability: null,
     presentation: null,
@@ -6642,7 +6725,8 @@ export const HOST_AUTHORITY_METHODS = {
       session: "family",
       residency: "observability",
       family: "runtime.supervision-observability",
-      rationale: "Bounded retained-log read from one exact executable-unit driver.",
+      rationale:
+        "Bounded retained-log read from executable-unit drivers, selected by exact entity or release identity.",
     },
     capability: null,
     presentation: null,
@@ -7202,40 +7286,6 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "supervision",
       family: "shellPresence.control",
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "speech.prepare": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "speech.transcribe",
-      rationale: "Readiness and preparation of the bundled local speech model.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "speech.status": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "speech.transcribe",
-      rationale: "Readiness and preparation of the bundled local speech model.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "speech.transcribe": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "speech.transcribe",
-      rationale:
-        "Installed CPU inference over caller-supplied bytes; no workspace or host data is disclosed and no microphone is accessed by this operation.",
     },
     capability: null,
     presentation: null,
@@ -8952,6 +9002,27 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "workspace-state.slot.patchCurrentStateArgs": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale:
+        "Exact typed proxy to the builtin topology owner, which merges and validates one current-entry patch",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
   "workspace-state.slot.resolveByEntity": {
     tier: {
       tier: "open",
@@ -8970,27 +9041,6 @@ export const HOST_AUTHORITY_METHODS = {
       authorityCategory: {
         domain: "automation",
         verb: "see",
-      },
-    },
-  },
-  "workspace-state.slot.updateCurrentStateArgs": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "transport",
-      family: "workspace-state.builtin-rpc",
-      rationale:
-        "Exact typed proxy to the builtin topology owner for one receiver-validated current-entry update",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage running apps and tasks",
-      action: "manage apps, panels, and scheduled tasks that are currently running",
-      description: "Start, stop, or check on apps and tasks running in your workspace",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
       },
     },
   },
@@ -9236,6 +9286,17 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "workspaceTemplateSource.readInstallation": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale: "Reviewed template workflows read their exact installed baseline.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "workspaceTemplateSource.resolveLocal": {
     tier: {
       tier: "open",
@@ -9314,7 +9375,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "workspace-state.slot.commitPreparedNavigation": ["context.boundary"],
   "workspace-state.slot.create": ["context.boundary"],
   "workspace-state.slot.move": ["context.boundary"],
-  "workspace-state.slot.updateCurrentStateArgs": ["context.boundary"],
+  "workspace-state.slot.patchCurrentStateArgs": ["context.boundary"],
   "workspace.applyPreparedConfig": ["workspace.config.apply"],
 } as const satisfies Record<string, readonly string[]>;
 
@@ -9518,10 +9579,6 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "runtime.supervision.manage": {
     domain: "automation",
     verb: "manage",
-  },
-  "security.audit.read": {
-    domain: "safety",
-    verb: "see",
   },
   "server-logs.read": {
     domain: "computer",
@@ -9957,9 +10014,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "devices.pair": {
-    title: "Pair a device",
-    action: "pair a device",
-    description: "Connect another device to your account so you can use it to access workspaces.",
+    title: "Cancel a device invite",
+    action: "cancel a device invite",
+    description: "Cancel a pending device invite so it can no longer be redeemed.",
     group: "accounts",
     authorityCategory: {
       domain: "people",
@@ -10215,16 +10272,6 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "automation",
       verb: "manage",
-    },
-  },
-  "security.audit.read": {
-    title: "View the security activity log",
-    action: "view the security activity log",
-    description: "Allows {requesterKind} to view the security activity log.",
-    group: "approvals",
-    authorityCategory: {
-      domain: "safety",
-      verb: "see",
     },
   },
   "server-logs.read": {

@@ -64,8 +64,17 @@ export function encodeErrorFrame(payload: ErrorFramePayload): Uint8Array {
   return encodeFrame(FRAME_ERROR, textEncoder.encode(JSON.stringify(payload)));
 }
 
+/**
+ * Incremental frame parser. Unread bytes live in `buf[offset..length)`. The
+ * buffer grows geometrically and the unread tail moves only when space runs out,
+ * so chunked frames and many small frames per chunk both decode in linear time.
+ * A fully drained decoder releases its buffer. Each payload handed to `onFrame`
+ * is a fresh copy the callback may retain.
+ */
 export class FrameDecoder {
   private buf = new Uint8Array(0);
+  private offset = 0;
+  private length = 0;
 
   constructor(
     private readonly onFrame: (type: FrameType, payload: Uint8Array) => void | Promise<void>
@@ -73,29 +82,60 @@ export class FrameDecoder {
 
   async push(chunk: Uint8Array): Promise<void> {
     if (chunk.byteLength === 0) return;
-    const next = new Uint8Array(this.buf.byteLength + chunk.byteLength);
-    next.set(this.buf, 0);
-    next.set(chunk, this.buf.byteLength);
-    this.buf = next;
+    this.append(chunk);
     await this.drain();
   }
 
   finished(): boolean {
-    return this.buf.byteLength === 0;
+    return this.length === this.offset;
+  }
+
+  private append(chunk: Uint8Array): void {
+    if (this.length + chunk.byteLength > this.buf.byteLength) {
+      const unread = this.length - this.offset;
+      const required = unread + chunk.byteLength;
+      if (required > this.buf.byteLength) {
+        const grown = new Uint8Array(Math.max(required, this.buf.byteLength * 2));
+        grown.set(this.buf.subarray(this.offset, this.length));
+        this.buf = grown;
+      } else {
+        this.buf.copyWithin(0, this.offset, this.length);
+      }
+      this.offset = 0;
+      this.length = unread;
+    }
+    this.buf.set(chunk, this.length);
+    this.length += chunk.byteLength;
   }
 
   private async drain(): Promise<void> {
-    while (this.buf.byteLength >= 5) {
-      const type = this.buf[0] as FrameType;
+    while (this.length - this.offset >= 5) {
+      const at = this.offset;
+      const type = this.buf[at] as FrameType;
+      if (
+        type !== FRAME_HEAD &&
+        type !== FRAME_DATA &&
+        type !== FRAME_END &&
+        type !== FRAME_ERROR
+      ) {
+        throw new Error(`Unknown streaming RPC frame type: ${type}`);
+      }
+      // `>>> 0` keeps lengths >= 2^31 unsigned, matching the encoder.
       const len =
-        ((this.buf[1] ?? 0) << 24) |
-        ((this.buf[2] ?? 0) << 16) |
-        ((this.buf[3] ?? 0) << 8) |
-        (this.buf[4] ?? 0);
+        (((this.buf[at + 1] ?? 0) << 24) |
+          ((this.buf[at + 2] ?? 0) << 16) |
+          ((this.buf[at + 3] ?? 0) << 8) |
+          (this.buf[at + 4] ?? 0)) >>>
+        0;
       const total = 5 + len;
-      if (this.buf.byteLength < total) return;
-      const payload = this.buf.slice(5, total);
-      this.buf = this.buf.slice(total);
+      if (this.length - at < total) return;
+      const payload = this.buf.slice(at + 5, at + total);
+      this.offset = at + total;
+      if (this.offset === this.length) {
+        this.buf = new Uint8Array(0);
+        this.offset = 0;
+        this.length = 0;
+      }
       await this.onFrame(type, payload);
     }
   }
@@ -265,22 +305,15 @@ export interface DecodedFramedStream {
   body: ReadableStream<Uint8Array>;
 }
 
-/**
- * GENEROUS deadline on the first HEAD frame. A server that accepts a
- * `stream-open` but never emits HEAD (a wedged upstream) would otherwise hang
- * `await headPromise` — and therefore the caller's `stream()`/`proxyFetch` —
- * forever. Comparable to the session-open deadline (~20s): fail LOUD, not
- * hang. Only fires when the wire is genuinely silent — a real (even empty)
- * response resolves HEAD (or resolves it to null on END) and clears it, and a
- * caller-supplied AbortSignal still preempts it.
- */
-const STREAM_HEAD_TIMEOUT_MS = 20_000;
-
 export interface DecodeFramedStreamOptions {
   /** Called when the decoded response body consumer cancels before END/ERROR. */
   onBodyCancel?: (reason?: unknown) => void;
-  /** Override the HEAD deadline (ms). `0`/`Infinity` disables it (e.g. a plain
-   * in-memory decode with no wire that can hang). Defaults to ~20s. */
+  /**
+   * Explicit caller deadline (ms) for the first HEAD frame. There is no implicit
+   * deadline: a slow HEAD (cold service, pending approval) is a valid state, and
+   * a dead wire settles through the body stream's own error/close or the
+   * caller's AbortSignal. Omitted, `0` or `Infinity` waits for those events.
+   */
   headTimeoutMs?: number;
 }
 
@@ -323,8 +356,8 @@ export async function decodeFramedStream(
       rawRejectHead(error);
     };
   }
-  const headTimeoutMs = options?.headTimeoutMs ?? STREAM_HEAD_TIMEOUT_MS;
-  if (Number.isFinite(headTimeoutMs) && headTimeoutMs > 0) {
+  const headTimeoutMs = options?.headTimeoutMs;
+  if (headTimeoutMs !== undefined && Number.isFinite(headTimeoutMs) && headTimeoutMs > 0) {
     headTimer = setTimeout(() => {
       headTimer = null;
       if (!headSeen) {
@@ -368,6 +401,18 @@ export async function decodeFramedStream(
     bodyClosed = true;
     bodyController?.error(error);
   };
+  const abortError = (): Error => {
+    const reason = callerSignal?.reason;
+    return reason instanceof Error ? reason : new Error("Streaming RPC aborted by caller");
+  };
+  const onAbort = (): void => {
+    const error = abortError();
+    if (!headSeen) rejectHead(error);
+    errorBody(error);
+    void reader?.cancel(error).catch(() => undefined);
+  };
+  if (callerSignal?.aborted) onAbort();
+  else callerSignal?.addEventListener("abort", onAbort, { once: true });
   const decoder = new FrameDecoder((type, payload) => {
     if (type === FRAME_HEAD) {
       try {
@@ -421,6 +466,7 @@ export async function decodeFramedStream(
     }
   });
   reader = wireBody.getReader();
+  if (callerSignal?.aborted) onAbort();
   void (async () => {
     try {
       while (true) {
@@ -435,6 +481,7 @@ export async function decodeFramedStream(
       if (!headSeen) rejectHead(error);
       else errorBody(error);
     } finally {
+      callerSignal?.removeEventListener("abort", onAbort);
       reader?.releaseLock();
     }
   })();

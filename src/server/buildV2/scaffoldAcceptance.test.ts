@@ -306,6 +306,32 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
       },
     ]);
 
+    // Service metadata belongs to the provider package. The workspace manifest
+    // selects that named export and keeps only the stable repository identity.
+    const providerManifest = JSON.parse(
+      mocks.files.get("workers/notes-store/package.json") as string
+    ) as { vibestudio?: Record<string, unknown> };
+    providerManifest.vibestudio = {
+      ...providerManifest.vibestudio,
+      services: [
+        {
+          name: "acceptance.notes",
+          title: "Acceptance Notes",
+          action: "manage acceptance test notes",
+          description: "Stores notes for the scaffold acceptance test.",
+          notability: "everyday",
+          presentation: { domain: "automation", verb: "manage" },
+          authority: { binding: "declared", principals: ["user", "code"] },
+          protocols: ["acceptance.notes.v1"],
+          durableObject: { className: "NotesStore" },
+        },
+      ],
+    };
+    mocks.files.set(
+      "workers/notes-store/package.json",
+      `${JSON.stringify(providerManifest, null, 2)}\n`
+    );
+
     // 2. Materialize the captured scaffold files into the temp workspace.
     for (const [relPath, content] of mocks.files) {
       const absolute = path.join(workspaceRoot, relPath);
@@ -313,8 +339,7 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
       fs.writeFileSync(absolute, content);
     }
 
-    // 3. Declare the durable service's application protocol in the canonical
-    //    workspace location (NOT rpcSchema — that field is host-reserved).
+    // 3. Select the provider export in the canonical workspace location.
     fs.mkdirSync(path.join(workspaceRoot, "meta"), { recursive: true });
     fs.writeFileSync(
       path.join(workspaceRoot, "meta", "vibestudio.yml"),
@@ -329,17 +354,6 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
         "services:",
         "  - source: workers/notes-store",
         "    name: acceptance.notes",
-        "    action: manage acceptance test notes",
-        "    notability: everyday",
-        "    presentation:",
-        "      domain: automation",
-        "      verb: manage",
-        "    authority:",
-        "      binding: declared",
-        "      principals: [user, code]",
-        "    protocols: [acceptance.notes.v1]",
-        "    durableObject:",
-        "      className: NotesStore",
         "singletonObjects:",
         "  - className: NotesStore",
         "    key: notes",

@@ -37,7 +37,6 @@ describe("CdpHostProviderRpcChannel", () => {
   it("adapts a remote provider stream into the CdpBridge provider contract", async () => {
     const bridge = new CdpBridge({
       adminToken: "admin-token",
-      externalHost: "127.0.0.1",
       port: 0,
     });
     const channel = new CdpHostProviderRpcChannel(bridge);
@@ -85,7 +84,6 @@ describe("CdpHostProviderRpcChannel", () => {
   it("binds remote provider sessions to the owning shell caller", async () => {
     const bridge = new CdpBridge({
       adminToken: "admin-token",
-      externalHost: "127.0.0.1",
       port: 0,
       canRegisterHostProvider: (hostConnectionId, ownerCallerId) =>
         hostConnectionId === "desktop-host" && ownerCallerId === "shell:desktop",

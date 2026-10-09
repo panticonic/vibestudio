@@ -215,7 +215,6 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
     unregisterEgressCaller: () => {},
     egressSecret: "mock-egress-secret",
     getWorkerdGatewayToken: () => "mock-workerd-gateway-token",
-    workerdStartupReadyTimeoutMs: 50,
     ...overrides,
   };
 }
@@ -1542,6 +1541,23 @@ describe("WorkerdManager", () => {
   // listInstances
   // -------------------------------------------------------------------------
   describe("listing", () => {
+    it("rejects a non-router readiness response instead of waiting on a live wrong endpoint", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 401 }))
+      );
+      const mgr = new WorkerdManager(createMockDeps());
+      const internals = mgr as unknown as {
+        port: number;
+        waitForHttpReady(abandoned: () => boolean, signal: AbortSignal): Promise<void>;
+      };
+      internals.port = 49552;
+
+      await expect(
+        internals.waitForHttpReady(() => false, new AbortController().signal)
+      ).rejects.toThrow("workerd readiness returned HTTP 401 (expected 204)");
+    });
+
     it("listInstances strips tokens", async () => {
       const mgr = new WorkerdManager(createMockDeps());
       await mgr.startWorker(startArgs());
@@ -1571,7 +1587,7 @@ describe("WorkerdManager", () => {
       expect(mgr.getWorkerInspectorUrl("workers/missing")).toBeNull();
     });
 
-    it("retries startup on a fresh port when the router never becomes ready", async () => {
+    it("retries startup on a fresh port when workerd exits before accepting HTTP", async () => {
       let workerdPortCalls = 0;
       vi.mocked(findServicePort).mockImplementation(
         async (service: Parameters<typeof findServicePort>[0]) => {
@@ -1585,9 +1601,23 @@ describe("WorkerdManager", () => {
         return new Response(null, { status: 204 });
       });
       vi.stubGlobal("fetch", fetchMock);
+      const spawnsBefore = vi.mocked(spawn).mock.results.length;
 
       const mgr = new WorkerdManager(createMockDeps());
-      await mgr.startWorker(startArgs());
+      const started = mgr.startWorker(startArgs());
+      // The first process is never ready on its port; a slow start would keep
+      // waiting, so only its exit (here, a bind failure) triggers the retry.
+      await vi.waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          "http://127.0.0.1:49552/__vibestudio_workerd_ready",
+          expect.any(Object)
+        )
+      );
+      const first = vi.mocked(spawn).mock.results[spawnsBefore]!.value as {
+        emit(event: string, ...args: unknown[]): void;
+      };
+      first.emit("exit", 1, null);
+      await started;
 
       expect(mgr.getPort()).toBe(49553);
       expect(fetchMock).toHaveBeenCalledWith(

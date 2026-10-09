@@ -5,6 +5,7 @@ import YAML from "yaml";
 import { sha256Hex } from "@vibestudio/content-addressing";
 import { GitClient, readExactGitSnapshot } from "@vibestudio/git";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { templateRepositories } from "@vibestudio/workspace/templateManifest";
 import { validateRootTemplateSource } from "@vibestudio/workspace/rootTemplate";
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
@@ -163,7 +164,7 @@ export async function inspectWorkspaceSources(input: {
               },
             }
           : {}),
-        ...manifest.inventory,
+        repositories: templateRepositories(snapshot.files.map((file) => file.path)),
         dependencies: manifest.dependencies,
       },
     };

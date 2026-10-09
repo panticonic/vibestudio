@@ -130,6 +130,7 @@ export {
   type RpcClientRecoveryOptions,
 } from "./client.js";
 export { bytesToBase64, base64ToBytes } from "./base64.js";
+export { encodeRpcJson, decodeRpcJson, rpcBytesOf } from "./wireJson.js";
 export { secureRandomUuid, type SecureRandomSource } from "./randomId.js";
 export {
   TERMINAL_CLOSE_CODES,

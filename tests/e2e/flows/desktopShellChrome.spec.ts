@@ -12,8 +12,14 @@ import {
   getPanelTree,
   hasElectronDisplay,
   launchTestApp,
+  approvePendingStartupUnits,
   type TestApp,
 } from "../../setup/electronSetup";
+import {
+  declineFirstRunReporting,
+  findWorkspaceShellPage,
+  presentApprovalCard,
+} from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -69,7 +75,7 @@ async function listWebContents(testApp: TestApp): Promise<WebContentsSnapshot[]>
   });
 }
 
-async function getPanelSurfaceLayout(testApp: TestApp): Promise<{
+async function getPanelSurfaceLayout(shellPage: Page): Promise<{
   surfaces: Array<{
     nativeSlotId: string;
     panelId: string;
@@ -97,118 +103,100 @@ async function getPanelSurfaceLayout(testApp: TestApp): Promise<{
     }>;
   };
 }> {
-  return testApp.app.evaluate(async ({ webContents }) => {
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const result = await contents.executeJavaScript(
-          `(() => {
-            const rectFor = (node) => {
-              if (!(node instanceof HTMLElement)) return null;
-              const rect = node.getBoundingClientRect();
-              if (rect.width <= 0 || rect.height <= 0) return null;
-              return {
-                x: Math.round(rect.left),
-                y: Math.round(rect.top),
-                width: Math.round(rect.width),
-                height: Math.round(rect.height),
-                bottom: Math.round(rect.bottom),
-              };
-            };
-            const surfaces = Array.from(document.querySelectorAll("[data-native-panel-slot-id]"))
-              .map((node) => {
-                const rect = rectFor(node);
-                const nativeSlotId = node.getAttribute("data-native-panel-slot-id");
-                const panelId = node.getAttribute("data-panel-id");
-                return rect && nativeSlotId && panelId
-                  ? { nativeSlotId, panelId, ...rect }
-                  : null;
-              })
-              .filter(Boolean);
-            const shellLayout = document.querySelector("[data-shell-layout-columns]");
-            if (surfaces.length === 0 && !shellLayout) return null;
-            return {
-              surfaces,
-              approval: rectFor(document.querySelector(".approval-card, .approval-pill")),
-              topChrome: Array.from(document.querySelectorAll("[data-shell-top-chrome]"))
-                .map(rectFor)
-                .filter(Boolean),
-              sidebar: rectFor(document.querySelector("[data-shell-panel-sidebar]")),
-              ...(shellLayout
-                ? { shellState: {
-                    columns: shellLayout.getAttribute("data-shell-layout-columns"),
-                    restored: shellLayout.getAttribute("data-shell-layout-restored"),
-                    visiblePanels: shellLayout.getAttribute("data-shell-layout-visible-panels"),
-                    rootPanels: shellLayout.getAttribute("data-shell-layout-root-panels"),
-                    residentColumns: shellLayout.getAttribute("data-shell-layout-resident-columns"),
-                    panelContentStates: Array.from(
-                      document.querySelectorAll("[data-panel-content-state]")
-                    ).map((node) => ({
-                      panelId: node.getAttribute("data-panel-id"),
-                      state: node.getAttribute("data-panel-content-state"),
-                      buildKey: node.getAttribute("data-panel-build-key"),
-                      buildState: node.getAttribute("data-panel-build-state"),
-                      runtimePhase: node.getAttribute("data-panel-runtime-phase"),
-                    })),
-                  } }
-                : {}),
-            };
-          })()`,
-          true
-        );
-        if (result?.surfaces?.length || result?.shellState) return result;
-      } catch {
-        // Ignore non-DOM webContents.
-      }
-    }
-    return { surfaces: [], approval: null, topChrome: [], sidebar: null };
+  return shellPage.evaluate(() => {
+    const rectFor = (node: Element | null) => {
+      if (!(node instanceof HTMLElement)) return null;
+      const rect = node.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      return {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        bottom: Math.round(rect.bottom),
+      };
+    };
+    const surfaces = Array.from(document.querySelectorAll("[data-native-panel-slot-id]"))
+      .map((node) => {
+        const rect = rectFor(node);
+        const nativeSlotId = node.getAttribute("data-native-panel-slot-id");
+        const panelId = node.getAttribute("data-panel-id");
+        return rect && nativeSlotId && panelId ? { nativeSlotId, panelId, ...rect } : null;
+      })
+      .filter((surface) => surface !== null);
+    const shellLayout = document.querySelector("[data-shell-layout-columns]");
+    return {
+      surfaces,
+      approval: rectFor(document.querySelector(".approval-card, .approval-pill")),
+      topChrome: Array.from(document.querySelectorAll("[data-shell-top-chrome]"))
+        .map(rectFor)
+        .filter((rect) => rect !== null),
+      sidebar: rectFor(document.querySelector("[data-shell-panel-sidebar]")),
+      ...(shellLayout
+        ? {
+            shellState: {
+              columns: shellLayout.getAttribute("data-shell-layout-columns"),
+              restored: shellLayout.getAttribute("data-shell-layout-restored"),
+              visiblePanels: shellLayout.getAttribute("data-shell-layout-visible-panels"),
+              rootPanels: shellLayout.getAttribute("data-shell-layout-root-panels"),
+              residentColumns: shellLayout.getAttribute("data-shell-layout-resident-columns"),
+              panelContentStates: Array.from(
+                document.querySelectorAll("[data-panel-content-state]")
+              ).map((node) => ({
+                panelId: node.getAttribute("data-panel-id"),
+                state: node.getAttribute("data-panel-content-state"),
+                buildKey: node.getAttribute("data-panel-build-key"),
+                buildState: node.getAttribute("data-panel-build-state"),
+                runtimePhase: node.getAttribute("data-panel-runtime-phase"),
+              })),
+            },
+          }
+        : {}),
+    };
   });
 }
 
-async function approveStartupUnitsIfNeeded(testApp: TestApp): Promise<void> {
+async function approveStartupUnitsAndDeclineReporting(testApp: TestApp): Promise<void> {
+  await approvePendingStartupUnits(testApp);
+  await declineFirstRunReporting(testApp);
+}
+
+async function workspaceReviewState(
+  page: Page,
+  workspaceId: string
+): Promise<{ status: string; approvalId?: string; error?: string }> {
+  return nativeUiRead(
+    page,
+    { kind: "workspace", workspaceId },
+    "shellApproval.getWorkspaceCreationReviewState",
+    []
+  );
+}
+
+async function approveWorkspaceCreationReviewInShell(
+  page: Page,
+  workspaceId: string
+): Promise<void> {
   await expect
-    .poll(
-      async () =>
-        testApp.app.evaluate(
-          async ({ webContents }, { workspaceId }) => {
-            const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
-            if (testApi?.getHostViewDebugInfo().visibleHostChromeAppId) return true;
-            for (const contents of webContents.getAllWebContents()) {
-              if (contents.isDestroyed()) continue;
-              try {
-                const result = await contents.executeJavaScript(
-                  `(() => {
-                  const hasHostedShellChrome = Boolean(document.querySelector('[data-shell-top-chrome="titlebar"]')
-                    || document.querySelector(".titlebar-breadcrumb-scroll")
-                    || document.querySelector('[aria-label="Menu"]'));
-                  if (hasHostedShellChrome) return "hosted-shell-loaded";
-
-                  if (!document.querySelector('[data-bootstrap-launch-gate="true"]')) {
-                    return "missing";
-                  }
-
-                  const approveAll = Array.from(document.querySelectorAll("button"))
-                    .find((button) =>
-                      /^(Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start)$/.test((button.textContent ?? "").trim())
-                    );
-                  if (!approveAll) return "waiting";
-                  approveAll.click();
-                  return "approved";
-                })()`,
-                  true
-                );
-                if (result === "approved" || result === "hosted-shell-loaded") return true;
-              } catch {
-                // Ignore non-DOM webContents.
-              }
-            }
-            return false;
-          },
-          { workspaceId: testApp!.systemWorkspaceId }
-        ),
-      { timeout: 120_000, intervals: [500, 1000, 2000] }
-    )
-    .toBe(true);
+    .poll(async () => (await workspaceReviewState(page, workspaceId)).status, {
+      timeout: 120_000,
+    })
+    .not.toBe("preparing");
+  let state = await workspaceReviewState(page, workspaceId);
+  if (state.status === "failed") {
+    throw new Error(`Workspace creation review failed: ${state.error}`);
+  }
+  if (state.status === "pending") {
+    if (!state.approvalId) throw new Error("Pending workspace review has no approval ID");
+    const card = await presentApprovalCard(page, state.approvalId);
+    expect(await card.getAttribute("data-approval-id")).toBe(state.approvalId);
+    await card.getByRole("button", { name: "Add to workspace", exact: true }).click();
+    await expect
+      .poll(() => workspaceReviewState(page, workspaceId), { timeout: 120_000 })
+      .toMatchObject({ status: "resolved" });
+    state = await workspaceReviewState(page, workspaceId);
+  }
+  expect(["resolved", "not-required"]).toContain(state.status);
 }
 
 test.describe("Desktop Shell Chrome", () => {
@@ -223,7 +211,7 @@ test.describe("Desktop Shell Chrome", () => {
 
   test("mounts the dynamic shell app with custom titlebar chrome", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
-    await approveStartupUnitsIfNeeded(testApp);
+    await approveStartupUnitsAndDeclineReporting(testApp);
 
     let lastSnapshots: WebContentsSnapshot[] = [];
     try {
@@ -292,34 +280,58 @@ test.describe("Desktop Shell Chrome", () => {
       }
       // Personal's startup review consumes a worker receiver declaration even
       // though the worker itself does not require privileged-code admission.
+      const shellPage = await findWorkspaceShellPage(testApp);
+      const workspaces = await nativeUiRead<Array<{ workspaceId: string; privateRole?: string }>>(
+        shellPage,
+        { kind: "hub" },
+        "hubControl.listWorkspaces",
+        []
+      );
+      const personal = workspaces.find((workspace) => workspace.privateRole === "personal");
+      expect(personal).toBeTruthy();
+      let browserReview:
+        | import("@vibestudio/shared/approvals").PendingUnitInstallReviewApproval
+        | undefined;
       await expect
         .poll(
-          () =>
-            testApp!.app.evaluate(async ({ webContents }, chromeId) => {
-              const chrome = webContents.fromId(chromeId);
-              if (!chrome || chrome.isDestroyed()) return "";
-              return chrome.executeJavaScript(`(() => {
-          const row = [...document.querySelectorAll('[data-part-row]')].find(node =>
-            node.getAttribute('data-identity-key')?.startsWith('extensions/browser-data@')
-            && node.getBoundingClientRect().width > 0);
-          if (!row) return "";
-          if (row.getAttribute('aria-current') !== 'true' && row.getAttribute('aria-expanded') !== 'true') row.click();
-          return [...document.querySelectorAll('.install-review-detail')]
-            .filter(node => node.getBoundingClientRect().width > 0)
-            .map(node => node.innerText).join('\\n');
-        })()`);
-            }, chromeId),
+          async () => {
+            const pending = await nativeUiRead<
+              import("@vibestudio/shared/approvals").PendingApproval[]
+            >(
+              shellPage,
+              { kind: "workspace", workspaceId: personal!.workspaceId },
+              "shellApproval.listPending",
+              []
+            );
+            browserReview = pending.find(
+              (approval) =>
+                approval.kind === "unit-install-review" &&
+                approval.parts.some((part) =>
+                  part.identityKey.startsWith("extensions/browser-data@")
+                )
+            );
+            return Boolean(browserReview);
+          },
           { timeout: 60_000 }
         )
-        .toContain("delete persistent browser data");
-      const browserReviewText = await testApp.app.evaluate(async ({ webContents }, chromeId) => {
-        return webContents.fromId(chromeId)!.executeJavaScript(`(() => {
-          const detail = [...document.querySelectorAll('.install-review-detail')].find(node =>
-            node.getBoundingClientRect().width > 0 && node.innerText.includes('delete persistent browser data'));
-          return detail?.innerText ?? '';
-        })()`);
-      }, chromeId);
-      expect(browserReviewText).not.toContain("doesn't recognize");
+        .toBe(true);
+      if (!browserReview) throw new Error("The browser-data declaration review disappeared");
+      const reviewCard = await presentApprovalCard(shellPage, browserReview.approvalId);
+      const browserDataRow = reviewCard.locator(
+        '[data-part-row][data-identity-key^="extensions/browser-data@"]'
+      );
+      await expect(browserDataRow).toBeVisible();
+      if (
+        (await browserDataRow.getAttribute("aria-current")) !== "true" &&
+        (await browserDataRow.getAttribute("aria-expanded")) !== "true"
+      ) {
+        await browserDataRow.click();
+      }
+      const browserDataDetail = reviewCard.locator(".install-review-detail").filter({
+        hasText: "delete persistent browser data",
+      });
+      await expect(browserDataDetail).toBeVisible();
+      expect(await browserDataDetail.innerText()).not.toContain("doesn't recognize");
       const screenshot = await testApp.app.evaluate(async ({ webContents }) => {
         const chrome = webContents
           .getAllWebContents()
@@ -346,7 +358,7 @@ test.describe("Desktop Shell Chrome", () => {
 
   test("presents every private workspace review before using the workspace catalog", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
-    await approveStartupUnitsIfNeeded(testApp);
+    await approveStartupUnitsAndDeclineReporting(testApp);
     let page: Page | undefined;
     await expect
       .poll(
@@ -421,23 +433,43 @@ test.describe("Desktop Shell Chrome", () => {
     for (let pass = 0; pass < 8; pass++) {
       const pending = await pendingReviews();
       if (!pending.length) break;
-      const add = chrome.getByRole("button", { name: "Add to workspace", exact: true });
-      await expect(add, JSON.stringify(pending)).toBeVisible({ timeout: 30_000 });
-      const card = chrome.locator("[data-approval-card]").filter({ has: add });
-      const approvalId = await card.getAttribute("data-approval-id");
-      expect(pending.some((review) => review.id === approvalId)).toBe(true);
-      await add.click();
+      const review = pending[0]!;
+      const card = await presentApprovalCard(chrome, review.id);
+      expect(await card.getAttribute("data-approval-id")).toBe(review.id);
+      await expect(
+        card.getByRole("button", { name: "Add to workspace", exact: true })
+      ).toBeVisible();
+      await card.getByRole("button", { name: "Add to workspace", exact: true }).click();
       await expect
-        .poll(async () => (await pendingReviews()).some((review) => review.id === approvalId), {
-          timeout: 60_000,
-        })
+        .poll(
+          async () => (await pendingReviews()).some((candidate) => candidate.id === review.id),
+          {
+            timeout: 60_000,
+          }
+        )
         .toBe(false);
     }
     expect(await pendingReviews()).toEqual([]);
+    for (const workspace of privateWorkspaces) {
+      await expect
+        .poll(
+          async () =>
+            (
+              await nativeUiRead<{ status: string }>(
+                chrome,
+                { kind: "workspace", workspaceId: workspace.workspaceId },
+                "shellApproval.getWorkspaceCreationReviewState",
+                []
+              )
+            ).status,
+          { timeout: 60_000 }
+        )
+        .toBe("resolved");
+    }
     await chrome.getByRole("button", { name: "Add workspace", exact: true }).click();
-    await chrome.getByRole("radio", { name: "Git URL Use a repository" }).click();
+    await chrome.getByRole("radio", { name: "Templates Find your starting point" }).click();
     await expect(
-      chrome.getByRole("heading", { name: "Workspace catalog", exact: true })
+      chrome.getByRole("heading", { name: "Choose your starting point", exact: true })
     ).toBeVisible();
     try {
       let approvalPage: Page | undefined;
@@ -511,7 +543,7 @@ test.describe("Desktop Shell Chrome", () => {
 
   test("copies one selected file between workspaces into an unpublished review branch", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
-    await approveStartupUnitsIfNeeded(testApp);
+    await approveStartupUnitsAndDeclineReporting(testApp);
     let chrome: Page | undefined;
     await expect
       .poll(
@@ -572,30 +604,15 @@ test.describe("Desktop Shell Chrome", () => {
           }
           const pending = queued.filter((approval) => approval.kind === "unit-install-review");
           if (!pending.length) return;
-          const add = page.getByRole("button", { name: "Add to workspace", exact: true });
-          // Approval settlement can coalesce another startup request while its
-          // previous list response is in flight. Re-read before waiting for UI.
-          await expect
-            .poll(
-              async () =>
-                (await add.isVisible()) ||
-                !(await approvals.listPending()).some(
-                  (approval) => approval.kind === "unit-install-review"
-                ),
-              { timeout: 60_000 }
-            )
-            .toBe(true);
-          if (!(await add.isVisible())) continue;
-          const card = page.locator("[data-approval-card]").filter({ has: add });
-          const approvalId = await card.getAttribute("data-approval-id");
-          if (!approvalId || !pending.some((approval) => approval.approvalId === approvalId))
-            throw new Error("Visible startup approval belongs to another workspace");
-          await add.click();
+          const approval = pending[0]!;
+          const card = await presentApprovalCard(page, approval.approvalId);
+          expect(await card.getAttribute("data-approval-id")).toBe(approval.approvalId);
+          await card.getByRole("button", { name: "Add to workspace", exact: true }).click();
           await expect
             .poll(
               async () =>
                 (await approvals.listPending()).some(
-                  (approval) => approval.approvalId === approvalId
+                  (item) => item.approvalId === approval.approvalId
                 ),
               { timeout: 60_000 }
             )
@@ -669,17 +686,6 @@ test.describe("Desktop Shell Chrome", () => {
         .toMatchObject({ state: "ready", surface: "code" });
       const presentation = (await personalPanels.getLocalPresentation(panelId!)).presentation;
       if (presentation.state !== "ready") throw new Error("Personal New panel stopped being ready");
-      const newPanel = await testApp.app.evaluate(async ({ webContents }, webContentsId) => {
-        const contents = webContents.fromId(webContentsId);
-        if (!contents || contents.isDestroyed()) return null;
-        return {
-          url: contents.getURL(),
-          hasLauncher: await contents.executeJavaScript(
-            `!!document.querySelector('[aria-label="Search panels and history, enter a web address, or start a chat"]')`
-          ),
-        };
-      }, presentation.webContentsId);
-      expect(newPanel).toEqual({ url: presentation.url, hasLauncher: true });
       await page.getByRole("button", { name: "Settings", exact: true }).click();
       await page.getByRole("tab", { name: "Templates", exact: true }).click();
       await page.getByRole("tab", { name: "Copy selected files", exact: true }).click();
@@ -758,7 +764,12 @@ test.describe("Desktop Shell Chrome", () => {
 
   test("places the native panel exactly in the measured shell panel surface", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
-    await approveStartupUnitsIfNeeded(testApp);
+    await approveStartupUnitsAndDeclineReporting(testApp);
+    const shellPage = await findWorkspaceShellPage(testApp);
+    await approveWorkspaceCreationReviewInShell(shellPage, testApp.systemWorkspaceId);
+    if (testApp.workspaceId !== testApp.systemWorkspaceId) {
+      await approveWorkspaceCreationReviewInShell(shellPage, testApp.workspaceId);
+    }
     const nativeBounds = () =>
       testApp!.app.evaluate(({ BaseWindow }) =>
         BaseWindow.getAllWindows().flatMap((window) =>
@@ -773,27 +784,11 @@ test.describe("Desktop Shell Chrome", () => {
       await expect
         .poll(
           async () => {
-            // Settle the isolated fixture's ordinary startup unit reviews through
-            // their UI before measuring visible native content below the chrome.
-            await testApp!.app.evaluate(async ({ webContents }) => {
-              for (const contents of webContents.getAllWebContents()) {
-                if (contents.isDestroyed()) continue;
-                await contents
-                  .executeJavaScript(
-                    `(() => {
-                  const button = [...document.querySelectorAll('[data-approval-card] button')]
-                    .find(node => node.textContent.trim() === 'Add to workspace' && node.getClientRects().length && !node.disabled);
-                  button?.click();
-                })()`
-                  )
-                  .catch(() => undefined);
-              }
-            });
             const views = await nativeBounds();
             const [panelsResult, slotsResult, layoutResult] = await Promise.allSettled([
               getPanelTree(testApp!),
               getNativePanelSlotDebugInfo(testApp!),
-              getPanelSurfaceLayout(testApp!),
+              getPanelSurfaceLayout(shellPage),
             ]);
             const panels = panelsResult.status === "fulfilled" ? panelsResult.value : [];
             const slots = slotsResult.status === "fulfilled" ? slotsResult.value : [];
@@ -872,22 +867,23 @@ test.describe("Desktop Shell Chrome", () => {
     // Drive the host-owned outage state through the real preload subscription.
     // Native WebContentsViews must move with the shell DOM, not just its sidebar.
     const before = await getNativePanelSlotDebugInfo(testApp);
+    const shellUrl = shellPage.url();
     const publish = async (phase: "reconnecting" | "online") => {
-      await testApp!.app.evaluate(async ({ webContents }, phase) => {
-        for (const contents of webContents.getAllWebContents()) {
-          if (contents.isDestroyed()) continue;
-          const isShell = await contents
-            .executeJavaScript('!!document.querySelector(".workspace-desktop")')
-            .catch(() => false);
-          if (isShell)
-            contents.send("vibestudio:workspace-connection-state", {
-              version: 1,
-              phase,
-              mode: "remote",
-              since: Date.now(),
-            });
-        }
-      }, phase);
+      await testApp!.app.evaluate(
+        ({ webContents }, { phase, shellUrl }) => {
+          const contents = webContents
+            .getAllWebContents()
+            .find((candidate) => !candidate.isDestroyed() && candidate.getURL() === shellUrl);
+          if (!contents) throw new Error(`Shell webContents is unavailable at ${shellUrl}`);
+          contents.send("vibestudio:workspace-connection-state", {
+            version: 1,
+            phase,
+            mode: "remote",
+            since: Date.now(),
+          });
+        },
+        { phase, shellUrl }
+      );
     };
     await publish("reconnecting");
     await expect
@@ -895,7 +891,7 @@ test.describe("Desktop Shell Chrome", () => {
         async () => {
           const [slots, layout, views] = await Promise.all([
             getNativePanelSlotDebugInfo(testApp!),
-            getPanelSurfaceLayout(testApp!),
+            getPanelSurfaceLayout(shellPage),
             nativeBounds(),
           ]);
           return (

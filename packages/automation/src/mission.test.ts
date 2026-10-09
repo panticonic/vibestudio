@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import {
   missionCompletionResponse,
   missionNextRunAt,
   missionPrincipal,
   missionRevisionDigest,
+  missionExecutionImageDigest,
   validateMissionCharter,
+  createMissionsClient,
   type MissionCharter,
 } from "./mission.js";
 
@@ -30,7 +34,147 @@ const charter = (): MissionCharter => ({
   trigger: { kind: "schedule", everyMs: 86_400_000, anchorAt: 1_000 },
 });
 
+describe("author-side missions client", () => {
+  it("compiles the author's plan before dispatch and gives each operation its own idempotency key", async () => {
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "authority.compileAuthorityPlan") return { schemaVersion: 2, digest: hex };
+      if (method === "workers.resolveService")
+        return { kind: "durable-object", targetId: "missions" };
+      return { missionId: "mission-1" };
+    });
+    await createMissionsClient({ call }).launch(
+      { name: "Backup", charter: charter() },
+      { idempotencyKey: "request-1" }
+    );
+    expect(call.mock.calls.map((args) => args[1])).toEqual([
+      "authority.compileAuthorityPlan",
+      "workers.resolveService",
+      "launch",
+    ]);
+    expect(call).toHaveBeenNthCalledWith(
+      1,
+      "main",
+      "authority.compileAuthorityPlan",
+      [{ execution: charter().execution }],
+      { idempotencyKey: "request-1:authority-plan" }
+    );
+    expect(call).toHaveBeenNthCalledWith(
+      3,
+      "missions",
+      "launch",
+      [expect.objectContaining({ authorityPlan: { schemaVersion: 2, digest: hex } })],
+      { idempotencyKey: "request-1" }
+    );
+  });
+
+  it("does not dispatch a launch when plan compilation fails", async () => {
+    const original = new Error("author cannot access context");
+    const call = vi.fn(async () => {
+      throw original;
+    });
+    await expect(
+      createMissionsClient({ call }).launch({ name: "Backup", charter: charter() })
+    ).rejects.toBe(original);
+    expect(call).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a current non-seeded plan for a name-only edit and recompiles a seeded default", async () => {
+    let seeded = false;
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "workers.resolveService")
+        return { kind: "durable-object", targetId: "missions" };
+      if (method === "get")
+        return { charter: charter(), authorityPlan: { schemaVersion: 2, digest: hex }, seeded };
+      if (method === "authority.compileAuthorityPlan") return { schemaVersion: 2, digest: hex };
+      return { missionId: "mission-1" };
+    });
+    const client = createMissionsClient({ call });
+    await client.edit("mission-1", { name: "Renamed" });
+    expect(call.mock.calls.map((args) => args[1])).toEqual([
+      "workers.resolveService",
+      "get",
+      "edit",
+    ]);
+    call.mockClear();
+    seeded = true;
+    await client.edit("mission-1", { name: "Customized" });
+    expect(call.mock.calls.map((args) => args[1])).toEqual([
+      "get",
+      "authority.compileAuthorityPlan",
+      "edit",
+    ]);
+  });
+});
+
 describe("automation revision", () => {
+  it("requires notifications to have text and a continuing conversation", () => {
+    const value = charter();
+    if (value.execution.kind !== "agent") throw new Error("Expected agent");
+    value.execution.action = { kind: "notify", text: "Review the rollout" };
+    expect(() => validateMissionCharter(value)).toThrow("conversation that created them");
+    value.execution.conversation = {
+      mode: "continue",
+      channelId: "channel",
+      contextId: "context",
+      executorId: "executor",
+    };
+    expect(() => validateMissionCharter(value)).not.toThrow();
+    value.execution.action.text = "  ";
+    expect(() => validateMissionCharter(value)).toThrow("requires text");
+  });
+
+  it("rejects notify metadata outside the delivery contract", () => {
+    const value = charter();
+    if (value.execution.kind !== "agent") throw new Error("Expected agent");
+    value.execution.conversation = {
+      mode: "continue",
+      channelId: "channel",
+      contextId: "context",
+      executorId: "executor",
+    };
+    const notifyAction = {
+      kind: "notify",
+      text: "Review the rollout",
+      title: "  ",
+      alert: "interrupt",
+    } as const;
+    value.execution.action = notifyAction;
+    expect(() => validateMissionCharter(value)).toThrow("title must be non-empty text");
+
+    const invalidAlertAction = {
+      ...notifyAction,
+      title: "Reminder",
+      alert: "urgent",
+    } as const;
+    value.execution.action = invalidAlertAction as never;
+    expect(() => validateMissionCharter(value)).toThrow('alert must be "inbox" or "interrupt"');
+  });
+
+  it("keeps mission digests byte-for-byte compatible with the Node SHA-256 contract", () => {
+    const referenceDigest = (prefix: string, value: unknown) =>
+      createHash("sha256")
+        .update(prefix, "utf8")
+        .update(canonicalJson(value), "utf8")
+        .digest("hex");
+    const value = charter();
+    const image = value.execution.image;
+
+    expect(missionRevisionDigest(value, hex)).toBe(
+      referenceDigest("automation-revision-v2\0", {
+        charter: value,
+        authorityPlanDigest: hex,
+      })
+    );
+    expect(missionExecutionImageDigest(image)).toBe(
+      referenceDigest("mission-execution-image-v1\0", {
+        source: image.source,
+        ref: image.ref,
+        effectiveVersion: image.effectiveVersion,
+        className: image.className,
+      })
+    );
+  });
+
   it("requires one immutable execution image", () => {
     const value = charter();
     value.execution.image.ref = "state:bad";

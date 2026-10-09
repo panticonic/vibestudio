@@ -88,6 +88,8 @@ export const EXTENSIONS_METHOD_NAMES = [
   "invokeProvider",
   "invokeStream",
   "streamingMethods",
+  "status",
+  "update",
   "emit",
   "fetchRequestBodyChunk",
   "fetchRequestBodyClose",
@@ -241,6 +243,7 @@ export const GAD_METHOD_NAMES = [
   "diagnoseInvocation",
   "inspectChannelRoster",
   "inspectAgentHealth",
+  "inspectAgent",
   "listAgentDirectory",
   "searchAgentDirectory",
   "describeChannels",
@@ -251,6 +254,7 @@ export const GAD_METHOD_NAMES = [
 ] as const;
 
 export const GAD_WIRE_METHOD_NAMES = [
+  "workspaceSourceTemplateInstallation",
   "workspaceSourceInitializeExactSnapshot",
   "workspaceSourceResolve",
   "workspaceSourceCurrent",
@@ -364,22 +368,41 @@ export const GAD_WIRE_METHOD_NAMES = [
   "deleteUserNotification",
 ] as const;
 
-export const VCS_CONTEXT_BOUND_METHOD_NAMES = [
-  "edit",
-  "move",
-  "copy",
-  "merge",
-  "revert",
-  "commit",
-  "discard",
-  "importSnapshot",
-  "registerExternalDelta",
-  "supersedeExternalDelta",
-  "finalizeExternalDelta",
-  "push",
-  "status",
-  "walk",
-  "query",
-  "search",
-  "readMemory",
-] as const;
+export const CONTEXT_BOUND_METHOD_NAMES = {
+  vcs: [
+    "edit",
+    "move",
+    "copy",
+    "merge",
+    "revert",
+    "commit",
+    "discard",
+    "importSnapshot",
+    "registerExternalDelta",
+    "supersedeExternalDelta",
+    "finalizeExternalDelta",
+    "push",
+    "status",
+    "walk",
+    "query",
+    "search",
+    "readMemory",
+  ],
+} as const;
+
+export const COMMAND_BOUND_METHOD_NAMES = {
+  vcs: [
+    "edit",
+    "move",
+    "copy",
+    "merge",
+    "revert",
+    "commit",
+    "discard",
+    "importSnapshot",
+    "registerExternalDelta",
+    "supersedeExternalDelta",
+    "finalizeExternalDelta",
+    "push",
+  ],
+} as const;

@@ -40,7 +40,7 @@ describe("missions v3 contract", () => {
       },
     });
     const authorityPlan = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       digest: hex,
       artifactRef: `authority-plan:${hex}`,
       compilerVersion: "1",

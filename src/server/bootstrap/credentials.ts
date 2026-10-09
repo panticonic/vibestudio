@@ -11,8 +11,12 @@ import {
   type CredentialServiceDeps,
 } from "../services/credentialService.js";
 import { createLocalGitMirrorTransport, readLocalGitMirrors } from "../services/localGitMirrors.js";
+import { WebsitePublicationJournal } from "../services/websitePublicationJournal.js";
+import { stateLayout } from "../stateLayout.js";
 
 export interface CredentialBootstrapDeps {
+  /** Workspace host state root; owns the website publication journal. */
+  statePath: string;
   container: Pick<ServiceContainer, "registerManaged">;
   routeRegistry: RouteRegistry;
   eventService: EventService;
@@ -75,6 +79,9 @@ export function wireCredentialService(
   }
 
   const credentialService = createCredentialService({
+    publicationJournal: new WebsitePublicationJournal({
+      filePath: stateLayout(deps.statePath).websitePublicationsFile,
+    }),
     completeCapture: (userId, captureId, response) => {
       if (!deps.isPersonalWorkspaceOwner(userId)) {
         throw new Error("Browser capture does not belong to this Personal workspace");

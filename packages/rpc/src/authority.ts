@@ -75,12 +75,12 @@ interface CompiledAuthorityPlanBody {
   createdAt: number;
 }
 
-/** Existing v1 bytes remain historical artifacts; only v2 can install a new plan. */
-export type CompiledAuthorityPlanArtifact = CompiledAuthorityPlanBody &
-  (
-    | { schemaVersion: 1 }
-    | { schemaVersion: 2; executionIntentDigest: string; author: AuthorityPlanAuthor }
-  );
+/** A compiled plan binds exact invocation intent and its authenticated author. */
+export type CompiledAuthorityPlanArtifact = CompiledAuthorityPlanBody & {
+  schemaVersion: 2;
+  executionIntentDigest: string;
+  author: AuthorityPlanAuthor;
+};
 
 export interface TargetAuthorityRequest {
   v: 1;

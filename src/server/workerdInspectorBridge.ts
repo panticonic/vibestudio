@@ -17,6 +17,7 @@ import { WebSocket, type WebSocketServer } from "ws";
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
 import { CDP_INTERNAL_GRANT_HEADER, CdpGrantService } from "@vibestudio/shared/cdpGrants";
+import { gatewayWsUrl } from "@vibestudio/shared/hostConfig";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { parseWebSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
@@ -37,8 +38,6 @@ export interface WorkerdInspectorTarget {
 export interface WorkerdInspectorBridgeOptions {
   /** Base inspector URL, e.g. http://127.0.0.1:9229 — null when disabled. */
   getInspectorUrl: () => string | null;
-  protocol?: "http" | "https";
-  externalHost?: string;
   port: number;
   /** Test seam for the server-owned upstream inspector transport. */
   createUpstreamSocket?: (url: string) => WebSocket;
@@ -96,11 +95,9 @@ export class WorkerdInspectorBridge {
   ): { wsEndpoint: string; token: string } | null {
     if (!this.options.getInspectorUrl()) return null;
     const { token } = this.grants.grant(principalId, `workerd-inspector:${targetPath}`);
-    const wsProtocol = this.options.protocol === "https" ? "wss" : "ws";
-    const host = this.options.externalHost ?? "127.0.0.1";
     const encoded = encodeURIComponent(targetPath);
     return {
-      wsEndpoint: `${wsProtocol}://${host}:${this.options.port}${WORKERD_INSPECTOR_PATH_PREFIX}${encoded}`,
+      wsEndpoint: `${gatewayWsUrl(this.options.port)}${WORKERD_INSPECTOR_PATH_PREFIX}${encoded}`,
       token,
     };
   }

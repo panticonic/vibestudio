@@ -86,6 +86,8 @@ export interface SensitiveBrowserImportStatus {
   state: "running" | "applying" | "application_failed" | "complete" | "cancelled" | "failed";
   counts: SensitiveBrowserImportCount[];
   error?: string;
+  /** Opaque status version; pass it back as `afterVersion` to await the next change. */
+  version: string;
 }
 export interface SensitiveBrowserImportPreview {
   dataTypes: ImportCategoryProgress[];
@@ -117,7 +119,14 @@ export interface BrowserDataClient {
   startSensitiveImport(
     request: SensitiveBrowserImportRequest
   ): Promise<SensitiveBrowserImportStatus>;
-  observeSensitiveImport(operationId: string): Promise<SensitiveBrowserImportStatus>;
+  /**
+   * Read aggregate status. With `afterVersion`, a running or applying import
+   * resolves on its next status change instead of returning the same version.
+   */
+  observeSensitiveImport(
+    operationId: string,
+    options?: { afterVersion?: string }
+  ): Promise<SensitiveBrowserImportStatus>;
   cancelSensitiveImport(operationId: string): Promise<SensitiveBrowserImportStatus>;
   openBrowserPrivacyManager(section?: BrowserPrivacySection): Promise<void>;
   cancelImport(jobId: string): Promise<void>;
@@ -226,7 +235,10 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     previewSensitiveImport: (request) => callNative("previewSensitiveImport", request),
     startImport: (selection, operationId) => callNative("startImport", selection, operationId),
     startSensitiveImport: (request) => callNative("startSensitiveImport", request),
-    observeSensitiveImport: (operationId) => callNative("observeSensitiveImport", operationId),
+    observeSensitiveImport: (operationId, options) =>
+      options?.afterVersion === undefined
+        ? callNative("observeSensitiveImport", operationId)
+        : callNative("observeSensitiveImport", operationId, { afterVersion: options.afterVersion }),
     cancelSensitiveImport: (operationId) => callNative("cancelSensitiveImport", operationId),
     openBrowserPrivacyManager: (section) => callNative("openBrowserPrivacyManager", section),
     cancelImport: (jobId) => callNative("cancelImport", jobId),

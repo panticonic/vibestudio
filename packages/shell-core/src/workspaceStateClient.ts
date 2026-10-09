@@ -107,7 +107,11 @@ export interface WorkspaceStateClient {
   commitPreparedNavigation(
     input: SlotCommitPreparedNavigationInput
   ): Promise<SlotCommitPreparedNavigationResult>;
-  updateCurrentStateArgs(slotId: PanelSlotId, stateArgs: unknown): Promise<void>;
+  /** Apply an RFC 7386 merge patch to the current entry's stateArgs; returns the result. */
+  patchCurrentStateArgs(
+    slotId: PanelSlotId,
+    patch: Record<string, unknown>
+  ): Promise<Record<string, unknown>>;
   moveSlot(
     slotId: PanelSlotId,
     parentSlotId: PanelSlotId | null,
@@ -168,8 +172,7 @@ export function createWorkspaceStateClient(callService: ShellServiceCall): Works
     resolveSlotByEntity: (entityId) => call("slot.resolveByEntity", [entityId]),
     createSlot: (input) => call("slot.create", [input]),
     commitPreparedNavigation: (input) => call("slot.commitPreparedNavigation", [input]),
-    updateCurrentStateArgs: (slotId, stateArgs) =>
-      call("slot.updateCurrentStateArgs", [slotId, stateArgs]),
+    patchCurrentStateArgs: (slotId, patch) => call("slot.patchCurrentStateArgs", [slotId, patch]),
     moveSlot: (slotId, parentSlotId, placement) =>
       call("slot.move", [slotId, parentSlotId, placement]),
     closeSlot: (slotId) => call("slot.close", [slotId]),

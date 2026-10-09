@@ -20,12 +20,13 @@ import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
 import { MembershipStore } from "@vibestudio/identity/membership";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
-import { DeviceAuthStore } from "./hostCore/deviceAuthStore.js";
+import { DeviceAuthStore, hashSecret } from "./hostCore/deviceAuthStore.js";
 import {
   applyWorkspaceHostRuntimeEnv,
   buildHubReadyPayload,
   buildWorkspaceChildArgs,
   buildWorkspaceChildEnv,
+  completeControlPairing,
   executeHubControl,
   applyHubWorkspacePresenceReport,
   snapshotInternalDOBundleForHub,
@@ -598,7 +599,7 @@ describe("workspace child exit reconciliation", () => {
 });
 
 describe("buildWorkspaceChildArgs", () => {
-  it("uses only current server flags and binds the child gateway to loopback", () => {
+  it("passes only the workspace selection and process handoff flags", () => {
     const args = buildWorkspaceChildArgs({
       entry: "/app/dist/server.mjs",
       workspaceName: "default",
@@ -606,9 +607,15 @@ describe("buildWorkspaceChildArgs", () => {
       readyFile: "/tmp/ready.json",
     });
 
-    expect(args).not.toContain("--protocol");
-    expect(args[args.indexOf("--host") + 1]).toBe("127.0.0.1");
-    expect(args[args.indexOf("--bind-host") + 1]).toBe("127.0.0.1");
+    expect(args).toEqual([
+      "/app/dist/server.mjs",
+      "--workspace",
+      "default",
+      "--app-root",
+      "/app",
+      "--ready-file",
+      "/tmp/ready.json",
+    ]);
   });
 });
 
@@ -1052,9 +1059,6 @@ describe("hub RPC pairing surfacing (§5)", () => {
       version: "test",
       buildId: "a".repeat(64),
       gatewayPort: 9,
-      protocol: "http",
-      externalHost: "127.0.0.1",
-      bindHost: "127.0.0.1",
       connectUrl: "http://127.0.0.1:9",
       identityDbPath,
       workspaceChildTokens: new Map(),
@@ -1072,7 +1076,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       grantStore: { close: vi.fn() } as never,
       eventService: { emitProjected: vi.fn() } as never,
       quiesceAuthority: vi.fn(async () => undefined),
-      inviteExpiryTimers: new Map(),
+      invites: new Map(),
     };
     return { state, shellToken, rootUserId: root.id, rootDeviceId: rootDevice.deviceId };
   }
@@ -1099,6 +1103,155 @@ describe("hub RPC pairing surfacing (§5)", () => {
       expect(result.devices[0]).not.toHaveProperty("refreshTokenHash");
       expect(result.devices[0]).not.toHaveProperty("transport");
     } finally {
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("settles a device invite's waiter when that invite is redeemed", async () => {
+    const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
+    const root = {
+      userId: rootUserId,
+      deviceId: rootDeviceId,
+      handle: "root",
+      role: "root" as const,
+    };
+    try {
+      const minted = vi.fn();
+      await executeHubControl(state, root, "pairDevice", [], minted);
+      const { code } = (minted.mock.calls[0]?.[0] as { pairing: { code: string } }).pairing;
+
+      const member = state.userStore.inviteUser({
+        handle: "member",
+        displayName: "Member",
+        role: "member",
+        createdBy: rootUserId,
+      });
+      await expect(
+        executeHubControl(
+          state,
+          { userId: member.id, deviceId: "dev_member", handle: "member", role: "member" },
+          "awaitPairing",
+          [{ code }],
+          vi.fn()
+        )
+      ).rejects.toThrow("Pairing invite is not pending");
+
+      const waited = vi.fn();
+      const waiting = executeHubControl(state, root, "awaitPairing", [{ code }], waited);
+      await Promise.resolve();
+      expect(waited).not.toHaveBeenCalled();
+
+      const credential = await completeControlPairing(state, code, {
+        label: "Phone",
+        platform: "android",
+        transport: { kind: "local" },
+      });
+      await waiting;
+      const outcome = hubControlMethods.awaitPairing.returns.parse(waited.mock.calls[0]?.[0]);
+      expect(outcome).toMatchObject({
+        status: "paired",
+        device: { deviceId: credential.deviceId, userId: rootUserId, label: "Phone" },
+      });
+
+      // The outcome stays observable until the invite's own expiry.
+      const late = vi.fn();
+      await executeHubControl(state, root, "awaitPairing", [{ code }], late);
+      expect(late.mock.calls[0]?.[0]).toEqual(outcome);
+    } finally {
+      for (const invite of state.controlTransport?.invites.values() ?? []) {
+        if (invite.timer) clearTimeout(invite.timer);
+      }
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("acknowledges invite cancellation only after its pairing waiter settles", async () => {
+    const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
+    const root = {
+      userId: rootUserId,
+      deviceId: rootDeviceId,
+      handle: "root",
+      role: "root" as const,
+    };
+    try {
+      const minted = vi.fn();
+      await executeHubControl(state, root, "pairDevice", [], minted);
+      const { code } = (minted.mock.calls[0]?.[0] as { pairing: { code: string } }).pairing;
+      const waited = vi.fn();
+      const waiting = executeHubControl(state, root, "awaitPairing", [{ code }], waited);
+      await Promise.resolve();
+      expect(waited).not.toHaveBeenCalled();
+
+      const member = state.userStore.inviteUser({
+        handle: "member",
+        displayName: "Member",
+        role: "member",
+        createdBy: rootUserId,
+      });
+      const unauthorized = vi.fn();
+      await executeHubControl(
+        state,
+        { userId: member.id, deviceId: "dev_member", handle: "member", role: "member" },
+        "cancelPairing",
+        [{ code }],
+        unauthorized
+      );
+      expect(unauthorized.mock.calls[0]?.[0]).toEqual({ cancelled: false });
+      expect(waited).not.toHaveBeenCalled();
+
+      const cancelled = vi.fn();
+      await executeHubControl(state, root, "cancelPairing", [{ code }], cancelled);
+      await waiting;
+      expect(cancelled.mock.calls[0]?.[0]).toEqual({ cancelled: true });
+      expect(waited.mock.calls[0]?.[0]).toEqual({ status: "cancelled" });
+
+      const repeated = vi.fn();
+      await executeHubControl(state, root, "cancelPairing", [{ code }], repeated);
+      expect(repeated.mock.calls[0]?.[0]).toEqual({ cancelled: false });
+    } finally {
+      for (const invite of state.controlTransport?.invites.values() ?? []) {
+        if (invite.timer) clearTimeout(invite.timer);
+      }
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("releases an aborted pairing waiter without cancelling the invite", async () => {
+    const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
+    const root = {
+      userId: rootUserId,
+      deviceId: rootDeviceId,
+      handle: "root",
+      role: "root" as const,
+    };
+    try {
+      const minted = vi.fn();
+      await executeHubControl(state, root, "pairDevice", [], minted);
+      const { code } = (minted.mock.calls[0]?.[0] as { pairing: { code: string } }).pairing;
+      const abort = new AbortController();
+      const waiting = executeHubControl(
+        state,
+        root,
+        "awaitPairing",
+        [{ code }],
+        vi.fn(),
+        abort.signal
+      );
+      await Promise.resolve();
+      abort.abort(new Error("view closed"));
+      await expect(waiting).rejects.toThrow("view closed");
+      expect(state.controlTransport?.invites.has(hashSecret(code))).toBe(true);
+
+      const cancelled = vi.fn();
+      await executeHubControl(state, root, "cancelPairing", [{ code }], cancelled);
+      expect(cancelled.mock.calls[0]?.[0]).toEqual({ cancelled: true });
+    } finally {
+      for (const invite of state.controlTransport?.invites.values() ?? []) {
+        if (invite.timer) clearTimeout(invite.timer);
+      }
       state.identityDb.close();
       fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
     }

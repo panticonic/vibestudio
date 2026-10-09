@@ -1,5 +1,7 @@
 import {
   collectExposableMethods,
+  decodeRpcJson,
+  encodeRpcJson,
   envelopeFromMessage,
   rpcExposedMethodNames,
   rpcErrorDataOf,
@@ -425,20 +427,22 @@ export abstract class DurableObjectBase {
     error?: string;
     caller?: AttestedCaller | null;
   } {
-    const parsed = JSON.parse(body);
+    const parsed = decodeRpcJson(body);
+    const dispatchArgs: unknown =
+      parsed && typeof parsed === "object" ? (parsed as { args?: unknown }).args : undefined;
     if (Array.isArray(parsed)) return { args: parsed };
     if (
       parsed &&
       typeof parsed === "object" &&
       ("__instanceToken" in parsed || "__instanceId" in parsed) &&
-      Array.isArray((parsed as { args?: unknown }).args)
+      Array.isArray(dispatchArgs)
     ) {
       const caller = (parsed as { __caller?: unknown }).__caller;
       if (caller && typeof caller === "object") {
         const record = caller as Record<string, unknown>;
         if (typeof record["callerId"] === "string" && typeof record["callerKind"] === "string") {
           return {
-            args: (parsed as { args: unknown[] }).args,
+            args: dispatchArgs,
             caller: {
               callerId: record["callerId"],
               callerKind: record["callerKind"] as AuthenticatedCaller["callerKind"],
@@ -459,7 +463,7 @@ export abstract class DurableObjectBase {
         }
       }
       return {
-        args: (parsed as { args: unknown[] }).args,
+        args: dispatchArgs,
       };
     }
     return { args: [parsed] };
@@ -757,7 +761,7 @@ export abstract class DurableObjectBase {
         if (body) {
           const result = this.parseRequestBody(body);
           if (result.error) {
-            return new Response(JSON.stringify({ error: result.error }), {
+            return new Response(encodeRpcJson({ error: result.error }), {
               status: 400,
               headers: { "Content-Type": "application/json" },
             });
@@ -858,9 +862,7 @@ export abstract class DurableObjectBase {
           {
             error: responseMessage.error,
             errorKind: responseMessage.errorKind,
-            ...(responseMessage.diagnosticId
-              ? { diagnosticId: responseMessage.diagnosticId }
-              : {}),
+            ...(responseMessage.diagnosticId ? { diagnosticId: responseMessage.diagnosticId } : {}),
             ...(responseMessage.errorStack ? { errorStack: responseMessage.errorStack } : {}),
             ...(responseMessage.errorCode ? { errorCode: responseMessage.errorCode } : {}),
             ...(responseMessage.errorData !== undefined
@@ -929,7 +931,7 @@ export abstract class DurableObjectBase {
     request: Request,
     authorityAcceptedAt: number
   ): Promise<Response> {
-    const envelope = (await request.json()) as RpcEnvelope;
+    const envelope = decodeRpcJson(await request.text()) as RpcEnvelope;
     const message = envelope.message;
     if (message?.type === "event") {
       const caller = (envelope.delivery.caller as AttestedCaller | undefined) ?? null;
@@ -1443,7 +1445,7 @@ function jsonResponse(
   status = 200,
   headers?: ConstructorParameters<typeof Headers>[0]
 ): Response {
-  return new Response(JSON.stringify(value), {
+  return new Response(encodeRpcJson(value), {
     status,
     headers: headers ?? { "Content-Type": "application/json" },
   });

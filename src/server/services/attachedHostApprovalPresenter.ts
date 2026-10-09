@@ -76,13 +76,6 @@ export class AttachedHostApprovalPresenter {
   }
 }
 
-export function attachedApprovalView(
-  endpoint: AttachedHostEndpoint,
-  challenge: AttachedHostApprovalChallenge
-): AttachedHostCanonicalApprovalPresentation {
-  return endpoint.verifyChallenge(challenge).presentation;
-}
-
 /**
  * Resolve prompt substance from the parent's own live service catalog. Static
  * host methods use the reviewed census; dynamically registered services must

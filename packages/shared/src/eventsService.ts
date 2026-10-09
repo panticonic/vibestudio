@@ -148,6 +148,8 @@ export class EventService {
   private sessionsByCallerId = new Map<string, Map<string, DirectEventSession>>();
   /** Live transport sessions grouped by their host-verified account subject. */
   private sessionsByUserId = new Map<string, Set<DirectEventSession>>();
+  /** Lifetime observers registered by `requestUser` for addressed sessions. */
+  private sessionCloseObservers = new Map<DirectEventSession, Set<() => void>>();
   /** Identifies the sequence namespace owned by this server activation. */
   private readonly epoch = crypto.randomUUID();
   private sequence = 0;
@@ -184,6 +186,9 @@ export class EventService {
       sessions?.delete(session);
       if (sessions?.size === 0) this.sessionsByUserId.delete(session.userId);
     }
+    const observers = this.sessionCloseObservers.get(session);
+    this.sessionCloseObservers.delete(session);
+    for (const observer of observers ?? []) observer();
   }
 
   openWatch(input: {
@@ -340,6 +345,49 @@ export class EventService {
       delivered = true;
     }
     return delivered;
+  }
+
+  /**
+   * Direct-address a request to one account's live transports and observe the
+   * addressees: `onAddresseesClosed` fires once every transport that received
+   * the request has gone away, the authoritative signal that nobody is left to
+   * answer it. Returns a release for the observation, or null when no transport
+   * was addressed.
+   */
+  requestUser<E extends EventName>(
+    userId: string,
+    event: E,
+    data: EventPayloads[E],
+    callerKinds: readonly CallerKind[],
+    onAddresseesClosed: () => void
+  ): (() => void) | null {
+    const addressed = [...(this.sessionsByUserId.get(userId) ?? [])].filter((session) =>
+      callerKinds.includes(session.callerKind)
+    );
+    if (addressed.length === 0) return null;
+    let remaining = addressed.length;
+    const observer = (): void => {
+      remaining -= 1;
+      if (remaining === 0) onAddresseesClosed();
+    };
+    for (const session of addressed) {
+      let observers = this.sessionCloseObservers.get(session);
+      if (!observers) {
+        observers = new Set();
+        this.sessionCloseObservers.set(session, observers);
+      }
+      observers.add(observer);
+    }
+    const release = () => {
+      for (const session of addressed) this.sessionCloseObservers.get(session)?.delete(observer);
+    };
+    try {
+      for (const session of addressed) session.send(event, data);
+    } catch (error) {
+      release();
+      throw error;
+    }
+    return release;
   }
 
   /** Direct-address exactly one live transport connection for a caller. */

@@ -4985,11 +4985,11 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotResolveByEntity",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPatchCurrentStateArgs",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
       "source": "vibestudio/internal",
-      "method": "slotResolveByEntity",
+      "method": "slotPatchCurrentStateArgs",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
@@ -4999,10 +4999,10 @@
         "host",
         "user"
       ],
-      "sensitivity": "read",
-      "tier": "open",
+      "sensitivity": "write",
+      "tier": "gated",
       "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.inspect",
+      "capability": "workspace.runtime-state.manage",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -5023,17 +5023,17 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "schema-authority",
-        "change": null
+        "review": "owner-serialized-current-panel-state-patch",
+        "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotUpdateCurrentStateArgs",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotResolveByEntity",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
       "source": "vibestudio/internal",
-      "method": "slotUpdateCurrentStateArgs",
+      "method": "slotResolveByEntity",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
@@ -5043,10 +5043,10 @@
         "host",
         "user"
       ],
-      "sensitivity": "write",
-      "tier": "gated",
+      "sensitivity": "read",
+      "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
+      "capability": "workspace.runtime-state.inspect",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -6893,52 +6893,6 @@
         "change": "Adds the host-only parent presentation of one verified signed child challenge. The acquisition request is derived from the canonical invocation snapshot and prepared operation, and the signed terminal decision cannot authorize a different request."
       },
       "capability": "service:attachedHosts.presentApproval",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:audit.query",
-      "rpcPlane": "host-service",
-      "owner": "audit",
-      "method": "query",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "observability",
-      "mechanismFamily": "audit.read",
-      "reviewRationale": "G4: privacy or authority-map read; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:audit.query"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host",
-        "code"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:audit.query),allOf(capability(user,service:audit.query),workspace-member),allOf(capability(code,service:audit.query),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:audit.query",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -13605,7 +13559,7 @@
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"website.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"website.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"website.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"website.publish\"}]}",
       "r3b": {
         "review": "reviewed-exact-website-publication-intent",
-        "change": "Acquires one critical website.publish decision sealed to the authenticated caller, exact artifact digest, provider, destination, environment, and operation id. The short-lived grant authorizes only subsequent matching publication requests and contains no provider credential material."
+        "change": "Acquires one critical website.publish decision sealed to the authenticated caller, exact artifact digest, provider, destination, environment, and operation id. The host journal binds the operation id to that intent permanently, so the decision can never resume a changed artifact. The grant authorizes only matching publication requests until the operation is submitted or the caller retires, and contains no provider credential material."
       },
       "capability": "service:credentials.beginWebsitePublication",
       "parityAssertion": "generated-census:host-authority"
@@ -14222,6 +14176,53 @@
         "change": "Forwards provider API requests only while a live website.publish grant matches the authenticated caller and exact publication intent. Credential bindings must be publish-only, caller-supplied audience ceilings constrain every redirect, and secret injection remains inside the Host egress proxy."
       },
       "capability": "service:credentials.publishFetch",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:credentials.recordWebsitePublication",
+      "rpcPlane": "host-service",
+      "owner": "credentials",
+      "method": "recordWebsitePublication",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "website.publish",
+      "reviewRationale": "The handler requires the same live caller-bound grant as publishFetch and only advances the host journal of that reviewed operation",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:credentials.recordWebsitePublication"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:credentials.recordWebsitePublication),allOf(capability(user,service:credentials.recordWebsitePublication),workspace-member),allOf(capability(code,service:credentials.recordWebsitePublication),workspace-member))",
+      "r3b": {
+        "review": "caller-bound-reviewed-publication-journal",
+        "change": "Advances the host journal of a reviewed website publication only while the same live caller-bound website.publish grant that authorizes publishFetch matches the exact recorded intent. Phases only advance; recording submitted ends the grant. It performs no network request and exposes no credential material."
+      },
+      "capability": "service:credentials.recordWebsitePublication",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17180,6 +17181,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:extensions.status",
+      "rpcPlane": "host-service",
+      "owner": "extensions",
+      "method": "status",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "extensions.control",
+      "reviewRationale": "Read-only projection of one declared extension's build and supervision state; grants no invocation or lifecycle authority",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:extensions.status"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:extensions.status),allOf(capability(user,service:extensions.status),workspace-member),allOf(capability(code,service:extensions.status),workspace-member))",
+      "r3b": {
+        "review": "admitted-session-extension-metadata",
+        "change": "Read-only projection of one declared extension's registry, build staleness, pending review, health, and live supervision identity. It discloses no inspector endpoint and grants no invocation or lifecycle authority."
+      },
+      "capability": "service:extensions.status",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:extensions.streamingMethods",
       "rpcPlane": "host-service",
       "owner": "extensions",
@@ -17223,6 +17270,52 @@
         "change": "Allows admitted execution sessions to discover the extension streaming method manifest required by the invocation router. Metadata grants no invocation authority; the selected extension receiver still authorizes every effect."
       },
       "capability": "service:extensions.streamingMethods",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:extensions.update",
+      "rpcPlane": "host-service",
+      "owner": "extensions",
+      "method": "update",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "extensions.control",
+      "reviewRationale": "Re-reconciles one existing declaration at its published source; any new build identity still requires the user's install/update review before it runs",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:extensions.update"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:extensions.update),allOf(capability(user,service:extensions.update),workspace-member),allOf(capability(code,service:extensions.update),workspace-member))",
+      "r3b": {
+        "review": "declared-extension-reconcile-through-unit-review",
+        "change": "Re-runs the existing meta-change reconcile for one already-declared extension at its published ref. A changed build identity is staged in the ordinary install/update unit review and runs only after the user accepts it; an unchanged admitted build is left as is. No declaration, source, or admission is created by the call."
+      },
+      "capability": "service:extensions.update",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -20381,6 +20474,96 @@
         "change": "Replaces server-wide administrator sensitivity with ordinary write sensitivity and explicit live target-workspace administrator enforcement. Server administration alone grants no membership management, and designated Personal/System workspaces reject additional members."
       },
       "capability": "service:hubControl.addWorkspaceMember",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hubControl.awaitPairing",
+      "rpcPlane": "host-service",
+      "owner": "hubControl",
+      "method": "awaitPairing",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "hubControl.read",
+      "reviewRationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hubControl.awaitPairing"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.awaitPairing),allOf(capability(user,service:hubControl.awaitPairing),workspace-member))",
+      "r3b": {
+        "review": "authenticated-pending-device-pairing-read",
+        "change": "Adds an event-driven wait for one caller-visible pending device invite, retaining authenticated user or host admission and devices.read capability. It settles on redemption, explicit cancellation, caller disconnect, or the existing invite expiry recorded by the pairing protocol; it adds no wait timeout or polling recovery."
+      },
+      "capability": "service:hubControl.awaitPairing",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hubControl.cancelPairing",
+      "rpcPlane": "host-service",
+      "owner": "hubControl",
+      "method": "cancelPairing",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "hubControl.control",
+      "reviewRationale": "G3: retiring a pending device invite changes account authority; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hubControl.cancelPairing"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.cancelPairing),allOf(capability(user,service:hubControl.cancelPairing),workspace-member))",
+      "r3b": {
+        "review": "authenticated-pending-device-invite-cancellation",
+        "change": "Allows an authenticated user or host with devices.pair capability to retire one pending invite. Cancellation invalidates that invite and settles its waiters; it grants no device credentials or access to another account."
+      },
+      "capability": "service:hubControl.cancelPairing",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -25022,6 +25205,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:problemReports.appendNarrative",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "appendNarrative",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.appendNarrative"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.appendNarrative),allOf(capability(user,service:problemReports.appendNarrative),workspace-member),allOf(capability(code,service:problemReports.appendNarrative),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-revisioned-narrative-append",
+        "change": "Revision-checked append to an owner's manual draft; the host assigns section ids and derives author from the verified caller, so agents cannot write user-attributed narrative. Never sends."
+      },
+      "capability": "service:problemReports.appendNarrative",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:problemReports.availability",
       "rpcPlane": "host-service",
       "owner": "problemReports",
@@ -25666,6 +25895,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:problemReports.patchNarrative",
+      "rpcPlane": "host-service",
+      "owner": "problemReports",
+      "method": "patchNarrative",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "problemReports.local",
+      "reviewRationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:problemReports.patchNarrative"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:problemReports.patchNarrative),allOf(capability(user,service:problemReports.patchNarrative),workspace-member),allOf(capability(code,service:problemReports.patchNarrative),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-revisioned-narrative-edit",
+        "change": "Revision-checked edit of one section of an owner's manual draft; section id and author are immutable and only a verified human caller may edit user-authored sections. Never sends."
+      },
+      "capability": "service:problemReports.patchNarrative",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:problemReports.prepare",
       "rpcPlane": "host-service",
       "owner": "problemReports",
@@ -25706,7 +25981,7 @@
       "r3aRequirement": "anyOf(capability(host,service:problemReports.prepare),allOf(capability(user,service:problemReports.prepare),workspace-member),allOf(capability(code,service:problemReports.prepare),workspace-member))",
       "r3b": {
         "review": "owner-scoped-redacted-preview",
-        "change": "Builds frozen bytes from an owner's revisioned draft; sanitization produces a new draft revision requiring another preview, and this method never uploads."
+        "change": "Builds frozen bytes from an owner's revisioned draft; when sanitization changes content it is saved as the next draft revision, which is the one frozen and returned for preview and send. This method never uploads."
       },
       "capability": "service:problemReports.prepare",
       "parityAssertion": "generated-census:host-authority"
@@ -27892,7 +28167,7 @@
       "sessionAdmission": "family",
       "residency": "supervision",
       "mechanismFamily": "runtime.supervision",
-      "reviewRationale": "Read-only description of one exact driver-owned executable entity.",
+      "reviewRationale": "Read-only description of driver-owned executable entities selected by exact entity or release identity.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:runtime.supervision.describe"
@@ -28030,7 +28305,7 @@
       "sessionAdmission": "family",
       "residency": "observability",
       "mechanismFamily": "runtime.supervision-observability",
-      "reviewRationale": "Bounded retained-log read from one exact executable-unit driver.",
+      "reviewRationale": "Bounded retained-log read from executable-unit drivers, selected by exact entity or release identity.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:runtime.supervision.logs"
@@ -30173,147 +30448,6 @@
         "change": null
       },
       "capability": "service:shellPresence.heartbeat",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:speech.prepare",
-      "rpcPlane": "host-service",
-      "owner": "speech",
-      "method": "prepare",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "speech.transcribe",
-      "reviewRationale": "Readiness and preparation of the bundled local speech model.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:speech.prepare"
-      },
-      "authorityPrincipals": [
-        "host",
-        "user",
-        "code",
-        "website"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:speech.prepare),allOf(capability(user,service:speech.prepare),workspace-member),allOf(capability(code,service:speech.prepare),workspace-member))",
-      "r3b": {
-        "review": "explicit-speech-model-preparation",
-        "change": "Adds explicit preparation of the bundled local speech model with actual loading progress and terminal readiness. Callers cannot select resources, read host data, or acquire microphone access. Preparation cancellation and disconnect retire and join owned native work through the transcription lifecycle; no deadline or background retry is introduced."
-      },
-      "capability": "service:speech.prepare",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:speech.status",
-      "rpcPlane": "host-service",
-      "owner": "speech",
-      "method": "status",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "speech.transcribe",
-      "reviewRationale": "Readiness and preparation of the bundled local speech model.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:speech.status"
-      },
-      "authorityPrincipals": [
-        "host",
-        "user",
-        "code",
-        "website"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:speech.status),allOf(capability(user,service:speech.status),workspace-member),allOf(capability(code,service:speech.status),workspace-member))",
-      "r3b": {
-        "review": "explicit-speech-model-preparation",
-        "change": "Adds read-only readiness without starting the model. Callers cannot select resources, read host data, or acquire microphone access. Preparation cancellation and disconnect retire and join owned native work through the transcription lifecycle; no deadline or background retry is introduced."
-      },
-      "capability": "service:speech.status",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:speech.transcribe",
-      "rpcPlane": "host-service",
-      "owner": "speech",
-      "method": "transcribe",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "speech.transcribe",
-      "reviewRationale": "Installed CPU inference over caller-supplied bytes; no workspace or host data is disclosed and no microphone is accessed by this operation.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:speech.transcribe"
-      },
-      "authorityPrincipals": [
-        "host",
-        "user",
-        "code",
-        "website"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:speech.transcribe),allOf(capability(user,service:speech.transcribe),workspace-member),allOf(capability(code,service:speech.transcribe),workspace-member))",
-      "r3b": {
-        "review": "supplied-audio-native-inference",
-        "change": "Adds a host-owned Phonon-2 inference primitive for caller-supplied mono PCM. The caller cannot select an executable, model, filesystem path, environment, or another caller's recording. Only supplied audio becomes the progress/transcript response; nothing is persisted. The open native-effect method grants no microphone access, credential use, workspace disclosure, or external egress. Browser capture remains separately permission-gated. Cancellation, connection loss, native failure, and service shutdown retire owned work without deadlines or automatic retries."
-      },
-      "capability": "service:speech.transcribe",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -37108,6 +37242,97 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:workspace-state.slot.patchCurrentStateArgs",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "slot.patchCurrentStateArgs",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "workspace-state.builtin-rpc",
+      "reviewRationale": "Exact typed proxy to the builtin topology owner, which merges and validates one current-entry patch",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "workspace.runtime-state.manage"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"workspace.runtime-state.manage\"}]}",
+      "r3b": {
+        "review": "owner-serialized-current-panel-state-patch",
+        "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
+      },
+      "capability": "service:workspace-state.slot.patchCurrentStateArgs",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.slot.patchCurrentStateArgs#capability:context.boundary",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "slot.patchCurrentStateArgs",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "workspace-state.builtin-rpc",
+      "reviewRationale": "Exact typed proxy to the builtin topology owner, which merges and validates one current-entry patch",
+      "capability": "context.boundary",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "workspace-state.slot.patchCurrentStateArgs.contextBoundary"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3b": {
+        "review": "receiver-owned-context-boundary-principals",
+        "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:workspace-state.slot.resolveByEntity",
       "rpcPlane": "host-service",
       "owner": "workspace-state",
@@ -37151,97 +37376,6 @@
         "change": null
       },
       "capability": "service:workspace-state.slot.resolveByEntity",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace-state.slot.updateCurrentStateArgs",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "slot.updateCurrentStateArgs",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "transport",
-      "mechanismFamily": "workspace-state.builtin-rpc",
-      "reviewRationale": "Exact typed proxy to the builtin topology owner for one receiver-validated current-entry update",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "workspace.runtime-state.manage"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"workspace.runtime-state.manage\"}]}",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace-state.slot.updateCurrentStateArgs",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace-state.slot.updateCurrentStateArgs#capability:context.boundary",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "slot.updateCurrentStateArgs",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "transport",
-      "mechanismFamily": "workspace-state.builtin-rpc",
-      "reviewRationale": "Exact typed proxy to the builtin topology owner for one receiver-validated current-entry update",
-      "capability": "context.boundary",
-      "resourceDerivation": {
-        "kind": "prepared",
-        "resolver": "workspace-state.slot.updateCurrentStateArgs.contextBoundary"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "session",
-        "user"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "schema-owned-authority-preparation"
-      ],
-      "currentOutcomes": {
-        "allowed": "prepared authority leaf selected and satisfied",
-        "denied": "missing prepared authority leaf fails before handler entry"
-      },
-      "predicates": [
-        "live-session",
-        "exact-prepared-resource",
-        "registered-preparer"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
-      "r3b": {
-        "review": "receiver-owned-context-boundary-principals",
-        "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
-      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -38110,6 +38244,51 @@
         "change": "Reads the stable compatibility requirement, including installed dependency floors, and reports the available matching host for an exact pinned source. Future runtime fields remain uninterpreted. Verified source consumers receive no workspace mutation authority."
       },
       "capability": "service:workspaceTemplateSource.readCompatibility",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspaceTemplateSource.readInstallation",
+      "rpcPlane": "host-service",
+      "owner": "workspaceTemplateSource",
+      "method": "readInstallation",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "workspaceTemplateSource.exactSnapshot",
+      "reviewRationale": "Reviewed template workflows read their exact installed baseline.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspaceTemplateSource.readInstallation"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:workspaceTemplateSource.readInstallation),workspace-member),allOf(capability(code,service:workspaceTemplateSource.readInstallation),workspace-member))",
+      "r3b": {
+        "review": "reviewed-exact-installation-provenance-read",
+        "change": "Reads the installation record for one exact event through the workspace-bound source provider. The handler admits only the reviewed templates extension or authenticated shell; the internal GAD route is not agent-facing, and no repository path, mutation, or arbitrary event data is exposed."
+      },
+      "capability": "service:workspaceTemplateSource.readInstallation",
       "parityAssertion": "generated-census:host-authority"
     },
     {

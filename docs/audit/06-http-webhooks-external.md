@@ -501,7 +501,6 @@ res.setHeader("X-Frame-Options", "DENY");
 - `src/server/services/imageService.ts` (+ `imageService.test.ts`)
 - `src/server/services/notificationService.ts`
 - `src/server/services/metaService.ts` (+ `metaService.test.ts`)
-- `src/server/services/auditService.ts`
 - `src/server/services/egressProxy.ts`
 - `src/server/services/authFlowService.ts`
 - `src/server/services/credentialService.ts`

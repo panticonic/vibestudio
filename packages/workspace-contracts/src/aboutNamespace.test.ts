@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   ABOUT_SOURCE_PREFIX,
   ABOUT_PAGES,
+  ABOUT_PAGE_WORKSPACE_ROLE,
   aboutPanelSource,
+  aboutPageWorkspaceRole,
   isAboutSource,
 } from "./aboutNamespace.js";
 
@@ -56,5 +58,23 @@ describe("aboutPanelSource", () => {
   it("produces a non-matching source for an empty page", () => {
     expect(aboutPanelSource("")).toBe("about/");
     expect(isAboutSource(aboutPanelSource(""))).toBe(false);
+  });
+});
+
+describe("aboutPageWorkspaceRole", () => {
+  it("routes standard pages to the workspace that owns their data and controls", () => {
+    expect(ABOUT_PAGE_WORKSPACE_ROLE).toEqual({
+      "keyboard-shortcuts": "system",
+      help: "system",
+      about: "system",
+      permissions: "system",
+      "local-models": "system",
+      credentials: "personal",
+      downloads: "personal",
+      bookmarks: "personal",
+      history: "personal",
+    });
+    expect(aboutPageWorkspaceRole(ABOUT_PAGES.NEW)).toBeNull();
+    expect(aboutPageWorkspaceRole("custom-page")).toBeNull();
   });
 });

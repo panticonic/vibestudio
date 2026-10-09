@@ -14,6 +14,7 @@ import { validateRootTemplateSource } from "@vibestudio/workspace/rootTemplate";
 import {
   canonicalTemplateYaml,
   templateManifestDocument,
+  templateRepositories,
   readTemplateManifest,
   type ParsedTemplateManifest,
 } from "@vibestudio/workspace/templateManifest";
@@ -35,12 +36,13 @@ import { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types"
 import type {
   WorkspaceCreationDescriptor,
   WorkspaceTemplatePin,
+  WorkspaceTemplateInstallation,
 } from "@vibestudio/workspace-contracts/types";
 import {
   buildHostBuildUnitInventory,
   hostBuildUnitInventoryPath,
 } from "@vibestudio/shared/hostBuildUnits";
-import { discoverRepos } from "./vcsHost/repoDiscovery.js";
+import { discoverRepos } from "@vibestudio/shared/runtime/repoDiscovery";
 
 function recordedLayers(receipt: unknown): MaterializedLayer[] {
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return [];
@@ -93,17 +95,17 @@ export interface ComposeDeclaredTemplateLayersInput {
  */
 export async function composeDeclaredTemplateLayers(
   input: ComposeDeclaredTemplateLayersInput
-): Promise<{ snapshot: ExactGitSnapshot; layers: ComposedTemplateLayer[] }> {
+): Promise<{
+  snapshot: ExactGitSnapshot;
+  layers: ComposedTemplateLayer[];
+  installation: WorkspaceTemplateInstallation;
+}> {
   const { pin, root, purpose = "use" } = input;
   const readManifestOf = (snapshot: ExactGitSnapshot): ParsedTemplateManifest => {
     const manifest = readTemplateManifest({
       readFile: (filePath) => snapshot.readFile(filePath),
       expectedSystemEpoch: input.expectedSystemEpoch,
     });
-    if (manifest.installation)
-      throw new Error(
-        "A published template cannot contain local installation records; publish its authored source instead"
-      );
     return manifest;
   };
   const rootManifest = readManifestOf(root);
@@ -156,35 +158,34 @@ export async function composeDeclaredTemplateLayers(
     ...resolved.layers.map((layer) => acquired.get(layer.url)!),
     { pin, snapshot: root, manifest: rootManifest },
   ];
-  const sourceLayers = stack.map((entry) => ({ label: entry.pin.url, manifest: entry.manifest }));
+  const sourceLayers = stack.map((entry) => ({
+    label: entry.pin.url,
+    manifest: entry.manifest,
+    repositories: templateRepositories(entry.snapshot.files.map((file) => file.path)),
+  }));
   // Validate overrides before selecting whole-unit trees, including deleted files.
-  mergeTemplateManifests(sourceLayers);
+  const merged = mergeTemplateManifests(sourceLayers);
   const owners = templateRepositoryOwners(sourceLayers);
   const layers = stack.map((entry) => ({ ...entry.pin }));
-  const authored =
-    purpose === "use"
-      ? {
-          systemEpoch: input.expectedSystemEpoch,
-          template: {
-            repositories: ["meta"],
+  const document = {
+    ...merged.document,
+    template:
+      purpose === "use"
+        ? {
             dependencies: [
               { url: pin.url, ...(pin.credential ? { credential: pin.credential } : {}) },
             ],
-          },
-        }
-      : templateManifestDocument(rootManifest);
-  const metadata = authored["template"] as Record<string, unknown>;
-  metadata["repositories"] = [...new Set([...(metadata["repositories"] as string[]), "meta"])].sort(
-    compareUtf16CodeUnits
-  );
-  metadata["installation"] = {
+          }
+        : templateManifestDocument(rootManifest)["template"],
+  };
+  const installation: WorkspaceTemplateInstallation = {
     sources: stack.map((entry) => ({
       pin: entry.pin,
       manifest: new TextDecoder().decode(entry.snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH)!),
     })),
     ...(purpose === "use" ? {} : { upstream: pin }),
   };
-  const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(authored));
+  const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(document));
   const composed = composeTemplateLayers({
     layers: stack.map((entry) => ({
       label: entry.pin.url,
@@ -226,7 +227,7 @@ export async function composeDeclaredTemplateLayers(
         ? new Uint8Array(manifestBytes)
         : composed.readFile(filePath),
   };
-  return { snapshot, layers };
+  return { snapshot, layers, installation };
 }
 
 /** One layer of a materialized workspace, in the order it was laid down. */
@@ -270,6 +271,7 @@ export interface RootTemplateRepository {
 }
 
 export interface PreparedRootTemplateInitialization {
+  installation: WorkspaceTemplateInstallation;
   pin: WorkspaceTemplatePin;
   repositories: RootTemplateRepository[];
 }
@@ -391,6 +393,7 @@ export class WorkspaceRootTemplateBootstrap {
   private preparedInitialization: PreparedRootTemplateInitialization | null = null;
   private acquiredSnapshot: ExactGitSnapshot | null = null;
   private acquiredLayers: MaterializedLayer[] = [];
+  private acquiredInstallation: WorkspaceTemplateInstallation | null = null;
 
   constructor(private readonly deps: WorkspaceRootTemplateBootstrapDeps) {
     this.descriptorPath = path.join(deps.statePath, CREATION_DESCRIPTOR_PATH);
@@ -489,6 +492,7 @@ export class WorkspaceRootTemplateBootstrap {
       },
     });
     this.acquiredLayers = composed.layers;
+    this.acquiredInstallation = composed.installation;
     return composed.snapshot;
   }
   private async acquireInitialization(
@@ -529,7 +533,10 @@ export class WorkspaceRootTemplateBootstrap {
     }
     await publishRepositoryContentTrees(repositories, this.deps.sink);
     this.acquiredSnapshot = snapshot;
+    if (!this.acquiredInstallation)
+      throw new Error("Root acquisition lost its installation baseline");
     return {
+      installation: this.acquiredInstallation,
       pin,
       repositories,
     };
@@ -557,7 +564,11 @@ export class WorkspaceRootTemplateBootstrap {
     if (!fs.existsSync(manifestPath)) {
       throw new Error("Workspace root materialization receipt exists but its source is missing");
     }
-    parseWorkspaceConfigContentWithId(fs.readFileSync(manifestPath, "utf8"), this.deps.workspaceId);
+    parseWorkspaceConfigContentWithId(
+      fs.readFileSync(manifestPath, "utf8"),
+      this.deps.workspaceId,
+      (source) => fs.readFileSync(path.join(this.deps.sourcePath, source, "package.json"), "utf8")
+    );
     return true;
   }
 
@@ -585,7 +596,8 @@ export class WorkspaceRootTemplateBootstrap {
     }
     parseWorkspaceConfigContentWithId(
       fs.readFileSync(path.join(staging, WORKSPACE_MANIFEST_PATH), "utf8"),
-      this.deps.workspaceId
+      this.deps.workspaceId,
+      (source) => fs.readFileSync(path.join(staging, source, "package.json"), "utf8")
     );
     if (fs.existsSync(backup)) fs.rmSync(backup, { recursive: true, force: true });
     fs.renameSync(this.deps.sourcePath, backup);

@@ -16,8 +16,7 @@ function manifest(): string {
     "template:",
     "  name: Test",
     "  description: Test template",
-    "  repositories:",
-    "    - apps/one",
+
     "apps:",
     "  - source: apps/one",
     "",

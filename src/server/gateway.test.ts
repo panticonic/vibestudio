@@ -13,7 +13,6 @@ describe("Gateway lifecycle", () => {
 
   it("retains a completed loader connection until its owner retires it", async () => {
     gateway = new Gateway({
-      externalHost: "127.0.0.1",
       tokenManager: {} as never,
       getWorkerHost: () =>
         ({
@@ -47,7 +46,6 @@ describe("Gateway lifecycle", () => {
 
   it("owns and closes an idle connection during stop", async () => {
     gateway = new Gateway({
-      externalHost: "127.0.0.1",
       tokenManager: {} as never,
     });
     const port = await gateway.start(0);
@@ -68,7 +66,6 @@ describe("Gateway lifecycle", () => {
 
   it("does not expose raw userland Durable Object transport", async () => {
     gateway = new Gateway({
-      externalHost: "127.0.0.1",
       tokenManager: {} as never,
     });
     const port = await gateway.start(0);
@@ -86,7 +83,6 @@ describe("Gateway lifecycle", () => {
       res.end();
     });
     gateway = new Gateway({
-      externalHost: "127.0.0.1",
       tokenManager: {} as never,
       rpcHandler: { handleWorkspaceRpcHttp } as never,
     });

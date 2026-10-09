@@ -1,9 +1,8 @@
 import { NativeModules, Platform } from "react-native";
+import { RN_HOST_ABI } from "@vibestudio/shared/buildProvider";
 import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { loadShellCredential } from "./connect.js";
 import { retryBundleTransfer } from "./bundleTransferRetry.js";
-
-export const RN_HOST_ABI = "rn-host-5";
 
 export interface BrowserImportArchiveEntry {
   name: string;

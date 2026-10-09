@@ -160,17 +160,20 @@ describe("preparePanelAccessAuthority", () => {
     ]);
   });
 
-  it("keeps creator-controlled panel operations inside the caller's authority", async () => {
-    const isEntityControlledBy = vi.fn(() => true);
-    await expect(
-      preparePanelAccessAuthority(deps({ isEntityControlledBy }), ctx, "close", {
-        id: "created-panel",
-        runtimeEntityId: "panel:created-runtime",
-        contextId: "ctx-created-panel",
-      })
-    ).resolves.toEqual([]);
-    expect(isEntityControlledBy).toHaveBeenCalledWith("panel:created-runtime", "panel:requester");
-  });
+  it.each(["close", "archive"] as const)(
+    "keeps creator-controlled %s inside the caller's authority",
+    async (operation) => {
+      const isEntityControlledBy = vi.fn(() => true);
+      await expect(
+        preparePanelAccessAuthority(deps({ isEntityControlledBy }), ctx, operation, {
+          id: "created-panel",
+          runtimeEntityId: "panel:created-runtime",
+          contextId: "ctx-created-panel",
+        })
+      ).resolves.toEqual([]);
+      expect(isEntityControlledBy).toHaveBeenCalledWith("panel:created-runtime", "panel:requester");
+    }
+  );
 
   it("keeps lifecycle-child panel operations inside the supervising caller's authority", async () => {
     const controlsLifecycleContext = vi.fn(async () => true);

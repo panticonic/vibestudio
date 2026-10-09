@@ -3,8 +3,11 @@ import type { CallerKind } from "@vibestudio/shared/principalKinds";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
 import { EXTENSIONS_METHOD_NAMES } from "@vibestudio/service-schemas/clients/generated/runtimeClientMethods";
 import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
+import type { ExtensionStatus } from "@vibestudio/service-schemas/extensions";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
+
+export type { ExtensionStatus };
 
 export interface Disposable {
   dispose(): void;
@@ -102,6 +105,16 @@ export interface ExtensionsClient {
   invoke(name: ExtensionName | (string & {}), method: string, args: unknown[]): Promise<unknown>;
   /** Invoke a method in the extension selected for a manifest provider slot. */
   invokeProvider(provider: string, method: string, args: unknown[]): Promise<unknown>;
+  /**
+   * One declared extension's build state joined with its supervised process;
+   * `identity` (when live) addresses `runtime.supervision.*`.
+   */
+  status(name: ExtensionName | (string & {})): Promise<ExtensionStatus>;
+  /**
+   * Rebuild one declared extension from its published source and current
+   * dependencies through the install/update review, then activate it.
+   */
+  update(name: ExtensionName | (string & {})): Promise<ExtensionStatus>;
 }
 
 /**
@@ -239,6 +252,8 @@ export function createExtensionsClient(rpc: ExtensionsClientRpc): ExtensionsClie
     invoke: (name, method, args) => extensionsService.invoke(name, method, args),
     invokeProvider: (provider, method, args) =>
       extensionsService.invokeProvider(provider, method, args),
+    status: (name) => extensionsService.status(name),
+    update: (name) => extensionsService.update(name),
   };
   return client;
 }
@@ -289,8 +304,11 @@ export interface ExtensionFsClient {
   rename(oldPath: string, newPath: string): Promise<void>;
   nativeRoots(): Promise<{ source: string; scratch: string }>;
   realpath(path: string): Promise<string>;
-  /** Materialize sparse context paths before an extension subprocess reads disk directly. */
-  ensureMaterialized(scope: string | string[] | "all"): Promise<void>;
+  /**
+   * Provision the invoking caller's context projection before a subprocess or
+   * raw Node call reads it from disk; returns its absolute source root.
+   */
+  ensureMaterialized(scope: string | string[] | "all"): Promise<string>;
   open(path: string, flags?: string, mode?: number): Promise<ExtensionFileHandle>;
   truncate(path: string, len?: number): Promise<void>;
   readlink(path: string): Promise<string>;

@@ -41,7 +41,11 @@ export interface BrowserEnvironmentImportRouter {
     dataTypes: Parameters<BrowserImportHostProvider["startSensitiveImport"]>[1],
     operationId: string
   ): unknown;
-  observeSensitiveImport(ctx: ServiceContext, operationId: string): unknown;
+  observeSensitiveImport(
+    ctx: ServiceContext,
+    operationId: string,
+    options?: { afterVersion?: string }
+  ): unknown;
   cancelSensitiveImport(ctx: ServiceContext, operationId: string): unknown;
 }
 
@@ -76,7 +80,8 @@ export function localBrowserEnvironmentImportRouter(
       provider(ctx, hostId).listOpenTabs(sourceId, ctx.signal),
     startSensitiveImport: (ctx, hostId, sourceId, dataTypes, operationId) =>
       provider(ctx, hostId).startSensitiveImport(sourceId, dataTypes, operationId),
-    observeSensitiveImport: (ctx, operationId) => provider(ctx).observeSensitiveImport(operationId),
+    observeSensitiveImport: (ctx, operationId, options) =>
+      provider(ctx).observeSensitiveImport(operationId, { ...options, signal: ctx.signal }),
     cancelSensitiveImport: (ctx, operationId) => provider(ctx).cancelSensitiveImport(operationId),
   };
 }
@@ -172,9 +177,9 @@ export function createBrowserEnvironmentService(deps: {
           operationId
         );
       },
-      observeSensitiveImport: (_ctx, [operationId]) => {
+      observeSensitiveImport: (_ctx, [operationId, options]) => {
         requireBrowserDataProviderSource(_ctx, deps.browserDataBrokerRepoPath);
-        return deps.importRouter.observeSensitiveImport(_ctx, operationId);
+        return deps.importRouter.observeSensitiveImport(_ctx, operationId, options);
       },
       cancelSensitiveImport: (_ctx, [operationId]) => {
         requireBrowserDataProviderSource(_ctx, deps.browserDataBrokerRepoPath);

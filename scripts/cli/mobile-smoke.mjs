@@ -29,6 +29,7 @@ import {
   selectReadyAndroidDevice,
   waitForAndroidBoot,
 } from "./lib/android-avd.mjs";
+import { flagValue } from "./lib/args.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
@@ -77,15 +78,15 @@ function parseArgs(argv) {
     if (arg === "--") {
       continue;
     } else if (arg === "--platform") {
-      options.platform = argv[++i] ?? "android";
+      options.platform = flagValue(argv, ++i, arg);
     } else if (arg === "--avd") {
-      options.avd = argv[++i] ?? null;
+      options.avd = flagValue(argv, ++i, arg);
     } else if (arg === "--device") {
-      options.device = argv[++i] ?? null;
+      options.device = flagValue(argv, ++i, arg);
     } else if (arg === "--package") {
-      options.packageName = argv[++i] ?? "";
+      options.packageName = flagValue(argv, ++i, arg);
     } else if (arg === "--activity") {
-      options.activityName = argv[++i] ?? "";
+      options.activityName = flagValue(argv, ++i, arg);
     } else if (arg === "--no-build") {
       options.noBuild = true;
     } else if (arg === "--no-install") {
@@ -97,7 +98,7 @@ function parseArgs(argv) {
     } else if (arg === "--real-model") {
       options.realModel = true;
     } else if (arg === "--template-checkouts") {
-      options.templateCheckouts = argv[++i] ?? null;
+      options.templateCheckouts = flagValue(argv, ++i, arg);
     } else if (arg === "--production-templates") {
       options.productionTemplates = true;
     } else if (arg === "--timeout-ms") {

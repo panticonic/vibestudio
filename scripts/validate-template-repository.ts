@@ -8,7 +8,7 @@ import {
 } from "../src/server/buildV2/packageGraph.js";
 import {
   parseTemplateManifestContent,
-  validateTemplateSnapshotInventory,
+  templateRepositories,
 } from "@vibestudio/workspace/templateManifest";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
@@ -69,29 +69,13 @@ export function validateTemplateRepository(
   root: string,
   options: { bootOnly?: boolean } = {}
 ): void {
-  const manifest = parseTemplateManifestContent(
+  parseTemplateManifestContent(
     fs.readFileSync(path.join(root, "meta/vibestudio.yml"), "utf8"),
     WORKSPACE_SYSTEM_EPOCH
   );
   const files = walkFiles(root);
-  try {
-    validateTemplateSnapshotInventory(manifest.inventory, files);
-  } catch (error) {
-    // The bare path list does not say what to do with it. A half-authored
-    // panel sitting in a checkout is an ordinary dev state, and the remedy is
-    // always the same edit — so hand it over instead of making each person
-    // rediscover it.
-    const message = error instanceof Error ? error.message : String(error);
-    const undeclared = [...message.matchAll(/(?:^|\s)([\w.-]+\/[\w./-]+)/gu)].map((m) => m[1]!);
-    const units = [...new Set(undeclared.map((p) => p.split("/").slice(0, 2).join("/")))];
-    throw new Error(
-      `${message}\n\n` +
-        `Add these to the \`template.repositories\` list in meta/vibestudio.yml (keep it sorted):\n` +
-        units.map((unit) => `    - ${unit}`).join("\n") +
-        `\nOr delete the paths if they are scratch files.`
-    );
-  }
-  for (const unit of manifest.inventory.repositories) {
+  const repositories = templateRepositories(files);
+  for (const unit of repositories) {
     const kind = buildUnitKindForPath(unit);
     const marker = `${unit}/package.json`;
     if (!kind || kind === "template" || !files.includes(marker)) continue;
@@ -113,10 +97,6 @@ function main(): void {
   const directoryArgument = args.find((arg) => !arg.startsWith("--"));
   if (!directoryArgument) throw new Error("Usage: validate-template-repository DIR [--boot-only]");
   const root = path.resolve(directoryArgument);
-  const manifest = parseTemplateManifestContent(
-    fs.readFileSync(path.join(root, "meta/vibestudio.yml"), "utf8"),
-    WORKSPACE_SYSTEM_EPOCH
-  );
   const files = walkFiles(root);
   validateTemplateRepository(root, { bootOnly });
   process.stdout.write(
@@ -124,7 +104,7 @@ function main(): void {
       {
         root,
         epoch: WORKSPACE_SYSTEM_EPOCH,
-        repositories: manifest.inventory.repositories,
+        repositories: templateRepositories(files),
         files: files.length,
       },
       null,

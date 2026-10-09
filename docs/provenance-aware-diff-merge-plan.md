@@ -415,7 +415,7 @@ a concurrent-head conflict. Semantic reads carry the stored kind and extents to
 the blob owner, which verifies them before returning that representation.
 
 The ordinary filesystem API does not expose a semantic content-kind choice. Its
-base64 envelope is a transport encoding. Managed writes, appends, truncations
+byte encoding is a transport detail. Managed writes, appends, truncations
 and scratch imports classify the exact resulting bytes with fatal UTF-8
 decoding, preserving a leading BOM as content. This makes classification
 independent of whether a caller used a string, stdin, or a local file.

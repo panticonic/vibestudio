@@ -202,8 +202,11 @@ the mechanism above: `inline_ui`, `load_action_bar`, `inspect_card`,
 When an inline UI, action bar, or card fails to render or rejects its props,
 `UiFeedbackReporter` (`agentic-chat/components/UiFeedbackReporter.tsx`)
 publishes a `ui.feedback` event to the authoring participant, deduplicated by
-`occurrenceKey`. `FeedbackIngest` (`agentic-do/src/feedback-ingest.ts`) stores
-it as a note that is drained into that agent's next turn input.
+`occurrenceKey`. The agent's native channel session
+(`agentic-do/src/native-channel-session.ts`) admits it: a first failure of an
+ordinary turn's output starts a repair turn when the agent is idle, or follows
+its current turn; failures of a repair turn's own output, and later failures of
+an already repaired turn, wait as notes for the agent's next turn.
 
 ## Approval
 

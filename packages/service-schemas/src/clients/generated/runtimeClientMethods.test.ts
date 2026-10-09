@@ -14,8 +14,9 @@ import {
   GAD_METHOD_NAMES,
   GAD_WIRE_METHOD_NAMES,
   GIT_INTEROP_METHOD_NAMES,
+  COMMAND_BOUND_METHOD_NAMES,
+  CONTEXT_BOUND_METHOD_NAMES,
   RUNTIME_METHOD_NAMES,
-  VCS_CONTEXT_BOUND_METHOD_NAMES,
   VCS_METHOD_NAMES,
   WORKSPACE_METHOD_NAMES,
 } from "./runtimeClientMethods.js";
@@ -35,8 +36,9 @@ describe("generated lazy runtime client manifests", () => {
     expect(names).toEqual(Object.keys(methods));
   });
 
-  it("keeps the VCS context-binding projection aligned with the canonical registry", () => {
-    expect(VCS_CONTEXT_BOUND_METHOD_NAMES).toEqual(
+  it("keeps the context-binding projection aligned with the canonical registry", () => {
+    expect(Object.keys(CONTEXT_BOUND_METHOD_NAMES)).toEqual(["vcs"]);
+    expect(CONTEXT_BOUND_METHOD_NAMES.vcs).toEqual(
       Object.entries(vcsOperationRegistry)
         .filter(([, operation]) =>
           operation.references.some(
@@ -44,6 +46,22 @@ describe("generated lazy runtime client manifests", () => {
               reference.kind === "context" &&
               reference.path.length === 1 &&
               reference.path[0] === "contextId"
+          )
+        )
+        .map(([method]) => method)
+    );
+  });
+
+  it("keeps the command-binding projection aligned with the canonical registry", () => {
+    expect(Object.keys(COMMAND_BOUND_METHOD_NAMES)).toEqual(["vcs"]);
+    expect(COMMAND_BOUND_METHOD_NAMES.vcs).toEqual(
+      Object.entries(vcsOperationRegistry)
+        .filter(([, operation]) =>
+          operation.references.some(
+            (reference) =>
+              reference.kind === "command" &&
+              reference.path.length === 1 &&
+              reference.path[0] === "commandId"
           )
         )
         .map(([method]) => method)

@@ -1,4 +1,9 @@
-import { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "@vibestudio/rpc";
+import {
+  rpcDiagnosticIdOf,
+  attachRpcDiagnosticId,
+  decodeRpcJson,
+  encodeRpcJson,
+} from "@vibestudio/rpc";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { bindInvocationParent } from "@vibestudio/rpc/internal";
 import {
@@ -127,7 +132,6 @@ import {
   RPC_WS_ADMISSION_MAX_CLIENT_LABEL_BYTES,
   RPC_WS_ADMISSION_MAX_OUTSTANDING_GRANTS,
   RPC_WS_ADMISSION_MAX_PENDING_RESOLUTIONS,
-  RPC_WS_ADMISSION_RESOLUTION_TIMEOUT_MS,
   RPC_WS_ADMISSION_RETRY_AFTER_MS,
   RPC_WS_PAIRING_REPLAY_TTL_MS,
   RPC_WEBSOCKET_MAX_PAYLOAD_BYTES,
@@ -160,20 +164,6 @@ function refineTestPolicy(
   return refined;
 }
 
-export async function awaitRpcAdmissionResolution<T>(
-  resolution: T | PromiseLike<T>,
-  timeoutMs: number = RPC_WS_ADMISSION_RESOLUTION_TIMEOUT_MS
-): Promise<{ status: "resolved"; value: T } | { status: "timed-out" }> {
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  return await Promise.race([
-    Promise.resolve(resolution).then((value) => ({ status: "resolved" as const, value })),
-    new Promise<{ status: "timed-out" }>((resolve) => {
-      timeoutHandle = setTimeout(() => resolve({ status: "timed-out" }), timeoutMs);
-    }),
-  ]).finally(() => {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-  });
-}
 import { callerKindForPrincipalKind } from "@vibestudio/shared/principalKinds";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { SessionRegistry, type SessionRegistryOptions } from "./rpcServer/sessionRegistry.js";
@@ -209,6 +199,7 @@ import {
   productBuiltinMethodPolicy,
   productBuiltinMethodRequests,
 } from "@vibestudio/shared/productBuiltinCatalog.generated";
+import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import {
   authorityFailureForDecision,
   evaluateAuthority,
@@ -4142,7 +4133,7 @@ export class RpcServer {
       }
       this.deps.assertWorkspaceRpcAccess({
         caller: input.caller,
-        target: `do:${input.ref.source}:${input.ref.className}:${input.ref.objectKey}`,
+        target: doTargetId(input.ref),
         operation: input.method,
         purpose: "call",
       });
@@ -5063,7 +5054,7 @@ export class RpcServer {
           ? { Authorization: `Bearer ${this.workerdGatewayToken}` }
           : {}),
       },
-      body: JSON.stringify(envelope),
+      body: encodeRpcJson(envelope),
       ...(meta?.signal ? { signal: meta.signal } : {}),
       dispatcher: getWorkerdConnectionDispatcher(url),
     } as RequestInit);
@@ -5082,7 +5073,7 @@ export class RpcServer {
       throw new Error(`Worker relay to ${targetId} failed (${res.status}): ${text}`);
     }
 
-    const responseEnvelope = (await res.json()) as RpcEnvelope | undefined;
+    const responseEnvelope = decodeRpcJson(await res.text()) as RpcEnvelope | undefined;
     const responseMessage = responseEnvelope?.message as RpcResponse | undefined;
     if (responseMessage && responseMessage.type === "response") {
       if ("error" in responseMessage) {
@@ -5222,7 +5213,7 @@ export class RpcServer {
             ? { Authorization: `Bearer ${this.workerdGatewayToken}` }
             : {}),
         },
-        body: JSON.stringify(eventEnvelope),
+        body: encodeRpcJson(eventEnvelope),
         dispatcher: getWorkerdConnectionDispatcher(url),
       } as RequestInit);
       if (!res.ok) {
@@ -5548,22 +5539,13 @@ export class RpcServer {
       return;
     }
 
-    // Reserve capacity before any async pairing/device-store operation begins.
+    // Reserve capacity before any async pairing/device-store operation begins
+    // and hold it until that operation settles. Resolution is server-side work
+    // over an already-read body, so it is never abandoned: a redeemed pairing
+    // code always records its replay grant, even if the client has gone away.
     this.pendingWsAdmissionResolutions += 1;
     try {
-      const boundedResolution = await awaitRpcAdmissionResolution(
-        this.resolveRpcCredential(credential, clientLabel, clientPlatform)
-      );
-      if (boundedResolution.status === "timed-out") {
-        this.wsAdmissionFailure(res, 503, {
-          ok: false,
-          code: "server_unavailable",
-          message: "RPC credential verification timed out; retry shortly",
-          retryAfterMs: RPC_WS_ADMISSION_RETRY_AFTER_MS,
-        });
-        return;
-      }
-      const resolution = boundedResolution.value;
+      const resolution = await this.resolveRpcCredential(credential, clientLabel, clientPlatform);
       if (this.isShuttingDown()) {
         this.wsAdmissionFailure(res, 503, {
           ok: false,
@@ -5786,7 +5768,7 @@ export class RpcServer {
         ]);
         return;
       }
-      const envelope = JSON.parse(
+      const envelope = decodeRpcJson(
         new TextDecoder("utf-8", { fatal: true }).decode(
           await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES)
         )

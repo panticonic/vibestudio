@@ -142,13 +142,13 @@ import {
   rechecks the complete operation before it runs.
 - `authority.effects` describes the whole eval cell. Use `"read-only"` only
   when every nested operation is observational. Panel `diagnose()`,
-  `cdp.consoleHistory()`, and `cdp.screenshot()` are reads; `cdp.reload()`,
-  `cdp.evaluate()`, navigation, clicks, and lifecycle changes require
+  `cdp.consoleHistory()`, and `cdp.screenshot()` are reads; `cdp.session()`,
+  page evaluation, navigation, clicks, and lifecycle changes require
   `"read-write"`. Split mutation from follow-up observation when you want the
   latter to retain a read-only ceiling.
-- `parent` / `getParent()` resolve the owning panel of the eval session (the
-  agent's launch parent when an agent runs the eval), or a no-panel handle when
-  there is none.
+- `getParent()` (synchronous) resolves the owning panel of the eval session
+  (the agent's launch parent when an agent runs the eval), or `null` when there
+  is none.
 - To publish an inbound RPC method use `rpc.expose(method, (req) => …)` — there
   is no top-level `expose`.
 - The imported `rpc` is the full RPC client; the AMBIENT `rpc` (above) is 2-arg

@@ -586,12 +586,6 @@ export class DevelopmentClientExecutorRegistry {
   }
 }
 
-export function createDevelopmentClientExecutorService(
-  deps: ConstructorParameters<typeof DevelopmentClientExecutorRegistry>[0]
-): ServiceDefinition {
-  return new DevelopmentClientExecutorRegistry(deps).definition();
-}
-
 function requireUser(caller: VerifiedCaller): string {
   const userId = caller.subject?.userId;
   if (!userId)

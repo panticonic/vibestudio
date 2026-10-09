@@ -31,6 +31,7 @@ import {
 } from "@vibestudio/shared/productBuiltinCatalog.generated";
 import { resolveWorkspaceService, type ResolvedWorkspaceService } from "../workspaceServices.js";
 import { browserEnvironmentIdentityFromContext } from "../browserEnvironmentIdentity.js";
+import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 
 type ServiceListRow =
   | {
@@ -210,10 +211,7 @@ export function createWorkerService(deps: {
     })
     .passthrough()
     .superRefine((target, ctx) => {
-      if (
-        target.targetId !== undefined &&
-        target.targetId !== `do:${target.source}:${target.className}:${target.objectKey}`
-      ) {
+      if (target.targetId !== undefined && target.targetId !== doTargetId(target)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "targetId does not match the exact source/class/objectKey target",
@@ -396,13 +394,7 @@ export function createWorkerService(deps: {
         );
         await assertForeignServiceExported(ctx, scoped.service);
         const { service } = scoped;
-        const singleton =
-          service.kind === "durable-object"
-            ? scoped.decls.singletons.find(service.source, service.className)
-            : undefined;
-        const buildRef = singleton?.contextId
-          ? undefined
-          : (scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined));
+        const buildRef = scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined);
         deps.prepareRuntimeImage?.(service.source, buildRef);
         // A declared binding is reviewed wiring, not an authority-bearing
         // operation. Direct receiver admission already applies the exact same
@@ -580,7 +572,6 @@ export function createWorkerService(deps: {
         await assertForeignServiceExported(ctx, scoped.service);
         const service = scoped.service;
         if (service.kind === "durable-object") {
-          const singleton = scoped.decls.singletons.find(service.source, service.className);
           const creatorContextId =
             service.context === "creator"
               ? deps.getCallerContextId?.(ctx.caller.runtime.id)
@@ -588,10 +579,8 @@ export function createWorkerService(deps: {
           if (service.context === "creator" && !creatorContextId) {
             throw new Error(`Workspace service ${service.name} requires a creator runtime context`);
           }
-          const contextId = singleton?.contextId ?? creatorContextId ?? scoped.contextId;
-          const buildRef = singleton?.contextId
-            ? undefined
-            : (scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined));
+          const contextId = creatorContextId ?? scoped.contextId;
+          const buildRef = scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined);
           await deps.activateDurableObject?.({
             source: service.source,
             className: service.className,
@@ -607,11 +596,8 @@ export function createWorkerService(deps: {
         const resolvedObjectKey = resolvedDurableObjectKey(ctx, source, className, objectKey);
         const scoped = await resolveDurableObjectForCaller(ctx, source, className);
         const targetId = `do:${source}:${className}:${resolvedObjectKey}`;
-        const singleton = scoped.decls.singletons.find(source, className);
-        const contextId = singleton?.contextId ?? scoped.contextId;
-        const buildRef = singleton?.contextId
-          ? undefined
-          : (scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined));
+        const contextId = scoped.contextId;
+        const buildRef = scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined);
         await deps.activateDurableObject?.({
           source,
           className,

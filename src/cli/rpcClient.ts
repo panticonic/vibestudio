@@ -7,6 +7,7 @@ import {
   type CliStoredPairing,
 } from "./credentialStore.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import { decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc";
 import type { RpcErrorData, RpcErrorKind, RpcStreamOptions } from "@vibestudio/rpc";
 import { Agent, type Dispatcher } from "undici";
 import {
@@ -130,6 +131,14 @@ function remoteErrorMessage(body: Record<string, unknown>, fallback: string): st
   const message = typeof body["error"] === "string" ? body["error"] : fallback;
   const code = typeof body["code"] === "string" ? body["code"] : undefined;
   return code ? `${message} [${code}]` : message;
+}
+
+async function readRpcResponseBody(response: Response): Promise<unknown> {
+  try {
+    return decodeRpcJson(await response.text());
+  } catch {
+    return {};
+  }
 }
 
 function responseRecord(value: unknown): Record<string, unknown> {
@@ -527,11 +536,11 @@ export class RpcClient {
       token = await this.refreshBearerToken();
       response = await this.postRpc(token, body);
       if (response.status === 401) {
-        const errorBody = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+        const errorBody = responseRecord(await readRpcResponseBody(response));
         throw new AuthError(remoteErrorMessage(errorBody, "unauthorized after token refresh"));
       }
     }
-    const raw = responseRecord(await response.json().catch(() => ({})));
+    const raw = responseRecord(await readRpcResponseBody(response));
     if (!response.ok) {
       throw new RpcError(
         typeof raw["error"] === "string"
@@ -592,7 +601,7 @@ export class RpcClient {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify(body),
+      body: encodeRpcJson(body),
       dispatcher: this.httpDispatcher,
     });
   }

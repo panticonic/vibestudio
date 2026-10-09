@@ -455,7 +455,7 @@ describe("buildCatalog", () => {
 
     expect(byId(projected, "runtime:workerRuntime.openPanel")).toMatchObject({
       signature: "openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle>",
-      description: expect.stringContaining("session = (await session.refresh()).session"),
+      description: expect.stringContaining("Keep the stable page across rebuild/navigation"),
     });
   });
 

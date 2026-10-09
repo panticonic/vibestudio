@@ -4495,6 +4495,12 @@
             },
             "hasMoreAfter": {
               "type": "boolean"
+            },
+            "next": {
+              "$ref": "#/properties/pageInfo/properties/request/properties/window"
+            },
+            "previous": {
+              "$ref": "#/properties/pageInfo/properties/request/properties/window"
             }
           },
           "required": [
@@ -4874,6 +4880,12 @@
             },
             "hasMoreAfter": {
               "type": "boolean"
+            },
+            "next": {
+              "$ref": "#/properties/pageInfo/properties/request/properties/window"
+            },
+            "previous": {
+              "$ref": "#/properties/pageInfo/properties/request/properties/window"
             }
           },
           "required": [
@@ -6099,16 +6111,28 @@
         "generatedAt": {
           "type": "string"
         },
+        "caller": {
+          "type": "object",
+          "properties": {
+            "invocationId": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          "required": [
+            "invocationId",
+            "turnId"
+          ],
+          "additionalProperties": false,
+          "nullable": true
+        },
         "summary": {
           "type": "object",
           "properties": {
-            "ok": {
-              "type": "boolean"
-            },
             "durableIntegrityOk": {
-              "type": "boolean"
-            },
-            "inFlightOnly": {
               "type": "boolean"
             },
             "activity": {
@@ -6148,9 +6172,7 @@
             }
           },
           "required": [
-            "ok",
             "durableIntegrityOk",
-            "inFlightOnly",
             "activity",
             "publicationIssues",
             "turnIntegrityIssues",
@@ -6778,6 +6800,12 @@
                 },
                 "hasMoreAfter": {
                   "type": "boolean"
+                },
+                "next": {
+                  "$ref": "#/properties/envelopes/properties/pageInfo/properties/request/properties/window"
+                },
+                "previous": {
+                  "$ref": "#/properties/envelopes/properties/pageInfo/properties/request/properties/window"
                 }
               },
               "required": [
@@ -6838,6 +6866,7 @@
         "channelId",
         "branchId",
         "generatedAt",
+        "caller",
         "summary",
         "publicationIntegrity",
         "turnState",
@@ -6845,6 +6874,94 @@
         "roster",
         "envelopes",
         "storage"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inspectAgent": {
+    "description": "Read one agent's activation-local inspection (getDebugState, getAgentSettings, or inspectMethodSuspensions) through the channel's read-only inspectAgent receiver. participantId defaults to the channel's sole agent participant. Never invokes onMethodCall or hydrates GAD state; use chat.callMethod for in-channel RPC.",
+    "access": {
+      "sensitivity": "admin"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "participantId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "getDebugState",
+                "getAgentSettings",
+                "inspectMethodSuspensions"
+              ]
+            },
+            "channelId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "method",
+            "channelId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "participantId": {
+          "type": "string"
+        },
+        "channelId": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "getDebugState",
+            "getAgentSettings",
+            "inspectMethodSuspensions"
+          ]
+        },
+        "result": {},
+        "isError": {
+          "type": "boolean"
+        },
+        "roster": {
+          "type": "object",
+          "properties": {
+            "present": {
+              "type": "boolean"
+            },
+            "transport": {
+              "type": "string"
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "present"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "participantId",
+        "channelId",
+        "method",
+        "roster"
       ],
       "additionalProperties": false
     }

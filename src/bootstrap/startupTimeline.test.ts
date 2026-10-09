@@ -16,13 +16,13 @@ describe("startup timeline", () => {
     expect(connectionTimeline(progress)).toEqual([
       {
         id: "start-local-server",
-        label: "Start local workspace server",
+        label: "Starting Vibestudio",
         state: "complete",
       },
-      { id: "connect-workspace", label: "Connect to workspace", state: "active" },
+      { id: "connect-workspace", label: "Connecting to your workspace", state: "active" },
       {
         id: "prepare-workspace-session",
-        label: "Prepare workspace session",
+        label: "Getting your workspace ready",
         state: "pending",
       },
     ]);
@@ -46,7 +46,7 @@ describe("startup timeline", () => {
   it("uses a stable generic connection row before the host reports a plan", () => {
     expect(startupTimeline(null)[0]).toEqual({
       id: "connect-workspace",
-      label: "Connect to workspace",
+      label: "Connecting to your workspace",
       state: "active",
     });
   });

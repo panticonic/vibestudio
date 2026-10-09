@@ -224,7 +224,6 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
     unregisterEgressCaller: () => {},
     egressSecret: "universal-do-host-egress-secret",
     getWorkerdGatewayToken: () => "udo-gateway-token",
-    workerdStartupReadyTimeoutMs: 15_000,
   };
   const provider: WorkerdWorkspaceProvider = {
     bindRuntimeImage: async (source: string, ref?: string) => {

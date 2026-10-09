@@ -1,7 +1,12 @@
 import { EventEmitter } from "node:events";
 import type { ProcessAdapter } from "@vibestudio/process-adapter";
 import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
-import type { RpcEnvelope, AuthenticatedCaller } from "@vibestudio/rpc";
+import {
+  decodeRpcJson,
+  encodeRpcJson,
+  type RpcEnvelope,
+  type AuthenticatedCaller,
+} from "@vibestudio/rpc";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   AUTHENTICATION_FRAME_MAX_BYTES,
@@ -46,7 +51,7 @@ export class ProcessSessionChannel implements RpcSessionChannel {
     }
     let message: WsClientMessage;
     try {
-      message = JSON.parse(raw) as WsClientMessage;
+      message = decodeRpcJson(raw) as WsClientMessage;
       if (!message || typeof message !== "object" || typeof message.type !== "string") {
         throw new Error("Invalid RPC process message");
       }
@@ -95,7 +100,7 @@ export class ProcessSessionChannel implements RpcSessionChannel {
   }
   sendMessage(message: WsServerMessage): void {
     if (!this.open) return;
-    const raw = JSON.stringify(message);
+    const raw = encodeRpcJson(message);
     if (Buffer.byteLength(raw) > RPC_WEBSOCKET_MAX_PAYLOAD_BYTES) {
       this.close(1009, "RPC process response exceeds limit");
       return;
@@ -117,7 +122,7 @@ export class ProcessSessionChannel implements RpcSessionChannel {
     responder?: AuthenticatedCaller
   ): Promise<void> {
     if (!this.open) throw new Error("Native process session closed");
-    const raw = JSON.stringify(encodeWebSocketStreamFrame(requestEnvelope, frame, responder));
+    const raw = encodeRpcJson(encodeWebSocketStreamFrame(requestEnvelope, frame, responder));
     if (Buffer.byteLength(raw) > RPC_WEBSOCKET_MAX_PAYLOAD_BYTES) {
       throw new Error("RPC process response exceeds limit");
     }

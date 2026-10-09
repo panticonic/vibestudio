@@ -23,7 +23,7 @@ export type PanelAccessOperation =
   | "openDevTools"
   | "rebuildPanel"
   | "updatePanelState"
-  | "stateArgs.set";
+  | "stateArgs.patch";
 
 export interface PanelAccessRequester {
   id: string;

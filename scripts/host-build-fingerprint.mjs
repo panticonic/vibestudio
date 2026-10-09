@@ -9,7 +9,6 @@ export const DESKTOP_HOST_BUILD_FINGERPRINT_PATH = "dist/desktop-host-build-fing
 const INPUT_ROOTS = [
   "apps",
   "build-resources",
-  "native/phonon",
   "packages",
   "skills/vibestudio-agent",
   "src",
@@ -20,7 +19,6 @@ const INPUT_FILES = [
   ".nvmrc",
   "native/node/distribution.json",
   "scripts/node-runtime-artifacts.mjs",
-  "scripts/phonon-runtime-artifacts.mjs",
   "build.mjs",
   "electron-builder.yml",
   "package.json",

@@ -1532,6 +1532,77 @@ describe("ExtensionHost reconcileDeclared", () => {
   });
 });
 
+describe("ExtensionHost update and status", () => {
+  it("leaves an up-to-date extension as is and reports its status", async () => {
+    const { host, approvalQueue, buildSystem, extensionNode } = makeHost();
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    host.setDeclared(declare(extensionNode.name));
+
+    const status = await host.update(extensionNode.name);
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(status).toMatchObject({
+      name: extensionNode.name,
+      source: extensionNode.relativePath,
+      availableUpdate: null,
+      pendingApproval: null,
+      lastError: null,
+    });
+    expect(host.status(extensionNode.relativePath)).toEqual(status);
+  });
+
+  it("rebuilds a stale dependency through the install/update review", async () => {
+    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+      activeEv: "ev-current",
+      candidateEv: "ev-candidate",
+      depEv: "ev-runtime-next",
+      activeDepEv: "ev-runtime-old",
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    host.setDeclared(declare(extensionNode.name));
+    expect(host.status(extensionNode.name).availableUpdate).toMatchObject({
+      reason: "dependency",
+    });
+
+    const status = await host.update(extensionNode.name);
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-install-review",
+        mode: "install",
+        units: [expect.objectContaining({ unitName: extensionNode.name })],
+      })
+    );
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+      priority: "background",
+    });
+    expect(status.availableUpdate).toBeNull();
+  });
+
+  it("rejects when the install/update review is not accepted", async () => {
+    const { host, approvalQueue, extensionNode } = makeHost({
+      activeEv: "ev-old",
+      candidateEv: "ev-candidate",
+      status: "stopped",
+      isAdmitted: (_repoPath, effectiveVersion) => effectiveVersion === "ev-old",
+      approvalDecision: "deny",
+    });
+    host.setDeclared(declare(extensionNode.name));
+
+    await expect(host.update(extensionNode.name)).rejects.toMatchObject({ code: "EACCES" });
+    expect(approvalQueue.request).toHaveBeenCalledOnce();
+    expect(host.status(extensionNode.name)).toMatchObject({ activeEv: "ev-old" });
+  });
+
+  it("refuses an extension that is not declared", async () => {
+    const { host, extensionNode } = makeHost();
+    host.setDeclared([]);
+
+    await expect(host.update(extensionNode.name)).rejects.toMatchObject({ code: "ENOEXT" });
+  });
+});
+
 describe("ExtensionHost activation", () => {
   it("prepares sealed method authority on demand while permission review remains owed", async () => {
     const { host, buildSystem, extensionNode, approvalQueue } = makeHost({
@@ -2328,15 +2399,15 @@ describe("ExtensionHost activation", () => {
             { caller: createVerifiedCaller(extensionNode.name, "extension") } as any,
             "fetchRequestBodyChunk",
             [body!.id!]
-          )) as { done: boolean; chunk?: { __bin: true; data: string } };
+          )) as { done: boolean; chunk?: Uint8Array };
           if (next.done) break;
-          expect(next.chunk).toMatchObject({ __bin: true });
-          capturedChunks.push(Buffer.from(next.chunk!.data, "base64"));
+          expect(next.chunk).toBeInstanceOf(Uint8Array);
+          capturedChunks.push(Buffer.from(next.chunk!));
         }
         return {
           status: 201,
           headers: { "content-type": "application/octet-stream" },
-          body: { __bin: true, data: responseBody.toString("base64") },
+          body: responseBody,
         };
       }),
     };
@@ -2400,7 +2471,7 @@ describe("ExtensionHost activation", () => {
           if (!chunk) return { done: true };
           return {
             done: false,
-            chunk: { __bin: true, data: chunk.toString("base64") },
+            chunk,
           };
         }
         if (method === "extension.fetchResponseBodyClose") {

@@ -13,6 +13,7 @@ import * as ts from "typescript/unstable/ast";
 import type { AuthorityRequirement } from "@vibestudio/rpc";
 import { usingTypeScriptProject } from "@vibestudio/typecheck";
 import { BuildDiagnosticsError, type BuildDiagnostic } from "./diagnostics.js";
+import type { Project, Symbol as TypeScriptSymbol } from "typescript/unstable/sync";
 
 /** A malformed authored declaration, distinct from parser/IO failures. */
 class WorkspaceRpcDeclarationError extends Error {}
@@ -100,32 +101,144 @@ export interface WorkspaceRpcMethodDoc {
   };
 }
 
-function handleProductionOf(
-  call: ts.CallExpression,
-  label: string
-): { capability: string } | undefined {
-  const object = call.arguments[0];
-  if (!object || !ts.isObjectLiteralExpression(object)) return undefined;
-  const property = object.properties.find((candidate) => propertyName(candidate) === "produces");
-  if (!property) return undefined;
-  if (!ts.isPropertyAssignment(property) || !ts.isObjectLiteralExpression(property.initializer)) {
-    throw new WorkspaceRpcDeclarationError(`${label} handle production must be a literal object`);
+type PolicyFields = ReadonlyMap<string, ts.Node>;
+
+/**
+ * Reads one `@rpc` policy without running provider code. Each field is written
+ * inline or names a module-level `const` in the same file (optionally with
+ * `as const` or `satisfies`), and an object may spread such a constant.
+ * Anything that is not statically resolvable is a declaration error, never a
+ * silently omitted field.
+ */
+class StaticRpcPolicy {
+  constructor(
+    private readonly project: Project,
+    private readonly source: ts.SourceFile,
+    readonly label: string
+  ) {}
+
+  /** One object's own fields, with spreads and constant references resolved. */
+  fields(node: ts.Node | undefined, what: string): PolicyFields {
+    const object = node ? this.expression(node) : undefined;
+    if (!object || !ts.isObjectLiteralExpression(object)) {
+      throw new WorkspaceRpcDeclarationError(`${this.label} ${what} must be a static object`);
+    }
+    const fields = new Map<string, ts.Node>();
+    for (const property of object.properties) {
+      if (ts.isSpreadAssignment(property)) {
+        for (const [name, value] of this.fields(property.expression, what)) fields.set(name, value);
+      } else if (ts.isShorthandPropertyAssignment(property)) {
+        fields.set(property.name.getText(this.source), property);
+      } else if (
+        ts.isPropertyAssignment(property) &&
+        (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+      ) {
+        fields.set(property.name.text, property.initializer);
+      } else {
+        throw new WorkspaceRpcDeclarationError(
+          `${this.label} ${what} has a member that is not statically resolvable`
+        );
+      }
+    }
+    return fields;
   }
-  const source = property.initializer;
-  const kindProperty = source.properties.find((candidate) => propertyName(candidate) === "kind");
-  const capabilityProperty = source.properties.find(
-    (candidate) => propertyName(candidate) === "capability"
-  );
-  const kind =
-    kindProperty && ts.isPropertyAssignment(kindProperty)
-      ? literalString(kindProperty.initializer)
-      : null;
-  const capability =
-    capabilityProperty && ts.isPropertyAssignment(capabilityProperty)
-      ? literalString(capabilityProperty.initializer)
-      : null;
+
+  string(node: ts.Node | undefined): string | null {
+    const value = node ? this.expression(node) : undefined;
+    return value && ts.isStringLiteralLikeNode(value) ? value.text : null;
+  }
+
+  boolean(node: ts.Node | undefined): boolean | null {
+    const value = node ? this.expression(node) : undefined;
+    if (value?.kind === ts.SyntaxKind.TrueKeyword) return true;
+    if (value?.kind === ts.SyntaxKind.FalseKeyword) return false;
+    return null;
+  }
+
+  integer(node: ts.Node | undefined): number | null {
+    const value = node ? this.expression(node) : undefined;
+    return value && ts.isNumericLiteral(value) ? Number(value.text) : null;
+  }
+
+  strings(node: ts.Node | undefined): string[] | null {
+    const value = node ? this.expression(node) : undefined;
+    if (!value || !ts.isArrayLiteralExpression(value)) return null;
+    const strings = value.elements.map((element) => this.string(element));
+    return strings.every((entry): entry is string => entry !== null) ? strings : null;
+  }
+
+  /** Strip value-preserving syntax and follow module-level constants. */
+  private expression(node: ts.Node): ts.Node {
+    const seen = new Set<number>();
+    let current = node;
+    for (;;) {
+      if (
+        ts.isParenthesizedExpression(current) ||
+        ts.isAsExpression(current) ||
+        ts.isSatisfiesExpression(current)
+      ) {
+        current = current.expression;
+        continue;
+      }
+      if (!ts.isIdentifier(current) && !ts.isShorthandPropertyAssignment(current)) return current;
+      const declaration = this.moduleConstant(current);
+      if (seen.has(declaration.pos)) {
+        throw new WorkspaceRpcDeclarationError(`${this.label} policy constants are circular`);
+      }
+      seen.add(declaration.pos);
+      current = declaration.initializer!;
+    }
+  }
+
+  private moduleConstant(
+    reference: ts.Identifier | ts.ShorthandPropertyAssignment
+  ): ts.VariableDeclaration {
+    const checker = this.project.checker;
+    const symbol: TypeScriptSymbol | undefined = ts.isShorthandPropertyAssignment(reference)
+      ? checker.getShorthandAssignmentValueSymbol(reference)
+      : checker.getSymbolAtLocation(reference);
+    const declarations =
+      symbol?.declarations.flatMap((handle) => {
+        const declaration = handle.resolve(this.project);
+        return declaration ? [declaration] : [];
+      }) ?? [];
+    const declaration = declarations.length === 1 ? declarations[0] : undefined;
+    const list = declaration?.parent;
+    if (
+      declaration &&
+      ts.isVariableDeclaration(declaration) &&
+      declaration.initializer &&
+      list &&
+      ts.isVariableDeclarationList(list) &&
+      (list.flags & ts.NodeFlags.Const) !== 0 &&
+      ts.isVariableStatement(list.parent) &&
+      ts.isSourceFile(list.parent.parent) &&
+      list.parent.parent.fileName === this.source.fileName
+    ) {
+      return declaration;
+    }
+    const name = ts.isShorthandPropertyAssignment(reference)
+      ? reference.name.getText(this.source)
+      : reference.getText(this.source);
+    throw new WorkspaceRpcDeclarationError(
+      `${this.label} references ${name}, which is not a module-level const in this file; ` +
+        "RPC policy must be statically resolvable"
+    );
+  }
+}
+
+function handleProductionOf(
+  policy: StaticRpcPolicy,
+  fields: PolicyFields
+): { capability: string } | undefined {
+  const produces = fields.get("produces");
+  if (!produces) return undefined;
+  const source = policy.fields(produces, "handle production");
+  const kind = policy.string(source.get("kind"));
+  const capability = policy.string(source.get("capability"));
+  const label = policy.label;
   if (
-    source.properties.length !== 2 ||
+    source.size !== 2 ||
     kind !== "opaque-handle" ||
     !capability ||
     capability.startsWith("rpc:")
@@ -180,150 +293,107 @@ function rpcDecorator(
   return null;
 }
 
-function propertyName(node: ts.ObjectLiteralElementLike): string | null {
-  if (!ts.isPropertyAssignment(node) || !node.name) return null;
-  if (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) return node.name.text;
-  return null;
-}
-
-function literalString(expression: ts.Expression): string | null {
-  return ts.isStringLiteralLikeNode(expression) ? expression.text : null;
-}
-
 function effectResourceOf(
-  object: ts.ObjectLiteralExpression,
-  label: string
+  policy: StaticRpcPolicy,
+  effect: PolicyFields
 ): Extract<WorkspaceRpcMethodDoc["effect"], { kind: "userland-capability" }>["resource"] {
-  const property = object.properties.find((candidate) => propertyName(candidate) === "resource");
-  if (
-    !property ||
-    !ts.isPropertyAssignment(property) ||
-    !ts.isObjectLiteralExpression(property.initializer)
-  ) {
+  const label = policy.label;
+  const node = effect.get("resource");
+  if (!node) {
     throw new WorkspaceRpcDeclarationError(
-      `${label} protected effect must declare a literal resource selector`
+      `${label} protected effect must declare a static resource selector`
     );
   }
-  const resource = property.initializer;
-  const kindProperty = resource.properties.find((candidate) => propertyName(candidate) === "kind");
-  const kind =
-    kindProperty && ts.isPropertyAssignment(kindProperty)
-      ? literalString(kindProperty.initializer)
-      : null;
-  if (kind === "receiver-object" && resource.properties.length === 1) return { kind };
+  const resource = policy.fields(node, "effect resource selector");
+  const kind = policy.string(resource.get("kind"));
+  if (kind === "receiver-object" && resource.size === 1) return { kind };
   if (kind === "opaque-handle") {
-    const argumentProperty = resource.properties.find(
-      (candidate) => propertyName(candidate) === "argument"
-    );
-    const argument =
-      argumentProperty &&
-      ts.isPropertyAssignment(argumentProperty) &&
-      ts.isNumericLiteral(argumentProperty.initializer)
-        ? Number(argumentProperty.initializer.text)
-        : -1;
-    if (resource.properties.length === 2 && Number.isSafeInteger(argument) && argument >= 0) {
+    const argument = policy.integer(resource.get("argument")) ?? -1;
+    if (resource.size === 2 && Number.isSafeInteger(argument) && argument >= 0) {
       return { kind, argument };
     }
   }
-  throw new WorkspaceRpcDeclarationError(`${label} has an invalid literal resource selector`);
+  throw new WorkspaceRpcDeclarationError(`${label} has an invalid static resource selector`);
 }
 
-function websitePolicyOf(call: ts.CallExpression, label: string): WorkspaceRpcMethodDoc["website"] {
-  const object = call.arguments[0];
-  const property =
-    object && ts.isObjectLiteralExpression(object)
-      ? object.properties.find((property) => propertyName(property) === "website")
-      : undefined;
-  if (
-    !property ||
-    !ts.isPropertyAssignment(property) ||
-    !ts.isObjectLiteralExpression(property.initializer)
-  )
-    throw new WorkspaceRpcDeclarationError(`${label} requires a literal website exposure decision`);
-  const fields = new Map(
-    property.initializer.properties.flatMap((field) =>
-      ts.isPropertyAssignment(field)
-        ? [[propertyName(field), literalString(field.initializer)] as const]
-        : []
-    )
-  );
-  const kind = fields.get("kind");
-  if (kind === "closed" && fields.get("reason")?.trim())
-    return { kind, reason: fields.get("reason")! };
-  if (kind === "eligible" && fields.get("rationale")?.trim())
-    return { kind, rationale: fields.get("rationale")! };
+function websitePolicyOf(
+  policy: StaticRpcPolicy,
+  fields: PolicyFields
+): WorkspaceRpcMethodDoc["website"] {
+  const label = policy.label;
+  const node = fields.get("website");
+  if (!node) {
+    throw new WorkspaceRpcDeclarationError(`${label} requires a static website exposure decision`);
+  }
+  const website = policy.fields(node, "website exposure decision");
+  const kind = policy.string(website.get("kind"));
+  const reason = policy.string(website.get("reason"));
+  const rationale = policy.string(website.get("rationale"));
+  if (kind === "closed" && reason?.trim()) return { kind, reason };
+  if (kind === "eligible" && rationale?.trim()) return { kind, rationale };
   throw new WorkspaceRpcDeclarationError(
     `${label} requires an explained website exposure decision`
   );
 }
 
-function accessOf(call: ts.CallExpression): WorkspaceRpcMethodDoc["access"] {
-  const object = call.arguments[0];
-  if (!object || !ts.isObjectLiteralExpression(object)) return undefined;
+const RPC_TIERS = ["open", "gated", "critical"] as const;
+const RPC_SENSITIVITIES = ["read", "write", "admin", "destructive"] as const;
+
+function accessOf(policy: StaticRpcPolicy, fields: PolicyFields): WorkspaceRpcMethodDoc["access"] {
+  const label = policy.label;
   const access: NonNullable<WorkspaceRpcMethodDoc["access"]> = {};
-  for (const property of object.properties) {
-    const name = propertyName(property);
-    if (!name || !ts.isPropertyAssignment(property)) continue;
-    if (name === "principals" && ts.isArrayLiteralExpression(property.initializer)) {
-      const values = property.initializer.elements
-        .map((element) => literalString(element as ts.Expression))
-        .filter((value): value is string => value !== null);
-      if (values.length === property.initializer.elements.length) access.principals = values;
-    } else if (name === "tier") {
-      const value = literalString(property.initializer);
-      if (value === "open" || value === "gated" || value === "critical") access.tier = value;
-    } else if (name === "sensitivity") {
-      const value = literalString(property.initializer);
-      if (value === "read" || value === "write" || value === "admin" || value === "destructive") {
-        access.sensitivity = value;
-      }
-    } else if (name === "crossWorkspace") {
-      if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) access.crossWorkspace = true;
-      else if (property.initializer.kind === ts.SyntaxKind.FalseKeyword)
-        access.crossWorkspace = false;
-      else
-        throw new WorkspaceRpcDeclarationError(
-          "RPC crossWorkspace exposure must be a literal boolean"
-        );
-    } else if (name === "codeOnly") {
-      if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) access.codeOnly = true;
-      if (property.initializer.kind === ts.SyntaxKind.FalseKeyword) access.codeOnly = false;
+  if (fields.has("principals")) {
+    const principals = policy.strings(fields.get("principals"));
+    if (!principals) {
+      throw new WorkspaceRpcDeclarationError(
+        `${label} principals must be a static array of principal names`
+      );
     }
+    access.principals = principals;
+  }
+  if (fields.has("requires")) {
+    if (access.principals) {
+      throw new WorkspaceRpcDeclarationError(
+        `${label} declares both principals and requires; declare exactly one`
+      );
+    }
+  }
+  if (fields.has("tier")) {
+    const tier = policy.string(fields.get("tier"));
+    if (!RPC_TIERS.includes(tier as never)) {
+      throw new WorkspaceRpcDeclarationError(`${label} tier must be a static RPC tier`);
+    }
+    access.tier = tier as (typeof RPC_TIERS)[number];
+  }
+  if (fields.has("sensitivity")) {
+    const sensitivity = policy.string(fields.get("sensitivity"));
+    if (!RPC_SENSITIVITIES.includes(sensitivity as never)) {
+      throw new WorkspaceRpcDeclarationError(`${label} sensitivity must be a static sensitivity`);
+    }
+    access.sensitivity = sensitivity as (typeof RPC_SENSITIVITIES)[number];
+  }
+  for (const flag of ["crossWorkspace", "codeOnly"] as const) {
+    if (!fields.has(flag)) continue;
+    const value = policy.boolean(fields.get(flag));
+    if (value === null) {
+      throw new WorkspaceRpcDeclarationError(`${label} ${flag} must be a static boolean`);
+    }
+    access[flag] = value;
   }
   return Object.keys(access).length > 0 ? access : undefined;
 }
 
-function effectOf(call: ts.CallExpression, label: string): WorkspaceRpcMethodDoc["effect"] {
-  const object = call.arguments[0];
-  if (!object || !ts.isObjectLiteralExpression(object)) {
-    throw new WorkspaceRpcDeclarationError(`${label} must declare a literal RPC effect`);
-  }
-  const property = object.properties.find((candidate) => propertyName(candidate) === "effect");
-  if (
-    !property ||
-    !ts.isPropertyAssignment(property) ||
-    !ts.isObjectLiteralExpression(property.initializer)
-  ) {
-    throw new WorkspaceRpcDeclarationError(`${label} must declare a literal RPC effect`);
-  }
-  const kindProperty = property.initializer.properties.find(
-    (candidate) => propertyName(candidate) === "kind"
-  );
-  const kind =
-    kindProperty && ts.isPropertyAssignment(kindProperty)
-      ? literalString(kindProperty.initializer)
-      : null;
+function effectOf(policy: StaticRpcPolicy, fields: PolicyFields): WorkspaceRpcMethodDoc["effect"] {
+  const label = policy.label;
+  const node = fields.get("effect");
+  if (!node) throw new WorkspaceRpcDeclarationError(`${label} must declare a static RPC effect`);
+  const effect = policy.fields(node, "RPC effect");
+  const kind = policy.string(effect.get("kind"));
   if (kind === "open") return { kind };
   if (kind === "userland-capability" || kind === "host-capability") {
-    const capabilityProperty = property.initializer.properties.find(
-      (candidate) => propertyName(candidate) === "capability"
-    );
-    const capability =
-      capabilityProperty && ts.isPropertyAssignment(capabilityProperty)
-        ? literalString(capabilityProperty.initializer)
-        : null;
+    const capability = policy.string(effect.get("capability"));
     if (capability && !capability.startsWith("rpc:")) {
-      const resource = effectResourceOf(property.initializer, label);
+      const resource = effectResourceOf(policy, effect);
       if (kind === "host-capability" && resource.kind !== "receiver-object") {
         throw new WorkspaceRpcDeclarationError(
           `${label} host capability must select the receiver object`
@@ -334,7 +404,7 @@ function effectOf(call: ts.CallExpression, label: string): WorkspaceRpcMethodDoc
         : { kind, capability, resource };
     }
   }
-  throw new WorkspaceRpcDeclarationError(`${label} has an invalid literal RPC effect`);
+  throw new WorkspaceRpcDeclarationError(`${label} has an invalid static RPC effect`);
 }
 
 function methodName(method: ts.MethodDeclaration): string | null {
@@ -358,6 +428,53 @@ function signatureOf(method: ts.MethodDeclaration, source: ts.SourceFile): strin
   return `${methodName(method) ?? "<computed>"}${typeParameters ? `<${typeParameters}>` : ""}(${params}): ${returns}`;
 }
 
+/**
+ * The entry points whose value exports are module-level runtime clients, bound
+ * to the initialized panel, plain worker, or eval runtime. A Durable Object
+ * must use its own instance clients (`this.rpc`, `this.fs`, …), which carry the
+ * object's identity and the current invocation's authority.
+ */
+const MODULE_RUNTIME_ENTRIES = new Set(["@workspace/runtime", "@workspace/runtime/worker"]);
+
+/** A value (not type-only) import or re-export from a module-level runtime entry. */
+function moduleRuntimeValueImport(
+  statement: ts.Statement
+): { node: ts.Node; specifier: string } | null {
+  const found = (node: ts.Node | undefined, specifier: string) =>
+    node ? { node, specifier } : null;
+  if (ts.isImportDeclaration(statement)) {
+    const specifier = statement.moduleSpecifier;
+    if (!ts.isStringLiteral(specifier) || !MODULE_RUNTIME_ENTRIES.has(specifier.text)) return null;
+    const clause = statement.importClause;
+    // A bare `import "@workspace/runtime"` initializes the module runtime.
+    if (!clause || clause.name) return found(statement, specifier.text);
+    if (clause.phaseModifier === ts.SyntaxKind.TypeKeyword || !clause.namedBindings) return null;
+    if (!ts.isNamedImports(clause.namedBindings)) return found(statement, specifier.text);
+    return found(
+      clause.namedBindings.elements.find((element) => !element.isTypeOnly),
+      specifier.text
+    );
+  }
+  if (ts.isExportDeclaration(statement)) {
+    const specifier = statement.moduleSpecifier;
+    if (
+      !specifier ||
+      !ts.isStringLiteral(specifier) ||
+      !MODULE_RUNTIME_ENTRIES.has(specifier.text) ||
+      statement.isTypeOnly
+    ) {
+      return null;
+    }
+    const clause = statement.exportClause;
+    if (!clause || !ts.isNamedExports(clause)) return found(statement, specifier.text);
+    return found(
+      clause.elements.find((element) => !element.isTypeOnly),
+      specifier.text
+    );
+  }
+  return null;
+}
+
 /** Extract `@rpc` public method docs from one exact materialized worker package. */
 export function collectWorkspaceRpcCatalog(
   workerSourcePath: string,
@@ -365,6 +482,11 @@ export function collectWorkspaceRpcCatalog(
     provider: string;
     authority: UnitAuthorityManifest;
     rpcSchemas?: Readonly<Record<string, Readonly<Record<string, WorkspaceRpcSchemaMetadata>>>>;
+    /**
+     * The package declares Durable Object classes. Its sources must not use
+     * module-level runtime clients, which are not bound to an object.
+     */
+    durableObjects?: boolean;
   }
 ): WorkspaceRpcMethodDoc[] {
   const absoluteWorkerSourcePath = path.resolve(workerSourcePath);
@@ -376,6 +498,23 @@ export function collectWorkspaceRpcCatalog(
     for (const file of files) {
       const source = project.program.getSourceFile(file);
       if (!source) throw new Error(`TypeScript did not parse ${file}`);
+      if (input.durableObjects) {
+        for (const statement of source.statements) {
+          const offending = moduleRuntimeValueImport(statement);
+          if (!offending) continue;
+          const position = source.getLineAndCharacterOfPosition(offending.node.getStart(source));
+          diagnostics.push({
+            source: "authority",
+            severity: "error",
+            file,
+            line: position.line + 1,
+            column: position.character + 1,
+            message: `${input.provider} declares Durable Object classes but imports a module-level runtime client from "${offending.specifier}"; those clients are bound to a panel, plain worker, or eval runtime, not to this object.`,
+            suggestion:
+              "Use the object's own clients (this.rpc, this.fs, this.credentials, this.notifications, this.blobstore) and the PanelDurableObjectBase instance methods. Import base classes from @workspace/runtime/worker/kernel, /worker/durable-base, or /worker/panel-durable-base; type-only imports are fine. See skills/workspace-dev/WORKERS.md.",
+          });
+        }
+      }
       const visit = (node: ts.Node): void => {
         if (ts.isClassDeclaration(node) && node.name) {
           for (const member of node.members) {
@@ -445,18 +584,22 @@ export function collectWorkspaceRpcCatalog(
               } else {
                 // These fields are independent. Diagnose each, but never publish
                 // a partial method contract or infer an exposure/effect decision.
+                const policy = new StaticRpcPolicy(project, source, label);
+                const fieldsResult = collectDeclaration(() =>
+                  policy.fields(decorator.call.arguments[0], "RPC policy")
+                );
+                if (!fieldsResult) continue;
+                const fields = fieldsResult.value;
                 const websiteResult = collectDeclaration(
-                  () => websitePolicyOf(decorator.call, label),
-                  'Declare a literal website policy: { kind: "closed", reason: "..." } or { kind: "eligible", rationale: "..." }. Choose the exposure intentionally; see skills/workspace-dev/WORKERS.md.'
+                  () => websitePolicyOf(policy, fields),
+                  'Declare a static website policy: { kind: "closed", reason: "..." } or { kind: "eligible", rationale: "..." }, inline or as a module-level const. Choose the exposure intentionally; see skills/workspace-dev/WORKERS.md.'
                 );
-                const accessResult = collectDeclaration(() => accessOf(decorator.call));
+                const accessResult = collectDeclaration(() => accessOf(policy, fields));
                 const effectResult = collectDeclaration(
-                  () => effectOf(decorator.call, label),
-                  'Declare a literal effect: { kind: "open" } for a method with no protected effect, or { kind: "userland-capability", capability: "...", resource: ... } matching authority.provides. This does not replace service-target authorization; see skills/workspace-dev/WORKERS.md.'
+                  () => effectOf(policy, fields),
+                  'Declare a static effect: { kind: "open" } for a method with no protected effect, or { kind: "userland-capability", capability: "...", resource: ... } matching authority.provides. This does not replace service-target authorization; see skills/workspace-dev/WORKERS.md.'
                 );
-                const handleResult = collectDeclaration(() =>
-                  handleProductionOf(decorator.call, label)
-                );
+                const handleResult = collectDeclaration(() => handleProductionOf(policy, fields));
                 if (!websiteResult || !accessResult || !effectResult || !handleResult) continue;
                 website = websiteResult.value;
                 access = accessResult.value;

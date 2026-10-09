@@ -138,6 +138,12 @@ describe("createBrowserDataClient", () => {
       "openBrowserPrivacyManager",
       ["credentials"],
     ]);
+    await client.observeSensitiveImport(request.operationId, { afterVersion: "v1" });
+    expect(rpc.callService).toHaveBeenLastCalledWith("extensions", "invokeProvider", [
+      "browserData",
+      "observeSensitiveImport",
+      [request.operationId, { afterVersion: "v1" }],
+    ]);
   });
 
   it("routes Electron-native browser effects directly to their resident service", async () => {

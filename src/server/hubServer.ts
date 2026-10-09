@@ -52,7 +52,7 @@ import {
   SERVER_BOOT_ID_PATTERN,
   SERVER_ID_PATTERN,
 } from "@vibestudio/shared/deviceCredentials";
-import { resolveHostConfig } from "@vibestudio/shared/hostConfig";
+import { GATEWAY_HOST, gatewayHttpUrl } from "@vibestudio/shared/hostConfig";
 import { selectedWorkspaceUrl, WORKSPACE_ROUTE_PREFIX } from "@vibestudio/shared/connect";
 import {
   createNodeEndpointBinding,
@@ -70,7 +70,9 @@ import {
   hubControlMethods,
   HubReadyPayloadSchema,
   type HubWorkspaceEntry,
+  type HubDevice,
   type HubPairingInvite,
+  type HubPairingOutcome,
   type HubReadyPayload,
 } from "@vibestudio/service-schemas/hubControl";
 import {
@@ -126,6 +128,7 @@ import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/ser
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { RPC_WEBSOCKET_ADMISSION_PATH } from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
 import { resolveIrohRelayUrls } from "./irohRelayConfig.js";
+import { readBoundedBody, sendJson, sendText } from "./hostCore/httpResponses.js";
 
 declare const __filename: string;
 
@@ -157,10 +160,7 @@ export interface HubServerArgs {
   bootstrapWorkspace?: string;
   logLevel?: string;
   readyFile?: string;
-  servePanels?: boolean;
   gatewayPort?: number;
-  host?: string;
-  bindHost?: string;
   requireMobileReady?: boolean;
   requireElectronReady?: boolean;
   headlessHostAutospawn?: boolean;
@@ -218,9 +218,6 @@ export interface HubRuntimeState {
   /** SHA-256 identity of the exact server entry artifact loaded by this process. */
   buildId: string;
   gatewayPort: number;
-  protocol: "http" | "https";
-  externalHost: string;
-  bindHost: string;
   connectUrl: string;
   /** Absolute path to `identity.db`; handed to children as a READ-ONLY handle. */
   identityDbPath: string;
@@ -247,7 +244,23 @@ interface HubControlTransport {
   grantStore: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   eventService: EventService;
   quiesceAuthority: () => Promise<void>;
-  inviteExpiryTimers: Map<string, NodeJS.Timeout>;
+  /** Live device invites by code hash, retained until their protocol expiry. */
+  invites: Map<string, ControlInvite>;
+}
+
+/**
+ * One device invite's pairing lifecycle. The record outlives redemption until
+ * the invite's own expiry so a waiter that arrives after the device joined
+ * still observes that outcome; cancellation removes it immediately.
+ */
+interface ControlInvite {
+  /** Account the redeemed device belongs to; absent only for root bootstrap. */
+  userId?: string;
+  timer: NodeJS.Timeout | null;
+  outcome: Promise<HubPairingOutcome>;
+  settled: boolean;
+  resolve(outcome: HubPairingOutcome): void;
+  reject(error: Error): void;
 }
 
 const WORKSPACE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -303,16 +316,6 @@ function parseEnvPort(name: string): number | undefined {
     throw new Error(`${name} must be an integer from 1 to 65535`);
   }
   return port;
-}
-
-function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(payload));
-}
-
-function sendText(res: http.ServerResponse, status: number, payload: string): void {
-  res.writeHead(status, { "Content-Type": "text/plain" });
-  res.end(payload);
 }
 
 async function readJson(req: http.IncomingMessage): Promise<unknown> {
@@ -900,7 +903,7 @@ export function buildHubReadyPayload(
 ): HubReadyPayload {
   return HubReadyPayloadSchema.parse({
     mode: "hub",
-    gatewayUrl: `${state.protocol}://${state.externalHost}:${state.gatewayPort}`,
+    gatewayUrl: gatewayHttpUrl(state.gatewayPort),
     rootInvite,
     serverId: state.deviceAuthStore.getServerId(),
     serverBootId: state.serverBootId,
@@ -1003,47 +1006,136 @@ function reachFromControlTransport(transport: HubControlTransport): ChildReach {
   return transport.pairing;
 }
 
-function clearControlInviteExpiry(transport: HubControlTransport, codeHash: string): void {
-  const timer = transport.inviteExpiryTimers.get(codeHash);
-  if (timer) clearTimeout(timer);
-  transport.inviteExpiryTimers.delete(codeHash);
+function settleControlInvite(invite: ControlInvite, outcome: HubPairingOutcome): void {
+  if (invite.settled) return;
+  invite.settled = true;
+  invite.resolve(outcome);
 }
 
-function scheduleControlInviteExpiry(
+/** Track an armed invite until its expiry; persisted invites re-enter on startup. */
+function trackControlInvite(
   state: HubRuntimeState,
   codeHash: string,
-  expiresAt: number
+  invite: { expiresAt: number; userId?: string }
 ): void {
   const transport = requireControlTransport(state);
-  clearControlInviteExpiry(transport, codeHash);
-  const expire = (): void => {
-    transport.inviteExpiryTimers.delete(codeHash);
-    state.deviceAuthStore.cleanupPairingInvites(Date.now());
+  const previous = transport.invites.get(codeHash);
+  if (previous?.timer) clearTimeout(previous.timer);
+  let resolve!: (outcome: HubPairingOutcome) => void;
+  let reject!: (error: Error) => void;
+  const outcome = new Promise<HubPairingOutcome>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  // A lifecycle nobody awaits must not surface its shutdown rejection.
+  outcome.catch(() => undefined);
+  const record: ControlInvite = {
+    ...(invite.userId ? { userId: invite.userId } : {}),
+    timer: null,
+    outcome,
+    settled: false,
+    resolve,
+    reject,
   };
-  const remainingMs = expiresAt - Date.now();
+  transport.invites.set(codeHash, record);
+  const expire = (): void => {
+    if (transport.invites.get(codeHash) === record) transport.invites.delete(codeHash);
+    state.deviceAuthStore.cleanupPairingInvites(Date.now());
+    settleControlInvite(record, { status: "expired" });
+  };
+  const remainingMs = invite.expiresAt - Date.now();
   if (remainingMs <= 0) {
     expire();
     return;
   }
-  const timer = setTimeout(expire, remainingMs);
-  timer.unref();
-  transport.inviteExpiryTimers.set(codeHash, timer);
+  record.timer = setTimeout(expire, remainingMs);
+  record.timer.unref();
 }
 
 async function armControlInvite(
   state: HubRuntimeState,
-  invite: { code: string; expiresAt: number }
+  invite: { code: string; expiresAt: number; userId?: string }
 ): Promise<ChildReach> {
   const transport = requireControlTransport(state);
-  scheduleControlInviteExpiry(state, hashSecret(invite.code), invite.expiresAt);
+  trackControlInvite(state, hashSecret(invite.code), invite);
   return reachFromControlTransport(transport);
 }
 
-async function disarmControlInvite(state: HubRuntimeState, code: string): Promise<void> {
+function cancelControlInvite(transport: HubControlTransport, codeHash: string): void {
+  const invite = transport.invites.get(codeHash);
+  if (!invite) return;
+  transport.invites.delete(codeHash);
+  if (invite.timer) clearTimeout(invite.timer);
+  settleControlInvite(invite, { status: "cancelled" });
+}
+
+async function disarmControlInvite(state: HubRuntimeState, code: string): Promise<boolean> {
   const transport = requireControlTransport(state);
   const codeHash = hashSecret(code);
-  clearControlInviteExpiry(transport, codeHash);
-  state.deviceAuthStore.cancelPairingInvite(code);
+  const wasTracked = transport.invites.has(codeHash);
+  cancelControlInvite(transport, codeHash);
+  const wasPersisted = state.deviceAuthStore.cancelPairingInvite(code);
+  return wasTracked || wasPersisted;
+}
+
+/** Cancel only an invite visible to this caller, and acknowledge its retirement. */
+async function cancelControlPairing(
+  state: HubRuntimeState,
+  subject: HubSubject,
+  code: string
+): Promise<{ cancelled: boolean }> {
+  const invite = requireControlTransport(state).invites.get(hashSecret(code));
+  const visible =
+    invite &&
+    (invite.userId === subject.userId || subject.role === "root" || subject.role === "admin");
+  if (!visible) return { cancelled: false };
+  return { cancelled: await disarmControlInvite(state, code) };
+}
+
+/** Wait for the caller-visible invite's redemption, expiry, or cancellation. */
+async function awaitControlPairing(
+  state: HubRuntimeState,
+  subject: HubSubject,
+  code: string,
+  signal?: AbortSignal
+): Promise<HubPairingOutcome> {
+  const invite = requireControlTransport(state).invites.get(hashSecret(code));
+  const visible =
+    invite &&
+    (invite.userId === subject.userId || subject.role === "root" || subject.role === "admin");
+  if (!visible) {
+    throw authError("PAIRING_CODE_INVALID_OR_EXPIRED", "Pairing invite is not pending", 404);
+  }
+  if (!signal) return invite.outcome;
+  signal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  return new Promise<HubPairingOutcome>((resolve, reject) => {
+    onAbort = (): void => reject(signal.reason ?? new Error("Pairing wait cancelled"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    invite.outcome.then(resolve, reject);
+  }).finally(() => {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  });
+}
+
+function hubDeviceView(device: {
+  deviceId: string;
+  userId: string;
+  label: string;
+  platform?: string;
+  createdAt: number;
+  lastUsedAt?: number;
+  revokedAt?: number;
+}): HubDevice {
+  return {
+    deviceId: device.deviceId,
+    userId: device.userId,
+    label: device.label,
+    platform: device.platform,
+    createdAt: device.createdAt,
+    lastUsedAt: device.lastUsedAt,
+    revokedAt: device.revokedAt,
+  };
 }
 
 /** Stop stable hub reach only after the revoked caller's final response drains. */
@@ -1056,7 +1148,7 @@ function retireDeviceControlReach(state: HubRuntimeState, deviceId: string): voi
   });
 }
 
-async function completeControlPairing(
+export async function completeControlPairing(
   state: HubRuntimeState,
   code: string,
   input: {
@@ -1088,7 +1180,10 @@ async function completeControlPairing(
     platform: input.platform,
     transport: input.transport,
   });
-  clearControlInviteExpiry(transport, codeHash);
+  const invite = transport.invites.get(codeHash);
+  const device = state.identityDb.getDevice(credential.deviceId);
+  if (invite && device)
+    settleControlInvite(invite, { status: "paired", device: hubDeviceView(device) });
   if (bootstrapRoot) state.onRootBootstrapCompleted?.();
   return credential;
 }
@@ -1158,18 +1253,10 @@ function isRefreshShellPath(upstreamPath: string): boolean {
   return new URL(upstreamPath, "http://workspace.local").pathname === "/_r/s/auth/refresh-shell";
 }
 
-async function readBody(req: http.IncomingMessage, maxBytes: number): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const buf = chunk as Buffer;
-    total += buf.byteLength;
-    if (total > maxBytes) {
-      throw authError("REQUEST_BODY_TOO_LARGE", "Request body too large", 413);
-    }
-    chunks.push(buf);
-  }
-  return Buffer.concat(chunks);
+function readBody(req: http.IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return readBoundedBody(req, maxBytes, () =>
+    authError("REQUEST_BODY_TOO_LARGE", "Request body too large", 413)
+  );
 }
 
 async function handleAuthRoute(
@@ -1476,6 +1563,11 @@ export async function revokeHubUser(
     .filter((entry) => state.membershipStore.has(target.id, entry.workspaceId))
     .map((entry) => entry.workspaceId);
   const revoked = state.userStore.revokeUser(target.id, workspaceIds);
+  // Revocation deleted the account's pending invites; end their lifecycles.
+  const controlTransport = state.controlTransport;
+  for (const [codeHash, invite] of controlTransport?.invites ?? []) {
+    if (invite.userId === target.id) cancelControlInvite(controlTransport!, codeHash);
+  }
   for (const deviceId of deviceIds) {
     state.tokenManager.revokeToken(shellCallerId(deviceId));
     retireDeviceControlReach(state, deviceId);
@@ -1518,7 +1610,8 @@ export async function executeHubControl(
   subject: HubSubject,
   method: string,
   args: unknown[],
-  respond: (result: unknown) => void
+  respond: (result: unknown) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   if (state.shuttingDown) throw new Error("Hub is shutting down");
 
@@ -1992,16 +2085,18 @@ export async function executeHubControl(
         : state.identityDb.listDevicesForUser(subject.userId);
     respond({
       serverId: state.deviceAuthStore.getServerId(),
-      devices: visibleDevices.map((device) => ({
-        deviceId: device.deviceId,
-        userId: device.userId,
-        label: device.label,
-        platform: device.platform,
-        createdAt: device.createdAt,
-        lastUsedAt: device.lastUsedAt,
-        revokedAt: device.revokedAt,
-      })),
+      devices: visibleDevices.map(hubDeviceView),
     });
+    return;
+  }
+  if (method === "awaitPairing") {
+    const opts = asRecord(args[0]) ?? {};
+    respond(await awaitControlPairing(state, subject, String(opts["code"] ?? ""), signal));
+    return;
+  }
+  if (method === "cancelPairing") {
+    const opts = asRecord(args[0]) ?? {};
+    respond(await cancelControlPairing(state, subject, String(opts["code"] ?? "")));
     return;
   }
   if (method === "revokeDevice") {
@@ -2026,10 +2121,17 @@ export function createDirectHubControlService(state: HubRuntimeState): ServiceDe
     const definition = hubControlMethods[method];
     let responded = false;
     let result: unknown;
-    await executeHubControl(state, subject, method, args, (value) => {
-      responded = true;
-      result = definition.returns?.parse(value) ?? value;
-    });
+    await executeHubControl(
+      state,
+      subject,
+      method,
+      args,
+      (value) => {
+        responded = true;
+        result = definition.returns?.parse(value) ?? value;
+      },
+      ctx.signal
+    );
     if (!responded) throw new Error(`Hub control method ${method} produced no response`);
     return result;
   };
@@ -2209,13 +2311,13 @@ async function startHubControlTransport(
       await acquisitions.quiesceOwnerDelivery();
       await acquisitions.quiescePresentations();
     },
-    inviteExpiryTimers: new Map(),
+    invites: new Map(),
   };
   state.controlTransport = transport;
 
   state.deviceAuthStore.cleanupPairingInvites(Date.now());
   for (const invite of state.identityDb.listPairingCodes()) {
-    scheduleControlInviteExpiry(state, invite.code, invite.expiresAt);
+    trackControlInvite(state, invite.code, invite);
   }
   return transport;
 }
@@ -2464,8 +2566,6 @@ export function buildWorkspaceChildEnv(input: {
   const env: NodeJS.ProcessEnv = {
     ...input.baseEnv,
     VIBESTUDIO_APP_ROOT: input.appRoot,
-    VIBESTUDIO_HOST: "127.0.0.1",
-    VIBESTUDIO_BIND_HOST: "127.0.0.1",
     VIBESTUDIO_WORKSPACE: input.workspaceName,
     VIBESTUDIO_WORKSPACE_ID: input.workspaceId,
     VIBESTUDIO_IDENTITY_DB_PATH: input.identityDbPath,
@@ -2546,12 +2646,6 @@ export function buildWorkspaceChildArgs(input: {
     input.appRoot,
     "--ready-file",
     input.readyFile,
-    "--host",
-    "127.0.0.1",
-    "--bind-host",
-    "127.0.0.1",
-    "--serve-panels",
-    "--init",
   ];
   if (input.logLevel) args.push("--log-level", input.logLevel);
   if (input.requireMobileReady) args.push("--require-mobile-ready");
@@ -2991,7 +3085,6 @@ export function openHubDataStores(databasePath: string): {
  */
 async function startHubGateway(input: {
   requestedPort?: number;
-  bindHost: string;
   getState(): HubRuntimeState | null;
 }): Promise<{ server: http.Server; port: number }> {
   const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
@@ -3074,7 +3167,7 @@ async function startHubGateway(input: {
 
   const port = await new Promise<number>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(input.requestedPort ?? 0, input.bindHost, () => {
+    server.listen(input.requestedPort ?? 0, GATEWAY_HOST, () => {
       server.off("error", reject);
       const address = server.address();
       if (!address || typeof address === "string") reject(new Error("Hub listen failed"));
@@ -3088,16 +3181,9 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   const args = input.args;
   const appRoot = input.appRoot;
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
-  const hostConfig = resolveHostConfig({
-    workerdPort: 0,
-    gatewayPort: requestedGatewayPort ?? 0,
-    host: args.host,
-    bindHost: args.bindHost,
-  });
   let state: HubRuntimeState | null = null;
   const { server, port: gatewayPort } = await startHubGateway({
     requestedPort: requestedGatewayPort,
-    bindHost: hostConfig.bindHost,
     getState: () => state,
   });
 
@@ -3170,8 +3256,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   const needsRootBootstrap = !identityDb.hasUsers();
   // No public ingress: the hub is loopback HTTP only. connectUrl is the loopback
   // gateway URL; remote reach is the per-workspace Iroh endpoint.
-  const gatewayUrl = `${hostConfig.protocol}://${hostConfig.externalHost}:${gatewayPort}`;
-  const connectUrl = gatewayUrl.replace(/\/$/, "");
+  const connectUrl = gatewayHttpUrl(gatewayPort);
   state = {
     appRoot,
     args,
@@ -3189,9 +3274,6 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     version,
     buildId,
     gatewayPort,
-    protocol: hostConfig.protocol,
-    externalHost: hostConfig.externalHost,
-    bindHost: hostConfig.bindHost,
     connectUrl,
     identityDbPath,
     workspaceChildTokens: new Map(),
@@ -3240,7 +3322,9 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
           const reach = await armControlInvite(activeState, pairing);
           return pairingInviteFromReach(activeState, pairing.code, pairing.expiresAt, reach);
         },
-        cancelPairing: (pairing) => disarmControlInvite(activeState, pairing.code),
+        cancelPairing: async (pairing): Promise<void> => {
+          await disarmControlInvite(activeState, pairing.code);
+        },
         publish: (invite) => {
           startupInvite = invite;
           publishReady();
@@ -3294,7 +3378,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   }, 10_000);
   revocationCleanupTimer.unref();
   console.log("vibestudio-server hub ready:");
-  console.log(`  Gateway:     ${gatewayUrl} (loopback)`);
+  console.log(`  Gateway:     ${connectUrl} (loopback)`);
   console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
   if (startupInvite && !args.readyFile) {
     console.log(`  Root Pair URL: ${startupInvite?.pairUrl ?? "unavailable"}`);
@@ -3316,8 +3400,14 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     clearInterval(revocationCleanupTimer);
     console.log("[Hub] Shutting down...");
     if (state.controlTransport) {
-      for (const timer of state.controlTransport.inviteExpiryTimers.values()) clearTimeout(timer);
-      state.controlTransport.inviteExpiryTimers.clear();
+      for (const invite of state.controlTransport.invites.values()) {
+        if (invite.timer) clearTimeout(invite.timer);
+        if (!invite.settled) {
+          invite.settled = true;
+          invite.reject(new Error("Hub is shutting down"));
+        }
+      }
+      state.controlTransport.invites.clear();
       await state.controlTransport.ingress.stop();
       await state.controlTransport.rpcServer.stop();
       await state.controlTransport.quiesceAuthority();

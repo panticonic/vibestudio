@@ -350,6 +350,10 @@ export async function resolveProviderRpcCatalog(
         ...(schema
           ? { rpcSchemas: { [input.className]: workspaceRpcSchemaMetadata(schema) } }
           : {}),
+        // This resolver only accepts a declared Durable Object class (see
+        // providerCatalogIdentity); keep its source checks aligned with the
+        // worker build path, which rejects clients bound to a module runtime.
+        durableObjects: true,
       })
     ).filter((entry) => entry.className === input.className);
     const catalog: ExactProviderRpcCatalog = {

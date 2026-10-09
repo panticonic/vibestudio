@@ -11,7 +11,7 @@ import {
 } from "./runtimeSurface.core.js";
 
 const panelTreeDescription =
-  "Top-level export, not workspace.panelTree. self/get are synchronous handle factories. Use roots(input?) for the current human subject, rootOwners() then rootsForOwner(ownerUserId) for cross-owner inspection, or children(parentSlotId); each returns a bounded page with entries. page(...) is the advanced discriminated-group primitive. search(...) returns hits containing entry.node and entry.handle. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read.";
+  "Top-level export, not workspace.panelTree. self/get are synchronous handle factories. Use roots(input?) for the current human subject, rootOwners() then rootsForOwner(ownerUserId) for cross-owner inspection, or children(parentSlotId); each returns a bounded page with entries. walk(rootSlotId, { limit }) async-iterates a bounded subtree breadth-first. page(...) is the advanced discriminated-group primitive. search(...) returns hits containing entry.node and entry.handle. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read.";
 
 // Panel-only affordances, grouped under one `panel` namespace (was ~16 flat
 // top-level exports). Identity/introspection/theme/focus/lifecycle + stateArgs.
@@ -26,8 +26,6 @@ const PANEL_MEMBERS = [
   "getTheme",
   "onThemeChange",
   "registerHostCommands",
-  "unregisterHostCommands",
-  "onHostCommandRun",
   "onFocus",
   "onConnectionError",
   "onChildCreated",
@@ -110,7 +108,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
     // Panel-only namespaces.
     panel: namespaceEntry(
       PANEL_MEMBERS,
-      "Panel-only affordances: identity (entityId/slotId/parentId/env), semantic display title (setTitle(title, { explicit? })), introspection (getInfo/getTheme/onThemeChange/onFocus/onConnectionError), host-local command contribution (registerHostCommands/unregisterHostCommands/onHostCommandRun), lifecycle (focusPanel/onChildCreated/reopen), and stateArgs (get/set/setForPanel)."
+      "Panel-only affordances: identity (entityId/slotId/parentId/env), semantic display title (setTitle(title, { explicit? })), introspection (getInfo/getTheme/onThemeChange/onFocus/onConnectionError), host-local command contribution (registerHostCommands(commands, onRun) returns a disposer; registrations merge and ids must be unique across the panel), lifecycle (focusPanel/onChildCreated/reopen), and stateArgs (get/patch/patchForPanel; patch is an RFC 7386 JSON merge patch where null deletes a key)."
     ),
     journal: namespaceEntry(
       ["Journal", "with", "current"],

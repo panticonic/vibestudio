@@ -1177,19 +1177,6 @@ function resourceKeyOf(scope: ResourceScope): string {
   }
 }
 
-export function authorityResourceForApprovalScope(scope: ApprovalResourceScope): ResourceScope {
-  switch (scope.kind) {
-    case "exact":
-      return { kind: "exact", key: scope.key };
-    case "origin":
-      return { kind: "origin", origin: scope.origin };
-    case "domain":
-      return { kind: "domain", domain: scope.domain };
-    case "network":
-      return { kind: "network", value: "*" };
-  }
-}
-
 export function approvalScopeForAuthorityResource(scope: ResourceScope): ApprovalResourceScope {
   switch (scope.kind) {
     case "exact":

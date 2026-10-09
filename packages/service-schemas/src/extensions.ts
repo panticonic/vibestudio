@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { ByteArraySchema } from "@vibestudio/shared/binary";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { selectedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
@@ -27,7 +28,10 @@ const STREAM_ACCESS: MethodAccessDescriptor = {
 
 export const EXTENSION_METHOD_AUTHORITY_RESOLVER = "extensions.invoke.userland-method";
 const extensionInvocationAuthority = {
-  requirement: requirementForPrincipals(["code", "user", "host", "website"], "service:extensions.invoke"),
+  requirement: requirementForPrincipals(
+    ["code", "user", "host", "website"],
+    "service:extensions.invoke"
+  ),
   resource: { kind: "literal" as const, key: "service:extensions.invoke" },
   prepared: {
     resolver: EXTENSION_METHOD_AUTHORITY_RESOLVER,
@@ -75,31 +79,95 @@ export type NativeExtensionInvocationObservation = z.infer<
   typeof NativeExtensionInvocationObservationSchema
 >;
 
-export const binaryEnvelopeSchema = z
-  .object({
-    __bin: z.literal(true),
-    data: z.string(),
-  })
-  .strict();
-
 export const streamChunkEnvelopeSchema = z
   .object({
     done: z.boolean(),
-    chunk: binaryEnvelopeSchema.optional(),
+    chunk: ByteArraySchema.optional(),
   })
   .strict();
 
+const extensionNameArg = z
+  .string()
+  .describe(
+    "Extension identity: the canonical package name from build.listUnits entries with kind extension, its source path, or the exact final segment of that path."
+  );
+
+/**
+ * One declared extension's build state joined with its supervised process.
+ * `identity` is present exactly while a process is live and is the handle for
+ * `runtime.supervision.describe/health/logs/restart`.
+ */
+export const extensionStatusSchema = z
+  .object({
+    name: z.string(),
+    source: z.string(),
+    displayName: z.string(),
+    status: z.enum(["running", "available", "stopped", "error", "pending-approval", "building"]),
+    version: z.string(),
+    activeEv: z.string().nullable().describe("Effective version of the active approved build."),
+    activeBundleKey: z.string().nullable(),
+    lastBuiltAt: z.number().nullable(),
+    lastError: z.string().nullable(),
+    pendingApproval: z
+      .object({
+        kind: z.enum(["extension.install", "extension.update"]),
+        submittedAt: z.number(),
+      })
+      .strict()
+      .nullable(),
+    availableUpdate: z
+      .object({ reason: z.literal("dependency"), checkedAt: z.number() })
+      .strict()
+      .nullable()
+      .describe(
+        "Non-null when the active build is stale against current sources or dependencies; extensions.update rebuilds it."
+      ),
+    identity: z
+      .object({ kind: z.literal("extension"), entityId: z.string() })
+      .strict()
+      .nullable()
+      .describe("Live supervision identity, or null when no process is running."),
+    health: z
+      .object({
+        state: z.enum(["healthy", "degraded", "unhealthy"]),
+        summary: z.string(),
+        reasons: z.array(z.string()).optional(),
+        reportedAt: z.number(),
+        retryAt: z.number().optional(),
+      })
+      .strict()
+      .nullable(),
+    methods: z.array(z.string()),
+    hasFetch: z.boolean(),
+    respawn: z
+      .object({ attempts: z.number(), nextAttemptAt: z.number().nullable() })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type ExtensionStatus = z.infer<typeof extensionStatusSchema>;
+
 const publicExtensionInvocationArgs = z.tuple([
-  z.string().describe(
-    "Extension identity: prefer the canonical package name from build.listUnits entries with kind extension. The source path and its exact final segment are also accepted. A display title or guessed abbreviation is not an identifier.",
-  ),
-  z.string().describe("Public method declared by that extension's methodAuthority; use its API contract for the positional arguments."),
+  z
+    .string()
+    .describe(
+      "Extension identity: prefer the canonical package name from build.listUnits entries with kind extension. The source path and its exact final segment are also accepted. A display title or guessed abbreviation is not an identifier."
+    ),
+  z
+    .string()
+    .describe(
+      "Public method declared by that extension's methodAuthority; use its API contract for the positional arguments."
+    ),
   z.array(z.unknown()).describe("Positional arguments to the selected extension method."),
 ]);
 
 export const extensionsMethods = defineServiceMethods({
   invoke: {
-    website: { kind: "eligible", rationale: "The host resolves and enforces the exact sealed extension method policy before invocation." },
+    website: {
+      kind: "eligible",
+      rationale:
+        "The host resolves and enforces the exact sealed extension method policy before invocation.",
+    },
     tier: {
       tier: "open",
       session: "family",
@@ -122,7 +190,11 @@ export const extensionsMethods = defineServiceMethods({
     ],
   },
   invokeProvider: {
-    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -142,7 +214,11 @@ export const extensionsMethods = defineServiceMethods({
   // invokeStream intentionally declares no return schema: the result is a raw
   // streaming Response, not a wire-serializable value.
   invokeStream: {
-    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -158,7 +234,11 @@ export const extensionsMethods = defineServiceMethods({
     access: INVOKE_ACCESS,
   },
   streamingMethods: {
-    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -174,8 +254,56 @@ export const extensionsMethods = defineServiceMethods({
     access: READ_ACCESS,
     examples: [{ args: ["shell"] }],
   },
+  status: {
+    website: {
+      kind: "closed",
+      reason:
+        "The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "extensions.control",
+      rationale:
+        "Read-only projection of one declared extension's build and supervision state; grants no invocation or lifecycle authority",
+    },
+    description:
+      "Report one declared extension's build state (active build, staleness, pending approval, last error) joined with its supervised process (live identity, health, methods, crash respawn).",
+    args: z.tuple([extensionNameArg]),
+    argumentNames: ["extension"],
+    returns: extensionStatusSchema,
+    access: READ_ACCESS,
+    examples: [{ args: ["@workspace-extensions/hello"] }],
+  },
+  update: {
+    website: {
+      kind: "closed",
+      reason:
+        "The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "extensions.control",
+      rationale:
+        "Re-reconciles one existing declaration at its published source; any new build identity still requires the user's install/update review before it runs",
+    },
+    description:
+      "Rebuild one declared extension from its published source and current dependencies, then activate it. A changed build goes through the install/update review; the call settles with the resulting status once that review and activation complete. An up-to-date extension is left as is.",
+    args: z.tuple([extensionNameArg]),
+    argumentNames: ["extension"],
+    returns: extensionStatusSchema,
+    access: INVOKE_ACCESS,
+    examples: [{ args: ["@workspace-extensions/hello"] }],
+  },
   emit: {
-    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -191,7 +319,11 @@ export const extensionsMethods = defineServiceMethods({
     access: EXTENSION_REPORT_ACCESS,
   },
   fetchRequestBodyChunk: {
-    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -208,7 +340,11 @@ export const extensionsMethods = defineServiceMethods({
     authority: extensionInvocationAuthority,
   },
   fetchRequestBodyClose: {
-    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "codeOnly",

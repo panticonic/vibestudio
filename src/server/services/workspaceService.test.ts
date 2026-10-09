@@ -237,9 +237,12 @@ describe("workspace service handler", () => {
     const service = makeService();
     await expect(
       service.handler(panelCtx, "validateConfig", [
-        "systemEpoch: 1\nservices:\n  - source: workers/incomplete\n    name: incomplete\n",
+        {
+          manifest: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nservices:\n  - name: incomplete\n`,
+          serviceManifests: {},
+        },
       ])
-    ).rejects.toThrow(/services\.0/);
+    ).rejects.toThrow(/meta\/vibestudio\.yml: every `services` entry needs a non-empty `source`/);
     expect(await service.handler(panelCtx, "getConfig", [])).toEqual(makeConfig());
   });
 
@@ -252,35 +255,63 @@ describe("workspace service handler", () => {
     });
     await expect(
       service.handler(panelCtx, "validateConfig", [
-        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplates:\n  use:\n    - name: News\n      url: https://example.test/news.git\n      ref: refs/tags/v1\n      commit: '1111111111111111111111111111111111111111'\n      snapshot: v1-sha256:1111111111111111111111111111111111111111111111111111111111111111\n`,
+        {
+          manifest: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplates:\n  use:\n    - name: News\n      url: https://example.test/news.git\n      ref: refs/tags/v1\n      commit: '1111111111111111111111111111111111111111'\n      snapshot: v1-sha256:1111111111111111111111111111111111111111111111111111111111111111\n`,
+          serviceManifests: {},
+        },
       ])
-    ).rejects.toThrow(/unknown.*templates/i);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/meta\/vibestudio\.yml: unknown.*templates/i),
+      cause: expect.anything(),
+    });
     await expect(
       service.handler(panelCtx, "validateConfig", [
-        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/chat\n`,
+        {
+          manifest: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/chat\n`,
+          serviceManifests: {},
+        },
       ])
     ).resolves.toEqual({ valid: true });
   });
 
   it("validates joined service ownership before accepting an authoring candidate", async () => {
-    const service = makeService();
-    const declaration = {
-      source: "workers/tasks",
-      name: "tasks.v1",
+    const serviceExports = ["tasks.v1", "other"].map((name) => ({
+      name,
       protocols: ["tasks.v1"],
       action: "manage tasks",
       presentation: { domain: "files", verb: "manage" },
       authority: { principals: ["code"] },
       durableObject: { className: "TasksDO" },
-    };
+    }));
+    const service = createWorkspaceService({
+      workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
+      getConfig: () => makeConfig(),
+      setConfigField: vi.fn(),
+    });
     const candidate = (services: unknown[]) =>
       JSON.stringify({ systemEpoch: WORKSPACE_SYSTEM_EPOCH, services });
     await expect(
-      service.handler(panelCtx, "validateConfig", [candidate([declaration])])
+      service.handler(panelCtx, "validateConfig", [
+        {
+          manifest: candidate([{ source: "workers/tasks", name: "tasks.v1" }]),
+          serviceManifests: {
+            "workers/tasks": JSON.stringify({ vibestudio: { services: serviceExports } }),
+          },
+        },
+      ])
     ).resolves.toEqual({ valid: true });
     await expect(
       service.handler(panelCtx, "validateConfig", [
-        candidate([declaration, { ...declaration, name: "other" }]),
+        {
+          manifest: candidate([
+            { source: "workers/tasks", name: "tasks.v1" },
+            { source: "workers/tasks", name: "other" },
+          ]),
+          serviceManifests: {
+            "workers/tasks": JSON.stringify({ vibestudio: { services: serviceExports } }),
+          },
+        },
       ])
     ).rejects.toThrow(/declared by both/);
     expect(await service.handler(panelCtx, "getConfig", [])).toEqual(makeConfig());

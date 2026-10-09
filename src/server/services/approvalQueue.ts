@@ -712,8 +712,6 @@ export interface ApprovalQueueWithListeners extends ApprovalQueue {
   ): number;
 }
 
-export type SensitiveActionQueue = ApprovalQueue;
-
 export function createApprovalQueue(deps: {
   eventService: EventService;
   /** Actual workspace server platform; never accepted from an approval requester. */

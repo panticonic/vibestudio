@@ -13,6 +13,7 @@ import { createEvalService } from "./evalService.js";
 import { createPushService } from "./pushService.js";
 import { createMobileNativeService } from "./mobileNativeService.js";
 import { createWebhookIngressService } from "./webhookIngressService.js";
+import { DevelopmentClientExecutorRegistry } from "./developmentClientExecutorService.js";
 
 const servicesDir = fileURLToPath(new URL(".", import.meta.url));
 const goldenPath = join(servicesDir, "__serviceAuthorityMatrix.golden.json");
@@ -95,6 +96,12 @@ async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
   // store, preserving authority coverage without weakening that validation.
   const webhookIngressDefinition = createWebhookIngressService({}).definition;
   definitions.set(webhookIngressDefinition.name, webhookIngressDefinition);
+  // The development client executor is a registry whose definition the
+  // development-native bootstrap registers directly; it has no create* factory.
+  const developmentClientExecutorDefinition = new DevelopmentClientExecutorRegistry(
+    inertDeps() as ConstructorParameters<typeof DevelopmentClientExecutorRegistry>[0]
+  ).definition();
+  definitions.set(developmentClientExecutorDefinition.name, developmentClientExecutorDefinition);
   for (const file of files) {
     const module = (await import(/* @vite-ignore */ join(servicesDir, file))) as Record<
       string,

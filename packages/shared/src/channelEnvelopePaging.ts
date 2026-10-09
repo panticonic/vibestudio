@@ -88,6 +88,10 @@ export const ChannelEnvelopePageInfoSchema = z
     returnedToSeq: z.number().int().nonnegative().optional(),
     hasMoreBefore: z.boolean(),
     hasMoreAfter: z.boolean(),
+    /** Ready-to-pass `window` for the following page; absent when none follows. */
+    next: ChannelEnvelopeWindowSchema.optional(),
+    /** Ready-to-pass `window` for the preceding page; absent when none precedes. */
+    previous: ChannelEnvelopeWindowSchema.optional(),
   })
   .strict();
 export type ChannelEnvelopePageInfo = z.infer<typeof ChannelEnvelopePageInfoSchema>;
@@ -144,6 +148,34 @@ export function channelEnvelopePageInfo(
     hasMoreAfter = stats.lastSeq !== undefined && stats.lastSeq >= request.window.seq;
   }
 
+  // Cursor anchors: the returned range, or for an empty page the boundary its
+  // window names. Forward continuations stay bound to the snapshot watermark.
+  const previousSeq =
+    returnedFromSeq ??
+    (request.window.kind === "tail"
+      ? (stats.lastSeq ?? -1) + 1
+      : request.window.kind === "after"
+        ? request.window.seq + 1
+        : request.window.seq);
+  const nextAfterSeq =
+    returnedToSeq ??
+    (request.window.kind === "after"
+      ? request.window.seq
+      : request.window.kind === "before"
+        ? request.window.seq - 1
+        : undefined);
+  const next: ChannelEnvelopeWindow | undefined =
+    hasMoreAfter && nextAfterSeq !== undefined && nextAfterSeq >= 0
+      ? {
+          kind: "after",
+          seq: nextAfterSeq,
+          ...(snapshotLastSeq !== undefined ? { throughSeq: snapshotLastSeq } : {}),
+        }
+      : undefined;
+  const previous: ChannelEnvelopeWindow | undefined = hasMoreBefore
+    ? { kind: "before", seq: previousSeq }
+    : undefined;
+
   return {
     request: {
       window: request.window,
@@ -159,6 +191,8 @@ export function channelEnvelopePageInfo(
     ...(returnedToSeq !== undefined ? { returnedToSeq } : {}),
     hasMoreBefore,
     hasMoreAfter,
+    ...(next ? { next } : {}),
+    ...(previous ? { previous } : {}),
   };
 }
 
@@ -203,10 +237,8 @@ export async function collectChannelEnvelopePages<T>(
     );
   }
 
-  const initialWindow = input.window ?? { kind: "tail" as const };
-  const backwards = initialWindow.kind !== "after";
-  let window: ChannelEnvelopeWindow = initialWindow;
-  let forwardThroughSeq = initialWindow.kind === "after" ? initialWindow.throughSeq : undefined;
+  let window: ChannelEnvelopeWindow = input.window ?? { kind: "tail" };
+  const backwards = window.kind !== "after";
   let remaining = maximumItems;
   const pages: Array<ChannelEnvelopePage<T>> = [];
 
@@ -224,9 +256,6 @@ export async function collectChannelEnvelopePages<T>(
       pageInfo: ChannelEnvelopePageInfoSchema.parse(rawPage.pageInfo),
     };
     assertChannelEnvelopePageRequestEcho(pageRequest, page.pageInfo);
-    if (!backwards && forwardThroughSeq === undefined) {
-      forwardThroughSeq = page.pageInfo.snapshotLastSeq;
-    }
     if (page.pageInfo.returnedCount !== page.items.length) {
       throw new Error(
         `channel envelope page returnedCount mismatch: metadata=${page.pageInfo.returnedCount}, items=${page.items.length}`
@@ -239,40 +268,29 @@ export async function collectChannelEnvelopePages<T>(
     const hasMore = backwards ? page.pageInfo.hasMoreBefore : page.pageInfo.hasMoreAfter;
     if (!hasMore || (remaining !== "all" && remaining === 0)) break;
 
-    if (!backwards && forwardThroughSeq === undefined) {
-      throw new Error(
-        "channel envelope forward page claims more data without a snapshotLastSeq watermark"
-      );
-    }
-
-    const cursor = backwards ? page.pageInfo.returnedFromSeq : page.pageInfo.returnedToSeq;
-    if (cursor === undefined || page.items.length === 0) {
+    const cursor = backwards ? page.pageInfo.previous : page.pageInfo.next;
+    if (!cursor || page.items.length === 0) {
       throw new Error(
         `channel envelope paging made no ${backwards ? "backward" : "forward"} progress`
       );
     }
-    if (backwards && window.kind === "before" && cursor >= window.seq) {
-      throw new Error(
-        `channel envelope paging did not move backward: cursor ${cursor} is not before ${window.seq}`
-      );
+    if (
+      backwards &&
+      (cursor.kind !== "before" || (window.kind === "before" && cursor.seq >= window.seq))
+    ) {
+      throw new Error("channel envelope paging did not move backward");
     }
-    if (!backwards && window.kind === "after" && cursor <= window.seq) {
-      throw new Error(
-        `channel envelope paging did not move forward: cursor ${cursor} is not after ${window.seq}`
-      );
+    if (
+      !backwards &&
+      (cursor.kind !== "after" ||
+        cursor.throughSeq === undefined ||
+        (window.kind === "after" &&
+          (cursor.seq <= window.seq ||
+            (window.throughSeq !== undefined && cursor.throughSeq !== window.throughSeq))))
+    ) {
+      throw new Error("channel envelope paging did not move forward within its snapshot watermark");
     }
-    if (!backwards && forwardThroughSeq !== undefined && cursor > forwardThroughSeq) {
-      throw new Error(
-        `channel envelope paging crossed its snapshot watermark: cursor ${cursor} exceeds ${forwardThroughSeq}`
-      );
-    }
-    window = backwards
-      ? { kind: "before", seq: cursor }
-      : {
-          kind: "after",
-          seq: cursor,
-          ...(forwardThroughSeq !== undefined ? { throughSeq: forwardThroughSeq } : {}),
-        };
+    window = cursor;
   }
 
   return pages;

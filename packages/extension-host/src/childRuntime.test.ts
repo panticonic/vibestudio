@@ -26,14 +26,14 @@ describe("extension child runtime", () => {
     expect(source.includes("call" + "DO")).toBe(false);
   });
 
-  it("exposes sparse context materialization on the extension fs client", () => {
+  it("exposes context materialization, returning the source root, on the extension fs client", () => {
     const source = fs.readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts"),
       "utf8"
     );
 
     expect(source).toContain("async ensureMaterialized(scope:");
-    expect(source).toContain('rpcCall("fs.ensureMaterialized", [scope])');
+    expect(source).toContain('rpcCall<string>("fs.ensureMaterialized", [scope])');
   });
 
   it("synthesizes a rejecting response from ws:routed-response-error and logs ws:routed-event-error", () => {

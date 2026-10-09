@@ -170,7 +170,6 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
     unregisterEgressCaller: () => {},
     egressSecret: "dynamic-worker-host-egress-secret",
     getWorkerdGatewayToken: () => "test-gateway-token",
-    workerdStartupReadyTimeoutMs: 15_000,
   };
   const provider: WorkerdWorkspaceProvider = {
     bindRuntimeImage: async (unitPath: string, ref?: string) => ({

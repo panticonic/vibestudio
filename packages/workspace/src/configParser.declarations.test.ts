@@ -13,29 +13,34 @@ import {
 } from "./configParser.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
-const parse = (yaml: string) =>
-  parseWorkspaceConfigContentWithId(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n${yaml}`, "test-ws");
+const parse = (yaml: string, manifests: Record<string, string> = {}) =>
+  parseWorkspaceConfigContentWithId(
+    `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n${yaml}`,
+    "test-ws",
+    (source) => manifests[source] ?? null
+  );
 
 describe("template authoring metadata", () => {
   it.each([
     ["scalar", "template: invalid\n"],
-    ["unknown key", "template:\n  repositories: []\n  mystery: true\n"],
-    ["noncanonical path", "template:\n  repositories: [../outside]\n"],
-    ["duplicate path", "template:\n  repositories: [panels/one, panels/one]\n"],
+    ["unknown key", "template:\n  mystery: true\n"],
+    ["removed inventory", "template:\n  repositories: []\n"],
+    [
+      "duplicate override",
+      "template:\n  overrides:\n    - { repoPath: panels/example, source: https://example.test/base.git }\n    - { repoPath: panels/example, source: https://example.test/base.git }\n",
+    ],
   ])("rejects invalid metadata: %s", (_label, template) => {
     expect(() => parse(template)).toThrow(/meta\/vibestudio\.yml: .*`template/);
   });
 
   it("reports runtime errors at their runtime path when metadata is present", () => {
-    const source = "template:\n  repositories: []\nproviders:\n  evalEngine: {}\n";
+    const source = "template: {}\nproviders:\n  evalEngine: {}\n";
     expect(() => parse(source)).toThrow(/`providers\.evalEngine\.source`/);
     expect(() => parse(source)).not.toThrow(/`template\.providers/);
   });
 
   it("validates and removes authoring metadata from runtime configuration", () => {
-    expect(
-      parse("template:\n  name: Example\n  repositories: [panels/example]\n")
-    ).not.toHaveProperty("template");
+    expect(parse("template:\n  name: Example\n")).not.toHaveProperty("template");
   });
 });
 
@@ -239,20 +244,23 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
 describe("manifest declarations: product workspace services", () => {
   it("accepts user-facing service approval copy", () => {
     expect(
-      parse(`services:
-  - source: workers/notes
-    name: notes
-    title: Notes
-    action: read and update your notes
-    description: Reads and updates notes stored in this workspace.
-    presentation:
-      domain: automation
-      verb: act
-    authority:
-      principals: [code]
-    durableObject:
-      className: NotesDO
-`)
+      parse("services:\n  - source: workers/notes\n    name: notes\n", {
+        "workers/notes": JSON.stringify({
+          vibestudio: {
+            services: [
+              {
+                name: "notes",
+                title: "Notes",
+                action: "read and update your notes",
+                description: "Reads and updates notes stored in this workspace.",
+                presentation: { domain: "automation", verb: "act" },
+                authority: { principals: ["code"] },
+                durableObject: { className: "NotesDO" },
+              },
+            ],
+          },
+        }),
+      })
     ).toMatchObject({
       services: [
         {
@@ -266,20 +274,22 @@ describe("manifest declarations: product workspace services", () => {
 
   it("accepts a declared service binding whose methods own their authority", () => {
     expect(
-      parse(`services:
-  - source: workers/workspace-source
-    name: gad.workspace
-    title: Workspace data
-    action: use this workspace's files and history
-    presentation:
-      domain: automation
-      verb: manage
-    authority:
-      binding: declared
-      principals: [code]
-    durableObject:
-      className: GadWorkspaceDO
-`)
+      parse("services:\n  - source: workers/workspace-source\n    name: gad.workspace\n", {
+        "workers/workspace-source": JSON.stringify({
+          vibestudio: {
+            services: [
+              {
+                name: "gad.workspace",
+                title: "Workspace data",
+                action: "use this workspace's files and history",
+                presentation: { domain: "automation", verb: "manage" },
+                authority: { binding: "declared", principals: ["code"] },
+                durableObject: { className: "GadWorkspaceDO" },
+              },
+            ],
+          },
+        }),
+      })
     ).toMatchObject({
       services: [{ name: "gad.workspace", authority: { binding: "declared" } }],
     });
@@ -287,20 +297,21 @@ describe("manifest declarations: product workspace services", () => {
 
   it("accepts declared wiring restricted to named consumer units", () => {
     expect(
-      parse(`services:
-  - source: workers/flowboard-store
-    name: flowboard-store
-    action: manage Flowboard lists and tasks
-    presentation:
-      domain: automation
-      verb: act
-    authority:
-      binding:
-        declaredFor: [panels/flowboard]
-      principals: [code]
-    durableObject:
-      className: FlowboardStore
-`)
+      parse("services:\n  - source: workers/flowboard-store\n    name: flowboard-store\n", {
+        "workers/flowboard-store": JSON.stringify({
+          vibestudio: {
+            services: [
+              {
+                name: "flowboard-store",
+                action: "manage Flowboard lists and tasks",
+                presentation: { domain: "automation", verb: "act" },
+                authority: { binding: { declaredFor: ["panels/flowboard"] }, principals: ["code"] },
+                durableObject: { className: "FlowboardStore" },
+              },
+            ],
+          },
+        }),
+      })
     ).toMatchObject({
       services: [
         {
@@ -313,80 +324,50 @@ describe("manifest declarations: product workspace services", () => {
 
   it("accepts the workspace source provider as an ordinary manifest service", () => {
     expect(
-      parse(`services:
-  - source: workers/impostor
-    name: gad.workspace
-    action: impersonate the workspace service
-    presentation:
-      domain: automation
-      verb: act
-    authority:
-      principals: [code]
-    durableObject:
-      className: ImpostorDO
-`)
+      parse("services:\n  - source: workers/impostor\n    name: gad.workspace\n", {
+        "workers/impostor": JSON.stringify({
+          vibestudio: {
+            services: [
+              {
+                name: "gad.workspace",
+                action: "impersonate the workspace service",
+                presentation: { domain: "automation", verb: "act" },
+                authority: { principals: ["code"] },
+                durableObject: { className: "ImpostorDO" },
+              },
+            ],
+          },
+        }),
+      })
     ).toMatchObject({ services: [{ name: "gad.workspace" }] });
   });
 
-  it("accepts the workspace source protocol from the flattened manifest", () => {
+  it("accepts the workspace source protocol from its repository export", () => {
     expect(
-      parse(`services:
-  - source: workers/impostor
-    name: impostor
-    action: impersonate the workspace protocol
-    presentation:
-      domain: automation
-      verb: act
-    protocols: [vibestudio.gad.workspace.v1]
-    authority:
-      principals: [code]
-    durableObject:
-      className: ImpostorDO
-`)
+      parse("services:\n  - source: workers/impostor\n    name: impostor\n", {
+        "workers/impostor": JSON.stringify({
+          vibestudio: {
+            services: [
+              {
+                name: "impostor",
+                action: "impersonate the workspace protocol",
+                presentation: { domain: "automation", verb: "act" },
+                protocols: ["vibestudio.gad.workspace.v1"],
+                authority: { principals: ["code"] },
+                durableObject: { className: "ImpostorDO" },
+              },
+            ],
+          },
+        }),
+      })
     ).toMatchObject({
       services: [{ protocols: ["vibestudio.gad.workspace.v1"] }],
     });
   });
 });
 
-describe("manifest declarations: canonical Git config", () => {
-  it("accepts object-only remote and upstream declarations", () => {
-    const config = parse(`
-git:
-  remotes:
-    projects:
-      demo:
-        origin:
-          url: https://github.com/acme/demo.git
-          branch: main
-  upstreams:
-    projects:
-      demo:
-        remote: origin
-        branch: main
-        autoPush: false
-`);
-
-    expect(config.git?.remotes?.["projects"]?.["demo"]?.["origin"]).toEqual({
-      url: "https://github.com/acme/demo.git",
-      branch: "main",
-    });
-  });
-
-  it.each([
-    [
-      "string remote shorthand",
-      `git:\n  remotes:\n    projects:\n      demo:\n        origin: https://github.com/acme/demo.git\n`,
-    ],
-    [
-      "nullable remote branch",
-      `git:\n  remotes:\n    projects:\n      demo:\n        origin:\n          url: https://github.com/acme/demo.git\n          branch: null\n`,
-    ],
-    ["remote tombstone", `git:\n  remotes:\n    projects:\n      demo:\n        origin: null\n`],
-    ["upstream tombstone", `git:\n  upstreams:\n    projects:\n      demo: null\n`],
-  ])("rejects %s", (_label, yaml) => {
-    expect(() => parse(yaml)).toThrow(/meta\/vibestudio\.yml/);
-  });
+it("rejects Git service settings in authored workspace configuration", () => {
+  expect(() => parse("git: { remotes: {}, upstreams: {} }\n")).toThrow(/unknown.*git/);
 });
 
 describe("workspace package-name helpers (centralized scopes)", () => {
@@ -407,36 +388,63 @@ describe("workspace package-name helpers (centralized scopes)", () => {
   });
 });
 
-it("enforces installed dependency floors through the stable future-schema envelope", async () => {
+it("reads the composed compatibility floor through the future-schema envelope", async () => {
   const { parseWorkspaceAppCompatibilityEnvelope } = await import("./configParser");
   const { appCompatibilityError } =
     await import("@vibestudio/workspace-contracts/appCompatibility");
-  const pin = {
-    url: "https://example.test/base.git",
-    ref: "refs/heads/main",
-    commit: "a".repeat(40),
-  };
-  const manifest = JSON.stringify({
-    systemEpoch: 1,
-    futureRuntimeField: { unsupported: true },
-    template: {
-      dependencies: [{ url: pin.url }],
-      installation: {
-        sources: [
-          {
-            pin,
-            manifest: JSON.stringify({
-              systemEpoch: 1,
-              minimumAppVersion: "1.5.0",
-              futureUnits: true,
-            }),
-          },
-        ],
-      },
-    },
-  });
-  const requirement = parseWorkspaceAppCompatibilityEnvelope(manifest);
+  const requirement = parseWorkspaceAppCompatibilityEnvelope(
+    JSON.stringify({
+      systemEpoch: 1,
+      minimumAppVersion: "1.5.0",
+      futureRuntimeField: { unsupported: true },
+    })
+  );
   expect(requirement).toEqual({ systemEpoch: 1, minimumAppVersion: "1.5.0" });
   expect(appCompatibilityError(requirement, "1.0.0")).toContain("1.5.0");
   expect(appCompatibilityError(requirement, "1.6.0")).toBeNull();
+});
+
+it("resolves selected service exports from the same exact tree as workspace wiring", async () => {
+  const calls: string[] = [];
+  const content = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nservices:\n  - { source: workers/notes, name: notes }\n`;
+  const exported = {
+    name: "notes",
+    action: "read notes",
+    description: "The selected revision",
+    presentation: { domain: "files", verb: "see" },
+    protocols: ["notes.v1"],
+    authority: { principals: ["code"] },
+    durableObject: { className: "NotesDO" },
+  };
+  const reader = {
+    readText: async (filePath: string) => {
+      calls.push(filePath);
+      return filePath === "meta/vibestudio.yml"
+        ? content
+        : filePath === "workers/notes/package.json"
+          ? JSON.stringify({ vibestudio: { services: [exported] } })
+          : null;
+    },
+  };
+  expect((await readWorkspaceConfig(reader, "workspace")).services).toEqual([
+    { ...exported, source: "workers/notes" },
+  ]);
+  expect(calls).toEqual(["meta/vibestudio.yml", "workers/notes/package.json"]);
+  await expect(
+    readWorkspaceConfig(
+      { readText: async (filePath) => (filePath === "meta/vibestudio.yml" ? content : null) },
+      "workspace"
+    )
+  ).rejects.toThrow("requires workers/notes/package.json");
+  expect(() =>
+    parse("services:\n  - { source: workers/notes, name: notes, action: obsolete }\n")
+  ).toThrow(/unknown.*action/);
+});
+
+it("rejects singleton runtime identity in workspace source", () => {
+  expect(() =>
+    parse(
+      "singletonObjects:\n  - { source: workers/notes, className: NotesDO, key: notes, contextId: local-context }\n"
+    )
+  ).toThrow(/unknown.*contextId/);
 });

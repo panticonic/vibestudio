@@ -3,19 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { templatesMethods } from "../packages/service-schemas/src/templates.ts";
+import { renderBytesJsonSchema } from "../packages/shared/src/binary.ts";
 import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 const root = developmentTemplateConfig.requireDevelopmentTemplateCheckouts(process.cwd()).checkouts
   .base;
 const file = path.join(root, "skills/templates/public-contract.json");
 const previous = JSON.parse(fs.readFileSync(file, "utf8"));
+const jsonSchemaOptions = { $refStrategy: "none", postProcess: renderBytesJsonSchema };
 const methods = Object.fromEntries(
   Object.entries(templatesMethods).map(([name, method]) => [
     name,
     {
       description: method.description,
       sensitivity: method.access.sensitivity,
-      arguments: zodToJsonSchema(method.args, { $refStrategy: "none" }),
-      returns: zodToJsonSchema(method.returns, { $refStrategy: "none" }),
+      arguments: zodToJsonSchema(method.args, jsonSchemaOptions),
+      returns: zodToJsonSchema(method.returns, jsonSchemaOptions),
     },
   ])
 );

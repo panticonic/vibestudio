@@ -4,7 +4,7 @@ Workspace browser profiles require iOS 17 or later. Android requires a System
 WebView supporting AndroidX WebKit's `MULTI_PROFILE` capability. The native host
 binds each browser view to one account/workspace profile before loading content;
 unsupported engines show an update message and never use shared browser storage.
-This native contract is `rn-host-5`.
+The native contract version is `RN_HOST_ABI` in `@vibestudio/shared/buildProvider`.
 
 This directory contains the shipped native host: the Android/iOS projects,
 first-pairing and recovery bootstrap, Metro boundary, native modules, signing,
@@ -69,7 +69,7 @@ needed and dispatches to the panel's registered `_agent.*` handlers.
 CDP automation always runs through the server broker and requires a
 CDP-capable Electron host. The mobile app does not expose an Android WebView
 CDP proxy or a direct WebView drive path. Panels held by the mobile host are
-not CDP targets; `handle.cdp.page()` and drive verbs reject while a target is
+not CDP targets; `handle.cdp.session()` and drive verbs reject while a target is
 leased to mobile rather than taking it over silently. iOS `WKWebView` does not
 provide CDP, so brokered CDP automation remains unavailable for mobile-held
 panels there as well.

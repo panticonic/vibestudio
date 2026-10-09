@@ -143,6 +143,7 @@ import {
   executionArtifactRefFromBuild,
 } from "../executionRootProviders.js";
 import { assertUnitIconSize, declaredUnitIconPath } from "./unitIcon.js";
+import { LruMap } from "./lruMap.js";
 import type {
   ServiceBindingFact,
   WorkspaceServiceReviewFact,
@@ -610,22 +611,10 @@ export async function initBuildSystemV2(
     string,
     Promise<ExactWorkspaceAuthorityEnvironment>
   >();
-  const authorityFactCache = new Map<
+  const authorityFactCache = new LruMap<
     string,
     { facts: ReturnType<typeof analyzeWorkspaceServiceCalls>; moduleClosureDigest: string }
-  >();
-  const rememberAuthorityFacts = (
-    key: string,
-    value: { facts: ReturnType<typeof analyzeWorkspaceServiceCalls>; moduleClosureDigest: string }
-  ): void => {
-    authorityFactCache.delete(key);
-    authorityFactCache.set(key, value);
-    while (authorityFactCache.size > 256) {
-      const oldest = authorityFactCache.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      authorityFactCache.delete(oldest);
-    }
-  };
+  >(256);
   const authorityIndexManager = new AuthorityIndexManager();
   const authorityAnalysisWorker = new AuthorityAnalysisWorkerClient(rootOptions.appRoot);
   const authorityEpoch = {
@@ -864,7 +853,7 @@ export async function initBuildSystemV2(
             if (cachedFacts) {
               if (memoryFacts) memoryFactHits += 1;
               else durableFactHits += 1;
-              rememberAuthorityFacts(factCacheKey, cachedFacts);
+              authorityFactCache.set(factCacheKey, cachedFacts);
               const proofError = serviceDeclarationProofError(node, view.graph, cachedFacts.facts);
               if (proofError) {
                 blockingConsumers.add(node.name);
@@ -989,7 +978,7 @@ export async function initBuildSystemV2(
                     facts,
                   });
                   if (cacheable) {
-                    rememberAuthorityFacts(factCacheKey, {
+                    authorityFactCache.set(factCacheKey, {
                       facts,
                       moduleClosureDigest: identity.moduleClosureDigest,
                     });
@@ -1476,19 +1465,10 @@ export async function initBuildSystemV2(
   // the shipped snapshot do not repeat discovery and EV computation. Pending
   // work lives in a separate flight map so LRU eviction can never break
   // single-flight behavior.
-  const MAX_GRAPH_VIEWS = 8;
-  const graphViewCache = new Map<string, GraphView>();
+  const graphViewCache = new LruMap<string, GraphView>(8);
   const graphViewFlights = new Map<string, Promise<GraphView>>();
-  const cacheGraphView = (viewStateHash: string, view: GraphView): GraphView => {
-    graphViewCache.delete(viewStateHash);
+  const cacheGraphView = (viewStateHash: string, view: GraphView): GraphView =>
     graphViewCache.set(viewStateHash, view);
-    while (graphViewCache.size > MAX_GRAPH_VIEWS) {
-      const oldest = graphViewCache.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      graphViewCache.delete(oldest);
-    }
-    return view;
-  };
   cacheGraphView(stateHash, { graph, evMap });
 
   /** Discover + EV-compute over one immutable content view. */
@@ -1520,7 +1500,7 @@ export async function initBuildSystemV2(
   // state + unit + EV, not by a mutable source label. The fast path is valid
   // only while the publication trigger is settled; any queued publication
   // forces the normal settlement path before selecting an identity.
-  const runtimeBindingCache = new Map<string, RuntimeImageBinding>();
+  const runtimeBindingCache = new LruMap<string, RuntimeImageBinding>(4096);
   const runtimeBindingFlights = new Map<string, Promise<RuntimeImageBinding>>();
   const runtimeBindingKey = (stateHash: string, unitName: string, ev: string) =>
     `${stateHash}\0${unitName}\0${ev}`;
@@ -2065,8 +2045,7 @@ export async function initBuildSystemV2(
   // so retain the complete projection instead of rerunning materialization,
   // authority analysis, and TypeScript on every diagnostics read. Transient
   // infrastructure failures are marked non-reusable by buildUnitReport.
-  const MAX_BUILD_REPORTS = 256;
-  const buildReportCache = new Map<string, UnitBuildReport>();
+  const buildReportCache = new LruMap<string, UnitBuildReport>(256);
   const buildReportFlights = new Map<string, Promise<UnitBuildReport>>();
   const buildReportProgressListeners = new Map<
     string,
@@ -2074,23 +2053,14 @@ export async function initBuildSystemV2(
   >();
   const reportCacheKey = (viewStateHash: string, unitName: string): string =>
     `${viewStateHash}\0${unitName}`;
-  const cacheBuildReport = (key: string, report: UnitBuildReport): UnitBuildReport => {
-    buildReportCache.delete(key);
+  const cacheBuildReport = (key: string, report: UnitBuildReport): UnitBuildReport =>
     buildReportCache.set(key, report);
-    while (buildReportCache.size > MAX_BUILD_REPORTS) {
-      const oldest = buildReportCache.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      buildReportCache.delete(oldest);
-    }
-    return report;
-  };
 
   // An icon is presentation data, not an executable build. Resolve all requests
   // in one browser wave against one exact head view, then retain immutable file
   // results by state. This keeps the canonical manifest/path/size validation
   // while avoiding source materialization, bundling, and typechecking.
-  const MAX_UNIT_ICONS = 256;
-  const unitIconCache = new Map<string, ResolvedUnitIcon>();
+  const unitIconCache = new LruMap<string, ResolvedUnitIcon>(256);
   const unitIconFlights = new Map<string, Promise<ResolvedUnitIcon | null>>();
   let unitIconViewFlight: Promise<GraphView & { stateHash: string }> | null = null;
   const currentUnitIconView = (): Promise<GraphView & { stateHash: string }> => {
@@ -2109,16 +2079,8 @@ export async function initBuildSystemV2(
     });
     return unitIconViewFlight;
   };
-  const cacheUnitIcon = (key: string, icon: ResolvedUnitIcon): ResolvedUnitIcon => {
-    unitIconCache.delete(key);
+  const cacheUnitIcon = (key: string, icon: ResolvedUnitIcon): ResolvedUnitIcon =>
     unitIconCache.set(key, icon);
-    while (unitIconCache.size > MAX_UNIT_ICONS) {
-      const oldest = unitIconCache.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      unitIconCache.delete(oldest);
-    }
-    return icon;
-  };
   const getUnitIcon = async (
     requestedSource: string,
     requestedPath: string,
@@ -3228,10 +3190,7 @@ export async function initBuildSystemV2(
       const cacheKey = reportCacheKey(viewStateHash, node.name);
       const cached = buildReportCache.get(cacheKey);
       if (cached) {
-        // Map insertion order is the LRU order.
-        buildReportCache.delete(cacheKey);
-        buildReportCache.set(cacheKey, cached);
-        return cached;
+        return buildReportCache.set(cacheKey, cached);
       }
       const pending = buildReportFlights.get(cacheKey);
       if (pending) {

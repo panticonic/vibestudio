@@ -4,7 +4,7 @@ import { promises as fsp } from "fs";
 import * as path from "path";
 import { Transform } from "stream";
 import { pipeline } from "stream/promises";
-import type { IncomingMessage, ServerResponse } from "http";
+import type { IncomingMessage } from "http";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
@@ -58,6 +58,7 @@ import {
   withBlobContentLock,
 } from "../storage/blobRetentions.js";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { sendJson, sendText } from "../hostCore/httpResponses.js";
 
 const log = createDevLogger("BlobstoreService");
 
@@ -107,16 +108,6 @@ async function ensureWorkspaceBlobReference(
   if (path.resolve(blobsDir) === path.resolve(backingDir)) return;
   const sourcePath = blobCasPath(backingDir, digest);
   await linkBlobFile(blobsDir, digest, sourcePath);
-}
-
-function sendJson(res: ServerResponse, status: number, payload: unknown): void {
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(payload));
-}
-
-function sendText(res: ServerResponse, status: number, body: string): void {
-  res.writeHead(status, { "Content-Type": "text/plain" });
-  res.end(body);
 }
 
 async function pathExists(filePath: string): Promise<boolean> {

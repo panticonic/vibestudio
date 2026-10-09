@@ -246,7 +246,6 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "permissions.read", notability: "everyday" },
   { key: "permissions.revoke", notability: "headline" },
   { key: "governance.read", notability: "everyday" },
-  { key: "security.audit.read", notability: "headline" },
   { key: "content.trust.policy.manage", notability: "headline" },
   { key: "content.trust.vouch", notability: "headline" },
 ];

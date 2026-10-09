@@ -8,6 +8,7 @@ import { parseHubReadyPayload } from "./hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 import { hostArtifactRootForServerEntry } from "../../host-build-generations.mjs";
 import { bindProcessLifetimeToParent } from "../../owned-process-tree.mjs";
+import { flagValue } from "./args.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -175,17 +176,17 @@ export function parsePairArgs(argv, config) {
     } else if (arg === "--workspace" || arg === "--workspace-dir") {
       throw new Error(`${arg} is no longer supported; choose a workspace after pairing`);
     } else if (arg === "--app-root") {
-      options.appRoot = argv[++i] ?? "";
+      options.appRoot = flagValue(argv, ++i, arg);
     } else if (arg === "--ready-file") {
-      const readyFile = argv[++i] ?? "";
+      const readyFile = flagValue(argv, ++i, arg);
       if (!readyFile) throw new Error("--ready-file requires a path");
       options.readyFile = path.resolve(readyFile);
     } else if (arg === "--bootstrap-workspace") {
-      const workspace = argv[++i] ?? "";
+      const workspace = flagValue(argv, ++i, arg);
       if (!workspace) throw new Error("--bootstrap-workspace requires a name");
       options.bootstrapWorkspace = workspace;
     } else if (arg === "--relay-url") {
-      const relay = argv[++i] ?? "";
+      const relay = flagValue(argv, ++i, arg);
       const url = new URL(relay);
       if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
         throw new Error("--relay-url requires a canonical HTTPS relay URL");
@@ -292,9 +293,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     hostArtifactRoot = hostArtifactRootForServerEntry(repoRoot, serverEntryArg());
   }
 
-  let serverArgs = hooks.buildServerArgs
-    ? hooks.buildServerArgs(options, LOOPBACK_HOST)
-    : buildServerArgs(options);
+  let serverArgs = buildServerArgs(options);
   let ownedReadyDir = null;
   let ownedCheckpointRoot = null;
   const ownedCheckpointDir = () => {
@@ -352,7 +351,6 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     ...workspaceTemplateEnv,
     VIBESTUDIO_HOST_ARTIFACT_ROOT:
       hostArtifactRoot ?? hostArtifactRootForServerEntry(repoRoot, serverEntryArg()),
-    VIBESTUDIO_HOST: LOOPBACK_HOST,
     VIBESTUDIO_GATEWAY_PORT: String(options.port),
     ...(options.relayUrls.length > 0
       ? { VIBESTUDIO_IROH_RELAYS: options.relayUrls.join(",") }
@@ -651,13 +649,8 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
 function buildServerArgs(options) {
   const args = [
     serverEntryArg(),
-    "--host",
-    LOOPBACK_HOST,
-    "--bind-host",
-    LOOPBACK_HOST,
     "--gateway-port",
     String(options.port),
-    "--serve-panels",
   ];
 
   if (options.bootstrapWorkspace) {

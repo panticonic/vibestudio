@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { writeFileAtomicSync } from "../../atomicFile.js";
@@ -16,11 +17,16 @@ export interface SensitiveBrowserImportCount {
   skipped: number;
   errors: number;
 }
-export interface SensitiveBrowserImportStatus {
+/** The durable status; callers observe it with its opaque change version. */
+interface DurableSensitiveImportStatus {
   operationId: string;
   state: "running" | "applying" | "application_failed" | "complete" | "cancelled" | "failed";
   counts: SensitiveBrowserImportCount[];
   error?: string;
+}
+export interface SensitiveBrowserImportStatus extends DurableSensitiveImportStatus {
+  /** Opaque change version, scoped to this ledger instance. */
+  version: string;
 }
 
 const SensitiveDataTypeSchema = z.enum(["cookies", "passwords", "formFill"]);
@@ -83,13 +89,23 @@ const LedgerSchema = z
 interface LedgerRecord {
   operationId: string;
   input: SensitiveBrowserImportInput;
-  status: SensitiveBrowserImportStatus;
+  status: DurableSensitiveImportStatus;
   updatedAt: number;
+  /** In-memory change counter; versions are scoped to this ledger instance. */
+  revision: number;
 }
+
+const WAITABLE_STATES: ReadonlySet<DurableSensitiveImportStatus["state"]> = new Set([
+  "running",
+  "applying",
+]);
 
 /** Durable instance-scoped identity, progress, cancellation, and receipt ledger. */
 export class SensitiveBrowserImportLedger {
   private readonly records = new Map<string, LedgerRecord>();
+  private readonly waiters = new Map<string, Set<Waiter>>();
+  private readonly epoch = randomUUID();
+  private revision = 0;
 
   constructor(private readonly filePath: string) {
     this.load();
@@ -99,26 +115,72 @@ export class SensitiveBrowserImportLedger {
     const existing = this.records.get(operationId);
     if (existing) {
       this.assertSameInput(existing, input);
-      return cloneStatus(existing.status);
+      return this.observed(existing);
     }
-    const status: SensitiveBrowserImportStatus = {
+    const status: DurableSensitiveImportStatus = {
       operationId,
       state: "running",
       counts: input.dataTypes.map((dataType) => zeroCount(dataType)),
     };
-    this.records.set(operationId, {
+    const record: LedgerRecord = {
       operationId,
       input: cloneInput(input),
       status,
       updatedAt: Date.now(),
-    });
+      revision: ++this.revision,
+    };
+    this.records.set(operationId, record);
     this.persist();
-    return cloneStatus(status);
+    return this.observed(record);
   }
 
   observe(operationId: string): SensitiveBrowserImportStatus {
+    return this.observed(this.require(operationId));
+  }
+
+  /**
+   * Resolve on the operation's next status change when the caller already
+   * holds the current version of a running or applying import. Any other state
+   * or version answers immediately. Waits end with the change itself, the
+   * caller's abort signal, or {@link releaseWaiters} when the owning host stops.
+   */
+  observeAfter(
+    operationId: string,
+    afterVersion: string,
+    signal?: AbortSignal
+  ): Promise<SensitiveBrowserImportStatus> {
     const record = this.require(operationId);
-    return cloneStatus(record.status);
+    const current = this.observed(record);
+    if (current.version !== afterVersion || !WAITABLE_STATES.has(record.status.state)) {
+      return Promise.resolve(current);
+    }
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const waiters = this.waiters.get(operationId) ?? new Set<Waiter>();
+      this.waiters.set(operationId, waiters);
+      const onAbort = () => settle(() => reject(signal!.reason));
+      const settle = (finish: () => void) => {
+        waiters.delete(waiter);
+        if (waiters.size === 0 && this.waiters.get(operationId) === waiters) {
+          this.waiters.delete(operationId);
+        }
+        signal?.removeEventListener("abort", onAbort);
+        finish();
+      };
+      const waiter: Waiter = {
+        changed: (status) => settle(() => resolve(status)),
+        released: (error) => settle(() => reject(error)),
+      };
+      waiters.add(waiter);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  /** Reject every pending wait; the owning host is stopping. */
+  releaseWaiters(error: Error): void {
+    for (const waiters of [...this.waiters.values()]) {
+      for (const waiter of [...waiters]) waiter.released(error);
+    }
   }
 
   running(): Array<{ operationId: string; input: SensitiveBrowserImportInput }> {
@@ -138,9 +200,7 @@ export class SensitiveBrowserImportLedger {
     const index = record.status.counts.findIndex((entry) => entry.dataType === count.dataType);
     if (index < 0) throw new Error(`Unexpected sensitive import category: ${count.dataType}`);
     record.status.counts[index] = { ...count };
-    record.updatedAt = Date.now();
-    this.persist();
-    return cloneStatus(record.status);
+    return this.commit(record);
   }
 
   complete(
@@ -150,17 +210,14 @@ export class SensitiveBrowserImportLedger {
   ): SensitiveBrowserImportStatus {
     const record = this.require(operationId);
     this.assertSameInput(record, input);
-    if (!["running", "applying"].includes(record.status.state)) return cloneStatus(record.status);
+    if (!["running", "applying"].includes(record.status.state)) return this.observed(record);
     assertExactCounts(input, counts);
     record.status = {
       operationId,
       state: "complete",
       counts: counts.map((count) => ({ ...count })),
     };
-    record.updatedAt = Date.now();
-    this.pruneTerminalReceipts();
-    this.persist();
-    return cloneStatus(record.status);
+    return this.commit(record);
   }
 
   applying(
@@ -171,47 +228,53 @@ export class SensitiveBrowserImportLedger {
     const record = this.require(operationId);
     this.assertSameInput(record, input);
     if (!["running", "applying", "application_failed"].includes(record.status.state))
-      return cloneStatus(record.status);
+      return this.observed(record);
     assertExactCounts(input, counts);
     record.status = {
       operationId,
       state: "applying",
       counts: counts.map((count) => ({ ...count })),
     };
-    record.updatedAt = Date.now();
-    this.persist();
-    return cloneStatus(record.status);
+    return this.commit(record);
   }
 
   applicationFailed(operationId: string, error: string): SensitiveBrowserImportStatus {
     const record = this.require(operationId);
-    if (record.status.state !== "applying") return cloneStatus(record.status);
+    if (record.status.state !== "applying") return this.observed(record);
     record.status = { ...record.status, state: "application_failed", error };
-    record.updatedAt = Date.now();
-    this.persist();
-    return cloneStatus(record.status);
+    return this.commit(record);
   }
 
   cancel(operationId: string): SensitiveBrowserImportStatus {
     const record = this.require(operationId);
     if (!["running", "applying", "application_failed"].includes(record.status.state))
-      return cloneStatus(record.status);
+      return this.observed(record);
     const { error: _error, ...status } = record.status;
     record.status = { ...status, state: "cancelled" };
-    record.updatedAt = Date.now();
-    this.pruneTerminalReceipts();
-    this.persist();
-    return cloneStatus(record.status);
+    return this.commit(record);
   }
 
   fail(operationId: string, error: string): SensitiveBrowserImportStatus {
     const record = this.require(operationId);
-    if (record.status.state !== "running") return cloneStatus(record.status);
+    if (record.status.state !== "running") return this.observed(record);
     record.status = { ...record.status, state: "failed", error };
+    return this.commit(record);
+  }
+
+  private commit(record: LedgerRecord): SensitiveBrowserImportStatus {
     record.updatedAt = Date.now();
+    record.revision = ++this.revision;
     this.pruneTerminalReceipts();
     this.persist();
-    return cloneStatus(record.status);
+    const status = this.observed(record);
+    for (const waiter of [...(this.waiters.get(record.operationId) ?? [])]) {
+      waiter.changed(this.observed(record));
+    }
+    return status;
+  }
+
+  private observed(record: LedgerRecord): SensitiveBrowserImportStatus {
+    return { ...cloneStatus(record.status), version: `${this.epoch}:${record.revision}` };
   }
 
   private require(operationId: string): LedgerRecord {
@@ -272,6 +335,7 @@ export class SensitiveBrowserImportLedger {
         input: cloneInput(record.input),
         status: cloneStatus(record.status),
         updatedAt: record.updatedAt,
+        revision: ++this.revision,
       });
     }
   }
@@ -282,7 +346,12 @@ export class SensitiveBrowserImportLedger {
       `${JSON.stringify(
         {
           format: "vibestudio-sensitive-browser-import-ledger/1",
-          records: [...this.records.values()],
+          records: [...this.records.values()].map((record) => ({
+            operationId: record.operationId,
+            input: record.input,
+            status: record.status,
+            updatedAt: record.updatedAt,
+          })),
         },
         null,
         2
@@ -290,6 +359,11 @@ export class SensitiveBrowserImportLedger {
       { mode: 0o600 }
     );
   }
+}
+
+interface Waiter {
+  changed(status: SensitiveBrowserImportStatus): void;
+  released(error: Error): void;
 }
 
 function assertExactCounts(
@@ -313,7 +387,7 @@ function cloneInput(input: SensitiveBrowserImportInput): SensitiveBrowserImportI
   return { sourceId: input.sourceId, dataTypes: [...input.dataTypes] };
 }
 
-function cloneStatus(status: SensitiveBrowserImportStatus): SensitiveBrowserImportStatus {
+function cloneStatus(status: DurableSensitiveImportStatus): DurableSensitiveImportStatus {
   return {
     operationId: status.operationId,
     state: status.state,

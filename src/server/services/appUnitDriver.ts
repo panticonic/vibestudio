@@ -27,6 +27,7 @@ export function createAppUnitDriver(input: {
     const row = rowFor(entityId);
     return {
       identity: { kind: "app", entityId },
+      release: { kind: "app", releaseId: entityId },
       source: record.source.repoPath,
       ...(row?.displayName ? { displayName: row.displayName } : {}),
       status: row?.lastError ? "error" : "running",

@@ -15,6 +15,8 @@ import type {
   StoreUrlBoundCredentialRequest,
   UrlAudience,
   WebsitePublicationIntent,
+  WebsitePublicationProgress,
+  WebsitePublicationReceipt,
 } from "./types.js";
 
 export type {
@@ -41,6 +43,9 @@ export type {
   StoreUrlBoundCredentialRequest,
   UrlAudience,
   WebsitePublicationIntent,
+  WebsitePublicationPhase,
+  WebsitePublicationProgress,
+  WebsitePublicationReceipt,
 } from "./types.js";
 
 export {
@@ -64,7 +69,16 @@ export interface CredentialClient {
     input: ResolveUrlBoundCredentialRequest
   ): Promise<StoredCredentialSummary | null>;
   deriveCredential(input: DeriveUrlBoundCredentialRequest): Promise<StoredCredentialSummary>;
-  beginWebsitePublication(publication: WebsitePublicationIntent): Promise<void>;
+  /**
+   * Review one exact publication intent and open or resume its host-journaled
+   * operation. Returns the receipt of the last completed phase.
+   */
+  beginWebsitePublication(publication: WebsitePublicationIntent): Promise<WebsitePublicationReceipt>;
+  /** Record the next completed phase of an open reviewed publication. */
+  recordWebsitePublication(
+    publication: WebsitePublicationIntent,
+    progress: WebsitePublicationProgress
+  ): Promise<WebsitePublicationReceipt>;
   publishFetch(
     publication: WebsitePublicationIntent,
     url: string | URL,
@@ -174,8 +188,16 @@ export function createCredentialClient(rpc: RpcCaller): CredentialClient {
     deriveCredential(input) {
       return rpc.call<StoredCredentialSummary>("main", "credentials.deriveCredential", [input]);
     },
-    async beginWebsitePublication(publication) {
-      await rpc.call<void>("main", "credentials.beginWebsitePublication", [publication]);
+    beginWebsitePublication(publication) {
+      return rpc.call<WebsitePublicationReceipt>("main", "credentials.beginWebsitePublication", [
+        publication,
+      ]);
+    },
+    recordWebsitePublication(publication, progress) {
+      return rpc.call<WebsitePublicationReceipt>("main", "credentials.recordWebsitePublication", [
+        publication,
+        progress,
+      ]);
     },
     publishFetch(publication, url, init, opts) {
       return proxyFetch(rpc, url, init, opts, publication);

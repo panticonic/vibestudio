@@ -151,12 +151,14 @@ const PUBLICATION_REVIEW_ACCESS: MethodAccessDescriptor = {
 };
 
 /** Native lookup evidence retains neither credential data nor the requested audience. */
-export const NativeCredentialResolutionObservationSchema = z.object({
-  protocol: z.literal("credential-resolution-observation.v1"),
-  method: z.literal("credentials.resolveCredential"),
-  requestDigest: z.string().regex(/^[a-f0-9]{64}$/u),
-  found: z.boolean(),
-}).strict();
+export const NativeCredentialResolutionObservationSchema = z
+  .object({
+    protocol: z.literal("credential-resolution-observation.v1"),
+    method: z.literal("credentials.resolveCredential"),
+    requestDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+    found: z.boolean(),
+  })
+  .strict();
 
 export const IdentifierSchema = z
   .string()
@@ -869,6 +871,37 @@ export const WebsitePublicationIntentSchema = z
   })
   .strict();
 
+/**
+ * Completed phases of one website publication, in order. `submitted` is
+ * terminal: the provider accepted the deployment and the operation's
+ * publication grant ends.
+ */
+export const WEBSITE_PUBLICATION_PHASES = [
+  "prepared",
+  "destination-ready",
+  "uploaded",
+  "submitted",
+] as const;
+export const WebsitePublicationPhaseSchema = z.enum(WEBSITE_PUBLICATION_PHASES);
+
+export const WebsitePublicationProgressSchema = z
+  .object({
+    phase: z.enum(["destination-ready", "uploaded", "submitted"]),
+    deploymentId: z.string().trim().min(1).max(512).optional(),
+    url: z.string().url().max(2048).optional(),
+  })
+  .strict()
+  .refine((progress) => progress.phase !== "submitted" || progress.deploymentId !== undefined, {
+    message: "A submitted website publication records the provider deployment id",
+  });
+
+export const WebsitePublicationReceiptSchema = WebsitePublicationIntentSchema.extend({
+  phase: WebsitePublicationPhaseSchema,
+  deploymentId: z.string().optional(),
+  url: z.string().optional(),
+  updatedAt: z.string(),
+}).strict();
+
 export const DeriveCredentialParamsSchema = z
   .object({
     publication: WebsitePublicationIntentSchema,
@@ -1144,6 +1177,9 @@ export type ResolveCredentialParams = z.infer<typeof ResolveCredentialParamsSche
 export type ProxyFetchParams = z.infer<typeof ProxyFetchParamsSchema>;
 export type DeriveCredentialParams = z.infer<typeof DeriveCredentialParamsSchema>;
 export type WebsitePublicationIntentParams = z.infer<typeof WebsitePublicationIntentSchema>;
+export type WebsitePublicationPhase = z.infer<typeof WebsitePublicationPhaseSchema>;
+export type WebsitePublicationProgressParams = z.infer<typeof WebsitePublicationProgressSchema>;
+export type WebsitePublicationReceiptResult = z.infer<typeof WebsitePublicationReceiptSchema>;
 export type ProxyGitHttpParams = z.infer<typeof ProxyGitHttpParamsSchema>;
 export type AuditParams = z.infer<typeof AuditParamsSchema>;
 export type CredentialProxyFetchRequest = ProxyFetchParams;
@@ -1630,9 +1666,9 @@ export const credentialsMethods = defineServiceMethods({
       authorityCategory: { domain: "sharing", verb: "act" },
     },
     description:
-      "Review and open a short-lived provider-neutral publication operation for one exact artifact and destination.",
+      "Review one exact artifact and destination, then open or resume its host-journaled publication operation and return the receipt of its last completed phase. The operation id stays bound to the first artifact digest, provider, destination, and environment; a different intent under the same id fails with WEBSITE_PUBLICATION_INTENT_CONFLICT. Provider requests stay authorized for the caller until the operation is submitted or the caller retires.",
     args: z.tuple([WebsitePublicationIntentSchema]),
-    returns: z.void(),
+    returns: WebsitePublicationReceiptSchema,
     access: PUBLICATION_REVIEW_ACCESS,
     authority: {
       requirement: requirementForPrincipals(["code", "user", "host"], "website.publish"),
@@ -1655,6 +1691,23 @@ export const credentialsMethods = defineServiceMethods({
     args: z.tuple([ProxyFetchParamsSchema, WebsitePublicationIntentSchema]),
     returns: CredentialProxyFetchResponseSchema,
     access: PROXY_ACCESS,
+  },
+  recordWebsitePublication: {
+    website: { kind: "closed", reason: "Website publication is workspace tooling." } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "website.publish",
+      rationale:
+        "The handler requires the same live caller-bound grant as publishFetch and only advances the host journal of that reviewed operation",
+    },
+    description:
+      "Record the next completed phase of an open reviewed website publication in the host journal and return the updated receipt. Phases only advance; recording submitted ends the operation's publication grant.",
+    agentFacing: false,
+    args: z.tuple([WebsitePublicationIntentSchema, WebsitePublicationProgressSchema]),
+    returns: WebsitePublicationReceiptSchema,
+    access: PUBLICATION_REVIEW_ACCESS,
   },
   proxyGitHttp: {
     website: {

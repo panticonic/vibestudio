@@ -36,27 +36,35 @@ const log = createDevLogger("PanelHttpServer");
 // Pre-compiled browser transport + context bootstrap
 // ---------------------------------------------------------------------------
 
-function loadBrandAsset(filename: string): Buffer | null {
-  const assetPath = path.join(resolveRequiredHostArtifactRoot(), "assets", "brand", filename);
-  try {
-    return fs.readFileSync(assetPath);
-  } catch {
-    return null;
-  }
+interface BrandAssets {
+  faviconIco: Buffer;
+  faviconPng: Buffer;
+  faviconSvg: Buffer;
+  symbolLightDataUrl: string;
+  symbolDarkDataUrl: string;
 }
 
-const BRAND_FAVICON_ICO = loadBrandAsset("favicon.ico");
-const BRAND_FAVICON_PNG = loadBrandAsset("favicon-64.png");
-const BRAND_FAVICON_SVG = loadBrandAsset("favicon.svg");
-const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#14243D"/><path d="M23 8C12 5 6 11 9 18c2 4 8 4 12 3" fill="none" stroke="#AFC8F0" stroke-width="4" stroke-linecap="round"/><path d="M10 23c8 5 16 0 13-7-2-4-6-5-10-4" fill="none" stroke="#DC9584" stroke-width="4" stroke-linecap="round"/></svg>`;
-const BRAND_SYMBOL_SVG = loadBrandAsset("vibestudio-symbol.svg");
-const BRAND_SYMBOL_DARK_SVG = loadBrandAsset("vibestudio-symbol-dark.svg");
-const BRAND_SYMBOL_LIGHT_DATA_URL = `data:image/svg+xml;base64,${(
-  BRAND_SYMBOL_SVG ?? Buffer.from(DEFAULT_FAVICON_SVG)
-).toString("base64")}`;
-const BRAND_SYMBOL_DARK_DATA_URL = `data:image/svg+xml;base64,${(
-  BRAND_SYMBOL_DARK_SVG ?? Buffer.from(DEFAULT_FAVICON_SVG)
-).toString("base64")}`;
+let brandAssets: BrandAssets | null = null;
+
+/**
+ * The host build copies `build-resources/brand` into every artifact generation,
+ * so these files are part of the build contract: read them on first use and
+ * fail loudly if a generation is missing one.
+ */
+function getBrandAssets(): BrandAssets {
+  if (brandAssets) return brandAssets;
+  const brandDir = path.join(resolveRequiredHostArtifactRoot(), "assets", "brand");
+  const read = (filename: string) => fs.readFileSync(path.join(brandDir, filename));
+  const dataUrl = (svg: Buffer) => `data:image/svg+xml;base64,${svg.toString("base64")}`;
+  brandAssets = {
+    faviconIco: read("favicon.ico"),
+    faviconPng: read("favicon-64.png"),
+    faviconSvg: read("favicon.svg"),
+    symbolLightDataUrl: dataUrl(read("vibestudio-symbol.svg")),
+    symbolDarkDataUrl: dataUrl(read("vibestudio-symbol-dark.svg")),
+  };
+  return brandAssets;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -947,7 +955,7 @@ export class PanelHttpServer {
   </style>
 </head>
 <body>
-  <div class="brand-mark"><img class="mark-light" src="${BRAND_SYMBOL_LIGHT_DATA_URL}" alt="" aria-hidden="true"><img class="mark-dark" src="${BRAND_SYMBOL_DARK_DATA_URL}" alt="" aria-hidden="true"></div>
+  <div class="brand-mark"><img class="mark-light" src="${getBrandAssets().symbolLightDataUrl}" alt="" aria-hidden="true"><img class="mark-dark" src="${getBrandAssets().symbolDarkDataUrl}" alt="" aria-hidden="true"></div>
   <h1>Build Failed</h1>
   <p>The panel <code>${escapeHtml(source)}</code> failed to build:</p>
   <pre>${escapeHtml(error)}</pre>
@@ -1329,7 +1337,7 @@ export class PanelHttpServer {
 </head>
 <body>
   <div class="brand-header">
-    <div class="brand-mark"><img class="mark-light" src="${BRAND_SYMBOL_LIGHT_DATA_URL}" alt="" aria-hidden="true"><img class="mark-dark" src="${BRAND_SYMBOL_DARK_DATA_URL}" alt="" aria-hidden="true"></div>
+    <div class="brand-mark"><img class="mark-light" src="${getBrandAssets().symbolLightDataUrl}" alt="" aria-hidden="true"><img class="mark-dark" src="${getBrandAssets().symbolDarkDataUrl}" alt="" aria-hidden="true"></div>
     <h1>Vibestudio Panels</h1>
   </div>
   ${
@@ -1345,38 +1353,19 @@ export class PanelHttpServer {
   }
 
   private serveFavicon(pathname: string, res: import("http").ServerResponse): void {
-    if (pathname === "/favicon.svg" && BRAND_FAVICON_SVG) {
-      res.writeHead(200, {
-        "Content-Type": "image/svg+xml; charset=utf-8",
-        "Content-Length": BRAND_FAVICON_SVG.length,
-        "Cache-Control": "public, max-age=86400",
-      });
-      res.end(BRAND_FAVICON_SVG);
-      return;
-    }
-    if (pathname === "/favicon.ico" && BRAND_FAVICON_ICO) {
-      res.writeHead(200, {
-        "Content-Type": "image/x-icon",
-        "Content-Length": BRAND_FAVICON_ICO.length,
-        "Cache-Control": "public, max-age=86400",
-      });
-      res.end(BRAND_FAVICON_ICO);
-      return;
-    }
-    if (BRAND_FAVICON_PNG) {
-      res.writeHead(200, {
-        "Content-Type": "image/png",
-        "Content-Length": BRAND_FAVICON_PNG.length,
-        "Cache-Control": "public, max-age=86400",
-      });
-      res.end(BRAND_FAVICON_PNG);
-      return;
-    }
+    const brand = getBrandAssets();
+    const [body, contentType] =
+      pathname === "/favicon.svg"
+        ? [brand.faviconSvg, "image/svg+xml; charset=utf-8"]
+        : pathname === "/favicon.ico"
+          ? [brand.faviconIco, "image/x-icon"]
+          : [brand.faviconPng, "image/png"];
     res.writeHead(200, {
-      "Content-Type": "image/svg+xml; charset=utf-8",
+      "Content-Type": contentType,
+      "Content-Length": body.length,
       "Cache-Control": "public, max-age=86400",
     });
-    res.end(DEFAULT_FAVICON_SVG);
+    res.end(body);
   }
 }
 

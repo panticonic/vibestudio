@@ -1342,36 +1342,6 @@ export const developmentMethods = defineReceiverServiceMethods({
     authority: DEVELOPMENT_PRINCIPALS,
     access: { sensitivity: "write" },
   },
-  snapshotExecutionRoots: {
-    website: {
-      kind: "closed",
-      reason:
-        "The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "supervision",
-      family: "development.retention",
-      rationale:
-        "Feeds the generic execution-artifact retention census from durable builtin ownership",
-    },
-    description: "Return the exact retained development artifacts for one GC epoch.",
-    args: z.tuple([z.object({ epoch: z.number().int().nonnegative() }).strict()]),
-    returns: z.array(
-      z
-        .object({
-          owner: z.literal("development-run"),
-          ownerId: nonEmpty,
-          reason: z.literal("retained-result"),
-          artifact: executionArtifactRefSchema,
-        })
-        .strict()
-    ),
-    agentFacing: false,
-    authority: { principals: ["host"] },
-    access: { sensitivity: "read" },
-  },
   nativeRunEvent: {
     website: {
       kind: "closed",

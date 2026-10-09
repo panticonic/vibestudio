@@ -260,6 +260,7 @@ interface EvalEngine {
     channelId: string;
     panelId: string;
     persistence?: unknown;
+    rehydrators?: Readonly<Record<string, (id: string) => unknown>>;
   }) => ScopeManagerLike;
   SqlScopePersistence: new (sql: unknown, blobs: ScopeBlobBackendLike) => unknown;
 }
@@ -273,6 +274,14 @@ interface EvalEngine {
  */
 interface PanelRuntimeApiLike {
   getPanelHandle(panelId: string): unknown;
+}
+
+interface EvalPanelResource {
+  id: string;
+  source: string;
+  kind: "workspace" | "browser";
+  lifetime?: "invocation" | "session";
+  runId?: string;
 }
 
 /** Opaque hosted-runtime surface — the EvalDO only spreads/enumerates it. */
@@ -296,6 +305,9 @@ interface RuntimeSupportModule {
   createWorkerdClient(rpc: unknown): unknown;
   createPanelRuntime(options: Record<string, unknown>): PanelRuntimeApiLike;
   createRuntimeSelfHandle(options: { id: string }): unknown;
+  createRuntimeScopeRehydrators(
+    getPanelHandle: (id: string) => unknown
+  ): Readonly<Record<string, (id: string) => unknown>>;
 }
 
 /** The `./hosted` + `./panel-runtime` factory names the EvalDO requires. */
@@ -306,7 +318,11 @@ const RUNTIME_HOSTED_FACTORIES = [
   "createRuntimeParentHandle",
   "createWorkerdClient",
 ] as const;
-const RUNTIME_PANEL_FACTORIES = ["createPanelRuntime", "createRuntimeSelfHandle"] as const;
+const RUNTIME_PANEL_FACTORIES = [
+  "createPanelRuntime",
+  "createRuntimeSelfHandle",
+  "createRuntimeScopeRehydrators",
+] as const;
 
 type FsClient = TypedServiceClient<typeof fsMethods>;
 type BlobstoreClient = TypedServiceClient<typeof blobstoreMethods>;
@@ -391,7 +407,7 @@ interface RunArgs {
   /**
    * The owner's nearest panel ancestor (resolved server-side by the eval service
    * from verified entity lineage), or absent when there is none. Backs the
-   * portable `parent`/`getParent`/`getParentWithContract`. Server→DO arg only.
+   * portable `getParent`/`getParentWithContract`. Server→DO arg only.
    */
   parent?: { parentId: string; parentEntityId: string; parentKind: "panel" | "worker" | "do" };
   /** Caller-provided idempotency key for the run (agents: a namespaced invocation-effect id). */
@@ -565,10 +581,7 @@ export class EvalDO extends DurableObjectBase {
   /** Panels created through this notebook runtime and not archived through it.
    * Repeating the inventory in every result keeps resource ownership visible
    * across cells instead of burying it in the creation receipt. */
-  private readonly openPanelResources = new Map<
-    string,
-    { id: string; source: string; kind: "workspace" | "browser" }
-  >();
+  private readonly openPanelResources = new Map<string, EvalPanelResource>();
   /** Stateless provider/runtime modules shared by EvalDO instances in this isolate.
    * The map and compiler remain host-closure state and are never guest globals. */
   private readonly isolateModuleMap: Record<string, unknown> = {
@@ -607,11 +620,7 @@ export class EvalDO extends DurableObjectBase {
     const persistedPanelResources = this.getStateValue("eval_open_panel_resources");
     if (persistedPanelResources) {
       try {
-        const entries = JSON.parse(persistedPanelResources) as Array<{
-          id: string;
-          source: string;
-          kind: "workspace" | "browser";
-        }>;
+        const entries = JSON.parse(persistedPanelResources) as EvalPanelResource[];
         for (const entry of entries) this.openPanelResources.set(entry.id, entry);
       } catch {
         this.setStateValue("eval_open_panel_resources", "[]");
@@ -643,7 +652,7 @@ export class EvalDO extends DurableObjectBase {
   private persistOpenPanelResources(): void {
     this.setStateValue(
       "eval_open_panel_resources",
-      JSON.stringify([...this.openPanelResources.values()].slice(0, 100))
+      JSON.stringify([...this.openPanelResources.values()])
     );
   }
 
@@ -1108,6 +1117,11 @@ export class EvalDO extends DurableObjectBase {
       failures.push(error);
     }
     if (input.mode === "retire") {
+      try {
+        await this.retireOwnedPanels(() => true);
+      } catch (error) {
+        failures.push(error);
+      }
       try {
         await this.endResidentChannelMemberships();
       } catch (error) {
@@ -1602,6 +1616,15 @@ export class EvalDO extends DurableObjectBase {
       }
       const ran = this.runChain.then(async () => {
         try {
+          // A cold activation reconciles interrupted runs before admitting
+          // new work. Their durable panel ownership must be drained too.
+          await this.retireOwnedPanels((entry) => {
+            if (entry.lifetime !== "invocation") return false;
+            const owner = this.sql
+              .exec(`SELECT status FROM runs WHERE run_id = ?`, entry.runId ?? "")
+              .toArray()[0];
+            return !owner || owner["status"] === "done" || owner["status"] === "cancelled";
+          });
           this.recordRunCheckpoint(runId, { stage: "sandbox-execution" });
           return await this.runLocked(args, controller.signal, runId, deadlineAt, cleanupPhase);
         } finally {
@@ -1755,6 +1778,31 @@ export class EvalDO extends DurableObjectBase {
       this.runCancelExecutions.delete(runId);
       if (!controller.signal.aborted) this.runCancelHandlers.delete(runId);
       this.releaseUnloadedExecutionRoots(runId);
+    }
+
+    // Cancellation owns its terminal boundary until its handlers settle.
+    // Ordinary completion retires panels before publishing its terminal.
+    try {
+      const status = this.sql
+        .exec(`SELECT status FROM runs WHERE run_id = ?`, runId)
+        .toArray()[0]?.["status"];
+      if (status !== "cancelling") {
+        await this.retireOwnedPanels(
+          (entry) => entry.lifetime === "invocation" && entry.runId === runId
+        );
+      }
+      if (result.panelResources) {
+        result.panelResources.open = [...this.openPanelResources.values()].slice(0, 100);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      result = {
+        ...result,
+        success: false,
+        error: [result.error, detail].filter(Boolean).join("; "),
+        failureKind: "infrastructure",
+        failureCode: "eval_host_failed",
+      };
     }
 
     try {
@@ -2170,7 +2218,12 @@ export class EvalDO extends DurableObjectBase {
       const execution = this.infrastructureExecution();
       const engine = await this.ensureEngine(execution);
       const persistence = this.createScopePersistence(engine, execution);
-      const manager = await this.ensureScopeManager(engine, this.scopeGeneration, persistence);
+      const manager = await this.ensureScopeManager(
+        engine,
+        this.scopeGeneration,
+        persistence,
+        execution
+      );
       const source = manager.current[key];
       if (typeof source !== "string") {
         throw new Error(`eval: scope value ${JSON.stringify(key)} is unavailable or is not text`);
@@ -2196,7 +2249,12 @@ export class EvalDO extends DurableObjectBase {
       const execution = this.infrastructureExecution();
       const engine = await this.ensureEngine(execution);
       const persistence = this.createScopePersistence(engine, execution);
-      const manager = await this.ensureScopeManager(engine, this.scopeGeneration, persistence);
+      const manager = await this.ensureScopeManager(
+        engine,
+        this.scopeGeneration,
+        persistence,
+        execution
+      );
       const existed = Object.prototype.hasOwnProperty.call(manager.current, key);
       manager.enterEval();
       try {
@@ -2622,7 +2680,11 @@ export class EvalDO extends DurableObjectBase {
     this.appendRunEvent(runId, "state", { status: "cancellation-requested" });
     this.appendRunEvent(runId, "cleanup", { status: "started" });
     const inFlight = this.inFlightRuns.get(runId);
-    const hasOwnedCleanup = (this.runCancelHandlers.get(runId)?.size ?? 0) > 0;
+    const hasOwnedCleanup =
+      (this.runCancelHandlers.get(runId)?.size ?? 0) > 0 ||
+      [...this.openPanelResources.values()].some(
+        (entry) => entry.lifetime === "invocation" && entry.runId === runId
+      );
     const cleanupPhase = this.runCleanupPhases.get(runId);
     if (cleanupPhase) cleanupPhase.active = true;
     const cleanup = this.executeRunCancelHandlers(runId);
@@ -2659,19 +2721,31 @@ export class EvalDO extends DurableObjectBase {
       // rejects: partial terminal diagnostics must remain inspectable rather
       // than disappearing behind the cleanup error.
       let persistenceFailure: unknown;
+      let panelFailure: unknown;
+      try {
+        await this.retireOwnedPanels(
+          (entry) => entry.lifetime === "invocation" && entry.runId === runId
+        );
+      } catch (error) {
+        panelFailure = error;
+      }
       try {
         await this.persistRunScope(runId);
       } catch (error) {
         persistenceFailure = error;
       }
-      if (cleanupResult.status === "rejected" && persistenceFailure !== undefined) {
+      const failures = [
+        ...(cleanupResult.status === "rejected" ? [cleanupResult.reason] : []),
+        ...(panelFailure !== undefined ? [panelFailure] : []),
+        ...(persistenceFailure !== undefined ? [persistenceFailure] : []),
+      ];
+      if (failures.length > 1) {
         throw new AggregateError(
-          [cleanupResult.reason, persistenceFailure],
+          failures,
           `eval: cancellation cleanup and terminal scope persistence failed for run ${runId}`
         );
       }
-      if (cleanupResult.status === "rejected") throw cleanupResult.reason;
-      if (persistenceFailure !== undefined) throw persistenceFailure;
+      if (failures.length === 1) throw failures[0];
       return { ok: true, forcedReset: false };
     } finally {
       // Terminalization is guaranteed even when cleanup reports a failure. The
@@ -2942,7 +3016,12 @@ export class EvalDO extends DurableObjectBase {
     const engine = await this.ensureEngine(execution);
     const support = await this.ensureRuntimeSupport(execution);
     const scopePersistence = this.createScopePersistence(engine, execution);
-    const scopeManager = await this.ensureScopeManager(engine, scopeGeneration, scopePersistence);
+    const scopeManager = await this.ensureScopeManager(
+      engine,
+      scopeGeneration,
+      scopePersistence,
+      execution
+    );
 
     // Runtime clients can be retained by module singletons and scope, so they
     // borrow this immutable execution through activeEvalExecution at call time.
@@ -2952,16 +3031,11 @@ export class EvalDO extends DurableObjectBase {
     const rt = hardenBoundary(
       this.createRunHostedRuntime(support, execution, args.gatewayToken, args.parent ?? null)
     );
-    // `services` is the complete convenience namespace (createServicesProxy): service names that
-    // don't collide with runtime bindings are reachable as `services.<name>.<method>(...)`, while
-    // rich runtime clients win on collisions (`services.workers` is the same ergonomic `workers`
-    // binding). Raw service methods are always reachable with `rpc.call("main", "<svc>.<method>", [...])`.
-    // It layers:
-    //  1. ergonomic override — when `<name>` is a rich runtime client (vcs/fs/credentials/blobstore/
-    //     …), `services.<name>` is that SAME curated object (so `services.vcs` === the bare `vcs`),
-    //  2. dynamic fallback — any other service becomes `callMain("<name>.<method>", …)`.
-    // It adds no access: the fallback routes through `callMain`, so the server dispatcher's
-    // per-method `policy.allowed` is still the sole gate (a `do`-denied method still rejects).
+    // `services` is the raw service namespace (createServicesProxy): `services.<name>.<method>(...)`
+    // is always `callMain("<name>.<method>", …)` on the server service, even when a rich runtime
+    // binding shares the name (`services.workers` is the raw `workers` service, not `workers`).
+    // It adds no access: it routes through `callMain`, so the server dispatcher's per-method
+    // `policy.allowed` is still the sole gate (a `do`-denied method still rejects).
     // Layer 2 — the importable surface (gad/workspace/credentials/openPanel/…)
     // injected ambiently too (same refs as importing the declared runtime
     // module), plus Layer 3 — eval-only ambient state helpers (scope/db/help/…).
@@ -2983,10 +3057,9 @@ export class EvalDO extends DurableObjectBase {
       guidance:
         "Use rich runtime bindings directly (`workers`, `vcs`, `fs`, ...), or import them from " +
         `\`${runtimeModuleName}\`. For raw service catalog methods, use ` +
-        '`rpc.call("main", "<svc>.<method>", [...])`; `services.<svc>.<method>(...)` is also available ' +
-        "for service names that do not collide with runtime bindings. For rich runtime bindings " +
-        "(fs, vcs, credentials, blobstore, gad, workers, …), `services.<name>` is the SAME " +
-        "ergonomic client as the bare binding, so raw service-only methods may differ. Call " +
+        '`services.<svc>.<method>(...)` or `rpc.call("main", "<svc>.<method>", [...])`; ' +
+        "`services.<name>` is always the raw server service, even when a rich runtime binding " +
+        "shares the name (`services.workers` is the raw service, `workers` the binding). Call " +
         "help('<name>') for a binding's methods — for the rich bindings this describes what you " +
         "actually call (e.g. fs.open()→FileHandle), not the raw RPC service; or use the " +
         "docs_search/docs_open tools for full typed schemas in the service/runtime catalog. `importable` " +
@@ -3609,7 +3682,8 @@ export class EvalDO extends DurableObjectBase {
   private async ensureScopeManager(
     engine: EvalEngine,
     generation: number,
-    persistence: unknown
+    persistence: unknown,
+    execution: EvalExecutionContext
   ): Promise<ScopeManagerLike> {
     if (generation !== this.scopeGeneration) {
       throw new Error("eval execution was invalidated by a scope reset");
@@ -3618,7 +3692,12 @@ export class EvalDO extends DurableObjectBase {
     // The manager owns only notebook state. Every operation receives a fresh,
     // explicit persistence capability and therefore cannot retain whichever
     // run or maintenance invocation happened to initialize it.
+    const support = await this.ensureRuntimeSupport(execution);
+    const panels = this.createEvalPanelRuntime(support, execution.contextId, null, (entry) =>
+      this.requireActiveEvalExecution().operationJournal.append(entry)
+    );
     const mgr = new engine.ScopeManager({
+      rehydrators: support.createRuntimeScopeRehydrators((id) => panels.getPanelHandle(id)),
       channelId: this.objectKey, // one scope per EvalDO instance
       panelId: "eval",
     });
@@ -3930,6 +4009,97 @@ export class EvalDO extends DurableObjectBase {
     }
   }
 
+  /** Identity factories are inert; restored handles borrow the active eval
+   * invocation only when used, including after cold maintenance hydration. */
+  private createEvalPanelRuntime(
+    support: RuntimeSupportModule,
+    contextId: string,
+    parent: RunArgs["parent"] | null,
+    recordOperation: (entry: Record<string, unknown>) => void
+  ): PanelRuntimeApiLike {
+    const activeRpc = this.createActiveRuntimeRpc();
+    return support.createPanelRuntime({
+      rpc: activeRpc,
+      operationSignal: () => this.requireActiveEvalExecution().signal,
+      contextId,
+      recordOperation,
+      selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
+      defaultOpenParentId: () => parent?.parentId ?? null,
+      onOpen: (entry: { id: string; source: string; kind: "workspace" | "browser" }) => {
+        this.openPanelResources.set(entry.id, entry);
+        this.persistOpenPanelResources();
+      },
+      onClose: (id: string) => {
+        this.openPanelResources.delete(id);
+        this.persistOpenPanelResources();
+      },
+      claimPanelLifetime: (entry: { id: string; lifetime: "invocation" | "session" }) => {
+        const execution = this.requireActiveEvalExecution();
+        const resource = this.openPanelResources.get(entry.id);
+        if (!resource) throw new Error(`eval cannot own a panel it did not open: ${entry.id}`);
+        if (!execution.runId) throw new Error("Panel lifetime requires an active eval run");
+        resource.lifetime = entry.lifetime;
+        resource.runId = execution.runId;
+        this.persistOpenPanelResources();
+      },
+      loadModule: async (id: string) => {
+        const existing = this.moduleMap[id] ?? this.isolateModuleMap[id];
+        if (existing !== undefined) return existing;
+        const cdpSource = this.declaredProviderSource("EVAL_CDP_CLIENT_SOURCE");
+        if (cdpSource && id === cdpSource) {
+          const activeExecution = this.requireActiveEvalExecution();
+          return this.loadLibraryModule(cdpSource, activeExecution, {
+            externals: Object.keys(this.isolateModuleMap),
+            endowments: { fetch: globalThis.fetch.bind(globalThis) },
+          });
+        }
+        throw new Error(`Module "${id}" is not endowed to this eval runtime`);
+      },
+    });
+  }
+
+  private async retireOwnedPanels(select: (entry: EvalPanelResource) => boolean): Promise<void> {
+    const entries = [...this.openPanelResources.values()].filter(
+      (entry) => entry.lifetime !== undefined && select(entry)
+    );
+    if (entries.length === 0) return;
+    const execution = this.infrastructureExecution();
+    const support = await this.ensureRuntimeSupport(execution);
+    // Use the ordinary archive implementation under this owner, without a
+    // guest's cancelled signal. Launch ancestry authorizes the owned subtree.
+    let activeClosedIds: Set<string> | null = null;
+    const runtime = support.createPanelRuntime({
+      rpc: this.rpc,
+      contextId: execution.contextId,
+      onClose: (id: string) => {
+        activeClosedIds?.add(id);
+      },
+    });
+    const failures: unknown[] = [];
+    for (const entry of entries) {
+      if (!this.openPanelResources.has(entry.id)) continue;
+      const closedIds = new Set<string>();
+      activeClosedIds = closedIds;
+      try {
+        const handle = runtime.getPanelHandle(entry.id) as { archive(): Promise<unknown> };
+        await handle.archive();
+        for (const id of closedIds) this.openPanelResources.delete(id);
+        this.openPanelResources.delete(entry.id);
+        this.persistOpenPanelResources();
+      } catch (error) {
+        failures.push(error);
+      } finally {
+        activeClosedIds = null;
+      }
+    }
+    if (failures.length > 0) {
+      const detail = failures
+        .map((error) => (error instanceof Error ? error.message : String(error)))
+        .join("; ");
+      throw new AggregateError(failures, `eval panel lifetime cleanup failed: ${detail}`);
+    }
+  }
+
   /**
    * Build one run-local portable runtime surface via the shared stateless
    * factories. The resulting objects may be retained by imported module
@@ -3974,35 +4144,12 @@ export class EvalDO extends DurableObjectBase {
     // Imported modules and retained page handles cannot own an earlier cell.
     const recordOperation = (entry: Record<string, unknown>) =>
       this.requireActiveEvalExecution().operationJournal.append(entry);
-    const panelRuntime = support.createPanelRuntime({
-      rpc: activeRpc,
-      operationSignal: () => this.requireActiveEvalExecution().signal,
-      contextId: execution.contextId,
-      recordOperation,
-      selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
-      defaultOpenParentId: () => parent?.parentId ?? null,
-      onOpen: (entry: { id: string; source: string; kind: "workspace" | "browser" }) => {
-        this.openPanelResources.set(entry.id, entry);
-        this.persistOpenPanelResources();
-      },
-      onClose: (id: string) => {
-        this.openPanelResources.delete(id);
-        this.persistOpenPanelResources();
-      },
-      loadModule: async (id: string) => {
-        const existing = this.moduleMap[id] ?? this.isolateModuleMap[id];
-        if (existing !== undefined) return existing;
-        const cdpSource = this.declaredProviderSource("EVAL_CDP_CLIENT_SOURCE");
-        if (cdpSource && id === cdpSource) {
-          const activeExecution = this.requireActiveEvalExecution();
-          return this.loadLibraryModule(cdpSource, activeExecution, {
-            externals: Object.keys(this.isolateModuleMap),
-            endowments: { fetch: globalThis.fetch.bind(globalThis) },
-          });
-        }
-        throw new Error(`Module "${id}" is not endowed to this eval runtime`);
-      },
-    });
+    const panelRuntime = this.createEvalPanelRuntime(
+      support,
+      execution.contextId,
+      parent,
+      recordOperation
+    );
     const host: Record<string, unknown> = {
       recordOperation,
       id: this.rpcSelfId,

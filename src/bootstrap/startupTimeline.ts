@@ -14,7 +14,7 @@ export interface BootstrapTimelinePhase {
 
 const GENERIC_CONNECTION_PHASE: BootstrapTimelinePhase = {
   id: "connect-workspace",
-  label: "Connect to workspace",
+  label: "Connecting to your workspace",
   state: "active",
 };
 

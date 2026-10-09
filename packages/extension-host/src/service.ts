@@ -9,6 +9,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   EXTENSION_METHOD_AUTHORITY_RESOLVER,
   extensionsMethods,
+  type ExtensionStatus,
 } from "@vibestudio/service-schemas/extensions";
 import {
   preparedAuthorityState,
@@ -79,9 +80,7 @@ import {
 
 import { ExtensionProcessManager, type ExtensionProcessManagerDeps } from "./processManager.js";
 import {
-  isBinaryEnvelope,
   isStreamEnvelope,
-  type BinaryEnvelope,
   type BodyEnvelope,
   type StreamChunkEnvelope,
   type StreamEnvelope,
@@ -376,7 +375,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     ReturnType<ExtensionHost["findExtensionNode"]>,
     ReviewedUnit
   >;
-  private health = new Map<string, unknown>();
+  private health = new Map<string, ExtensionHealth>();
   private inspectorUrls = new Map<string, string | null>();
   private unitLogs = new Map<string, UnitLogRecord[]>();
   private extensionErrorHistory = new Map<string, ExtensionErrorHistoryItem[]>();
@@ -731,7 +730,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         activateCurrent: async () => {
           if (this.activatesEagerly(node)) {
             await this.ensureActivated(node.name);
-          } else {
+          } else if (!this.processes.isRunning(node.name)) {
             this.registry.patch(node.name, { status: "available", lastError: null });
           }
         },
@@ -1101,6 +1100,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         emit: (ctx, [event, payload]) => this.emitFromExtension(ctx, event, payload),
         fetchRequestBodyChunk: (ctx, [streamId]) => this.fetchRequestBodyChunk(ctx, streamId),
         fetchRequestBodyClose: (ctx, [streamId]) => this.fetchRequestBodyClose(ctx, streamId),
+        status: (_ctx, [name]) => this.status(name),
+        update: (ctx, [name]) => this.update(name, ctx.signal),
       }),
     };
   }
@@ -1941,7 +1942,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         )) as StreamChunkEnvelope;
         if (next.done) break;
         if (next.chunk) {
-          await writeResponseChunk(res, Buffer.from(next.chunk.data, "base64"));
+          await writeResponseChunk(res, next.chunk);
         }
       }
       const finished = waitForResponseFinish(res);
@@ -2125,6 +2126,80 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     await this.activate(name);
   }
 
+  /** One declared extension's build state joined with its supervised process. */
+  status(name: string): ExtensionStatus {
+    const node = this.findExtensionNode(name);
+    const row = this.listWorkspaceUnits().find((candidate) => candidate.name === node.name);
+    if (!row) {
+      throw new ServiceError(
+        "extensions",
+        "status",
+        `Extension is not declared: ${node.relativePath}`,
+        "ENOEXT"
+      );
+    }
+    return {
+      name: row.name,
+      source: row.source,
+      displayName: row.displayName,
+      status: row.status,
+      version: row.version,
+      activeEv: row.activeEv,
+      activeBundleKey: row.activeBundleKey,
+      lastBuiltAt: row.lastBuiltAt,
+      lastError: row.lastError,
+      pendingApproval: row.pendingApproval,
+      availableUpdate: row.availableUpdate,
+      identity: this.processes.isRunning(row.name)
+        ? { kind: "extension", entityId: row.name }
+        : null,
+      health: row.health,
+      methods: row.methods,
+      hasFetch: row.hasFetch,
+      respawn: row.respawn,
+    };
+  }
+
+  /**
+   * Re-reconcile one existing declaration: the same classification, install/
+   * update review, build, and activation a `meta/vibestudio.yml` change runs,
+   * scoped to this extension. Settles once that review and application finish.
+   */
+  async update(name: string, signal?: AbortSignal): Promise<ExtensionStatus> {
+    const node = this.findExtensionNode(name);
+    const declaration = this.lastDeclared.find(
+      (item) => this.findExtensionNode(item.source).name === node.name
+    );
+    if (!declaration) {
+      throw new ServiceError(
+        "extensions",
+        "update",
+        `Extension is not declared: ${node.relativePath}`,
+        "ENOEXT"
+      );
+    }
+    await this.unitHost.reconcileDeclared([{ ...declaration }], {
+      trigger: "meta-change",
+      removeUndeclared: false,
+      waitFor: "applied",
+    });
+    // A changed build is reviewed in the background approval flow; join it,
+    // then the application it ran, which rethrows its build/activation failure.
+    await this.unitHost.whenSettled(signal);
+    await this.unitHost.whenApplied(node.name, signal);
+    const status = this.status(node.name);
+    if (status.availableUpdate) {
+      // Still stale after a settled pass: its review was not accepted.
+      throw new ServiceError(
+        "extensions",
+        "update",
+        `${node.name} was not updated: its install/update review was not accepted`,
+        "EACCES"
+      );
+    }
+    return status;
+  }
+
   async retire(name: string): Promise<void> {
     const entry = this.registry.get(name);
     if (!entry) throw new Error(`Unknown extension: ${name}`);
@@ -2144,10 +2219,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     activeBundleKey: string | null;
     activeRuntimeDepsKey: string | null;
     lastBuiltAt: number | null;
-    pendingApproval: { kind: string; submittedAt: number } | null;
+    pendingApproval: { kind: "extension.install" | "extension.update"; submittedAt: number } | null;
     availableUpdate: { reason: "dependency"; checkedAt: number } | null;
     lastError: string | null;
-    health: unknown;
+    health: ExtensionHealth | null;
     methods: string[];
     hasFetch: boolean;
     respawn: { attempts: number; nextAttemptAt: number | null } | null;
@@ -2165,7 +2240,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       const pendingApproval =
         entry.status === "pending-approval"
           ? {
-              kind: entry.activeBundleKey ? "extension.update" : "extension.install",
+              kind: entry.activeBundleKey
+                ? ("extension.update" as const)
+                : ("extension.install" as const),
               submittedAt: entry.installedAt,
             }
           : null;
@@ -2901,7 +2978,7 @@ const STREAM_CHUNK_BYTES = 64 * 1024;
 const EXTENSION_REQUEST_BODY_MAX_BYTES = 32 * 1024 * 1024;
 
 function bufferToChunk(buf: Buffer): StreamChunkEnvelope {
-  return { done: false, chunk: { __bin: true, data: buf.toString("base64") } };
+  return { done: false, chunk: buf };
 }
 
 async function readNextBodyChunk(stream: FetchRequestBodyStream): Promise<StreamChunkEnvelope> {
@@ -2945,7 +3022,7 @@ function waitForResponseFinish(res: ServerResponse): Promise<void> {
   });
 }
 
-async function writeResponseChunk(res: ServerResponse, chunk: Buffer): Promise<void> {
+async function writeResponseChunk(res: ServerResponse, chunk: Uint8Array): Promise<void> {
   if (res.write(chunk)) return;
   await new Promise<void>((resolve, reject) => {
     res.once("drain", resolve);
@@ -2955,17 +3032,9 @@ async function writeResponseChunk(res: ServerResponse, chunk: Buffer): Promise<v
 
 async function writeInlineResponseBody(
   res: ServerResponse,
-  body: BinaryEnvelope | string
+  body: Uint8Array | string
 ): Promise<void> {
-  if (typeof body === "string") {
-    res.end(body);
-    return;
-  }
-  if (isBinaryEnvelope(body)) {
-    res.end(Buffer.from(body.data, "base64"));
-    return;
-  }
-  res.end();
+  res.end(body);
 }
 
 function extensionMetadataDetails(

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import * as path from "node:path";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import type { evalRunStatusSchema } from "@vibestudio/service-schemas/eval";
 import type { z } from "zod";
@@ -569,6 +570,7 @@ async function run(inv: ParsedInvocation): Promise<number> {
       if (await signalCancellation.ensureCancellation()) return 130;
       const value = resultValue(status, stored.runId);
       const artifact = writeSystemTestArtifact(stored.runId, "summary", value, stored.artifactDir);
+      await retainFailedRunEvidence(scope, stored, value);
       printRun(value, json, artifact);
       return failedSummary(value) ? 1 : 0;
     } finally {
@@ -616,6 +618,7 @@ async function status(inv: ParsedInvocation): Promise<number> {
         state.result.returnValue,
         storedArtifactDir(runId, stored)
       );
+      await retainFailedRunEvidence(scope, stored, state.result.returnValue);
     }
     printResult(value, { json });
     if (state.status === "unknown" || state.status === "cancelled") return 1;
@@ -733,6 +736,53 @@ async function readPersisted(
   }
 }
 
+async function fetchTrajectory(
+  scope: SessionScope,
+  stored: StoredSystemTestRun,
+  testName: string,
+  full: boolean
+): Promise<unknown> {
+  let offset = 0;
+  let length: number | null = null;
+  let text = "";
+  do {
+    const page = await scope.client.callTarget<{
+      length: number;
+      encoding: "plain-string";
+      chunk: string;
+    }>(stored.runnerTargetId, "readSystemTestTrajectoryPage", [
+      stored.runId,
+      testName,
+      full,
+      offset,
+      SYSTEM_TEST_TRAJECTORY_PAGE_CHARS,
+    ]);
+    if (
+      !Number.isSafeInteger(page.length) ||
+      page.length < 0 ||
+      page.encoding !== "plain-string" ||
+      typeof page.chunk !== "string"
+    ) {
+      throw new CliError("invalid page while retrieving system-test trajectory");
+    }
+    length ??= page.length;
+    if (page.length !== length) {
+      throw new CliError("system-test trajectory changed while it was being retrieved");
+    }
+    if (page.chunk.length === 0 && offset < length) {
+      throw new CliError("system-test trajectory returned an empty page before completion");
+    }
+    text += page.chunk;
+    offset += page.chunk.length;
+  } while (length === null || offset < length);
+  if (text.length !== length) {
+    throw new CliError(
+      `system-test trajectory is incomplete (expected ${length} chars, received ${text.length})`
+    );
+  }
+  return JSON.parse(text) as unknown;
+}
+
 async function readPersistedTrajectory(
   inv: ParsedInvocation,
   testName: string,
@@ -744,45 +794,7 @@ async function readPersistedTrajectory(
   if (!stored) throw new CliError(`no local metadata for system-test run ${runId}`);
   const scope = await resolveSystemTestScope(inv, stored.sessionName);
   try {
-    let offset = 0;
-    let length: number | null = null;
-    let text = "";
-    do {
-      const page = await scope.client.callTarget<{
-        length: number;
-        encoding: "plain-string";
-        chunk: string;
-      }>(stored.runnerTargetId, "readSystemTestTrajectoryPage", [
-        runId,
-        testName,
-        full,
-        offset,
-        SYSTEM_TEST_TRAJECTORY_PAGE_CHARS,
-      ]);
-      if (
-        !Number.isSafeInteger(page.length) ||
-        page.length < 0 ||
-        page.encoding !== "plain-string" ||
-        typeof page.chunk !== "string"
-      ) {
-        throw new CliError("invalid page while retrieving system-test trajectory");
-      }
-      length ??= page.length;
-      if (page.length !== length) {
-        throw new CliError("system-test trajectory changed while it was being retrieved");
-      }
-      if (page.chunk.length === 0 && offset < length) {
-        throw new CliError("system-test trajectory returned an empty page before completion");
-      }
-      text += page.chunk;
-      offset += page.chunk.length;
-    } while (length === null || offset < length);
-    if (text.length !== length) {
-      throw new CliError(
-        `system-test trajectory is incomplete (expected ${length} chars, received ${text.length})`
-      );
-    }
-    return { runId, stored, value: JSON.parse(text) as unknown };
+    return { runId, stored, value: await fetchTrajectory(scope, stored, testName, full) };
   } catch (durableError) {
     if (!readLive) throw durableError;
     const outer = await readRunState(scope, stored);
@@ -794,6 +806,99 @@ async function readPersistedTrajectory(
     if (live !== undefined) return { runId, stored, value: live };
     throw unavailableTrajectory(runId, testName, durableError);
   }
+}
+
+/** Retained failure evidence lives apart from user exports, which may hold
+ * live snapshots of a run that was still in progress. */
+function failureEvidenceDir(stored: StoredSystemTestRun): string {
+  return path.join(stored.artifactDir, "failure-evidence");
+}
+
+/** Artifact names shared by retained evidence and the `inspect`/`trajectory`
+ * commands' own exports. */
+function inspectionArtifactName(testName?: string): string {
+  return testName ? `inspect-${safeName(testName)}` : "inspect";
+}
+
+function trajectoryArtifactName(testName: string, full: boolean): string {
+  return `trajectory-${safeName(testName)}${full ? "-full" : ""}`;
+}
+
+function failedSummaryTestNames(summary: unknown): string[] {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) return [];
+  const record = summary as Record<string, unknown>;
+  return [
+    ...new Set(
+      [record["failedTests"], record["testsWithUnexpectedToolFailures"]]
+        .flatMap((value) => (Array.isArray(value) ? value : []))
+        .filter((value): value is string => typeof value === "string")
+    ),
+  ];
+}
+
+/**
+ * A failed run's evidence must outlive the instance that produced it. When a
+ * terminal summary reports failures, keep the bounded inspection packet and the
+ * full trajectory of every failed test beside the run metadata (mode `0600`,
+ * trajectories gzipped). The inspection packet is written last, so its presence
+ * marks the evidence complete and a later observer does not refetch it.
+ */
+export async function retainFailedRunEvidence(
+  scope: SessionScope,
+  stored: StoredSystemTestRun,
+  summary: unknown
+): Promise<void> {
+  if (!failedSummary(summary)) return;
+  const dir = failureEvidenceDir(stored);
+  if (loadSystemTestArtifact(stored.runId, inspectionArtifactName(), dir) !== null) return;
+  try {
+    for (const testName of failedSummaryTestNames(summary)) {
+      writeSystemTestArtifact(
+        stored.runId,
+        inspectionArtifactName(testName),
+        await scope.client.callTarget<unknown>(stored.runnerTargetId, "inspectSystemTestRun", [
+          stored.runId,
+          testName,
+        ]),
+        dir
+      );
+      writeSystemTestArtifact(
+        stored.runId,
+        trajectoryArtifactName(testName, false),
+        await fetchTrajectory(scope, stored, testName, false),
+        dir
+      );
+      writeSystemTestArtifact(
+        stored.runId,
+        trajectoryArtifactName(testName, true),
+        await fetchTrajectory(scope, stored, testName, true),
+        dir
+      );
+    }
+    const inspection = await scope.client.callTarget<unknown>(
+      stored.runnerTargetId,
+      "inspectSystemTestRun",
+      [stored.runId]
+    );
+    writeSystemTestArtifact(stored.runId, inspectionArtifactName(), inspection, dir);
+  } catch (error) {
+    throw new CliError(
+      `system-test run ${stored.runId} failed, and its failure evidence could not be retained ` +
+        `in ${dir}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+/** Read evidence retained when a failed run completed, without contacting the
+ * instance that produced it. */
+function loadRetainedFailureEvidence(
+  runId: string,
+  name: string
+): { runId: string; stored: StoredSystemTestRun; value: unknown } | null {
+  const stored = loadSystemTestRun(runId);
+  if (!stored) return null;
+  const value = loadSystemTestArtifact(runId, name, failureEvidenceDir(stored));
+  return value === null ? null : { runId, stored, value };
 }
 
 /**
@@ -816,24 +921,30 @@ async function inspect(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const testName = typeof inv.flags["test"] === "string" ? inv.flags["test"] : undefined;
-    const { runId, stored, value } = await readPersisted(
-      inv,
-      "inspectSystemTestRun",
-      (id) => [id, testName],
-      (progress) => {
-        const live = progress["liveInspection"] as Record<string, unknown> | undefined;
-        if (!live) return undefined;
-        if (!testName) return live["inspect"];
-        const byTest = live["inspectByTest"] as Record<string, unknown> | undefined;
-        if (byTest?.[testName] !== undefined) return byTest[testName];
-        const trajectories = live["trajectories"] as Record<string, unknown> | undefined;
-        const row = trajectories?.[testName] as Record<string, unknown> | undefined;
-        return row?.["bounded"];
-      }
+    const retained = loadRetainedFailureEvidence(
+      requireRunId(inv),
+      inspectionArtifactName(testName)
     );
+    const { runId, stored, value } =
+      retained ??
+      (await readPersisted(
+        inv,
+        "inspectSystemTestRun",
+        (id) => [id, testName],
+        (progress) => {
+          const live = progress["liveInspection"] as Record<string, unknown> | undefined;
+          if (!live) return undefined;
+          if (!testName) return live["inspect"];
+          const byTest = live["inspectByTest"] as Record<string, unknown> | undefined;
+          if (byTest?.[testName] !== undefined) return byTest[testName];
+          const trajectories = live["trajectories"] as Record<string, unknown> | undefined;
+          const row = trajectories?.[testName] as Record<string, unknown> | undefined;
+          return row?.["bounded"];
+        }
+      ));
     const artifact = writeSystemTestArtifact(
       runId,
-      testName ? `inspect-${safeName(testName)}` : "inspect",
+      inspectionArtifactName(testName),
       value,
       requestedArtifactDir(inv, runId, stored)
     );
@@ -857,11 +968,13 @@ async function trajectory(inv: ParsedInvocation): Promise<number> {
     if (!testName)
       throw new UsageError("usage: vibestudio system-test trajectory RUN_ID TEST_NAME");
     const full = inv.flags["full"] === true;
-    const { runId, stored, value } = await readPersistedTrajectory(
-      inv,
-      testName,
-      full,
-      (progress) => {
+    const retained = loadRetainedFailureEvidence(
+      requireRunId(inv),
+      trajectoryArtifactName(testName, full)
+    );
+    const { runId, stored, value } =
+      retained ??
+      (await readPersistedTrajectory(inv, testName, full, (progress) => {
         const live = progress["liveInspection"] as Record<string, unknown> | undefined;
         const trajectories = live?.["trajectories"] as Record<string, unknown> | undefined;
         const row = trajectories?.[testName] as Record<string, unknown> | undefined;
@@ -874,11 +987,10 @@ async function trajectory(inv: ParsedInvocation): Promise<number> {
           reason: "Full trajectory becomes available when the running test completes",
           bounded: row["bounded"],
         };
-      }
-    );
+      }));
     const artifact = writeSystemTestArtifact(
       runId,
-      `trajectory-${safeName(testName)}${full ? "-full" : ""}`,
+      trajectoryArtifactName(testName, full),
       value,
       requestedArtifactDir(inv, runId, stored)
     );
@@ -967,6 +1079,7 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
       if (await signalCancellation.ensureCancellation()) return 130;
       const result = resultValue(state, stored.runId);
       const artifact = writeSystemTestArtifact(stored.runId, "summary", result, stored.artifactDir);
+      await retainFailedRunEvidence(scope, stored, result);
       printRun(result, json, artifact);
       return failedSummary(result) ? 1 : 0;
     } finally {

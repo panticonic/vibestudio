@@ -2,12 +2,18 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
+import {
+  parseTemplateManifestContent,
+  templateManifestDocument,
+} from "@vibestudio/workspace/templateManifest";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
 import { verifiedInitiator, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import { MERGED_RECORD_SETTINGS } from "@vibestudio/workspace/templateManifestMerge";
-import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
+import {
+  readWorkspaceConfig,
+  parseWorkspaceConfigContentWithId,
+} from "@vibestudio/workspace/configParser";
 import {
   assertWorkspaceConfigPathScope,
   changedWorkspaceConfigPaths,
@@ -20,6 +26,7 @@ import type {
   VcsNeighborsResult,
   VcsPushResult,
   VcsReadFileResult,
+  VcsResolveRepositoryResult,
   VcsStateNodeRef,
   VcsStatusResult,
   VcsWorkingMutationResult,
@@ -60,6 +67,8 @@ interface WorkspaceConfigAtState {
   fileId: string;
   text: string;
   config: WorkspaceConfig;
+  sourceFiles: Map<string, string | null>;
+  readSourceFile(path: string): Promise<string | null>;
 }
 
 function sameState(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
@@ -214,12 +223,36 @@ export function createWorkspaceConfigMainWriter(deps: {
         `Cannot persist workspace config: ${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE} is not text`
       );
     }
+    const sourceFiles = new Map<string, string | null>([
+      ["meta/vibestudio.yml", content.content.text],
+    ]);
+    const readSourceFile = async (filePath: string): Promise<string | null> => {
+      if (sourceFiles.has(filePath)) return sourceFiles.get(filePath)!;
+      const repoPath = filePath.slice(0, -"/package.json".length);
+      const repo = await call<VcsResolveRepositoryResult>("vcsResolveRepository", {
+        state,
+        repoPath,
+      });
+      const file = repo
+        ? await call<VcsReadFileResult>("vcsReadFile", {
+            state,
+            repositoryId: repo.repositoryId,
+            file: { kind: "path", path: "package.json" },
+          })
+        : null;
+      const text = file?.content.kind === "text" ? file.content.text : null;
+      sourceFiles.set(filePath, text);
+      return text;
+    };
+    const config = await readWorkspaceConfig({ readText: readSourceFile }, deps.workspaceId);
     return {
       status,
       repositoryId,
       fileId,
       text: content.content.text,
-      config: parseWorkspaceConfigContentWithId(content.content.text, deps.workspaceId),
+      config,
+      sourceFiles,
+      readSourceFile,
     };
   };
 
@@ -273,10 +306,24 @@ export function createWorkspaceConfigMainWriter(deps: {
     return withFreshContext((contextId) => operation(contextId, false));
   };
 
-  const render = (currentState: WorkspaceConfigAtState, mutate: WorkspaceConfigMutation) => {
+  const render = async (currentState: WorkspaceConfigAtState, mutate: WorkspaceConfigMutation) => {
     const nextConfig = mutate(currentState.config);
-    const nextContent = renderWorkspaceConfigYaml(currentState.text, nextConfig, deps.workspaceId);
-    const parsed = parseWorkspaceConfigContentWithId(nextContent, deps.workspaceId);
+    await Promise.all(
+      (nextConfig.services ?? []).map((service) =>
+        currentState.readSourceFile(`${service.source}/package.json`)
+      )
+    );
+    const nextContent = renderWorkspaceConfigYaml(
+      currentState.text,
+      nextConfig,
+      deps.workspaceId,
+      (source) => currentState.sourceFiles.get(`${source}/package.json`) ?? null
+    );
+    const parsed = parseWorkspaceConfigContentWithId(
+      nextContent,
+      deps.workspaceId,
+      (source) => currentState.sourceFiles.get(`${source}/package.json`) ?? null
+    );
     return {
       nextConfig: parsed,
       nextContent: isDeepStrictEqual(nextConfig, currentState.config)
@@ -304,7 +351,7 @@ export function createWorkspaceConfigMainWriter(deps: {
       );
     }
     const current = await readConfig(contextId, causalParent, borrowedStatus);
-    const rendered = render(current, input.mutate);
+    const rendered = await render(current, input.mutate);
     if (rendered.nextContent === current.text) {
       return { changed: false, nextConfig: rendered.nextConfig };
     }
@@ -379,7 +426,7 @@ export function createWorkspaceConfigMainWriter(deps: {
     wouldMutate: (mutate) =>
       withFreshContext(async (contextId) => {
         const current = await readConfig(contextId, SYSTEM_CAUSE);
-        return render(current, mutate).nextContent !== current.text;
+        return (await render(current, mutate)).nextContent !== current.text;
       }),
     applyMutation,
     applyPrepared: async (input) => {
@@ -414,60 +461,22 @@ export function createWorkspaceConfigMainWriter(deps: {
 export function renderWorkspaceConfigYaml(
   currentContent: string,
   nextConfig: WorkspaceConfig,
-  workspaceId: string
+  workspaceId: string,
+  readServiceManifest?: (source: string) => string | null
 ): string {
   // Parse the old file so malformed runtime state is never overwritten under
   // cover of an unrelated mutation.
-  const previous = parseWorkspaceConfigContentWithId(currentContent, workspaceId);
-  // `WorkspaceConfig.id` is resolved host state, not manifest content.
-  const { id: _resolvedId, ...nextManifest } = nextConfig;
-  const authored = YAML.parse(currentContent) as Record<string, unknown>;
-  for (const key of new Set([...Object.keys(previous), ...Object.keys(nextManifest)])) {
-    if (
-      key === "id" ||
-      isDeepStrictEqual(
-        previous[key as keyof WorkspaceConfig],
-        nextManifest[key as keyof typeof nextManifest]
-      )
-    )
-      continue;
-    const before = previous[key as keyof WorkspaceConfig];
-    const after = nextManifest[key as keyof typeof nextManifest];
-    if (
-      (MERGED_RECORD_SETTINGS as readonly string[]).includes(key) &&
-      after &&
-      typeof after === "object"
-    ) {
-      const priorSlots = (before ?? {}) as Record<string, unknown>;
-      const nextSlots = after as Record<string, unknown>;
-      const ownSlots = { ...(authored[key] as Record<string, unknown> | undefined) };
-      for (const slot of new Set([...Object.keys(priorSlots), ...Object.keys(nextSlots)])) {
-        if (isDeepStrictEqual(priorSlots[slot], nextSlots[slot])) continue;
-        if (slot in nextSlots) ownSlots[slot] = nextSlots[slot];
-        else delete ownSlots[slot];
-      }
-      authored[key] = ownSlots;
-    } else if (Array.isArray(before) && Array.isArray(after) && authored["template"]) {
-      const own = (Array.isArray(authored[key]) ? authored[key] : []) as unknown[];
-      const removed = before.filter(
-        (value) => !after.some((next) => isDeepStrictEqual(value, next))
-      );
-      if (removed.some((value) => !own.some((local) => isDeepStrictEqual(value, local))))
-        throw new Error(
-          `Cannot remove inherited ${key} declarations through a local configuration edit; author the owning template`
-        );
-      authored[key] = [
-        ...own.filter((value) => !removed.some((old) => isDeepStrictEqual(value, old))),
-        ...after.filter((value) => !before.some((old) => isDeepStrictEqual(value, old))),
-      ];
-    } else if (key in nextManifest) authored[key] = after;
-    else delete authored[key];
-  }
+  parseWorkspaceConfigContentWithId(currentContent, workspaceId, readServiceManifest);
+  const manifest = parseTemplateManifestContent(currentContent, nextConfig.systemEpoch);
+  const { id: _resolvedId, services, ...desired } = nextConfig;
+  const authored = {
+    ...desired,
+    ...(services ? { services: services.map(({ source, name }) => ({ source, name })) } : {}),
+    template: templateManifestDocument(manifest)["template"],
+  };
   const nextContent = YAML.stringify(authored);
-  const resolved = parseWorkspaceConfigContentWithId(nextContent, workspaceId);
+  const resolved = parseWorkspaceConfigContentWithId(nextContent, workspaceId, readServiceManifest);
   if (!isDeepStrictEqual(resolved, nextConfig))
-    throw new Error(
-      "The configuration edit would leave inherited settings active; override their values explicitly"
-    );
+    throw new Error("Service contracts must be edited in their owning repository manifest");
   return nextContent;
 }

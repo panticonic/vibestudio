@@ -38,6 +38,7 @@ import {
 } from "@vibestudio/service-schemas/vcs";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
+import { requireReviewedSourceConsumer } from "./workspaceTemplateSourceService.js";
 
 export interface VcsServiceDeps {
   workspaceVcs: WorkspaceVcs;
@@ -320,6 +321,8 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   };
 
   const admitOperation = async (ctx: ServiceContext, method: VcsMethodName, input: unknown) => {
+    if (method === "push" && isRecord(input) && input["templateInstallation"] !== undefined)
+      requireReviewedSourceConsumer(ctx.caller);
     const parsed = parseVcsSemanticRequest(method, input);
     const operation = vcsOperationRegistry[method];
     const isMutation =

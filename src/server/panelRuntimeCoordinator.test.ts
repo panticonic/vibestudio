@@ -1,5 +1,11 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
+import {
+  ATTEMPT_STALL_PROBE_MS,
+  ATTEMPT_STALL_ROUNDS,
+  PanelRuntimeCoordinator,
+} from "./panelRuntimeCoordinator.js";
+
+const STALL_WINDOW_MS = ATTEMPT_STALL_ROUNDS * ATTEMPT_STALL_PROBE_MS;
 import type {
   AttemptPhase,
   AttemptReporter,
@@ -263,6 +269,24 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
+  it("lets a slow boot keep booting well past a minute without declaring a stall", async () => {
+    vi.useFakeTimers();
+    const { coordinator, attempt } = resident();
+    const booting = {
+      url: "http://panel/?buildKey=ready-build",
+      loading: false,
+      boot: { kind: "observed" as const, observation: { phase: "booting" as const } },
+    };
+    coordinator.reportView("panel:nav-a", "route-a", booting);
+    coordinator.setAttemptProbe(async () => booting);
+
+    await vi.advanceTimersByTimeAsync(STALL_WINDOW_MS / 2);
+
+    expect(
+      coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
+    ).not.toMatchObject({ attempt: { phase: "failed" } });
+  });
+
   it("does not classify pending build or host assignment time as a boot stall", async () => {
     vi.useFakeTimers();
     const { coordinator, attempt } = resident();
@@ -289,7 +313,7 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
       boot: { kind: "unavailable" as const },
     }));
 
-    await vi.advanceTimersByTimeAsync(12_100);
+    await vi.advanceTimersByTimeAsync(STALL_WINDOW_MS + 100);
 
     expect(
       coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
@@ -316,7 +340,7 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     }));
 
     coordinator.markConnected("panel:nav-a", "route-a");
-    await vi.advanceTimersByTimeAsync(12_100);
+    await vi.advanceTimersByTimeAsync(STALL_WINDOW_MS + 100);
 
     expect(
       coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
@@ -337,8 +361,8 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     coordinator.reportView("panel:nav-a", "route-a", unavailableView);
     coordinator.setAttemptProbe(async () => unavailableView);
 
-    for (let round = 0; round < 12; round += 1) {
-      await vi.advanceTimersByTimeAsync(1_000);
+    for (let round = 0; round < ATTEMPT_STALL_ROUNDS; round += 1) {
+      await vi.advanceTimersByTimeAsync(ATTEMPT_STALL_PROBE_MS);
       coordinator.reportView("panel:nav-a", "route-a", unavailableView);
     }
 
@@ -531,7 +555,7 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
           }
         : null;
     });
-    await vi.advanceTimersByTimeAsync(12_100);
+    await vi.advanceTimersByTimeAsync(STALL_WINDOW_MS + 100);
     expect(
       coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
     ).toMatchObject({

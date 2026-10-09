@@ -17,6 +17,13 @@ import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceNode } from "@vibestudio/shared/types";
 
+export const WorkspaceConfigValidationCandidateSchema = z.object({
+  manifest: z.string().describe("Complete candidate meta/vibestudio.yml document."),
+  serviceManifests: z.record(z.string(), z.string()).describe(
+    "Candidate provider package.json documents keyed by exact workspace repository path."
+  ),
+}).strict();
+
 // ─── Access descriptors ───────────────────────────────────────────────────────
 // Mirrors the blobstore idiom of a shared `*_ACCESS` constant for the pure-read
 // methods (which all share identical access metadata). Caller-kind authorization
@@ -180,8 +187,8 @@ export const workspaceMethods = defineServiceMethods({
         "Pure validation of caller-supplied candidate configuration has no workspace effect; §2 default {code, session} family",
     },
     description:
-      "Validate a complete flattened workspace runtime manifest without changing workspace state.",
-    args: z.tuple([z.string().describe("Complete YAML document to validate.")]),
+      "Validate one exact candidate workspace manifest plus provider package manifests without changing workspace state.",
+    args: z.tuple([WorkspaceConfigValidationCandidateSchema]),
     returns: z.object({ valid: z.literal(true) }).strict(),
     authority: { principals: ["user", "code", "host"] },
     access: READ_ACCESS,

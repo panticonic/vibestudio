@@ -14,6 +14,15 @@ import {
 import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
 
 const roots: string[] = [];
+const CHILD_FIXTURE_STARTUP_POLL_MS = 5_000;
+
+/** Full-suite load delayed fixture readiness beyond Vitest's default 1s poll (up to 1.4s); this
+ * bounded test-only budget covers tsx/node scheduling without changing production readiness. */
+async function expectChildFixtureReady(file: string): Promise<void> {
+  await expect
+    .poll(() => fs.existsSync(file), { timeout: CHILD_FIXTURE_STARTUP_POLL_MS })
+    .toBe(true);
+}
 
 function temporaryRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-dev-supervisor-"));
@@ -75,7 +84,7 @@ describe("DevInstanceSupervisor", () => {
       const identity = captureOwnedProcessIdentity(owner.pid!);
       const exit = new Promise<number | null>((resolve) => owner.once("exit", resolve));
       try {
-        await expect.poll(() => fs.existsSync(ready)).toBe(true);
+        await expectChildFixtureReady(ready);
         owner.kill("SIGINT");
         await expect.poll(() => fs.existsSync(countFile)).toBe(true);
         owner.kill("SIGINT");
@@ -142,7 +151,7 @@ describe("DevInstanceSupervisor", () => {
         owner.once("exit", (code, signal) => resolve({ code, signal }))
       );
       try {
-        await expect.poll(() => fs.existsSync(ready)).toBe(true);
+        await expectChildFixtureReady(ready);
         owner.kill("SIGTERM");
         await expect.poll(() => fs.existsSync(cleanupStarted)).toBe(true);
         // pnpm/tsx can deliver another signal after the child has already exited.
@@ -290,7 +299,7 @@ describe("DevInstanceSupervisor", () => {
         }
       };
       try {
-        await expect.poll(() => fs.existsSync(ready)).toBe(true);
+        await expectChildFixtureReady(ready);
         identity = JSON.parse(fs.readFileSync(ready, "utf8"));
         expect(alive(identity!.service)).toBe(true);
         expect(alive(identity!.worker)).toBe(true);

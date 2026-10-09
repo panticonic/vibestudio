@@ -86,6 +86,12 @@ describe("ServerBrowserImportHostRegistry", () => {
           return { type: "complete", summary: { dataTypes: [], warnings: [] } };
         }
         if (method === "browserEnvironment.cancelImportRead") return undefined;
+        if (method === "browserEnvironment.startSensitiveImport") {
+          return { operationId: "device-sensitive", state: "running", counts: [], version: "d:1" };
+        }
+        if (method === "browserEnvironment.observeSensitiveImport") {
+          return { operationId: "device-sensitive", state: "complete", counts: [], version: "d:2" };
+        }
         throw new Error(`Unexpected device method: ${method}`);
       }),
     };
@@ -140,6 +146,22 @@ describe("ServerBrowserImportHostRegistry", () => {
     expect(calls).toContainEqual({
       method: "browserEnvironment.releaseImportSource",
       args: ["device:a", "export:temporary"],
+    });
+    const sensitive = await registry.startSensitiveImport(
+      initiatingContext(),
+      "device:a",
+      "firefox-source",
+      ["passwords"],
+      "device-sensitive"
+    );
+    await expect(
+      registry.observeSensitiveImport(detachedContext(), "device-sensitive", {
+        afterVersion: sensitive.version,
+      })
+    ).resolves.toMatchObject({ state: "complete", version: "d:2" });
+    expect(calls).toContainEqual({
+      method: "browserEnvironment.observeSensitiveImport",
+      args: ["device-sensitive", { afterVersion: "d:1" }],
     });
     await registry.stop();
   });
@@ -208,11 +230,13 @@ describe("ServerBrowserImportHostRegistry", () => {
         ["cookies"],
         "operation-a"
       );
-      await vi.waitFor(async () => {
-        expect(
-          (await registry.observeSensitiveImport(detachedContext(), "operation-a")).state
-        ).toBe(connected ? "complete" : "application_failed");
-      });
+      let observed = await registry.observeSensitiveImport(detachedContext(), "operation-a");
+      while (observed.state === "running" || observed.state === "applying") {
+        observed = await registry.observeSensitiveImport(detachedContext(), "operation-a", {
+          afterVersion: observed.version,
+        });
+      }
+      expect(observed.state).toBe(connected ? "complete" : "application_failed");
 
       expect(resolveDeviceConnection).toHaveBeenCalledWith(context);
       expect(dispatch).toHaveBeenCalledWith(
@@ -240,6 +264,7 @@ describe("ServerBrowserImportHostRegistry", () => {
             }
           : {}),
         counts: [{ dataType: "cookies", read: 1, stored: 1, skipped: 0, errors: 0 }],
+        version: observed.version,
       });
       const updated = {
         ...(initiatingContext() as unknown as Record<string, unknown>),

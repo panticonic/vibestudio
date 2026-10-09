@@ -256,6 +256,39 @@
                             "code"
                           ],
                           "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "notify"
+                              ]
+                            },
+                            "text": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4000
+                            },
+                            "title": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "alert": {
+                              "type": "string",
+                              "enum": [
+                                "inbox",
+                                "interrupt"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "text"
+                          ],
+                          "additionalProperties": false
                         }
                       ]
                     },
@@ -431,19 +464,9 @@
           "type": "object",
           "properties": {
             "schemaVersion": {
-              "anyOf": [
-                {
-                  "type": "number",
-                  "enum": [
-                    1
-                  ]
-                },
-                {
-                  "type": "number",
-                  "enum": [
-                    2
-                  ]
-                }
+              "type": "number",
+              "enum": [
+                2
               ]
             },
             "digest": {
@@ -3367,8 +3390,7 @@
                 "type": "string",
                 "enum": [
                   "authored",
-                  "inherited",
-                  "unlisted"
+                  "inherited"
                 ]
               },
               "inheritedFrom": {

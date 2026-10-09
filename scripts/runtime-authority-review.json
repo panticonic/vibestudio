@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:80800688714daef1c003d791539a95b5c8432cec589c94bd3e8d5f28e5cbf469",
+  "censusDigest": "sha256:4d6451fae4774e24eec1adc24d88b341aca13d8b1bd0cd9a90cd3a3407846a34",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -391,7 +391,7 @@
     },
     "host:credentials.beginWebsitePublication": {
       "review": "reviewed-exact-website-publication-intent",
-      "change": "Acquires one critical website.publish decision sealed to the authenticated caller, exact artifact digest, provider, destination, environment, and operation id. The short-lived grant authorizes only subsequent matching publication requests and contains no provider credential material."
+      "change": "Acquires one critical website.publish decision sealed to the authenticated caller, exact artifact digest, provider, destination, environment, and operation id. The host journal binds the operation id to that intent permanently, so the decision can never resume a changed artifact. The grant authorizes only matching publication requests until the operation is submitted or the caller retires, and contains no provider credential material."
     },
     "host:credentials.cancelOAuth": {
       "review": "website-eligible-proxy-dispatch",
@@ -440,6 +440,10 @@
     "host:credentials.publishFetch": {
       "review": "caller-bound-reviewed-publication-egress",
       "change": "Forwards provider API requests only while a live website.publish grant matches the authenticated caller and exact publication intent. Credential bindings must be publish-only, caller-supplied audience ceilings constrain every redirect, and secret injection remains inside the Host egress proxy."
+    },
+    "host:credentials.recordWebsitePublication": {
+      "review": "caller-bound-reviewed-publication-journal",
+      "change": "Advances the host journal of a reviewed website publication only while the same live caller-bound website.publish grant that authorizes publishFetch matches the exact recorded intent. Phases only advance; recording submitted ends the grant. It performs no network request and exposes no credential material."
     },
     "host:credentials.requestCredentialInput": {
       "review": "host-owned-credential-input",
@@ -601,6 +605,14 @@
       "review": "admitted-session-extension-metadata",
       "change": "Allows admitted execution sessions to discover the extension streaming method manifest required by the invocation router. Metadata grants no invocation authority; the selected extension receiver still authorizes every effect."
     },
+    "host:extensions.status": {
+      "review": "admitted-session-extension-metadata",
+      "change": "Read-only projection of one declared extension's registry, build staleness, pending review, health, and live supervision identity. It discloses no inspector endpoint and grants no invocation or lifecycle authority."
+    },
+    "host:extensions.update": {
+      "review": "declared-extension-reconcile-through-unit-review",
+      "change": "Re-runs the existing meta-change reconcile for one already-declared extension at its published ref. A changed build identity is staged in the ordinary install/update unit review and runs only after the user accepts it; an unchanged admitted build is left as is. No declaration, source, or admission is created by the call."
+    },
     "host:fs.access": {
       "review": "connected-website-scoped-file-authority",
       "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
@@ -721,14 +733,6 @@
       "review": "receiver-prepared-website-file-envelope",
       "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
-    "host:fs.readdir": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
-    },
-    "host:fs.readdir#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
-    },
     "host:fs.readFile": {
       "review": "connected-website-scoped-file-authority",
       "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
@@ -742,6 +746,14 @@
       "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
     "host:fs.readText#capability:filesystem.read": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+    },
+    "host:fs.readdir": {
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:fs.readdir#capability:filesystem.list": {
       "review": "receiver-prepared-website-file-envelope",
       "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
@@ -832,6 +844,14 @@
     "host:hubControl.addWorkspaceMember": {
       "review": "workspace-membership-owned-administration",
       "change": "Replaces server-wide administrator sensitivity with ordinary write sensitivity and explicit live target-workspace administrator enforcement. Server administration alone grants no membership management, and designated Personal/System workspaces reject additional members."
+    },
+    "host:hubControl.awaitPairing": {
+      "review": "authenticated-pending-device-pairing-read",
+      "change": "Adds an event-driven wait for one caller-visible pending device invite, retaining authenticated user or host admission and devices.read capability. It settles on redemption, explicit cancellation, caller disconnect, or the existing invite expiry recorded by the pairing protocol; it adds no wait timeout or polling recovery."
+    },
+    "host:hubControl.cancelPairing": {
+      "review": "authenticated-pending-device-invite-cancellation",
+      "change": "Allows an authenticated user or host with devices.pair capability to retire one pending invite. Cancellation invalidates that invite and settles its waiters; it grants no device credentials or access to another account."
     },
     "host:hubControl.createWorkspace": {
       "review": "durable-owner-scoped-workspace-creation",
@@ -945,6 +965,10 @@
       "review": "exact-account-paired-mobile-readiness",
       "change": "Only the exact approved phone-provisioning provider may query the fixed mobileWorkspace.readiness method on the exact paired mobile connection belonging to the initiating account. This read does not install, pair, mint credentials, or grant authority; the public mobile.devices.read gate remains authoritative."
     },
+    "host:problemReports.appendNarrative": {
+      "review": "owner-scoped-revisioned-narrative-append",
+      "change": "Revision-checked append to an owner's manual draft; the host assigns section ids and derives author from the verified caller, so agents cannot write user-attributed narrative. Never sends."
+    },
     "host:problemReports.availability": {
       "review": "owner-scoped-reporting-state",
       "change": "Reads only whether the authenticated owner's local reporting store is available; no report contents leave the host."
@@ -1001,9 +1025,13 @@
       "review": "owner-scoped-incident-list",
       "change": "Lists captured incidents for the authenticated owner and current workspace only; recording does not authorize submission."
     },
+    "host:problemReports.patchNarrative": {
+      "review": "owner-scoped-revisioned-narrative-edit",
+      "change": "Revision-checked edit of one section of an owner's manual draft; section id and author are immutable and only a verified human caller may edit user-authored sections. Never sends."
+    },
     "host:problemReports.prepare": {
       "review": "owner-scoped-redacted-preview",
-      "change": "Builds frozen bytes from an owner's revisioned draft; sanitization produces a new draft revision requiring another preview, and this method never uploads."
+      "change": "Builds frozen bytes from an owner's revisioned draft; when sanitization changes content it is saved as the next draft revision, which is the one frozen and returned for preview and send. This method never uploads."
     },
     "host:problemReports.remoteStatus": {
       "review": "trusted-shell-owner-receipt-status",
@@ -1216,18 +1244,6 @@
     "host:shellApproval.submitSecretInput": {
       "review": "root-presenter-independent-secret-input",
       "change": "Opens the protected-input transport for trusted presenters while retaining a prepared protected-input.submit leaf for non-chrome code and exact pending secret-input validation."
-    },
-    "host:speech.prepare": {
-      "review": "explicit-speech-model-preparation",
-      "change": "Adds explicit preparation of the bundled local speech model with actual loading progress and terminal readiness. Callers cannot select resources, read host data, or acquire microphone access. Preparation cancellation and disconnect retire and join owned native work through the transcription lifecycle; no deadline or background retry is introduced."
-    },
-    "host:speech.status": {
-      "review": "explicit-speech-model-preparation",
-      "change": "Adds read-only readiness without starting the model. Callers cannot select resources, read host data, or acquire microphone access. Preparation cancellation and disconnect retire and join owned native work through the transcription lifecycle; no deadline or background retry is introduced."
-    },
-    "host:speech.transcribe": {
-      "review": "supplied-audio-native-inference",
-      "change": "Adds a host-owned Phonon-2 inference primitive for caller-supplied mono PCM. The caller cannot select an executable, model, filesystem path, environment, or another caller's recording. Only supplied audio becomes the progress/transcript response; nothing is persisted. The open native-effect method grants no microphone access, credential use, workspace disclosure, or external egress. Browser capture remains separately permission-gated. Cancellation, connection loss, native failure, and service shutdown retire owned work without deadlines or automatic retries."
     },
     "host:vcs.blame": {
       "review": "connected-website-scoped-file-authority",
@@ -1669,7 +1685,7 @@
       "review": "receiver-owned-context-boundary-principals",
       "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
     },
-    "host:workspace-state.slot.updateCurrentStateArgs#capability:context.boundary": {
+    "host:workspace-state.slot.patchCurrentStateArgs#capability:context.boundary": {
       "review": "receiver-owned-context-boundary-principals",
       "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
     },
@@ -1689,9 +1705,21 @@
       "review": "verified-exact-source-compatibility-read",
       "change": "Reads the stable compatibility requirement, including installed dependency floors, and reports the available matching host for an exact pinned source. Future runtime fields remain uninterpreted. Verified source consumers receive no workspace mutation authority."
     },
+    "host:workspaceTemplateSource.readInstallation": {
+      "review": "reviewed-exact-installation-provenance-read",
+      "change": "Reads the installation record for one exact event through the workspace-bound source provider. The handler admits only the reviewed templates extension or authenticated shell; the internal GAD route is not agent-facing, and no repository path, mutation, or arbitrary event data is exposed."
+    },
     "host:workspaceTemplateSource.resolveLocal": {
       "review": "reviewed-exact-workspace-source-consumer",
       "change": "Records the existing exact checkpoint lookup for the reviewed templates extension and authenticated shell. It returns the designated pin for one template URL without exposing native checkout paths or executing its source."
+    },
+    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPatchCurrentStateArgs": {
+      "review": "owner-serialized-current-panel-state-patch",
+      "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
+    },
+    "host:workspace-state.slot.patchCurrentStateArgs": {
+      "review": "owner-serialized-current-panel-state-patch",
+      "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
     }
   },
   "version": 1

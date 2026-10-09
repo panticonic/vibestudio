@@ -187,8 +187,6 @@ describe("workspace child auth clean cutover", () => {
     const routeRegistry = new RouteRegistry();
     routeRegistry.registerHttpServiceRoutes(service.routes ?? []);
     const gateway = new Gateway({
-      externalHost: "127.0.0.1",
-      bindHost: "127.0.0.1",
       workerdPort: 9,
       routeRegistry,
       adminToken: "admin-secret",

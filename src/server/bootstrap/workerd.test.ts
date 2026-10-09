@@ -34,19 +34,15 @@ describe("workerd bootstrap policy", () => {
     expect(
       resolveWorkerdServerAliasUrls({
         getPort: () => 7788,
-        protocol: "https",
-        externalHost: "studio.example",
-        configuredAliases: '["https://alias.example:7788", "https://studio.example:7788"]',
+        configuredAliases: '["https://alias.example:7788", "http://127.0.0.1:7788"]',
       })
-    ).toEqual(["https://alias.example:7788", "https://studio.example:7788"]);
+    ).toEqual(["https://alias.example:7788", "http://127.0.0.1:7788"]);
   });
 
   it("publishes no aliases before the gateway port is finalized", () => {
     expect(
       resolveWorkerdServerAliasUrls({
         getPort: () => null,
-        protocol: "http",
-        externalHost: "127.0.0.1",
         configuredAliases: "http://alias.example:7788",
       })
     ).toEqual([]);
@@ -68,8 +64,6 @@ describe("workerd bootstrap policy", () => {
       gatewayToken: "gateway-token",
       gateway: {
         getPort: () => 7788,
-        protocol: "http",
-        externalHost: "127.0.0.1",
         configuredAliases: undefined,
       },
       getInternalDoEnv: () => ({}),
@@ -130,8 +124,6 @@ describe("workerd bootstrap policy", () => {
       gatewayToken: "gateway-token",
       gateway: {
         getPort: () => 7788,
-        protocol: "http",
-        externalHost: "127.0.0.1",
         configuredAliases: undefined,
       },
       getInternalDoEnv: () => ({ INTERNAL: "1" }),
@@ -218,8 +210,6 @@ describe("workerd bootstrap policy", () => {
       gatewayToken: "gateway-token",
       gateway: {
         getPort: () => 7788,
-        protocol: "http",
-        externalHost: "127.0.0.1",
         configuredAliases: undefined,
       },
       getInternalDoEnv: () => ({}),

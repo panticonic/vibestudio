@@ -117,7 +117,14 @@ export function installFallbackShellBridge(
       }
     }
   });
-  const panelInit: PanelInitPayload = { ...init, gatewayConfig, entityId, slotId, connectionId };
+  const panelInit: PanelInitPayload = {
+    ...init,
+    gatewayConfig,
+    workspaceId,
+    entityId,
+    slotId,
+    connectionId,
+  };
   const shell: ShellEnvelopeBridge = {
     ready: () => transport.ready?.() ?? Promise.resolve(),
     postEnvelope: (envelope) => transport.send(envelope),

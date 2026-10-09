@@ -13,9 +13,9 @@ import {
   parseEndFrame,
   parseErrorFrame,
   parseHeadFrame,
-} from "./streamFraming.js";
+} from "./streamCodec.js";
 
-describe("streamFraming", () => {
+describe("frame codec", () => {
   it("round-trips a HEAD frame", async () => {
     const head = {
       status: 200,
@@ -130,7 +130,7 @@ describe("streamFraming", () => {
     // The caller then saw "no HEAD frame received" instead of the
     // real upstream message. Now ERROR before HEAD rejects the head
     // promise with the upstream's message.
-    const { decodeFramedResponseToStreaming } = await import("./streamFraming.js");
+    const { decodeFramedResponseToStreaming } = await import("./streamCodec.js");
     const frame = encodeErrorFrame({
       status: 502,
       message: "upstream connection refused",
@@ -148,7 +148,7 @@ describe("streamFraming", () => {
   });
 
   it("preserves a pre-HEAD ERROR frame code on the rejected error", async () => {
-    const { decodeFramedResponseToStreaming } = await import("./streamFraming.js");
+    const { decodeFramedResponseToStreaming } = await import("./streamCodec.js");
     const frame = encodeErrorFrame({
       status: 403,
       message: "client_not_authorized",

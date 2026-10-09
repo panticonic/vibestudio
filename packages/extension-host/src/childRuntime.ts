@@ -6,6 +6,8 @@ import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   createRpcClient,
+  decodeRpcJson,
+  encodeRpcJson,
   envelopeFromMessage,
   rpcErrorDataOf,
   rpcErrorKindOf,
@@ -15,7 +17,11 @@ import {
   type StreamingMethodFrame,
 } from "@vibestudio/rpc";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
-import { createExtensionProxy, type ExtensionsClient } from "@vibestudio/extension";
+import {
+  createExtensionProxy,
+  type ExtensionStatus,
+  type ExtensionsClient,
+} from "@vibestudio/extension";
 import { createCredentialClient } from "@vibestudio/credential-client";
 import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
@@ -24,13 +30,7 @@ import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/remoteSession";
 
 import type { ExtensionInvocation } from "./types.js";
-import {
-  isBinaryEnvelope,
-  isStreamEnvelope,
-  type BinaryEnvelope,
-  type BodyEnvelope,
-  type StreamChunkEnvelope,
-} from "./wireEnvelopes.js";
+import { isStreamEnvelope, type BodyEnvelope, type StreamChunkEnvelope } from "./wireEnvelopes.js";
 import { replaceExtensionStorageFile } from "./atomicStorage.js";
 
 import { ExtensionRuntimeLifecycle } from "./runtimeLifecycle.js";
@@ -258,19 +258,17 @@ function createExtensionsClient(): ExtensionsClient {
     invoke: (name, method, args) => rpcCall<unknown>("extensions.invoke", [name, method, args]),
     invokeProvider: (provider, method, args) =>
       rpcCall<unknown>("extensions.invokeProvider", [provider, method, args]),
+    status: (name) => rpcCall<ExtensionStatus>("extensions.status", [name]),
+    update: (name) => rpcCall<ExtensionStatus>("extensions.update", [name]),
   };
   return client;
-}
-
-function encodeBinary(data: Uint8Array): BinaryEnvelope {
-  return { __bin: true, data: Buffer.from(data).toString("base64") };
 }
 
 async function requestBodyFromEnvelope(
   body: BodyEnvelope | undefined
 ): Promise<BodyInit | undefined> {
   if (!body) return undefined;
-  if (isBinaryEnvelope(body)) return Buffer.from(body.data, "base64");
+  if (body instanceof Uint8Array) return Buffer.from(body);
   if (!isStreamEnvelope(body)) return undefined;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -281,7 +279,7 @@ async function requestBodyFromEnvelope(
         controller.close();
         return;
       }
-      if (next.chunk) controller.enqueue(Buffer.from(next.chunk.data, "base64"));
+      if (next.chunk) controller.enqueue(next.chunk);
     },
     async cancel() {
       await rpcCall("extensions.fetchRequestBodyClose", [body.id]).catch(() => {});
@@ -305,19 +303,13 @@ function createFsClient() {
     constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 },
     async readFile(filePath: string, encoding?: BufferEncoding) {
       const result = await rpcCall<unknown>("fs.readFile", [filePath, encoding]);
-      return isBinaryEnvelope(result) ? Buffer.from(result.data, "base64") : result;
+      return result instanceof Uint8Array ? Buffer.from(result) : result;
     },
     async writeFile(filePath: string, data: string | Uint8Array) {
-      await rpcCall("fs.writeFile", [
-        filePath,
-        typeof data === "string" ? data : encodeBinary(data),
-      ]);
+      await rpcCall("fs.writeFile", [filePath, data]);
     },
     async appendFile(filePath: string, data: string | Uint8Array) {
-      await rpcCall("fs.appendFile", [
-        filePath,
-        typeof data === "string" ? data : encodeBinary(data),
-      ]);
+      await rpcCall("fs.appendFile", [filePath, data]);
     },
     async readdir(filePath: string, options?: unknown) {
       return rpcCall("fs.readdir", [filePath, options]);
@@ -359,18 +351,19 @@ function createFsClient() {
       return rpcCall("fs.realpath", [filePath]);
     },
     async ensureMaterialized(scope: string | string[] | "all") {
-      await rpcCall("fs.ensureMaterialized", [scope]);
+      return rpcCall<string>("fs.ensureMaterialized", [scope]);
     },
     async open(filePath: string, flags?: string, mode?: number) {
       const { handleId } = await rpcCall<{ handleId: number }>("fs.open", [filePath, flags, mode]);
       return {
         fd: handleId,
         async read(buffer: Uint8Array, offset: number, length: number, position: number | null) {
-          const result = await rpcCall<{ bytesRead: number; buffer: BinaryEnvelope }>(
-            "fs.handleRead",
-            [handleId, length, position]
-          );
-          buffer.set(Buffer.from(result.buffer.data, "base64"), offset);
+          const result = await rpcCall<{ bytesRead: number; buffer: Uint8Array }>("fs.handleRead", [
+            handleId,
+            length,
+            position,
+          ]);
+          buffer.set(result.buffer, offset);
           return { bytesRead: result.bytesRead, buffer };
         },
         async write(
@@ -382,7 +375,7 @@ function createFsClient() {
           const slice = buffer.subarray(offset, offset + length);
           const result = await rpcCall<{ bytesWritten: number }>("fs.handleWrite", [
             handleId,
-            encodeBinary(slice),
+            slice,
             position,
           ]);
           return { bytesWritten: result.bytesWritten, buffer };
@@ -564,7 +557,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
         reject(new Error("Extension process RPC is disconnected"));
         return;
       }
-      process.send(JSON.stringify(message), (error) => (error ? reject(error) : resolve()));
+      process.send(encodeRpcJson(message), (error) => (error ? reject(error) : resolve()));
     });
   const transport: EnvelopeRpcTransport = {
     async send(envelope: RpcEnvelope): Promise<void> {
@@ -613,7 +606,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
     if (typeof raw !== "string") return; // Shutdown is a lifecycle object, not an RPC frame.
     let message: WsServerMessage;
     try {
-      message = JSON.parse(raw) as WsServerMessage;
+      message = decodeRpcJson(raw) as WsServerMessage;
     } catch {
       return;
     }
@@ -688,7 +681,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
 }
 
 function responseBodyToEnvelope(response: Response): BodyEnvelope {
-  if (!response.body) return { __bin: true, data: "" };
+  if (!response.body) return new Uint8Array(0);
   const id = randomUUID();
   fetchResponseBodies.set(id, {
     reader: response.body.getReader(),
@@ -696,13 +689,6 @@ function responseBodyToEnvelope(response: Response): BodyEnvelope {
     offset: 0,
   });
   return { __stream: true, id };
-}
-
-function streamChunkFromBytes(bytes: Uint8Array): StreamChunkEnvelope {
-  return {
-    done: false,
-    chunk: { __bin: true, data: Buffer.from(bytes).toString("base64") },
-  };
 }
 
 function writeExtensionLog(
@@ -732,14 +718,14 @@ async function readNextResponseBodyChunk(id: string): Promise<StreamChunkEnvelop
       stream.pending = null;
       stream.offset = 0;
     }
-    return streamChunkFromBytes(chunk);
+    return { done: false, chunk };
   }
   const next = await stream.reader.read();
   if (next.done) {
     await closeResponseBodyStream(id);
     return { done: true };
   }
-  if (next.value.length <= STREAM_CHUNK_BYTES) return streamChunkFromBytes(next.value);
+  if (next.value.length <= STREAM_CHUNK_BYTES) return { done: false, chunk: next.value };
   stream.pending = next.value;
   stream.offset = 0;
   return readNextResponseBodyChunk(id);

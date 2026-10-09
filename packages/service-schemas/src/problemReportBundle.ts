@@ -83,6 +83,11 @@ export const ReportNarrativeSchema = z
     evidenceIds: z.array(id).max(100),
   })
   .strict();
+/** Narrative content an editor supplies; the host assigns `id` and derives `author` from the verified caller. */
+export const ReportNarrativeInputSchema = ReportNarrativeSchema.omit({ id: true, author: true });
+export type ReportNarrativeInput = z.infer<typeof ReportNarrativeInputSchema>;
+export const ReportNarrativePatchSchema = ReportNarrativeInputSchema.partial();
+export type ReportNarrativePatch = z.infer<typeof ReportNarrativePatchSchema>;
 export const ReportEvidenceSchema = z
   .object({
     id,

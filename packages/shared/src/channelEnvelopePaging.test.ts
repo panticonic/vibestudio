@@ -71,15 +71,39 @@ describe("normalizeChannelEnvelopePageRequest", () => {
       returnedToSeq: 7,
       hasMoreBefore: true,
       hasMoreAfter: true,
+      next: { kind: "after", seq: 7, throughSeq: 10 },
+      previous: { kind: "before", seq: 6 },
     });
     expect(
       channelEnvelopePageInfo(after, { totalCount: 10, firstSeq: 1, lastSeq: 10 }, [])
-    ).toMatchObject({ hasMoreBefore: true, hasMoreAfter: true });
+    ).toMatchObject({
+      hasMoreBefore: true,
+      hasMoreAfter: true,
+      next: { kind: "after", seq: 5, throughSeq: 10 },
+      previous: { kind: "before", seq: 6 },
+    });
 
     const tail = normalizeChannelEnvelopePageRequest({ channelId: "channel-1", limit: 0 });
-    expect(
-      channelEnvelopePageInfo(tail, { totalCount: 1, firstSeq: 4, lastSeq: 4 }, [])
-    ).toMatchObject({ hasMoreBefore: true, hasMoreAfter: false });
+    const emptyTail = channelEnvelopePageInfo(tail, { totalCount: 1, firstSeq: 4, lastSeq: 4 }, []);
+    expect(emptyTail).toMatchObject({
+      hasMoreBefore: true,
+      hasMoreAfter: false,
+      previous: { kind: "before", seq: 5 },
+    });
+    expect(emptyTail).not.toHaveProperty("next");
+
+    const before = normalizeChannelEnvelopePageRequest({
+      channelId: "channel-1",
+      window: { kind: "before", seq: 3 },
+      limit: 5,
+    });
+    const first = channelEnvelopePageInfo(
+      before,
+      { totalCount: 4, firstSeq: 1, lastSeq: 4 },
+      [1, 2]
+    );
+    expect(first).toMatchObject({ next: { kind: "after", seq: 2, throughSeq: 4 } });
+    expect(first).not.toHaveProperty("previous");
   });
 
   it("rejects an inverted stable forward window", () => {
@@ -231,10 +255,10 @@ describe("collectChannelEnvelopePages", () => {
             { totalCount: 2, firstSeq: 1, lastSeq: 2 },
             [1]
           );
-          delete pageInfo.snapshotLastSeq;
+          pageInfo.next = { kind: "after", seq: 1 };
           return { items: [1], pageInfo };
         }
       )
-    ).rejects.toThrow("without a snapshotLastSeq watermark");
+    ).rejects.toThrow("within its snapshot watermark");
   });
 });

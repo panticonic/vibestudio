@@ -33,10 +33,6 @@ export const WorkspaceJsonValueSchema: z.ZodType<WorkspaceJsonValue> = z.lazy(()
 
 export const WorkspaceJsonObjectSchema = z.record(WorkspaceJsonValueSchema);
 
-const WorkspaceGitRemoteDeclarationSchema = z
-  .object({ url: z.string(), branch: z.string().optional() })
-  .strict();
-
 function containsForbiddenGitRefCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const character = value[index];
@@ -107,6 +103,27 @@ export const WorkspaceGitUpstreamSchema = z
     credential: WorkspaceLogicalCredentialNameSchema.optional(),
     authorEmail: z.string().optional(),
     authorName: z.string().optional(),
+  })
+  .strict();
+
+/** Git-provider-owned settings; never part of authored workspace configuration. */
+export const GitConfigSchema = z
+  .object({
+    remotes: z
+      .record(
+        z.record(
+          z.record(
+            z
+              .object({
+                url: z.string(),
+                branch: z.string().optional(),
+              })
+              .strict()
+          )
+        )
+      )
+      .optional(),
+    upstreams: z.record(z.record(WorkspaceGitUpstreamSchema)).optional(),
   })
   .strict();
 
@@ -270,29 +287,18 @@ export const WorkspaceTemplateAuthoringMetadataSchema = z
      */
     dependencies: z.array(WorkspaceTemplateDependencySchema).optional(),
     overrides: z.array(WorkspaceTemplateOverrideSchema).optional(),
-    installation: WorkspaceTemplateInstallationSchema.optional(),
-    repositories: z.array(CanonicalWorkspaceInventoryPathSchema),
   })
   .strict()
-  .superRefine(({ repositories, overrides = [] }, ctx) => {
+  .superRefine(({ overrides = [] }, ctx) => {
     const overridden = new Set<string>();
     for (const [index, override] of overrides.entries()) {
-      if (!repositories.includes(override.repoPath) || overridden.has(override.repoPath))
+      if (overridden.has(override.repoPath))
         ctx.addIssue({
           code: "custom",
           path: ["overrides", index],
-          message: "An override must name exactly one repository owned by this template",
+          message: "An override must name each repository only once",
         });
       overridden.add(override.repoPath);
-    }
-    for (const [field, paths] of [["repositories", repositories]] as const) {
-      if (new Set(paths).size !== paths.length) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [field],
-          message: `${field} contains duplicate paths`,
-        });
-      }
     }
   });
 
@@ -372,6 +378,17 @@ const WorkspaceServiceSchema = z.union([
     .strict(),
 ]);
 
+export const WorkspaceServiceExportSchema = z.union([
+  WorkspaceServiceSchema.options[0].omit({ source: true }),
+  WorkspaceServiceSchema.options[1].omit({ source: true }),
+]);
+export const WorkspaceServiceSelectionSchema = z
+  .object({
+    source: z.string().min(1),
+    name: z.string().min(1),
+  })
+  .strict();
+
 /** The resolver's wire shape and every runtime client derive from one contract. */
 const ResolvedWorkspaceServiceBaseSchema = WorkspaceServiceSchema.options[0]
   .pick({
@@ -411,13 +428,6 @@ export const WorkspaceConfigSchema = z
     systemEpoch: z.number().int().nonnegative(),
     minimumAppVersion: AppVersionSchema.optional(),
     defaultRepo: z.string().optional(),
-    git: z
-      .object({
-        remotes: z.record(z.record(z.record(WorkspaceGitRemoteDeclarationSchema))).optional(),
-        upstreams: z.record(z.record(WorkspaceGitUpstreamSchema)).optional(),
-      })
-      .strict()
-      .optional(),
     initPanels: z
       .array(
         z.object({ source: z.string(), stateArgs: WorkspaceJsonObjectSchema.optional() }).strict()
@@ -441,7 +451,6 @@ export const WorkspaceConfigSchema = z
             source: z.string(),
             className: z.string(),
             key: z.string(),
-            contextId: z.string().optional(),
           })
           .strict()
       )
@@ -501,7 +510,9 @@ export const WorkspaceConfigSchema = z
   })
   .strict() satisfies z.ZodType<WorkspaceConfig>;
 
-const WorkspaceConfigManifestShape = WorkspaceConfigSchema.omit({ id: true });
+const WorkspaceConfigManifestShape = WorkspaceConfigSchema.omit({ id: true }).extend({
+  services: z.array(WorkspaceServiceSelectionSchema).optional(),
+});
 
 /** A publishable workspace source manifest with self-asserted presentation. */
 export const WorkspaceConfigTopLayerSchema = WorkspaceConfigManifestShape.extend({

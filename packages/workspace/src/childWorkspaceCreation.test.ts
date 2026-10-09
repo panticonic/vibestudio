@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveLocalWorkspaceStartup } from "./startup.js";
+import { resolveOrCreateWorkspace } from "./loader.js";
 
 const originalInstanceRoot = process.env["VIBESTUDIO_INSTANCE_ROOT"];
 const tempRoots: string[] = [];
@@ -48,7 +48,7 @@ function setup() {
   return { root, workspaceDir };
 }
 
-describe("resolveLocalWorkspaceStartup current lifecycle", () => {
+describe("child workspace creation", () => {
   it("writes an explicitly selected development root into a fresh child descriptor", () => {
     const { root, workspaceDir } = setup();
     const candidate = {
@@ -57,12 +57,10 @@ describe("resolveLocalWorkspaceStartup current lifecycle", () => {
       commit: "c".repeat(40),
     };
 
-    resolveLocalWorkspaceStartup({
+    resolveOrCreateWorkspace({
       appRoot: root,
       name: "candidate-child",
-      init: true,
       workspaceId: "ws_candidate",
-      requireExplicitSelection: true,
       rootTemplate: candidate,
     });
 
@@ -79,15 +77,13 @@ describe("resolveLocalWorkspaceStartup current lifecycle", () => {
   it("uses the hub-owned identity when creating a child workspace disk", () => {
     const { root, workspaceDir } = setup();
 
-    const result = resolveLocalWorkspaceStartup({
+    const result = resolveOrCreateWorkspace({
       appRoot: root,
       name: "dev-child",
-      init: true,
       workspaceId: "ws_hub_owned",
-      requireExplicitSelection: true,
     });
 
-    expect(result.resolved.created).toBe(true);
+    expect(result.created).toBe(true);
     expect(
       JSON.parse(
         fs.readFileSync(

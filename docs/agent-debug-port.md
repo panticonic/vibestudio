@@ -23,16 +23,16 @@ const turn = await gad.inspectTurnState({ channelId });
 Then inspect the agent vessel when local execution state matters:
 
 ```ts
-const channel = await workers.resolveService("vibestudio.channel.v1", channelId);
-const debug = await rpc.call(channel.targetId, "inspectAgent", [
-  agentParticipantId,
-  "getDebugState",
-]);
+const debug = await gad.inspectAgent({ channelId, method: "getDebugState" });
 ```
 
+`gad.inspectAgent({ channelId, participantId?, method })` resolves the
+channel's DO and calls its `inspectAgent` receiver under the caller's own
+authority; `participantId` defaults to the channel's sole agent participant.
 The channel calls the agent's dedicated read-only inspection RPC directly.
-This path is separate from ordinary participant `onMethodCall` routing, is
-bounded to five seconds, and does not require a live roster row. The host relay
+This path is separate from ordinary participant `onMethodCall` routing
+(`chat.callMethod` remains the in-channel RPC) and does not require a live
+roster row when `participantId` is given. The host relay
 requires an already-active entity, so a retired or missing agent fails without
 being resolved, reactivated, or recreated.
 
@@ -102,9 +102,8 @@ const debug = await chat.callMethod(agentParticipantId, "getDebugState", {});
 That form is an ordinary channel-scoped participant invocation and therefore
 requires the target to be joined. An agent must not call its own participant
 method during its active turn because that is a synchronous self-call; agent
-eval uses `await agent.describe()` instead. Prefer the channel's `inspectAgent`
-facade for out-of-band diagnosis, especially when the live method path is
-itself in question.
+eval uses `await agent.describe()` instead. Use `gad.inspectAgent` for
+diagnosis, especially when the live method path is itself in question.
 
 ## Failure interpretation
 

@@ -131,7 +131,6 @@ maybeDescribe("headless browser panel integration", () => {
         serverPath,
         "--bootstrap-workspace",
         "headless-panel-integration",
-        "--serve-panels",
         "--ready-file",
         readyFile,
       ],

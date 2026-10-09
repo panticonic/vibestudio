@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createTypedServiceClient, maxArgsArity } from "@vibestudio/shared/typedServiceClient";
 import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
+import { ByteArraySchema } from "@vibestudio/shared/binary";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 import type { RuntimeSurfaceMethodDoc } from "@vibestudio/shared/runtimeSurface";
 import {
@@ -47,7 +48,6 @@ import { hostPerformanceMethods } from "./hostPerformance.js";
 import { hubControlMethods } from "./hubControl.js";
 import { serverLogMethods } from "./serverLog.js";
 import { hostTerminalMethods } from "./hostTerminal.js";
-import { speechMethods } from "./speech.js";
 import { menuMethods } from "./menu.js";
 import { mirrorMethods } from "./mirror.js";
 import { missionsMethods } from "./missions.js";
@@ -157,7 +157,6 @@ const serviceTables: ServiceTable[] = [
   { service: "serverLog", file: "serverLog.ts", methods: serverLogMethods },
   { service: "problemReports", file: "problemReports.ts", methods: problemReportsMethods },
   { service: "hostTerminal", file: "hostTerminal.ts", methods: hostTerminalMethods },
-  { service: "speech", file: "speech.ts", methods: speechMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "mirror", file: "mirror.ts", methods: mirrorMethods },
   { service: "missions", file: "missions.ts", methods: missionsMethods },
@@ -281,7 +280,7 @@ function weakReturnRootPaths(
 ): string[] {
   // A supported native resource has a concrete runtime validator, but no JSON
   // structure. Keep arbitrary custom/refined unknown roots subject to the scan.
-  if (schema === StreamResponseSchema) return [];
+  if (schema === StreamResponseSchema || schema === ByteArraySchema) return [];
   if (visited.has(schema)) return [];
   visited.add(schema);
   const def = schema._def as TraversableZodDef;
@@ -339,6 +338,16 @@ describe("service schema contracts", () => {
     expect(weakReturnRootPaths(z.array(StreamResponseSchema))).toEqual([]);
     expect(weakReturnRootPaths(z.union([StreamResponseSchema, z.unknown()]))).toEqual(["$|1"]);
     expect(weakReturnRootPaths(z.custom<Response>())).toEqual(["$"]);
+    expect(weakReturnRootPaths(ByteArraySchema)).toEqual([]);
+    expect(weakReturnRootPaths(ByteArraySchema.optional())).toEqual([]);
+    expect(weakReturnRootPaths(z.custom<Uint8Array>())).toEqual(["$"]);
+    expect(ByteArraySchema.safeParse(new Uint8Array([1])).success).toBe(true);
+    expect(ByteArraySchema.safeParse(Buffer.from([1])).success).toBe(true);
+    expect(ByteArraySchema.safeParse({ 0: 1, length: 1 }).success).toBe(false);
+    expect(
+      ByteArraySchema.safeParse({ 0: 1, length: 1, [Symbol.toStringTag]: "Uint8Array" }).success
+    ).toBe(false);
+    expect(ByteArraySchema.safeParse({ [Symbol.toStringTag]: "ArrayBuffer" }).success).toBe(false);
     expect(weakReturnRootPaths(z.any().refine(() => true))).toEqual(["$"]);
   });
 

@@ -30,6 +30,10 @@ export interface ResolvedTemplate {
  * A panel with its own index.html is self-contained — the default template's
  * framework does not bleed in. Only an explicit template reference or dep
  * auto-detection determines the framework.
+ *
+ * An explicit `vibestudio.template` must name an existing template; a missing
+ * template or an unreadable `template.json` is a build error, never a silent
+ * fallback to another shell or framework.
  */
 export function resolveTemplate(
   manifest: { template?: string },
@@ -42,7 +46,7 @@ export function resolveTemplate(
   if (fs.existsSync(panelHtml)) {
     // Only use template framework if explicitly referenced
     const templateFramework = manifest.template
-      ? readTemplateFramework(sourceRoot, manifest.template)
+      ? readTemplateFramework(sourceRoot, requireTemplateDir(sourceRoot, manifest.template))
       : null;
     return {
       htmlPath: panelHtml,
@@ -52,12 +56,17 @@ export function resolveTemplate(
 
   // Explicit template reference
   if (manifest.template) {
-    const templateDir = path.join(sourceRoot, "templates", manifest.template);
+    const templateDir = requireTemplateDir(sourceRoot, manifest.template);
+    const htmlPath = findHtml(templateDir);
+    if (!htmlPath) {
+      throw new Error(
+        `Panel template "${manifest.template}" has no index.html (expected ${path.join(templateDir, "index.html")})`
+      );
+    }
     return {
-      htmlPath: findHtml(templateDir),
+      htmlPath,
       framework:
-        readTemplateFramework(sourceRoot, manifest.template) ??
-        detectFrameworkFromDeps(dependencies),
+        readTemplateFramework(sourceRoot, templateDir) ?? detectFrameworkFromDeps(dependencies),
     };
   }
 
@@ -68,7 +77,7 @@ export function resolveTemplate(
     return {
       htmlPath: defaultHtml,
       framework:
-        readTemplateFramework(sourceRoot, "default") ?? detectFrameworkFromDeps(dependencies),
+        readTemplateFramework(sourceRoot, defaultDir) ?? detectFrameworkFromDeps(dependencies),
     };
   }
 
@@ -84,15 +93,28 @@ function findHtml(templateDir: string): string | null {
   return fs.existsSync(htmlPath) ? htmlPath : null;
 }
 
-function readTemplateFramework(sourceRoot: string, templateName: string): string | null {
-  const configPath = path.join(sourceRoot, "templates", templateName, "template.json");
-  if (!fs.existsSync(configPath)) return null;
-  try {
-    const config = JSON.parse(fs.readFileSync(configPath, "utf-8")) as TemplateConfig;
-    return config.framework ?? null;
-  } catch {
-    return null;
+function requireTemplateDir(sourceRoot: string, templateName: string): string {
+  const templateDir = path.join(sourceRoot, "templates", templateName);
+  if (!fs.existsSync(templateDir)) {
+    throw new Error(`Panel declares template "${templateName}", but ${templateDir} does not exist`);
   }
+  return templateDir;
+}
+
+function readTemplateFramework(sourceRoot: string, templateDir: string): string | null {
+  const configPath = path.join(templateDir, "template.json");
+  if (!fs.existsSync(configPath)) return null;
+  let config: TemplateConfig;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, "utf-8")) as TemplateConfig;
+  } catch (error) {
+    throw new Error(
+      `Template config ${path.relative(sourceRoot, configPath)} is not valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+  return config.framework ?? null;
 }
 
 function detectFrameworkFromDeps(dependencies: Record<string, string>): string {

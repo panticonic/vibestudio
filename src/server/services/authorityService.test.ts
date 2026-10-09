@@ -688,7 +688,7 @@ describe("authorityService", () => {
     }));
     const publish = vi.fn((_input: unknown) => ({
       bodyDigest: "a".repeat(64),
-      compilerVersion: "authority-plan.v1",
+      compilerVersion: "authority-plan.v2",
       catalogDigest: "b".repeat(64),
     }));
     const actor = planActorFixture();

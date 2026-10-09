@@ -64,7 +64,7 @@ function fixture(epoch: number, consumers = ["personal", "system", "examples"]) 
     );
     fs.writeFileSync(
       path.join(checkout, "meta", "vibestudio.yml"),
-      `systemEpoch: ${epoch}\ntemplate:\n  name: ${name}\n  repositories: [packages/${name}]\n${
+      `systemEpoch: ${epoch}\ntemplate:\n  name: ${name}\n${
         name === "examples" || name === "system-testing"
           ? "  dependencies:\n    - url: git+https://example.test/base.git\n"
           : ""

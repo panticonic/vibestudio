@@ -44,8 +44,9 @@ vibestudio mobile doctor
 
 ## State And Configuration
 
-- `RN_HOST_ABI = "rn-host-5"` is the cross-cutting contract in the native shell
-  and workspace app manifest.
+- `RN_HOST_ABI` (`@vibestudio/shared/buildProvider`) is the cross-cutting
+  contract between the native shell, the React Native build provider, and the
+  workspace app manifest.
 - `apps/mobile/ios/Signing.local.xcconfig` is developer-local and ignored. It
   is included by the checked-in `Vibestudio.Debug.xcconfig` and
   `Vibestudio.Release.xcconfig`, so direct Xcode builds and

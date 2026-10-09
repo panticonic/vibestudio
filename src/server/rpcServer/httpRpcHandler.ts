@@ -1,4 +1,4 @@
-import { rpcDiagnosticIdOf } from "@vibestudio/rpc";
+import { decodeRpcJson, encodeRpcJson, rpcDiagnosticIdOf } from "@vibestudio/rpc";
 import {
   rpcErrorDataOf,
   rpcErrorKindOf,
@@ -57,7 +57,7 @@ export function resolveRpcMaxBodyBytes(raw: string | undefined): number {
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   if (res.destroyed || res.writableEnded) return;
   res.writeHead(status, JSON_HEADERS);
-  res.end(JSON.stringify(body));
+  res.end(encodeRpcJson(body));
 }
 
 /** HTTP transport adapter for the server's canonical RPC dispatch callbacks. */
@@ -136,7 +136,7 @@ export class HttpRpcHandler {
 
     let envelope: RpcEnvelope;
     try {
-      envelope = JSON.parse(Buffer.concat(chunks).toString()) as RpcEnvelope;
+      envelope = decodeRpcJson(Buffer.concat(chunks).toString()) as RpcEnvelope;
     } catch {
       writeJson(res, 400, { error: "Invalid JSON body" });
       return;

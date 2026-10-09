@@ -17,6 +17,8 @@
 import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
 import {
   attachRpcDiagnosticId,
+  decodeRpcJson,
+  encodeRpcJson,
   RemoteRpcError,
   type AgentExecutionTestPolicy,
   type RpcErrorKind,
@@ -46,6 +48,7 @@ import {
   decodeDurableWorkReady,
   type DurableWorkReadyHint,
 } from "@vibestudio/shared/durableWork";
+import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 
 /** Canonical string key for a DORef, used for maps and logging. */
 export function doRefKey(ref: DORef): string {
@@ -155,7 +158,7 @@ export async function postToDOWithToken(
   signal?: AbortSignal
 ): Promise<unknown> {
   // 1. Build the instance ID for this DO: "do:{source}:{className}:{objectKey}"
-  const instanceId = `do:${ref.source}:${ref.className}:${ref.objectKey}`;
+  const instanceId = doTargetId(ref);
 
   // 2. Mint/retrieve a per-instance token
   const token = deps.tokenManager.ensureToken(instanceId, "worker");
@@ -186,7 +189,7 @@ export async function postToDOWithToken(
     res = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(envelope),
+      body: encodeRpcJson(envelope),
       signal,
       // The method's owner defines its semantic lifetime. In particular,
       // `__alarm` may legitimately await an agent model effect, so Undici's
@@ -206,7 +209,7 @@ export async function postToDOWithToken(
   if (!res.ok) {
     const body = await res.text();
     try {
-      const parsed = JSON.parse(body) as {
+      const parsed = decodeRpcJson(body) as {
         error?: unknown;
         errorKind?: unknown;
         errorCode?: unknown;
@@ -252,7 +255,7 @@ export async function postToDOWithToken(
     }
   }
   try {
-    return await res.json();
+    return decodeRpcJson(await res.text());
   } catch (error) {
     throw new AmbiguousDoDispatchError(
       `DO dispatch to ${url} returned an unreadable success acknowledgement`,
@@ -346,7 +349,7 @@ export function verifyInstanceTokenEnvelope(
 
 export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, LifecycleDoDispatcher {
   private async withRelayAdmission<T>(ref: DORef, invoke: () => Promise<T>): Promise<T> {
-    const finish = beginDurableObjectRelay(`do:${ref.source}:${ref.className}:${ref.objectKey}`);
+    const finish = beginDurableObjectRelay(doTargetId(ref));
     try {
       return await invoke();
     } finally {
@@ -634,21 +637,18 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     if (!this.authorityParentRunner) {
       throw new Error("DODispatch requires an authority parent runner");
     }
-    const result = await this.authorityParentRunner(
-      `do:${ref.source}:${ref.className}:${ref.objectKey}`,
-      authorization,
-      () =>
-        this.withRelayAdmission(ref, () =>
-          postToDOWithToken(
-            ref,
-            method,
-            dispatchedArgs,
-            this.buildPostDeps(ref),
-            "main",
-            serverCaller,
-            signal
-          )
+    const result = await this.authorityParentRunner(doTargetId(ref), authorization, () =>
+      this.withRelayAdmission(ref, () =>
+        postToDOWithToken(
+          ref,
+          method,
+          dispatchedArgs,
+          this.buildPostDeps(ref),
+          "main",
+          serverCaller,
+          signal
         )
+      )
     );
     return this.authorityResultTransform
       ? await this.authorityResultTransform(ref, authorization, result)
@@ -710,20 +710,17 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     if (!serverCaller.authorization || !this.authorityParentRunner) {
       throw new Error("DODispatch requires an authority parent runner");
     }
-    return await this.authorityParentRunner(
-      `do:${ref.source}:${ref.className}:${ref.objectKey}`,
-      serverCaller.authorization,
-      () =>
-        this.withRelayAdmission(ref, () =>
-          postToDOWithToken(
-            ref,
-            lifecycleMethod,
-            [arg],
-            this.buildPostDeps(ref),
-            "main",
-            serverCaller
-          )
+    return await this.authorityParentRunner(doTargetId(ref), serverCaller.authorization, () =>
+      this.withRelayAdmission(ref, () =>
+        postToDOWithToken(
+          ref,
+          lifecycleMethod,
+          [arg],
+          this.buildPostDeps(ref),
+          "main",
+          serverCaller
         )
+      )
     );
   }
 
@@ -771,10 +768,6 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     if (!serverCaller.authorization || !this.authorityParentRunner) {
       throw new Error("DODispatch requires an authority parent runner");
     }
-    return await this.authorityParentRunner(
-      `do:${ref.source}:${ref.className}:${ref.objectKey}`,
-      serverCaller.authorization,
-      invoke
-    );
+    return await this.authorityParentRunner(doTargetId(ref), serverCaller.authorization, invoke);
   }
 }

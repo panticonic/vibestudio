@@ -1573,12 +1573,11 @@ describe("FsService", () => {
       });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-content-kind");
-      const envelope = (bytes: Buffer) => ({ __bin: true, data: bytes.toString("base64") });
       const text = "\uFEFFa😀éz";
-      await svc.handleCall(ctx, "writeFile", ["meta/value", envelope(Buffer.from(text))]);
-      await svc.handleCall(ctx, "appendFile", ["meta/value", envelope(Buffer.from("!"))]);
+      await svc.handleCall(ctx, "writeFile", ["meta/value", Buffer.from(text)]);
+      await svc.handleCall(ctx, "appendFile", ["meta/value", Buffer.from("!")]);
       expect([...files.values()]).toEqual([{ kind: "text", text: text + "!" }]);
-      await svc.handleCall(ctx, "writeFile", ["meta/value", envelope(Buffer.from([0xff]))]);
+      await svc.handleCall(ctx, "writeFile", ["meta/value", Buffer.from([0xff])]);
       expect([...files.values()]).toEqual([{ kind: "bytes", base64: "/w==" }]);
       await svc.handleCall(ctx, "writeFile", ["meta/value", text]);
       expect([...files.values()]).toEqual([{ kind: "text", text }]);
@@ -1715,16 +1714,30 @@ describe("FsService", () => {
       expect(calls).toEqual([{ contextId: "ctx-glob-demand", repos: ["panels/foo"] }]);
     });
 
-    it("ensureMaterialized RPC declares a narrow scope (a single repo)", async () => {
+    function makeChainedExtensionCtx(contextId: string): ServiceContext {
+      const ctx = makeExtensionCtx("@workspace-extensions/file-tools");
+      ctx.chainCaller = {
+        callerId: `do:workers/agent-worker:AiChatWorker:${contextId}`,
+        callerKind: "do",
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "ev-1",
+      };
+      registerContext(ctx.chainCaller.callerId, "do", contextId);
+      mkdirSync(path.join(tmpRoot, contextId), { recursive: true });
+      return ctx;
+    }
+
+    it("ensureMaterialized RPC declares a narrow scope and returns the source root", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
         disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
-      const ctx = makeWorkerCtx("do:src:class:key");
-      registerContext(ctx.caller.runtime.id, "do", "ctx-s4");
+      const ctx = makeChainedExtensionCtx("ctx-s4");
 
-      await svc.handleCall(ctx, "ensureMaterialized", ["panels/chat/index.tsx"]);
+      await expect(
+        svc.handleCall(ctx, "ensureMaterialized", ["panels/chat/index.tsx"])
+      ).resolves.toBe(path.join(tmpRoot, "ctx-s4"));
 
       expect(calls).toEqual([{ contextId: "ctx-s4", repos: ["panels/chat"] }]);
     });
@@ -1735,10 +1748,27 @@ describe("FsService", () => {
         disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
-      const ctx = makeWorkerCtx("do:src:class:key");
-      registerContext(ctx.caller.runtime.id, "do", "ctx-s5");
+      const ctx = makeChainedExtensionCtx("ctx-s5");
 
-      await svc.handleCall(ctx, "ensureMaterialized", [".tmp/file.txt"]);
+      await expect(svc.handleCall(ctx, "ensureMaterialized", [".tmp/file.txt"])).resolves.toBe(
+        path.join(tmpRoot, "ctx-s5")
+      );
+
+      expect(calls).toEqual([]);
+    });
+
+    it("ensureMaterialized RPC is refused to sandboxed callers", async () => {
+      const { bridge, calls } = makeMaterializeBridge({ materialize: true });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-s6");
+
+      await expect(
+        svc.handleCall(ctx, "ensureMaterialized", ["panels/chat"])
+      ).rejects.toMatchObject({ code: "EACCES" });
 
       expect(calls).toEqual([]);
     });

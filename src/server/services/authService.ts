@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "http";
+import type { IncomingMessage } from "http";
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -43,6 +43,7 @@ import {
   bindingForLiveAgentEntity,
   ownerForLiveAgentEntity,
 } from "../hostCore/auth/agentEntity.js";
+import { readBoundedBody, sendJson } from "../hostCore/httpResponses.js";
 
 export const RefreshShellBodySchema = z
   .object({
@@ -63,28 +64,11 @@ export const RefreshAgentBodySchema = z
   .strict();
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const buffer = chunk as Buffer;
-    total += buffer.byteLength;
-    if (total > 64 * 1024) {
-      throw authError("REQUEST_BODY_TOO_LARGE", "Request body exceeds 64 KiB", 413);
-    }
-    chunks.push(buffer);
-  }
-  if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
-function sendJson(
-  res: ServerResponse,
-  status: number,
-  payload: unknown,
-  headers: Record<string, string> = {}
-): void {
-  res.writeHead(status, { "Content-Type": "application/json", ...headers });
-  res.end(JSON.stringify(payload));
+  const body = await readBoundedBody(req, 64 * 1024, () =>
+    authError("REQUEST_BODY_TOO_LARGE", "Request body exceeds 64 KiB", 413)
+  );
+  if (body.length === 0) return {};
+  return JSON.parse(body.toString("utf8"));
 }
 
 interface DeviceCredentialRedeemerDeps {

@@ -263,43 +263,6 @@
       }
     }
   },
-  "audit": {
-    "service": {
-      "principals": [
-        "user",
-        "host",
-        "code"
-      ]
-    },
-    "methods": {
-      "query": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "observability",
-          "family": "audit.read",
-          "rationale": "G4: privacy or authority-map read; §2 default {code, session} family"
-        },
-        "capability": "security.audit.read",
-        "presentation": {
-          "title": "View the security activity log",
-          "action": "view the security activity log",
-          "description": "Allows {requesterKind} to view the security activity log.",
-          "group": "approvals",
-          "authorityCategory": {
-            "domain": "safety",
-            "verb": "see"
-          }
-        }
-      }
-    }
-  },
   "auth": {
     "service": {
       "principals": [
@@ -3276,6 +3239,23 @@
         "capability": null,
         "presentation": null
       },
+      "recordWebsitePublication": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "website.publish",
+          "rationale": "The handler requires the same live caller-bound grant as publishFetch and only advances the host journal of that reviewed operation"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "requestCredentialInput": {
         "authority": {
           "inherits": true
@@ -5082,6 +5062,23 @@
         "capability": null,
         "presentation": null
       },
+      "status": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "transport",
+          "family": "extensions.control",
+          "rationale": "Read-only projection of one declared extension's build and supervision state; grants no invocation or lifecycle authority"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "streamingMethods": {
         "authority": {
           "inherits": true
@@ -5095,6 +5092,23 @@
           "residency": "transport",
           "family": "extensions.control",
           "rationale": "Streaming-method discovery is required by the extension invocation router and shares its admitted execution-session scope; it returns manifest metadata and grants no invocation authority"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "update": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "transport",
+          "family": "extensions.control",
+          "rationale": "Re-reconciles one existing declaration at its published source; any new build identity still requires the user's install/update review before it runs"
         },
         "capability": null,
         "presentation": null
@@ -12215,6 +12229,23 @@
       ]
     },
     "methods": {
+      "appendNarrative": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "availability": {
         "authority": {
           "inherits": true
@@ -12454,6 +12485,23 @@
         },
         "access": {
           "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "observability",
+          "family": "problemReports.local",
+          "rationale": "Host-enforced caller ownership; preparing drafts grants no external reporting authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "patchNarrative": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
         },
         "tier": {
           "tier": "open",
@@ -14465,7 +14513,7 @@
           "session": "family",
           "residency": "supervision",
           "family": "runtime.supervision",
-          "rationale": "Read-only description of one exact driver-owned executable entity."
+          "rationale": "Read-only description of driver-owned executable entities selected by exact entity or release identity."
         },
         "capability": null,
         "presentation": null
@@ -14528,7 +14576,7 @@
           "session": "family",
           "residency": "observability",
           "family": "runtime.supervision-observability",
-          "rationale": "Bounded retained-log read from one exact executable-unit driver."
+          "rationale": "Bounded retained-log read from executable-unit drivers, selected by exact entity or release identity."
         },
         "capability": null,
         "presentation": null
@@ -16609,69 +16657,6 @@
           "residency": "supervision",
           "family": "shellPresence.control",
           "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
-        },
-        "capability": null,
-        "presentation": null
-      }
-    }
-  },
-  "speech": {
-    "service": {
-      "principals": [
-        "host",
-        "user",
-        "code",
-        "website"
-      ]
-    },
-    "methods": {
-      "prepare": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "speech.transcribe",
-          "rationale": "Readiness and preparation of the bundled local speech model."
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "status": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "speech.transcribe",
-          "rationale": "Readiness and preparation of the bundled local speech model."
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "transcribe": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "speech.transcribe",
-          "rationale": "Installed CPU inference over caller-supplied bytes; no workspace or host data is disclosed and no microphone is accessed by this operation."
         },
         "capability": null,
         "presentation": null
@@ -22007,37 +21992,7 @@
           }
         }
       },
-      "slot.resolveByEntity": {
-        "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "identity",
-          "family": "workspace-state.identity",
-          "rationale": "The entity-to-slot binding determines runtime ancestry and the context-boundary target"
-        },
-        "capability": "workspace.runtime-state.inspect",
-        "presentation": {
-          "title": "View running apps and tasks",
-          "action": "view apps, panels, and scheduled tasks that are currently running",
-          "description": "See what apps and tasks are currently running in your workspace",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "see"
-          }
-        }
-      },
-      "slot.updateCurrentStateArgs": {
+      "slot.patchCurrentStateArgs": {
         "authority": {
           "principals": [
             "user",
@@ -22101,7 +22056,7 @@
             "key": "workspace.runtime-state.manage"
           },
           "prepared": {
-            "resolver": "workspace-state.slot.updateCurrentStateArgs.contextBoundary",
+            "resolver": "workspace-state.slot.patchCurrentStateArgs.contextBoundary",
             "contextBoundary": {
               "operation": "updatePanelState",
               "targetArgument": 0
@@ -22174,7 +22129,7 @@
           "session": "family",
           "residency": "transport",
           "family": "workspace-state.builtin-rpc",
-          "rationale": "Exact typed proxy to the builtin topology owner for one receiver-validated current-entry update"
+          "rationale": "Exact typed proxy to the builtin topology owner, which merges and validates one current-entry patch"
         },
         "capability": "workspace.runtime-state.manage",
         "presentation": {
@@ -22185,6 +22140,36 @@
           "authorityCategory": {
             "domain": "automation",
             "verb": "manage"
+          }
+        }
+      },
+      "slot.resolveByEntity": {
+        "authority": {
+          "principals": [
+            "user",
+            "code",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "identity",
+          "family": "workspace-state.identity",
+          "rationale": "The entity-to-slot binding determines runtime ancestry and the context-boundary target"
+        },
+        "capability": "workspace.runtime-state.inspect",
+        "presentation": {
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
           }
         }
       }
@@ -22302,6 +22287,26 @@
           "residency": "protected-write",
           "family": "workspaceTemplateSource.exactSnapshot",
           "rationale": "Verified source consumers read only the stable compatibility envelope; foreign source is never activated."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "readInstallation": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "protected-write",
+          "family": "workspaceTemplateSource.exactSnapshot",
+          "rationale": "Reviewed template workflows read their exact installed baseline."
         },
         "capability": null,
         "presentation": null

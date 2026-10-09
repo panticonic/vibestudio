@@ -131,11 +131,3 @@ export function encodeCanonicalJson(value: unknown, maximumBytes: number): Uint8
   }
   return bytes;
 }
-
-export function decodeJsonFrame(bytes: Uint8Array): unknown {
-  try {
-    return JSON.parse(decoder.decode(bytes));
-  } catch (error) {
-    throw new Error("Invalid Iroh JSON frame", { cause: error });
-  }
-}

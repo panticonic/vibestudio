@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import {
@@ -35,7 +35,7 @@ export interface MissionOperationIntent {
 }
 
 export interface MissionAuthorityPlanReference {
-  schemaVersion: 1 | typeof MISSION_AUTHORITY_PLAN_SCHEMA_VERSION;
+  schemaVersion: typeof MISSION_AUTHORITY_PLAN_SCHEMA_VERSION;
   digest: string;
   artifactRef: `authority-plan:${string}`;
   compilerVersion: string;
@@ -44,6 +44,7 @@ export interface MissionAuthorityPlanReference {
 
 export type MissionAgentAction =
   | { kind: "prompt"; text: string }
+  | { kind: "notify"; text: string; title?: string; alert?: "inbox" | "interrupt" }
   | {
       kind: "eval" | "watch";
       code: string;
@@ -245,6 +246,22 @@ function validateExecution(execution: MissionExecution): void {
     if (execution.action.kind === "prompt" && !execution.action.text.trim()) {
       throw new Error("Prompt automation requires prompt text");
     }
+    if (execution.action.kind === "notify") {
+      if (!execution.action.text.trim()) throw new Error("Notify automation requires text");
+      const title: unknown = execution.action.title;
+      if (title !== undefined && (typeof title !== "string" || !title.trim())) {
+        throw new Error("Notify automation title must be non-empty text");
+      }
+      const alert: unknown = execution.action.alert;
+      if (alert !== undefined && alert !== "inbox" && alert !== "interrupt") {
+        throw new Error('Notify automation alert must be "inbox" or "interrupt"');
+      }
+      // A notification links back to the conversation it was scheduled from;
+      // a fresh conversation would have nothing to link to.
+      if (execution.conversation.mode !== "continue") {
+        throw new Error("Notify automations run in the conversation that created them");
+      }
+    }
     if (execution.action.kind === "eval" || execution.action.kind === "watch") {
       if (!execution.action.code.trim()) throw new Error("Eval automation requires inline code");
       if (
@@ -377,26 +394,21 @@ export function missionRevisionDigest(
   if (!HEX64.test(authorityPlanDigest)) {
     throw new Error("Automation revision requires an exact authority-plan digest");
   }
-  return createHash("sha256")
-    .update("automation-revision-v2\0", "utf8")
-    .update(canonicalJson({ charter, authorityPlanDigest }), "utf8")
-    .digest("hex");
+  return sha256HexSyncText(
+    `automation-revision-v2\0${canonicalJson({ charter, authorityPlanDigest })}`
+  );
 }
 
 export function missionExecutionImageDigest(image: MissionExecutionImage): string {
   validateExecutionImage(image);
-  return createHash("sha256")
-    .update("mission-execution-image-v1\0", "utf8")
-    .update(
-      canonicalJson({
-        source: image.source,
-        ref: image.ref,
-        effectiveVersion: image.effectiveVersion,
-        className: image.className,
-      }),
-      "utf8"
-    )
-    .digest("hex");
+  return sha256HexSyncText(
+    `mission-execution-image-v1\0${canonicalJson({
+      source: image.source,
+      ref: image.ref,
+      effectiveVersion: image.effectiveVersion,
+      className: image.className,
+    })}`
+  );
 }
 
 /** Continuing schedules are ordinary input; isolated executions own mission authority. */
@@ -404,25 +416,45 @@ export function missionUsesAuthority(execution: MissionExecution): boolean {
   return !(execution.kind === "agent" && execution.conversation.mode === "continue");
 }
 
-/** One author-side composition for native tools, UI edits and installed defaults. */
+/** Minimal RPC surface used by the author-side helpers below. */
+export interface MissionRpc {
+  call(
+    target: string,
+    method: string,
+    args: unknown[],
+    options?: { idempotencyKey: string }
+  ): Promise<unknown>;
+}
+
+export const MISSIONS_SERVICE_PROTOCOL = "vibestudio.missions.v1" as const;
+
+/** Compile one execution's authority plan as the authenticated caller. The
+ * controller later verifies it against the same author; it never compiles. */
 export async function compileMissionAuthorityPlan(
-  rpc: {
-    call(
-      target: string,
-      method: string,
-      args: unknown[],
-      options?: { idempotencyKey: string }
-    ): Promise<unknown>;
-  },
+  rpc: MissionRpc,
   execution: MissionExecution,
   idempotencyKey?: string
 ): Promise<MissionAuthorityPlanReference> {
-  return (await rpc.call(
+  return (await callWithKey(
+    rpc,
     "main",
     "authority.compileAuthorityPlan",
     [{ execution }],
-    idempotencyKey ? { idempotencyKey } : undefined
+    idempotencyKey
   )) as MissionAuthorityPlanReference;
+}
+
+/** Pass call options only when a request identity exists. */
+function callWithKey(
+  rpc: MissionRpc,
+  target: string,
+  method: string,
+  args: unknown[],
+  idempotencyKey: string | undefined
+): Promise<unknown> {
+  return idempotencyKey
+    ? rpc.call(target, method, args, { idempotencyKey })
+    : rpc.call(target, method, args);
 }
 
 /** Schedule/name changes do not change the compiled invocation meaning. */
@@ -430,25 +462,135 @@ export function sameMissionExecution(left: MissionExecution, right: MissionExecu
   return canonicalJson(left) === canonicalJson(right);
 }
 
-/** Prepare a definition edit under its actual author's authenticated invocation. */
-export async function prepareMissionEdit<T extends { name?: string; charter?: MissionCharter }>(
-  rpc: Parameters<typeof compileMissionAuthorityPlan>[0],
+/** A definition edit needs a new plan when its execution changes or when it
+ * customizes a seeded default (a new author). */
+function editNeedsAuthorityPlan(
   current: Pick<MissionRecord, "charter" | "authorityPlan" | "seeded">,
-  patch: T,
-  idempotencyKey?: string
-): Promise<T & { authorityPlan?: MissionAuthorityPlanReference }> {
-  const execution = patch.charter?.execution ?? current.charter.execution;
-  const requiresBoundPlan =
-    current.authorityPlan.schemaVersion === 1 && missionUsesAuthority(execution);
-  if (
-    !current.seeded &&
-    !requiresBoundPlan &&
-    sameMissionExecution(current.charter.execution, execution)
-  )
-    return patch;
+  execution: MissionExecution
+): boolean {
+  return (
+    current.seeded === true ||
+    !sameMissionExecution(current.charter.execution, execution)
+  );
+}
+
+export interface MissionDefinitionInput {
+  name: string;
+  charter: MissionCharter;
+}
+
+export interface MissionEditPatch {
+  name?: string;
+  charter?: MissionCharter;
+}
+
+export interface MissionCallOptions {
+  /** Stable request identity. The authority-plan compilation and the
+   * controller call derive their own keys from it. */
+  idempotencyKey?: string;
+}
+
+/**
+ * Author-side client for the missions controller. `launch`, `edit`, and
+ * `provisionDefault` compile the authority plan as the authenticated caller
+ * and then call the controller, which verifies that plan within its own
+ * invocation: still two server calls, never controller-side compilation.
+ */
+export interface MissionsClient {
+  overview(options?: Record<string, unknown>): Promise<unknown>;
+  list(): Promise<MissionRecord[]>;
+  get(missionId: string): Promise<MissionRecord | null>;
+  getDefault(defaultId: string): Promise<MissionRecord | null>;
+  listRuns(
+    missionId: string,
+    options?: { limit?: number; cursor?: { startedAt: number; runId: string } }
+  ): Promise<{
+    items: MissionRunRecord[];
+    nextCursor?: { startedAt: number; runId: string };
+  }>;
+  getRun(runId: string): Promise<MissionRunRecord | null>;
+  launch(input: MissionDefinitionInput, options?: MissionCallOptions): Promise<MissionRecord>;
+  provisionDefault(
+    defaultId: string,
+    input: MissionDefinitionInput,
+    options?: MissionCallOptions
+  ): Promise<MissionRecord>;
+  edit(
+    missionId: string,
+    patch: MissionEditPatch,
+    options?: MissionCallOptions
+  ): Promise<MissionRecord>;
+  runNow(missionId: string): Promise<MissionRunRecord>;
+  cancel(missionId: string): Promise<MissionRecord>;
+  pause(missionId: string): Promise<MissionRecord>;
+  resume(missionId: string): Promise<MissionRecord>;
+  retire(missionId: string): Promise<MissionRecord>;
+}
+
+export function createMissionsClient(rpc: MissionRpc): MissionsClient {
+  let target: Promise<string> | null = null;
+  const resolveTarget = (): Promise<string> =>
+    (target ??= (async () => {
+      const service = (await rpc.call("main", "workers.resolveService", [
+        MISSIONS_SERVICE_PROTOCOL,
+        null,
+      ])) as { kind?: unknown; targetId?: unknown };
+      if (service.kind !== "durable-object" || typeof service.targetId !== "string")
+        throw new Error("The Automations service is unavailable");
+      return service.targetId;
+    })().catch((error: unknown) => {
+      target = null;
+      throw error;
+    }));
+  const call = async <T>(method: string, args: unknown[], idempotencyKey?: string) =>
+    (await callWithKey(rpc, await resolveTarget(), method, args, idempotencyKey)) as T;
+  const planKey = (options?: MissionCallOptions) =>
+    options?.idempotencyKey ? `${options.idempotencyKey}:authority-plan` : undefined;
   return {
-    ...patch,
-    authorityPlan: await compileMissionAuthorityPlan(rpc, execution, idempotencyKey),
+    overview: (options = {}) => call("overview", [options]),
+    list: () => call("list", []),
+    get: (missionId) => call("get", [missionId]),
+    getDefault: (defaultId) => call("getDefault", [defaultId]),
+    listRuns: (missionId, options = {}) => call("listRuns", [missionId, options]),
+    getRun: (runId) => call("getRun", [runId]),
+    async launch(input, options) {
+      const authorityPlan = await compileMissionAuthorityPlan(
+        rpc,
+        input.charter.execution,
+        planKey(options)
+      );
+      return call("launch", [{ ...input, authorityPlan }], options?.idempotencyKey);
+    },
+    async provisionDefault(defaultId, input, options) {
+      const authorityPlan = await compileMissionAuthorityPlan(
+        rpc,
+        input.charter.execution,
+        planKey(options)
+      );
+      return call(
+        "provisionDefault",
+        [defaultId, { ...input, authorityPlan }],
+        options?.idempotencyKey
+      );
+    },
+    async edit(missionId, patch, options) {
+      const current = await call<MissionRecord | null>("get", [missionId]);
+      if (!current) throw new Error(`Automation ${missionId} is unavailable`);
+      const execution = patch.charter?.execution ?? current.charter.execution;
+      const authorityPlan = editNeedsAuthorityPlan(current, execution)
+        ? await compileMissionAuthorityPlan(rpc, execution, planKey(options))
+        : undefined;
+      return call(
+        "edit",
+        [missionId, { ...patch, ...(authorityPlan ? { authorityPlan } : {}) }],
+        options?.idempotencyKey
+      );
+    },
+    runNow: (missionId) => call("runNow", [missionId]),
+    cancel: (missionId) => call("cancel", [missionId]),
+    pause: (missionId) => call("pause", [missionId]),
+    resume: (missionId) => call("resume", [missionId]),
+    retire: (missionId) => call("retire", [missionId]),
   };
 }
 

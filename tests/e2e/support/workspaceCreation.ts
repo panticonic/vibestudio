@@ -57,8 +57,7 @@ export async function settleWorkspaceInstallReviews(
   }
 }
 
-/** Present one exact pending approval without acting on any other queue entry. */
-export async function presentApprovalCard(page: Page, approvalId: string): Promise<Locator> {
+async function presentApprovalCardOnPage(page: Page, approvalId: string): Promise<Locator> {
   const requested = page.locator(`[data-approval-id=${JSON.stringify(approvalId)}]`);
   const pill = page.locator("[data-approval-pill]");
   if (!(await page.locator("[data-approval-id]:visible").count())) {
@@ -82,6 +81,34 @@ export async function presentApprovalCard(page: Page, approvalId: string): Promi
   }
   await expect(requested).toBeVisible({ timeout: 30_000 });
   return requested;
+}
+
+/** Present one exact approval on the surface that currently owns its UI. */
+export async function presentApprovalCard(page: Page, approvalId: string): Promise<Locator> {
+  const approvalSurface = () =>
+    page
+      .context()
+      .pages()
+      .find(
+        (candidate) =>
+          !candidate.isClosed() && candidate.url().endsWith("#overlaySurface=approval-card")
+      );
+  const surface = approvalSurface();
+  const candidates = surface && surface !== page ? [page, surface] : [page];
+
+  // A request may already be expanded in the shell's inline queue or in the
+  // dedicated approval surface. Use the exact visible card before opening or
+  // navigating another queue.
+  for (const candidate of candidates) {
+    const requested = candidate.locator(`[data-approval-id=${JSON.stringify(approvalId)}]`);
+    if (await requested.isVisible()) return requested;
+  }
+  for (const candidate of candidates) {
+    if ((await candidate.locator("[data-approval-id]:visible").count()) > 0) {
+      return presentApprovalCardOnPage(candidate, approvalId);
+    }
+  }
+  return presentApprovalCardOnPage(surface ?? page, approvalId);
 }
 
 /** Complete the product's reviewed creation flow and wait for its workspace to become active. */

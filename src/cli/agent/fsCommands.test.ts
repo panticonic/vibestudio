@@ -155,10 +155,10 @@ describe("vibestudio fs commands", () => {
     ]);
   });
 
-  it("read decodes the binary envelope to stdout", async () => {
+  it("read writes native response bytes to stdout", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    stubServer(() => ({ __bin: true, data: Buffer.from("héllo\n").toString("base64") }));
+    stubServer(() => new Uint8Array(Buffer.from("héllo\n")));
     const writes: Buffer[] = [];
     const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
       chunk: Buffer | string
@@ -178,7 +178,7 @@ describe("vibestudio fs commands", () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     const payload = Buffer.from([0, 1, 2, 255]);
-    const { rpcBodies } = stubServer(() => ({ __bin: true, data: payload.toString("base64") }));
+    const { rpcBodies } = stubServer(() => new Uint8Array(payload));
     const outFile = path.join(tmpDir, "out.bin");
 
     const { main } = await import("../client.js");
@@ -189,7 +189,7 @@ describe("vibestudio fs commands", () => {
     expect(jsonOutput()).toMatchObject({ path: "/blob.bin", bytes: 4 });
   });
 
-  it("write sends a binary envelope that round-trips the content", async () => {
+  it("write sends native bytes through RPC", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     const { rpcBodies } = stubServer(() => undefined);
@@ -200,15 +200,11 @@ describe("vibestudio fs commands", () => {
     ).resolves.toBe(0);
 
     expect(rpcBodies).toHaveLength(1);
-    const [contextId, target, envelope] = rpcBodies[0]!.args as [
-      string,
-      string,
-      { __bin: true; data: string },
-    ];
+    const [contextId, target, bytes] = rpcBodies[0]!.args as [string, string, Uint8Array];
     expect(rpcBodies[0]!.method).toBe("fs.writeFile");
     expect(contextId).toBe("ctx_1");
     expect(target).toBe("/notes/a.txt");
-    expect(Buffer.from(envelope.data, "base64").toString("utf8")).toBe("héllo wörld");
+    expect(Buffer.from(bytes).toString("utf8")).toBe("héllo wörld");
   });
 
   it("write --append sends one append intent; the service creates parents", async () => {
@@ -237,8 +233,8 @@ describe("vibestudio fs commands", () => {
       main(["fs", "write", "/copy.txt", "--from-file", localFile, "--json"])
     ).resolves.toBe(0);
 
-    const envelope = rpcBodies[0]!.args[2] as { data: string };
-    expect(Buffer.from(envelope.data, "base64").toString("utf8")).toBe("from disk");
+    const bytes = rpcBodies[0]!.args[2] as Uint8Array;
+    expect([...bytes]).toEqual([...Buffer.from("from disk")]);
   });
 
   it("rm/mv/cp/mkdir/stat construct the expected fs calls", async () => {

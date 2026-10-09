@@ -10,7 +10,6 @@ import { bindProcessLifetimeToParent } from "../../../scripts/owned-process-tree
 
 if (process.send) bindProcessLifetimeToParent();
 
-const IPC_INIT_TIMEOUT_MS = 10_000;
 
 interface IpcInit {
   type: "init";
@@ -51,22 +50,34 @@ function parseArgs(argv: string[]): ConfigOverrides {
   return overrides;
 }
 
+/**
+ * A managed host (spawned with an IPC channel) always receives its server URL
+ * and token in an `init` message. Wait for it; the parent going away first is
+ * the only terminal outcome. Unmanaged launches configure from argv/env.
+ */
 async function awaitIpcInit(): Promise<IpcInit | null> {
   if (!process.send) return null;
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+  if (!process.connected) {
+    throw new Error("headless-host: parent disconnected before sending its init message");
+  }
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
       process.off("message", onMessage);
-      resolve(null);
-    }, IPC_INIT_TIMEOUT_MS);
+      process.off("disconnect", onDisconnect);
+    };
     const onMessage = (message: unknown): void => {
       const init = message as IpcInit;
       if (init && init.type === "init" && init.token && init.serverUrl) {
-        clearTimeout(timer);
-        process.off("message", onMessage);
+        cleanup();
         resolve(init);
       }
     };
+    const onDisconnect = (): void => {
+      cleanup();
+      reject(new Error("headless-host: parent disconnected before sending its init message"));
+    };
     process.on("message", onMessage);
+    process.once("disconnect", onDisconnect);
   });
 }
 

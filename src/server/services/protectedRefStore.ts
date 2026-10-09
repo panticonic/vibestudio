@@ -171,10 +171,6 @@ export class RefEventConflictError extends Error {
   }
 }
 
-export function isRefConflictError(error: unknown): error is RefBatchConflictError {
-  return error instanceof RefBatchConflictError;
-}
-
 const REF_VALUE_RE = /^state:[0-9a-f]{64}$/;
 const STORE_VERSION = 6;
 const STORE_FILE_NAME = "protected-publication-state.json";

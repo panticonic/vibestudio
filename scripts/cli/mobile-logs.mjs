@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
 import { bootedIosSimulator } from "./lib/mobile-ios.mjs";
+import { flagValue } from "./lib/args.mjs";
 
 function parseArgs(argv) {
   const options = {
@@ -18,11 +19,11 @@ function parseArgs(argv) {
     if (arg === "--") {
       continue;
     } else if (arg === "--platform") {
-      options.platform = argv[++i] ?? "android";
+      options.platform = flagValue(argv, ++i, arg);
     } else if (arg === "--device") {
-      options.device = argv[++i] ?? null;
+      options.device = flagValue(argv, ++i, arg);
     } else if (arg === "--package") {
-      options.packageName = argv[++i] ?? "";
+      options.packageName = flagValue(argv, ++i, arg);
     } else if (arg === "--help") {
       options.help = true;
     } else {

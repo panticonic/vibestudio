@@ -13,6 +13,8 @@ import {
   type ProcessAdapter,
 } from "@vibestudio/process-adapter";
 import {
+  decodeRpcJson,
+  encodeRpcJson,
   envelopeFromMessage,
   type RpcEnvelope,
   type RpcMessage,
@@ -135,6 +137,7 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
         "  }});",
         "  return {",
         "    ping(value) { return `pong:${value}`; },",
+        "    echoBinary(value) { return value; },",
         "    async replaceStorage(value) {",
         "      await ctx.storage.mkdir('atomic');",
         "      await ctx.storage.replaceFile('atomic/value.txt', value);",
@@ -258,6 +261,9 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
       on(event: "message", listener: (message: unknown) => void) {
         proc!.on(event, listener);
       },
+      off(event: "message", listener: (message: unknown) => void) {
+        proc!.off(event, listener);
+      },
       send(frame: string) {
         proc!.postMessage(frame);
       },
@@ -369,6 +375,7 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
     expect(ready.message.args[0]).toEqual({
       methods: [
         "ping",
+        "echoBinary",
         "replaceStorage",
         "sqliteStorage",
         "callerContext",
@@ -473,6 +480,53 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
       type: "response",
       requestId,
       result: "pong:ok",
+    });
+
+    const binaryRequestId = randomUUID();
+    const payload = new Uint8Array([0, 255, 17, 0, 128]);
+    const binaryResponse = await waitForMessage<RpcResponse>((resolve, reject) => {
+      const onMessage = (raw: unknown) => {
+        try {
+          if (typeof raw !== "string") return;
+          const message = decodeRpcJson(raw) as WsClientMessage;
+          if (message.type !== "ws:rpc") return;
+          const rpc = message.envelope?.message as RpcMessage | undefined;
+          if (rpc?.type === "response" && rpc.requestId === binaryRequestId) {
+            ready.ws.off("message", onMessage);
+            resolve(rpc);
+          }
+        } catch (error) {
+          ready.ws.off("message", onMessage);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+      ready.ws.on("message", onMessage);
+      ready.ws.send(
+        encodeRpcJson({
+          type: "ws:rpc",
+          envelope: makeEnvelope("main", "@workspace-extensions/process-test", "server", {
+            type: "request",
+            requestId: binaryRequestId,
+            fromId: "main",
+            method: "extension.invoke",
+            args: [
+              "echoBinary",
+              [payload],
+              {
+                requestId: binaryRequestId,
+                extensionName: "@workspace-extensions/process-test",
+                method: "echoBinary",
+                caller: { callerId: "test", callerKind: "shell" },
+              },
+            ],
+          } satisfies RpcRequest),
+        } satisfies WsServerMessage)
+      );
+    });
+    expect(binaryResponse).toEqual({
+      type: "response",
+      requestId: binaryRequestId,
+      result: payload,
     });
 
     const storageRequestId = randomUUID();

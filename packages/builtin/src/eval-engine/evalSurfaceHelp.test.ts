@@ -175,7 +175,7 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(Object.keys(out!.methods)).toEqual(["mktemp", "open", "readFile"]);
     expect(out!.surface).toBe("injected-runtime");
     expect(out!.note).toContain('rpc.call("main", "fs.…"');
-    expect(out!.note).toContain("services.fs");
+    expect(out!.note).toContain("`services.fs`");
   });
 
   it("returns null when there are no live methods (caller falls back to the service schema)", () => {

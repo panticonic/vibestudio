@@ -324,7 +324,6 @@ describe("RpcServer HTTP POST /rpc", () => {
     setup.server.initHandlers();
     gateway = new Gateway({
       tokenManager: setup.tokenManager,
-      externalHost: "localhost",
       getRpcHandler: () => setup.server,
     });
     port = await gateway.start(0);
@@ -405,7 +404,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => setup.server,
       });
       port = await gateway.start(0);
@@ -443,7 +441,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => setup.server,
       });
       port = await gateway.start(0);
@@ -488,7 +485,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => setup.server,
       });
       port = await gateway.start(0);
@@ -541,7 +537,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => setup.server,
       });
       port = await gateway.start(0);
@@ -598,7 +593,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => setup.server,
       });
       port = await gateway.start(0);
@@ -655,7 +649,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => setup.server,
       });
       port = await gateway.start(0);
@@ -878,7 +871,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => setup.server,
       });
       port = await gateway.start(0);
@@ -985,7 +977,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => setup.server,
       });
       port = await gateway.start(0);
@@ -1408,7 +1399,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => setup.server,
       });
       port = await gateway.start(0);
@@ -1475,7 +1465,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => server,
       });
       const p = await gw.start(0);
@@ -1518,7 +1507,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => server,
       });
       const p = await gw.start(0);
@@ -1628,7 +1616,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => server,
       });
       const p = await gw.start(0);
@@ -1718,7 +1705,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => server,
       });
       const p = await gw.start(0);
@@ -1773,7 +1759,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => server,
       });
       const p = await gw.start(0);
@@ -1794,7 +1779,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         });
         expect(res.status).toBe(200);
         const { decodeFramedResponseToStreaming } =
-          await import("@vibestudio/credential-client/streamFraming");
+          await import("@vibestudio/rpc/protocol/streamCodec");
         const decoded = await decodeFramedResponseToStreaming(res.body!, "");
         expect(decoded.status).toBe(201);
         expect(decoded.headers.get("content-type")).toContain("text/plain");
@@ -1862,7 +1847,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => server,
       });
       const p = await gw.start(0);
@@ -1885,7 +1869,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         const buf = new Uint8Array(await res.arrayBuffer());
 
         const { FrameDecoder, FRAME_HEAD, FRAME_DATA, FRAME_END, parseHeadFrame, parseEndFrame } =
-          await import("@vibestudio/credential-client/streamFraming");
+          await import("@vibestudio/rpc/protocol/streamCodec");
 
         const frames: Array<{ type: number; payload: Uint8Array }> = [];
         const decoder = new FrameDecoder((type, payload) => {
@@ -1937,7 +1921,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
-        externalHost: "localhost",
         getRpcHandler: () => server,
       });
       const p = await gw.start(0);
@@ -1958,7 +1941,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         });
         expect(res.status).toBe(200);
         const { FrameDecoder, FRAME_ERROR, parseErrorFrame } =
-          await import("@vibestudio/credential-client/streamFraming");
+          await import("@vibestudio/rpc/protocol/streamCodec");
         const frames: Array<{ type: number; payload: Uint8Array }> = [];
         const decoder = new FrameDecoder((type, payload) => {
           frames.push({ type, payload });

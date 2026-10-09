@@ -113,7 +113,7 @@ describe("workerdRpcRelay", () => {
 
   it("surfaces durable-work readiness from caller-attributed DO relays", async () => {
     const response = responseEnvelope({ ok: true });
-    response.headers.set(DURABLE_WORK_READY_HEADER, "channel-delivery,agent-effect");
+    response.headers.set(DURABLE_WORK_READY_HEADER, "channel-delivery,workspace-publication");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
     const onWorkReady = vi.fn();
 
@@ -129,7 +129,7 @@ describe("workerdRpcRelay", () => {
     );
 
     expect(onWorkReady).toHaveBeenCalledOnce();
-    expect(onWorkReady).toHaveBeenCalledWith(["channel-delivery", "agent-effect"]);
+    expect(onWorkReady).toHaveBeenCalledWith(["channel-delivery", "workspace-publication"]);
   });
 
   it("preserves structured service failures while unwrapping the DO envelope", async () => {

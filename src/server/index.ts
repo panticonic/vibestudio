@@ -47,7 +47,11 @@ import {
   verifiedInitiator,
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
-import { omitTrailingUndefined, parseDoTargetId } from "@vibestudio/shared/workspaceServiceRpc";
+import {
+  doTargetId,
+  omitTrailingUndefined,
+  parseDoTargetId,
+} from "@vibestudio/shared/workspaceServiceRpc";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
 import { eventWatchOwner } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
@@ -139,11 +143,7 @@ interface CliArgs {
   appRoot?: string;
   logLevel?: string;
   readyFile?: string;
-  servePanels?: boolean;
   gatewayPort?: number;
-  init?: boolean;
-  host?: string;
-  bindHost?: string;
   requireMobileReady?: boolean;
   requireElectronReady?: boolean;
   headlessHostAutospawn?: boolean;
@@ -165,10 +165,7 @@ Options:
   --bootstrap-workspace <name>
                            Register and use an existing workspace for first-run pairing
   --ready-file <path>      Write structured readiness JSON to this file
-  --host <hostname>        External hostname (also sets bind to 0.0.0.0)
-  --bind-host <addr>       Explicit bind address (default: 127.0.0.1, or 0.0.0.0 with --host)
-  --serve-panels           Enable panel HTTP serving
-  --gateway-port <port>    Port for the gateway HTTP/WS ingress (default: auto-assigned)
+  --gateway-port <port>    Port for the loopback gateway HTTP/WS ingress (default: auto-assigned)
   --log-level <level>      Log verbosity (trace, verbose, info, warn, error, silent)
   --require-mobile-ready   Fail startup unless the workspace React Native app can be
                            built and served to native mobile clients.
@@ -178,8 +175,6 @@ Options:
 
 Environment variables:
   VIBESTUDIO_ADMIN_TOKEN     Use a stable admin token instead of generating a random one
-  VIBESTUDIO_HOST            External hostname (same as --host)
-  VIBESTUDIO_BIND_HOST       Explicit bind address (same as --bind-host)
   VIBESTUDIO_GATEWAY_PORT    Gateway ingress port (same as --gateway-port)
   VIBESTUDIO_APP_ROOT        Application root (same as --app-root)
   VIBESTUDIO_LOG_LEVEL       Log verbosity (same as --log-level)
@@ -222,11 +217,7 @@ function parseArgs(argv: string[]): CliArgs {
     "app-root",
     "ready-file",
     "log-level",
-    "serve-panels",
     "gateway-port",
-    "init",
-    "host",
-    "bind-host",
     "require-mobile-ready",
     "require-electron-ready",
     "headless-host-autospawn",
@@ -234,8 +225,6 @@ function parseArgs(argv: string[]): CliArgs {
   ]);
   /** Flags that don't take a value */
   const booleanFlags = new Set([
-    "serve-panels",
-    "init",
     "require-mobile-ready",
     "require-electron-ready",
     "headless-host-autospawn",
@@ -296,20 +285,8 @@ function parseArgs(argv: string[]): CliArgs {
       case "log-level":
         args.logLevel = value;
         break;
-      case "serve-panels":
-        args.servePanels = true;
-        break;
-      case "init":
-        args.init = true;
-        break;
       case "gateway-port":
         args.gatewayPort = parsePort(value, "--gateway-port");
-        break;
-      case "host":
-        args.host = value;
-        break;
-      case "bind-host":
-        args.bindHost = value;
         break;
       case "require-mobile-ready":
         args.requireMobileReady = true;
@@ -365,10 +342,9 @@ async function main() {
     },
   });
   const { setUserDataPath } = await import("@vibestudio/env-paths");
-  const { loadCentralEnv } = await import("@vibestudio/workspace/loader");
+  const { loadCentralEnv, resolveOrCreateWorkspace } = await import("@vibestudio/workspace/loader");
   const { loadPersistedAdminToken, savePersistedAdminToken, getAdminTokenPath } =
     await import("@vibestudio/shared/centralAuth");
-  const { resolveLocalWorkspaceStartup } = await import("@vibestudio/workspace/startup");
   const { TokenManager } = await import("@vibestudio/shared/tokenManager");
   const { ServiceDispatcher } = await import("@vibestudio/shared/serviceDispatcher");
   const dispatcher = new ServiceDispatcher();
@@ -399,13 +375,10 @@ async function main() {
       `VIBESTUDIO_PROCESS_ROLE must be "hub" or "workspace-child" (got ${processRole})`
     );
   }
-  const isWorkspaceServer = processRole === "workspace-child";
-
-  if (!isWorkspaceServer) {
+  if (processRole === "hub") {
     const forbiddenWorkspaceSelection =
       args.workspaceName ||
       args.workspaceDir ||
-      args.init ||
       process.env["VIBESTUDIO_WORKSPACE"] ||
       process.env["VIBESTUDIO_WORKSPACE_DIR"];
     if (forbiddenWorkspaceSelection) {
@@ -459,12 +432,10 @@ async function main() {
   let workspace: import("@vibestudio/workspace-contracts/types").Workspace;
   let workspaceName: string;
   try {
-    const startup = resolveLocalWorkspaceStartup({
+    const resolved = resolveOrCreateWorkspace({
       appRoot,
       wsDir,
       name: wsName,
-      init: args.init,
-      requireExplicitSelection: isWorkspaceServer,
       workspaceId,
       ...(creationIntent
         ? { rootTemplate: creationIntent.rootTemplate, purpose: creationIntent.purpose }
@@ -473,13 +444,12 @@ async function main() {
     // Managed directory names are storage coordinates, not workspace
     // identities: a child retains the hub catalog's opaque id.
     workspace = {
-      ...startup.resolved.workspace,
-      config: { ...startup.resolved.workspace.config, id: workspaceId },
+      ...resolved.workspace,
+      config: { ...resolved.workspace.config, id: workspaceId },
     };
-    workspaceName = startup.resolved.name;
+    workspaceName = resolved.name;
   } catch (error) {
     console.error(`Workspace resolution failed: ${error}`);
-    if (!args.init) console.error("  Use --init to auto-create from template.");
     process.exit(1);
   }
 
@@ -1429,23 +1399,9 @@ async function main() {
       },
     });
   };
-  if (process.env["VIBESTUDIO_DOGFOOD"] === "1") {
-    console.warn(
-      "[Dogfood] VIBESTUDIO_DOGFOOD git-fast-forward mirroring is unavailable under the GAD vcs; " +
-        "commit and push changes from the source workspace instead."
-    );
-  }
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
-  const configuredProtocol = "http" as const;
-  // Resolve the advertised gateway before registering workerd: workerd's
-  // back-channel aliases are a real startup input, not a later lexical side effect.
-  const { resolveHostConfig } = await import("@vibestudio/shared/hostConfig");
-  const hostConfig = resolveHostConfig({
-    workerdPort: 0,
-    gatewayPort: requestedGatewayPort ?? 0,
-    host: args.host,
-    bindHost: args.bindHost,
-  });
+  const { gatewayHttpUrl, gatewayWsUrl, GATEWAY_HOST } =
+    await import("@vibestudio/shared/hostConfig");
   let appHostForGateway: import("./appHost.js").AppHost | null = null;
   type TrustedUnitHostInstance =
     | import("@vibestudio/extension-host").ExtensionHost
@@ -1611,21 +1567,21 @@ async function main() {
   // Unit manifests in the materialized semantic source own userland
   // dependencies. The workspace root itself is not a Node package.
   const buildDependencyWorkspaceRoot = workspacePath;
-  const { parseWorkspaceConfigContentWithId } = await import("@vibestudio/workspace/configParser");
+  const { readWorkspaceConfig } = await import("@vibestudio/workspace/configParser");
   const restoredLaunch = readWorkspaceHostLaunchRecord(statePath);
   const bootstrapStateHash =
     restoredLaunch?.stateHash ?? (await rootTemplateBootstrap.prepareBootstrapState());
   const { readFileAtTree, getBytes } = await import("./services/blobstoreService.js");
-  const bootstrapManifest = await readFileAtTree(
-    layout.blobsDir,
-    bootstrapStateHash,
-    "meta/vibestudio.yml"
-  );
-  if (!bootstrapManifest) throw new Error("Workspace publication has no manifest");
-  const bootstrapManifestBytes = await getBytes(layout.blobsDir, bootstrapManifest.contentHash);
-  if (!bootstrapManifestBytes) throw new Error("Workspace manifest content is unavailable");
-  const materializedWorkspaceConfig = parseWorkspaceConfigContentWithId(
-    Buffer.from(bootstrapManifestBytes).toString("utf8"),
+  const materializedWorkspaceConfig = await readWorkspaceConfig(
+    {
+      readText: async (filePath) => {
+        const file = await readFileAtTree(layout.blobsDir, bootstrapStateHash, filePath);
+        if (!file) return null;
+        const bytes = await getBytes(layout.blobsDir, file.contentHash);
+        if (!bytes) throw new Error(`Workspace source content is unavailable: ${filePath}`);
+        return Buffer.from(bytes).toString("utf8");
+      },
+    },
     workspaceId
   );
   replaceWorkspaceConfig(workspaceConfig, materializedWorkspaceConfig);
@@ -1827,8 +1783,6 @@ async function main() {
     },
   };
 
-  const { isDeclaredRemoteRepoPath, syncDeclaredRemoteForRepo } =
-    await import("@vibestudio/workspace/remotes");
   const { resolveDeclaredApps, resolveDeclaredExtensions } =
     await import("@vibestudio/workspace/loader");
   const { readWorkspaceConfigFromState } = await import("./workspaceConfigSource.js");
@@ -2047,32 +2001,6 @@ async function main() {
     const { stateHash } = await workspaceVcs.ensureFresh();
     return workspaceVcs.materializeSourceTree(stateHash);
   });
-  const skippedDeclaredRemoteRepoWarnings = new Set<string>();
-  const syncDeclaredRemotesForSource = async (repoPath?: string): Promise<void> => {
-    const repos = repoPath
-      ? [repoPath]
-      : collectWorkspaceUnitPaths((await treeScanner.getSourceTree()).children);
-    await Promise.all(
-      repos.map((repo) => {
-        if (!isDeclaredRemoteRepoPath(repo)) {
-          if (!skippedDeclaredRemoteRepoWarnings.has(repo)) {
-            skippedDeclaredRemoteRepoWarnings.add(repo);
-            console.log(
-              `[GitRemotes] Skipping declared remote sync for non-declarable workspace repo path ${repo}`
-            );
-          }
-          return Promise.resolve();
-        }
-        return syncDeclaredRemoteForRepo({
-          config: workspaceConfig,
-          workspaceRoot: workspacePath,
-          repoPath: repo,
-        }).catch((err: unknown) => {
-          console.warn(`[GitRemotes] Failed to sync declared remote for ${repo}:`, err);
-        });
-      })
-    );
-  };
   // Protected workspace publications drive runtime reactions:
   //  - meta/ changes reload workspace config from the exact published state
   //    and reconcile declared units
@@ -2113,7 +2041,15 @@ async function main() {
   workspaceVcs.onProtectedPublication(async (event) => {
     if (epochHandoffCommitted) return;
     treeScanner.invalidate();
-    if (event.changedPaths.some((changed) => changed.startsWith("meta/"))) {
+    if (
+      event.changedPaths.some(
+        (changed) =>
+          changed.startsWith("meta/") ||
+          (workspaceConfig.services ?? []).some(
+            (service) => changed === `${service.source}/package.json`
+          )
+      )
+    ) {
       const reloadSeq = ++latestMetaConfigReloadSeq;
       queueMicrotask(() => {
         void (async () => {
@@ -2128,9 +2064,6 @@ async function main() {
             }
             void reconcileDeclaredWorkspaceUnits(nextConfig, "meta-change").then(
               reconcileDefaultAutomations
-            );
-            syncDeclaredRemotesForSource().catch((err: unknown) =>
-              console.warn("[GitRemotes] Failed to sync declared remotes after meta change:", err)
             );
           } catch (err) {
             console.warn(
@@ -2362,6 +2295,7 @@ async function main() {
     await import("./services/workspaceTemplateSourceService.js");
   container.registerRpc(
     createWorkspaceTemplateSourceService({
+      readInstallation: (eventId) => workspaceVcs.readTemplateInstallation(eventId),
       hostVersion: (epoch) => {
         if (epoch === WORKSPACE_SYSTEM_EPOCH) return WORKSPACE_APP_VERSION;
         const currentAppVersion = process.env["VIBESTUDIO_CURRENT_APP_VERSION"];
@@ -3479,6 +3413,7 @@ async function main() {
   // ── Credential service ──
   const { wireCredentialService } = await import("./bootstrap/credentials.js");
   relayServices.credential = wireCredentialService({
+    statePath,
     container,
     routeRegistry,
     eventService,
@@ -3586,17 +3521,6 @@ async function main() {
         resolveAuthorEntity: (runtimeId) => entityCache.resolveActive(runtimeId),
       })
     );
-  }
-
-  {
-    const { createSpeechService } = await import("./services/speechService.js");
-    const speech = createSpeechService({ appRoot });
-    container.registerManaged({
-      name: "speech",
-      start: async () => speech,
-      stop: (service: typeof speech) => service.stop(),
-      getServiceDefinition: () => speech,
-    });
   }
 
   // Explicit host terminals are native effects, separately approved from shell
@@ -4309,6 +4233,15 @@ async function main() {
             });
           },
           onEntityTitleChanged: (entityId, title) => entityTitleProjection.observe(entityId, title),
+          stateArgsSchemaForBuild: (buildKey) => {
+            const build = container
+              .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+              ?.getBuildByKey(buildKey);
+            if (!build) {
+              throw new Error(`Build ${buildKey} is unavailable; cannot validate stateArgs`);
+            }
+            return build.metadata.stateArgsSchema;
+          },
         });
       },
       getServiceDefinition() {
@@ -4909,11 +4842,7 @@ async function main() {
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           dispatchToTarget: async (target, event) => {
-            await rpcServer.server.callTarget(
-              `do:${target.source}:${target.className}:${target.objectKey}`,
-              target.method,
-              [event]
-            );
+            await rpcServer.server.callTarget(doTargetId(target), target.method, [event]);
           },
         });
         relayServices.webhook = webhookIngress;
@@ -4987,22 +4916,10 @@ async function main() {
     }
     return gatewayPortResolved;
   }
-  // Public TLS ingress is decommissioned — the gateway is loopback HTTP only.
-  // Remote reach is the endpoint-authenticated Iroh pipe; there is no public URL.
-  function gatewayProtocol(): "http" {
-    return "http";
-  }
+  // The gateway is loopback HTTP only; remote reach is the endpoint-authenticated
+  // Iroh pipe, so this is the single advertised origin.
   function getLocalGatewayUrl(context: string): string {
-    return `${gatewayProtocol()}://127.0.0.1:${getResolvedGatewayPort(context)}`;
-  }
-  function getExternalGatewayUrl(context: string): string {
-    return `${gatewayProtocol()}://${hostConfig.externalHost}:${getResolvedGatewayPort(context)}`;
-  }
-  // Single advertised loopback origin for auth connection info and native React
-  // Native bundle bootstrap. (The public/QR pairing origin is gone — pairing is
-  // the compact endpoint reach minted by the ingress; see the seam below.)
-  function getConnectUrl(context: string): string {
-    return getExternalGatewayUrl(context);
+    return gatewayHttpUrl(getResolvedGatewayPort(context));
   }
   const { PanelRuntimeCoordinator } = await import("./panelRuntimeCoordinator.js");
   const panelRuntimeCoordinator = new PanelRuntimeCoordinator({
@@ -5103,14 +5020,6 @@ async function main() {
     panelRuntimeCoordinator,
     executionPublicationPort: executionPublicationJournal,
     bindDevelopmentRunRootProvider: (provider) => developmentRunRootProvider.bind(provider),
-    snapshotLegacyDevelopmentRoots: async (epoch) => {
-      if (!developmentDispatch) {
-        throw new Error("Base development service is not reachable for legacy retention migration");
-      }
-      return (await developmentDispatch("snapshotExecutionRoots", [
-        { epoch },
-      ])) as import("@vibestudio/shared/execution/retention").ExecutionRoot[];
-    },
   });
   {
     const { createMobileNativeService } = await import("./services/mobileNativeService.js");
@@ -6244,7 +6153,7 @@ async function main() {
         readWorkspaceFileAtState,
         describeCapability,
         getGatewayUrl: () => getLocalGatewayUrl("app startup"),
-        getReactNativeAppArtifactBaseUrl: () => getConnectUrl("React Native app artifact"),
+        getReactNativeAppArtifactBaseUrl: () => getLocalGatewayUrl("React Native app artifact"),
         getTerminalAppArtifactBaseUrl: () => getLocalGatewayUrl("Terminal app artifact"),
         // Manifest-declared preferred app per host target (meta/vibestudio.yml
         // hostTargets.*). Read live from workspaceConfig so meta-change
@@ -6542,8 +6451,6 @@ async function main() {
     gatewayToken: workerdGatewayToken,
     gateway: {
       getPort: () => gatewayPortResolved,
-      protocol: configuredProtocol,
-      externalHost: hostConfig.externalHost,
       configuredAliases: process.env["VIBESTUDIO_GATEWAY_ALIASES"],
     },
     getInternalDoEnv: internalDoProviderEnv,
@@ -6583,7 +6490,7 @@ async function main() {
       const artifact = executionArtifactRefFromBuild(workspaceId, build);
       const mainSingletons = workspaceDecls.singletons
         .all()
-        .filter((decl) => decl.source === source && !decl.contextId);
+        .filter((decl) => decl.source === source);
       const unchanged: EntityRecord[] = [];
       const advances: EntityActivateInput[] = [];
       for (const decl of mainSingletons) {
@@ -6825,9 +6732,7 @@ async function main() {
               .allNodes()
               .find((node) => node.relativePath === ref.source);
             if (!unit?.manifest.agent) return false;
-            return capabilityGrantStore.isRuntimeAuthorityPaused(
-              `do:${ref.source}:${ref.className}:${ref.objectKey}`
-            );
+            return capabilityGrantStore.isRuntimeAuthorityPaused(doTargetId(ref));
           },
         });
         alarmDriverInstance = driver;
@@ -6895,7 +6800,6 @@ async function main() {
     treeScanner,
     adminToken,
     args,
-    hostConfig,
     tokenManager,
     cdpGrants,
     grantStore: capabilityGrantStore,
@@ -7192,12 +7096,11 @@ async function main() {
           resolveUser: (userId) => userStore.getUser(userId),
           getConnectionInfo: () => {
             const gatewayPort = getResolvedGatewayPort("auth connection info");
-            const protocol = gatewayProtocol();
             const hubUrl = process.env["VIBESTUDIO_HUB_URL"];
             return {
-              serverUrl: hubUrl ?? getExternalGatewayUrl("auth connection info"),
-              protocol,
-              externalHost: hostConfig.externalHost,
+              serverUrl: hubUrl ?? getLocalGatewayUrl("auth connection info"),
+              protocol: "http" as const,
+              externalHost: GATEWAY_HOST,
               gatewayPort,
             };
           },
@@ -7256,8 +7159,6 @@ async function main() {
         objectKey,
       });
     },
-    externalHost: hostConfig.externalHost,
-    bindHost: hostConfig.bindHost,
     adminToken,
     workerdGatewayToken,
     getWorkerdDispatchSecret: () => workerdManagerForGateway?.getDispatchSecret() ?? null,
@@ -7314,8 +7215,6 @@ async function main() {
         const { WorkerdInspectorBridge } = await import("./workerdInspectorBridge.js");
         const bridge = new WorkerdInspectorBridge({
           getInspectorUrl: () => workerdManager.getInspectorUrl(),
-          protocol: hostConfig.protocol,
-          externalHost: hostConfig.externalHost,
           port: gatewayPort,
         });
         server.setWorkerdInspectorBridge(bridge);
@@ -7749,25 +7648,15 @@ async function main() {
   };
 
   const runStartupWorkspaceUnitReconcile = async (): Promise<void> => {
-    let syncDeclaredRemotesAfterStartupReload = false;
     try {
       do {
         if (pendingStartupMetaConfigReload) {
-          syncDeclaredRemotesAfterStartupReload = true;
           pendingStartupMetaConfigReload = false;
         }
         await reconcileDeclaredWorkspaceUnits(workspaceConfig, "startup");
       } while (pendingStartupMetaConfigReload);
     } finally {
       initialWorkspaceUnitReconcileComplete = true;
-      if (syncDeclaredRemotesAfterStartupReload) {
-        syncDeclaredRemotesForSource().catch((err: unknown) =>
-          console.warn(
-            "[GitRemotes] Failed to sync declared remotes after startup config reload:",
-            err
-          )
-        );
-      }
     }
   };
   // Calling an async function still executes its synchronous prefix inline.
@@ -7869,13 +7758,11 @@ async function main() {
       console.warn("[Server] Failed to write admin token file:", err);
     }
 
-    const proto = "http";
-    const wsProto = "ws";
     console.log("vibestudio-server ready:");
     console.log(`  Workspace:   ${workspaceName}`);
-    console.log(`  Gateway:     ${proto}://${hostConfig.externalHost}:${gatewayPort} (loopback)`);
+    console.log(`  Gateway:     ${gatewayHttpUrl(gatewayPort)} (loopback)`);
     console.log(`  Workerd:     (via gateway /_w/)`);
-    console.log(`  RPC:         ${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`);
+    console.log(`  RPC:         ${gatewayWsUrl(gatewayPort)}/rpc`);
     const sourceLabel =
       tokenSource === "env"
         ? " (from VIBESTUDIO_ADMIN_TOKEN)"
@@ -7891,9 +7778,9 @@ async function main() {
         workspaceName,
         workspaceId,
         workspaceDir: workspacePath,
-        gatewayUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}`,
-        rpcUrl: `${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`,
-        workerdUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_w/`,
+        gatewayUrl: gatewayHttpUrl(gatewayPort),
+        rpcUrl: `${gatewayWsUrl(gatewayPort)}/rpc`,
+        workerdUrl: `${gatewayHttpUrl(gatewayPort)}/_w/`,
         adminToken,
         pairing: currentIrohReach(),
         serverId: deviceAuthStore.getServerId(),
@@ -8069,40 +7956,22 @@ async function main() {
   process.on("SIGTERM", () => void shutdown());
   process.on("SIGINT", () => void shutdown());
 
-  // Idle auto-exit (workspace-server mode only): the garbage collector for
-  // detached servers. No connected shell/app clients AND no active background
-  // runs, continuously for VIBESTUDIO_IDLE_EXIT_MS (default 30 min; 0 disables)
-  // → graceful shutdown.
-  if (isWorkspaceServer) {
-    const { startIdleExitMonitor, DEFAULT_IDLE_EXIT_MS } =
-      await import("./services/hostLifecycleService.js");
-    const idleExitEnv = process.env["VIBESTUDIO_IDLE_EXIT_MS"];
-    const parsedIdleExit = idleExitEnv === undefined ? Number.NaN : Number(idleExitEnv);
-    const idleExitMs = Number.isFinite(parsedIdleExit) ? parsedIdleExit : DEFAULT_IDLE_EXIT_MS;
-    startIdleExitMonitor({
-      activity: activityRegistry,
-      hasConnectedClients: () =>
-        (rpcServerForGateway?.countConnectedClients(["shell", "app"]) ?? 0) > 0,
-      shutdown: () => void shutdown(),
-      idleExitMs,
-      log: (message) => console.log(message),
-    });
-  }
-}
-
-function collectWorkspaceUnitPaths(
-  nodes: Array<{ path: string; isUnit: boolean; children: unknown[] }>
-): string[] {
-  const units: string[] = [];
-  for (const node of nodes) {
-    if (node.isUnit) units.push(node.path);
-    units.push(
-      ...collectWorkspaceUnitPaths(
-        node.children as Array<{ path: string; isUnit: boolean; children: unknown[] }>
-      )
-    );
-  }
-  return units;
+  // Idle auto-exit: the garbage collector for detached workspace children. No
+  // connected shell/app clients AND no active background runs, continuously for
+  // VIBESTUDIO_IDLE_EXIT_MS (default 30 min; 0 disables) → graceful shutdown.
+  const { startIdleExitMonitor, DEFAULT_IDLE_EXIT_MS } =
+    await import("./services/hostLifecycleService.js");
+  const idleExitEnv = process.env["VIBESTUDIO_IDLE_EXIT_MS"];
+  const parsedIdleExit = idleExitEnv === undefined ? Number.NaN : Number(idleExitEnv);
+  const idleExitMs = Number.isFinite(parsedIdleExit) ? parsedIdleExit : DEFAULT_IDLE_EXIT_MS;
+  startIdleExitMonitor({
+    activity: activityRegistry,
+    hasConnectedClients: () =>
+      (rpcServerForGateway?.countConnectedClients(["shell", "app"]) ?? 0) > 0,
+    shutdown: () => void shutdown(),
+    idleExitMs,
+    log: (message) => console.log(message),
+  });
 }
 
 function replaceWorkspaceConfig<T extends object>(target: T, next: T): void {

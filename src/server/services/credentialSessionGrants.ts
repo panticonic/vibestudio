@@ -32,6 +32,26 @@ export class CredentialSessionGrantStore {
   }
 
   /**
+   * Authorize one caller's provider requests for a reviewed website
+   * publication. The grant lives for the operation: it ends when the
+   * publication is submitted or the caller retires (`dropForCaller`).
+   */
+  grantWebsitePublication(callerId: string, operationId: string): void {
+    this.grants.add(websitePublicationGrantKey(operationId, callerId));
+  }
+
+  hasWebsitePublication(callerId: string, operationId: string): boolean {
+    return this.grants.has(websitePublicationGrantKey(operationId, callerId));
+  }
+
+  endWebsitePublication(operationId: string): void {
+    const prefix = JSON.stringify(["website-publication", operationId, "caller"]).slice(0, -1);
+    for (const key of this.grants) {
+      if (key.startsWith(prefix)) this.grants.delete(key);
+    }
+  }
+
+  /**
    * Drop every session-scope grant tied to this caller id. Called from the
    * runtime-retire cleanup hook so a retired panel/worker/DO can never reach
    * a credential it was once granted access to, even if its principal id is
@@ -51,6 +71,11 @@ export class CredentialSessionGrantStore {
     }
     return dropped;
   }
+}
+
+// Caller-scoped like every other key here, so `dropForCaller` retires it.
+function websitePublicationGrantKey(operationId: string, callerId: string): string {
+  return JSON.stringify(["website-publication", operationId, "caller", callerId]);
 }
 
 function sessionGrantKey(

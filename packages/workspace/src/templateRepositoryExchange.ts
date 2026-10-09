@@ -3,8 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   parseTemplateManifestContent,
-  validateTemplateSnapshotInventory,
+  templateRepositories,
 } from "@vibestudio/workspace/templateManifest";
+import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 export type ExchangeDirection = "export" | "import";
@@ -186,21 +187,10 @@ function projection(root: string): {
 } {
   const manifestPath = path.join(root, "meta/vibestudio.yml");
   const manifestBytes = fs.readFileSync(manifestPath);
-  const manifest = parseTemplateManifestContent(
-    manifestBytes.toString("utf8"),
-    WORKSPACE_SYSTEM_EPOCH
-  );
+  parseTemplateManifestContent(manifestBytes.toString("utf8"), WORKSPACE_SYSTEM_EPOCH);
   const files = walkFiles(root);
-  const projected = [
-    ...new Set([
-      ...files.filter(
-        (file) =>
-          file === "meta/vibestudio.yml" ||
-          manifest.inventory.repositories.some((repository) => file.startsWith(`${repository}/`))
-      ),
-    ]),
-  ].sort();
-  validateTemplateSnapshotInventory(manifest.inventory, projected);
+  const projected = files.filter((file) => !!splitRepoPath(file)?.repoRelPath).sort();
+  templateRepositories(projected);
   return { files: projected, manifestDigest: digest(manifestBytes) };
 }
 

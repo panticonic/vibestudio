@@ -39,6 +39,7 @@ import {
   removeManagedTestWorkspace,
   type TestApp,
 } from "../../setup/electronSetup";
+import { declineFirstRunReporting } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -65,7 +66,7 @@ async function findShellWebContentsId(owner: TestApp): Promise<number> {
           ?.id ?? -1
       );
     },
-    { workspaceId: owner.workspaceId }
+    { workspaceId: owner.systemWorkspaceId }
   );
   if (id < 0) throw new Error("Hosted shell WebContents not found");
   return id;
@@ -85,7 +86,12 @@ async function shellEval<T>(owner: TestApp, wcId: number, script: string): Promi
 
 type ShellRect = { x: number; y: number; width: number; height: number };
 
-/** DOM boxes of every mounted pane surface, keyed by native slot id. */
+/**
+ * Positive-area visible DOM boxes of panel surfaces, keyed by local native slot
+ * id. Native views cannot escape the shell viewport or CSS clipping ancestors,
+ * so compare them with the visible intersection rather than an overflowing
+ * pane's unconstrained layout box.
+ */
 async function getSurfaceRects(
   owner: TestApp,
   wcId: number
@@ -93,19 +99,53 @@ async function getSurfaceRects(
   return shellEval(
     owner,
     wcId,
-    `Array.from(document.querySelectorAll('[data-native-panel-slot-id]')).map((node) => {
+    `Array.from(document.querySelectorAll('[data-native-panel-slot-id]')).flatMap((node) => {
        const rect = node.getBoundingClientRect();
-       return {
-         nativeSlotId: node.getAttribute('data-native-panel-slot-id'),
-         panelId: node.getAttribute('data-panel-id'),
-         paneId: node.closest('[data-pane-id]')?.getAttribute('data-pane-id') ?? null,
+       const nativeSlotId = node.getAttribute('data-native-panel-slot-id');
+       const panelId = node.getAttribute('data-panel-id');
+       const paneId = node.closest('[data-pane-id]')?.getAttribute('data-pane-id');
+       // Match what can actually be shown in the shell. A min-width pane may
+       // extend past its viewport while the native view is clamped to the
+       // visible content area; overflow ancestors clip independently by axis.
+       let left = rect.left;
+       let top = rect.top;
+       let right = rect.right;
+       let bottom = rect.bottom;
+       for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+         const style = getComputedStyle(ancestor);
+         const clipX = ['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowX);
+         const clipY = ['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowY);
+         if (!clipX && !clipY) continue;
+         const bounds = ancestor.getBoundingClientRect();
+         const clipLeft = bounds.left + ancestor.clientLeft;
+         const clipTop = bounds.top + ancestor.clientTop;
+         if (clipX) {
+           left = Math.max(left, clipLeft);
+           right = Math.min(right, clipLeft + ancestor.clientWidth);
+         }
+         if (clipY) {
+           top = Math.max(top, clipTop);
+           bottom = Math.min(bottom, clipTop + ancestor.clientHeight);
+         }
+       }
+       // The renderer viewport is the final clipping boundary for a native
+       // WebContents hosted over this shell.
+       left = Math.max(left, 0);
+       top = Math.max(top, 0);
+       right = Math.min(right, window.innerWidth);
+       bottom = Math.min(bottom, window.innerHeight);
+       if (!nativeSlotId || !panelId || !paneId || right <= left || bottom <= top) return [];
+       return [{
+         nativeSlotId,
+         panelId,
+         paneId,
          rect: {
-           x: Math.round(rect.left),
-           y: Math.round(rect.top),
-           width: Math.round(rect.width),
-           height: Math.round(rect.height),
+           x: Math.round(left),
+           y: Math.round(top),
+           width: Math.round(right - left),
+           height: Math.round(bottom - top),
          },
-       };
+       }];
      })`
   );
 }
@@ -125,7 +165,10 @@ async function surfacesMatchNativeBounds(
   ]);
   if (slots.length === 0 || slots.length !== surfaces.length) return false;
   return slots.every((slot) => {
-    const surface = surfaces.find((candidate) => candidate.nativeSlotId === slot.nativeSlotId);
+    const surface = surfaces.find(
+      (candidate) =>
+        JSON.stringify([owner.workspaceId, candidate.nativeSlotId]) === slot.nativeSlotId
+    );
     if (!surface || surface.panelId !== slot.panelId) return false;
     return (
       Math.abs(slot.bounds.x - surface.rect.x) <= tolerance &&
@@ -344,7 +387,9 @@ test.describe("Multi-column panel layout", () => {
   test("native slots track panes across child creation, drags, parking, close, and keyboard", async () => {
     test.setTimeout(600_000);
     const workspacePath = await createManagedTestWorkspace({
-      configureSource: (sourceRoot) => configureInitialPanel(sourceRoot, "about/about"),
+      // This fixture owns a Personal workspace; use a panel installed in that
+      // template rather than a similarly named System-only source.
+      configureSource: (sourceRoot) => configureInitialPanel(sourceRoot, "about/search"),
     });
     let testApp: TestApp | null = null;
     try {
@@ -353,6 +398,7 @@ test.describe("Multi-column panel layout", () => {
         launchTimeout: 240_000,
       });
       await approvePendingStartupUnits(testApp);
+      await declineFirstRunReporting(testApp);
       await approvePendingWorkspaceCreationReview(testApp);
       const app = testApp.app;
 
@@ -390,7 +436,7 @@ test.describe("Multi-column panel layout", () => {
       let readiness = null as Awaited<ReturnType<typeof ensureHostedShellReady>> | null;
       for (let attempt = 0; readiness === null; attempt++) {
         try {
-          readiness = await ensureHostedShellReady(testApp, { panelSource: "about/about" });
+          readiness = await ensureHostedShellReady(testApp, { panelSource: "about/search" });
         } catch (error) {
           // "Extension is not installed" is equally transient on first boot:
           // the browser-data extension is still building/activating.
@@ -406,9 +452,10 @@ test.describe("Multi-column panel layout", () => {
       }
       const panel1 = readiness.panelId;
 
-      // Exercise a desktop width where, with the 232px tree, two 575px columns
-      // and their divider fit in the remaining viewport.
-      await setWindowSize(testApp, 1400, 800);
+      // The layout viewport excludes the shell sidebar. Give two minimum-width
+      // columns and their divider room, then verify the measured content area
+      // before asserting that both native surfaces are resident.
+      await setWindowSize(testApp, 1600, 800);
 
       let wcId = 0;
       await expect
@@ -422,6 +469,46 @@ test.describe("Multi-column panel layout", () => {
         }, POLL)
         .toBe(true);
 
+      // Readiness means the panel is built and leased; layout placement is a
+      // separate shell operation. Focus it through the ordinary API so child
+      // placement has a visible parent pane to anchor beside.
+      const focus = await app.evaluate(
+        async (_electron, { workspaceId, panelId }) => {
+          const api = await globalThis.__testApi?.forWorkspace(workspaceId);
+          if (!api) throw new Error("Test API not available");
+          return api.focusPanel(panelId);
+        },
+        { workspaceId: testApp!.workspaceId, panelId: panel1 }
+      );
+      expect(focus).toMatchObject({ panelId: panel1, focused: true });
+      await expect
+        .poll(async () => {
+          const [surfaces, slots] = await Promise.all([
+            getSurfaceRects(testApp!, wcId),
+            getNativePanelSlotDebugInfo(testApp!),
+          ]);
+          const surface = surfaces.find((entry) => entry.panelId === panel1);
+          const slot = slots.find((entry) => entry.panelId === panel1);
+          if (!surface || !slot) return false;
+          return (
+            Math.abs(surface.rect.x - slot.bounds.x) <= 1 &&
+            Math.abs(surface.rect.y - slot.bounds.y) <= 1 &&
+            Math.abs(surface.rect.width - slot.bounds.width) <= 1 &&
+            Math.abs(surface.rect.height - slot.bounds.height) <= 1
+          );
+        }, POLL)
+        .toBe(true);
+
+      const availableLayoutWidth = () =>
+        shellEval<number>(
+          testApp!,
+          wcId,
+          `Math.round(document.querySelector('[data-shell-layout-columns]')?.getBoundingClientRect().width ?? 0)`
+        );
+      await expect
+        .poll(() => availableLayoutWidth(), POLL)
+        .toBeGreaterThan(2 * 575 + 7);
+
       // ---- Scenario 1: open a second panel beside the first --------------
       const created = await app.evaluate(
         async (_electron, { workspaceId, payload: args }) => {
@@ -431,7 +518,7 @@ test.describe("Multi-column panel layout", () => {
         },
         {
           workspaceId: testApp!.workspaceId,
-          payload: { parentId: panel1, source: "about/adblock" },
+          payload: { parentId: panel1, source: "about/search" },
         }
       );
       const panel2 = created.id;
@@ -592,18 +679,49 @@ test.describe("Multi-column panel layout", () => {
 
         // The column returns, rebinds its slot, and the panel is live again —
         // no dead surface (§5.4: un-parking re-runs loading if GC unloaded it).
+        let lastRebindState: unknown;
         await expect
           .poll(async () => {
-            const slots = await getNativePanelSlotDebugInfo(testApp!);
-            if (slots.length !== 1 || slots[0]!.panelId !== parkedPanelId) return false;
-            const parkedReadiness = await getPanelReadiness(testApp!, parkedPanelId);
+            const [slots, surfaces, parkedReadiness, viewport] = await Promise.all([
+              getNativePanelSlotDebugInfo(testApp!),
+              getSurfaceRects(testApp!, wcId),
+              getPanelReadiness(testApp!, parkedPanelId),
+              shellEval<string>(
+                testApp!,
+                wcId,
+                `document.querySelector('[role="navigation"][aria-label="Panel columns"]')?.innerText ?? "all columns resident"`
+              ),
+            ]);
+            const boundsMatch = await surfacesMatchNativeBounds(testApp!, wcId);
+            lastRebindState = {
+              parkedPanelId,
+              slots,
+              surfaces,
+              readiness: {
+                panelId: parkedReadiness.panelId,
+                nativeSlotBound: parkedReadiness.nativeSlotBound,
+                terminal: parkedReadiness.terminal,
+                presentation: parkedReadiness.presentation,
+              },
+              viewport,
+              boundsMatch,
+            };
             return (
+              slots.length === 1 &&
+              slots[0]!.panelId === parkedPanelId &&
               parkedReadiness.nativeSlotBound &&
               parkedReadiness.terminal &&
-              (await surfacesMatchNativeBounds(testApp!, wcId))
+              boundsMatch
             );
           }, POLL)
-          .toBe(true);
+          .toBe(true)
+          .catch(async (error: unknown) => {
+            await test.info().attach("scenario-3-rebind-state", {
+              body: Buffer.from(JSON.stringify(lastRebindState, null, 2)),
+              contentType: "application/json",
+            });
+            throw error;
+          });
 
         // Restore the wide window; both columns become resident again.
         await setWindowSize(testApp!, 1600, 1000);

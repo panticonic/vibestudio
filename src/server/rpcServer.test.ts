@@ -14,7 +14,7 @@ import { WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
-import { awaitRpcAdmissionResolution, RpcServer } from "./rpcServer.js";
+import { RpcServer } from "./rpcServer.js";
 import { Gateway } from "./gateway.js";
 import { createLiveCallerGate } from "./services/liveCallerGate.js";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
@@ -89,26 +89,6 @@ afterAll(() => {
   if (originalArtifactRoot === undefined) delete process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"];
   else process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = originalArtifactRoot;
   fs.rmSync(testProductAppRoot, { recursive: true, force: true });
-});
-
-describe("RPC WebSocket admission resolution deadline", () => {
-  afterEach(() => vi.useRealTimers());
-
-  it("releases the caller at the deadline and ignores a later result", async () => {
-    vi.useFakeTimers();
-    let resolveCredential!: (value: string) => void;
-    const credential = new Promise<string>((resolve) => {
-      resolveCredential = resolve;
-    });
-    const pending = awaitRpcAdmissionResolution(credential, 250);
-
-    await vi.advanceTimersByTimeAsync(250);
-    await expect(pending).resolves.toEqual({ status: "timed-out" });
-
-    resolveCredential("too-late");
-    await Promise.resolve();
-    await expect(pending).resolves.toEqual({ status: "timed-out" });
-  });
 });
 
 function makeRecord(
@@ -5130,7 +5110,6 @@ describe("RpcServer caller identity", () => {
     ).toMatchObject({ userId: "user-2", workspaceId: "test-workspace" });
     const gateway = new Gateway({
       tokenManager: setup.tokenManager,
-      externalHost: "localhost",
       getRpcHandler: () => server,
       getExtensionHttpHandler: () => ({
         handleExtensionHttpRequest: (_req, res, _name, _path, caller) => {

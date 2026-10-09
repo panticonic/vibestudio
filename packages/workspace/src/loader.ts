@@ -339,7 +339,11 @@ export function initWorkspace(name: string, opts: WorkspaceCreationOptions): voi
     // Validate against the FINAL managed path before publishing. Parsing the
     // staged file directly would derive the temporary directory name as the
     // workspace id and would let malformed manifests become visible on disk.
-    parseWorkspaceConfigContentWithId(fs.readFileSync(stagedConfigPath, "utf-8"), opts.workspaceId);
+    parseWorkspaceConfigContentWithId(
+      fs.readFileSync(stagedConfigPath, "utf-8"),
+      opts.workspaceId,
+      (source) => fs.readFileSync(path.join(stagedSourceRoot, source, "package.json"), "utf8")
+    );
 
     fs.renameSync(stagingDir, wsDir);
     published = true;
@@ -378,7 +382,8 @@ export function loadWorkspaceConfig(workspacePath: string): WorkspaceConfig {
 
   const config = parseWorkspaceConfigContentWithId(
     fs.readFileSync(configPath, "utf-8"),
-    deriveWorkspaceId(workspacePath)
+    deriveWorkspaceId(workspacePath),
+    (source) => fs.readFileSync(path.join(workspacePath, source, "package.json"), "utf8")
   );
   setWorkspaceAppTrust(resolveWorkspaceTrustGrants(config));
   return config;
@@ -453,10 +458,8 @@ export interface ResolveWorkspaceOpts {
   wsDir?: string;
   /** Workspace name (resolved via getWorkspaceDir) */
   name?: string;
-  /** App root for template resolution (required when init is true) */
+  /** App root for template resolution of a newly created workspace. */
   appRoot?: string;
-  /** Auto-create from template if workspace doesn't exist */
-  init?: boolean;
   /** Hub-allocated opaque identity for a newly created managed workspace. */
   workspaceId?: string;
   /** Explicit exact root selected by a development or management caller. */
@@ -476,12 +479,10 @@ export interface ResolvedWorkspace {
 }
 
 /**
- * Resolve a workspace by name or path, optionally creating from template.
+ * Resolve a workspace by name or path, creating it from template when absent.
  *
  * Used only inside the selected workspace child. The hub and Electron shell
  * own catalog intents but never scaffold this directory.
- *
- * Throws if workspace doesn't exist and init is false.
  */
 export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWorkspace {
   let wsDir = opts.wsDir;
@@ -501,9 +502,6 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
   let created = false;
 
   if (!fs.existsSync(configPath)) {
-    if (!opts.init) {
-      throw new Error(`Workspace not found at ${wsDir}`);
-    }
     // Never infer that an existing directory is disposable just because its
     // manifest is missing. It may contain panels, source, or state that the
     // user can recover by restoring source/meta/vibestudio.yml.

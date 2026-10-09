@@ -4,6 +4,7 @@ import * as path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
+import { applyStateArgsMergePatch, decodePanelStateArgs } from "@vibestudio/shared/panelStateArgs";
 import { PanelLifecycleAggregateError, PanelManager } from "./panelManager.js";
 import { PanelNavigationCommitError } from "./panelNavigationTransaction.js";
 import { canonicalEntityId, runtimeEntitySource } from "@vibestudio/shared/runtime/entitySpec";
@@ -315,13 +316,16 @@ function createWorkspaceMemory() {
         cursor,
       };
     },
-    async updateCurrentStateArgs(slotId, stateArgs) {
+    async patchCurrentStateArgs(slotId, patch) {
       const slot = slots.get(slotId);
-      if (!slot?.current_entry_key) return;
-      const rows = history.get(slotId) ?? [];
-      const row = rows.find((r) => r.entry_key === slot.current_entry_key);
-      if (row) row.state_args = stringifyStateArgs(stateArgs);
+      const row = (history.get(slotId) ?? []).find(
+        (r) => r.entry_key === slot?.current_entry_key
+      );
+      if (!row) throw new Error(`Panel not found: ${slotId}`);
+      const next = applyStateArgsMergePatch(decodePanelStateArgs(row.state_args), patch);
+      row.state_args = stringifyStateArgs(next);
       revision += 1;
+      return next;
     },
     async moveSlot(slotId, parentSlotId) {
       const slot = slots.get(slotId);
@@ -1060,7 +1064,7 @@ describe("PanelManager", () => {
     const onStateArgsChanged = vi.fn();
     const unsubscribe = manager.onStateArgsChanged(created.panelId, onStateArgsChanged);
 
-    const nextStateArgs = await manager.updateStateArgs(created.panelId, { greeting: "updated" });
+    const nextStateArgs = await manager.patchStateArgs(created.panelId, { greeting: "updated" });
     expect(nextStateArgs).toEqual({ greeting: "updated" });
     expect(onStateArgsChanged).toHaveBeenCalledWith({ greeting: "updated" });
     expect(mem.state.entities.size).toBe(1);
@@ -1072,7 +1076,7 @@ describe("PanelManager", () => {
       greeting: "updated",
     });
 
-    const clearedStateArgs = await manager.updateStateArgs(created.panelId, { greeting: null });
+    const clearedStateArgs = await manager.patchStateArgs(created.panelId, { greeting: null });
     expect(clearedStateArgs).toEqual({});
     expect(onStateArgsChanged).toHaveBeenCalledWith({});
     expect(mem.state.entities.size).toBe(1);
@@ -1080,7 +1084,7 @@ describe("PanelManager", () => {
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).stateArgs).toEqual({});
 
     unsubscribe();
-    await manager.updateStateArgs(created.panelId, { greeting: "ignored" });
+    await manager.patchStateArgs(created.panelId, { greeting: "ignored" });
     expect(onStateArgsChanged).toHaveBeenCalledTimes(2);
 
     const projectedStateArgs = vi.fn();

@@ -11,7 +11,6 @@ import { createDevLogger } from "@vibestudio/dev-log";
 const log = createDevLogger("HeadlessHost:launch");
 
 const WS_URL_PATTERN = /DevTools listening on (ws:\/\/[^\s]+)/;
-const LAUNCH_TIMEOUT_MS = 30_000;
 
 export interface LaunchedChromium {
   wsEndpoint: string;
@@ -172,21 +171,14 @@ export async function launchChromium(opts: {
   try {
     wsEndpoint = await new Promise<string>((resolve, reject) => {
       let stderr = "";
+      // A cold Chromium start can be slow; it either reports its endpoint or
+      // exits/errors, and those are the only outcomes this waits for.
       const cleanup = () => {
-        clearTimeout(timer);
         child.stderr?.off("data", onData);
         child.stderr?.resume();
         child.off("exit", onExit);
         child.off("error", onError);
       };
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(
-          new Error(
-            `Chromium did not report a DevTools endpoint within ${LAUNCH_TIMEOUT_MS}ms:\n${stderr.slice(-2000)}`
-          )
-        );
-      }, LAUNCH_TIMEOUT_MS);
       const onData = (chunk: Buffer) => {
         stderr = (stderr + chunk.toString()).slice(-4096);
         const match = WS_URL_PATTERN.exec(stderr);

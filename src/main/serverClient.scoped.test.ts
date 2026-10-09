@@ -575,6 +575,17 @@ describe("ServerClient scoped runtime callers", () => {
       .poll(() => harness.grantRequests, { timeout: 5_000 })
       .toEqual([[caller.callerId], [caller.callerId]]);
 
+    // Server-side grant redemption precedes the client processing its auth
+    // reply. The authenticated event proves the reopened session is usable.
+    await expect
+      .poll(
+        () =>
+          received.filter(
+            ({ message }) => message.type === "event" && message.event === "workspace:changed"
+          ).length
+      )
+      .toBe(2);
+
     await client.sendAs(caller, makeRequest("after-reconnect"));
     await expect
       .poll(() =>

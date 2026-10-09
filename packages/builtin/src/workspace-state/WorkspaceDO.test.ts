@@ -1270,7 +1270,10 @@ describe("WorkspaceDO slot operations", () => {
     expect(navigated.currentHistory.entity_id).toBe(entryB.id);
     expect(instance.slotHistoryRelative("snapshot-slot", -1)?.entity_id).toBe(entryA.id);
 
-    instance.slotUpdateCurrentStateArgs("snapshot-slot", { step: "updated" });
+    instance.slotPatchCurrentStateArgs("snapshot-slot", { step: "updated" }, {
+      entryKey: navigated.slot.current_entry_key!,
+      activeBuildKey: navigated.entity.activeBuildKey ?? null,
+    });
     const updated = instance.panelTreeDetail("snapshot-slot");
     expect(updated).not.toBeNull();
     if (!updated) throw new Error("expected updated detail");
@@ -1440,28 +1443,115 @@ describe("WorkspaceDO slot operations", () => {
     expect(instance.panelTreeRootGroups({ limit: 1 }).revision).toBe(beforeRevision);
   });
 
-  it("slotUpdateCurrentStateArgs mutates the current history entry without changing entity id", () => {
-    const rec = instance.entityActivate(panelInput({ key: "state-1", stateArgs: { a: 1 } }));
-    instance.slotCreate({
-      slotId: "slot-state",
-      parentSlotId: null,
-      initialEntry: {
-        entryKey: rec.key,
-        entityId: rec.id,
-        source: SOURCE,
-        contextId: "ctx-1",
-        stateArgs: { a: 1 },
-      },
+  describe("slotPatchCurrentStateArgs", () => {
+    const createStateSlot = (stateArgs: Record<string, unknown>) => {
+      const rec = instance.entityActivate(panelInput({ key: "state-1", stateArgs }));
+      instance.slotCreate({
+        slotId: "slot-state",
+        parentSlotId: null,
+        initialEntry: {
+          entryKey: rec.key,
+          entityId: rec.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+          stateArgs,
+        },
+      });
+      return rec;
+    };
+    const expectedFor = (slotId: string) => {
+      const detail = instance.panelTreeDetail(slotId);
+      if (!detail?.slot.current_entry_key) throw new Error("expected detail");
+      return {
+        entryKey: detail.slot.current_entry_key,
+        activeBuildKey: detail.entity.activeBuildKey ?? null,
+      };
+    };
+    const storedStateArgs = () =>
+      JSON.parse(instance.panelTreeDetail("slot-state")?.currentHistory.state_args ?? "null");
+
+    it("mutates the current history entry without changing entity id", () => {
+      const rec = createStateSlot({ a: 1 });
+
+      expect(
+        instance.slotPatchCurrentStateArgs("slot-state", { a: 2 }, expectedFor("slot-state"))
+      ).toEqual({ a: 2 });
+
+      expect(instance.slotGet("slot-state")?.current_entity_id).toBe(rec.id);
+      expect(storedStateArgs()).toEqual({ a: 2 });
+      expect(instance.entityResolve(rec.id)?.stateArgs).toEqual({ a: 2 });
     });
 
-    instance.slotUpdateCurrentStateArgs("slot-state", { a: 2 });
+    it("applies RFC 7386 merge semantics: nested merge, null deletes, arrays replace", () => {
+      createStateSlot({
+        keep: "yes",
+        drop: "old",
+        notes: { a: "one", b: "two" },
+        list: [1, 2, 3],
+      });
 
-    const slot = instance.slotGet("slot-state");
-    expect(slot?.current_entity_id).toBe(rec.id);
-    expect(instance.panelTreeDetail("slot-state")?.currentHistory.state_args).toBe(
-      JSON.stringify({ a: 2 })
-    );
-    expect(instance.entityResolve(rec.id)?.stateArgs).toEqual({ a: 2 });
+      const next = instance.slotPatchCurrentStateArgs(
+        "slot-state",
+        { drop: null, notes: { a: null, c: "three" }, list: [9] },
+        expectedFor("slot-state")
+      );
+
+      const expected = { keep: "yes", notes: { b: "two", c: "three" }, list: [9] };
+      expect(next).toEqual(expected);
+      expect(storedStateArgs()).toEqual(expected);
+    });
+
+    it("serializes patches so concurrent writers addressed to one entry both land", () => {
+      createStateSlot({ notes: {} });
+      // Both writers observed the same entry before either committed.
+      const expected = expectedFor("slot-state");
+
+      instance.slotPatchCurrentStateArgs("slot-state", { notes: { a: "first" } }, expected);
+      instance.slotPatchCurrentStateArgs("slot-state", { notes: { b: "second" } }, expected);
+
+      expect(storedStateArgs()).toEqual({ notes: { a: "first", b: "second" } });
+    });
+
+    it("validates the merged result against the schema and leaves state untouched on failure", () => {
+      createStateSlot({ mode: "a" });
+      const schema: import("@vibestudio/shared/stateArgs").StateArgsSchema = {
+        type: "object",
+        properties: { mode: { type: "string", enum: ["a", "b"] }, count: { type: "integer" } },
+        additionalProperties: false,
+      };
+      const expected = { ...expectedFor("slot-state"), schema };
+
+      expect(() =>
+        instance.slotPatchCurrentStateArgs("slot-state", { mode: "z" }, expected)
+      ).toThrow(/Invalid stateArgs/);
+      expect(() =>
+        instance.slotPatchCurrentStateArgs("slot-state", { extra: true }, expected)
+      ).toThrow(/Invalid stateArgs/);
+      expect(storedStateArgs()).toEqual({ mode: "a" });
+
+      expect(
+        instance.slotPatchCurrentStateArgs("slot-state", { mode: "b", count: "3" }, expected)
+      ).toEqual({ mode: "b", count: 3 });
+    });
+
+    it("refuses a patch addressed to a stale entry or build with a typed conflict", () => {
+      createStateSlot({ mode: "a" });
+      const expected = expectedFor("slot-state");
+
+      for (const stale of [
+        { ...expected, entryKey: "stale-entry" },
+        { ...expected, activeBuildKey: expected.activeBuildKey ? null : "b".repeat(64) },
+      ]) {
+        let error: unknown;
+        try {
+          instance.slotPatchCurrentStateArgs("slot-state", { mode: "b" }, stale);
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error).toMatchObject({ code: "PANEL_STATE_ARGS_CONFLICT" });
+      }
+      expect(storedStateArgs()).toEqual({ mode: "a" });
+    });
   });
 
   it("re-owns an entire subtree to the destination root owner", () => {
@@ -1844,17 +1934,17 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("registers work capability only for an active owner and removes it on retirement", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    expect(() => instance.durableWorkOwnerRegister({ ...key, queues: ["agent-wake"] })).toThrow(
+    expect(() => instance.durableWorkOwnerRegister({ ...key, queues: ["channel-delivery"] })).toThrow(
       /is not active/u
     );
 
     const entity = instance.entityActivate(doInput());
     instance.durableWorkOwnerRegister({
       ...key,
-      queues: ["agent-effect", "agent-wake", "agent-wake"],
+      queues: ["workspace-publication", "channel-delivery", "channel-delivery"],
     });
     expect(instance.durableWorkOwnerList()).toEqual([
-      { owner: key, queues: ["agent-effect", "agent-wake"] },
+      { owner: key, queues: ["channel-delivery", "workspace-publication"] },
     ]);
 
     instance.entityRetire(entity.id);

@@ -36,16 +36,6 @@ Authority principals: `code`, `host`, `user`
 | `account.isMember` | Return whether a user belongs to this child server's bound workspace. The workspace is host-bound, never caller-selected. |
 | `account.listWorkspaceMembers` | List live members of this child server's bound workspace with their workspace role and separate account role. |
 
-## `audit`
-
-Audit log query access
-
-Authority principals: `code`, `host`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `audit.query` |  |
-
 ## `auth`
 
 Gateway authentication bootstrap routes
@@ -179,27 +169,9 @@ Authority principals: `code`, `host`, `user`, `website`
 | `credentials.inspectStoredCredentials` | List administrator-facing credential summaries with runtime usage metadata; secret material is never included. |
 | `credentials.revokeCredential` | Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); requires critical account-disconnection authority bound to the exact credential id. |
 | `credentials.resolveCredential` | Resolve the host's exact URL/provider/id and intended-use selection. An unbound audience returns null without opening UI; a matched credential returns a secret-free summary after any required use authorization. Preserve failures other than the canonical null miss. |
-| `credentials.beginWebsitePublication` | Review and open a short-lived provider-neutral publication operation for one exact artifact and destination. |
+| `credentials.beginWebsitePublication` | Review one exact artifact and destination, then open or resume its host-journaled publication operation and return the receipt of its last completed phase. The operation id stays bound to the first artifact digest, provider, destination, and environment; a different intent under the same id fails with WEBSITE_PUBLICATION_INTENT_CONFLICT. Provider requests stay authorized for the caller until the operation is submitted or the caller retires. |
 | `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell. |
 | `credentials.audit` | Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after). |
-
-## `developmentClientExecutor`
-
-Owner-bound desktop executors for exact development-client launches
-
-Authority principals: `user`
-
-| Method | Description |
-|--------|-------------|
-| `developmentClientExecutor.register` | Register or refresh this authenticated desktop as a reviewed Electron development executor. |
-| `developmentClientExecutor.claim` | Claim an exact pending development-client launch addressed to this desktop. |
-| `developmentClientExecutor.readArtifact` | Read one bounded chunk of an exact pending artifact into the selected executor's owned root. |
-| `developmentClientExecutor.launched` | Record the selected trusted executor's owned-process launch receipt. |
-| `developmentClientExecutor.attest` | Attest readiness from the newly paired child session; identity and user are derived from the verified caller. |
-| `developmentClientExecutor.bindIsolatedManager` | Bind the exact isolated generation's already-paired management device before any client invite is issued. |
-| `developmentClientExecutor.consumeAttestation` | Consume one nonce-bound paired-child attestation through the exact isolated management device. |
-| `developmentClientExecutor.fail` | Report a bounded launch failure from the exact selected desktop executor. |
-| `developmentClientExecutor.exited` | Report exact owned-process exit and cleanup; the host derives whether it was an intentional stop. |
 
 ## `docs`
 
@@ -273,11 +245,11 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `fs.readFile` | Read a file's contents. Managed workspace files are resolved through the semantic authority at the context's exact working head, so projected disk bytes are never treated as authoritative; scratch paths read directly from the context filesystem. Overloaded: with an encoding string (or Node-style `{ encoding: "utf8" }`) the bytes are decoded and returned as a string; without one, raw bytes are returned base64-encoded in a binary envelope. (Server/shell callers prepend a contextId as the first argument.) |
+| `fs.readFile` | Read a file's contents. Managed workspace files are resolved through the semantic authority at the context's exact working head, so projected disk bytes are never treated as authoritative; scratch paths read directly from the context filesystem. Overloaded: with an encoding string (or Node-style `{ encoding: "utf8" }`) the bytes are decoded and returned as a string; without one, raw bytes are returned as Uint8Array. (Server/shell callers prepend a contextId as the first argument.) |
 | `fs.readText` | Read a bounded line range from a UTF-8 text file without transferring the complete file. Returns exact UTF-16 coordinates, total line count, continuation metadata, and a SHA-256 hash of the complete bytes. Managed files resolve through exact semantic authority; scratch files are streamed from disk. |
 | `fs.readBytes` | Read a bounded byte range without decoding or transferring the complete file. Returns canonical base64, exact byte coordinates, total size, continuation metadata, and a SHA-256 hash of the complete bytes. Managed files resolve through exact semantic authority; scratch files are streamed from disk. |
-| `fs.writeFile` | Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. Managed workspace files are recorded as semantic VCS operations before the accepted working head is projected; platform-excluded paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope. |
-| `fs.appendFile` | Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. Managed workspace files are recorded as attributed semantic VCS operations before projection; platform-excluded paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope. |
+| `fs.writeFile` | Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. Managed workspace files are recorded as semantic VCS operations before the accepted working head is projected; platform-excluded paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or bytes (Uint8Array). |
+| `fs.appendFile` | Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. Managed workspace files are recorded as attributed semantic VCS operations before projection; platform-excluded paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or bytes (Uint8Array). |
 | `fs.readdir` | List the entries of a directory; returns bare name strings, or Dirent-shaped objects with type flags when `withFileTypes` is set, optionally recursing into subdirectories. |
 | `fs.mkdir` | Create a scratch directory directly on the context filesystem. Managed workspace paths reject mkdir because empty directories have no semantic fact; author a file instead and its parent directories are implicit. With `recursive`, scratch mkdir creates missing parents and returns the first-created path relative to the context root; otherwise it returns undefined. |
 | `fs.rmdir` | Remove a directory. The semantic workspace records a managed subtree removal atomically before projection; a scratch directory is removed directly and throws if it is not empty. |
@@ -291,7 +263,7 @@ Authority principals: `code`, `host`, `user`
 | `fs.rename` | Move or rename a context-root-relative file or directory. Scratch-to-scratch renames are direct. The semantic workspace records managed-to-managed moves before projection and preserves stable file identity. Generic scratch-to-managed rename is refused because a path cannot prove new-import versus trusted atomic-replacement intent; use `copyFile` for a vacant managed import or an explicit managed write/edit for replacement, and the refused rename leaves the scratch source intact. Moving a tracked managed path out to scratch is also refused. Routed endpoints under reserved workspace source roots must use canonical casing and valid repo shape. |
 | `fs.nativeRoots` | Return explicit read-only source and writable scratch locations for a scoped native extension. |
 | `fs.realpath` | Resolve a path to its canonical form, returning it relative to the context root (sandboxed callers) or as an absolute path for scoped native extensions. The logical root has two physical locations; native callers use nativeRoots. |
-| `fs.ensureMaterialized` | Materialize the given workspace path(s)/repo(s) (or 'all') into the context working folder. Context folders are SPARSE — only what is materialized exists on disk — so call this for the narrowest scope you need (a repo path like 'panels/chat', a section like 'panels', or specific paths) before reading them OUTSIDE the fs.* API (e.g. a grep/find subprocess). fs.* reads materialize on demand automatically. |
+| `fs.ensureMaterialized` | Scoped native extensions only: provision the caller's complete context projection on disk and return its absolute source root. Pass the narrowest scope the extension will read (a repo path like 'panels/chat', a section like 'panels', specific paths, or 'all') before reading it OUTSIDE the fs.* API (e.g. a grep/find subprocess); the scope records read intent while the projection is always complete. fs.* reads provision on demand automatically. |
 | `fs.truncate` | Truncate (or zero-extend) a file to the given byte length (default 0). The semantic workspace records a managed file update before projection; a scratch file is changed directly. |
 | `fs.readlink` | Read a symlink's target; absolute targets are relativized to the context root to avoid leaking host paths. |
 | `fs.symlink` | Create a symbolic link inside context-local scratch. Both the link and its resolved target must remain inside the caller's context root; absolute-looking targets are interpreted relative to that virtual root and stored as contained relative targets. Managed workspace link paths are rejected because the semantic file manifest does not represent symlink entries. |
@@ -300,8 +272,8 @@ Authority principals: `code`, `host`, `user`
 | `fs.grep` | Search file contents under the context root with the bundled ripgrep engine for a regex pattern (the first argument), returning bounded matching lines in deterministic path/line order with optional context. Respects .gitignore/.ignore by default and always skips .git, .gad, node_modules, symlinks, and binary files. |
 | `fs.glob` | Find regular files whose path matches a glob pattern (the first argument) under the context root, returned in deterministic lexical traversal order. Results are bounded and resumable. Respects .gitignore/.ignore by default and always skips .git, .gad, node_modules, and symlinks. |
 | `fs.open` | Open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId for subsequent handleRead/handleWrite/handleStat/handleClose RPC calls. The portable runtime fs.open facade instead returns { fd, read, write, stat, close }; it has no readFile method. Use const buffer = new Uint8Array(length); const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0); decode buffer.subarray(0, bytesRead). read returns { bytesRead, buffer }, not a numeric count. Close with await handle.close() in finally. Handles remain valid until explicitly closed or their caller retires; elapsed idle time does not expire them. For context-bound callers, write-capable flags are supported for scratch paths only and are rejected for GAD-tracked workspace-repo paths. |
-| `fs.handleRead` | Read up to `length` bytes from an open handle at the given position (null reads from the current offset), returning the bytes base64-encoded plus the count actually read. |
-| `fs.handleWrite` | Write data (UTF-8 string or base64 binary envelope) to a write-capable handle at the given position (null uses the current offset), returning the byte count written. Context-bound callers cannot open GAD-tracked workspace-repo paths with write-capable flags, so their handle writes are scratch-only. |
+| `fs.handleRead` | Read up to `length` bytes from an open handle at the given position (null reads from the current offset), returning the bytes plus the count actually read. |
+| `fs.handleWrite` | Write data (UTF-8 string or Uint8Array bytes) to a write-capable handle at the given position (null uses the current offset), returning the byte count written. Context-bound callers cannot open GAD-tracked workspace-repo paths with write-capable flags, so their handle writes are scratch-only. |
 | `fs.handleClose` | Close an open file handle and release its server-side resources; a no-op if the handle is already gone. |
 | `fs.handleStat` | Return metadata (type flags, size, mtime/ctime, mode) for the file behind an open handle. |
 | `fs.mktemp` | Create the context's `.tmp/` directory if needed and return a fresh, unused root-relative scratch path under it (preferred for write-to-temp-then-rename patterns). The file itself is not created, the prefix is sanitized, and the path is not a tracked edit/VCS destination. |
@@ -503,8 +475,10 @@ Authority principals: `code`, `host`, `user`
 | `problemReports.decide` | Trusted human shell/CLI only: persist automatic reporting choice. Agents cannot consent. |
 | `problemReports.create` | Create a local manual problem report. Does not send or enroll reporting. |
 | `problemReports.get` | Read an owned report draft. |
-| `problemReports.update` | Revision-checked replacement of a manual draft including selected agent narrative and evidence. The host assigns revisions and submission IDs. |
-| `problemReports.prepare` | Sanitize and freeze an exact revision for preview/download. Returns exact canonical bytes and digest. Never sends. |
+| `problemReports.update` | Revision-checked replacement of a manual draft's editable content. The host assigns revisions and submission IDs. Agents add and edit narrative with appendNarrative and patchNarrative. |
+| `problemReports.appendNarrative` | Revision-checked append of narrative sections to a manual draft. The host assigns each section ID (returned in order) and records the author from the verified caller: agents write agent sections. |
+| `problemReports.patchNarrative` | Revision-checked edit of one narrative section by its host-assigned ID. Omitted fields are kept; the section's ID and author never change. |
+| `problemReports.prepare` | Sanitize and freeze a draft revision for preview, download, and send. When sanitization changes content, the host saves the sanitized draft as the next revision and freezes that. Returns the frozen revision with its exact canonical bytes, submission ID, and digest. Never sends. |
 | `problemReports.send` | Request submission of an exact prepared revision/digest. Agents wait for a targeted one-time human approval; denial or a changed draft sends nothing. Trusted human callers approve directly. Never changes automatic reporting consent. |
 | `problemReports.history` | Bounded owned report history; no secrets or bundle bytes. |
 | `problemReports.cancel` | Cancel pending delivery of an owned report; accepted reports require remote deletion. |
@@ -551,9 +525,9 @@ Authority principals: `code`, `host`, `user`, `website`
 | `runtime.recordContextEdge` | Idempotently upsert a context-relationship edge into the registry. Host-internal only; userland creates trusted edges through cloneContext/createSubagentContext instead. |
 | `runtime.createSubagentContext` | Create a subagent's child context from a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's committed event and exact event/application working head while retaining provenance lineage, ensure its projection directory, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes context lifecycle and registry operations; callers must not hand-roll this. |
 | `runtime.supervision.list` | List supervised executable entities through their exact driver identities. |
-| `runtime.supervision.describe` | Describe one supervised entity, including immutable artifact identity and supported facets. |
+| `runtime.supervision.describe` | Describe live supervised entities, including release key, immutable artifact identity, and supported facets. Pass an entity identity for that one entity, or a release key ({ kind, releaseId }; for workspace apps and extensions the declared unit name) for every live entity of that release. Returns an empty array when nothing selected is live. |
 | `runtime.supervision.health` | Read bounded health for one exact supervised entity, including its persisted logs and separate retained error buffer with independent counts, capacities, and dropped counts. Use limit for logs and errorLimit for errors; both buffers are returned here. |
-| `runtime.supervision.logs` | Read only retained log records for one exact supervised entity. This array does not include the separate error buffer or buffer counts; use supervision.health to inspect those. |
+| `runtime.supervision.logs` | Read only retained log records for one supervised entity identity, or for every live entity of a release key ({ kind, releaseId }), merged in timestamp order; each record carries its entity identity. Fails when nothing selected is live. This array does not include the separate error buffer or buffer counts; use supervision.health to inspect those. |
 | `runtime.supervision.restart` | Restart one exact supervised entity through its owning driver. |
 | `runtime.supervision.activate` | Activate one exact admitted app or extension release. |
 | `runtime.supervision.prepare` | Prepare an immutable app release from a source ref. |
@@ -601,18 +575,6 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `shellPresence.heartbeat` | Mark the calling shell active and return the current active-shell count. |
 
-## `speech`
-
-Bundled offline speech recognition
-
-Authority principals: `code`, `host`, `user`, `website`
-
-| Method | Description |
-|--------|-------------|
-| `speech.status` | Read bundled speech model readiness without loading it. |
-| `speech.prepare` | Load the bundled speech model without capturing audio. Returns NDJSON progress and a terminal ready event. |
-| `speech.transcribe` | Transcribe supplied mono audio locally using the bundled English Phonon-2 model. Returns an NDJSON progress/result stream. |
-
 ## `vcs`
 
 One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.
@@ -626,7 +588,7 @@ Authority principals: `code`, `host`, `user`, `website`
 | `vcs.copy` | Copy exact source files into new identities with immediate coordinate provenance. |
 | `vcs.merge` | Merge one bounded page of stable coordinates from an exact event or external delta by net effect. |
 | `vcs.revert` | Author explicit counteractions of exact semantic changes. |
-| `vcs.commit` | Commit the complete local application chain; derive every integration parent from recorded merge decisions. |
+| `vcs.commit` | Commit the complete local application chain; derive every integration parent from recorded merge decisions. `concludes` atomically records the decision-only conclusion of one complete convergent or net-zero source. |
 | `vcs.discard` | Discard the complete uncommitted chain and return to the committed event. |
 | `vcs.importSnapshot` | Import one exact complete external snapshot as ordinary changes on an import work unit and atomically return the committed event, application, work unit, admitted repository IDs, and canonical external snapshot. |
 | `vcs.registerExternalDelta` | Register one exact unapplied old-to-new external repository delta. |
@@ -711,7 +673,7 @@ Authority principals: `code`, `host`, `user`
 | `workspace.getInfo` | Filesystem paths (source, state, contexts) and resolved config for the active workspace. |
 | `workspace.getActive` | Name (id) of the currently active workspace. |
 | `workspace.getConfig` | The active workspace's resolved config (meta/vibestudio.yml). |
-| `workspace.validateConfig` | Validate a complete flattened workspace runtime manifest without changing workspace state. |
+| `workspace.validateConfig` | Validate one exact candidate workspace manifest plus provider package manifests without changing workspace state. |
 | `workspace.setInitPanels` | Replace the set of panels opened when this workspace starts; approval-gated for userland. |
 | `workspace.setConfigField` | Write an arbitrary field into the workspace config (meta/vibestudio.yml); approval-gated for userland. |
 | `workspace.applyPreparedConfig` | Atomically apply a complete validated workspace configuration only when its base digest, result digest, and changed-path scope match. |
@@ -740,6 +702,7 @@ Authority principals: `code`, `host`
 
 | Method | Description |
 |--------|-------------|
+| `workspaceTemplateSource.readInstallation` | Read installation provenance at an exact published workspace event. |
 | `workspaceTemplateSource.composeExact` | Acquire an exact template tree using the supplied layer pins, resolving newly introduced dependencies once. |
 | `workspaceTemplateSource.localRegistry` | Read the instance-designated local template registry, if one is configured. |
 | `workspaceTemplateSource.resolveLocal` | Resolve a canonical source URL to this instance's designated exact local pin, if present. |

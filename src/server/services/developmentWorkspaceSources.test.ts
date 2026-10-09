@@ -40,7 +40,7 @@ it("launches the exact semantic templates rather than the host's packaged releas
         await fs.mkdir(path.join(destination, "meta"), { recursive: true });
         await fs.writeFile(
           path.join(destination, "meta/vibestudio.yml"),
-          `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: ${plan.repositoryId}\n  repositories: [projects/input]\n`
+          `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: ${plan.repositoryId}\n`
         );
         await fs.mkdir(path.join(destination, "projects/input"), { recursive: true });
         await fs.writeFile(

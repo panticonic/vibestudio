@@ -60,9 +60,28 @@ export const ABOUT_PAGES = {
   ABOUT: "about",
   CREDENTIALS: "credentials",
   PERMISSIONS: "permissions",
+  LOCAL_MODELS: "local-models",
   DOWNLOADS: "downloads",
   BOOKMARKS: "bookmarks",
   HISTORY: "history",
 } as const;
 
 export type AboutPageId = (typeof ABOUT_PAGES)[keyof typeof ABOUT_PAGES];
+
+/** Private workspace that owns each standard page; `new` belongs to its caller. */
+export const ABOUT_PAGE_WORKSPACE_ROLE = {
+  [ABOUT_PAGES.KEYBOARD_SHORTCUTS]: "system",
+  [ABOUT_PAGES.HELP]: "system",
+  [ABOUT_PAGES.ABOUT]: "system",
+  [ABOUT_PAGES.PERMISSIONS]: "system",
+  [ABOUT_PAGES.LOCAL_MODELS]: "system",
+  [ABOUT_PAGES.CREDENTIALS]: "personal",
+  [ABOUT_PAGES.DOWNLOADS]: "personal",
+  [ABOUT_PAGES.BOOKMARKS]: "personal",
+  [ABOUT_PAGES.HISTORY]: "personal",
+} as const satisfies Record<Exclude<AboutPageId, typeof ABOUT_PAGES.NEW>, "personal" | "system">;
+
+export function aboutPageWorkspaceRole(page: string): "personal" | "system" | null {
+  if (!Object.hasOwn(ABOUT_PAGE_WORKSPACE_ROLE, page)) return null;
+  return ABOUT_PAGE_WORKSPACE_ROLE[page as keyof typeof ABOUT_PAGE_WORKSPACE_ROLE];
+}

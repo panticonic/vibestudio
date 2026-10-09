@@ -22,6 +22,7 @@ import {
 } from "../protocol/rpcWebSocketAdmission.js";
 import { webSocketAuthProtocol } from "../protocol/webSocketAuthProtocol.js";
 import { base64ToBytes, bytesToBase64 } from "../base64.js";
+import { decodeRpcJson, encodeRpcJson } from "../wireJson.js";
 import { RpcBoundaryError } from "../errors.js";
 import { SESSION_CONNECTION_LOST_CODE } from "../protocol/remoteSession.js";
 import {
@@ -138,7 +139,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     if (!current || current.readyState !== OPEN || !authenticated) {
       throw connectionLostError("Not connected to server");
     }
-    current.send(JSON.stringify(message));
+    current.send(encodeRpcJson(message));
   };
 
   const sendEnvelope = async (envelope: RpcEnvelope, streamBody = false): Promise<void> => {
@@ -605,7 +606,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     nextSocket.onmessage = (event) => {
       if (socketGeneration !== generation || socket !== nextSocket) return;
       try {
-        handleServerMessage(JSON.parse(String(event.data)) as WsServerMessage);
+        handleServerMessage(decodeRpcJson(String(event.data)) as WsServerMessage);
       } catch (error) {
         console.warn(`[${prefix}] Malformed message from server:`, error);
       }

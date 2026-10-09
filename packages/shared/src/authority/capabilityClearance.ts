@@ -64,7 +64,6 @@ const CONTEXTUAL_KEYS: readonly string[] = [
   "workspace.members.remove",
   "users.revoke",
   "channel.members.remove",
-  "security.audit.read",
 ];
 
 /**

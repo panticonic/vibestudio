@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { renderBytesJsonSchema } from "../packages/shared/src/binary.ts";
 import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 import {
@@ -63,6 +64,7 @@ function jsonSchema(schema, name) {
     name,
     target: "openApi3",
     $refStrategy: "root",
+    postProcess: renderBytesJsonSchema,
   });
 }
 
@@ -139,7 +141,8 @@ ${rows.join("\n")}
 ${errorCodes.map((code) => `- \`${code}\``).join("\n")}
 
 Mutation \`commandId\` values are idempotency identities, not actor or
-authorship credentials. Retry the same ID only with an identical request.
+authorship credentials. The runtime client mints one per call and reuses it
+only for its own transport retries; omit it.
 Provenance is walked through typed nodes with \`inspect\`, \`neighbors\`,
 \`history\`, and \`blame\`.
 `;

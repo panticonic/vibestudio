@@ -11,6 +11,8 @@ import {
   RemoteRpcError,
   RpcBoundaryError,
   attachRpcDiagnosticId,
+  decodeRpcJson,
+  encodeRpcJson,
   rpcDiagnosticIdOf,
   rpcErrorDataOf,
   rpcErrorKindOf,
@@ -232,7 +234,7 @@ export async function receiveWorkspaceRpcHttp(
     const reader = new FramedReader(req);
     const bytes = await readFrame(reader, MAX_ENVELOPE_FRAME_BYTES);
     phase = "decode frame";
-    const packet: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
+    const packet: unknown = decodeRpcJson(Buffer.from(bytes).toString("utf8"));
     if (!record(packet) || typeof packet["body"] !== "boolean")
       throw malformed(
         "Workspace RPC packet must contain an invocation and a boolean body declaration"
@@ -280,7 +282,7 @@ export async function receiveWorkspaceRpcHttp(
           phase = "send reply";
           assertLive();
           assertReply(invocation, envelope);
-          const payload = Buffer.from(JSON.stringify(envelope));
+          const payload = Buffer.from(encodeRpcJson(envelope));
           if (!res.headersSent) res.writeHead(200, { "Content-Type": CONTENT_TYPE });
           await writeFrame(
             {
@@ -329,7 +331,7 @@ export async function receiveWorkspaceRpcHttp(
         ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
       };
       res.writeHead(status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(failure));
+      res.end(encodeRpcJson(failure));
     }
   } finally {
     req.off("aborted", disconnect);
@@ -353,7 +355,7 @@ export async function forwardWorkspaceRpcHttp(options: {
     ? AbortSignal.any([options.signal, controller.signal])
     : controller.signal;
   const invocation = parseWorkspaceRpcInvocation(options.invocation);
-  const payload = Buffer.from(JSON.stringify({ invocation, body: !!options.body }));
+  const payload = Buffer.from(encodeRpcJson({ invocation, body: !!options.body }));
   if (payload.byteLength > MAX_ENVELOPE_FRAME_BYTES)
     throw new Error("Workspace RPC envelope exceeds frame limit");
   const assertLive = () => {
@@ -398,7 +400,7 @@ export async function forwardWorkspaceRpcHttp(options: {
       const text = await response.text();
       let failure: unknown;
       try {
-        failure = JSON.parse(text);
+        failure = decodeRpcJson(text);
       } catch {
         // An infrastructure response may not speak RPC; retain its actual body.
       }
@@ -440,7 +442,7 @@ export async function forwardWorkspaceRpcHttp(options: {
       const bytes = await reader.nextFrame();
       if (bytes === null) return;
       assertLive();
-      const envelope = JSON.parse(Buffer.from(bytes).toString("utf8")) as RpcEnvelope;
+      const envelope = decodeRpcJson(Buffer.from(bytes).toString("utf8")) as RpcEnvelope;
       assertReply(invocation, envelope);
       await options.onEnvelope(envelope);
     }

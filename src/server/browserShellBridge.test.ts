@@ -79,6 +79,31 @@ describe("installFallbackShellBridge", () => {
     });
   });
 
+  it("reports a workspace id supplied only through the page global in its panel init", async () => {
+    mocks.createWsTransport.mockReturnValue({
+      ready: mocks.ready,
+      send: mocks.send,
+      onMessage: mocks.onMessage,
+      onRecovery: mocks.onRecovery,
+    });
+    const globals = {
+      __vibestudioWorkspaceId: "workspace:global-only",
+      __vibestudioPanelInit: {
+        entityId: "panel:nav-entry-a",
+        slotId: "panel:tree/slot-a",
+        gatewayConfig: {
+          serverUrl: "http://127.0.0.1:4567/_workspace/test",
+          token: "grant-token",
+        },
+        connectionId: "runtime-conn",
+      },
+    } as BrowserShellBridgeGlobals;
+
+    const shell = installFallbackShellBridge(globals);
+
+    expect(await shell?.getPanelInit?.()).toMatchObject({ workspaceId: "workspace:global-only" });
+  });
+
   it("exposes runtime host helpers over the same panel RPC session", async () => {
     const handlers = new Set<(envelope: RpcEnvelope) => void>();
     mocks.onMessage.mockImplementation((handler: (envelope: RpcEnvelope) => void) => {

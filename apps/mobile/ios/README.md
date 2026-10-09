@@ -5,7 +5,7 @@ Workspace browser profiles use the iOS 17 WebKit APIs. Android requires a System
 WebView supporting AndroidX WebKit's `MULTI_PROFILE` capability. The native host
 binds each browser view to one account/workspace profile before loading content;
 unsupported engines show an update message and never use shared browser storage.
-This native contract is `rn-host-5`.
+The native contract version is `RN_HOST_ABI` in `@vibestudio/shared/buildProvider`.
 
 The checked-in Xcode project is authoritative. Do not regenerate it with
 `react-native init`; update `Vibestudio.xcodeproj/project.pbxproj` directly when

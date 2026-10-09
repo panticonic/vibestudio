@@ -12,6 +12,7 @@ import type {
   RuntimeSupervisionReadyReport,
   RuntimeSupervisionReleaseKey,
   RuntimeSupervisionReleaseVersions,
+  RuntimeSupervisionTarget,
 } from "@vibestudio/service-schemas/runtime";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 
@@ -87,10 +88,6 @@ export interface UnitDriver {
   readonly activation?: UnitActivationDriver;
 }
 
-export function callbackUnitDriver(input: UnitDriver): UnitDriver {
-  return input;
-}
-
 export class UnitSupervisor {
   private readonly drivers = new Map<RuntimeSupervisionKind, UnitDriver>();
 
@@ -112,16 +109,45 @@ export class UnitSupervisor {
       );
   }
 
-  describe(key: RuntimeSupervisionEntityKey) {
-    return this.requireDriver(key.kind).describe(key.entityId);
+  async describe(target: RuntimeSupervisionTarget): Promise<RuntimeSupervisionDescription[]> {
+    if ("entityId" in target) {
+      const entity = await this.requireDriver(target.kind).describe(target.entityId);
+      return entity ? [entity] : [];
+    }
+    return (await this.list(target.kind)).filter(
+      (entity) =>
+        entity.release?.kind === target.kind && entity.release.releaseId === target.releaseId
+    );
   }
 
   health(key: RuntimeSupervisionEntityKey, query?: UnitLogQuery) {
     return this.requireDriver(key.kind).health(key.entityId, query);
   }
 
-  logs(key: RuntimeSupervisionEntityKey, query?: UnitLogQuery) {
-    return this.requireDriver(key.kind).logs(key.entityId, query);
+  async logs(
+    target: RuntimeSupervisionTarget,
+    query?: UnitLogQuery
+  ): Promise<RuntimeSupervisionLogRecord[]> {
+    if ("entityId" in target) {
+      return await this.requireDriver(target.kind).logs(target.entityId, query);
+    }
+    const entities = await this.describe(target);
+    if (entities.length === 0) {
+      throw Object.assign(
+        new Error(`No live ${target.kind} entity belongs to release ${target.releaseId}`),
+        { code: "UNIT_ENTITY_NOT_FOUND" }
+      );
+    }
+    const records = (
+      await Promise.all(
+        entities.map(({ identity }) =>
+          this.requireDriver(identity.kind).logs(identity.entityId, query)
+        )
+      )
+    )
+      .flat()
+      .sort((left, right) => left.timestamp - right.timestamp);
+    return query?.limit === undefined ? records : records.slice(-query.limit);
   }
 
   async restart(ctx: ServiceContext, key: RuntimeSupervisionEntityKey): Promise<void> {

@@ -9,6 +9,7 @@ import { createPnpmInvocation } from "./lib/package-manager.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
 import { INTERNAL_ANDROID_PACKAGE } from "./lib/mobile-native-android.mjs";
 import { waitForAndroidBoot } from "./lib/android-avd.mjs";
+import { flagValue } from "./lib/args.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
@@ -97,11 +98,11 @@ function parseArgs(argv) {
     if (arg === "--") {
       throw new Error("Forwarding raw server flags is no longer supported");
     } else if (arg === "--platform") {
-      options.platform = argv[++i] ?? "android";
+      options.platform = flagValue(argv, ++i, arg);
     } else if (arg === "--avd") {
-      options.avd = argv[++i] ?? null;
+      options.avd = flagValue(argv, ++i, arg);
     } else if (arg === "--device") {
-      options.device = argv[++i] ?? null;
+      options.device = flagValue(argv, ++i, arg);
     } else if (arg === "--reset-app") {
       options.resetApp = true;
     } else if (arg === "--no-metro") {
@@ -111,7 +112,7 @@ function parseArgs(argv) {
     } else if (arg === "--no-launch") {
       options.noLaunch = true;
     } else if (arg === "--template-checkouts") {
-      options.templateCheckouts = argv[++i] ?? null;
+      options.templateCheckouts = flagValue(argv, ++i, arg);
     } else if (arg === "--help") {
       options.help = true;
     } else {

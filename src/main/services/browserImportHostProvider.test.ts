@@ -365,11 +365,10 @@ describe("BrowserImportHostProvider", () => {
         { dataType: "passwords", read: 0, stored: 0, skipped: 0, errors: 0 },
         { dataType: "formFill", read: 0, stored: 0, skipped: 0, errors: 0 },
       ],
+      version: expect.any(String),
     });
-    await vi.waitFor(() => {
-      expect(provider.observeSensitiveImport("stable-operation-id").state).toBe("complete");
-    });
-    const receipt = provider.observeSensitiveImport("stable-operation-id");
+    const receipt = await settledSensitiveImport(provider, "stable-operation-id");
+    expect(receipt.state).toBe("complete");
 
     expect(browserVault.addCookiesBatch).toHaveBeenCalledWith({
       jobId: "stable-operation-id",
@@ -392,6 +391,7 @@ describe("BrowserImportHostProvider", () => {
         { dataType: "passwords", read: 1, stored: 1, skipped: 0, errors: 0 },
         { dataType: "formFill", read: 1, stored: 1, skipped: 0, errors: 0 },
       ],
+      version: expect.any(String),
     });
     expect(JSON.stringify(receipt)).not.toMatch(/secret|warning/i);
   });
@@ -415,8 +415,8 @@ describe("BrowserImportHostProvider", () => {
         },
       }
     );
-    await vi.waitFor(() =>
-      expect(unavailable.observeSensitiveImport("operation").state).toBe("application_failed")
+    expect((await settledSensitiveImport(unavailable, "operation")).state).toBe(
+      "application_failed"
     );
     await unavailable.stop();
     let finish!: () => void;
@@ -433,20 +433,20 @@ describe("BrowserImportHostProvider", () => {
       }
     );
     await vi.waitFor(() => expect(applyCookies).toHaveBeenCalledOnce());
-    expect(restarted.observeSensitiveImport("operation")).toEqual({
+    expect(await restarted.observeSensitiveImport("operation")).toEqual({
       operationId: "operation",
       state: "applying",
       counts,
+      version: expect.any(String),
     });
     expect(createProvider).not.toHaveBeenCalled();
     finish();
-    await vi.waitFor(() =>
-      expect(restarted.observeSensitiveImport("operation")).toEqual({
-        operationId: "operation",
-        state: "complete",
-        counts,
-      })
-    );
+    expect(await settledSensitiveImport(restarted, "operation")).toEqual({
+      operationId: "operation",
+      state: "complete",
+      counts,
+      version: expect.any(String),
+    });
     await restarted.stop();
   });
 
@@ -485,6 +485,7 @@ describe("BrowserImportHostProvider", () => {
       operationId: "cancel-application",
       state: "cancelled",
       counts,
+      version: expect.any(String),
     });
     await provider.stop();
     expect(joined).toBe(true);
@@ -546,13 +547,12 @@ describe("BrowserImportHostProvider", () => {
     release();
 
     expect(first).toEqual(retry);
-    await vi.waitFor(() =>
-      expect(provider.observeSensitiveImport("retry-id").state).toBe("complete")
-    );
+    expect((await settledSensitiveImport(provider, "retry-id")).state).toBe("complete");
     expect(provider.startSensitiveImport("source", ["passwords"], "retry-id")).toEqual({
       operationId: "retry-id",
       state: "complete",
       counts: [{ dataType: "passwords", read: 1, stored: 1, skipped: 0, errors: 0 }],
+      version: expect.any(String),
     });
     expect(importProvider.openImport).toHaveBeenCalledOnce();
     expect(browserVault.addPasswordsBatch).toHaveBeenCalledOnce();
@@ -578,17 +578,14 @@ describe("BrowserImportHostProvider", () => {
     );
 
     provider.startSensitiveImport("source", ["passwords"], "failed-operation");
-    await vi.waitFor(() =>
-      expect(provider.observeSensitiveImport("failed-operation").state).toBe("failed")
-    );
-
-    const status = provider.observeSensitiveImport("failed-operation");
+    const status = await settledSensitiveImport(provider, "failed-operation");
     expect(status).toEqual({
       operationId: "failed-operation",
       state: "failed",
       counts: [{ dataType: "passwords", read: 0, stored: 0, skipped: 0, errors: 0 }],
       error:
         "Protected browser data could not be imported. Check that the selected browser profile is available, then try again.",
+      version: expect.any(String),
     });
     expect(JSON.stringify(status)).not.toContain("/private/profile");
     expect(JSON.stringify(status)).not.toContain("password-secret");
@@ -616,14 +613,12 @@ describe("BrowserImportHostProvider", () => {
 
     for (let index = 0; index < 35; index += 1) {
       provider.startSensitiveImport("source", ["passwords"], `operation-${index}`);
-      await vi.waitFor(() =>
-        expect(provider.observeSensitiveImport(`operation-${index}`).state).not.toBe("running")
-      );
+      await settledSensitiveImport(provider, `operation-${index}`);
     }
 
-    expect(() => provider.observeSensitiveImport("operation-2")).toThrow("not found");
-    expect(provider.observeSensitiveImport("operation-3").state).toBe("failed");
-    expect(provider.observeSensitiveImport("operation-34").state).toBe("failed");
+    await expect(provider.observeSensitiveImport("operation-2")).rejects.toThrow("not found");
+    expect((await provider.observeSensitiveImport("operation-3")).state).toBe("failed");
+    expect((await provider.observeSensitiveImport("operation-34")).state).toBe("failed");
     nativeLog.mockRestore();
   });
 
@@ -637,3 +632,15 @@ describe("BrowserImportHostProvider", () => {
     );
   });
 });
+
+/** Follow an import through versioned observations until it stops changing on its own. */
+async function settledSensitiveImport(
+  provider: BrowserImportHostProvider,
+  operationId: string
+): Promise<Awaited<ReturnType<BrowserImportHostProvider["observeSensitiveImport"]>>> {
+  let status = await provider.observeSensitiveImport(operationId);
+  while (status.state === "running" || status.state === "applying") {
+    status = await provider.observeSensitiveImport(operationId, { afterVersion: status.version });
+  }
+  return status;
+}

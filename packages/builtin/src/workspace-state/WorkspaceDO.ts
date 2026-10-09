@@ -38,6 +38,13 @@ import {
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
 import { mintHistoryEntryKey } from "@vibestudio/shared/panel/idValues";
+import {
+  applyStateArgsMergePatch,
+  decodePanelStateArgs,
+  PanelStateArgsConflictError,
+} from "@vibestudio/shared/panelStateArgs";
+import type { StateArgsSchema } from "@vibestudio/shared/stateArgs";
+import { validateStateArgs } from "@vibestudio/shared/stateArgsValidator";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { computePanelId, SlotIdentityCollisionError } from "@vibestudio/shared/panelIdUtils";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
@@ -2961,13 +2968,47 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  slotUpdateCurrentStateArgs(slotId: string, stateArgs: unknown): void {
-    this.ctx.storage.transactionSync(() => {
+  slotPatchCurrentStateArgs(
+    slotId: string,
+    patch: Record<string, unknown>,
+    expected: { entryKey: string; activeBuildKey: string | null; schema?: StateArgsSchema }
+  ): Record<string, unknown> {
+    // The owner serializes every patch: read, merge, validate, and write happen
+    // in one transaction, so concurrent patches compose instead of losing keys.
+    return this.ctx.storage.transactionSync(() => {
       const slot = this.requireSlot(slotId);
       if (!slot.current_entry_key) {
         throw new Error(`Slot ${slotId} has no current history entry`);
       }
-      const serialized = stateArgs === undefined ? null : JSON.stringify(stateArgs);
+      if (slot.current_entry_key !== expected.entryKey) {
+        throw new PanelStateArgsConflictError(slotId, {
+          field: "entryKey",
+          expected: expected.entryKey,
+          actual: slot.current_entry_key,
+        });
+      }
+      const entity = slot.current_entity_id ? this.readEntityRow(slot.current_entity_id) : null;
+      const activeBuildKey = entity?.active_build_key ?? null;
+      if (activeBuildKey !== expected.activeBuildKey) {
+        throw new PanelStateArgsConflictError(slotId, {
+          field: "activeBuildKey",
+          expected: expected.activeBuildKey,
+          actual: activeBuildKey,
+        });
+      }
+      const history = this.sql
+        .exec(
+          `SELECT state_args FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+          slotId,
+          slot.current_entry_key
+        )
+        .toArray()[0] as Pick<DbSlotHistoryRow, "state_args"> | undefined;
+      if (!history) throw new Error(`Slot ${slotId} current history entry is missing`);
+      const merged = applyStateArgsMergePatch(decodePanelStateArgs(history.state_args), patch);
+      const validation = validateStateArgs(merged, expected.schema);
+      if (!validation.success) throw new Error(`Invalid stateArgs: ${validation.error}`);
+      const next = validation.data as Record<string, unknown>;
+      const serialized = JSON.stringify(next);
       this.sql.exec(
         `UPDATE slot_history SET state_args = ? WHERE slot_id = ? AND entry_key = ?`,
         serialized,
@@ -2981,6 +3022,7 @@ export class WorkspaceDO extends DurableObjectBase {
           slot.current_entity_id
         );
       }
+      return next;
     });
   }
 

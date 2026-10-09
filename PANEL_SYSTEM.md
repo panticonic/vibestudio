@@ -48,17 +48,15 @@ my-panel/
 
 ## Workspace Templates
 
-The `template` field in the vibestudio config selects a workspace template from `workspace/templates/{name}/`. Each template provides a `template.json` (framework config) and an `index.html` (HTML shell that loads `bundle.js` into `#root`). The template defines the framework, so panels do not need a separate `framework` field.
+The `template` field in the vibestudio config selects an HTML-shell template from the composed workspace's `templates/{name}/`. Each template provides a `template.json` (framework config) and an `index.html` (HTML shell that loads `bundle.js` into `#root`). The template defines the framework, so panels do not need a separate `framework` field. Naming a template that does not exist, or one whose `template.json` is not valid JSON, fails the build.
 
-Three frameworks are supported, one per template:
+| Template  | Shipped by           | Framework | UI layer         | Binding package                  |
+| --------- | -------------------- | --------- | ---------------- | -------------------------------- |
+| `default` | Base                 | `react`   | React + Radix UI | `@workspace/react`               |
+| `svelte`  | Examples             | `svelte`  | Svelte 5         | `@workspace/svelte`              |
+| `vanilla` | Examples             | `vanilla` | none — pure DOM  | none (`@workspace/runtime` only) |
 
-| Template                                   | Framework | UI layer         | Binding package                  |
-| ------------------------------------------ | --------- | ---------------- | -------------------------------- |
-| `default` (`workspace/templates/default/`) | `react`   | React + Radix UI | `@workspace/react`               |
-| `svelte` (`workspace/templates/svelte/`)   | `svelte`  | Svelte 5         | `@workspace/svelte`              |
-| `vanilla` (`workspace/templates/vanilla/`) | `vanilla` | none — pure DOM  | none (`@workspace/runtime` only) |
-
-Most panels should use the `default` (React) template. To use another framework, set the `template` field and depend on its binding package (or none for vanilla). `panels/hello-svelte` is the canonical non-React example; [PANEL_DEVELOPMENT.md](PANEL_DEVELOPMENT.md) also includes a minimal inline vanilla example.
+Most panels should use the `default` (React) template. To use another framework, set the `template` field to a template your workspace composes and depend on its binding package (or none for vanilla). The Examples template's `panels/hello-svelte` and `panels/hello-vanilla` are the canonical non-React examples; [PANEL_DEVELOPMENT.md](PANEL_DEVELOPMENT.md) also includes a minimal inline vanilla example.
 
 ### Framework resolution order
 
@@ -82,8 +80,8 @@ import {
   panel, // panel.slotId / entityId / parentId / env;
   // panel.getTheme() / onThemeChange() / getInfo();
   // panel.focusPanel() / onFocus() / onConnectionError() / reopen();
-  // panel.registerHostCommands() / onHostCommandRun();
-  // panel.stateArgs.{ get, set, setForPanel }
+  // panel.registerHostCommands(commands, onRun) → dispose;
+  // panel.stateArgs.{ get, patch, patchForPanel }
 
   // RPC
   rpc, // RPC client: rpc.expose(), rpc.call(), events
@@ -95,8 +93,7 @@ import {
   panelTree, // Get/list/walk the panel tree (top-level, NOT workspace.panelTree)
   getPanelHandle, // Handle by id
   listPanels, // List open panels
-  parent, // This panel's parent handle (no-op handle when root)
-  getParent, // Parent handle, or null
+  getParent, // Current parent handle, or null (re-resolves after moves)
   getParentWithContract, // Contract-typed parent handle, or null
   onChildCreated, // window.open child notifications
   openExternal, // Open a URL in the system browser
@@ -154,7 +151,7 @@ context-bound filesystem as every runtime target and has no implicit RPC
 deadline—only explicit cancellation from its owning execution.
 
 State args are read and written imperatively via `panel.stateArgs.get()` /
-`panel.stateArgs.set()`. For reactive access in a React panel, use the
+`panel.stateArgs.patch()`. For reactive access in a React panel, use the
 `useStateArgs` hook from `@workspace/react`:
 
 ```typescript
@@ -206,13 +203,13 @@ window.location.href = buildPanelLink("panels/chat", { contextId: "abc-123" });
 const handle = panelTree.get("panel-id");
 
 handle.id; // Stable panel slot ID
-await handle.refresh(); // Hydrate metadata for an existing slot
+const observation = await handle.observe(); // Read current lifecycle state
 handle.call.method(args); // Call exposed RPC method
 handle.emit("event", payload); // Emit event to the panel
 handle.on("event", handler); // Listen for events from the panel
-handle.cdp.page(); // Approval-gated CDP page access
-handle.ensureLoaded(); // Explicit load for RPC/introspection
-handle.close(); // Approval-gated structural operation
+handle.cdp.session(); // Approval-gated stable CDP session
+await handle.focus(); // Materialize and wait for application boot readiness
+await handle.archive(); // Retire the panel and its subtree
 ```
 
 Use `panelTree.get/list/roots/children` for existing panels;

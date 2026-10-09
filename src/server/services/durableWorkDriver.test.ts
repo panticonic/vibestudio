@@ -44,8 +44,6 @@ function handlers(overrides: Partial<DurableWorkHandler> = {}) {
     handler,
     record: {
       "channel-delivery": handler,
-      "agent-wake": handler,
-      "agent-effect": handler,
       "workspace-publication": handler,
     } satisfies Record<DurableWorkQueue, DurableWorkHandler>,
   };
@@ -76,7 +74,7 @@ describe("DurableWorkDriver", () => {
     });
 
     driver.start();
-    driver.notify({ owner: owner("a"), queues: ["agent-effect"] });
+    driver.notify({ owner: owner("a"), queues: ["channel-delivery"] });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(driver.inspect().recentTrace.length).toBeGreaterThan(0);
@@ -96,8 +94,8 @@ describe("DurableWorkDriver", () => {
       workerId: "driver-1",
     });
     driver.start();
-    driver.notify({ owner: owner("a"), queues: ["agent-effect"] });
-    driver.notify({ owner: owner("a"), queues: ["agent-effect"] });
+    driver.notify({ owner: owner("a"), queues: ["channel-delivery"] });
+    driver.notify({ owner: owner("a"), queues: ["channel-delivery"] });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(suite.handler.execute).toHaveBeenCalledOnce();
@@ -124,7 +122,7 @@ describe("DurableWorkDriver", () => {
     });
 
     driver.start();
-    driver.notify({ owner: owner("retired"), queues: ["agent-effect"] });
+    driver.notify({ owner: owner("retired"), queues: ["channel-delivery"] });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(suite.handler.claim).toHaveBeenCalledOnce();
@@ -149,7 +147,7 @@ describe("DurableWorkDriver", () => {
     });
 
     driver.start();
-    driver.notify({ owner: owner("retired"), queues: ["agent-effect"] });
+    driver.notify({ owner: owner("retired"), queues: ["channel-delivery"] });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(suite.handler.claim).toHaveBeenCalledOnce();
@@ -183,8 +181,8 @@ describe("DurableWorkDriver", () => {
       concurrency: 2,
     });
     driver.start();
-    driver.notify({ owner: owner("slow"), queues: ["agent-effect"] });
-    driver.notify({ owner: owner("fast"), queues: ["agent-effect"] });
+    driver.notify({ owner: owner("slow"), queues: ["channel-delivery"] });
+    driver.notify({ owner: owner("fast"), queues: ["channel-delivery"] });
     await vi.advanceTimersByTimeAsync(0);
     expect(started).toEqual(["slow", "fast"]);
     release();
@@ -219,9 +217,9 @@ describe("DurableWorkDriver", () => {
       concurrency: 2,
     });
     driver.start();
-    driver.notify({ owner: owner("removed"), queues: ["agent-effect"] });
+    driver.notify({ owner: owner("removed"), queues: ["channel-delivery"] });
     await vi.advanceTimersByTimeAsync(0);
-    driver.notify({ owner: owner("removed"), queues: ["agent-effect"] });
+    driver.notify({ owner: owner("removed"), queues: ["channel-delivery"] });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(suite.handler.fail).toHaveBeenCalledOnce();
@@ -239,7 +237,7 @@ describe("DurableWorkDriver", () => {
     });
     const recoveryHint: DurableWorkReadyHint = {
       owner: owner("recovered-owner"),
-      queues: ["agent-wake"],
+      queues: ["workspace-publication"],
     };
     const driver = new DurableWorkDriver({
       handlers: suite.record,
@@ -263,7 +261,7 @@ describe("DurableWorkDriver", () => {
         expect.objectContaining({
           phase: "claim.completed",
           trigger: "recovery",
-          queue: "agent-wake",
+          queue: "workspace-publication",
         }),
       ]),
     });
@@ -301,7 +299,7 @@ describe("DurableWorkDriver", () => {
   it("scans owner recovery status through a single low-priority lane", async () => {
     const registrations = Array.from({ length: 12 }, (_, index) => ({
       owner: owner(`registered-${index}`),
-      queues: ["agent-wake"] as const,
+      queues: ["workspace-publication"] as const,
     }));
     let active = 0;
     let maxActive = 0;
@@ -311,7 +309,7 @@ describe("DurableWorkDriver", () => {
       maxActive = Math.max(maxActive, active);
       await new Promise((resolve) => setTimeout(resolve, 5));
       active--;
-      return { readyQueues: ["agent-wake"] };
+      return { readyQueues: ["workspace-publication"] };
     });
     const scan = createDurableWorkOwnerScanner(
       { dispatch } as never,
@@ -332,7 +330,7 @@ describe("DurableWorkDriver", () => {
 
   it("reports an unchanged permanent readiness failure only once while continuing probes", async () => {
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const registration = { owner: owner("blocked"), queues: ["agent-effect"] as const };
+    const registration = { owner: owner("blocked"), queues: ["channel-delivery"] as const };
     const dispatch = vi.fn(async (_ref: DORef, method: string) => {
       if (method === "durableWorkOwnerList") return [registration];
       throw Object.assign(new Error("sealed execution unavailable"), {
@@ -554,11 +552,11 @@ describe("DurableWorkDriver", () => {
       limit: 1,
     };
 
-    await record["agent-effect"].claim(owner("agent-1"), {
+    await record["channel-delivery"].claim(owner("agent-1"), {
       ...request,
       trigger: "hint",
     });
-    await record["agent-effect"].claim(owner("agent-1"), {
+    await record["channel-delivery"].claim(owner("agent-1"), {
       ...request,
       trigger: "continuation",
     });
@@ -568,7 +566,7 @@ describe("DurableWorkDriver", () => {
       "driver-1"
     );
 
-    await record["agent-effect"].claim(owner("agent-1"), {
+    await record["channel-delivery"].claim(owner("agent-1"), {
       ...request,
       trigger: "recovery",
     });

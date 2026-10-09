@@ -12,6 +12,7 @@ function description(
 ): RuntimeSupervisionDescription {
   return {
     identity: { kind, entityId },
+    release: null,
     source: `workers/${entityId}`,
     status: "running",
     lastError: null,
@@ -66,6 +67,43 @@ describe("UnitSupervisor", () => {
 
     expect(workers.restart).toHaveBeenCalledWith(ctx, "worker:one");
     expect(panels.restart).not.toHaveBeenCalled();
+  });
+
+  it("fans describe and logs out from a release key to that release's live entities", async () => {
+    const release = { kind: "app" as const, releaseId: "remote-cli" };
+    const first = { ...description("app", "remote-cli#a"), release };
+    const second = { ...description("app", "remote-cli#b"), release };
+    const other = {
+      ...description("app", "shell"),
+      release: { kind: "app" as const, releaseId: "shell" },
+    };
+    const record = (entityId: string, timestamp: number, message: string) => ({
+      identity: { kind: "app" as const, entityId },
+      timestamp,
+      level: "info" as const,
+      message,
+    });
+    const logs = vi.fn((entityId: string) =>
+      entityId === "remote-cli#a"
+        ? [record(entityId, 1, "a1"), record(entityId, 3, "a3")]
+        : [record(entityId, 2, "b2")]
+    );
+    const supervisor = new UnitSupervisor();
+    supervisor.register(
+      driver("app", "unused", { list: vi.fn(() => [other, first, second]), logs })
+    );
+
+    await expect(supervisor.describe(release)).resolves.toEqual([first, second]);
+    await expect(supervisor.logs(release, { limit: 2 })).resolves.toEqual([
+      record("remote-cli#b", 2, "b2"),
+      record("remote-cli#a", 3, "a3"),
+    ]);
+    expect(logs).not.toHaveBeenCalledWith("shell", expect.anything());
+    await expect(supervisor.describe({ kind: "app", releaseId: "missing" })).resolves.toEqual([]);
+    await expect(supervisor.logs({ kind: "app", releaseId: "missing" })).rejects.toMatchObject({
+      code: "UNIT_ENTITY_NOT_FOUND",
+    });
+    await expect(supervisor.describe({ kind: "app", entityId: "gone" })).resolves.toEqual([]);
   });
 
   it("addresses rollback only through a release identity and release facet", async () => {

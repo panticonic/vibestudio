@@ -20,11 +20,10 @@ import type { RpcServer } from "../rpcServer.js";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
 import { WorkspaceRpcMethodUndeclaredError } from "../workspaceRpcCatalogMismatch.js";
+import { gatewayHttpUrl } from "@vibestudio/shared/hostConfig";
 
 export interface WorkerdGatewayBootstrapConfig {
   getPort(): number | null;
-  protocol: "http" | "https";
-  externalHost: string;
   configuredAliases: string | undefined;
 }
 
@@ -98,7 +97,7 @@ export function resolveWorkerdServerAliasUrls(config: WorkerdGatewayBootstrapCon
   if (config.configuredAliases) {
     for (const alias of parseGatewayAliases(config.configuredAliases)) aliases.add(alias);
   }
-  aliases.add(`${config.protocol}://${config.externalHost}:${port}`);
+  aliases.add(gatewayHttpUrl(port));
   return [...aliases];
 }
 

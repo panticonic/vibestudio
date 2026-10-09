@@ -15,7 +15,6 @@ import type { WorkspaceChildHubPort } from "../workspaceChildHubPort.js";
 import type { createAttachedHostPublicationPorts } from "../services/attachedHostTransport.js";
 import type {
   ExecutionPublicationPort,
-  ExecutionRoot,
   ExecutionRootProvider,
 } from "@vibestudio/shared/execution/retention";
 
@@ -49,7 +48,6 @@ export interface DevelopmentNativeBootstrapDeps {
   panelRuntimeCoordinator: Pick<PanelRuntimeCoordinator, "resolvePresentationCallerForRuntime">;
   executionPublicationPort: ExecutionPublicationPort;
   bindDevelopmentRunRootProvider(provider: ExecutionRootProvider): void;
-  snapshotLegacyDevelopmentRoots(epoch: number): Promise<readonly ExecutionRoot[]>;
 }
 
 /** Wire the exact native effects consumed by the userland development builtin. */
@@ -98,7 +96,6 @@ export async function wireDevelopmentNative(
     root: deps.layout.development.runsDir,
     workspaceId: deps.workspaceId,
     publicationJournal: deps.executionPublicationPort,
-    legacyRoots: (epoch) => deps.snapshotLegacyDevelopmentRoots(epoch),
   });
   deps.bindDevelopmentRunRootProvider(developmentRunRoots);
 

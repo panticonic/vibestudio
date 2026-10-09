@@ -105,6 +105,12 @@ import {
   validateCredentialClientConfigUrls as validateClientConfigUrls,
 } from "./credentialClientConfig.js";
 import { assertCredentialLabelAvailable } from "./credentialSelection.js";
+import {
+  WebsitePublicationIntentConflictError,
+  WebsitePublicationJournal,
+  sameWebsitePublicationIntent,
+  isTerminalWebsitePublication,
+} from "./websitePublicationJournal.js";
 
 interface CredentialUseContext {
   binding: CredentialBinding;
@@ -136,6 +142,8 @@ interface CredentialUseContext {
 export type { CredentialRuntimeInspector, CredentialRuntimePanelInfo, SessionCredentialCapture };
 
 export interface CredentialServiceDeps {
+  /** Workspace-owned durable record of reviewed publication operations. */
+  publicationJournal?: WebsitePublicationJournal;
   credentialStore?: CredentialStore;
   clientConfigStore?: ClientConfigStore;
   auditLog?: AuditLog;
@@ -204,34 +212,20 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       credentialStore,
       clientConfigStore,
     });
-  const publicationGrants = new Map<
-    string,
-    { intent: WebsitePublicationIntentParams; expiresAt: number }
-  >();
-
-  const publicationKey = (ctx: ServiceContext, operationId: string) =>
-    `${ctx.caller.runtime.id}\0${operationId}`;
-  const samePublication = (
-    left: WebsitePublicationIntentParams,
-    right: WebsitePublicationIntentParams
-  ) =>
-    left.operationId === right.operationId &&
-    left.artifactDigest === right.artifactDigest &&
-    left.provider === right.provider &&
-    left.destination === right.destination &&
-    left.environment === right.environment;
+  const publicationJournal = deps.publicationJournal ?? new WebsitePublicationJournal();
   const assertPublicationGrant = (
     ctx: ServiceContext,
     publication: WebsitePublicationIntentParams
   ) => {
-    const key = publicationKey(ctx, publication.operationId);
-    const grant = publicationGrants.get(key);
-    if (!grant || grant.expiresAt <= Date.now()) {
-      publicationGrants.delete(key);
-      throw new Error("Website publication has not been reviewed or its review expired");
+    const receipt = publicationJournal.get(publication.operationId);
+    if (
+      !receipt ||
+      !sessionGrantStore.hasWebsitePublication(ctx.caller.runtime.id, publication.operationId)
+    ) {
+      throw new Error("Website publication has not been reviewed for this caller");
     }
-    if (!samePublication(grant.intent, publication)) {
-      throw new Error("Website publication intent differs from the reviewed operation");
+    if (!sameWebsitePublicationIntent(receipt, publication)) {
+      throw new WebsitePublicationIntentConflictError(receipt, publication);
     }
   };
 
@@ -1568,10 +1562,18 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       revokeCredential: (ctx, [input]) => revokeCredential(ctx, input),
       resolveCredential: (ctx, [input]) => resolveCredential(ctx, input),
       beginWebsitePublication: (ctx, [publication]) => {
-        publicationGrants.set(publicationKey(ctx, publication.operationId), {
-          intent: publication,
-          expiresAt: Date.now() + 30 * 60_000,
-        });
+        const receipt = publicationJournal.begin(publication);
+        if (!isTerminalWebsitePublication(receipt)) {
+          sessionGrantStore.grantWebsitePublication(ctx.caller.runtime.id, publication.operationId);
+        }
+        return receipt;
+      },
+      recordWebsitePublication: (ctx, [publication, progress]) => {
+        assertPublicationGrant(ctx, publication);
+        const receipt = publicationJournal.record(publication, progress);
+        if (isTerminalWebsitePublication(receipt))
+          sessionGrantStore.endWebsitePublication(publication.operationId);
+        return receipt;
       },
       deriveCredential: (ctx, [input]) => deriveCredential(ctx, input),
       proxyFetch: (ctx, [input]) => proxyFetch(ctx, input),
