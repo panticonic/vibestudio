@@ -13,6 +13,17 @@ export const agentActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("prompt"), text: z.string().min(1).max(24_000) }).strict(),
   z
     .object({
+      kind: z.literal("tool"),
+      tool: z
+        .string()
+        .min(1)
+        .max(128)
+        .refine((name) => name.trim().length > 0),
+      args: z.record(z.unknown()),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("eval"),
       code: z.string().min(1).max(96_000),
       syntax: z.enum(["javascript", "typescript", "jsx", "tsx"]).optional(),

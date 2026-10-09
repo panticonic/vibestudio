@@ -185,6 +185,32 @@
                             "kind": {
                               "type": "string",
                               "enum": [
+                                "tool"
+                              ]
+                            },
+                            "tool": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "tool",
+                            "args"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
                                 "eval"
                               ]
                             },

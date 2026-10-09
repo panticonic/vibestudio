@@ -44,6 +44,7 @@ export interface MissionAuthorityPlanReference {
 
 export type MissionAgentAction =
   | { kind: "prompt"; text: string }
+  | { kind: "tool"; tool: string; args: Record<string, unknown> }
   | { kind: "notify"; text: string; title?: string; alert?: "inbox" | "interrupt" }
   | {
       kind: "eval" | "watch";
@@ -243,6 +244,24 @@ function validateExecution(execution: MissionExecution): void {
       throw new Error("Automation method must be one canonical RPC method name");
     }
   } else {
+    if (execution.action.kind === "tool") {
+      if (
+        typeof execution.action.tool !== "string" ||
+        !execution.action.tool.trim() ||
+        execution.action.tool.length > 128
+      ) {
+        throw new Error(
+          "Agent tool automation requires a selected tool name of 1 to 128 characters"
+        );
+      }
+      if (
+        !execution.action.args ||
+        typeof execution.action.args !== "object" ||
+        Array.isArray(execution.action.args)
+      ) {
+        throw new Error("Agent tool automation requires object arguments");
+      }
+    }
     if (execution.action.kind === "prompt" && !execution.action.text.trim()) {
       throw new Error("Prompt automation requires prompt text");
     }

@@ -35,6 +35,26 @@ const charter = (): MissionCharter => ({
 });
 
 describe("author-side missions client", () => {
+  it("preserves exact namespaced tool identity and rejects invalid tool arguments", () => {
+    const value = charter();
+    if (value.execution.kind !== "agent") throw new Error("Expected agent");
+    value.execution.action = {
+      kind: "tool",
+      tool: "vibestudio.refresh-now",
+      args: { briefing: false },
+    };
+    expect(() => validateMissionCharter(value)).not.toThrow();
+    const originalDigest = missionRevisionDigest(value, hex);
+    value.execution.action.args = { briefing: true };
+    expect(missionRevisionDigest(value, hex)).not.toBe(originalDigest);
+    value.execution.action.tool = " ";
+    expect(() => validateMissionCharter(value)).toThrow("selected tool name");
+    value.execution.action.tool = "x".repeat(129);
+    expect(() => validateMissionCharter(value)).toThrow("selected tool name");
+    value.execution.action.tool = "vibestudio.refresh-now";
+    value.execution.action.args = [] as unknown as Record<string, unknown>;
+    expect(() => validateMissionCharter(value)).toThrow("object arguments");
+  });
   it("passes observation cancellation as invocation metadata and keeps the version in wire arguments", async () => {
     const controller = new AbortController();
     const call = vi.fn(async (_target: string, method: string) =>
