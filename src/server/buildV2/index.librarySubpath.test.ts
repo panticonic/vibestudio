@@ -156,7 +156,6 @@ describe("BuildSystemV2 library package subpaths", () => {
     writePackage(contextRoot, "target", { "@workspace/shared": "workspace:*" });
     writePackage(contextRoot, "shared", { zod: "3.25.76" });
     const admitted: string[] = [];
-    const nativePath = path.join(root, "native", "node_modules");
     let admissionStarted!: () => void;
     const started = new Promise<void>((resolve) => {
       admissionStarted = resolve;
@@ -175,17 +174,31 @@ describe("BuildSystemV2 library package subpaths", () => {
       APP_NODE_MODULES,
       {
         ...buildRoots(mainRoot),
-        admitNativeDependencies: async ({ nodeModulesDir: source, workspacePackages }) => {
+        admitNativeDependencies: async ({
+          nodeModulesDir: source,
+          workspacePackages,
+          workspacePackageNodeModules,
+        }) => {
           expect(APP_NODE_MODULES).not.toContain(source);
+          expect(source).toBe("");
+          const shared = workspacePackages["@workspace/shared"]!;
+          const sharedNodeModules = workspacePackageNodeModules["@workspace/shared"]!;
           const manifest = JSON.parse(
-            fs.readFileSync(path.join(source, "zod", "package.json"), "utf8")
+            fs.readFileSync(path.join(sharedNodeModules, "zod", "package.json"), "utf8")
           );
           expect(manifest.version).toBe("3.25.76");
-          expect(fs.existsSync(path.join(source, "@workspace", "shared"))).toBe(false);
-          admitted.push(source);
+          expect(fs.readFileSync(path.join(shared, "package.json"), "utf8")).toContain(
+            "@workspace/shared"
+          );
+          admitted.push(sharedNodeModules);
           admissionStarted();
           await completion;
-          return { nodeModulesPaths: [nativePath], workspacePackages };
+          return {
+            nodeModulesPaths: [],
+            workspacePackages: {
+              "@workspace/shared": path.join(root, "native", "workspace", "shared"),
+            },
+          };
         },
       }
     );
@@ -210,8 +223,8 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(environment).toEqual({
       stateHash: CONTEXT_STATE,
       dependencyKey: expect.any(String),
-      nodeModulesPaths: [nativePath],
-      workspacePackages: {},
+      nodeModulesPaths: [],
+      workspacePackages: { "@workspace/shared": path.join(root, "native", "workspace", "shared") },
       moduleConditions: ["import", "default"],
     });
     expect(admitted).toHaveLength(1);

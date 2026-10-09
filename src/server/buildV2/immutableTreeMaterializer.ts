@@ -126,7 +126,7 @@ export async function materializePrivateTree(source: string, target: string): Pr
   await visit(root, target, new Set());
 }
 
-/** Admit an installed SDK package's public source/declaration roots. Its
+/** Admit a workspace package's public source/declaration roots. Its
  * dependency links and package-manager workspace are never copied. */
 export async function materializePackageResources(source: string, target: string): Promise<void> {
   const root = await fs.promises.realpath(source);

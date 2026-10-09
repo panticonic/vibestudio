@@ -2479,6 +2479,10 @@ export async function initBuildSystemV2(
           resolution.stateHash,
           workspaceRoot
         );
+        // The resource source map below is derived only from this pinned build
+        // snapshot. Context-bound callers select the same context ref when they
+        // discover semantic packages; the admitted package copy is therefore
+        // the compiler's canonical view for this request, not a live-name lookup.
         for (const candidate of compiler.graph.allNodes()) {
           if (!graph.has(candidate.name))
             candidate.relativePath = path
@@ -2491,7 +2495,8 @@ export async function initBuildSystemV2(
             compiler.graph.get(node.name),
             compiler.graph,
             sourceRoot,
-            appNodeModuleRoots
+            appNodeModuleRoots,
+            { traverseWorkspaceDependencies: false }
           );
         // Host package roots participate in declaration resolution, but never
         // become grants to native workspace code. Acquire the closed installation
@@ -2500,13 +2505,48 @@ export async function initBuildSystemV2(
           appRoot: rootOptions.appRoot,
           patches: dependencyPatches,
         });
+        const workspacePackageSources = Object.fromEntries(
+          compiler.graph
+            .allNodes()
+            .filter((candidate) => candidate.name !== node.name)
+            .map((candidate) => [
+              candidate.name,
+              compiler.workspacePackages[candidate.name] ??
+                path.resolve(sourceRoot, ...candidate.relativePath.split("/")),
+            ])
+        );
+        const workspacePackageNodeModules: Record<string, string> = {};
+        const workspacePackageDependencyKeys: Record<string, string | null> = {};
+        const packageEnvironments: Awaited<ReturnType<typeof acquireExternalDeps>>[] = [];
         try {
-          const packages = Object.keys(compiler.workspacePackages).sort();
+          const packages = Object.keys(workspacePackageSources).sort();
+          for (const name of packages) {
+            const packageNode = compiler.graph.get(name);
+            const requirements = await resolveExternalDependencyRequirements(
+              packageNode,
+              compiler.graph,
+              sourceRoot,
+              appNodeModuleRoots,
+              { traverseWorkspaceDependencies: false }
+            );
+            const packageEnvironment = await acquireExternalDeps(
+              requirements.closure.installSet,
+              requirements.dependencyOverrides,
+              { appRoot: rootOptions.appRoot, patches: requirements.dependencyPatches }
+            );
+            packageEnvironments.push(packageEnvironment);
+            workspacePackageDependencyKeys[name] = packageEnvironment.key;
+            if (packageEnvironment.nodeModulesDir) {
+              workspacePackageNodeModules[name] = packageEnvironment.nodeModulesDir;
+            }
+          }
           const dependencyKey =
             environment.key || packages.length
               ? sha256Canonical({
                   recipe: "native-typecheck-resources.v1",
+                  stateHash: resolution.stateHash,
                   external: environment.key,
+                  workspacePackageDependencies: workspacePackageDependencyKeys,
                   sdk: getRootDependencyFingerprintInfo().value,
                   packages,
                 })
@@ -2515,7 +2555,8 @@ export async function initBuildSystemV2(
             ? await admitDependencies({
                 key: dependencyKey,
                 nodeModulesDir: environment.nodeModulesDir,
-                workspacePackages: compiler.workspacePackages,
+                workspacePackages: workspacePackageSources,
+                workspacePackageNodeModules,
               })
             : { nodeModulesPaths: [], workspacePackages: {} };
           return {
@@ -2527,6 +2568,7 @@ export async function initBuildSystemV2(
           };
         } finally {
           environment.release();
+          for (const packageEnvironment of packageEnvironments) packageEnvironment.release();
         }
       })();
       dependencyPreparations.add(preparation);

@@ -67,6 +67,11 @@ export interface ExternalDependencyClosure {
   installSet: Record<string, string>;
 }
 
+export interface ExternalDependencyTraversalOptions {
+  /** Stop at workspace package edges so each package keeps its own npm realm. */
+  traverseWorkspaceDependencies?: boolean;
+}
+
 /**
  * Collect all external (non-workspace) dependencies transitively
  * from a unit and all its internal dependencies.
@@ -75,8 +80,10 @@ export function collectExternalDependencyClosure(
   unit: GraphNode,
   graph: PackageGraph,
   workspaceRoot?: string,
-  packageRoots: string[] = []
+  packageRoots: string[] = [],
+  options: ExternalDependencyTraversalOptions = {}
 ): ExternalDependencyClosure {
+  const traverseWorkspaceDependencies = options.traverseWorkspaceDependencies ?? true;
   const dependencies: Record<string, string> = {};
   const peers: Record<string, string> = {};
   const peerOwners = new Map<string, Set<string>>();
@@ -134,10 +141,14 @@ export function collectExternalDependencyClosure(
       }
       if (graph.isInternal(name)) {
         const dep = graph.tryGet(name);
-        if (dep) walkNode(dep);
+        if (dep && traverseWorkspaceDependencies) walkNode(dep);
         continue;
       }
-      if (version.startsWith("workspace:") && options.walkWorkspaceDeps) {
+      if (
+        version.startsWith("workspace:") &&
+        options.walkWorkspaceDeps &&
+        traverseWorkspaceDependencies
+      ) {
         const pkg = workspaceRoot
           ? readWorkspacePackageJson(workspaceRoot, name, packageRoots)
           : null;
@@ -185,9 +196,11 @@ export function collectExternalDependencyClosure(
       owner: node.name,
       optional: node.optionalPeerDependencies,
     });
-    for (const dependency of node.internalDeps) {
-      const child = graph.tryGet(dependency);
-      if (child) walkNode(child);
+    if (traverseWorkspaceDependencies) {
+      for (const dependency of node.internalDeps) {
+        const child = graph.tryGet(dependency);
+        if (child) walkNode(child);
+      }
     }
   }
 
@@ -235,8 +248,10 @@ export function collectTransitiveDependencyOverrides(
   unit: GraphNode,
   graph: PackageGraph,
   workspaceRoot?: string,
-  packageRoots: string[] = []
+  packageRoots: string[] = [],
+  options: ExternalDependencyTraversalOptions = {}
 ): Record<string, string> {
+  const traverseWorkspaceDependencies = options.traverseWorkspaceDependencies ?? true;
   const overrides: Record<string, string> = {};
   const owners = new Map<string, string>();
   const visited = new Set<string>();
@@ -261,10 +276,14 @@ export function collectTransitiveDependencyOverrides(
     for (const [name, version] of Object.entries(dependencies)) {
       if (graph.isInternal(name)) {
         const dep = graph.tryGet(name);
-        if (dep) walkNode(dep);
+        if (dep && traverseWorkspaceDependencies) walkNode(dep);
         continue;
       }
-      if (version.startsWith("workspace:") && options.walkWorkspaceDeps) {
+      if (
+        version.startsWith("workspace:") &&
+        options.walkWorkspaceDeps &&
+        traverseWorkspaceDependencies
+      ) {
         const pkg = workspaceRoot
           ? readWorkspacePackageJson(workspaceRoot, name, packageRoots)
           : null;
@@ -298,9 +317,11 @@ export function collectTransitiveDependencyOverrides(
     // declaration kinds are traversed here; the peer/dependency split only
     // decides how an *external* package is treated, not which owners are read.
     walkDeps({ ...node.peerDependencies, ...node.dependencies }, { walkWorkspaceDeps: true });
-    for (const dependency of node.internalDeps) {
-      const child = graph.tryGet(dependency);
-      if (child) walkNode(child);
+    if (traverseWorkspaceDependencies) {
+      for (const dependency of node.internalDeps) {
+        const child = graph.tryGet(dependency);
+        if (child) walkNode(child);
+      }
     }
   }
 
@@ -326,8 +347,10 @@ export interface ExternalDependencyPatch {
 export async function collectTransitiveDependencyPatches(
   unit: GraphNode,
   graph: PackageGraph,
-  sourceRoot: string
+  sourceRoot: string,
+  options: ExternalDependencyTraversalOptions = {}
 ): Promise<ExternalDependencyPatch[]> {
+  const traverseWorkspaceDependencies = options.traverseWorkspaceDependencies ?? true;
   const patches = new Map<string, ExternalDependencyPatch>();
   const visited = new Set<string>();
   const closure: GraphNode[] = [];
@@ -381,9 +404,11 @@ export async function collectTransitiveDependencyPatches(
       patches.set(selector, patch);
     }
 
-    for (const dependency of node.internalDeps) {
-      const child = graph.tryGet(dependency);
-      if (child) await walkNode(child);
+    if (traverseWorkspaceDependencies) {
+      for (const dependency of node.internalDeps) {
+        const child = graph.tryGet(dependency);
+        if (child) await walkNode(child);
+      }
     }
   }
 
@@ -1268,16 +1293,29 @@ export async function resolveExternalDependencyRequirements(
   unit: GraphNode,
   graph: PackageGraph,
   sourceRoot: string,
-  appNodeModules: string[]
+  appNodeModules: string[],
+  options: ExternalDependencyTraversalOptions = {}
 ) {
-  const closure = collectExternalDependencyClosure(unit, graph, sourceRoot, appNodeModules);
+  const closure = collectExternalDependencyClosure(
+    unit,
+    graph,
+    sourceRoot,
+    appNodeModules,
+    options
+  );
   const dependencyOverrides = collectTransitiveDependencyOverrides(
     unit,
     graph,
     sourceRoot,
-    appNodeModules
+    appNodeModules,
+    options
   );
-  const dependencyPatches = await collectTransitiveDependencyPatches(unit, graph, sourceRoot);
+  const dependencyPatches = await collectTransitiveDependencyPatches(
+    unit,
+    graph,
+    sourceRoot,
+    options
+  );
   return { closure, dependencyOverrides, dependencyPatches };
 }
 

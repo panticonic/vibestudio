@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { mkdtemp, writeFile, readFile, mkdir, rm, access } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, mkdir, rm, access, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { waitForNativeJob } from "./nativeWorkspaceJob.js";
@@ -181,11 +181,13 @@ it("runs bundled typechecking with its admitted native compiler and standard lib
         key: "fixture-dependencies",
         nodeModulesDir: dependencies,
         workspacePackages: { "@vibestudio/fixture-sdk": sdk },
+        workspacePackageNodeModules: {},
       }),
       runtime.admitDependencies({
         key: "fixture-dependencies",
         nodeModulesDir: dependencies,
         workspacePackages: { "@vibestudio/fixture-sdk": sdk },
+        workspacePackageNodeModules: {},
       }),
     ]);
     expect(concurrentAdmissions[0]).toBe(concurrentAdmissions[1]);
@@ -233,5 +235,104 @@ it("runs bundled typechecking with its admitted native compiler and standard lib
     if (admitted) await expect(access(admitted)).rejects.toThrow();
     await runtime?.retireStorage();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("materializes independent dependency realms for workspace package owners", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "native-workspace-owner-deps-"));
+  const statePath = path.join(root, "state");
+  const sourceRoot = path.join(statePath, "source");
+  const engine = path.join(root, "packages", "typecheck");
+  const transform = path.join(root, "packages", "svelte-type-source");
+  const engineDependencies = path.join(root, "owners", "typecheck", "node_modules");
+  const transformDependencies = path.join(root, "owners", "svelte-type-source", "node_modules");
+  let runtime: Awaited<ReturnType<typeof startNativeWorkspaceRuntime>> | undefined;
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await mkdir(engine, { recursive: true });
+    await writeFile(
+      path.join(engine, "package.json"),
+      JSON.stringify({
+        name: "@vibestudio/typecheck",
+        version: "0.1.0",
+        type: "module",
+        exports: { ".": "./index.js" },
+      })
+    );
+    await writeFile(
+      path.join(engine, "index.js"),
+      "import { Project } from 'typescript/unstable/sync'; export const hasProject = typeof Project === 'function';\n"
+    );
+    await mkdir(transform, { recursive: true });
+    await writeFile(
+      path.join(transform, "package.json"),
+      JSON.stringify({
+        name: "@vibestudio/svelte-type-source",
+        version: "0.1.0",
+        main: "./index.cjs",
+        exports: { ".": "./index.cjs" },
+      })
+    );
+    await writeFile(
+      path.join(transform, "index.cjs"),
+      "const ts = require('typescript'); module.exports = { version: ts.version, hasCreateSourceFile: typeof ts.createSourceFile === 'function' };\n"
+    );
+    await mkdir(engineDependencies, { recursive: true });
+    await mkdir(transformDependencies, { recursive: true });
+    await cp(path.resolve("node_modules/typescript"), path.join(engineDependencies, "typescript"), {
+      recursive: true,
+    });
+    await cp(
+      path.resolve("packages/svelte-type-source/node_modules/typescript"),
+      path.join(transformDependencies, "typescript"),
+      { recursive: true }
+    );
+    runtime = await startNativeWorkspaceRuntime({
+      workspaceId: "owner-dependency-fixture",
+      statePath,
+      sourceRoot,
+      scratchRoot: path.join(statePath, "scratch", "contexts"),
+      buildsRoot: path.join(statePath, "builds"),
+      appRoot: process.cwd(),
+    });
+    const resources = await runtime.admitDependencies({
+      key: "workspace-package-owner-realms",
+      nodeModulesDir: "",
+      workspacePackages: {
+        "@vibestudio/typecheck": engine,
+        "@vibestudio/svelte-type-source": transform,
+      },
+      workspacePackageNodeModules: {
+        "@vibestudio/typecheck": engineDependencies,
+        "@vibestudio/svelte-type-source": transformDependencies,
+      },
+    });
+    await runtime.runJob({
+      dependencies: "",
+      bundle: "",
+      script: `
+        import { createRequire } from 'node:module';
+        import { pathToFileURL } from 'node:url';
+        const require = createRequire(import.meta.url);
+        const assert = require('node:assert/strict');
+        const engine = await import(pathToFileURL(${JSON.stringify(path.join(resources.workspacePackages["@vibestudio/typecheck"]!, "index.js"))}));
+        const transform = require(${JSON.stringify(resources.workspacePackages["@vibestudio/svelte-type-source"]!)});
+        assert.equal(engine.hasProject, true);
+        assert.equal(transform.version, '6.0.3');
+        assert.equal(transform.hasCreateSourceFile, true);
+        assert.notEqual(require.resolve('typescript', { paths: [${JSON.stringify(resources.workspacePackages["@vibestudio/typecheck"]!)}] }), require.resolve('typescript', { paths: [${JSON.stringify(resources.workspacePackages["@vibestudio/svelte-type-source"]!)}] }));
+      `,
+    });
+  } finally {
+    if (!runtime) {
+      await rm(root, { recursive: true, force: true });
+    } else {
+      const stopped = await runtime.stop();
+      if (stopped.launcherExited) {
+        await runtime.retireStorage();
+        await rm(root, { recursive: true, force: true });
+      }
+      expect(stopped.launcherExited).toBe(true);
+    }
   }
 });

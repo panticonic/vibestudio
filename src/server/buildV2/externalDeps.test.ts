@@ -346,6 +346,30 @@ describe("collectExternalDependencyClosure", () => {
     });
   });
 
+  it("keeps workspace-package dependency realms separate when traversal stops at owners", () => {
+    const graph = new PackageGraph();
+    const transform = makeNode("@vibestudio/svelte-type-source", { typescript: "6.0.3" });
+    const engine = makeNode(
+      "@vibestudio/typecheck",
+      { typescript: "7.0.2", "@vibestudio/svelte-type-source": "workspace:*" },
+      ["@vibestudio/svelte-type-source"]
+    );
+    graph.addNode(transform);
+    graph.addNode(engine);
+
+    expect(
+      collectExternalDependencyClosure(engine, graph, undefined, [], {
+        traverseWorkspaceDependencies: false,
+      }).installSet
+    ).toEqual({ typescript: "7.0.2" });
+    expect(
+      collectExternalDependencyClosure(transform, graph, undefined, [], {
+        traverseWorkspaceDependencies: false,
+      }).installSet
+    ).toEqual({ typescript: "6.0.3" });
+    expect(() => collectExternalDependencyClosure(engine, graph)).toThrow(/typescript/);
+  });
+
   it("walks internal deps transitively and collects their externals", () => {
     const graph = new PackageGraph();
     const inner = makeNode("@workspace/inner", { zod: "^3.0.0" });
