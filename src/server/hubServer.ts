@@ -1229,13 +1229,16 @@ async function handleInternalRoute(
     }
     const token = bearerToken(req);
     const boundWorkspaceId = token ? state.workspaceChildTokens.get(token) : undefined;
-    if (!boundWorkspaceId) {
-      sendJson(res, 401, { error: "Unauthorized", code: "UNAUTHORIZED" });
-      return;
-    }
     if (route === "workspace-rpc") {
       await receiveHubWorkspaceRpcHttp(req, res, {
         authenticateSource() {
+          if (!boundWorkspaceId) {
+            throw authError(
+              "UNAUTHORIZED",
+              "Workspace RPC source runtime token is not authenticated",
+              401
+            );
+          }
           if (!token || state.workspaceChildTokens.get(token) !== boundWorkspaceId) {
             throw authError("EACCES", "Workspace child runtime expired", 403);
           }
@@ -1277,6 +1280,10 @@ async function handleInternalRoute(
           };
         },
       });
+      return;
+    }
+    if (!boundWorkspaceId) {
+      sendJson(res, 401, { error: "Unauthorized", code: "UNAUTHORIZED" });
       return;
     }
     const rawBody = await readJson(req);

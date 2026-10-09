@@ -1,9 +1,16 @@
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { responseEnvelopeFor, type RpcEnvelope } from "@vibestudio/rpc";
+import {
+  RpcBoundaryError,
+  attachRpcDiagnosticId,
+  rpcDiagnosticIdOf,
+  responseEnvelopeFor,
+  type RpcEnvelope,
+} from "@vibestudio/rpc";
 import { encodeLengthPrefix, MAX_ENVELOPE_FRAME_BYTES } from "@vibestudio/iroh-transport";
 import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
 import { receiveHubWorkspaceRpcHttp } from "./workspaceRpcHubTransport.js";
+import { authError } from "./hostCore/auth/errors.js";
 import {
   receiveWorkspaceRpcHttp,
   type WorkspaceRpcDelivery,
@@ -150,6 +157,157 @@ async function fixture(dispatch: (delivery: WorkspaceRpcDelivery) => Promise<voi
 }
 
 describe("host-to-host workspace RPC transport", () => {
+  it("preserves a receiver failure through both HTTP hops with its original domain payload and diagnostics", async () => {
+    const data = ["receiver-owned", { conflict: 7 }];
+    const original = new RpcBoundaryError(
+      "Receiver preparation failed",
+      "service",
+      "ERECEIVER",
+      undefined,
+      data
+    );
+    original.stack = "Receiver preparation failed\n    at receiver.ts:42:7";
+    const diagnosticId = "11223344-5566-7788-99aa-bbccddeeff00";
+    attachRpcDiagnosticId(original, diagnosticId);
+    const f = await fixture(async () => {
+      throw original;
+    });
+    const failure = await f.port
+      .forwardWorkspaceRpc(invocation(), { onEnvelope() {} })
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      name: "RemoteRpcError",
+      errorKind: "service",
+      code: "ERECEIVER",
+      errorData: data,
+      stack: original.stack,
+    });
+    expect((failure as Error).message).toContain("Receiver preparation failed");
+    expect((failure as Error).message).toContain("dispatch, HTTP 500");
+    expect((failure as Error).message.match(/Workspace RPC forwarding to/g)).toHaveLength(2);
+    expect(rpcDiagnosticIdOf(failure)).toBe(diagnosticId);
+  });
+
+  it("reports authentication rejection before parsing or dispatching a request", async () => {
+    const f = await fixture(async () => {});
+    const response = await fetch(`${f.hub}/_r/s/internal/workspace-rpc`, {
+      method: "POST",
+      body: "untrusted",
+    });
+    expect(response.status).toBe(403);
+    const failure = await response.json();
+    expect(failure).toMatchObject({
+      errorCode: "EACCES",
+      errorKind: "access",
+      error: expect.stringContaining("denied [Workspace RPC receiver"),
+      errorStack: expect.stringContaining("denied"),
+    });
+    expect(failure).not.toHaveProperty("requestId");
+    expect(failure).not.toHaveProperty("type");
+    expect(f.resolveDestination).not.toHaveBeenCalled();
+    expect(f.receiver).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit unauthenticated HTTP status and reason without inventing a request identity", async () => {
+    const endpoint = await listen((req, res) => {
+      void receiveWorkspaceRpcHttp(req, res, {
+        authenticate() {
+          throw authError("UNAUTHORIZED", "Source runtime token is not authenticated", 401);
+        },
+        assertLive() {},
+        async dispatch() {
+          throw new Error("must not dispatch");
+        },
+      });
+    });
+    const response = await fetch(endpoint, { method: "POST", body: "untrusted" });
+    expect(response.status).toBe(401);
+    const failure = await response.json();
+    expect(failure).toMatchObject({
+      errorCode: "UNAUTHORIZED",
+      errorKind: "access",
+      error: expect.stringContaining("Source runtime token is not authenticated"),
+    });
+    expect(failure).not.toHaveProperty("requestId");
+  });
+
+  it("refuses a canonical failure associated with a different request", async () => {
+    const endpoint = await listen((_req, res) => {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          requestId: "other-request",
+          error: "Another operation failed",
+          errorKind: "service",
+          errorCode: "EOTHER",
+        })
+      );
+    });
+    const port = createWorkspaceChildHubPort({ hubUrl: endpoint, runtimeToken: "source-secret" });
+    await expect(port.forwardWorkspaceRpc(invocation(), { onEnvelope() {} })).rejects.toMatchObject(
+      {
+        errorKind: "protocol",
+        code: "EPROTOCOL",
+        message: expect.stringContaining("different request identifier"),
+      }
+    );
+  });
+
+  it("reports the original live policy rejection through the HTTP forwarding boundary", async () => {
+    const f = await fixture(async () => {});
+    f.denyPolicy();
+    await expect(
+      f.port.forwardWorkspaceRpc(invocation(), { onEnvelope() {} })
+    ).rejects.toMatchObject({
+      errorKind: "access",
+      code: "EACCES",
+      message: expect.stringContaining("denied"),
+    });
+    expect(f.resolveDestination).not.toHaveBeenCalled();
+    expect(f.receiver).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["method", "Workspace RPC transport requires POST"],
+    ["body declaration", "boolean body declaration"],
+    ["unexpected upload", "upload body requires a stream-request"],
+    ["trailing payload", "contains trailing payload"],
+  ] as const)(
+    "reports %s misuse as a protocol error before receiver dispatch",
+    async (scenario, reason) => {
+      const f = await fixture(async () => {
+        throw new Error("must not dispatch");
+      });
+      const packet = {
+        invocation: invocation(),
+        body: scenario === "unexpected upload" ? true : false,
+      };
+      const payload = Buffer.from(
+        JSON.stringify(scenario === "body declaration" ? { ...packet, body: "invalid" } : packet)
+      );
+      const response = await fetch(`${f.hub}/_r/s/internal/workspace-rpc`, {
+        method: scenario === "method" ? "GET" : "POST",
+        headers: { Authorization: "Bearer source-secret" },
+        ...(scenario === "method"
+          ? {}
+          : {
+              body: Buffer.concat([
+                encodeLengthPrefix(payload.byteLength),
+                payload,
+                ...(scenario === "trailing payload" ? [Buffer.from("unexpected")] : []),
+              ]),
+            }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        errorKind: "protocol",
+        errorCode: "EPROTOCOL",
+        error: expect.stringContaining(reason),
+      });
+      expect(f.resolveDestination).not.toHaveBeenCalled();
+      expect(f.receiver).not.toHaveBeenCalled();
+    }
+  );
   it("preserves target/context selectors, provenance facts and structured application failures", async () => {
     const input = invocation();
     const result = reply(input, {
@@ -418,6 +576,13 @@ describe("host-to-host workspace RPC transport", () => {
       body: Buffer.from(encodeLengthPrefix(MAX_ENVELOPE_FRAME_BYTES + 1)),
     });
     expect(response.status).toBe(400);
+    const failure = await response.json();
+    expect(failure).toMatchObject({
+      errorKind: "protocol",
+      error: expect.stringContaining("read frame, HTTP 400"),
+    });
+    expect(failure.error).not.toContain("Invalid workspace RPC transport");
+    expect(failure).not.toHaveProperty("requestId");
     expect(f.resolveDestination).not.toHaveBeenCalled();
   });
 

@@ -7,8 +7,18 @@ import {
   writeFrame,
   MAX_ENVELOPE_FRAME_BYTES,
 } from "@vibestudio/iroh-transport";
-import type { RpcEnvelope } from "@vibestudio/rpc";
+import {
+  RemoteRpcError,
+  RpcBoundaryError,
+  attachRpcDiagnosticId,
+  rpcDiagnosticIdOf,
+  rpcErrorDataOf,
+  rpcErrorKindOf,
+  type RpcEnvelope,
+  type RpcResponse,
+} from "@vibestudio/rpc";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { authErrorStatus } from "./hostCore/auth/errors.js";
 
 export const WORKSPACE_RPC_INTERNAL_ROUTE = "/_r/s/internal/workspace-rpc";
 const CONTENT_TYPE = "application/vnd.vibestudio.rpc-envelopes";
@@ -33,8 +43,12 @@ export interface WorkspaceRpcDelivery {
   send(envelope: RpcEnvelope): Promise<void>;
 }
 
-function denied(message = "Cross-workspace RPC is not permitted"): Error {
-  return Object.assign(new Error(message), { code: "EACCES" });
+function denied(message: string): Error {
+  return new RpcBoundaryError(message, "access", "EACCES");
+}
+
+function malformed(message: string): Error {
+  return new RpcBoundaryError(message, "protocol", "EPROTOCOL");
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -60,11 +74,14 @@ function verifiedCaller(value: unknown): value is VerifiedCaller {
 /** Validate structure before trusting a host assertion. Authentication of the
  * installed child process is a separate, mandatory check at the HTTP boundary. */
 export function parseWorkspaceRpcInvocation(value: unknown): WorkspaceRpcInvocation {
+  if (!record(value)) throw malformed("Workspace RPC invocation must be an object");
+  if (!verifiedCaller(value["caller"]) || !verifiedCaller(value["authorizingCaller"]))
+    throw denied(
+      "Workspace RPC requires an authenticated source caller and authorizing account user"
+    );
+  if (value["caller"].subject!.userId !== value["authorizingCaller"].subject!.userId)
+    throw denied("Workspace RPC caller and authorizing caller belong to different account users");
   if (
-    !record(value) ||
-    !verifiedCaller(value["caller"]) ||
-    !verifiedCaller(value["authorizingCaller"]) ||
-    value["caller"]["subject"]!.userId !== value["authorizingCaller"]["subject"]!.userId ||
     typeof value["operation"] !== "string" ||
     !value["operation"] ||
     (value["purpose"] !== "call" && value["purpose"] !== "discover") ||
@@ -80,7 +97,9 @@ export function parseWorkspaceRpcInvocation(value: unknown): WorkspaceRpcInvocat
     !record(value["envelope"]["delivery"]["caller"]) ||
     !Array.isArray(value["envelope"]["provenance"])
   )
-    throw denied();
+    throw malformed(
+      "Malformed workspace RPC invocation: expected operation, purpose, and workspace-addressed envelope"
+    );
   const invocation = value as unknown as WorkspaceRpcInvocation;
   const message = invocation.envelope.message;
   if (
@@ -88,18 +107,23 @@ export function parseWorkspaceRpcInvocation(value: unknown): WorkspaceRpcInvocat
       message.type
     )
   ) {
-    throw denied();
+    throw malformed(`Unsupported workspace RPC message type: ${message.type}`);
   }
   if (
     (message.type === "request" || message.type === "stream-request") &&
-    (message.method !== invocation.operation || !Array.isArray(message.args))
+    message.method !== invocation.operation
   )
-    throw denied();
+    throw denied("Workspace RPC method does not match its authorized operation");
+  if (
+    (message.type === "request" || message.type === "stream-request") &&
+    !Array.isArray(message.args)
+  )
+    throw malformed("Workspace RPC request arguments must be an array");
   if (
     message.type !== "event" &&
     (!("requestId" in message) || typeof message.requestId !== "string" || !message.requestId)
   )
-    throw denied();
+    throw malformed("Workspace RPC message has no request identifier");
   const attributed = invocation.envelope.delivery.caller;
   if (
     invocation.envelope.from !== invocation.caller.runtime.id ||
@@ -109,7 +133,7 @@ export function parseWorkspaceRpcInvocation(value: unknown): WorkspaceRpcInvocat
     attributed.callerKind !== invocation.caller.runtime.kind ||
     attributed.userId !== invocation.caller.subject!.userId
   )
-    throw denied();
+    throw denied("Workspace RPC envelope attribution does not match its authenticated caller");
   return invocation;
 }
 
@@ -170,7 +194,9 @@ function assertReply(invocation: WorkspaceRpcInvocation, reply: RpcEnvelope): vo
     invocation.envelope.destination?.kind !== "workspace" ||
     reply.delivery.caller.workspaceId !== invocation.envelope.destination.workspaceId
   )
-    throw denied();
+    throw denied(
+      "Workspace RPC reply destination, target, or responder workspace does not match its invocation"
+    );
   const message = reply.message;
   if (message.type === "event") return; // Receiver owns its existing subscription authorization.
   const request = invocation.envelope.message;
@@ -179,7 +205,7 @@ function assertReply(invocation: WorkspaceRpcInvocation, reply: RpcEnvelope): vo
     !("requestId" in request) ||
     message.requestId !== request.requestId
   )
-    throw denied();
+    throw malformed("Workspace RPC reply type or request identifier does not match its invocation");
 }
 
 export async function receiveWorkspaceRpcHttp(
@@ -192,26 +218,38 @@ export async function receiveWorkspaceRpcHttp(
   }
 ): Promise<void> {
   const controller = new AbortController();
+  let phase = "authenticate";
+  let requestId: string | undefined;
   const disconnect = () => {
     if (!res.writableFinished) controller.abort(new Error("Workspace RPC disconnected"));
   };
   req.on("aborted", disconnect);
   res.on("close", disconnect);
   try {
-    if (req.method !== "POST") throw denied();
+    if (req.method !== "POST") throw malformed("Workspace RPC transport requires POST");
     options.authenticate();
+    phase = "read frame";
     const reader = new FramedReader(req);
     const bytes = await readFrame(reader, MAX_ENVELOPE_FRAME_BYTES);
+    phase = "decode frame";
     const packet: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
-    if (!record(packet) || typeof packet["body"] !== "boolean") throw denied();
+    if (!record(packet) || typeof packet["body"] !== "boolean")
+      throw malformed(
+        "Workspace RPC packet must contain an invocation and a boolean body declaration"
+      );
+    phase = "parse invocation";
     const invocation = parseWorkspaceRpcInvocation(packet["invocation"]);
+    if ("requestId" in invocation.envelope.message)
+      requestId = invocation.envelope.message.requestId;
     const hasBody = packet["body"];
-    if (hasBody && invocation.envelope.message.type !== "stream-request") throw denied();
+    if (hasBody && invocation.envelope.message.type !== "stream-request")
+      throw malformed("Workspace RPC upload body requires a stream-request");
     const assertLive = () => {
       controller.signal.throwIfAborted();
       options.authenticate();
       options.assertLive(invocation);
     };
+    phase = "check boundary";
     assertLive();
     async function* upload() {
       for await (const chunk of reader.remaining()) {
@@ -220,12 +258,17 @@ export async function receiveWorkspaceRpcHttp(
       }
     }
     if (!hasBody) {
+      phase = "read upload end";
       for await (const chunk of reader.remaining()) {
         assertLive();
-        if (chunk.byteLength) throw denied();
+        if (chunk.byteLength)
+          throw malformed(
+            "Workspace RPC packet declares no upload body but contains trailing payload"
+          );
       }
     }
     let writes = Promise.resolve();
+    phase = "dispatch";
     await options.dispatch({
       invocation,
       ...(hasBody
@@ -234,6 +277,7 @@ export async function receiveWorkspaceRpcHttp(
       signal: controller.signal,
       send(envelope) {
         const write = writes.then(async () => {
+          phase = "send reply";
           assertLive();
           assertReply(invocation, envelope);
           const payload = Buffer.from(JSON.stringify(envelope));
@@ -260,17 +304,32 @@ export async function receiveWorkspaceRpcHttp(
   } catch (error) {
     if (res.headersSent) res.destroy(error instanceof Error ? error : new Error(String(error)));
     else {
-      const code = (error as { code?: string })?.code;
-      res.writeHead(code === "EACCES" ? 403 : 400, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error:
-            code === "EACCES"
-              ? "Cross-workspace RPC is not permitted"
-              : "Invalid workspace RPC transport",
-          code: code ?? "EPROTOCOL",
-        })
+      const code = (error as { code?: unknown } | null)?.code;
+      const errorKind = rpcErrorKindOf(
+        error,
+        code === "EACCES" || code === "UNAUTHORIZED"
+          ? "access"
+          : phase === "dispatch"
+            ? "internal"
+            : "protocol"
       );
+      const status =
+        authErrorStatus(error) ??
+        (errorKind === "access" ? 403 : errorKind === "protocol" ? 400 : 500);
+      const message = error instanceof Error ? error.message : String(error);
+      const failure: Omit<Extract<RpcResponse, { error: string }>, "type" | "requestId"> & {
+        requestId?: string;
+      } = {
+        ...(requestId ? { requestId } : {}),
+        error: `${message} [Workspace RPC receiver :${req.socket.localPort}, ${phase}, HTTP ${status}]`,
+        errorKind,
+        ...(typeof code === "string" ? { errorCode: code } : {}),
+        ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
+        ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+        ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+      };
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(failure));
     }
   } finally {
     req.off("aborted", disconnect);
@@ -335,10 +394,42 @@ export async function forwardWorkspaceRpcHttp(options: {
       signal,
     } as RequestInit & { duplex: "half" });
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw Object.assign(new Error("Cross-workspace RPC delivery failed"), {
-        code: response.status === 401 || response.status === 403 ? "EACCES" : "ETRANSPORT",
-      });
+      const context = `[Workspace RPC forwarding to ${new URL(options.url).origin}${new URL(options.url).pathname}, HTTP ${response.status}]`;
+      const text = await response.text();
+      let failure: unknown;
+      try {
+        failure = JSON.parse(text);
+      } catch {
+        // An infrastructure response may not speak RPC; retain its actual body.
+      }
+      if (record(failure) && typeof failure["error"] === "string") {
+        const expectedId =
+          "requestId" in invocation.envelope.message
+            ? invocation.envelope.message.requestId
+            : undefined;
+        if (failure["requestId"] !== undefined && failure["requestId"] !== expectedId) {
+          throw new RemoteRpcError(
+            `Workspace RPC failure response has a different request identifier ${context}`,
+            "protocol",
+            "EPROTOCOL"
+          );
+        }
+        const error = new RemoteRpcError(
+          `${failure["error"]} ${context}`,
+          rpcErrorKindOf(failure, "transport"),
+          typeof failure["errorCode"] === "string" ? failure["errorCode"] : undefined,
+          failure["errorData"]
+        );
+        if (typeof failure["errorStack"] === "string") error.stack = failure["errorStack"];
+        if (typeof failure["diagnosticId"] === "string")
+          attachRpcDiagnosticId(error, failure["diagnosticId"]);
+        throw error;
+      }
+      throw new RemoteRpcError(
+        `${response.statusText || "Cross-workspace RPC delivery failed"}: ${text} ${context}`,
+        "transport",
+        response.status === 401 || response.status === 403 ? "EACCES" : "ETRANSPORT"
+      );
     }
     if (!response.body) throw new Error("Workspace RPC response is missing its envelope stream");
     responseStream = Readable.fromWeb(

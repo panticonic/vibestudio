@@ -2,6 +2,7 @@ import type { IdentityDb } from "@vibestudio/identity/identityDb";
 import type { MembershipStore } from "@vibestudio/identity/membership";
 import { evaluateWorkspaceRpcBoundary } from "@vibestudio/identity/workspaceRpcPolicy";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { RpcBoundaryError } from "@vibestudio/rpc";
 
 /** Live governing facts, read below mutable workspace source. This check opens
  * only the RPC boundary; the ordinary receiver still decides all authority. */
@@ -17,16 +18,21 @@ export function assertWorkspaceRpcAccess(input: {
   const sourceWorkspaceId = input.caller.workspaceId;
   if (sourceWorkspaceId === input.destinationWorkspaceId) return;
   const userId = input.caller.subject?.userId;
-  const deny = () => {
-    // Uniform failure: callers cannot use policy checks as a private directory.
-    throw Object.assign(new Error("Cross-workspace RPC is not permitted"), { code: "EACCES" });
+  const deny = (reason: string) => {
+    throw new RpcBoundaryError(
+      `Cross-workspace RPC is not permitted: ${reason} (source ${sourceWorkspaceId ?? "missing"}, destination ${input.destinationWorkspaceId}, target ${input.target}, operation ${input.operation}, purpose ${input.purpose})`,
+      "access",
+      "EACCES"
+    );
   };
-  if (!sourceWorkspaceId || !userId || input.caller.hostOriginated) return deny();
-  if (
-    !input.membership.has(userId, sourceWorkspaceId) ||
-    !input.membership.has(userId, input.destinationWorkspaceId)
-  )
-    return deny();
+  if (!sourceWorkspaceId) return deny("caller has no authenticated source workspace");
+  if (!userId) return deny("caller has no authenticated account user");
+  if (input.caller.hostOriginated)
+    return deny("host authority cannot cross an application boundary");
+  if (!input.membership.has(userId, sourceWorkspaceId))
+    return deny(`user ${userId} is not a member of the source workspace`);
+  if (!input.membership.has(userId, input.destinationWorkspaceId))
+    return deny(`user ${userId} is not a member of the destination workspace`);
   const decision = evaluateWorkspaceRpcBoundary({
     sourceWorkspaceId,
     destinationWorkspaceId: input.destinationWorkspaceId,
@@ -41,5 +47,5 @@ export function assertWorkspaceRpcAccess(input: {
     // after this preflight, before ordinary authority/acquisition can run.
     exported: true,
   });
-  if (!decision.allowed) deny();
+  if (!decision.allowed) deny(decision.reason);
 }

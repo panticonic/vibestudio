@@ -35,7 +35,7 @@ function fixture() {
           : { incoming: [{ ...scope, workspaceId: "project" }], outgoing: [] }
       ),
     },
-    membership: { has: vi.fn(() => true) },
+    membership: { has: vi.fn((_userId: string, _workspaceId: string) => true) },
   };
 }
 
@@ -135,13 +135,57 @@ describe("live cross-workspace RPC access", () => {
     expect(() => assertWorkspaceRpcAccess(input)).toThrow();
   });
 
-  it("does not carry host authority across an application boundary or reveal policies to nonmembers", () => {
+  it("does not carry host authority across an application boundary or consult policies for nonmembers", () => {
     const input = fixture();
     expect(() =>
       assertWorkspaceRpcAccess({ ...input, caller: { ...input.caller, hostOriginated: true } })
-    ).toThrow();
+    ).toThrow("host authority cannot cross an application boundary");
     input.membership.has.mockReturnValue(false);
-    expect(() => assertWorkspaceRpcAccess(input)).toThrow();
+    expect(() => assertWorkspaceRpcAccess(input)).toThrow("not a member of the source workspace");
+    expect(input.identity.getWorkspaceRpcPolicy).not.toHaveBeenCalled();
+  });
+
+  it.each(["outgoing-blocked", "incoming-blocked", "system-ingress"] as const)(
+    "reports %s with the exact rejected operation while preserving the access gate",
+    (reason) => {
+      const input = fixture();
+      if (reason === "system-ingress") {
+        input.identity.getPrivateWorkspaceOwner.mockReturnValue({
+          userId: "alice",
+          role: "system",
+        });
+      } else {
+        const original = input.identity.getWorkspaceRpcPolicy.getMockImplementation()!;
+        input.identity.getWorkspaceRpcPolicy.mockImplementation((workspaceId) => {
+          const policy = original(workspaceId);
+          return reason === "outgoing-blocked" && workspaceId === "project"
+            ? { ...policy, outgoing: [] }
+            : reason === "incoming-blocked" && workspaceId === "personal"
+              ? { ...policy, incoming: [] }
+              : policy;
+        });
+      }
+      let failure: unknown;
+      try {
+        assertWorkspaceRpcAccess(input);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ code: "EACCES", errorKind: "access" });
+      expect((failure as Error).message).toContain(reason);
+      expect((failure as Error).message).toContain(`operation ${input.operation}`);
+      expect((failure as Error).message).toContain(`destination ${input.destinationWorkspaceId}`);
+    }
+  );
+
+  it("distinguishes missing destination membership from source membership", () => {
+    const input = fixture();
+    input.membership.has.mockImplementation(
+      (_userId: string, workspaceId: string) => workspaceId !== "personal"
+    );
+    expect(() => assertWorkspaceRpcAccess(input)).toThrow(
+      "not a member of the destination workspace"
+    );
     expect(input.identity.getWorkspaceRpcPolicy).not.toHaveBeenCalled();
   });
 });

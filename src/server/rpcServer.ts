@@ -30,6 +30,7 @@ import type { ExtensionInvocation } from "@vibestudio/extension";
 import {
   createRpcClient,
   RemoteRpcError,
+  RpcBoundaryError,
   rpcErrorDataOf,
   rpcErrorKindOf,
   envelopeFromMessage,
@@ -5892,12 +5893,17 @@ export class RpcServer {
       authenticatedCaller: invocation.caller,
       authorizingCaller: invocation.authorizingCaller,
     };
+    // This host synthesizes the reply after the ordinary target relay settles.
+    // Target readiness owns principal resolution, including cold-cache restore;
+    // a host rejection must not need an executable target principal to exist.
+    const responder = { ...SERVER_RESPONDER, workspaceId: this.deps.workspaceId };
     if (message.type === "stream-request") {
       try {
         if (delivery.body) {
-          throw Object.assign(
-            new Error("Streaming request bodies are not supported by this receiver target"),
-            { code: "EACCES" }
+          throw new RpcBoundaryError(
+            "Streaming request bodies are not supported by this receiver target",
+            "protocol",
+            "EPROTOCOL"
           );
         }
         const response = await this.relayTargetStream(
@@ -5911,11 +5917,7 @@ export class RpcServer {
         await this.streamingRelay.forwardWorkspaceResponse(
           response,
           invocation.envelope,
-          {
-            callerId: invocation.envelope.target,
-            callerKind: this.callerKindForRuntimePrincipal(invocation.envelope.target),
-            workspaceId: this.deps.workspaceId,
-          },
+          responder,
           delivery.send,
           delivery.signal
         );
@@ -5923,44 +5925,31 @@ export class RpcServer {
         if (delivery.signal.aborted) return;
         const errorCode = getErrorCode(error);
         await delivery.send(
-          responseEnvelopeFor(
-            invocation.envelope,
-            {
-              callerId: invocation.envelope.target,
-              callerKind: this.callerKindForRuntimePrincipal(invocation.envelope.target),
-              workspaceId: this.deps.workspaceId,
-            },
-            {
-              type: "stream-frame",
-              requestId: message.requestId,
-              fromId: invocation.envelope.target,
-              frameType: FRAME_ERROR,
-              payload: JSON.stringify({
-                status: errorCode === "EACCES" ? 403 : 500,
-                message: error instanceof Error ? error.message : String(error),
-                ...(errorCode ? { code: errorCode } : {}),
-                errorKind: rpcErrorKindOf(error, "internal"),
-                ...(rpcErrorDataOf(error) !== undefined
-                  ? { errorData: rpcErrorDataOf(error) }
-                  : {}),
-                ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
-              }),
-            }
-          )
+          responseEnvelopeFor(invocation.envelope, responder, {
+            type: "stream-frame",
+            requestId: message.requestId,
+            fromId: invocation.envelope.target,
+            frameType: FRAME_ERROR,
+            payload: JSON.stringify({
+              status: errorCode === "EACCES" ? 403 : 500,
+              message: error instanceof Error ? error.message : String(error),
+              ...(errorCode ? { code: errorCode } : {}),
+              errorKind: rpcErrorKindOf(error, "internal"),
+              ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+              ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+            }),
+          })
         );
       }
       return;
     }
     if (message.type !== "request") {
-      throw Object.assign(new Error("Unsupported workspace RPC delivery"), {
-        code: "EACCES",
-      });
+      throw new RpcBoundaryError(
+        `Unsupported workspace RPC delivery type: ${message.type}`,
+        "protocol",
+        "EPROTOCOL"
+      );
     }
-    const responder = {
-      callerId: invocation.envelope.target,
-      callerKind: this.callerKindForRuntimePrincipal(invocation.envelope.target),
-      workspaceId: this.deps.workspaceId,
-    };
     try {
       const result = await this.relayCall(
         invocation.caller.runtime.id,
@@ -5994,6 +5983,7 @@ export class RpcServer {
           requestId: message.requestId,
           error: error instanceof Error ? error.message : String(error),
           errorKind: rpcErrorKindOf(error, "internal"),
+          ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
           ...(errorCode ? { errorCode } : {}),
           ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
           ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),

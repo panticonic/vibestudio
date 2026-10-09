@@ -65,6 +65,8 @@ import { bytesToBase64 } from "@vibestudio/rpc";
 import type { StreamFrame } from "./services/egressProxy.js";
 import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
 import { receiveHubWorkspaceRpcHttp } from "./workspaceRpcHubTransport.js";
+import { forwardWorkspaceRpcHttp } from "./workspaceRpcTransport.js";
+import { DurableObjectRetiredError } from "./durableObjectExecutionReadiness.js";
 
 const fetchHttp = globalThis.fetch;
 const originalAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
@@ -1382,15 +1384,120 @@ describe("RpcServer relay behavior", () => {
     ]);
   });
 
-  it("routes a real framed call from a source session through the hub into the destination dispatcher", async () => {
+  it.each(["request", "stream-request"] as const)(
+    "preserves missing-target readiness failure for a foreign %s over actual HTTP",
+    async (type) => {
+      vi.stubGlobal("fetch", fetchHttp);
+      const target = "do:workers/calendar:Calendar:absent";
+      const failure = new DurableObjectRetiredError(target);
+      const ensureUserlandDoReady = vi.fn(async () => {
+        throw failure;
+      });
+      const destination = createServer({
+        workspaceId: "destination-workspace",
+        assertWorkspaceRpcAccess: vi.fn(),
+        ensureUserlandDoReady,
+      });
+      destination.tokenManager.setAdminToken("destination-secret");
+      const host = http.createServer((req, res) => {
+        void destination.server.handleWorkspaceRpcHttp(req, res);
+      });
+      await new Promise<void>((resolve) => host.listen(0, "127.0.0.1", resolve));
+      try {
+        const address = host.address() as import("node:net").AddressInfo;
+        const caller = {
+          ...createVerifiedCaller("panel:source", "panel", null, null, {
+            userId: "user-1",
+            handle: "user1",
+          }),
+          workspaceId: "source-workspace",
+        };
+        const received: RpcEnvelope[] = [];
+        await forwardWorkspaceRpcHttp({
+          url: `http://127.0.0.1:${address.port}/_r/s/internal/workspace-rpc`,
+          runtimeToken: "destination-secret",
+          invocation: {
+            caller,
+            authorizingCaller: caller,
+            operation: "calendar.slots",
+            purpose: "call",
+            envelope: {
+              from: caller.runtime.id,
+              target,
+              destination: { kind: "workspace", workspaceId: "destination-workspace" },
+              delivery: {
+                caller: {
+                  callerId: caller.runtime.id,
+                  callerKind: "panel",
+                  userId: "user-1",
+                  workspaceId: "source-workspace",
+                },
+              },
+              provenance: [],
+              message: {
+                type,
+                fromId: caller.runtime.id,
+                requestId: "missing-target",
+                method: "calendar.slots",
+                args: [],
+              },
+            },
+          },
+          onEnvelope(envelope) {
+            received.push(envelope);
+          },
+        });
+        expect(ensureUserlandDoReady).toHaveBeenCalledWith({
+          source: "workers/calendar",
+          className: "Calendar",
+          objectKey: "absent",
+        });
+        expect(destination.entityCache.resolve(target)).toBeNull();
+        expect(received).toHaveLength(1);
+        expect(received[0]?.delivery.caller).toEqual({
+          callerId: "main",
+          callerKind: "server",
+          workspaceId: "destination-workspace",
+        });
+        if (type === "request") {
+          expect(received[0]?.message).toMatchObject({
+            type: "response",
+            error: failure.message,
+            errorCode: failure.code,
+            errorStack: failure.stack,
+          });
+        } else {
+          expect(received[0]?.message).toMatchObject({
+            type: "stream-frame",
+            frameType: FRAME_ERROR,
+          });
+          expect(JSON.parse((received[0]?.message as { payload: string }).payload)).toMatchObject({
+            message: failure.message,
+            code: failure.code,
+          });
+        }
+      } finally {
+        host.closeAllConnections();
+        await new Promise<void>((resolve) => host.close(() => resolve()));
+      }
+    }
+  );
+
+  it("routes a real framed call from a source session through the hub into the cold destination dispatcher", async () => {
     vi.stubGlobal("fetch", fetchHttp);
     const destination = createServer({
       workspaceId: "destination-workspace",
       assertWorkspaceRpcAccess: vi.fn(),
     });
     destination.tokenManager.setAdminToken("destination-secret");
-    destination.entityCache._onActivate(makeRecord("do:workers/calendar:Calendar:main", "do"));
-    testServer(destination.server).relayCall = vi.fn(async () => ({ slots: ["09:00"] }));
+    testServer(destination.server).relayCall = vi.fn(async () => {
+      // Model the ordinary readiness owner's restoration of an admitted durable
+      // entity whose disposable mirror is cold; reply construction cannot run
+      // before this receiver boundary.
+      expect(destination.entityCache.resolve("do:workers/calendar:Calendar:main")).toBeNull();
+      destination.entityCache._onActivate(makeRecord("do:workers/calendar:Calendar:main", "do"));
+      return { slots: ["09:00"] };
+    });
     const ownedServers: http.Server[] = [];
     const listen = async (handler: http.RequestListener): Promise<string> => {
       const server = http.createServer(handler);
