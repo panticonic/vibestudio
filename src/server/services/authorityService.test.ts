@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { z } from "zod";
+import { testAuthority } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import type { AcquisitionRequestInput } from "./acquisitionCoordinator.js";
 import {
   createInvocationSnapshot,
   invocationSnapshotDigest,
@@ -488,6 +491,211 @@ describe("authorityService", () => {
       sessionId: "authority:session-one",
       signal,
     });
+  });
+
+  it.each(["compiled", "existing"])(
+    "matches a static plan against runtime receiver identity and preserves %s grants",
+    async (grantKind) => {
+      const statePath = mkdtempSync(join(tmpdir(), "authority-plan-runtime-"));
+      const grants = new CapabilityGrantStore({ statePath });
+      try {
+        const dispatcher = new ServiceDispatcher();
+        const capability = "runtime.supervision.manage";
+        const caller = createVerifiedCaller("app:compiler", "app", undefined, null, {
+          userId: "alice",
+          handle: "alice",
+        });
+        const baseline = testAuthority(caller, capability, "activate:app:task-board");
+        dispatcher.setAuthorityResolver(() => ({
+          ...baseline,
+          grants: grants.grantsForSubjects(
+            [baseline.context.authorizingOrigin.principal],
+            capability
+          ),
+        }));
+        const request = vi.fn((input: AcquisitionRequestInput) => ({
+          acquisitionId: "acq:runtime",
+          ownerRuntimeId: caller.runtime.id,
+          snapshotDigest: input.snapshotDigest,
+          capability,
+          resourceKey: input.snapshot.resourceKey,
+          tier: "gated" as const,
+          cardType: "permission.gated" as const,
+          renderedAction: "start a workspace service",
+          pending: true,
+        }));
+        dispatcher.setAuthorityAcquirer({
+          request,
+          acquire: vi.fn(),
+          consume: vi.fn(),
+          invalidate: vi.fn(),
+        });
+        const handler = vi.fn(async () => "started");
+        dispatcher.registerService({
+          name: "lifecycle",
+          authority: { principals: ["code"] },
+          handler,
+          methods: {
+            activate: {
+              website: { kind: "eligible", rationale: "Explicit fixture policy" },
+              args: z.tuple([z.object({ kind: z.string(), releaseId: z.string() })]),
+              capability,
+              tier: { tier: "gated", session: "family", rationale: "Starts admitted code" },
+              authority: {
+                requirement: { kind: "capability", principal: "code", capability },
+                resource: {
+                  kind: "argument-fields",
+                  index: 0,
+                  fields: ["kind", "releaseId"],
+                  prefix: "activate:",
+                },
+              },
+            },
+          },
+        });
+        dispatcher.markInitialized();
+        const args = [{ kind: "app", releaseId: "task-board" }];
+        const leaf = (
+          await dispatcher.compileAuthorityPlanOperation(
+            { caller },
+            { service: "lifecycle", method: "activate", args, use: "action" }
+          )
+        ).leaves[0]!;
+        const targetSubject = "task:planned-lifecycle";
+        const target = grants.targetRequests.ensure({
+          targetSubject,
+          authorityPlanDigest: "plan:one",
+          operationKey: "activate:task-board",
+          capability: leaf.capability,
+          capabilityDefinitionDigest: leaf.capabilityDefinitionDigest,
+          resource: leaf.resource,
+          tier: "gated",
+          sourceUser: "user:alice",
+          review: leaf.review,
+        });
+        await expect(
+          dispatcher.dispatch({ caller }, "lifecycle", "activate", args)
+        ).rejects.toMatchObject({ code: "EACQUIRE" });
+        const input = request.mock.calls[0]![0];
+        expect(
+          grants.targetRequests.pendingForInvocation({
+            targetSubject,
+            capability: input.snapshot.capability,
+            capabilityDefinitionDigest: input.snapshot.capabilityDefinitionDigest,
+            resource: input.resource,
+          })?.requestId
+        ).toBe(target.requestId);
+        expect(handler).not.toHaveBeenCalled();
+        grants.issue({
+          effect: "allow",
+          subject: baseline.context.authorizingOrigin.principal,
+          capability: leaf.capability,
+          resource: leaf.resource,
+          issuedBy: "user:alice",
+          provenance: "acquisition",
+          ...(grantKind === "compiled"
+            ? { capabilityDefinitionDigest: leaf.capabilityDefinitionDigest }
+            : {}),
+          scope: "version",
+        });
+        await expect(dispatcher.dispatch({ caller }, "lifecycle", "activate", args)).resolves.toBe(
+          "started"
+        );
+        expect(handler).toHaveBeenCalledOnce();
+        expect(request).toHaveBeenCalledOnce();
+      } finally {
+        grants.close();
+        rmSync(statePath, { recursive: true });
+      }
+    }
+  );
+
+  it("joins context-aware operation compilation before publishing every receiver leaf", async () => {
+    const compile = vi.fn(async (_ctx: unknown, input: { method: string }) => ({
+      definitionDigest: `${input.method}:receiver-definition`,
+      leaves: [
+        {
+          service: "files",
+          method: input.method,
+          capability: "filesystem.read",
+          resource: { kind: "exact" as const, key: input.method },
+          tier: "gated" as const,
+          capabilityDefinitionDigest: "-",
+          provider: "-",
+          providerEffectiveVersion: "-",
+          use: "action" as const,
+          review: {
+            action: "read files",
+            domain: "files" as const,
+            verb: "see" as const,
+            declaredBy: "host:files",
+          },
+        },
+      ],
+    }));
+    const publish = vi.fn((_input: unknown) => ({
+      bodyDigest: "a".repeat(64),
+      compilerVersion: "authority-plan.v1",
+      catalogDigest: "b".repeat(64),
+    }));
+    const service = createAuthorityService({
+      dispatcher: { compileAuthorityPlanOperation: compile } as never,
+      acquisitions: {} as never,
+      authorityPlans: { publish } as never,
+    });
+    const ctx = { caller: createVerifiedCaller("do:missions", "do") };
+    await service.handler(ctx, "compileAuthorityPlan", [
+      {
+        executionImageDigest: "c".repeat(64),
+        operations: [
+          { service: "files", method: "first", args: ["notes/a"], use: "action" },
+          { service: "files", method: "second", use: "conditional" },
+        ],
+      },
+    ]);
+    expect(compile.mock.calls[0]).toEqual([
+      ctx,
+      { service: "files", method: "first", args: ["notes/a"], use: "action" },
+    ]);
+    expect(compile.mock.calls[1]).toEqual([
+      ctx,
+      { service: "files", method: "second", args: [], use: "conditional" },
+    ]);
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish.mock.calls[0]?.[0]).toMatchObject({
+      leaves: [
+        expect.objectContaining({ method: "first", capabilityDefinitionDigest: "-" }),
+        expect.objectContaining({ method: "second", capabilityDefinitionDigest: "-" }),
+      ],
+    });
+  });
+
+  it("does not publish a partial plan or start later preparation after a receiver failure", async () => {
+    const failure = new Error("receiver snapshot unavailable");
+    const compile = vi.fn().mockRejectedValue(failure);
+    const publish = vi.fn();
+    const service = createAuthorityService({
+      dispatcher: { compileAuthorityPlanOperation: compile } as never,
+      acquisitions: {} as never,
+      authorityPlans: { publish } as never,
+    });
+    await expect(
+      service.handler(
+        { caller: createVerifiedCaller("do:missions", "do") },
+        "compileAuthorityPlan",
+        [
+          {
+            executionImageDigest: "c".repeat(64),
+            operations: [
+              { service: "files", method: "first", use: "action" },
+              { service: "files", method: "second", use: "action" },
+            ],
+          },
+        ]
+      )
+    ).rejects.toBe(failure);
+    expect(compile).toHaveBeenCalledOnce();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("lets the durable controller retire authority only after live executions close", async () => {

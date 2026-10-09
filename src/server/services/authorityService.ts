@@ -126,25 +126,21 @@ export function createAuthorityService(deps: {
       },
       preflight: (ctx, [input]) =>
         deps.dispatcher.preflightAuthority(ctx, input.service, input.method, input.args),
-      compileAuthorityPlan: (_ctx, [input]) => {
+      compileAuthorityPlan: async (ctx, [input]) => {
         const authorityPlans = requireDependency(deps.authorityPlans, "Authority plan compilation");
-        const leaves = input.operations.map((operation) =>
-          deps.dispatcher.compileAuthorityPlanLeaf({
-            ...operation,
-            args: operation.args ?? [],
-          })
-        );
+        const operations = [];
+        for (const operation of input.operations) {
+          operations.push(
+            await deps.dispatcher.compileAuthorityPlanOperation(ctx, {
+              ...operation,
+              args: operation.args ?? [],
+            })
+          );
+        }
+        const leaves = operations.flatMap((operation) => operation.leaves);
         const catalogDigest = createHash("sha256")
           .update("authority-catalog-v1\0")
-          .update(
-            canonicalJson(
-              leaves.map((leaf) => ({
-                service: leaf.service,
-                method: leaf.method,
-                capabilityDefinitionDigest: leaf.capabilityDefinitionDigest,
-              }))
-            )
-          )
+          .update(canonicalJson(operations.map((operation) => operation.definitionDigest)))
           .digest("hex");
         const artifact = authorityPlans.publish({
           catalogDigest,

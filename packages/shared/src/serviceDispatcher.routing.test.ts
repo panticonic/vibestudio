@@ -234,7 +234,7 @@ describe("ServiceDispatcher ownership", () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
-  it("derives a complete compound identity for lifecycle-style authority targets", () => {
+  it("derives a complete compound identity for lifecycle-style authority targets", async () => {
     const dispatcher = new ServiceDispatcher();
     dispatcher.registerService({
       name: "lifecycle",
@@ -274,12 +274,17 @@ describe("ServiceDispatcher ownership", () => {
     });
 
     expect(
-      dispatcher.compileAuthorityPlanLeaf({
-        service: "lifecycle",
-        method: "activate",
-        args: [{ kind: "app", releaseId: "task-board" }],
-        use: "action",
-      }).resource
+      (
+        await dispatcher.compileAuthorityPlanOperation(
+          { caller: createVerifiedCaller("app:compiler", "app") },
+          {
+            service: "lifecycle",
+            method: "activate",
+            args: [{ kind: "app", releaseId: "task-board" }],
+            use: "action",
+          }
+        )
+      ).leaves[0]!.resource
     ).toEqual({ kind: "exact", key: "activate:app:task-board" });
   });
 
@@ -380,7 +385,7 @@ describe("ServiceDispatcher ownership", () => {
     expect(requested?.substance).not.toHaveProperty("facts");
   });
 
-  it("seals receiver-reviewed semantics into compiled authority-plan leaves", () => {
+  it("seals receiver-reviewed semantics into compiled authority-plan leaves", async () => {
     const dispatcher = new ServiceDispatcher();
     dispatcher.registerService({
       name: "mail",
@@ -424,12 +429,17 @@ describe("ServiceDispatcher ownership", () => {
     });
 
     expect(
-      dispatcher.compileAuthorityPlanLeaf({
-        service: "mail",
-        method: "send",
-        args: ["alice@example.com"],
-        use: "action",
-      })
+      (
+        await dispatcher.compileAuthorityPlanOperation(
+          { caller: createVerifiedCaller("app:compiler", "app") },
+          {
+            service: "mail",
+            method: "send",
+            args: ["alice@example.com"],
+            use: "action",
+          }
+        )
+      ).leaves[0]
     ).toMatchObject({
       capability: "workspace-service:mail",
       resource: { kind: "exact", key: "alice@example.com" },

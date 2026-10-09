@@ -18,6 +18,18 @@ import {
   type MethodSchema,
   type PreparedAuthorityRequirement,
 } from "./typedServiceClient.js";
+type PreparedSelection = {
+  selection: PreparedAuthoritySelection;
+  leaf: NonNullable<MethodAuthorityDescriptor["prepared"]>["leaves"][number];
+  requirement: import("./authorization.js").AuthorityRequirement;
+  tier?: "open" | "gated" | "critical";
+};
+type PreparedInvocationState = {
+  selections: PreparedSelection[];
+  payload: unknown;
+  target?: ApprovalTargetIdentity;
+};
+
 export {
   describeArgsValidationError,
   invalidArgumentsErrorData,
@@ -1241,25 +1253,8 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[]
   ): Promise<AuthorityPreflightResult> {
-    this.assertWorkspaceConnection(ctx, service, method);
     delete ctx.preparedAuthority;
-    const methodDef = this.definitions.get(service)?.methods[method];
-    if (!methodDef) throw new ServiceError(service, method, "Unknown service method");
-    this.assertWebsiteEligibility(ctx, methodDef.website, service, method);
-    const normalized = normalizeServiceArgs(args, methodDef.args);
-    const parsed = methodDef.args.safeParse(normalized);
-    if (!parsed.success) {
-      const validation = describeArgsValidationError(parsed.error, methodDef);
-      throw new ServiceError(
-        service,
-        method,
-        `Invalid args: ${validation.summary}${formatUsageHint(service, method, methodDef)}`,
-        undefined,
-        undefined,
-        "service",
-        invalidArgumentsErrorData(service, method, validation.issues)
-      );
-    }
+    const { args: normalized } = this.validateAuthorityInvocation(ctx, service, method, args);
     return this.assessAuthority(
       ctx,
       service,
@@ -1281,12 +1276,30 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[]
   ): Promise<void> {
-    this.assertWorkspaceConnection(ctx, service, method);
     delete ctx.preparedAuthority;
-    const methodDef = this.definitions.get(service)?.methods[method];
-    if (!methodDef) throw new ServiceError(service, method, "Unknown service method");
+    const { args: normalized } = this.validateAuthorityInvocation(ctx, service, method, args);
+    await this.assessAuthority(
+      { ...ctx, authorityAcquisition: "wait", authorityPreauthorization: true },
+      service,
+      method,
+      normalized,
+      false
+    );
+  }
+
+  private validateAuthorityInvocation(
+    ctx: ServiceContext,
+    service: string,
+    method: string,
+    args: readonly unknown[]
+  ) {
+    this.assertWorkspaceConnection(ctx, service, method);
+    const serviceDef = this.definitions.get(service);
+    const methodDef = serviceDef?.methods[method];
+    if (!serviceDef || !methodDef)
+      throw new ServiceError(service, method, "Unknown service method");
     this.assertWebsiteEligibility(ctx, methodDef.website, service, method);
-    const normalized = normalizeServiceArgs(args, methodDef.args);
+    const normalized = normalizeServiceArgs([...args], methodDef.args);
     const parsed = methodDef.args.safeParse(normalized);
     if (!parsed.success) {
       const validation = describeArgsValidationError(parsed.error, methodDef);
@@ -1300,13 +1313,7 @@ export class ServiceDispatcher {
         invalidArgumentsErrorData(service, method, validation.issues)
       );
     }
-    await this.assessAuthority(
-      { ...ctx, authorityAcquisition: "wait", authorityPreauthorization: true },
-      service,
-      method,
-      normalized,
-      false
-    );
+    return { serviceDef, methodDef, args: normalized };
   }
 
   /** Admission precedes schema lookup, preparation, discovery, and acquisition. */
@@ -1558,118 +1565,11 @@ export class ServiceDispatcher {
         "EACCES"
       );
     }
-    type PreparedSelection = {
-      selection: PreparedAuthoritySelection;
-      leaf: NonNullable<MethodAuthorityDescriptor["prepared"]>["leaves"][number];
-      requirement: import("./authorization.js").AuthorityRequirement;
-      tier?: "open" | "gated" | "critical";
-    };
     const prepareDescriptor = "prepared" in descriptor ? descriptor.prepared : undefined;
-    type PreparedInvocationState = {
-      selections: PreparedSelection[];
-      payload: unknown;
-      target?: ApprovalTargetIdentity;
-    };
-    const collectPreparedState = async (): Promise<PreparedInvocationState> => {
-      if (!prepareDescriptor) return { selections: [], payload: null };
-      const prepare = serviceDef.authorityPreparation?.[prepareDescriptor.resolver];
-      if (!prepare) {
-        throw new ServiceError(
-          service,
-          method,
-          `Authority preparer '${prepareDescriptor.resolver}' is unavailable`
-        );
-      }
-      const prepared = await prepare(ctx, args);
-      if (
-        !prepared ||
-        typeof prepared !== "object" ||
-        !Array.isArray(prepared.selections) ||
-        !("payload" in prepared)
-      ) {
-        throw new ServiceError(
-          service,
-          method,
-          `Authority preparer '${prepareDescriptor.resolver}' returned an invalid prepared state`
-        );
-      }
-      const collected: PreparedSelection[] = [];
-      const seen = new Set<string>();
-      for (const selection of prepared.selections) {
-        if (selection.resource && !scopeCovers(selection.resource, selection.resourceKey)) {
-          throw new ServiceError(
-            service,
-            method,
-            "Prepared resource envelope does not cover its key"
-          );
-        }
-        const matchingLeaves = prepareDescriptor.leaves.filter((leaf) =>
-          leaf.capability !== undefined
-            ? leaf.capability === selection.capability
-            : selection.capability.startsWith(leaf.capabilityPrefix)
-        );
-        if (matchingLeaves.length !== 1) {
-          throw new ServiceError(
-            service,
-            method,
-            matchingLeaves.length === 0
-              ? `Authority preparer selected undeclared capability '${selection.capability}'`
-              : `Authority preparer selected ambiguously declared capability '${selection.capability}'`
-          );
-        }
-        const leaf = matchingLeaves[0]!;
-        const selectionKey = `${selection.capability}\u0000${selection.resourceKey}`;
-        if (seen.has(selectionKey)) {
-          throw new ServiceError(
-            service,
-            method,
-            `Authority preparer selected '${selection.capability}' for '${selection.resourceKey}' more than once`
-          );
-        }
-        seen.add(selectionKey);
-        collected.push({
-          selection,
-          leaf,
-          requirement: resolvePreparedRequirement(service, method, leaf.requirement, selection),
-          tier: resolvePreparedTier(service, method, leaf.tier, selection.tier),
-        });
-      }
-      return {
-        selections: collected,
-        payload: prepared.payload,
-        ...(prepared.target ? { target: prepared.target } : {}),
-      };
-    };
-    const preparedDigest = (prepared: PreparedInvocationState): string =>
-      sha256Canonical({
-        service,
-        method,
-        args,
-        selections: prepared.selections.map(({ selection, requirement, tier }) => ({
-          capability: selection.capability,
-          resourceKey: selection.resourceKey,
-          resource: selection.resource ?? null,
-          requirement,
-          authorizingCaller: selection.authorizingCaller
-            ? {
-                runtime: selection.authorizingCaller.runtime,
-                hostOriginated: selection.authorizingCaller.hostOriginated === true,
-                code: selection.authorizingCaller.code
-                  ? {
-                      principal: selection.authorizingCaller.code.repoPath,
-                      effectiveVersion: selection.authorizingCaller.code.effectiveVersion,
-                      executionDigest: selection.authorizingCaller.code.executionDigest ?? null,
-                    }
-                  : null,
-                subject: selection.authorizingCaller.subject?.userId ?? null,
-              }
-            : null,
-          challenge: selection.challenge ?? null,
-          tier: tier ?? null,
-        })),
-        payload: prepared.payload,
-        target: prepared.target ?? null,
-      });
+    const collectPreparedState = () =>
+      this.collectPreparedAuthority(ctx, service, method, args, serviceDef, prepareDescriptor);
+    const preparedDigest = (prepared: PreparedInvocationState) =>
+      this.preparedAuthorityDigest(service, method, args, prepared);
     const preparedState = await collectPreparedState();
     const preparedStateDigest = preparedDigest(preparedState);
     ctx.authority = {
@@ -2459,73 +2359,245 @@ export class ServiceDispatcher {
     return this.handlers.has(service);
   }
 
-  /**
-   * Compile the receiver-owned static authority declaration for one semantic
-   * operation. Dynamic prepared methods cannot be guessed at launch and must
-   * be represented by a receiver-defined bounded operation instead.
-   */
-  compileAuthorityPlanLeaf(input: {
-    service: string;
-    method: string;
-    args: readonly unknown[];
-    use: "action" | "conditional";
-  }): CompiledAuthorityPlanLeaf {
-    const serviceDef = this.definitions.get(input.service);
-    const methodDef = serviceDef?.methods[input.method];
-    const tier = this.methodTiers.get(`${input.service}.${input.method}`)?.tier;
-    if (!serviceDef || !methodDef || !tier) {
-      throw new Error(`Unknown operation ${input.service}.${input.method}`);
+  private preparedAuthorityDigest(
+    service: string,
+    method: string,
+    args: readonly unknown[],
+    prepared: PreparedInvocationState
+  ): string {
+    return sha256Canonical({
+      service,
+      method,
+      args,
+      selections: prepared.selections.map(({ selection, requirement, tier }) => ({
+        capability: selection.capability,
+        resourceKey: selection.resourceKey,
+        resource: selection.resource ?? null,
+        requirement,
+        authorizingCaller: selection.authorizingCaller
+          ? {
+              runtime: selection.authorizingCaller.runtime,
+              hostOriginated: selection.authorizingCaller.hostOriginated === true,
+              code: selection.authorizingCaller.code
+                ? {
+                    principal: selection.authorizingCaller.code.repoPath,
+                    effectiveVersion: selection.authorizingCaller.code.effectiveVersion,
+                    executionDigest: selection.authorizingCaller.code.executionDigest ?? null,
+                  }
+                : null,
+              subject: selection.authorizingCaller.subject?.userId ?? null,
+            }
+          : null,
+        challenge: selection.challenge ?? null,
+        tier: tier ?? null,
+      })),
+      payload: prepared.payload,
+      target: prepared.target ?? null,
+    });
+  }
+
+  private async collectPreparedAuthority(
+    ctx: ServiceContext,
+    service: string,
+    method: string,
+    args: unknown[],
+    serviceDef: ServiceDefinition,
+    prepareDescriptor: MethodAuthorityDescriptor["prepared"] | undefined
+  ): Promise<PreparedInvocationState> {
+    if (!prepareDescriptor) return { selections: [], payload: null };
+    const prepare = serviceDef.authorityPreparation?.[prepareDescriptor.resolver];
+    if (!prepare) {
+      throw new ServiceError(
+        service,
+        method,
+        `Authority preparer '${prepareDescriptor.resolver}' is unavailable`
+      );
     }
+    const prepared = await prepare(ctx, args);
+    if (
+      !prepared ||
+      typeof prepared !== "object" ||
+      !Array.isArray(prepared.selections) ||
+      !("payload" in prepared)
+    ) {
+      throw new ServiceError(
+        service,
+        method,
+        `Authority preparer '${prepareDescriptor.resolver}' returned an invalid prepared state`
+      );
+    }
+    const collected: PreparedSelection[] = [];
+    const seen = new Set<string>();
+    for (const selection of prepared.selections) {
+      if (selection.resource && !scopeCovers(selection.resource, selection.resourceKey)) {
+        throw new ServiceError(
+          service,
+          method,
+          "Prepared resource envelope does not cover its key"
+        );
+      }
+      const matchingLeaves = prepareDescriptor.leaves.filter((leaf) =>
+        leaf.capability !== undefined
+          ? leaf.capability === selection.capability
+          : selection.capability.startsWith(leaf.capabilityPrefix)
+      );
+      if (matchingLeaves.length !== 1) {
+        throw new ServiceError(
+          service,
+          method,
+          matchingLeaves.length === 0
+            ? `Authority preparer selected undeclared capability '${selection.capability}'`
+            : `Authority preparer selected ambiguously declared capability '${selection.capability}'`
+        );
+      }
+      const leaf = matchingLeaves[0]!;
+      const selectionKey = `${selection.capability}\u0000${selection.resourceKey}`;
+      if (seen.has(selectionKey)) {
+        throw new ServiceError(
+          service,
+          method,
+          `Authority preparer selected '${selection.capability}' for '${selection.resourceKey}' more than once`
+        );
+      }
+      seen.add(selectionKey);
+      collected.push({
+        selection,
+        leaf,
+        requirement: resolvePreparedRequirement(service, method, leaf.requirement, selection),
+        tier: resolvePreparedTier(service, method, leaf.tier, selection.tier),
+      });
+    }
+    return {
+      selections: collected,
+      payload: prepared.payload,
+      ...(prepared.target ? { target: prepared.target } : {}),
+    };
+  }
+
+  /** Compile the current receiver-owned authority scopes without assessing or acquiring grants. */
+  async compileAuthorityPlanOperation(
+    ctx: ServiceContext,
+    input: {
+      service: string;
+      method: string;
+      args: readonly unknown[];
+      use: "action" | "conditional";
+    }
+  ): Promise<{ leaves: CompiledAuthorityPlanLeaf[]; definitionDigest: string }> {
+    const { service, method } = input;
+    const { serviceDef, methodDef, args } = this.validateAuthorityInvocation(
+      ctx,
+      service,
+      method,
+      input.args
+    );
+    const methodTier = this.methodTiers.get(`${service}.${method}`);
+    if (!methodTier) throw new ServiceError(service, method, "Reviewed method tier is unavailable");
     const capability =
-      tier === "open" ? `service:${input.service}.${input.method}` : methodDef.capability;
+      methodTier.tier === "open" ? `service:${service}.${method}` : methodDef.capability;
     if (!capability)
-      throw new Error(`Operation ${input.service}.${input.method} has no semantic capability`);
+      throw new ServiceError(service, method, "Operation has no semantic capability");
     const declaration = methodDef.authority ?? serviceDef.authority;
     const descriptor =
       "requirement" in declaration
         ? declaration
         : {
-            requirement: requirementForPrincipals(declaration.principals, capability),
+            requirement: requirementForPrincipals(declaration.principals, capability, {
+              codeOnly: methodTier.session === "codeOnly",
+            }),
             resource: { kind: "literal" as const, key: capability },
           };
-    if ("prepared" in descriptor && descriptor.prepared) {
-      throw new Error(
-        `Operation ${input.service}.${input.method} uses dynamic authority preparation and needs a receiver-defined bounded operation`
+    if ("additional" in descriptor && descriptor.additional?.some((leaf) => leaf.when)) {
+      throw new ServiceError(
+        service,
+        method,
+        "Authority plan cannot represent origin-conditional receiver requirements"
       );
     }
-    const resourceKey = deriveAuthorityResource(descriptor.resource, [...input.args]);
-    const presentation = methodDef.presentation ?? describeCapability(capability);
-    if (tier !== "open" && !presentation.authorityCategory) {
-      throw new Error(
-        `Operation ${input.service}.${input.method} has no reviewed authority category`
-      );
-    }
-    return {
-      service: input.service,
-      method: input.method,
-      capability,
-      resource: { kind: "exact", key: resourceKey },
-      tier,
-      capabilityDefinitionDigest: sha256Canonical({
-        service: input.service,
-        method: input.method,
+    const prepared = await this.collectPreparedAuthority(
+      ctx,
+      service,
+      method,
+      args,
+      serviceDef,
+      "prepared" in descriptor ? descriptor.prepared : undefined
+    );
+    const compile = (selected: {
+      capability: string;
+      resource: ResourceScope;
+      tier: "open" | "gated" | "critical";
+      selection?: PreparedAuthoritySelection;
+    }): CompiledAuthorityPlanLeaf => {
+      const presentation =
+        selected.capability === methodDef.capability
+          ? (methodDef.presentation ?? describeCapability(selected.capability))
+          : describeCapability(selected.capability);
+      const vocabulary =
+        (selected.capability.startsWith("workspace-service:")
+          ? selected.selection?.challenge?.authorityVocabulary
+          : undefined) ?? presentation.authorityCategory;
+      if (selected.tier !== "open" && !vocabulary) {
+        throw new ServiceError(
+          service,
+          method,
+          `Capability '${selected.capability}' has no reviewed authority category`
+        );
+      }
+      const receiver = selected.selection?.receiverAuthority;
+      return {
+        service,
+        method,
+        capability: selected.capability,
+        resource: selected.resource,
+        tier: selected.tier,
+        capabilityDefinitionDigest: receiver?.capabilityDefinitionDigest ?? "-",
+        provider: receiver?.provider ?? "-",
+        providerEffectiveVersion: "-",
+        use: input.use,
+        review: {
+          action: selected.selection?.challenge?.operation.verb ?? presentation.action,
+          domain: vocabulary?.domain ?? "automation",
+          verb: vocabulary?.verb ?? "act",
+          declaredBy: vocabulary?.declaredBy ?? `host:${service}.${method}`,
+        },
+      };
+    };
+    const leaves = [
+      compile({
         capability,
-        declaration,
-        tier,
+        resource: { kind: "exact", key: deriveAuthorityResource(descriptor.resource, args) },
+        tier: methodTier.tier,
       }),
-      provider: "-",
-      providerEffectiveVersion: "-",
-      use: input.use,
-      review: {
-        action: presentation.action,
-        domain: presentation.authorityCategory?.domain ?? "automation",
-        verb: presentation.authorityCategory?.verb ?? "act",
-        declaredBy:
-          presentation.authorityCategory?.declaredBy ?? `host:${input.service}.${input.method}`,
-      },
+      ...("additional" in descriptor ? (descriptor.additional ?? []) : []).map((leaf) =>
+        compile({
+          capability: leaf.capability,
+          resource: { kind: "exact", key: deriveAuthorityResource(leaf.resource, args) },
+          tier: leaf.tier ?? methodTier.tier,
+        })
+      ),
+      ...prepared.selections.map(({ selection, tier }) =>
+        compile({
+          capability: selection.capability,
+          resource: selection.resource ?? { kind: "exact", key: selection.resourceKey },
+          tier: tier ?? methodTier.tier,
+          selection,
+        })
+      ),
+    ];
+    return {
+      leaves,
+      definitionDigest: sha256Canonical({
+        service,
+        method,
+        declaration,
+        tier: methodTier,
+        receiverAuthorities: prepared.selections.map(
+          ({ selection }) => selection.receiverAuthority ?? null
+        ),
+        preparedStateDigest: this.preparedAuthorityDigest(service, method, args, prepared),
+      }),
     };
   }
-
   /**
    * Get all registered service names.
    */
