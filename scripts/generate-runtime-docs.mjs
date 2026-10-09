@@ -190,7 +190,7 @@ const webhookCatalog = runtimeClientCatalog({
   root: repoRoot,
   files: [
     path.relative(repoRoot, path.join(userlandRoot, "packages/runtime/src/shared/webhooks.ts")),
-    "packages/shared/src/webhooks/ingress.ts",
+    "packages/shared/src/webhooks/contracts.ts",
   ],
   interfaceName: "WebhookIngressClient",
   namespace: "webhooks",

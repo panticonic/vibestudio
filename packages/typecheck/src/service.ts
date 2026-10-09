@@ -120,6 +120,11 @@ interface OverlayFile {
   content: string;
 }
 
+interface PackageProjection {
+  candidates: string[];
+  authoritative: boolean;
+}
+
 /**
  * Stateful TypeScript 7 project backed by one native compiler process.
  *
@@ -260,7 +265,11 @@ export class TypeCheckService {
   private projectSvelteEntry(absolute: string): void {
     if (!absolute.endsWith(".d.svelte.ts") || this.files.has(absolute)) return;
     const source = absolute.replace(/\.d\.svelte\.ts$/u, ".svelte");
-    for (const candidate of [source, ...this.packageProjectionCandidates(source)]) {
+    const projection = this.packageProjection(source);
+    const candidates = projection.authoritative
+      ? projection.candidates
+      : [source, ...projection.candidates];
+    for (const candidate of candidates) {
       try {
         if (!fs.statSync(candidate).isFile()) continue;
       } catch (error) {
@@ -704,7 +713,8 @@ export class TypeCheckService {
     if (absolute === this.configFilePath) return this.configContent;
     const overlay = this.files.get(absolute);
     if (overlay) return overlay.content;
-    for (const candidate of this.packageProjectionCandidates(absolute)) {
+    const projection = this.packageProjection(absolute);
+    for (const candidate of projection.candidates) {
       try {
         if (fs.statSync(candidate).isFile()) {
           const content = fs.readFileSync(candidate, "utf8");
@@ -716,6 +726,7 @@ export class TypeCheckService {
         // Try the next projection, then the real filesystem fallback.
       }
     }
+    if (projection.authoritative) return null;
     if (absolute.endsWith(`${path.sep}node_modules${path.sep}svelte${path.sep}types${path.sep}index.d.ts`) && fs.existsSync(absolute)) {
       return projectSvelteDeclarations(fs.readFileSync(absolute, "utf8"), absolute);
     }
@@ -727,26 +738,30 @@ export class TypeCheckService {
     if (this.removedFiles.has(absolute)) return false;
     this.projectSvelteEntry(absolute);
     if (absolute === this.configFilePath || this.files.has(absolute)) return true;
-    for (const candidate of this.packageProjectionCandidates(absolute)) {
+    const projection = this.packageProjection(absolute);
+    for (const candidate of projection.candidates) {
       try {
         if (fs.statSync(candidate).isFile()) return true;
       } catch {
         // Continue.
       }
     }
+    if (projection.authoritative) return false;
     return undefined;
   }
 
   private projectedDirectoryExists(directoryName: string): boolean | undefined {
     const absolute = path.resolve(directoryName);
     if (this.hasVirtualDirectory(absolute)) return true;
-    for (const candidate of this.packageProjectionCandidates(absolute)) {
+    const projection = this.packageProjection(absolute);
+    for (const candidate of projection.candidates) {
       try {
         if (fs.statSync(candidate).isDirectory()) return true;
       } catch {
         // Continue.
       }
     }
+    if (projection.authoritative) return false;
     return undefined;
   }
 
@@ -762,7 +777,8 @@ export class TypeCheckService {
         if (first) directories.add(first);
       }
     }
-    for (const candidate of this.packageProjectionCandidates(absolute)) {
+    const projection = this.packageProjection(absolute);
+    for (const candidate of projection.candidates) {
       try {
         for (const entry of fs.readdirSync(candidate, { withFileTypes: true })) {
           if (entry.isDirectory()) directories.add(entry.name);
@@ -773,7 +789,7 @@ export class TypeCheckService {
       }
     }
     this.addWorkspaceEntryNames(absolute, directories);
-    return files.size > 0 || directories.size > 0
+    return projection.authoritative || files.size > 0 || directories.size > 0
       ? { files: [...files].sort(), directories: [...directories].sort() }
       : undefined;
   }
@@ -781,14 +797,15 @@ export class TypeCheckService {
   private projectedRealpath(fileName: string): string | undefined {
     const absolute = path.resolve(fileName);
     if (absolute === this.configFilePath || this.files.has(absolute)) return absolute;
-    for (const candidate of this.packageProjectionCandidates(absolute)) {
+    const projection = this.packageProjection(absolute);
+    for (const candidate of projection.candidates) {
       try {
         return fs.realpathSync(candidate);
       } catch {
         // Continue.
       }
     }
-    return undefined;
+    return projection.authoritative ? (projection.candidates[0] ?? absolute) : undefined;
   }
 
   private filePathKey(fileName: string): string {
@@ -803,16 +820,90 @@ export class TypeCheckService {
     return this.presentedFilePaths.get(this.filePathKey(absolute)) ?? absolute;
   }
 
-  private packageProjectionCandidates(candidate: string): string[] {
+  private packageProjection(candidate: string): PackageProjection {
     const marker = `${path.sep}node_modules${path.sep}`;
     const markerIndex = candidate.lastIndexOf(marker);
-    if (markerIndex < 0) return [];
+    if (markerIndex < 0) return { candidates: [], authoritative: false };
     const packagePath = candidate.slice(markerIndex + marker.length);
-    const result: string[] = [];
+    const packageParts = packagePath.split(path.sep).filter(Boolean);
+    const packageName = packageParts[0]?.startsWith("@")
+      ? packageParts.slice(0, 2).join(path.sep)
+      : (packageParts[0] ?? "");
     const workspace = this.workspacePackageProjection(packagePath);
-    if (workspace) result.push(workspace);
-    for (const root of this.nodeModulesPaths) result.push(path.join(root, packagePath));
-    return result;
+    // A workspace package source mapping is the canonical instance of that
+    // package. Keep its subpaths within the selected source tree rather than
+    // combining it with an installed package of the same name.
+    if (workspace) return { candidates: [workspace], authoritative: true };
+
+    // A dependency physically installed beside an admitted workspace package
+    // owns its first package lookup before the workspace's shared virtual
+    // node_modules roots. Keep metadata and files for that selected package
+    // instance together; TypeScript may still continue its ordinary ancestor
+    // lookup if an exported target is absent.
+    const ownerPackageRoot = this.physicalNodePackageRoot(candidate, markerIndex, packagePath);
+    if (ownerPackageRoot) return { candidates: [candidate], authoritative: true };
+
+    // TypeScript probes each ancestor's node_modules directory in order. A
+    // global projection at an intermediate directory would shadow a package
+    // installed at the owning unit's node_modules before TypeScript reaches
+    // it. Leave these intermediate candidates to the physical filesystem;
+    // the root's virtual dependency projection is considered at the owner's
+    // own node_modules boundary or beyond.
+    if (this.isIntermediateOwnerNodeModules(candidate, markerIndex))
+      return { candidates: [candidate], authoritative: true };
+
+    const globalCandidates = this.nodeModulesPaths.map((root) => path.join(root, packagePath));
+    if (!packageName) return { candidates: globalCandidates, authoritative: false };
+    for (let index = 0; index < this.nodeModulesPaths.length; index++) {
+      const root = this.nodeModulesPaths[index]!;
+      const globalPackageRoot = path.join(root, packageName);
+      try {
+        if (fs.statSync(globalPackageRoot).isDirectory()) {
+          return {
+            candidates: [globalCandidates[index]!],
+            authoritative: true,
+          };
+        }
+      } catch {
+        // Continue to the next configured root until one package instance is selected.
+      }
+    }
+    return { candidates: globalCandidates, authoritative: false };
+  }
+
+  private physicalNodePackageRoot(
+    candidate: string,
+    markerIndex: number,
+    packagePath: string,
+  ): string | null {
+    const parts = packagePath.split(path.sep).filter(Boolean);
+    const packageName = parts[0]?.startsWith("@")
+      ? parts.slice(0, 2).join(path.sep)
+      : (parts[0] ?? "");
+    if (!packageName) return null;
+
+    const packageRoot = path.join(
+      candidate.slice(0, markerIndex + `${path.sep}node_modules${path.sep}`.length),
+      packageName,
+    );
+    try {
+      return fs.statSync(packageRoot).isDirectory() ? packageRoot : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private isIntermediateOwnerNodeModules(candidate: string, markerIndex: number): boolean {
+    const marker = `${path.sep}node_modules${path.sep}`;
+    const nodeModulesRoot = path.resolve(candidate.slice(0, markerIndex + marker.length - 1));
+    const owners = [
+      this.panelPath,
+      ...[...(this.workspaceContext?.packages.values() ?? [])].map((info) => info.dir),
+    ];
+    const owner = owners
+      .filter((root) => this.isWithin(path.resolve(root), path.resolve(candidate)))
+      .sort((left, right) => right.length - left.length)[0];
+    return owner !== undefined && nodeModulesRoot !== path.join(path.resolve(owner), "node_modules");
   }
 
   private workspacePackageProjection(packagePath: string): string | null {
@@ -854,7 +945,7 @@ export class TypeCheckService {
     const suffix = this.nodeModulesSuffix(directory);
     if (suffix === null) return false;
     if (suffix === "") return this.nodeModulesPaths.length > 0 || Boolean(this.workspaceContext);
-    return this.packageProjectionCandidates(directory).some((candidate) => {
+    return this.packageProjection(directory).candidates.some((candidate) => {
       try {
         return fs.statSync(candidate).isDirectory();
       } catch {

@@ -207,6 +207,45 @@ describe("TypeCheckService workspace resolution", () => {
     expect(errors).toHaveLength(0);
   });
 
+  it("does not fall back to a stale physical copy when a workspace source export is absent", () => {
+    const root = createTempDir("typecheck-service-workspace-canonical-");
+    writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n");
+    const producerDir = path.join(root, "packages", "runtime");
+    const consumerDir = path.join(root, "packages", "consumer");
+    writeFile(
+      path.join(producerDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/runtime",
+        exports: {
+          ".": "./src/index.ts",
+          "./missing": "./missing.d.ts",
+        },
+      })
+    );
+    writeFile(path.join(producerDir, "src/index.ts"), "export const value = 1;\n");
+    const staleCopy = path.join(
+      consumerDir,
+      "node_modules/@workspace/runtime/missing.d.ts"
+    );
+    writeFile(staleCopy, "export declare const staleValue: string;\n");
+    const sourceFile = path.join(consumerDir, "index.ts");
+    writeFile(
+      sourceFile,
+      'import { staleValue } from "@workspace/runtime/missing"; void staleValue;\n'
+    );
+
+    const service = new TypeCheckService({
+      panelPath: consumerDir,
+      skipSuggestions: true,
+      disableTsconfigDiscovery: true,
+    });
+    service.updateFile(sourceFile, fs.readFileSync(sourceFile, "utf8"));
+
+    const diagnostics = service.check(sourceFile).diagnostics;
+    expect(diagnostics.some((diagnostic) => diagnostic.code === 2307)).toBe(true);
+    expect(fs.existsSync(staleCopy)).toBe(true);
+  });
+
   it("returns a Cannot-find-module error for an import that doesn't resolve", () => {
     const root = createTempDir("typecheck-service-workspace-");
     writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n");
@@ -337,6 +376,7 @@ describe("TypeCheckService workspace resolution", () => {
     const root = createTempDir("typecheck-service-definitely-typed-");
     const consumerDir = path.join(root, "workspace", "panels", "consumer");
     const externalNodeModules = path.join(root, "external-deps", "node_modules");
+    const lowerPriorityNodeModules = path.join(root, "fallback-deps", "node_modules");
 
     writeFile(
       path.join(externalNodeModules, "react", "package.json"),
@@ -345,6 +385,7 @@ describe("TypeCheckService workspace resolution", () => {
         exports: {
           ".": "./index.js",
           "./jsx-runtime": "./jsx-runtime.js",
+          "./server-only": "./server-only.d.ts",
         },
       })
     );
@@ -355,6 +396,26 @@ describe("TypeCheckService workspace resolution", () => {
     writeFile(
       path.join(externalNodeModules, "react", "jsx-runtime.js"),
       "export function jsx() {}\n"
+    );
+    writeFile(
+      path.join(lowerPriorityNodeModules, "react", "package.json"),
+      JSON.stringify({
+        name: "react",
+        exports: {
+          ".": "./index.js",
+          "./jsx-runtime": "./jsx-runtime.js",
+          "./server-only": "./server-only.d.ts",
+        },
+      })
+    );
+    writeFile(path.join(lowerPriorityNodeModules, "react", "index.js"), "export {}\n");
+    writeFile(
+      path.join(lowerPriorityNodeModules, "react", "jsx-runtime.js"),
+      "export function jsx() {}\n"
+    );
+    writeFile(
+      path.join(lowerPriorityNodeModules, "react", "server-only.d.ts"),
+      "export declare const serverOnly: true;\n"
     );
     writeFile(
       path.join(externalNodeModules, "@types", "react", "package.json"),
@@ -375,15 +436,16 @@ describe("TypeCheckService workspace resolution", () => {
       [
         'import type { ReactNodeMarker } from "react";',
         'import { jsx } from "react/jsx-runtime";',
+        'import { serverOnly } from "react/server-only";',
         "const marker: ReactNodeMarker = { kind: 'react-node' };",
         "const elementType: string = jsx('div').type;",
-        "void marker; void elementType;",
+        "void marker; void elementType; void serverOnly;",
       ].join("\n")
     );
 
     const service = new TypeCheckService({
       panelPath: consumerDir,
-      nodeModulesPaths: [externalNodeModules],
+      nodeModulesPaths: [externalNodeModules, lowerPriorityNodeModules],
       skipSuggestions: true,
       disableTsconfigDiscovery: true,
       workspaceContext: null,
@@ -391,7 +453,7 @@ describe("TypeCheckService workspace resolution", () => {
     service.updateFile(sourceFile, fs.readFileSync(sourceFile, "utf-8"));
 
     const errors = service.check(sourceFile).diagnostics.filter((d) => d.severity === "error");
-    expect(errors).toEqual([]);
+    expect(errors.map((diagnostic) => diagnostic.code)).toEqual([2307]);
   });
 });
 

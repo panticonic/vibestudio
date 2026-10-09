@@ -117,7 +117,7 @@ it("runs the production disk receiver under its platform execution contract", as
   }
 });
 
-it("runs bundled typechecking with its admitted native compiler and standard libraries", async () => {
+it("runs bundled typechecking with admitted workspace-package dependencies", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "native-workspace-typecheck-"));
   const statePath = path.join(root, "state");
   const sourceRoot = path.join(statePath, "source");
@@ -143,21 +143,41 @@ process.env.NODE_ENV;
       name: "typed-dependency",
       version: "1.0.0",
       types: "index.d.ts",
+      exports: { ".": { types: "./index.d.ts", default: "./index.d.ts" } },
     })
   );
-  await writeFile(path.join(dependency, "index.d.ts"), "export declare const answer: string;\n");
+  await writeFile(path.join(dependency, "index.d.ts"), "export declare const answer: number;\n");
   const sdk = path.join(root, "installed-sdk");
   await mkdir(path.join(sdk, "types"), { recursive: true });
   await writeFile(
     path.join(sdk, "package.json"),
     JSON.stringify({
       name: "@vibestudio/fixture-sdk",
-      exports: { ".": { types: "./types/index.d.ts" } },
+      exports: { ".": { types: "./types/index.ts", default: "./types/index.ts" } },
+    })
+  );
+  const sdkSource = [
+    'import { answer } from "typed-dependency";',
+    "export { answer };",
+    "export const ownerAnswer: string = answer;",
+    "",
+  ].join("\n");
+  await writeFile(path.join(sdk, "types", "index.ts"), sdkSource);
+  const sdkNodeModules = path.join(root, "fixture-sdk-node_modules");
+  const sdkTypedDependency = path.join(sdkNodeModules, "typed-dependency");
+  await mkdir(sdkTypedDependency, { recursive: true });
+  await writeFile(
+    path.join(sdkTypedDependency, "package.json"),
+    JSON.stringify({
+      name: "typed-dependency",
+      version: "2.0.0",
+      types: "index.d.ts",
+      exports: { ".": { types: "./index.d.ts", default: "./index.d.ts" } },
     })
   );
   await writeFile(
-    path.join(sdk, "types", "index.d.ts"),
-    'export { answer } from "typed-dependency";\n'
+    path.join(sdkTypedDependency, "index.d.ts"),
+    "export declare const answer: string;\n"
   );
   await writeFile(path.join(sdk, ".npmrc"), "host-only package-manager input");
   const unrelatedOwner = path.join(root, "unrelated-node-owner");
@@ -210,6 +230,7 @@ process.env.NODE_ENV;
           "@vibestudio/unrelated-node-owner": unrelatedOwner,
         },
         workspacePackageNodeModules: {
+          "@vibestudio/fixture-sdk": sdkNodeModules,
           "@vibestudio/unrelated-node-owner": unrelatedOwnerNodeModules,
         },
       }),
@@ -223,6 +244,7 @@ process.env.NODE_ENV;
           "@vibestudio/unrelated-node-owner": unrelatedOwner,
         },
         workspacePackageNodeModules: {
+          "@vibestudio/fixture-sdk": sdkNodeModules,
           "@vibestudio/unrelated-node-owner": unrelatedOwnerNodeModules,
         },
       }),
@@ -232,13 +254,8 @@ process.env.NODE_ENV;
     admitted = resources.nodeModulesPaths[0]!;
     const sdkResource = resources.workspacePackages["@vibestudio/fixture-sdk"]!;
     await expect(access(path.join(sdkResource, ".npmrc"))).rejects.toThrow();
-    await writeFile(
-      path.join(sdk, "types", "index.d.ts"),
-      "export declare const answer: number;\n"
-    );
-    expect(await readFile(path.join(sdkResource, "types", "index.d.ts"), "utf8")).toBe(
-      'export { answer } from "typed-dependency";\n'
-    );
+    await writeFile(path.join(sdk, "types", "index.ts"), "export const answer: number = 42;\n");
+    expect(await readFile(path.join(sdkResource, "types", "index.ts"), "utf8")).toBe(sdkSource);
     await runtime.runJob({
       dependencies: "",
       bundle: bundled.outputFiles[0]!.text,
@@ -259,7 +276,13 @@ process.env.NODE_ENV;
         try {
           service.updateFile('index.ts', ${JSON.stringify(source)});
           const result = service.check();
-          assert(result.diagnostics.some(diagnostic => diagnostic.code === 2322));
+          const rootAssignment = result.diagnostics.find(diagnostic =>
+            diagnostic.code === 2322 && diagnostic.file === ${JSON.stringify(path.join(statePath, "scratch", "home", "index.ts"))}
+          );
+          assert(rootAssignment, JSON.stringify(result.diagnostics.map(({ code, message, file }) => ({ code, message, file }))));
+          assert(!result.diagnostics.some(diagnostic =>
+            diagnostic.code === 2322 && diagnostic.file === ${JSON.stringify(path.join(sdkResource, "types", "index.ts"))}
+          ), JSON.stringify(result.diagnostics.map(({ code, message, file }) => ({ code, message, file }))));
           const missingProcess = result.diagnostics.find(diagnostic =>
             /Cannot find name 'process'/.test(diagnostic.message)
           );
@@ -269,7 +292,7 @@ process.env.NODE_ENV;
             2,
             JSON.stringify(result.diagnostics.map(({ code, message, file }) => ({ code, message, file })))
           );
-          assert(!result.diagnostics.some(diagnostic => diagnostic.code === 2307));
+          assert.equal(result.diagnostics.filter(diagnostic => diagnostic.code === 2307).length, 0);
           assert(!result.diagnostics.some(diagnostic => diagnostic.message.includes('global type')));
         } finally { service.dispose(); }
       `,
