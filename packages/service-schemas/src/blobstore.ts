@@ -449,7 +449,7 @@ export const blobstoreMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Store one immutable directory node in the content-addressed store and return its tree hash. Every referenced file blob and child tree must already exist, so a tree hash cannot name missing objects. Pass {root:true} to also store a content-state root pointer. Content states are build/projection inputs, never semantic revision or ancestry identities. Idempotent by content; build deep trees bottom-up.",
+      "Store one immutable directory node in the content-addressed store and return its tree hash. Each entry name is one directory component, never a path: create a child tree for nested files, then reference its childHash from a directory entry. Every referenced file blob and child tree must already exist, so a tree hash cannot name missing objects. Pass {root:true} to also store a content-state root pointer. Content states are build/projection inputs, never semantic revision or ancestry identities. Idempotent by content; build deep trees bottom-up.",
     args: z.tuple([z.array(TreeEntrySchema).max(100_000), PutTreeOptsSchema]),
     returns: z.object({ treeHash: TreeHashSchema, stateHash: StateHashSchema.optional() }),
     authority: BLOBSTORE_READ_POLICY,

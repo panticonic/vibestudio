@@ -68,6 +68,7 @@ import { TypecheckWorkerClient } from "./typecheckWorkerClient.js";
 import {
   BuildDiagnosticsError,
   BuildRequestError,
+  TestCompilationFailedError,
   diagnosticsFromError,
   hasErrors,
   type BuildDiagnostic,
@@ -2425,6 +2426,20 @@ export async function initBuildSystemV2(
         include: [...suite.include],
         ...(selection.file ? { file: selection.file } : {}),
       },
+    }).catch((error: unknown) => {
+      if (
+        error instanceof BuildDiagnosticsError &&
+        error.diagnostics.some((diagnostic) => diagnostic.severity === "error") &&
+        error.diagnostics.every((diagnostic) => diagnostic.source !== "infrastructure")
+      ) {
+        throw new TestCompilationFailedError(error, {
+          target: node.relativePath,
+          suite: suite.name,
+          runtime: suite.runtime,
+          stateHash,
+        });
+      }
+      throw error;
     });
     const details = build.metadata.details;
     if (details.kind !== "test" || !build.metadata.execution) {

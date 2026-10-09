@@ -16,7 +16,10 @@ import type * as esbuild from "esbuild";
 import * as fs from "node:fs";
 import * as path from "path";
 import { RpcBoundaryError } from "@vibestudio/rpc";
-import type { AgentDiagnosticRepairWire } from "@vibestudio/service-schemas/build";
+import type {
+  AgentDiagnosticRepairWire,
+  WorkspaceTestPlan,
+} from "@vibestudio/service-schemas/build";
 
 /**
  * A caller-correctable build request failure. The structured payload survives
@@ -83,6 +86,18 @@ export class BuildDiagnosticsError extends Error {
     super(message);
     this.name = "BuildDiagnosticsError";
     this.diagnostics = diagnostics;
+  }
+}
+
+/** The compiler owns this refusal; no test artifact or execution was produced. */
+export class TestCompilationFailedError extends RpcBoundaryError {
+  constructor(error: BuildDiagnosticsError, plan: Omit<WorkspaceTestPlan, "protocol">) {
+    super(error.message, "application", "TestCompilationFailed", error, {
+      code: "TestCompilationFailed",
+      ...plan,
+      diagnostics: error.diagnostics,
+    });
+    this.name = "TestCompilationFailedError";
   }
 }
 

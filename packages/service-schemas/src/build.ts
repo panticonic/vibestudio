@@ -772,6 +772,16 @@ export const workspaceTestPlanSchema = z
   .strict();
 export type WorkspaceTestPlan = z.infer<typeof workspaceTestPlanSchema>;
 
+/** A compiler refusal is bound to source, not to an execution that never existed. */
+export const workspaceTestCompilationFailureSchema = workspaceTestPlanSchema
+  .omit({ protocol: true })
+  .extend({
+    code: z.literal("TestCompilationFailed"),
+    diagnostics: z.array(buildDiagnosticSchema).min(1),
+  })
+  .strict();
+export type WorkspaceTestCompilationFailure = z.infer<typeof workspaceTestCompilationFailureSchema>;
+
 export const testFileResultSchema = z
   .object({
     file: z.string(),

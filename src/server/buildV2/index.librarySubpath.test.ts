@@ -852,6 +852,35 @@ describe("BuildSystemV2 library package subpaths", () => {
       buildRoots(workspaceRoot)
     );
 
+    fs.writeFileSync(
+      path.join(panelDir, "counter.test.ts"),
+      'import { document } from "@workspace/runtime"; console.log(document);\n'
+    );
+    await expect(
+      buildSystem.getTestArtifact("panels/counter", `state:${"b".repeat(64)}`)
+    ).rejects.toMatchObject({
+      code: "TestCompilationFailed",
+      errorKind: "application",
+      errorData: {
+        code: "TestCompilationFailed",
+        target: "panels/counter",
+        suite: "unit",
+        runtime: "browser",
+        stateHash: `state:${"b".repeat(64)}`,
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({
+            source: "esbuild",
+            severity: "error",
+            message: expect.stringContaining("document"),
+          }),
+        ]),
+      },
+    });
+    fs.writeFileSync(
+      path.join(panelDir, "counter.test.ts"),
+      'import { test } from "@workspace/test-runtime"; test("counter", () => {});\n'
+    );
+
     const artifact = await buildSystem.getTestArtifact("panels/counter", `state:${"a".repeat(64)}`);
     expect(artifact).toMatchObject({
       protocol: "workspace-test-artifact.v1",
