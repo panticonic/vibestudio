@@ -111,6 +111,13 @@ it("derives explicit Personal and ordinary project roots from canonical template
   });
   expect(derived.defaultTemplates.personal).toEqual(derived.pin);
   expect(derived.pin).not.toEqual(personal.pin);
+  expect(derived.pin.url).not.toBe(personal.pin.url);
+  expect(derived.pin.url).toMatch(/^git\+https:\/\/e2e\.invalid\/vibestudio-e2e\//u);
+  expect(
+    execFileSync("git", ["-C", derived.checkout, "remote", "get-url", "origin"], {
+      encoding: "utf8",
+    }).trim()
+  ).toBe(derived.pin.url.slice("git+".length));
   expect(derived.defaultTemplates.system).toEqual(system.pin);
   expect(derived.sources).toEqual(
     expect.arrayContaining([
@@ -149,5 +156,9 @@ it("derives explicit Personal and ordinary project roots from canonical template
     },
   });
   expect(projectDerived.pin).not.toEqual(system.pin);
+  expect(projectDerived.pin.url).not.toBe(derived.pin.url);
   expect(projectDerived.defaultTemplates.base).toEqual(base.pin);
+  expect(
+    projectDerived.sources.find((source) => source.pin.url === projectDerived.pin.url)
+  ).toEqual(expect.objectContaining({ pin: projectDerived.pin, checkout: projectDerived.checkout }));
 });

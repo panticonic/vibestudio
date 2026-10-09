@@ -231,10 +231,17 @@ export async function deriveE2eRootTemplate(input: {
     "E2E case source customization",
   ]);
 
+  const fixtureId = [path.basename(path.dirname(input.workRoot)), path.basename(input.workRoot)]
+    .join("-")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/gu, "-");
+  const url = `git+https://e2e.invalid/vibestudio-e2e/${fixtureId}.git`;
+  git(checkout, ["remote", "set-url", "origin", url.slice("git+".length)]);
+
   const gitClient = new GitClient();
   const { pin } = await inspectRootTemplateCheckout({
     checkout,
-    url: selectedPin.url,
+    url,
     git: gitClient,
     sink: hashOnlySink,
   });
