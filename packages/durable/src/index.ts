@@ -446,6 +446,9 @@ export abstract class DurableObjectBase {
                 ? { callerPanelId: record["callerPanelId"] }
                 : {}),
               ...(typeof record["userId"] === "string" ? { userId: record["userId"] } : {}),
+              ...(typeof record["workspaceId"] === "string"
+                ? { workspaceId: record["workspaceId"] }
+                : {}),
               ...(record["authorization"] && typeof record["authorization"] === "object"
                 ? {
                     authorization: record["authorization"] as AttestedCaller["authorization"],
@@ -563,6 +566,7 @@ export abstract class DurableObjectBase {
       callerKind: caller.callerKind,
       ...(caller.callerPanelId ? { callerPanelId: caller.callerPanelId } : {}),
       ...(caller.userId ? { userId: caller.userId } : {}),
+      ...(caller.workspaceId ? { workspaceId: caller.workspaceId } : {}),
     };
   }
 
@@ -844,16 +848,26 @@ export abstract class DurableObjectBase {
             this.workReadyHeaders(dispatched.readyQueues)
           );
         }
+        const status =
+          responseMessage.errorKind === "access"
+            ? 403
+            : responseMessage.errorKind === "protocol"
+              ? 400
+              : 500;
         return jsonResponse(
           {
             error: responseMessage.error,
             errorKind: responseMessage.errorKind,
+            ...(responseMessage.diagnosticId
+              ? { diagnosticId: responseMessage.diagnosticId }
+              : {}),
+            ...(responseMessage.errorStack ? { errorStack: responseMessage.errorStack } : {}),
             ...(responseMessage.errorCode ? { errorCode: responseMessage.errorCode } : {}),
             ...(responseMessage.errorData !== undefined
               ? { errorData: responseMessage.errorData }
               : {}),
           },
-          500,
+          status,
           this.workReadyHeaders(dispatched.readyQueues)
         );
       }

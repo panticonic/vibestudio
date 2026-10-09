@@ -113,6 +113,7 @@ import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { authoritySessionIdForCaller } from "./services/callerAuthoritySession.js";
+import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
 import {
   workspaceServiceBindingTier,
   type WorkspaceServiceBinding,
@@ -4146,13 +4147,14 @@ export class RpcServer {
         purpose: "call",
       });
     }
-    const workspaceAuthorities = input.method.startsWith("__event:")
-      ? []
-      : await this.deps.resolveWorkspaceDirectAuthority?.({
-          caller: input.caller,
-          ...input.ref,
-          method: input.method,
-        });
+    const workspaceAuthorities =
+      input.method.startsWith("__event:") || isHostIntrinsicDirectMethod(input.method)
+        ? []
+        : await this.deps.resolveWorkspaceDirectAuthority?.({
+            caller: input.caller,
+            ...input.ref,
+            method: input.method,
+          });
     if (workspaceAuthorities && workspaceAuthorities.length > 1) {
       throw createRelayError(
         `Direct DO target ${input.ref.source}:${input.ref.className}:${input.ref.objectKey} has ambiguous workspace service authority`,

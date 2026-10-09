@@ -516,6 +516,9 @@ export function attestWorkspaceDoRpc(
     methodAuthority: WorkspaceDoMethodAuthority;
   }
 ): DirectAuthorityAttestation {
+  // Framework-owned methods retain their receiver contract. An application's
+  // service binding governs its public methods, not host lifecycle inspection.
+  if (isHostIntrinsicDirectMethod(input.method)) return attestDirectRpc(input);
   const targetCapability = `workspace-service:${input.service.name}`;
   const targetTier = workspaceServiceBindingTier(
     input.service.binding,

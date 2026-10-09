@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { rpcMethodAuthority } from "@vibestudio/rpc";
+import { DurableObjectBase } from "@vibestudio/durable";
+import { createTestDO } from "@vibestudio/durable/test-utils";
+import { directRpcDenial } from "@vibestudio/shared/directRpcEnforcement";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +24,91 @@ const executionDigest = "b".repeat(64);
 const digest = "c".repeat(64);
 
 describe("authority runtime", () => {
+  it("keeps framework inspection host-only without inheriting application service admission", async () => {
+    class FrameworkReceiver extends DurableObjectBase {
+      protected createTables(): void {}
+    }
+    const { instance, db } = await createTestDO(FrameworkReceiver);
+    try {
+      const facts = {
+        caller: createHostCaller("main"),
+        source: "workers/cross-workspace-receiver",
+        className: "CrossWorkspaceReceiver",
+        objectKey: "main",
+        workspaceId: "ws-1",
+        workspaceMember: true,
+        sessionId: "host:inspect",
+        now: 100,
+        service: {
+          name: "cross-workspace.receiver",
+          principals: ["code" as const],
+          binding: "declared" as const,
+        },
+        methodAuthority: { effect: { kind: "open" as const }, tier: "open" as const },
+      };
+      const hostProbe = attestWorkspaceDoRpc({ ...facts, method: "durableWorkCapabilities" });
+      expect(hostProbe.targetRequirement).toBeUndefined();
+      expect(hostProbe.capability).toBe("rpc:durableWorkCapabilities");
+      const declaration = rpcMethodAuthority(instance, "durableWorkCapabilities");
+      if (!declaration) throw new Error("Framework probe authority declaration is missing");
+      expect(declaration?.principals).toEqual(["host"]);
+      const inspect = (attestation: typeof hostProbe) =>
+        directRpcDenial({
+          kind: "call",
+          method: "durableWorkCapabilities",
+          caller: null,
+          attestation,
+          audience: attestation.audience,
+          resourceKey: attestation.resourceKey,
+          capability: attestation.capability,
+          declaration,
+          now: 100,
+        });
+      expect(inspect(hostProbe)).toBeNull();
+      const codeProbe = attestWorkspaceDoRpc({
+        ...facts,
+        method: "durableWorkCapabilities",
+        caller: createVerifiedCaller("panel:caller", "panel", {
+          callerId: "panel:caller",
+          callerKind: "panel",
+          repoPath: "panels/caller",
+          effectiveVersion,
+          executionDigest,
+          requested: [],
+        }),
+      });
+      expect(inspect(codeProbe)).toMatchObject({ code: "EACCES" });
+      const product = attestWorkspaceDoRpc({ ...facts, method: "readGreeting" });
+      expect(product.targetRequirement).toEqual(
+        requirementForPrincipals(["code"], "workspace-service:cross-workspace.receiver")
+      );
+      expect(
+        directRpcDenial({
+          kind: "call",
+          method: "readGreeting",
+          caller: null,
+          attestation: product,
+          audience: product.audience,
+          resourceKey: product.resourceKey,
+          capability: product.capability,
+          declaration: {
+            website: { kind: "closed", reason: "Test receiver" },
+            principals: ["host"],
+            tier: "open",
+            sensitivity: "read",
+            effect: { kind: "open" },
+          },
+          now: 100,
+        })
+      ).toMatchObject({
+        code: "EACCES",
+        failure: { capability: "workspace-service:cross-workspace.receiver" },
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("projects independent service and receiver-resource grants into one attestation", () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "service-resource-authority-")),

@@ -132,6 +132,8 @@ export interface DOCallerEnvelope {
    * code identity, WP0 §6). Absent for server-originated and bootstrap dispatches.
    */
   userId?: string;
+  /** Owning source workspace from host-verified caller attribution. */
+  workspaceId?: string;
   /** Fresh host mediation bound to this exact method and DO object. */
   authorization?: DirectAuthorityAttestation;
 }
