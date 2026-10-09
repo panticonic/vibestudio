@@ -30,6 +30,12 @@ import {
 import { credentialsMethods, NativeCredentialResolutionObservationSchema } from "@vibestudio/service-schemas/credentials";
 import { notificationMethods, NativeNotificationLifecycleObservationSchema } from "@vibestudio/service-schemas/notification";
 
+import {
+  extensionsMethods,
+  NativeExtensionInvocationObservationSchema,
+  type NativeExtensionInvocationObservation,
+} from "@vibestudio/service-schemas/extensions";
+
 /** Native effect evidence belongs to one execution, independently of its return value. */
 export class ExecutionJournal {
   readonly entries: Record<string, unknown>[] = [];
@@ -50,6 +56,51 @@ export class ExecutionJournal {
     // Guest code can later mutate a returned object; it cannot mutate this copy.
     this.entries.push(JSON.parse(encoded) as Record<string, unknown>);
     this.characters += encoded.length;
+  }
+
+  recordExtensionInvocation(method: string, args: unknown[], result: unknown): void {
+    if (this.closed) return;
+    let target:
+      | Pick<
+          Extract<NativeExtensionInvocationObservation, { transport: "invoke" }>,
+          "transport" | "extensionKey"
+        >
+      | Pick<
+          Extract<NativeExtensionInvocationObservation, { transport: "invokeProvider" }>,
+          "transport" | "providerKey"
+        >;
+    let invokedMethod: string;
+    if (method === "extensions.invoke") {
+      const [extensionKey, publicMethod] = extensionsMethods.invoke.args.parse(args);
+      target = { transport: "invoke", extensionKey };
+      invokedMethod = publicMethod;
+    } else if (method === "extensions.invokeProvider") {
+      const [providerKey, providerMethod] = extensionsMethods.invokeProvider.args.parse(args);
+      target = { transport: "invokeProvider", providerKey };
+      invokedMethod = providerMethod;
+    } else return;
+    const returned = extensionsMethods.invoke.returns!.parse(result);
+    const shape: NativeExtensionInvocationObservation["result"] =
+      returned === null
+        ? { kind: "null" }
+        : Array.isArray(returned)
+          ? { kind: "array", length: returned.length }
+          : typeof returned === "object"
+            ? { kind: "object", keyCount: Object.keys(returned).length }
+            : typeof returned === "string"
+              ? { kind: "string", length: returned.length }
+              : typeof returned === "number"
+                ? { kind: "number" }
+                : { kind: "boolean" };
+    this.append({
+      type: "extension.invocation",
+      receipt: NativeExtensionInvocationObservationSchema.parse({
+        protocol: "extension-invocation-observation.v1",
+        ...target,
+        method: invokedMethod,
+        result: shape,
+      }),
+    });
   }
 
   recordWebhookOperation(method: string, args: unknown[], result: unknown): void {

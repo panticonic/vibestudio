@@ -810,6 +810,7 @@ export class EvalDO extends DurableObjectBase {
       try {
         const result = await base.call<T>(targetId, method, args, mergeOptions(options));
         if (targetId === "main") {
+          operationJournal.recordExtensionInvocation(method, args, result);
           operationJournal.recordServerLogRead(method, args, result);
           operationJournal.recordBlobTextOperation(method, args, result);
           operationJournal.recordBlobTreeOperation(method, args, result);

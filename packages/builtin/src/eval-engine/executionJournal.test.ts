@@ -39,6 +39,112 @@ function profile(): BuildPerformanceProfileWire {
 }
 
 describe("execution-owned native operation evidence", () => {
+  it("records a settled provider transport call before guest mutation without retaining secrets", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const nativeRpc = (
+      instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } }
+    ).rpc;
+    vi.spyOn(nativeRpc, "call").mockResolvedValueOnce([]);
+    const owner = (
+      instance as unknown as {
+        createExecutionContext: (input: { contextId: string }) => {
+          rpc: typeof nativeRpc;
+          operationJournal: ExecutionJournal;
+        };
+      }
+    ).createExecutionContext({ contextId: "owner" });
+    const returned = (await owner.rpc.call("main", "extensions.invokeProvider", [
+      "gitInterop",
+      "upstreamStatus",
+      [{ secret: "PRIVATE ARGUMENT" }],
+    ])) as unknown[];
+    returned.push({ secret: "PRIVATE GUEST MUTATION" });
+    const journal = owner.operationJournal.close();
+    expect(journal.entries).toEqual([
+      {
+        type: "extension.invocation",
+        receipt: {
+          protocol: "extension-invocation-observation.v1",
+          transport: "invokeProvider",
+          providerKey: "gitInterop",
+          method: "upstreamStatus",
+          result: { kind: "array", length: 0 },
+        },
+      },
+    ]);
+    expect(JSON.stringify(journal)).not.toContain("PRIVATE");
+  });
+
+  it.each([
+    [{}, { kind: "object", keyCount: 0 }],
+    [{ privateKey: "PRIVATE RESULT" }, { kind: "object", keyCount: 1 }],
+    ["PRIVATE RESULT", { kind: "string", length: 14 }],
+    [false, { kind: "boolean" }],
+    [12345, { kind: "number" }],
+    [null, { kind: "null" }],
+  ])("retains only the observable shape of an extension result %j", (returned, shape) => {
+    const journal = new ExecutionJournal();
+    journal.recordExtensionInvocation(
+      "extensions.invoke",
+      ["extensions/example", "status", ["PRIVATE ARGUMENT"]],
+      returned
+    );
+    expect(journal.close().entries).toEqual([
+      {
+        type: "extension.invocation",
+        receipt: {
+          protocol: "extension-invocation-observation.v1",
+          transport: "invoke",
+          extensionKey: "extensions/example",
+          method: "status",
+          result: shape,
+        },
+      },
+    ]);
+    const encoded = JSON.stringify(journal.close());
+    expect(encoded).not.toContain("PRIVATE");
+    expect(encoded).not.toContain("privateKey");
+    expect(encoded).not.toContain("12345");
+  });
+
+  it("retains the original failed RPC and records neither failed calls nor calls to another receiver", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const nativeRpc = (
+      instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } }
+    ).rpc;
+    const failure = new Error("original extension failure");
+    vi.spyOn(nativeRpc, "call").mockRejectedValueOnce(failure).mockResolvedValueOnce([]);
+    const owner = (
+      instance as unknown as {
+        createExecutionContext: (input: { contextId: string }) => {
+          rpc: typeof nativeRpc;
+          operationJournal: ExecutionJournal;
+        };
+      }
+    ).createExecutionContext({ contextId: "owner" });
+    await expect(
+      owner.rpc.call("main", "extensions.invokeProvider", ["gitInterop", "upstreamStatus", []])
+    ).rejects.toBe(failure);
+    await owner.rpc.call("worker:unrelated", "extensions.invokeProvider", [
+      "gitInterop",
+      "upstreamStatus",
+      [],
+    ]);
+    expect(owner.operationJournal.close().entries).toEqual([]);
+  });
+
+  it("rejects malformed invocation observations and ignores unrelated or closed operations", () => {
+    const journal = new ExecutionJournal();
+    expect(() => journal.recordExtensionInvocation("extensions.invokeProvider", [], [])).toThrow();
+    expect(() =>
+      journal.recordExtensionInvocation("extensions.invoke", ["example", "status", []], undefined)
+    ).toThrow();
+    journal.recordExtensionInvocation("extensions.ready", ["example"], {});
+    expect(journal.close().entries).toEqual([]);
+    journal.recordExtensionInvocation("extensions.invoke", ["example", "status", []], {});
+    expect(journal.close().entries).toEqual([]);
+  });
+
   it("records permission inventory before guest summarization without retaining grant data", async () => {
     const { instance } = await createTestDO(EvalDO);
     const nativeRpc = (instance as unknown as {

@@ -41,6 +41,40 @@ const extensionInvocationAuthority = {
   },
 };
 
+/** Bounded proof that a real extension transport call completed; never carries application values. */
+const extensionInvocationResultShapeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("array"), length: z.number().int().nonnegative() }).strict(),
+  z.object({ kind: z.literal("object"), keyCount: z.number().int().nonnegative() }).strict(),
+  z.object({ kind: z.literal("string"), length: z.number().int().nonnegative() }).strict(),
+  z.object({ kind: z.literal("number") }).strict(),
+  z.object({ kind: z.literal("boolean") }).strict(),
+  z.object({ kind: z.literal("null") }).strict(),
+]);
+const extensionInvocationObservationFields = {
+  protocol: z.literal("extension-invocation-observation.v1"),
+  method: z.string().min(1),
+  result: extensionInvocationResultShapeSchema,
+};
+export const NativeExtensionInvocationObservationSchema = z.discriminatedUnion("transport", [
+  z
+    .object({
+      ...extensionInvocationObservationFields,
+      transport: z.literal("invoke"),
+      extensionKey: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      ...extensionInvocationObservationFields,
+      transport: z.literal("invokeProvider"),
+      providerKey: z.string().min(1),
+    })
+    .strict(),
+]);
+export type NativeExtensionInvocationObservation = z.infer<
+  typeof NativeExtensionInvocationObservationSchema
+>;
+
 export const binaryEnvelopeSchema = z
   .object({
     __bin: z.literal(true),
