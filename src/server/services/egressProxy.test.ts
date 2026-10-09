@@ -51,6 +51,7 @@ import {
 } from "./egressProxy.js";
 import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
 import { CredentialLifecycleError } from "./credentialLifecycle.js";
+import { RpcBoundaryError, attachRpcDiagnosticId } from "@vibestudio/rpc";
 
 const PUBLIC_REFRESH_RECIPE = {
   tokenUrl: "https://auth.example.test/oauth/token",
@@ -62,7 +63,6 @@ import { createApprovalQueue, type ApprovalQueue } from "./approvalQueue.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 import { createTestExecutionSession } from "@vibestudio/shared/serviceDispatcherTestUtils";
-import { RpcBoundaryError } from "@vibestudio/rpc";
 import { authorityFailureForDecision } from "@vibestudio/shared/authorization";
 
 class MemoryCredentialStore {
@@ -2885,6 +2885,193 @@ describe("EgressProxy", () => {
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not count explicit cancellation as destination health failure", async () => {
+    const proxy = createProxy();
+    const caller = workerCaller("worker:test");
+    const cancelled = new Error("caller cancelled its generation");
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const signal = init!.signal!;
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        queueMicrotask(() => controllers.at(-1)!.abort(cancelled));
+      });
+      return new Response("unused");
+    });
+    const controllers: AbortController[] = [];
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        const controller = new AbortController();
+        controllers.push(controller);
+        await expect(
+          proxy.forwardProxyFetchStream(
+            {
+              caller,
+              credentialId: "cred-1",
+              url: "https://api.example.test/v1/items",
+              method: "POST",
+            },
+            () => {},
+            controller.signal
+          )
+        ).rejects.toBe(cancelled);
+      }
+      fetchMock.mockImplementation(async () => new Response("ok"));
+      await expect(
+        proxy.forwardProxyFetch({
+          caller,
+          credentialId: "cred-1",
+          url: "https://api.example.test/v1/items",
+          method: "POST",
+        })
+      ).resolves.toMatchObject({ status: 200 });
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+    } finally {
+      await proxy.stop();
+    }
+  });
+
+  it("does not count a controlled Git redirect refusal as network health failure", async () => {
+    const origin = "http://127.0.0.1:12346";
+    const proxy = createProxy(
+      createCredential({ bindings: [] }),
+      new MemoryAuditLog(),
+      authorizeLoopbackFixture(origin)
+    );
+    const caller = workerCaller("worker:test");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("redirect", {
+          status: 302,
+          headers: { location: "http://127.0.0.1:12346/v1/other" },
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        await expect(
+          proxy.forwardGitHttp({
+            authority: { kind: "runtime", caller },
+            credential: { kind: "automatic" },
+            url: `${origin}/v1/items`,
+            method: "POST",
+          })
+        ).rejects.toMatchObject({ code: "git-http-redirect" });
+      }
+      fetchMock.mockImplementation(async () => new Response("ok"));
+      await expect(
+        proxy.forwardProxyFetch({
+          caller,
+          url: `${origin}/v1/items`,
+          method: "POST",
+        })
+      ).resolves.toMatchObject({ status: 200 });
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+    } finally {
+      await proxy.stop();
+    }
+  });
+
+  it("reports the actual upstream status that opened the circuit through HTTP", async () => {
+    let upstreamCalls = 0;
+    const upstream = createServer((_req, res) => {
+      upstreamCalls += 1;
+      res.writeHead(503);
+      res.end("provider unavailable");
+    });
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const port = (upstream.address() as AddressInfo).port;
+    const origin = `http://127.0.0.1:${port}`;
+    const proxy = createProxy(
+      createLocalFetchCredential(port),
+      new MemoryAuditLog(),
+      authorizeLoopbackFixture(origin)
+    );
+    const caller = workerCaller("worker:test");
+    try {
+      const proxyPort = await proxy.startForCaller(caller, () => caller);
+      for (let index = 0; index < 5; index += 1) {
+        const result = await requestThroughHttpProxy({
+          proxyPort,
+          targetUrl: `${origin}/v1/items`,
+          method: "POST",
+        });
+        expect(result.status).toBe(503);
+      }
+      const blocked = await requestThroughHttpProxy({
+        proxyPort,
+        targetUrl: `${origin}/v1/items`,
+        method: "POST",
+      });
+      expect(blocked.status).toBe(503);
+      expect(JSON.parse(blocked.body)).toMatchObject({
+        error: `Circuit breaker is open; last failure: POST ${origin}/v1/items: upstream HTTP 503`,
+        errorKind: "transport",
+        errorCode: "EGRESS_CIRCUIT_OPEN",
+      });
+      expect(upstreamCalls).toBe(5);
+    } finally {
+      await proxy.stop();
+      await new Promise<void>((resolve, reject) =>
+        upstream.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
+  });
+
+  it("preserves the original transport error fields in the HTTP circuit refusal", async () => {
+    const origin = "http://127.0.0.1:12345";
+    const proxy = createProxy(
+      createCredential({ bindings: [] }),
+      new MemoryAuditLog(),
+      authorizeLoopbackFixture(origin)
+    );
+    const caller = workerCaller("worker:test");
+    const original = new RpcBoundaryError(
+      "upstream connection reset during response",
+      "transport",
+      "ECONNRESET",
+      undefined,
+      { phase: "response" }
+    );
+    attachRpcDiagnosticId(original, "f976e1f0-4a0f-43ca-beb2-4e9a3414d50b");
+    const forward = vi
+      .spyOn(proxy as unknown as { forwardHttpRequest: () => Promise<never> }, "forwardHttpRequest")
+      .mockRejectedValue(original);
+    try {
+      const proxyPort = await proxy.startForCaller(caller, () => caller);
+      for (let index = 0; index < 5; index += 1) {
+        const failure = await requestThroughHttpProxy({
+          proxyPort,
+          targetUrl: `${origin}/v1/items`,
+          method: "POST",
+        });
+        expect(failure.status).toBe(500);
+        expect(JSON.parse(failure.body)).toMatchObject({
+          errorCode: "ECONNRESET",
+          errorData: { phase: "response" },
+        });
+      }
+      const blocked = await requestThroughHttpProxy({
+        proxyPort,
+        targetUrl: `${origin}/v1/items`,
+        method: "POST",
+      });
+      expect(blocked.status).toBe(503);
+      expect(JSON.parse(blocked.body)).toMatchObject({
+        error: `Circuit breaker is open; last failure: POST ${origin}/v1/items: ${original.message}`,
+        errorKind: "transport",
+        errorCode: "ECONNRESET",
+        errorData: { phase: "response" },
+        diagnosticId: "f976e1f0-4a0f-43ca-beb2-4e9a3414d50b",
+        errorStack: original.stack,
+      });
+      expect(forward).toHaveBeenCalledTimes(5);
+    } finally {
+      await proxy.stop();
+    }
   });
 
   it("retries replay-safe retryable responses and records retry count", async () => {

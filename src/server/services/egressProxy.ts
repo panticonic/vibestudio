@@ -55,7 +55,13 @@ import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { resolveCredentialByLabel } from "./credentialSelection.js";
 import { bridgeDuplexSockets, consumeSocketErrorsUntilClose } from "../socketBridge.js";
 import { CDP_INTERNAL_GRANT_HEADER } from "@vibestudio/shared/cdpGrants";
-import { RpcBoundaryError, rpcErrorDataOf } from "@vibestudio/rpc";
+import {
+  RpcBoundaryError,
+  rpcErrorDataOf,
+  rpcErrorKindOf,
+  rpcDiagnosticIdOf,
+  type RpcErrorKind,
+} from "@vibestudio/rpc";
 
 import {
   NetworkDestinationDenied,
@@ -241,9 +247,19 @@ class ForwardRejection extends Error {
     message: string,
     public readonly capabilityViolation?: string,
     public readonly code: string | undefined = capabilityViolation,
-    public readonly errorData?: import("@vibestudio/rpc").RpcErrorData
+    public readonly errorData?: import("@vibestudio/rpc").RpcErrorData,
+    public readonly errorKind: RpcErrorKind = statusCode === 401 || statusCode === 403
+      ? "access"
+      : statusCode < 500
+        ? "protocol"
+        : "transport",
+    cause?: unknown
   ) {
     super(message);
+    if (cause !== undefined) {
+      Object.defineProperty(this, "cause", { value: cause, configurable: true });
+      if (cause instanceof Error && cause.stack) this.stack = cause.stack;
+    }
   }
 }
 
@@ -277,6 +293,12 @@ interface CircuitState {
   failures: number;
   state: AuditEntry["breakerState"];
   openedAt?: number;
+  lastFailure?: {
+    target: string;
+    method: string;
+    statusCode?: number;
+    error?: unknown;
+  };
 }
 
 export class EgressProxy {
@@ -749,6 +771,7 @@ export class EgressProxy {
           }
           await sink({ kind: "end", bytesIn: bytesInTotal });
         } catch (err) {
+          if (transport.signal.aborted) throw err;
           // Mid-stream upstream failure. Surface as an error frame so
           // the consumer's ReadableStream gets an error rather than a
           // truncated body, and return 502 to the audit log along
@@ -1028,11 +1051,16 @@ export class EgressProxy {
         });
       } catch (error) {
         if (error instanceof ForwardRejection) {
-          this.respondWithError(res, error.statusCode, error.message);
+          this.respondWithError(res, error.statusCode, error.message, error);
           return;
         }
         if (!res.headersSent) {
-          this.respondWithError(res, 502, "Failed to forward proxy request");
+          this.respondWithError(
+            res,
+            502,
+            error instanceof Error ? error.message : "Failed to forward proxy request",
+            error
+          );
         }
       }
     } finally {
@@ -1178,7 +1206,25 @@ export class EgressProxy {
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         breakerState = getCircuitState(this.circuits, executionKey);
         if (breakerState === "open") {
-          throw new ForwardRejection(503, "Circuit breaker is open");
+          const failure = this.circuits.get(executionKey)?.lastFailure;
+          const original = failure?.error;
+          const detail = failure
+            ? `${failure.method} ${failure.target}: ${original instanceof Error ? original.message : `upstream HTTP ${failure.statusCode}`}`
+            : "no retained upstream failure";
+          throw new ForwardRejection(
+            503,
+            `Circuit breaker is open; last failure: ${detail}`,
+            undefined,
+            original &&
+              typeof original === "object" &&
+              "code" in original &&
+              typeof original.code === "string"
+              ? original.code
+              : "EGRESS_CIRCUIT_OPEN",
+            rpcErrorDataOf(original),
+            rpcErrorKindOf(original, "transport"),
+            original
+          );
         }
 
         const prepared = this.prepareForwardRequest(
@@ -1237,7 +1283,11 @@ export class EgressProxy {
             await result.provisional?.discard();
             result = undefined;
             retries += 1;
-            recordCircuitFailure(this.circuits, executionKey);
+            recordCircuitFailure(this.circuits, executionKey, {
+              target: `${targetUrl.origin}${targetUrl.pathname}`,
+              method: params.method,
+              statusCode,
+            });
             await delay(backoffDelayMs(attempt));
             continue;
           }
@@ -1248,7 +1298,11 @@ export class EgressProxy {
             bytesOut = committed.bytesOut;
           }
           if (statusCode >= 500) {
-            recordCircuitFailure(this.circuits, executionKey);
+            recordCircuitFailure(this.circuits, executionKey, {
+              target: `${targetUrl.origin}${targetUrl.pathname}`,
+              method: params.method,
+              statusCode,
+            });
           } else {
             recordCircuitSuccess(this.circuits, executionKey);
           }
@@ -1257,18 +1311,20 @@ export class EgressProxy {
         } catch (error) {
           await result?.provisional?.discard().catch(() => undefined);
           lastError = error;
-          if (
-            attempt < maxAttempts &&
-            !(error instanceof ForwardRejection) &&
-            shouldRetryError(error)
-          ) {
+          // Caller cancellation and local protocol/authority refusals do not
+          // observe the destination's network health. Preserve their own result.
+          if (signal.aborted || error instanceof ForwardRejection) throw error;
+          recordCircuitFailure(this.circuits, executionKey, {
+            target: `${targetUrl.origin}${targetUrl.pathname}`,
+            method: params.method,
+            error,
+          });
+          breakerState = getCircuitState(this.circuits, executionKey);
+          if (attempt < maxAttempts && shouldRetryError(error)) {
             retries += 1;
-            recordCircuitFailure(this.circuits, executionKey);
             await delay(backoffDelayMs(attempt));
             continue;
           }
-          recordCircuitFailure(this.circuits, executionKey);
-          breakerState = getCircuitState(this.circuits, executionKey);
           throw error;
         } finally {
           await dispatcher.destroy();
@@ -1289,7 +1345,9 @@ export class EgressProxy {
           error.message,
           capabilityViolation,
           error.code,
-          rpcErrorDataOf(error)
+          rpcErrorDataOf(error),
+          error.errorKind,
+          error
         );
       }
       if (error instanceof ForwardRejection) {
@@ -2728,13 +2786,35 @@ export class EgressProxy {
     return null;
   }
 
-  private respondWithError(res: ServerResponse, statusCode: number, message: string): void {
+  private respondWithError(
+    res: ServerResponse,
+    statusCode: number,
+    message: string,
+    error?: unknown
+  ): void {
     if (res.headersSent) {
       res.end();
       return;
     }
     res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ error: message }));
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    res.end(
+      JSON.stringify({
+        error: message,
+        errorKind: rpcErrorKindOf(
+          error,
+          statusCode === 401 || statusCode === 403
+            ? "access"
+            : statusCode < 500
+              ? "protocol"
+              : "transport"
+        ),
+        ...(typeof code === "string" ? { errorCode: code } : {}),
+        ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
+        ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+        ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+      })
+    );
   }
 
   private async appendAuditEntry(entry: AuditEntry): Promise<void> {
@@ -3319,17 +3399,22 @@ function recordCircuitSuccess(circuits: Map<string, CircuitState>, key: string):
   circuits.set(key, { failures: 0, state: "closed" });
 }
 
-function recordCircuitFailure(circuits: Map<string, CircuitState>, key: string): void {
+function recordCircuitFailure(
+  circuits: Map<string, CircuitState>,
+  key: string,
+  lastFailure: NonNullable<CircuitState["lastFailure"]>
+): void {
   const current = circuits.get(key) ?? { failures: 0, state: "closed" as const };
   const failures = current.failures + 1;
   circuits.set(
     key,
     failures >= CIRCUIT_FAILURE_THRESHOLD
-      ? { failures, state: "open", openedAt: Date.now() }
+      ? { failures, state: "open", openedAt: Date.now(), lastFailure }
       : {
           failures,
           state: current.state === "half-open" ? "open" : "closed",
           openedAt: current.openedAt,
+          lastFailure,
         }
   );
 }
