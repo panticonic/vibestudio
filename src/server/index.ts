@@ -1611,21 +1611,21 @@ async function main() {
   // Unit manifests in the materialized semantic source own userland
   // dependencies. The workspace root itself is not a Node package.
   const buildDependencyWorkspaceRoot = workspacePath;
-  const { parseWorkspaceConfigContentWithId } = await import("@vibestudio/workspace/configParser");
+  const { readWorkspaceConfig } = await import("@vibestudio/workspace/configParser");
   const restoredLaunch = readWorkspaceHostLaunchRecord(statePath);
   const bootstrapStateHash =
     restoredLaunch?.stateHash ?? (await rootTemplateBootstrap.prepareBootstrapState());
   const { readFileAtTree, getBytes } = await import("./services/blobstoreService.js");
-  const bootstrapManifest = await readFileAtTree(
-    layout.blobsDir,
-    bootstrapStateHash,
-    "meta/vibestudio.yml"
-  );
-  if (!bootstrapManifest) throw new Error("Workspace publication has no manifest");
-  const bootstrapManifestBytes = await getBytes(layout.blobsDir, bootstrapManifest.contentHash);
-  if (!bootstrapManifestBytes) throw new Error("Workspace manifest content is unavailable");
-  const materializedWorkspaceConfig = parseWorkspaceConfigContentWithId(
-    Buffer.from(bootstrapManifestBytes).toString("utf8"),
+  const materializedWorkspaceConfig = await readWorkspaceConfig(
+    {
+      readText: async (filePath) => {
+        const file = await readFileAtTree(layout.blobsDir, bootstrapStateHash, filePath);
+        if (!file) return null;
+        const bytes = await getBytes(layout.blobsDir, file.contentHash);
+        if (!bytes) throw new Error(`Workspace source content is unavailable: ${filePath}`);
+        return Buffer.from(bytes).toString("utf8");
+      },
+    },
     workspaceId
   );
   replaceWorkspaceConfig(workspaceConfig, materializedWorkspaceConfig);
@@ -1827,8 +1827,6 @@ async function main() {
     },
   };
 
-  const { isDeclaredRemoteRepoPath, syncDeclaredRemoteForRepo } =
-    await import("@vibestudio/workspace/remotes");
   const { resolveDeclaredApps, resolveDeclaredExtensions } =
     await import("@vibestudio/workspace/loader");
   const { readWorkspaceConfigFromState } = await import("./workspaceConfigSource.js");
@@ -2047,32 +2045,6 @@ async function main() {
     const { stateHash } = await workspaceVcs.ensureFresh();
     return workspaceVcs.materializeSourceTree(stateHash);
   });
-  const skippedDeclaredRemoteRepoWarnings = new Set<string>();
-  const syncDeclaredRemotesForSource = async (repoPath?: string): Promise<void> => {
-    const repos = repoPath
-      ? [repoPath]
-      : collectWorkspaceUnitPaths((await treeScanner.getSourceTree()).children);
-    await Promise.all(
-      repos.map((repo) => {
-        if (!isDeclaredRemoteRepoPath(repo)) {
-          if (!skippedDeclaredRemoteRepoWarnings.has(repo)) {
-            skippedDeclaredRemoteRepoWarnings.add(repo);
-            console.log(
-              `[GitRemotes] Skipping declared remote sync for non-declarable workspace repo path ${repo}`
-            );
-          }
-          return Promise.resolve();
-        }
-        return syncDeclaredRemoteForRepo({
-          config: workspaceConfig,
-          workspaceRoot: workspacePath,
-          repoPath: repo,
-        }).catch((err: unknown) => {
-          console.warn(`[GitRemotes] Failed to sync declared remote for ${repo}:`, err);
-        });
-      })
-    );
-  };
   // Protected workspace publications drive runtime reactions:
   //  - meta/ changes reload workspace config from the exact published state
   //    and reconcile declared units
@@ -2113,7 +2085,15 @@ async function main() {
   workspaceVcs.onProtectedPublication(async (event) => {
     if (epochHandoffCommitted) return;
     treeScanner.invalidate();
-    if (event.changedPaths.some((changed) => changed.startsWith("meta/"))) {
+    if (
+      event.changedPaths.some(
+        (changed) =>
+          changed.startsWith("meta/") ||
+          (workspaceConfig.services ?? []).some(
+            (service) => changed === `${service.source}/package.json`
+          )
+      )
+    ) {
       const reloadSeq = ++latestMetaConfigReloadSeq;
       queueMicrotask(() => {
         void (async () => {
@@ -2128,9 +2108,6 @@ async function main() {
             }
             void reconcileDeclaredWorkspaceUnits(nextConfig, "meta-change").then(
               reconcileDefaultAutomations
-            );
-            syncDeclaredRemotesForSource().catch((err: unknown) =>
-              console.warn("[GitRemotes] Failed to sync declared remotes after meta change:", err)
             );
           } catch (err) {
             console.warn(
@@ -2362,6 +2339,7 @@ async function main() {
     await import("./services/workspaceTemplateSourceService.js");
   container.registerRpc(
     createWorkspaceTemplateSourceService({
+      readInstallation: (eventId) => workspaceVcs.readTemplateInstallation(eventId),
       hostVersion: (epoch) => {
         if (epoch === WORKSPACE_SYSTEM_EPOCH) return WORKSPACE_APP_VERSION;
         const currentAppVersion = process.env["VIBESTUDIO_CURRENT_APP_VERSION"];
@@ -6583,7 +6561,7 @@ async function main() {
       const artifact = executionArtifactRefFromBuild(workspaceId, build);
       const mainSingletons = workspaceDecls.singletons
         .all()
-        .filter((decl) => decl.source === source && !decl.contextId);
+        .filter((decl) => decl.source === source);
       const unchanged: EntityRecord[] = [];
       const advances: EntityActivateInput[] = [];
       for (const decl of mainSingletons) {
@@ -7749,25 +7727,15 @@ async function main() {
   };
 
   const runStartupWorkspaceUnitReconcile = async (): Promise<void> => {
-    let syncDeclaredRemotesAfterStartupReload = false;
     try {
       do {
         if (pendingStartupMetaConfigReload) {
-          syncDeclaredRemotesAfterStartupReload = true;
           pendingStartupMetaConfigReload = false;
         }
         await reconcileDeclaredWorkspaceUnits(workspaceConfig, "startup");
       } while (pendingStartupMetaConfigReload);
     } finally {
       initialWorkspaceUnitReconcileComplete = true;
-      if (syncDeclaredRemotesAfterStartupReload) {
-        syncDeclaredRemotesForSource().catch((err: unknown) =>
-          console.warn(
-            "[GitRemotes] Failed to sync declared remotes after startup config reload:",
-            err
-          )
-        );
-      }
     }
   };
   // Calling an async function still executes its synchronous prefix inline.
@@ -8090,20 +8058,6 @@ async function main() {
   }
 }
 
-function collectWorkspaceUnitPaths(
-  nodes: Array<{ path: string; isUnit: boolean; children: unknown[] }>
-): string[] {
-  const units: string[] = [];
-  for (const node of nodes) {
-    if (node.isUnit) units.push(node.path);
-    units.push(
-      ...collectWorkspaceUnitPaths(
-        node.children as Array<{ path: string; isUnit: boolean; children: unknown[] }>
-      )
-    );
-  }
-  return units;
-}
 
 function replaceWorkspaceConfig<T extends object>(target: T, next: T): void {
   const mutableTarget = target as Record<string, unknown>;

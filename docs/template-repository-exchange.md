@@ -1,7 +1,7 @@
 # Template repository checkout exchange
 
-Use the explicit exchange command when moving a manifest-declared template
-projection between a materialized authoring tree and a sibling Git checkout:
+Use the explicit exchange command when moving an exact authored template
+source tree between a materialized authoring tree and a sibling Git checkout:
 
 ```sh
 pnpm template:exchange -- \
@@ -32,12 +32,19 @@ receipts live under the checkout's actual Git directory at
 `vibestudio/template-exchange/`, including linked-worktree `.git` files. They
 are checkout-local operation evidence, not template source or an ambient cache.
 
-The projection is derived from `meta/vibestudio.yml`:
+Repository membership is derived from source paths: `meta` is one repository,
+and every `section/<name>` under a repository container is another. No
+`template.repositories` inventory is authored in `meta/vibestudio.yml`.
 
-- only declared repository subtrees are included;
-- undeclared paths are reported as `untouched` and never copied or deleted;
-- the authored `meta/vibestudio.yml` is included as the single source and
-  runtime manifest.
+- Every repository subtree in the supplied authored source tree is included.
+- Paths outside the repository layout are reported as `untouched` and never
+  copied or deleted.
+- The authored `meta/vibestudio.yml` and companion `meta` files are included.
+
+Installation provenance belongs to the workspace source service, rather than
+the source document. For an installed composition, supply the authored semantic
+projection produced by template publication so inherited repositories do not
+leak into a release.
 
 There is no Base flag. Root capability follows from the manifest's dependency
 graph. The same exchange works for Base and optional contribution repositories.

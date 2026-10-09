@@ -1,14 +1,12 @@
 import {
   WorkspaceAppCompatibilitySchema,
   appCompatibilityError,
-  strongestMinimumAppVersion,
 } from "@vibestudio/workspace-contracts/appCompatibility";
 import {
   parseTemplateManifestContent,
   rootRuntimeFromTemplateManifest,
 } from "./templateManifest.js";
 import YAML from "yaml";
-import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
 import { z, ZodError, type ZodIssue } from "zod";
 import type {
   WorkspaceAppDecl,
@@ -25,9 +23,9 @@ import {
 } from "@vibestudio/workspace-contracts/sourceDirs";
 import {
   WorkspaceConfigSchema,
+  WorkspaceServiceExportSchema,
   WorkspaceTemplateAuthoringMetadataSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
-import { validateWorkspaceGitConfig } from "./remotes.js";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { WORKSPACE_SYSTEM_EPOCH, WORKSPACE_APP_VERSION } from "@vibestudio/shared/vcs/systemEpoch";
 
@@ -52,59 +50,17 @@ export function parseWorkspaceSystemEpochEnvelope(content: string): number {
   return systemEpoch as number;
 }
 
-const compatibilityMetadataSchema = z.object({
-  template: z
-    .object({
-      dependencies: z.array(z.object({ url: z.string() })).optional(),
-      installation: z
-        .object({
-          sources: z.array(z.object({ pin: z.object({ url: z.string() }), manifest: z.string() })),
-        })
-        .optional(),
-    })
-    .optional(),
-});
-
-/** Read only the stable requirement and installed source graph. The remaining
- * runtime schema may belong to a future host and must not be interpreted here. */
+/** Read the dispatch requirements without interpreting another host's runtime schema. */
 export function parseWorkspaceAppCompatibilityEnvelope(content: string) {
-  const document: unknown = YAML.parse(content);
-  const requirement = WorkspaceAppCompatibilitySchema.parse(document);
-  const metadata = compatibilityMetadataSchema.parse(document).template;
-  if (!metadata?.installation) return requirement;
-  const sources = new Map(
-    metadata.installation.sources.map((source) => [
-      normalizeTemplateGitUrl(source.pin.url),
-      source.manifest,
-    ])
-  );
-  const visited = new Set<string>();
-  const minima = [requirement.minimumAppVersion];
-  const visit = (url: string) => {
-    const key = normalizeTemplateGitUrl(url);
-    if (visited.has(key)) return;
-    visited.add(key);
-    const source = sources.get(key);
-    if (!source) throw new Error(`Installed source ${url} has no compatibility metadata`);
-    const parsed: unknown = YAML.parse(source);
-    const inherited = WorkspaceAppCompatibilitySchema.parse(parsed);
-    if (inherited.systemEpoch !== requirement.systemEpoch)
-      throw new Error(`Installed source ${url} requires another app generation`);
-    minima.push(inherited.minimumAppVersion);
-    for (const dependency of compatibilityMetadataSchema.parse(parsed).template?.dependencies ?? [])
-      visit(dependency.url);
-  };
-  for (const dependency of metadata.dependencies ?? []) visit(dependency.url);
-  const minimumAppVersion = strongestMinimumAppVersion(minima);
-  return { ...requirement, ...(minimumAppVersion ? { minimumAppVersion } : {}) };
+  return WorkspaceAppCompatibilitySchema.parse(YAML.parse(content));
 }
 
 /**
  * Read the single runtime manifest published at one immutable workspace state.
  *
- * Authored settings and exact installed dependency declarations share this
- * manifest. Runtime settings are resolved from them without replacing authored
- * source or maintaining a second generated file.
+ * The manifest holds complete desired settings. Selected service contracts
+ * are resolved from repository manifests in the same immutable tree;
+ * installation history is owned separately by the source service.
  */
 export async function readWorkspaceConfig(
   reader: WorkspaceConfigReader,
@@ -112,7 +68,25 @@ export async function readWorkspaceConfig(
 ): Promise<WorkspaceConfig> {
   const content = await reader.readText(WORKSPACE_CONFIG_PATH);
   if (content === null) throw new Error(`${WORKSPACE_CONFIG_PATH} is missing`);
-  return parseWorkspaceConfigContentWithId(content, id);
+  let runtime: ReturnType<typeof rootRuntimeFromTemplateManifest>;
+  try {
+    runtime = rootRuntimeFromTemplateManifest(
+      parseTemplateManifestContent(content, parseWorkspaceSystemEpochEnvelope(content))
+    );
+  } catch (error) {
+    throw workspaceConfigError(error);
+  }
+  const manifests = new Map(
+    await Promise.all(
+      [...new Set((runtime.services ?? []).map((service) => service.source))].map(
+        async (source) => {
+          normalizeWorkspaceRepoPath(source);
+          return [source, await reader.readText(`${source}/package.json`)] as const;
+        }
+      )
+    )
+  );
+  return parseWorkspaceConfigContentWithId(content, id, (source) => manifests.get(source) ?? null);
 }
 
 function workspaceConfigIssueMessage(issue: ZodIssue): string {
@@ -134,7 +108,26 @@ function workspaceConfigIssueMessage(issue: ZodIssue): string {
   return `meta/vibestudio.yml: \`${path}\`: ${issue.message}`;
 }
 
-export function parseWorkspaceConfigContentWithId(content: string, id: string): WorkspaceConfig {
+function workspaceConfigError(error: unknown): Error {
+  const detail =
+    error instanceof ZodError
+      ? error.issues[0]
+        ? workspaceConfigIssueMessage(error.issues[0])
+        : "Invalid workspace configuration"
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  return new Error(
+    detail.startsWith("meta/vibestudio.yml") ? detail : `meta/vibestudio.yml: ${detail}`,
+    { cause: error }
+  );
+}
+
+export function parseWorkspaceConfigContentWithId(
+  content: string,
+  id: string,
+  readServiceManifest: (source: string) => string | null = () => null
+): WorkspaceConfig {
   const yamlValue: unknown = YAML.parse(content);
   if (yamlValue === null || typeof yamlValue !== "object" || Array.isArray(yamlValue)) {
     throw new Error("meta/vibestudio.yml must contain a configuration mapping");
@@ -159,18 +152,32 @@ export function parseWorkspaceConfigContentWithId(content: string, id: string): 
   }
   let config: WorkspaceConfig;
   try {
-    if (_template !== undefined)
-      runtime = rootRuntimeFromTemplateManifest(
-        parseTemplateManifestContent(content, authored["systemEpoch"] as number)
-      ) as unknown as Record<string, unknown>;
+    runtime = rootRuntimeFromTemplateManifest(
+      parseTemplateManifestContent(content, authored["systemEpoch"] as number)
+    ) as unknown as Record<string, unknown>;
+    // Every contract comes from the same immutable source tree as its selection.
+    const services = (
+      runtime["services"] as Array<{ source: string; name: string }> | undefined
+    )?.map((selection) => {
+      const { source, name } = selection;
+      normalizeWorkspaceRepoPath(source);
+      const content = readServiceManifest(source);
+      if (content === null) throw new Error(`Service ${name} requires ${source}/package.json`);
+      const pkg = z
+        .object({ vibestudio: z.object({ services: z.array(WorkspaceServiceExportSchema) }) })
+        .parse(JSON.parse(content));
+      const exported = pkg.vibestudio.services.filter((service) => service.name === name);
+      if (exported.length !== 1)
+        throw new Error(`${source}/package.json must export service ${name} exactly once`);
+      return { ...exported[0]!, source };
+    });
     config = WorkspaceConfigSchema.parse({
       ...runtime,
+      ...(services === undefined ? {} : { services }),
       id,
     });
   } catch (error) {
-    if (!(error instanceof ZodError)) throw error;
-    const issue = error.issues[0];
-    throw new Error(issue ? workspaceConfigIssueMessage(issue) : "Invalid meta/vibestudio.yml");
+    throw workspaceConfigError(error);
   }
   return validateResolvedWorkspaceConfig(config);
 }
@@ -317,13 +324,6 @@ function validateDeclaredUnits(config: WorkspaceConfig): void {
   validateTrust(config.trust);
   validateHostTargets(config.hostTargets);
   validateProviders(config);
-  try {
-    validateWorkspaceGitConfig(config.git);
-  } catch (error) {
-    throw new Error(
-      `meta/vibestudio.yml: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
 }
 
 export function resolveDeclaredExtensions(

@@ -339,7 +339,11 @@ export function initWorkspace(name: string, opts: WorkspaceCreationOptions): voi
     // Validate against the FINAL managed path before publishing. Parsing the
     // staged file directly would derive the temporary directory name as the
     // workspace id and would let malformed manifests become visible on disk.
-    parseWorkspaceConfigContentWithId(fs.readFileSync(stagedConfigPath, "utf-8"), opts.workspaceId);
+    parseWorkspaceConfigContentWithId(
+      fs.readFileSync(stagedConfigPath, "utf-8"),
+      opts.workspaceId,
+      (source) => fs.readFileSync(path.join(stagedSourceRoot, source, "package.json"), "utf8")
+    );
 
     fs.renameSync(stagingDir, wsDir);
     published = true;
@@ -378,7 +382,8 @@ export function loadWorkspaceConfig(workspacePath: string): WorkspaceConfig {
 
   const config = parseWorkspaceConfigContentWithId(
     fs.readFileSync(configPath, "utf-8"),
-    deriveWorkspaceId(workspacePath)
+    deriveWorkspaceId(workspacePath),
+    (source) => fs.readFileSync(path.join(workspacePath, source, "package.json"), "utf8")
   );
   setWorkspaceAppTrust(resolveWorkspaceTrustGrants(config));
   return config;

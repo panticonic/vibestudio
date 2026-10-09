@@ -8,12 +8,17 @@
  */
 
 import { z } from "zod";
+import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import {
   channelEnvelopePageSchema,
   ChannelEnvelopePageRequestSchema,
 } from "@vibestudio/shared/channelEnvelopePaging";
 import type { GadRuntimeMethodName } from "@vibestudio/shared/gadRuntimeMethods";
 import { ChannelInviteSchema } from "@vibestudio/shared/channelInvites";
+import {
+  AgentInspectionRequestSchema,
+  AgentInspectionResultSchema,
+} from "@vibestudio/shared/agentInspection";
 import {
   defineServiceMethods,
   type MethodSchema,
@@ -1606,6 +1611,7 @@ const workspaceInitializationInputSchema = z
     commandId: nonemptyText,
     pin: workspacePinSchema,
     repositories: z.array(workspaceSnapshotRepositorySchema),
+    installation: WorkspaceTemplateInstallationSchema,
     acknowledgement: semanticAcknowledgementSchema.optional(),
   })
   .strict();
@@ -1816,6 +1822,16 @@ const forkLogResultSchema = z
 const channelInviteKeySchema = z.object({ channelId: nonemptyText, userId: nonemptyText }).strict();
 
 const gadInternalWireMethods = defineServiceMethods({
+  workspaceSourceTemplateInstallation: {
+    website: {
+      kind: "closed",
+      reason: "Installation provenance requires a reviewed source consumer.",
+    } as const,
+    description: "Read installation provenance at an exact workspace publication event.",
+    args: z.tuple([z.object({ eventId: nonemptyText }).strict()]),
+    returns: WorkspaceTemplateInstallationSchema.nullable(),
+    agentFacing: false,
+  },
   workspaceSourceInitializeExactSnapshot: {
     website: {
       kind: "closed",
@@ -2578,6 +2594,7 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
       "workspaceSourceResolve",
       "workspaceSourceCurrent",
       "workspaceSourceInspectInitialization",
+      "workspaceSourceTemplateInstallation",
       "workspaceSourceHealth",
       "vcsPendingSemanticEffects",
       "vcsContentGcRoots",

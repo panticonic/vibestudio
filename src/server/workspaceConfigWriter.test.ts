@@ -520,25 +520,23 @@ describe("workspaceConfigWriter", () => {
   });
 });
 
-it("preserves installed ownership and writes only a newly added local declaration", async () => {
+it("preserves composed settings while adding a workspace declaration", async () => {
   const { parseWorkspaceConfigContentWithId } = await import("@vibestudio/workspace/configParser");
-  const dependency = YAML.stringify({
+  const dependency = {
     systemEpoch: WORKSPACE_SYSTEM_EPOCH,
     extensions: [{ source: "extensions/inherited" }],
     defaultAgentConfig: { model: "inherited-model" },
-    template: { repositories: ["extensions/inherited"] },
-  });
+    template: {},
+  };
   const pin = {
     url: "https://example.test/base.git",
     ref: "refs/heads/main",
     commit: "a".repeat(40),
   };
   const source = YAML.stringify({
-    systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+    ...dependency,
     template: {
-      repositories: ["meta"],
       dependencies: [{ url: pin.url }],
-      installation: { sources: [{ pin, manifest: dependency }] },
     },
   });
   const before = parseWorkspaceConfigContentWithId(source, "workspace");
@@ -549,8 +547,8 @@ it("preserves installed ownership and writes only a newly added local declaratio
   };
   const rendered = renderWorkspaceConfigYaml(source, next, "workspace");
   const authored = YAML.parse(rendered);
-  expect(authored.extensions).toEqual([{ source: "extensions/mine" }]);
-  expect(authored.defaultAgentConfig).toEqual({ thinkingLevel: "high" });
+  expect(authored.extensions).toEqual(next.extensions);
+  expect(authored.defaultAgentConfig).toEqual({ model: "inherited-model", thinkingLevel: "high" });
   expect(authored.template).toEqual(YAML.parse(source).template);
   expect(parseWorkspaceConfigContentWithId(rendered, "workspace").extensions).toEqual(
     next.extensions

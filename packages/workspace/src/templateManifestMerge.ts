@@ -1,15 +1,9 @@
 import { strongestMinimumAppVersion } from "@vibestudio/workspace-contracts/appCompatibility";
 import { normalizeTemplateGitUrl } from "./templateCoordinates.js";
-import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
-import type { ParsedTemplateManifest, TemplateRepositoryInventory } from "./templateManifest.js";
+import type { ParsedTemplateManifest } from "./templateManifest.js";
 
 /**
  * Merging the manifests of the layers a workspace is composed from.
- *
- * Composition needs this because every template carries its own manifest, and
- * a template that depends on another declares only what it adds. The composed
- * tree holds both sets of repositories, so the composed manifest has to declare
- * both or inventory validation would call the base's files unowned.
  *
  * The rules stay deliberately blunt, because layered precedence is what made
  * the previous composition system unmaintainable. Declarations accumulate,
@@ -33,9 +27,7 @@ const ACCUMULATING_LISTS = ["services", "routes", "singletonObjects"] as const;
  *
  * One level only, and a slot's value is replaced rather than merged — a list
  * inside a slot stays the statement of the layer that made it, so a dependency
- * cannot quietly add itself to something like `trust.chromeApps`. `git` is
- * deliberately absent: its records nest further, and half-merging them would
- * be harder to predict than replacing them.
+ * cannot quietly add itself to something like `trust.chromeApps`.
  */
 export const MERGED_RECORD_SETTINGS = [
   "providers",
@@ -58,9 +50,8 @@ export interface TemplateManifestLayer {
 }
 
 export interface MergedTemplateManifest {
-  /** Effective runtime document; never write it over authored workspace source. */
+  /** Complete desired settings for an installed composition. */
   document: Record<string, unknown>;
-  inventory: TemplateRepositoryInventory;
 }
 
 function sourceOf(entry: unknown): string | null {
@@ -88,9 +79,6 @@ export function mergeTemplateManifests(
       .join("; ");
     throw new Error(`Composed templates disagree about the workspace system epoch: ${described}`);
   }
-
-  const owners = templateRepositoryOwners(layers);
-  const repositories = [...owners.keys()];
 
   const document: Record<string, unknown> = {};
   // Settings resolve to the last layer that stated them, so a dependency
@@ -164,26 +152,26 @@ export function mergeTemplateManifests(
     // created from this tree must still know which repositories came from an
     // upstream when it later publishes itself as a template.
     ...(top.manifest.dependencies.length > 0 ? { dependencies: top.manifest.dependencies } : {}),
-
-    repositories: [...repositories].sort(compareUtf16CodeUnits),
   };
 
   return {
     document,
-    inventory: {
-      repositories: [...repositories].sort(compareUtf16CodeUnits),
-    },
   };
 }
 
 const sourceKey = (source: string) =>
   /^(git\+)?https?:/.test(source) ? normalizeTemplateGitUrl(source) : source;
 
+/** Repository membership comes from each exact source tree, never its manifest. */
+export interface TemplateSourceLayer extends TemplateManifestLayer {
+  repositories: readonly string[];
+}
+
 /** Every collision must name the exact dependency whose whole unit it replaces. */
 export function templateRepositoryOwners(
-  layers: readonly TemplateManifestLayer[]
-): Map<string, TemplateManifestLayer> {
-  const owners = new Map<string, TemplateManifestLayer>();
+  layers: readonly TemplateSourceLayer[]
+): Map<string, TemplateSourceLayer> {
+  const owners = new Map<string, TemplateSourceLayer>();
   const bySource = new Map(layers.map((layer) => [sourceKey(layer.label), layer]));
   const dependsOn = (
     layer: TemplateManifestLayer,
@@ -205,7 +193,7 @@ export function templateRepositoryOwners(
     for (const [repoPath, override] of overrides) {
       const prior = owners.get(repoPath);
       if (
-        !layer.manifest.inventory.repositories.includes(repoPath) ||
+        !layer.repositories.includes(repoPath) ||
         (prior && sourceKey(prior.label) !== sourceKey(override.source)) ||
         !dependsOn(layer, sourceKey(override.source))
       )
@@ -213,7 +201,7 @@ export function templateRepositoryOwners(
           `Invalid override ${repoPath} in ${layer.label}: ${override.source} must be the dependency that currently owns this unit`
         );
     }
-    for (const repoPath of layer.manifest.inventory.repositories) {
+    for (const repoPath of layer.repositories) {
       if (repoPath === "meta") continue;
       const prior = owners.get(repoPath);
       if (prior && !overrides.has(repoPath))
@@ -224,6 +212,6 @@ export function templateRepositoryOwners(
     }
   }
   const top = layers.at(-1);
-  if (top?.manifest.inventory.repositories.includes("meta")) owners.set("meta", top);
+  if (top?.repositories.includes("meta")) owners.set("meta", top);
   return owners;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WorkspaceConfigSchema, WorkspaceTemplatePinSchema } from "./workspaceConfigSchema.js";
+import { GitConfigSchema, WorkspaceConfigSchema, WorkspaceTemplatePinSchema } from "./workspaceConfigSchema.js";
 
 const BASE = { id: "test", systemEpoch: 56 } as const;
 
@@ -21,8 +21,7 @@ describe("exact template source pins", () => {
 
 function configWithUpstream(upstream: Record<string, unknown>) {
   return {
-    ...BASE,
-    git: {
+
       remotes: {
         panels: {
           news: {
@@ -38,20 +37,19 @@ function configWithUpstream(upstream: Record<string, unknown>) {
           news: upstream,
         },
       },
-    },
   };
 }
 
 describe("workspace Git upstream contract", () => {
   it("accepts ordinary upstream tracking with a logical credential", () => {
     expect(
-      WorkspaceConfigSchema.parse(
+      GitConfigSchema.parse(
         configWithUpstream({
           remote: "origin",
           branch: "main",
           credential: "github-panels",
         })
-      ).git?.upstreams?.["panels"]?.["news"]
+      )?.upstreams?.["panels"]?.["news"]
     ).toEqual({
       remote: "origin",
       branch: "main",
@@ -61,7 +59,7 @@ describe("workspace Git upstream contract", () => {
 
   it("rejects host-owned seed acquisition declarations", () => {
     expect(
-      WorkspaceConfigSchema.safeParse(
+      GitConfigSchema.safeParse(
         configWithUpstream({
           remote: "origin",
           seed: {
@@ -76,12 +74,12 @@ describe("workspace Git upstream contract", () => {
 
   it("rejects concrete credentialId and nullable credential compatibility forms", () => {
     expect(
-      WorkspaceConfigSchema.safeParse(
+      GitConfigSchema.safeParse(
         configWithUpstream({ remote: "origin", credentialId: "concrete-install-id" })
       ).success
     ).toBe(false);
     expect(
-      WorkspaceConfigSchema.safeParse(configWithUpstream({ remote: "origin", credential: null }))
+      GitConfigSchema.safeParse(configWithUpstream({ remote: "origin", credential: null }))
         .success
     ).toBe(false);
   });

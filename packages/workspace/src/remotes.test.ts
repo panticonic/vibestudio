@@ -17,10 +17,9 @@ import {
   syncDeclaredRemoteForRepo,
   validateWorkspaceGitConfig,
 } from "./remotes.js";
-import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import type { GitConfig } from "@vibestudio/workspace-contracts/types";
 
-const BASE_CONFIG = { id: "test", systemEpoch: WORKSPACE_SYSTEM_EPOCH } as const;
+const BASE_CONFIG: GitConfig = {};
 
 function tempWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-remotes-"));
@@ -64,7 +63,7 @@ describe("workspace remotes", () => {
   });
 
   it("stores remote names as keys under the section/repo declaration", () => {
-    const config: WorkspaceConfig = { ...BASE_CONFIG, git: {} };
+    const config: GitConfig = {};
 
     const withOrigin = setDeclaredRemoteInConfig(config, "panels/chat", {
       name: "origin",
@@ -75,7 +74,7 @@ describe("workspace remotes", () => {
       url: "https://github.com/acme/chat-ci.git",
     });
 
-    expect(next.git?.remotes?.["panels"]?.["chat"]).toEqual({
+    expect(next?.remotes?.["panels"]?.["chat"]).toEqual({
       origin: { url: "https://github.com/acme/chat.git" },
       ci: { url: "https://github.com/acme/chat-ci.git" },
     });
@@ -96,13 +95,13 @@ describe("workspace remotes", () => {
   });
 
   it("stores branch-specific remotes as object declarations", () => {
-    const next = setDeclaredRemoteInConfig({ ...BASE_CONFIG, git: {} }, "projects/bgkit", {
+    const next = setDeclaredRemoteInConfig({}, "projects/bgkit", {
       name: "origin",
       url: "https://github.com/werg/bgkit.git",
       branch: "vibestudio-bridge",
     });
 
-    expect(next.git?.remotes?.["projects"]?.["bgkit"]).toEqual({
+    expect(next?.remotes?.["projects"]?.["bgkit"]).toEqual({
       origin: {
         url: "https://github.com/werg/bgkit.git",
         branch: "vibestudio-bridge",
@@ -201,7 +200,7 @@ describe("workspace remotes", () => {
 
   it("removes a named remote without removing the repo declaration", () => {
     const config = setDeclaredRemoteInConfig(
-      setDeclaredRemoteInConfig({ ...BASE_CONFIG, git: {} }, "panels/chat", {
+      setDeclaredRemoteInConfig({}, "panels/chat", {
         name: "origin",
         url: "https://github.com/acme/chat.git",
       }),
@@ -214,7 +213,7 @@ describe("workspace remotes", () => {
 
     const next = removeDeclaredRemoteFromConfig(config, "panels/chat", "ci");
 
-    expect(next.git?.remotes?.["panels"]?.["chat"]).toEqual({
+    expect(next?.remotes?.["panels"]?.["chat"]).toEqual({
       origin: { url: "https://github.com/acme/chat.git" },
     });
   });
@@ -253,7 +252,7 @@ describe("workspace remotes", () => {
   });
 
   it.each([
-    "https://github.com/acme/chat.git?token=secret",
+    "https://github.com/acme/chat?token=secret",
     "https://github.com/acme/chat.git#deployment",
   ])("rejects non-canonical durable remote URL %s", (url) => {
     expect(() =>
@@ -278,7 +277,7 @@ describe("workspace remotes", () => {
     const workspaceRoot = tempWorkspace();
     initRepo(workspaceRoot, "panels/chat");
     const config = setDeclaredRemoteInConfig(
-      setDeclaredRemoteInConfig({ ...BASE_CONFIG, git: {} }, "panels/chat", {
+      setDeclaredRemoteInConfig({}, "panels/chat", {
         name: "origin",
         url: "https://github.com/acme/chat.git",
       }),
@@ -314,7 +313,7 @@ describe("workspace remotes", () => {
 
   it("applies a predeclared remote when the repo appears later", async () => {
     const workspaceRoot = tempWorkspace();
-    const config = setDeclaredRemoteInConfig({ ...BASE_CONFIG, git: {} }, "panels/future", {
+    const config = setDeclaredRemoteInConfig({}, "panels/future", {
       name: "origin",
       url: "https://github.com/acme/future.git",
     });

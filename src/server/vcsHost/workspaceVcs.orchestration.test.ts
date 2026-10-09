@@ -496,6 +496,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const templateBytes = encoder.encode("export const news = true;\n");
     const templateHash = sha256Hex(templateBytes);
     const prepared = {
+      installation: { sources: [] },
       pin,
       config: {
         id: "workspace:test",
@@ -559,6 +560,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       },
     }));
     templateVcs.attachWorkspaceSourceProvider({
+      readTemplateInstallation: async () => null,
       initializeExactSnapshot,
       resolveSource: vi.fn(),
       currentSource: vi.fn(),
@@ -571,6 +573,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
 
     expect(initializeExactSnapshot).toHaveBeenCalledWith({
+      installation: prepared.installation,
       commandId: `workspace-source:${pin.commit}`,
       pin,
       repositories: [
@@ -590,7 +593,11 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       ref: "refs/tags/v1",
       commit: "1".repeat(40),
     };
-    const prepared = { pin, repositories: [] };
+    const prepared = {
+      installation: { sources: [] },
+      pin,
+      repositories: [],
+    };
     const prepareInitialization = vi.fn(async () => prepared);
     const vcs = new WorkspaceVcs({
       ...deps,
@@ -601,6 +608,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
     const initializeExactSnapshot = vi.fn();
     vcs.attachWorkspaceSourceProvider({
+      readTemplateInstallation: async () => null,
       initializeExactSnapshot,
       resolveSource: vi.fn(),
       currentSource: vi.fn(),

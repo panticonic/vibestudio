@@ -13,7 +13,7 @@ import type { TemplateRegistry } from "@vibestudio/service-schemas/templates";
 import {
   parseTemplateManifestContent,
   rootRuntimeFromTemplateManifest,
-  validateTemplateSnapshotInventory,
+  templateRepositories,
 } from "@vibestudio/workspace/templateManifest";
 import {
   TEMPLATE_SOURCE_MANIFEST_PATH,
@@ -45,6 +45,9 @@ export function createWorkspaceTemplateSourceService(deps: {
     track: string;
     credential?: string;
   }): Promise<{ ref: string; commit: string }>;
+  readInstallation(
+    eventId: string
+  ): Promise<import("@vibestudio/workspace-contracts/types").WorkspaceTemplateInstallation | null>;
   put(bytes: Uint8Array): Promise<unknown>;
 }): ServiceDefinition {
   const acquireValidated = async (pin: WorkspaceTemplatePin) => {
@@ -55,11 +58,8 @@ export function createWorkspaceTemplateSourceService(deps: {
     const requirement = parseWorkspaceAppCompatibilityEnvelope(content);
     const manifest = parseTemplateManifestContent(content, requirement.systemEpoch);
     rootRuntimeFromTemplateManifest(manifest);
-    validateTemplateSnapshotInventory(
-      manifest.inventory,
-      snapshot.files.map((file) => file.path)
-    );
-    return { snapshot, manifest };
+    const repositories = templateRepositories(snapshot.files.map((file) => file.path));
+    return { snapshot, manifest, repositories };
   };
   return {
     name: "workspaceTemplateSource",
@@ -67,6 +67,10 @@ export function createWorkspaceTemplateSourceService(deps: {
     authority: { principals: ["code", "host"] },
     methods: workspaceTemplateSourceMethods,
     handler: defineServiceHandler("workspaceTemplateSource", workspaceTemplateSourceMethods, {
+      readInstallation: async (ctx, [{ eventId }]) => {
+        requireReviewedSourceConsumer(ctx.caller);
+        return deps.readInstallation(eventId);
+      },
       composeExact: async (ctx, [{ sources, purpose }]) => {
         requireReviewedSourceConsumer(ctx.caller);
         const root = sources.at(-1)!;
@@ -104,6 +108,7 @@ export function createWorkspaceTemplateSourceService(deps: {
         await deps.put(manifestBytes);
         return {
           sources: composed.layers,
+          installation: composed.installation,
           repositories: enumerateRootTemplateRepositories(composed.snapshot).map((repo) => ({
             repoPath: repo.repoPath,
             snapshot: repo.snapshot,
@@ -143,11 +148,11 @@ export function createWorkspaceTemplateSourceService(deps: {
       },
       inspectExact: async (ctx, [pin]) => {
         requireReviewedSourceConsumer(ctx.caller);
-        const { manifest } = await acquireValidated(pin);
+        const { manifest, repositories } = await acquireValidated(pin);
         return {
           pin,
           ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
-          repositories: manifest.inventory.repositories,
+          repositories,
           dependencies: manifest.dependencies,
         };
       },
@@ -155,7 +160,7 @@ export function createWorkspaceTemplateSourceService(deps: {
   };
 }
 
-function requireReviewedSourceConsumer(caller: {
+export function requireReviewedSourceConsumer(caller: {
   codeApproved?: boolean;
   code?: { callerId: string; repoPath: string };
   runtime: { kind: string; id: string };

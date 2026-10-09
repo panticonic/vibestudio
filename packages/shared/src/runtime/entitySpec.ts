@@ -77,7 +77,7 @@ export function buildWorkspaceContext(contextId: string): WorkspaceContext {
 // repos and how (container sections = `section/<name>` is a repo; flat sections
 // = the section dir itself is one repo; content sections = container repos with
 // no build unit). Lives here in @vibestudio/shared because every layer depends on
-// it; `src/server/vcsHost/repoDiscovery.ts` and `workspace/remotes.ts` re-import
+// it; `runtime/repoDiscovery.ts` and `workspace/remotes.ts` re-import
 // these rather than re-declaring them.
 
 /** Flat sections: the section dir itself is one repo (single-segment repoPath). */

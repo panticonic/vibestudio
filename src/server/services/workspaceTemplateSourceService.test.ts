@@ -12,7 +12,6 @@ import {
 const sourceManifest = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}
 template:
   name: Dirty source
-  repositories: [panels/example]
 initPanels:
   - source: panels/example
 `;
@@ -98,6 +97,7 @@ describe("workspaceTemplateSource", () => {
     };
     const put = vi.fn(async (_bytes: Uint8Array) => undefined);
     const service = createWorkspaceTemplateSourceService({
+      readInstallation: async () => null,
       put,
       hostVersion: () => WORKSPACE_APP_VERSION,
       acquire,
@@ -136,7 +136,7 @@ describe("workspaceTemplateSource", () => {
     expect(one).toEqual({
       pin: first,
       presentation: { name: "Dirty source" },
-      repositories: ["panels/example"],
+      repositories: ["meta", "panels/example"],
       dependencies: [],
     });
     expect(two).toMatchObject({ pin: second });
@@ -146,7 +146,8 @@ describe("workspaceTemplateSource", () => {
     expect(composed.sources).toEqual([first]);
     expect(composed.repositories.map((repo) => repo.repoPath)).toEqual(["meta", "panels/example"]);
     expect(put).toHaveBeenCalledTimes(1);
-    expect(new TextDecoder().decode(put.mock.calls[0]![0])).toContain(first.commit);
+    expect(new TextDecoder().decode(put.mock.calls[0]![0])).not.toContain(first.commit);
+    expect(composed.installation.sources[0]?.pin).toEqual(first);
     await expect(
       service.handler(ctx, "composeExact", [{ sources: [first, second] }])
     ).rejects.toThrow("one exact pin");
@@ -177,6 +178,7 @@ describe("workspaceTemplateSource", () => {
       snapshot(`systemEpoch: ${foreignEpoch}\nfutureSchema: { unknownToday: true }\n`)
     );
     const service = createWorkspaceTemplateSourceService({
+      readInstallation: async () => null,
       put: vi.fn(),
       hostVersion: () => `${foreignEpoch}.1.0`,
       acquire,
@@ -211,6 +213,7 @@ it("rejects an exact source requiring a newer app before composition or workspac
   );
   const put = vi.fn();
   const service = createWorkspaceTemplateSourceService({
+    readInstallation: async () => null,
     hostVersion: () => WORKSPACE_APP_VERSION,
     acquire,
     put,
@@ -243,6 +246,7 @@ it("composes a compatible target generation as source data without admitting it 
   const put = vi.fn();
   const hostVersion = vi.fn(() => `${foreignEpoch}.2.0`);
   const service = createWorkspaceTemplateSourceService({
+    readInstallation: async () => null,
     hostVersion,
     acquire: async () => snapshot(manifest),
     put,
@@ -267,6 +271,7 @@ it("leaves target preparation blocked when its matching host is unavailable", as
   const foreignEpoch = WORKSPACE_SYSTEM_EPOCH + 1;
   const put = vi.fn();
   const service = createWorkspaceTemplateSourceService({
+    readInstallation: async () => null,
     hostVersion: () => {
       throw new Error("Target host is unavailable");
     },

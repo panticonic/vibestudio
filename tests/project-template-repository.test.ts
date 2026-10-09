@@ -27,8 +27,7 @@ function fixture(): { workspace: string; checkout: string } {
         "template:",
         "  name: Test",
         "  description: Test template",
-        "  repositories:",
-        "    - apps/one",
+
         "apps:",
         "  - source: apps/one",
         "",
@@ -46,7 +45,7 @@ afterEach(() => {
 });
 
 describe("template repository exchange", () => {
-  it("establishes an exact baseline and exports only the declared projection", () => {
+  it("establishes an exact baseline and exports the structural repository projection", () => {
     const fx = fixture();
     fs.writeFileSync(path.join(fx.checkout, "notes.txt"), "checkout-only\n");
     const plan = planTemplateRepositoryExchange({ ...fx, direction: "export" });
@@ -152,4 +151,19 @@ describe("template repository exchange", () => {
     );
     expect(fs.readFileSync(path.join(fx.checkout, "meta", "vibestudio.yml"), "utf8")).toBe(before);
   });
+});
+
+it("includes newly added repositories and companion meta files without a manifest edit", () => {
+  const fx = fixture();
+  applyTemplateRepositoryExchange(planTemplateRepositoryExchange({ ...fx, direction: "export" }));
+  fs.mkdirSync(path.join(fx.workspace, "projects", "new"), { recursive: true });
+  fs.writeFileSync(path.join(fx.workspace, "projects", "new", "note.md"), "new source");
+  fs.writeFileSync(path.join(fx.workspace, "meta", "notes.md"), "companion");
+  const plan = planTemplateRepositoryExchange({ ...fx, direction: "export" });
+  expect(plan.projection).toContain("projects/new/note.md");
+  expect(plan.projection).toContain("meta/notes.md");
+  applyTemplateRepositoryExchange(plan);
+  expect(fs.readFileSync(path.join(fx.checkout, "projects/new/note.md"), "utf8")).toBe(
+    "new source"
+  );
 });

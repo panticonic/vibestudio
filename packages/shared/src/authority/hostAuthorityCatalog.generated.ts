@@ -9236,6 +9236,17 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "workspaceTemplateSource.readInstallation": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale: "Reviewed template workflows read their exact installed baseline.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "workspaceTemplateSource.resolveLocal": {
     tier: {
       tier: "open",

@@ -1,6 +1,6 @@
 {
   "setSharedRemote": {
-    "description": "Declare or update the external Git remote shared across workspace contexts for a unit, persisting it to meta/vibestudio.yml, syncing it into the repo's git config, and queueing immediate provider reconciliation; may prompt for capability approval. Durable URLs must be credential-free HTTP(S) URLs without query parameters or fragments.",
+    "description": "Declare or update the external Git remote shared across workspace contexts for a unit, persisting it in Git service state, syncing it into the repo's git config, and queueing immediate provider reconciliation; may prompt for capability approval. Durable URLs must be credential-free HTTP(S) URLs without query parameters or fragments.",
     "access": {
       "sensitivity": "write",
       "capability": "git.remotes.manage"
@@ -130,7 +130,7 @@
     ]
   },
   "setUpstream": {
-    "description": "Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. The optional credential is a portable logical name resolved by the host for this workspace and remote URL.",
+    "description": "Declare or update upstream tracking for a workspace repo, persisting it in Git service state and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. The optional credential is a portable logical name resolved by the host for this workspace and remote URL.",
     "access": {
       "sensitivity": "write",
       "capability": "git.remotes.manage"
@@ -1242,7 +1242,7 @@
     ]
   },
   "publishRepo": {
-    "description": "Resolve exactly one GitHub credential (explicit credentialId, or the sole active GitHub credential; refuse ambiguity), resolve the destination owner from explicit organization, persisted credential target, or authenticated user, preflight live account and publish permissions, create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider.",
+    "description": "Resolve exactly one GitHub credential (explicit credentialId, or the sole active GitHub credential; refuse ambiguity), resolve the destination owner from explicit organization, persisted credential target, or authenticated user, preflight live account and publish permissions, resolve or create the provider repository, configure tracking, export protected main, and push through the configured gitInterop provider. Every step is idempotent: calling it again with the same input resumes after a failed or interrupted step and returns the same publication.",
     "access": {
       "sensitivity": "write",
       "capability": "git.publish"
@@ -1357,7 +1357,8 @@
           "nullable": true
         },
         "pushed": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "The remote branch holds headCommit, whether this call or an earlier one pushed it."
         }
       },
       "required": [

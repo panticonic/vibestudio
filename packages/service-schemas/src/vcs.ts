@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import {
   workspaceFileMethodAuthority,
   type WorkspaceFileEffect,
@@ -1085,6 +1086,7 @@ export const vcsPushInputSchema = z
     expectedCommittedEventId: id("Exact context commit to publish."),
     expectedMainEventId: id("Observed protected main event."),
     epochTransition: z.literal(true).optional(),
+    templateInstallation: WorkspaceTemplateInstallationSchema.optional(),
   })
   .strict();
 export type VcsPushInput = z.infer<typeof vcsPushInputSchema>;

@@ -18,6 +18,12 @@ distribution manifest, or release-coordinate ledger.
   Testing is composed into its declared consumers only by the development
   launcher; it is not copied into published templates.
 
+Repository membership comes from each exact source tree, using the workspace
+repository layout (`meta`, or `section/<name>`). The manifest does not duplicate
+that membership. Composition validates whole-repository ownership against the
+source trees; configuration merging uses the authored manifests. Dependencies
+and explicit whole-repository overrides remain authored choices.
+
 ## Registry
 
 The version-1 registry is JSON:

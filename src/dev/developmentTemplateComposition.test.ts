@@ -29,12 +29,12 @@ describe("composeDevelopmentTemplateCheckouts", () => {
   it("materializes dependency-owned and dependent-owned units without changing their ownership", () => {
     const base = template(
       "base",
-      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: Base\n  repositories: [packages/base]\n`,
+      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: Base\n`,
       { "packages/base/package.json": "{}", "packages/base/BASE.md": "base" }
     );
     const personal = template(
       "personal",
-      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: Personal\n  dependencies:\n    - url: git+https://example.test/base.git\n  repositories: [panels/tour]\n`,
+      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplate:\n  name: Personal\n  dependencies:\n    - url: git+https://example.test/base.git\n`,
       { "panels/tour/package.json": "{}", "panels/tour/PERSONAL.md": "personal" }
     );
 
@@ -48,9 +48,8 @@ describe("composeDevelopmentTemplateCheckouts", () => {
       WORKSPACE_SYSTEM_EPOCH
     );
 
-    expect(parsed.inventory).toEqual({
-      repositories: ["packages/base", "panels/tour"],
-    });
+    expect(parsed.top.template).not.toHaveProperty("repositories");
+
     expect(parsed.dependencies).toEqual([{ url: "git+https://example.test/base.git" }]);
     expect(fs.readFileSync(path.join(composition.root, "packages/base/BASE.md"), "utf8")).toBe(
       "base"

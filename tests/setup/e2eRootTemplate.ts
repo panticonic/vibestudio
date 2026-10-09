@@ -21,6 +21,7 @@ import { GitClient } from "@vibestudio/git";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import {
   canonicalTemplateYaml,
+  templateRepositories,
   parseTemplateManifestContent,
 } from "@vibestudio/workspace/templateManifest";
 import {
@@ -155,8 +156,13 @@ async function materializeRootTemplateSource(input: {
   return sourcePath;
 }
 
-function git(dir: string, args: readonly string[], env?: NodeJS.ProcessEnv): void {
-  execFileSync("git", args, { cwd: dir, stdio: "ignore", ...(env ? { env } : {}) });
+function git(dir: string, args: readonly string[], env?: NodeJS.ProcessEnv): string {
+  return execFileSync("git", args, {
+    cwd: dir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    ...(env ? { env } : {}),
+  });
 }
 
 /**
@@ -175,7 +181,6 @@ function regenerateRootRuntimeManifest(checkout: string): void {
       template: {
         ...(manifest.presentation ?? {}),
         ...(manifest.dependencies.length ? { dependencies: manifest.dependencies } : {}),
-        repositories: manifest.inventory.repositories,
       },
     }),
     "utf8"
@@ -267,7 +272,7 @@ export async function deriveE2eRootTemplate(input: {
         checkout,
         review: {
           ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
-          repositories: [...manifest.inventory.repositories],
+          repositories: inspectRootTemplateSourcePaths(checkout),
           dependencies: [...manifest.dependencies],
         },
       },
@@ -312,4 +317,8 @@ export function writeWorkspaceCreationDescriptor(
     `${JSON.stringify({ version: 1, workspaceId, rootTemplate: pin }, null, 2)}\n`,
     { encoding: "utf8", mode: 0o600 }
   );
+}
+
+function inspectRootTemplateSourcePaths(checkout: string): string[] {
+  return templateRepositories(git(checkout, ["ls-files", "-z"]).split("\0").filter(Boolean));
 }

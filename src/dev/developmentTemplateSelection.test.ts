@@ -36,15 +36,9 @@ function fixture(): { checkout: string; checkpointRoot: string } {
   fs.mkdirSync(path.join(checkout, "panels", "example"), { recursive: true });
   fs.writeFileSync(
     path.join(checkout, "meta", "vibestudio.yml"),
-    [
-      "systemEpoch: 0",
-      "template:",
-      "  name: Example",
-      "  description: Example template.",
-      "  repositories:",
-      "    - panels/example",
-      "",
-    ].join("\n")
+    ["systemEpoch: 0", "template:", "  name: Example", "  description: Example template.", ""].join(
+      "\n"
+    )
   );
   fs.writeFileSync(path.join(checkout, "panels", "example", "index.ts"), "export const v = 1;\n");
   git(checkout, "init", "-b", "main");
@@ -162,7 +156,7 @@ describe("development template selection", () => {
       changedPaths: ["meta/vibestudio.yml", "panels/example/new.ts"],
       review: {
         presentation: { name: "Example", description: "Example template." },
-        repositories: ["panels/example"],
+        repositories: ["meta", "panels/example"],
         dependencies,
       },
       pin: {

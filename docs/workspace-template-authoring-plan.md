@@ -1,6 +1,11 @@
 # Authoring, contributing, and updating workspace templates
 
 Templates contain repository units and their `meta/vibestudio.yml` manifest.
+Repository membership is derived from the exact published tree, never an
+inventory in the manifest. Publication selects an exact source projection;
+selection is operation input, not persisted workspace configuration. Local
+repositories are authored unless dependency provenance identifies an inherited
+owner; explicit overrides identify inherited units the author replaces.
 Every other file must belong to a declared unit. There is no `template.files`
 field or standalone-file export. Put documentation, artwork notes, and similar
 files inside an appropriate unit; use `meta` for template metadata companions.
@@ -86,9 +91,13 @@ filename when reconciling an uncertain response.
 
 ## Contribute units to an installed source
 
-Installation records exact pins and source declarations in `template.installation`.
-The runtime resolver computes effective settings from these declarations and the
-authored root. Installation records are omitted from published templates.
+The workspace source service records exact pins and source declarations against
+the publication event, atomically with publication. The installed YAML contains
+the complete desired workspace settings, so runtime loading needs no dependency
+acquisition or installation history. Template publication uses the recorded
+baselines to export only authored differences. Git remotes and upstream tracking
+belong to the Git provider's persistent state; service contracts belong to their
+provider repositories' package manifests.
 
 The Installed tab lists those sources separately. Select a source and its units,
 review the destination, then push a contribution branch. The source repository's

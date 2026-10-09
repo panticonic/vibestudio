@@ -76,7 +76,7 @@ import { joinRepoPrefix, normalizeRepositoryPath } from "./paths.js";
 import { ContentProjectionStore } from "./contentProjectionStore.js";
 import { DiskProjector } from "./diskProjector.js";
 import { ContextMaterializer } from "./contextMaterializer.js";
-import { discoverRepos } from "./repoDiscovery.js";
+import { discoverRepos } from "@vibestudio/shared/runtime/repoDiscovery";
 import type {
   WorkspaceSemanticPort,
   WorkspaceSourceProviderV1,
@@ -483,6 +483,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async attachGad(gad: WorkspaceSemanticPort): Promise<void> {
     if (this.gadCaller) throw new Error("semantic workspace is already attached");
     this.gadCaller = gad;
+  }
+
+  readTemplateInstallation(eventId: string) {
+    return this.workspaceSourceProvider().readTemplateInstallation({ eventId });
   }
 
   attachWorkspaceSourceProvider(provider: WorkspaceSourceProviderV1): void {
@@ -1308,6 +1312,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           ref: prepared.pin.ref,
           commit: prepared.pin.commit,
         },
+        installation: prepared.installation,
         repositories: [...prepared.repositories]
           .sort((left, right) => compareUtf16CodeUnits(left.repoPath, right.repoPath))
           .map((repository) => ({

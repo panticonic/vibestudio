@@ -596,7 +596,7 @@ export const gitInteropMethods = defineServiceMethods({
       },
     },
     description:
-      "Declare or update the external Git remote shared across workspace contexts for a unit, persisting it to meta/vibestudio.yml, syncing it into the repo's git config, and queueing immediate provider reconciliation; may prompt for capability approval. Durable URLs must be credential-free HTTP(S) URLs without query parameters or fragments.",
+      "Declare or update the external Git remote shared across workspace contexts for a unit, persisting it in Git service state, syncing it into the repo's git config, and queueing immediate provider reconciliation; may prompt for capability approval. Durable URLs must be credential-free HTTP(S) URLs without query parameters or fragments.",
     args: z.tuple([
       z.string().describe("Workspace-relative repo/unit path the remote applies to."),
       gitRemoteSchema,
@@ -673,7 +673,7 @@ export const gitInteropMethods = defineServiceMethods({
       },
     },
     description:
-      "Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. The optional credential is a portable logical name resolved by the host for this workspace and remote URL.",
+      "Declare or update upstream tracking for a workspace repo, persisting it in Git service state and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. The optional credential is a portable logical name resolved by the host for this workspace and remote URL.",
     args: z.tuple([
       z.string().describe("Workspace-relative repo/unit path the upstream applies to."),
       gitUpstreamWriteSchema,

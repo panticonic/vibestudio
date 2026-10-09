@@ -31,6 +31,9 @@ export interface WorkspaceSourceProviderRef {
  * operations deliberately do not enter this interface.
  */
 export interface WorkspaceSourceProviderV1 {
+  readTemplateInstallation(input: {
+    eventId: string;
+  }): Promise<import("@vibestudio/workspace-contracts/types").WorkspaceTemplateInstallation | null>;
   initializeExactSnapshot(
     input: InitializeExactWorkspaceSnapshotInput
   ): Promise<WorkspaceSourceInitializationInspection>;
@@ -255,6 +258,7 @@ export function createWorkspaceSourceProviderV1(
   const invokeNoArgs = <T>(method: string): Promise<T> =>
     dispatch.dispatch(provider, method) as Promise<T>;
   return {
+    readTemplateInstallation: (input) => invoke("workspaceSourceTemplateInstallation", input),
     initializeExactSnapshot: (input) => invoke("workspaceSourceInitializeExactSnapshot", input),
     resolveSource: (input) => invoke("workspaceSourceResolve", input),
     currentSource: () => invokeNoArgs("workspaceSourceCurrent"),

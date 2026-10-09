@@ -144,9 +144,9 @@ export interface PackageManifest {
    * (pubsub-channel, semantic control plane, fork, …) in the chat panel's agent picker.
    */
   agent?: { displayName?: string; description?: string };
-  // Note: workspace services and HTTP routes are no longer declared per worker.
-  // They live in `workspace/meta/vibestudio.yml` under `services:` and `routes:`,
-  // joined against `singletonObjects:` for DO singleton keys.
+  /** Named service contracts exported by this repository. Workspace wiring selects source/name. */
+  services?: import("@vibestudio/workspace-contracts/types").WorkspaceServiceExport[];
+
 }
 
 export type WorkspaceTestRuntime = "browser" | "workerd" | "native";
