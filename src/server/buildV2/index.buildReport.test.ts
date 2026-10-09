@@ -109,6 +109,7 @@ function fakeSource(
 async function loadWithMocks(
   options: {
     blockingAuthorityConsumer?: boolean;
+    authorityEnvironmentFailure?: Error;
     isolatedExports?: unknown;
     invalidPanelManifest?: boolean;
     resolvedBuildKey?: string;
@@ -252,9 +253,15 @@ async function loadWithMocks(
     appRoot: process.cwd(),
     runNativeJob: runIsolatedBuildJob,
     dependencyWorkspaceRoot: workspaceRoot,
-    ...(options.blockingAuthorityConsumer
-      ? { workspaceAuthorityEnvironmentAt: async () => ({ services: [] }) }
-      : {}),
+    ...(options.authorityEnvironmentFailure
+      ? {
+          workspaceAuthorityEnvironmentAt: async () => {
+            throw options.authorityEnvironmentFailure;
+          },
+        }
+      : options.blockingAuthorityConsumer
+        ? { workspaceAuthorityEnvironmentAt: async () => ({ services: [] }) }
+        : {}),
   });
   // Initialization only discovers/version-tracks units. Actual panel/worker
   // builds are demand-driven by their runtime access paths.
@@ -714,5 +721,24 @@ describe("BuildSystemV2 — explicit build reports", () => {
         }),
       ],
     });
+  });
+
+  it("reports untyped provider-catalog lookup errors as infrastructure diagnostics", async () => {
+    const providerFailure = new Error("provider catalog storage is unavailable");
+    env = await loadWithMocks({ authorityEnvironmentFailure: providerFailure });
+
+    const report = await env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW);
+
+    expect(report.status).toBe("failed");
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "infrastructure",
+          severity: "error",
+          file: "",
+          message: expect.stringContaining(providerFailure.message),
+        }),
+      ])
+    );
   });
 });

@@ -1786,12 +1786,12 @@ export async function initBuildSystemV2(
               diagnostics.push(...error.diagnostics);
             } else {
               diagnostics.push({
-                source: "authority",
+                source: "infrastructure",
                 severity: "error",
-                file: `${node.relativePath}/package.json`,
-                line: 1,
-                column: 1,
-                message: `Authority analysis could not resolve the exact provider catalog: ${error instanceof Error ? error.message : String(error)}`,
+                file: "",
+                line: 0,
+                column: 0,
+                message: `Authority provider-catalog lookup failed: ${error instanceof Error ? error.message : String(error)}`,
               });
             }
           }
