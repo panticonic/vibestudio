@@ -126,44 +126,57 @@ Commit in reviewable slices, per repo and per goal, not as one blob.
   continuation and preserved. Avoid overlapping edits to this feature.
 
 ## Open decisions (yours)
-1. **News scheduling.** Needs a `{kind:"method"}` action for continue-mode agent
-   automations; method-charter missions cannot target the live News agent. After that:
-   missions own the cadence, `setSchedule` gets a `timezone` argument, and the panel's 60s
-   timer is replaced by refetching on channel updates.
-2. **MissionsDO `driveRun`:** the `progress_at + 60_000 > Date.now()` elapsed-time
-   re-dispatch check violates AGENTS.md.
+1. **News scheduling.** The panel's 60s reader timer is now replaced by channel-driven
+   refreshes, with an initial read after channel readiness. The remaining scheduling
+   question is still open: method-charter missions cannot target the live News agent, and
+   missions do not yet own the News cadence or pass a timezone through `setSchedule`.
+2. **MissionsDO `driveRun`:** the elapsed-time redispatch check has been removed. Run
+   advancement is owned by persisted lifecycle work and explicit recovery/retirement events,
+   rather than inferred from `progress_at` age.
 3. **Principal ceiling.** How a receiver learns the service-level principal ceiling: the
    host attests the target's principals, or the receiver enforces the sealed catalog.
    Codex's false doc comment and dead flag are removed.
-4. **Singleton fold.** Should the singleton key be owned by the provider package export or
-   by the workspace selection? DO routes also look keys up in `singletonObjects`.
-   Generating consumer authority requests from `serviceRequests` (`authorityFold.ts`) is
-   still not done.
-5. **`prepareApplication` retry safety.** Proposal: split file generation from destination
-   checks and compare the regenerated files to the recorded command's application. Until
-   then the "Never call either preparation API again" rule stays.
+4. **Singleton fold.** Current authority folding derives consumer requests from
+   `serviceRequests` in `authorityFold.ts`; singleton selection remains a workspace
+   selection concern. The earlier ownership question is resolved by that split.
+5. **`prepareApplication` retry safety.** Preparation now retains the exact VCS edit and
+   receipt in its result, and accepts a caller-owned command id plus original working basis
+   before mutation. Replaying the identical request at that identity returns the original
+   receipt; changed bytes or intent fail with `CommandIdReuse`. The atomic repository-create
+   edit rejects occupied destinations, so a new command cannot overwrite an existing
+   candidate. A lost response is recoverable only when the caller retained identity and
+   basis before the first call; omitting them lets the helper mint an unreturned random id,
+   and a fresh helper invocation is a new command, not replay. Automatic runtime-owned
+   recovery remains future work. See Base `skills/workspace-dev/PROJECTS.md` for the
+   recovery contract.
 6. **`commit({concludes})`.** Accept the single source per commit, or migrate the decisions
    table (it has a `UNIQUE(work_unit_id)` constraint).
 7. **Transactional git import.** The git config now lives in git-bridge state, so it can't
    be atomic with the semantic import. Move it back into the snapshot, or use staging plus
    a discardable candidate.
-8. **`git.createBranch` semantics.** Proposal: `{repoPath, branch, from: eventId}` exports
-   to a new remote branch, gated like `pushUpstream`. The SELF_IMPROVEMENT.md snippet
-   using `GitClient` on a projection is wrong today.
-9. **Mobile self-revoke.** Should the mobile client clear its credential on close code 4001?
-   Desktop already does.
-10. **Worker supervision release id.** Panel, worker and DO rows report `release: null`.
-11. **typecheck-service.** May it check contexts other than the caller's own?
-12. **Problem reports.** `problemReports.update` still accepts any author on a full replace.
-13. **Agent inspection.** `getDebugState` is still callable via `chat.callMethod`;
-    `adminInspectAgent` is test-only and could be removed.
-14. **Desktop `workspaceClient.ts`.** It drops a panel's commands before reload or navigate
-    instead of on actual runtime replacement.
-15. **Cloudflare upload credential.** It keeps `expiresInMs: 15 min`. Confirm it mirrors
-    Cloudflare's JWT lifetime.
+8. **`git.createBranch` semantics.** Implemented as an event-bound remote branch creation
+   in Base, gated by the same publication authority as `pushUpstream`. The projection-based
+   `GitClient` example was removed from the guidance.
+9. **Mobile self-revoke.** The mobile client now clears its credential on close code 4001
+   and joins session, transport, and credential retirement while preserving the primary
+   failure. Focused failure-path coverage is present; no new validation claim is made here.
+10. **Worker supervision release id.** Panel and worker supervision now derive their
+    release identity from the source repository; DO supervision reports its worker release.
+11. **typecheck-service.** The service checks the invocation's own context and rejects a
+    request that names another context.
+12. **Problem reports.** Full replacement no longer changes another author's narrative;
+    narrative edits go through the author-checked patch operation.
+13. **Agent inspection.** Inspection goes through `gad.inspectAgent`; `chat.callMethod`
+    rejects debug-state access and points callers to that operation.
+14. **Desktop `workspaceClient.ts`.** Contributed commands remain registered when a
+    requested reload fails before runtime replacement, and retire with the replaced
+    runtime.
+15. **Cloudflare upload credential.** Base requests the provider's JWT expiry and derives
+    credential expiry from that claim rather than imposing a local 15-minute lifetime.
 16. **SetupHub owner-state change events.** Too large for this pass; it needs its own task
     (8 owner sources).
-17. **Remaining polling.**
+17. **Remaining polling.** Migration progress now follows the provider's event-observation
+    lifecycle; unmount cancels observation, not the import operation. Collection and
+    System Automations still use polling:
     - collection panel `setInterval(refresh, 2000)` (`personal/about/collection/index.tsx:~313`)
     - System Automations UI 5s polling
-    - `MigrateTab.tsx` `getImportJob` 500ms polling (no wait API)

@@ -32,6 +32,7 @@
 export {
   GitClient,
   GitAuthError,
+  GitRemoteChangedError,
   GitPushRejectedError,
   SYSTEM_GIT_AUTHOR,
   type FsPromisesLike,

@@ -46,6 +46,17 @@ export interface DurableWorkReadyHint {
 
 export const DURABLE_WORK_READY_HEADER = "X-Vibestudio-Work-Ready";
 
+export function parseDurableWorkReady(value: unknown): DurableWorkQueue[] {
+  if (!Array.isArray(value) || value.some((queue) => typeof queue !== "string")) {
+    throw new Error("Invalid durable-work receipt: expected an array of queue names");
+  }
+  const allowed = new Set<string>(DURABLE_WORK_QUEUES);
+  if (value.some((queue) => !allowed.has(queue))) {
+    throw new Error(`Invalid durable-work receipt: ${value.join(",")}`);
+  }
+  return [...new Set(value)].sort() as DurableWorkQueue[];
+}
+
 export function encodeDurableWorkReady(queues: Iterable<DurableWorkQueue>): string | null {
   const unique = [...new Set(queues)].sort();
   return unique.length === 0 ? null : unique.join(",");
@@ -53,13 +64,9 @@ export function encodeDurableWorkReady(queues: Iterable<DurableWorkQueue>): stri
 
 export function decodeDurableWorkReady(value: string | null): DurableWorkQueue[] {
   if (!value) return [];
-  const allowed = new Set<string>(DURABLE_WORK_QUEUES);
   const queues = value
     .split(",")
     .map((queue) => queue.trim())
     .filter(Boolean);
-  if (queues.some((queue) => !allowed.has(queue))) {
-    throw new Error(`Invalid durable-work receipt: ${value}`);
-  }
-  return [...new Set(queues)] as DurableWorkQueue[];
+  return parseDurableWorkReady(queues);
 }

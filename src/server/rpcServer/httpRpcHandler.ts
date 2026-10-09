@@ -56,7 +56,7 @@ export function resolveRpcMaxBodyBytes(raw: string | undefined): number {
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   if (res.destroyed || res.writableEnded) return;
-  res.writeHead(status, JSON_HEADERS);
+  if (!res.headersSent) res.writeHead(status, JSON_HEADERS);
   res.end(encodeRpcJson(body));
 }
 
@@ -204,6 +204,10 @@ export class HttpRpcHandler {
     res.once("close", abortDisconnectedTransport);
     this.activeRequests.set(requestKey, abort);
     if (req.aborted) abortDisconnectedTransport();
+    // The response headers acknowledge that this authenticated request is now
+    // registered and cancellable. The JSON body remains the terminal receipt.
+    res.writeHead(200, JSON_HEADERS);
+    res.flushHeaders();
     try {
       const result = await this.deps.handleRequest(
         admission.caller,

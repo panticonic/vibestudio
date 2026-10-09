@@ -12,6 +12,7 @@ import { createInProcessNetwork, inProcessTransport } from "./transports/inProce
 import type { EnvelopeRpcTransport, RpcConnectionStatus, RpcEnvelope } from "./types.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 import { RpcBoundaryError } from "./errors.js";
+import { responseEnvelopeFor } from "./envelope.js";
 
 /**
  * A fake transport whose status + recovery signals can be driven by the test,
@@ -25,10 +26,12 @@ function controllableTransport(): {
   transport: EnvelopeRpcTransport;
   sent: RpcEnvelope[];
   emitStatus: (status: RpcConnectionStatus) => void;
+  emitMessage: (envelope: RpcEnvelope) => void;
   onRecovery: (handler: (kind: RecoveryKind) => void) => () => void;
   emitRecovery: (kind: RecoveryKind) => void;
 } {
   const sent: RpcEnvelope[] = [];
+  const messageHandlers = new Set<(envelope: RpcEnvelope) => void>();
   let statusHandler: ((status: RpcConnectionStatus) => void) | null = null;
   let recoveryHandler: ((kind: RecoveryKind) => void) | null = null;
   return {
@@ -37,7 +40,10 @@ function controllableTransport(): {
       send: async (envelope) => {
         sent.push(envelope);
       },
-      onMessage: () => () => {},
+      onMessage: (handler) => {
+        messageHandlers.add(handler);
+        return () => messageHandlers.delete(handler);
+      },
       status: () => "connected",
       onStatusChange: (handler) => {
         statusHandler = handler;
@@ -47,6 +53,9 @@ function controllableTransport(): {
       },
     },
     emitStatus: (status) => statusHandler?.(status),
+    emitMessage: (envelope) => {
+      for (const handler of messageHandlers) handler(envelope);
+    },
     onRecovery: (handler) => {
       recoveryHandler = handler;
       return () => {
@@ -458,23 +467,98 @@ describe("createRpcClient", () => {
     expect(wait).not.toHaveBeenCalled();
   });
 
-  it("binds a caller signal to the original transport request", async () => {
+  it("keeps the original transport request open until a cancellation terminal response", async () => {
     let requestSignal: AbortSignal | undefined;
+    let request: RpcEnvelope | undefined;
+    let receive!: (envelope: RpcEnvelope) => void;
+    const sent: RpcEnvelope[] = [];
     const transport: EnvelopeRpcTransport = {
       async send(envelope, signal) {
-        if (envelope.message.type === "request") requestSignal = signal;
+        sent.push(envelope);
+        if (envelope.message.type === "request") {
+          requestSignal = signal;
+          request = envelope;
+        }
+        if (envelope.message.type === "request-cancel" && request) {
+          receive(
+            responseEnvelopeFor(
+              request,
+              { callerId: "server", callerKind: "server" },
+              { type: "response", requestId: envelope.message.requestId, result: null }
+            )
+          );
+        }
       },
-      onMessage: () => () => {},
+      onMessage(handler) {
+        receive = handler;
+        return () => {};
+      },
     };
     const rpc = createRpcClient({ selfId: "caller", callerKind: "worker", transport });
     const controller = new AbortController();
     const pending = rpc.call("server", "wait", [], { signal: controller.signal });
     await flushMicrotasks();
 
-    expect(requestSignal).toBe(controller.signal);
+    expect(requestSignal).toBeUndefined();
 
     controller.abort(new Error("activation released"));
-    await expect(pending).rejects.toThrow(/aborted/);
+    await expect(pending).rejects.toMatchObject({
+      code: "RPC_ABORTED",
+      cause: expect.objectContaining({ message: "activation released" }),
+    });
+    expect(sent.map((envelope) => envelope.message.type)).toEqual(["request", "request-cancel"]);
+  });
+
+  it("preserves both remote cleanup and cancellation delivery failures", async () => {
+    let request!: RpcEnvelope;
+    let receive!: (envelope: RpcEnvelope) => void;
+    let rejectCancellation!: (error: Error) => void;
+    const cancellationDelivery = new Promise<void>((_resolve, reject) => {
+      rejectCancellation = reject;
+    });
+    const sent: RpcEnvelope[] = [];
+    const transport: EnvelopeRpcTransport = {
+      async send(envelope) {
+        sent.push(envelope);
+        if (envelope.message.type === "request") request = envelope;
+        if (envelope.message.type === "request-cancel") await cancellationDelivery;
+      },
+      onMessage(handler) {
+        receive = handler;
+        return () => {};
+      },
+    };
+    const rpc = createRpcClient({ selfId: "caller", callerKind: "worker", transport });
+    const controller = new AbortController();
+    const pending = rpc.call("server", "wait", [], { signal: controller.signal });
+    const cancellationReason = new Error("caller stopped waiting");
+    controller.abort(cancellationReason);
+    await flushMicrotasks();
+    receive(
+      responseEnvelopeFor(
+        request,
+        { callerId: "server", callerKind: "server" },
+        {
+          type: "response",
+          requestId: (request.message as { requestId: string }).requestId,
+          error: "receiver cleanup failed",
+          errorKind: "application",
+        }
+      )
+    );
+    const deliveryError = new Error("cancel route disconnected");
+    rejectCancellation(deliveryError);
+
+    const failure = await pending.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).cause).toMatchObject({
+      message: "receiver cleanup failed",
+    });
+    expect((failure as AggregateError).errors).toMatchObject([
+      { message: "receiver cleanup failed" },
+      deliveryError,
+    ]);
+    expect(sent.map((envelope) => envelope.message.type)).toEqual(["request", "request-cancel"]);
   });
 
   it("automatically seals one exact causal parent onto scoped calls", async () => {
@@ -504,6 +588,21 @@ describe("createRpcClient", () => {
 
     expect(fake.sent[0]?.message).toMatchObject({ causalParent });
     controller.abort();
+    const state = track(pending);
+    await flushMicrotasks();
+    expect(state.settled).toBe(false);
+    expect(fake.sent.map((envelope) => envelope.message.type)).toEqual([
+      "request",
+      "request-cancel",
+    ]);
+    const request = fake.sent[0]!;
+    fake.emitMessage(
+      responseEnvelopeFor(
+        request,
+        { callerId: "main", callerKind: "server" },
+        { type: "response", requestId: (request.message as { requestId: string }).requestId, result: null }
+      )
+    );
     await expect(pending).rejects.toThrow(/aborted/);
   });
 
@@ -1038,6 +1137,14 @@ describe("createRpcClient", () => {
       const handlerEntered = new Promise<void>((resolve) => {
         entered = resolve;
       });
+      let releaseCleanup!: () => void;
+      const cleanupFinished = new Promise<void>((resolve) => {
+        releaseCleanup = resolve;
+      });
+      let cleanupStarted!: () => void;
+      const cleanupBegan = new Promise<void>((resolve) => {
+        cleanupStarted = resolve;
+      });
       let observedAbort = false;
       callee.expose(
         "wait",
@@ -1048,11 +1155,13 @@ describe("createRpcClient", () => {
               "abort",
               () => {
                 observedAbort = true;
+                cleanupStarted();
                 resolve();
               },
               { once: true }
             );
           });
+          await cleanupFinished;
           return null;
         },
         { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
@@ -1064,17 +1173,61 @@ describe("createRpcClient", () => {
         [],
         mode === "explicit" ? { signal: controller.signal } : undefined
       );
+      const tracked = track(pending);
+      const rejection = expect(pending).rejects.toMatchObject({ code: "RPC_ABORTED" });
       await handlerEntered;
-      controller.abort();
+      controller.abort(new Error("operation owner ended"));
 
-      await expect(pending).rejects.toThrow(/aborted/);
-      await vi.waitFor(() => expect(observedAbort).toBe(true));
+      await cleanupBegan;
+      await flushMicrotasks();
+      expect(observedAbort).toBe(true);
+      expect(tracked.settled).toBe(false);
+      releaseCleanup();
+      await rejection;
+      expect(tracked.reason).toMatchObject({
+        cause: expect.objectContaining({ message: "operation owner ended" }),
+      });
       invocationSignal = undefined;
       callee.expose("echo", () => "still connected", { kind: "closed", reason: "Internal test" });
       await expect(caller.call("callee", "echo", [])).resolves.toBe("still connected");
       lifetime.abort();
     }
   );
+
+  it("preserves receiver cleanup failure instead of replacing it with caller cancellation", async () => {
+    const controller = new AbortController();
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "caller",
+      transport: inProcessTransport("caller", network),
+    });
+    const callee = createRpcClient({
+      selfId: "callee",
+      transport: inProcessTransport("callee", network),
+    });
+    let cleanupStarted!: () => void;
+    const cleanupBegan = new Promise<void>((resolve) => { cleanupStarted = resolve; });
+    let releaseCleanup!: () => void;
+    const cleanupFinished = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+    let handlerEntered!: () => void;
+    const handlerStarted = new Promise<void>((resolve) => { handlerEntered = resolve; });
+    callee.expose("wait", async ({ signal }) => {
+      handlerEntered();
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+      cleanupStarted();
+      await cleanupFinished;
+      throw new Error("receiver cleanup failed");
+    }, { kind: "eligible", rationale: "This test explicitly permits website receiver entry." });
+
+    const pending = caller.call("callee", "wait", [], { signal: controller.signal });
+    const rejection = expect(pending).rejects.toMatchObject({ message: "receiver cleanup failed" });
+    await handlerStarted;
+    controller.abort(new Error("caller left"));
+    await cleanupBegan;
+    await flushMicrotasks();
+    releaseCleanup();
+    await rejection;
+  });
 
   it("preserves structured error categories across unary and streaming calls", async () => {
     const network = createInProcessNetwork();
@@ -1630,14 +1783,33 @@ describe("operation-owned RPC views", () => {
     "cancels calls, peers and both stream APIs when the %s operation ends",
     async (cancelled) => {
       const sent: RpcEnvelope[] = [];
+      const requests = new Map<string, RpcEnvelope>();
+      const handlers = new Set<(envelope: RpcEnvelope) => void>();
       const invocation = new AsyncLocalStorage<string | undefined>();
       const effectContexts: (string | undefined)[] = [];
       const transport: EnvelopeRpcTransport = {
         send: async (envelope) => {
           sent.push(envelope);
           effectContexts.push(invocation.getStore());
+          if (envelope.message.type === "request")
+            requests.set(envelope.message.requestId, envelope);
+          if (envelope.message.type === "request-cancel") {
+            const request = requests.get(envelope.message.requestId);
+            if (!request) throw new Error("Cancellation had no matching request");
+            const response = responseEnvelopeFor(
+              request,
+              { callerId: "main", callerKind: "server" },
+              { type: "response", requestId: envelope.message.requestId, result: undefined },
+            );
+            queueMicrotask(() => {
+              for (const handler of handlers) handler(response);
+            });
+          }
         },
-        onMessage: () => () => {},
+        onMessage: (handler) => {
+          handlers.add(handler);
+          return () => handlers.delete(handler);
+        },
       };
       const base = createRpcClient({ selfId: "owner", transport });
       const owner = new AbortController();
@@ -1906,10 +2078,11 @@ describe("createRpcClient — explicit call deadlines", () => {
     expect(state.settled).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
-    const err = (await call.catch((e) => e)) as Error;
-    expect(err.message).toBe("RPC call timed out after 5000ms");
     await flushMicrotasks();
-    const requestId = (fake.sent[0]?.message as { requestId?: string } | undefined)?.requestId;
+    expect(state.settled).toBe(false);
+    const request = fake.sent.find((envelope) => envelope.message.type === "request");
+    if (!request || request.message.type !== "request") throw new Error("Expected outbound RPC request");
+    const requestId = request.message.requestId;
     expect(fake.sent).toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({
@@ -1918,6 +2091,13 @@ describe("createRpcClient — explicit call deadlines", () => {
         }),
       })
     );
+    fake.emitMessage(responseEnvelopeFor(
+      request,
+      { callerId: "main", callerKind: "server" },
+      { type: "response", requestId, result: undefined },
+    ));
+    const err = (await call.catch((e) => e)) as Error;
+    expect(err.message).toBe("RPC call timed out after 5000ms");
   });
 
   it("never fires when timeoutMs is 0 (opt out)", async () => {

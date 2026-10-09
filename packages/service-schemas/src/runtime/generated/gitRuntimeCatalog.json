@@ -690,6 +690,66 @@
       }
     ]
   },
+  "createBranch": {
+    "description": "Create a new branch at the declared remote from an exact semantic event. Refuse an existing remote branch. Preserve protected main, the managed checkout, and upstream tracking configuration.",
+    "access": {
+      "sensitivity": "write",
+      "capability": "git.publish"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "repoPath": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "repoPath",
+            "branch",
+            "from"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "repoPath": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "headCommit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "repoPath",
+        "branch",
+        "eventId",
+        "headCommit"
+      ],
+      "additionalProperties": false
+    }
+  },
   "pushUpstream": {
     "description": "Export protected main, observe the declared remote, and return a typed push outcome through the configured gitInterop provider; refuse while an external snapshot candidate requires semantic integration. A forced update returns bounded overwrite evidence: related history has an exact count, while unrelated history has count null because no relative commit count exists.",
     "access": {

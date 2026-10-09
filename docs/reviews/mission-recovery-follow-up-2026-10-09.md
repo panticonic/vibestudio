@@ -26,5 +26,22 @@ Finish delivery, and terminal acknowledgment replay. These cases must neither
 duplicate execution nor strand admitted, method, or completion work. Only after
 that contract exists can the periodic run-status check be removed safely.
 
-This investigation made no production changes to mission recovery and does not
-claim to have repaired it.
+## Implemented recovery
+
+MissionsDO now acquires a durable lifecycle lease before admitting a run. Suspend
+seals new admissions and joins admitted work while retaining the lease. Restart
+reopens the ledger and advances retained rows using their original dispatch and
+receiver identities. Retirement persists cancellation first, signals executors,
+joins the owned drivers and outstanding effects, and then releases the lease.
+An interruption or completion failure remains visible to the lifecycle caller.
+
+The elapsed sixty-second run guard and periodic executing-run reconciliation are
+removed. Scheduled mission alarms still implement their actual schedules.
+Native agent lifecycle recovery drains parked terminal Finish receipts without
+executing their actions again.
+
+Forty-three mission regressions passed, including reopening storage at each
+persisted dispatch phase, stable receiver admission identity, sealing admission,
+and cancelling a blocked dispatch. Nineteen native automation regressions passed,
+including terminal receipt recovery after reopening storage. The Base semantic
+composition typecheck passed.

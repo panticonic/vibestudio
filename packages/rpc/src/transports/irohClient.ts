@@ -171,6 +171,7 @@ interface InboundRequest {
 
 interface OutboundRequest {
   cancel(reason?: unknown, code?: bigint): Promise<void>;
+  cancelRequest?(reason?: unknown, code?: bigint): Promise<void>;
   destination?: RpcDestination;
 }
 
@@ -181,6 +182,7 @@ class ClientSession implements IrohClientSession {
   private readonly statusListeners = new Set<(status: RpcConnectionStatus) => void>();
   private readonly inboundRequests = new Map<string, InboundRequest>();
   private readonly outboundRequests = new Map<string, OutboundRequest>();
+  private readonly outboundRequestAdmissions = new Map<string, Promise<OutboundRequest>>();
   private openPromise: Promise<void> | null = null;
   private requestGeneration = 0;
   private authenticatedCallerId: string | null = null;
@@ -230,9 +232,34 @@ class ClientSession implements IrohClientSession {
 
   async send(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void> {
     workspaceRpcDestination(envelope.destination);
+    const requestId = requestIdOf(envelope);
+    if (envelope.message.type === "request-cancel" && requestId) {
+      const opening = this.outboundRequestAdmissions.get(requestId);
+      if (opening) {
+        const outbound = await opening;
+        if (this.outboundRequests.get(requestId) === outbound) {
+          await this.cancelOutbound(envelope.message);
+        }
+        return;
+      }
+    }
+    let admitOutbound: ((outbound: OutboundRequest) => void) | undefined;
+    let rejectOutbound: ((error: unknown) => void) | undefined;
+    let admission: Promise<OutboundRequest> | undefined;
+    if (envelope.message.type === "request" && requestId) {
+      if (this.outboundRequestAdmissions.has(requestId)) {
+        throw new Error(`Iroh request id ${requestId} is already opening`);
+      }
+      admission = new Promise<OutboundRequest>((resolve, reject) => {
+        admitOutbound = resolve;
+        rejectOutbound = reject;
+      });
+      void admission.catch(() => {});
+      this.outboundRequestAdmissions.set(requestId, admission);
+    }
+    try {
     await this.ready();
     if (this.terminal) throw new Error(`Iroh session ${this.sid} is closed`);
-    const requestId = requestIdOf(envelope);
     if (
       requestId &&
       (envelope.message.type === "request" || envelope.message.type === "stream-request") &&
@@ -260,8 +287,11 @@ class ClientSession implements IrohClientSession {
 
     const generation = this.requestGeneration;
     const stream = await this.pipe.connection.openBi();
+    const unaryRequest = envelope.message.type === "request" && requestId !== null;
     const cancellable = signal !== undefined && requestId !== null;
+    const retainRequestHalf = unaryRequest || cancellable;
     let cancellation: Promise<void> | null = null;
+    let outboundRequest: OutboundRequest | undefined;
     const cancel = (_reason?: unknown, code = IROH_CANCEL_CODE): Promise<void> => {
       signal?.removeEventListener("abort", abort);
       return (cancellation ??= Promise.all([
@@ -278,10 +308,18 @@ class ClientSession implements IrohClientSession {
       requestId &&
       (envelope.message.type === "request" || envelope.message.type === "stream-request")
     ) {
-      this.outboundRequests.set(requestId, {
+      const outbound: OutboundRequest = {
         cancel,
+        ...(unaryRequest
+          ? {
+              cancelRequest: (_reason?: unknown, code = IROH_CANCEL_CODE) =>
+                stream.send.reset(code),
+            }
+          : {}),
         ...(envelope.destination ? { destination: envelope.destination } : {}),
-      });
+      };
+      outboundRequest = outbound;
+      this.outboundRequests.set(requestId, outbound);
       this.pipe.diagnosticsChanged();
     }
     signal?.addEventListener("abort", abort, { once: true });
@@ -300,20 +338,35 @@ class ClientSession implements IrohClientSession {
         new TextEncoder().encode(encodeRpcJson(envelope)),
         MAX_ENVELOPE_FRAME_BYTES
       );
-      // A request without caller cancellation ends at its bounded envelope.
-      // Cancellable requests retain the send half until their response settles,
-      // keeping cancellation ordered with this request on the same QUIC stream.
-      if (!cancellable) await stream.send.finish();
+      // Reset is ordered after the complete envelope on this same stream. A
+      // waiting request-cancel may now safely reset the request half without
+      // racing the receiver's envelope admission.
+      if (unaryRequest && outboundRequest) admitOutbound?.(outboundRequest);
+      // Unary requests retain the send half until the response settles. A
+      // later request-cancel resets that exact half, which the server observes
+      // on this route while keeping its response half available as the cleanup
+      // receipt. Streaming calls retain it only while caller-cancellable.
+      if (!retainRequestHalf) await stream.send.finish();
     } catch (error) {
       await cancel(error);
       throw error;
     }
     void this.readResponses(stream, requestId).finally(async () => {
-      if (cancellable) await stream.send.finish().catch(() => undefined);
+      if (retainRequestHalf) await stream.send.finish().catch(() => undefined);
       await cancellation;
       signal?.removeEventListener("abort", abort);
       if (requestId && this.outboundRequests.delete(requestId)) this.pipe.diagnosticsChanged();
+      if (requestId && admission && this.outboundRequestAdmissions.get(requestId) === admission) {
+        this.outboundRequestAdmissions.delete(requestId);
+      }
     });
+    } catch (error) {
+      if (requestId && admission && this.outboundRequestAdmissions.get(requestId) === admission) {
+        this.outboundRequestAdmissions.delete(requestId);
+      }
+      rejectOutbound?.(error);
+      throw error;
+    }
   }
 
   async stream(
@@ -496,6 +549,10 @@ class ClientSession implements IrohClientSession {
   private async cancelOutbound(message: RpcRequestCancel | RpcStreamCancel): Promise<void> {
     const outbound = this.outboundRequests.get(message.requestId);
     if (!outbound) return;
+    if (message.type === "request-cancel" && outbound.cancelRequest) {
+      await outbound.cancelRequest();
+      return;
+    }
     this.outboundRequests.delete(message.requestId);
     this.pipe.diagnosticsChanged();
     await outbound.cancel();

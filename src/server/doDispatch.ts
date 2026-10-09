@@ -43,11 +43,7 @@ import {
   describeWorkerdFetchFailure,
   getWorkerdConnectionDispatcher,
 } from "./workerdRpcRelay.js";
-import {
-  DURABLE_WORK_READY_HEADER,
-  decodeDurableWorkReady,
-  type DurableWorkReadyHint,
-} from "@vibestudio/shared/durableWork";
+import { parseDurableWorkReady, type DurableWorkReadyHint } from "@vibestudio/shared/durableWork";
 import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 
 /** Canonical string key for a DORef, used for maps and logging. */
@@ -215,7 +211,9 @@ export async function postToDOWithToken(
         errorCode?: unknown;
         errorData?: unknown;
         diagnosticId?: string;
+        metadata?: { durableWorkReady?: unknown };
       };
+      notifyDurableWorkReady(parsed.metadata?.durableWorkReady, deps.onWorkReady);
       if (typeof parsed.error === "string") {
         const kind: RpcErrorKind =
           parsed.errorKind === "access" ||
@@ -242,25 +240,39 @@ export async function postToDOWithToken(
     throw new Error(`DO dispatch failed (${res.status}): ${body}`);
   }
 
-  const encodedReady = res.headers.get(DURABLE_WORK_READY_HEADER);
-  if (encodedReady) {
-    try {
-      const queues = decodeDurableWorkReady(encodedReady);
-      if (queues.length > 0) deps.onWorkReady?.(queues);
-    } catch (error) {
-      // The durable owner remains authoritative and the registry scan recovers
-      // it. A malformed disposable hint must never turn a committed semantic
-      // call into an apparent failure that a caller might replay.
-      console.error("[DODispatch] ignored invalid durable-work receipt", error);
-    }
-  }
   try {
-    return decodeRpcJson(await res.text());
+    const decoded: unknown = decodeRpcJson(await res.text());
+    if (
+      !decoded ||
+      typeof decoded !== "object" ||
+      !Object.prototype.hasOwnProperty.call(decoded, "value")
+    ) {
+      throw new Error("DO dispatch success response must contain its canonical value field");
+    }
+    const payload = decoded as {
+      value: unknown;
+      metadata?: { durableWorkReady?: unknown };
+    };
+    notifyDurableWorkReady(payload.metadata?.durableWorkReady, deps.onWorkReady);
+    return payload.value;
   } catch (error) {
     throw new AmbiguousDoDispatchError(
       `DO dispatch to ${url} returned an unreadable success acknowledgement`,
       error
     );
+  }
+}
+
+function notifyDurableWorkReady(
+  value: unknown,
+  onWorkReady: PostToDOWithTokenDeps["onWorkReady"]
+): void {
+  if (value === undefined) return;
+  try {
+    const queues = parseDurableWorkReady(value);
+    if (queues.length > 0) onWorkReady?.(queues);
+  } catch (error) {
+    console.error("[DODispatch] ignored invalid durable-work receipt", error);
   }
 }
 

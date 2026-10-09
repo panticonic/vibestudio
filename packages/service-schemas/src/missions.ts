@@ -282,6 +282,11 @@ export const missionsMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
 
+  observeChanges: read(
+    "Observe a change to this user's visible automation definitions or retained runs. Cancellation retires only the observation.",
+    z.tuple([z.object({ afterVersion: z.string().optional() }).strict()]),
+    z.object({ version: z.string() }).strict()
+  ),
   overview: read(
     "Page visible automations with bounded recent runs and failures.",
     z.tuple([overviewOptionsSchema]),

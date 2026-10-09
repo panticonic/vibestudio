@@ -35,6 +35,23 @@ const charter = (): MissionCharter => ({
 });
 
 describe("author-side missions client", () => {
+  it("passes observation cancellation as invocation metadata and keeps the version in wire arguments", async () => {
+    const controller = new AbortController();
+    const call = vi.fn(async (_target: string, method: string) =>
+      method === "workers.resolveService"
+        ? { kind: "durable-object", targetId: "missions" }
+        : { version: "new" }
+    );
+    await expect(
+      createMissionsClient({ call }).observeChanges({
+        afterVersion: "old",
+        signal: controller.signal,
+      })
+    ).resolves.toEqual({ version: "new" });
+    expect(call).toHaveBeenLastCalledWith("missions", "observeChanges", [{ afterVersion: "old" }], {
+      signal: controller.signal,
+    });
+  });
   it("compiles the author's plan before dispatch and gives each operation its own idempotency key", async () => {
     const call = vi.fn(async (_target: string, method: string) => {
       if (method === "authority.compileAuthorityPlan") return { schemaVersion: 2, digest: hex };

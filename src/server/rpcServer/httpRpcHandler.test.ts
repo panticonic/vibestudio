@@ -34,10 +34,15 @@ function response(): {
   const res = Object.assign(events, {
     writableEnded: false,
     destroyed: false,
+    headersSent: false,
     writeHead(status: number, headers?: unknown) {
       captured.status = status;
       captured.headers = headers;
+      this.headersSent = true;
       return this;
+    },
+    flushHeaders() {
+      events.emit("headers-flushed");
     },
     end(body?: string | Buffer) {
       captured.body = body === undefined ? "" : body.toString();
@@ -284,6 +289,37 @@ describe("HttpRpcHandler", () => {
 
     expect(observedAbort).toBe(true);
     expect(cancelResponse.captured.status).toBe(200);
+  });
+
+  it("flushes the admission receipt before waiting for terminal handler cleanup", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const configured = deps({
+      handleRequest: vi.fn(async () => {
+        await held;
+        return "terminal";
+      }),
+    });
+    const handler = new HttpRpcHandler(configured);
+    const pendingResponse = response();
+    let admissionFlushed = false;
+    pendingResponse.events.once("headers-flushed", () => {
+      admissionFlushed = true;
+    });
+    const pending = handler.handle(
+      request({ body: JSON.stringify(rpcEnvelope()) }),
+      pendingResponse.res
+    );
+    await vi.waitFor(() => expect(configured.handleRequest).toHaveBeenCalledOnce());
+
+    expect(admissionFlushed).toBe(true);
+    expect(pendingResponse.captured.status).toBe(200);
+    expect(pendingResponse.captured.body).toBe("");
+    expect(pendingResponse.res.writableEnded).toBe(false);
+
+    release();
+    await pending;
+    expect(JSON.parse(pendingResponse.captured.body).message.result).toBe("terminal");
   });
 
   it("rejects an unordered pre-admission cancellation without poisoning a future request", async () => {

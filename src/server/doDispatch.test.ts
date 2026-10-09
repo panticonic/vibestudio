@@ -8,7 +8,6 @@ import {
   releaseDurableObjectRelaySeal,
   sealAndDrainDurableObjectRelays,
 } from "./workerdRpcRelay.js";
-import { DURABLE_WORK_READY_HEADER } from "@vibestudio/shared/durableWork";
 import type { AuthorizationContext } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 
@@ -168,7 +167,7 @@ describe("DODispatch", () => {
       guarded.setTokenManager(new TokenManager());
       guarded.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       guarded.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
-      const transport = vi.fn(async () => new Response("null", { status: 200 }));
+      const transport = vi.fn(async () => new Response('{"value":null}', { status: 200 }));
       vi.stubGlobal("fetch", transport);
       const ref = makeRef();
       const witness = {
@@ -224,7 +223,7 @@ describe("DODispatch", () => {
       });
       const fetchMock = vi.fn(async () => {
         events.push("invoke");
-        return new Response(JSON.stringify({ ok: true }), {
+        return new Response(JSON.stringify({ value: { ok: true } }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -257,7 +256,7 @@ describe("DODispatch", () => {
         "fetch",
         vi.fn(
           async () =>
-            new Response(JSON.stringify({}), {
+            new Response(JSON.stringify({ value: null }), {
               status: 200,
               headers: { "Content-Type": "application/json" },
             })
@@ -305,14 +304,19 @@ describe("DODispatch", () => {
       vi.stubGlobal(
         "fetch",
         vi.fn().mockResolvedValue(
-          new Response(JSON.stringify({ committed: true }), {
-            status: 200,
-            headers: {
-              "Content-Type": "application/json",
-              [DURABLE_WORK_READY_HEADER]:
-                "workspace-publication,channel-delivery,workspace-publication",
-            },
-          })
+          new Response(
+            JSON.stringify({
+              value: { committed: true },
+              metadata: {
+                durableWorkReady: [
+                  "workspace-publication",
+                  "channel-delivery",
+                  "workspace-publication",
+                ],
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
         )
       );
       dispatch.setTokenManager(new TokenManager());
@@ -324,14 +328,14 @@ describe("DODispatch", () => {
       await expect(dispatch.dispatch(ref, "enqueue")).resolves.toEqual({ committed: true });
       expect(observer).toHaveBeenCalledWith({
         owner: ref,
-        queues: ["workspace-publication", "channel-delivery"],
+        queues: ["channel-delivery", "workspace-publication"],
       });
     });
 
     it("does not impose Undici response deadlines on DO method lifetimes", async () => {
       const tokenManager = new TokenManager();
       const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ nextAlarm: null }), {
+        new Response(JSON.stringify({ value: { nextAlarm: null } }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         })
@@ -376,7 +380,7 @@ describe("DODispatch", () => {
       expect(warn).not.toHaveBeenCalled();
 
       finish(
-        new Response(JSON.stringify({ nextAlarm: null }), {
+        new Response(JSON.stringify({ value: { nextAlarm: null } }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         })
@@ -417,7 +421,7 @@ describe("DODispatch", () => {
     it("keeps test-scoped alarm authority active for the complete durable invocation", async () => {
       const tokenManager = new TokenManager();
       const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ nextAlarm: null }), {
+        new Response(JSON.stringify({ value: { nextAlarm: null } }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         })
@@ -518,7 +522,7 @@ describe("DODispatch", () => {
     it("stamps verified server caller identity for lifecycle dispatch", async () => {
       const tokenManager = new TokenManager();
       const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ ok: true }), {
+        new Response(JSON.stringify({ value: { ok: true } }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         })

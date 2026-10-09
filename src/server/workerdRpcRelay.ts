@@ -16,6 +16,7 @@ import { EntityNotCreatedError } from "@vibestudio/shared/runtime/entitySpec";
 import {
   DURABLE_WORK_READY_HEADER,
   decodeDurableWorkReady,
+  parseDurableWorkReady,
   type DurableWorkQueue,
 } from "@vibestudio/shared/durableWork";
 
@@ -279,19 +280,6 @@ async function fetchEnvelopeFromDO(
     throw wrapped;
   }
 
-  const encodedReady = res.headers.get(DURABLE_WORK_READY_HEADER);
-  if (encodedReady) {
-    try {
-      const queues = decodeDurableWorkReady(encodedReady);
-      if (queues.length > 0) deps.onWorkReady?.(queues);
-    } catch (error) {
-      // The owner registry remains the correctness backstop. A malformed
-      // disposable hint must not turn a committed semantic call into an
-      // apparent failure that its caller might replay.
-      console.error("[WorkerdRpcRelay] ignored invalid durable-work receipt", error);
-    }
-  }
-
   return res;
 }
 
@@ -301,10 +289,84 @@ async function postEnvelopeToDO(
   deps: DurableObjectRelayDeps,
   signal?: AbortSignal
 ): Promise<unknown> {
-  const res = await fetchEnvelopeFromDO(ref, envelope, deps, signal);
-  await assertDurableObjectResponseOk(ref, res);
-
-  return decodeRpcJson(await res.text());
+  const message = envelope.message;
+  const requestId = message.type === "request" ? message.requestId : null;
+  if (requestId && signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("DO RPC dispatch aborted");
+  }
+  let admitted = false;
+  let cancellationRequested = false;
+  let cancellationDelivery: Promise<void> | null = null;
+  const sendCancellation = (): Promise<void> => {
+    if (cancellationDelivery) return cancellationDelivery;
+    if (!requestId) return Promise.resolve();
+    const cancellation: RpcEnvelope = {
+      ...envelope,
+      message: {
+        type: "request-cancel",
+        requestId,
+        fromId: message.type === "request" ? message.fromId : envelope.from,
+      },
+    };
+    cancellationDelivery = (async () => {
+      const response = await fetchEnvelopeFromDO(ref, cancellation, deps);
+      await assertDurableObjectResponseOk(ref, response);
+      // Own the acknowledgement body as well as the POST. This is a unary
+      // cancellation delivery receipt, not background cleanup.
+      await response.arrayBuffer();
+    })();
+    void cancellationDelivery.catch(() => {});
+    return cancellationDelivery;
+  };
+  const onAbort = (): void => {
+    cancellationRequested = true;
+    if (admitted) void sendCancellation();
+  };
+  if (requestId) signal?.addEventListener("abort", onAbort, { once: true });
+  const dispatch = await (async () => {
+    // Keep the original fetch and its response body owned through the target's
+    // terminal response. Its headers are the target admission receipt; caller
+    // cancellation is a second envelope, never an abort of this response path.
+    const res = await fetchEnvelopeFromDO(ref, envelope, deps, requestId ? undefined : signal);
+    admitted = true;
+    if (cancellationRequested) void sendCancellation();
+    await assertDurableObjectResponseOk(ref, res);
+    return decodeRpcJson(await res.text()) as RpcEnvelope;
+  })().then(
+    (value) => ({ status: "fulfilled" as const, value }),
+    (reason) => ({ status: "rejected" as const, reason })
+  );
+  if (requestId) signal?.removeEventListener("abort", onAbort);
+  const [cancellation] = await Promise.allSettled(
+    cancellationDelivery ? [cancellationDelivery] : []
+  );
+  // Durable-work readiness describes committed receiver state. Observe it
+  // even when cancellation delivery or the receiver's application result
+  // failed, since the receiver may have committed queue work before either
+  // failure became terminal.
+  if (dispatch.status === "fulfilled") {
+    const responseMessage = dispatch.value.message as RpcResponse | undefined;
+    const ready = responseMessage?.metadata?.durableWorkReady;
+    if (ready !== undefined) {
+      try {
+        const queues = parseDurableWorkReady(ready);
+        if (queues.length > 0) deps.onWorkReady?.(queues);
+      } catch (error) {
+        // The owner registry remains the correctness backstop. A malformed
+        // disposable hint must not turn committed work into an apparent failure.
+        console.error("[WorkerdRpcRelay] ignored invalid durable-work receipt", error);
+      }
+    }
+  }
+  if (dispatch.status === "rejected" && cancellation?.status === "rejected") {
+    throw new AggregateError(
+      [dispatch.reason, cancellation.reason],
+      "DO dispatch and cancellation delivery both failed"
+    );
+  }
+  if (dispatch.status === "rejected") throw dispatch.reason;
+  if (cancellation?.status === "rejected") throw cancellation.reason;
+  return dispatch.value;
 }
 
 async function assertDurableObjectResponseOk(ref: DORef, res: Response): Promise<void> {
@@ -425,6 +487,15 @@ export async function streamFromDurableObject(
   try {
     const response = await fetchEnvelopeFromDO(ref, envelope, deps, signal);
     await assertDurableObjectResponseOk(ref, response);
+    const encodedReady = response.headers.get(DURABLE_WORK_READY_HEADER);
+    if (encodedReady) {
+      try {
+        const queues = decodeDurableWorkReady(encodedReady);
+        if (queues.length > 0) deps.onWorkReady?.(queues);
+      } catch (error) {
+        console.error("[WorkerdRpcRelay] ignored invalid durable-work stream receipt", error);
+      }
+    }
     if (!response.body) {
       finishRelay();
       return response;

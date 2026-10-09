@@ -15,6 +15,7 @@ import {
   httpClientTransport,
   type ConnectionlessTransport,
   type HttpClientTransportConfig,
+  type RpcInboundInvocation,
 } from "./transports/httpClient.js";
 import type { CallerKind, RpcClient, RpcEnvelope } from "./types.js";
 import type { AuthorityRequirement, PrincipalKind } from "./authority.js";
@@ -34,11 +35,11 @@ export interface ConnectionlessRpcClient {
   /** The unified client. Method calls dispatch via `exposeAll`. */
   client: RpcClient;
   /**
-   * Handle an inbound REQUEST envelope and return the response envelope (for the
-   * DO `fetch` to return in the HTTP body). Returns null for non-request
-   * messages (events/frames).
+   * Handle an inbound envelope with separate authenticated admission and
+   * terminal completion. The caller may acknowledge `admitted` while keeping
+   * the original response body open for `completion`.
    */
-  respond(envelope: RpcEnvelope): Promise<RpcEnvelope | null>;
+  respond(envelope: RpcEnvelope): RpcInboundInvocation;
   /** Feed an inbound envelope (event push, deferred reply) with no response. */
   deliver(envelope: RpcEnvelope): void;
 }

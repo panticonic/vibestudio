@@ -422,7 +422,7 @@ export interface MissionRpc {
     target: string,
     method: string,
     args: unknown[],
-    options?: { idempotencyKey: string }
+    options?: { idempotencyKey?: string; signal?: AbortSignal }
   ): Promise<unknown>;
 }
 
@@ -468,10 +468,7 @@ function editNeedsAuthorityPlan(
   current: Pick<MissionRecord, "charter" | "authorityPlan" | "seeded">,
   execution: MissionExecution
 ): boolean {
-  return (
-    current.seeded === true ||
-    !sameMissionExecution(current.charter.execution, execution)
-  );
+  return current.seeded === true || !sameMissionExecution(current.charter.execution, execution);
 }
 
 export interface MissionDefinitionInput {
@@ -497,6 +494,10 @@ export interface MissionCallOptions {
  * invocation: still two server calls, never controller-side compilation.
  */
 export interface MissionsClient {
+  observeChanges(options?: {
+    afterVersion?: string;
+    signal?: AbortSignal;
+  }): Promise<{ version: string }>;
   overview(options?: Record<string, unknown>): Promise<unknown>;
   list(): Promise<MissionRecord[]>;
   get(missionId: string): Promise<MissionRecord | null>;
@@ -547,6 +548,14 @@ export function createMissionsClient(rpc: MissionRpc): MissionsClient {
   const planKey = (options?: MissionCallOptions) =>
     options?.idempotencyKey ? `${options.idempotencyKey}:authority-plan` : undefined;
   return {
+    async observeChanges({ afterVersion, signal } = {}) {
+      return (await rpc.call(
+        await resolveTarget(),
+        "observeChanges",
+        [{ ...(afterVersion === undefined ? {} : { afterVersion }) }],
+        { ...(signal ? { signal } : {}) }
+      )) as { version: string };
+    },
     overview: (options = {}) => call("overview", [options]),
     list: () => call("list", []),
     get: (missionId) => call("get", [missionId]),

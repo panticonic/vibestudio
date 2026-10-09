@@ -16,6 +16,8 @@ import {
   responseEnvelopeFor,
   type RpcEnvelope,
   type RpcMessage,
+  type RpcRequest,
+  type RpcStreamRequest,
 } from "@vibestudio/rpc";
 import { encodeIrohStreamResponseHead } from "@vibestudio/rpc/protocol/irohStreamResponse";
 import {
@@ -33,6 +35,7 @@ const STREAM_CANCEL_CODE = 0x202n;
 
 interface RequestRoute {
   stream: IrohPhysicalBiStream;
+  envelope: RpcEnvelope & { message: RpcRequest | RpcStreamRequest };
   streaming: boolean;
   method: string;
   settled: boolean;
@@ -175,6 +178,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       }
       this.requests.set(requestId, {
         stream,
+        envelope: { ...envelope, message: envelope.message },
         streaming: envelope.message.type === "stream-request",
         method: envelope.message.method,
         settled: false,
@@ -457,22 +461,33 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     try {
       await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES);
       return;
-    } catch {
+    } catch (error) {
+      const resetCode = await stream.recv.receivedReset();
+      if (resetCode === null) {
+        this.logControlFailure(`request ${requestId} receive-half drain`, error);
+        return;
+      }
       if (!this.requests.has(requestId)) return;
     }
-    this.requests.delete(requestId);
-    this.inboundBodies.delete(requestId);
+    const route = this.requests.get(requestId);
+    if (!route) return;
+    if (type === "stream-request") {
+      this.requests.delete(requestId);
+      this.inboundBodies.delete(requestId);
+    }
+    const original = route.envelope;
     this.deliver({
-      type: "ws:rpc",
+      type: original.target === "main" || original.target === "server" ? "ws:rpc" : "ws:route",
       envelope: {
-        from: "",
-        target: "main",
-        delivery: { caller: { callerId: "", callerKind: "unknown" } },
-        provenance: [],
+        from: original.from,
+        target: original.target,
+        ...(original.destination ? { destination: original.destination } : {}),
+        delivery: original.delivery,
+        provenance: original.provenance,
         message: {
           type: type === "stream-request" ? "stream-cancel" : "request-cancel",
           requestId,
-          fromId: "",
+          fromId: original.message.fromId,
         },
       },
     });

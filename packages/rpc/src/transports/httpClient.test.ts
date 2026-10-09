@@ -49,6 +49,111 @@ describe("httpClientTransport", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the admitted HTTP request owned through its terminal response body", async () => {
+    let releaseBody!: () => void;
+    const body = new ReadableStream<Uint8Array>({
+      start(value) {
+        releaseBody = () => {
+          value.enqueue(
+            new TextEncoder().encode(
+              JSON.stringify(
+                responseEnvelopeFor(
+                  requestEnvelope(),
+                  { callerId: "main", callerKind: "server" },
+                  { type: "response", requestId: "req-1", result: "done" }
+                )
+              )
+            )
+          );
+          value.close();
+        };
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response(body, { status: 200 })) as unknown as typeof fetch;
+    const transport = httpClientTransport({
+      selfId: "worker:agent",
+      serverUrl: "http://127.0.0.1:65530",
+      authToken: "token",
+      fetch: fetchMock,
+    });
+    let terminal: RpcEnvelope | undefined;
+    transport.onMessage((envelope) => {
+      terminal = envelope;
+    });
+
+    let settled = false;
+    const pending = transport.send(requestEnvelope()).then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    expect(terminal).toBeUndefined();
+
+    releaseBody();
+    await pending;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(terminal?.message).toMatchObject({ result: "done" });
+  });
+
+  it("orders cancellation behind the original HTTP admission receipt", async () => {
+    let admit!: (response: Response) => void;
+    const admission = new Promise<Response>((resolve) => {
+      admit = resolve;
+    });
+    const postedTypes: string[] = [];
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const message = JSON.parse(String(init?.body)).message as { type: string };
+      postedTypes.push(message.type);
+      if (message.type === "request") return admission;
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const transport = httpClientTransport({
+      selfId: "worker:agent",
+      serverUrl: "http://127.0.0.1:65530",
+      authToken: "token",
+      fetch: fetchMock,
+    });
+
+    const sending = transport.send(requestEnvelope());
+    await vi.waitFor(() => expect(postedTypes).toEqual(["request"]));
+    const cancelled = transport.send({
+      ...requestEnvelope(),
+      message: { type: "request-cancel", requestId: "req-1", fromId: "worker:agent" },
+    });
+    await Promise.resolve();
+    expect(postedTypes).toEqual(["request"]);
+
+    admit(new Response("{}", { status: 200 }));
+    await sending;
+    await cancelled;
+    expect(postedTypes).toEqual(["request", "request-cancel"]);
+  });
+
+  it("treats an already-terminal request cancellation as an authoritative no-op", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const message = JSON.parse(String(init?.body)).message as { type: string };
+      if (message.type === "request") return new Response("{}", { status: 200 });
+      return new Response(JSON.stringify({ error: "RPC request is not active" }), {
+        status: 409,
+      });
+    }) as unknown as typeof fetch;
+    const transport = httpClientTransport({
+      selfId: "worker:agent",
+      serverUrl: "http://127.0.0.1:65530",
+      authToken: "token",
+      fetch: fetchMock,
+    });
+
+    await transport.send(requestEnvelope());
+    await expect(
+      transport.send({
+        ...requestEnvelope(),
+        message: { type: "request-cancel", requestId: "req-1", fromId: "worker:agent" },
+      })
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("annotates fetch failures with the RPC endpoint and low-level cause", async () => {
     const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:65530"), {
       code: "ECONNREFUSED",
@@ -73,115 +178,36 @@ describe("httpClientTransport", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("respond() resolves a rejecting error envelope on timeout (not null)", async () => {
-    vi.useFakeTimers();
-    try {
-      const transport = httpClientTransport({
-        selfId: "do:notes:Bucket:key",
-        serverUrl: "http://127.0.0.1:65530",
-        authToken: "token",
-        // No handler ever resolves the capture — model a dropped/never-answered
-        // inbound request. A short reaper deadline so the test stays fast.
-        respondTimeoutMs: 100,
-      });
+  it("retains an inbound invocation until its actual terminal response arrives", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}")) as unknown as typeof fetch;
+    const transport = httpClientTransport({
+      selfId: "do:approval:Waiter:key",
+      serverUrl: "http://127.0.0.1:65530",
+      authToken: "token",
+      fetch: fetchMock,
+    });
+    const inbound = requestEnvelope();
+    let settled = false;
+    const completion = transport.respond(inbound).completion.then((response) => {
+      settled = true;
+      return response;
+    });
 
-      const settled = transport.respond(requestEnvelope());
-      await vi.advanceTimersByTimeAsync(101);
-      const result = await settled;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
 
-      // A9 (silent-drop): the old code resolved `null`, which downstream
-      // unwrapped to `undefined` (a silent wrong result). It must resolve a
-      // rejecting response envelope so the relay rejects the caller's call.
-      expect(result).not.toBeNull();
-      expect(result?.message).toMatchObject({
-        type: "response",
-        requestId: "req-1",
-        errorCode: "RESPOND_TIMEOUT",
-      });
-      expect((result?.message as { error: string }).error).toContain("timed out after 100ms");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("drops a late response after an explicit respond timeout instead of POSTing it to /rpc", async () => {
-    vi.useFakeTimers();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const fetchMock = vi.fn(async () => new Response("{}")) as unknown as typeof fetch;
-      const transport = httpClientTransport({
-        selfId: "do:notes:Bucket:key",
-        serverUrl: "http://127.0.0.1:65530",
-        authToken: "token",
-        fetch: fetchMock,
-        respondTimeoutMs: 100,
-      });
-      const inbound = requestEnvelope();
-
-      const settled = transport.respond(inbound);
-      await vi.advanceTimersByTimeAsync(101);
-      await settled;
-
-      await transport.send(
-        responseEnvelopeFor(
-          inbound,
-          { callerId: "do:notes:Bucket:key", callerKind: "do" },
-          {
-            type: "response",
-            requestId: "req-1",
-            result: "late",
-          }
-        )
-      );
-
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("dropping unmatched response (requestId=req-1)")
-      );
-    } finally {
-      warn.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it("respond() never reaps by default", async () => {
-    vi.useFakeTimers();
-    try {
-      const transport = httpClientTransport({
-        selfId: "do:approval:Waiter:key",
-        serverUrl: "http://127.0.0.1:65530",
-        authToken: "token",
-      });
-
-      let settled = false;
-      void transport.respond(requestEnvelope()).then(() => {
-        settled = true;
-      });
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(settled).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("respond() never reaps when respondTimeoutMs <= 0", async () => {
-    vi.useFakeTimers();
-    try {
-      const transport = httpClientTransport({
-        selfId: "do:eval:EvalDO:key",
-        serverUrl: "http://127.0.0.1:65530",
-        authToken: "token",
-        respondTimeoutMs: 0,
-      });
-
-      let settled = false;
-      void transport.respond(requestEnvelope()).then(() => {
-        settled = true;
-      });
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(settled).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+    await transport.send(
+      responseEnvelopeFor(
+        inbound,
+        { callerId: "do:approval:Waiter:key", callerKind: "do" },
+        { type: "response", requestId: "req-1", result: "completed" }
+      )
+    );
+    await expect(completion).resolves.toMatchObject({
+      message: { type: "response", requestId: "req-1", result: "completed" },
+    });
+    expect(settled).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

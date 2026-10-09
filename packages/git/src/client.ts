@@ -25,6 +25,19 @@ import type {
 
 const FULL_OBJECT_ID = /^[0-9a-f]{40}$/iu;
 
+export class GitRemoteChangedError extends Error {
+  constructor(
+    readonly ref: string,
+    readonly expected: string | null,
+    readonly actual: string | null
+  ) {
+    super(
+      `Remote ref ${ref} changed: expected ${expected ?? "absent"}, found ${actual ?? "absent"}`
+    );
+    this.name = "GitRemoteChangedError";
+  }
+}
+
 export class GitAuthError extends Error {
   statusCode?: number;
 
@@ -225,10 +238,7 @@ function wrapFsForGit(fsPromises: FsPromisesLike): FsClient {
  * bundle. Network operations remain adapter-gated below.
  */
 const defaultLocalFs: FsPromisesLike = {
-  async readFile(
-    path: string,
-    encoding?: BufferEncoding
-  ): Promise<Uint8Array | string> {
+  async readFile(path: string, encoding?: BufferEncoding): Promise<Uint8Array | string> {
     const fs = await import("node:fs/promises");
     return encoding ? fs.readFile(path, encoding) : fs.readFile(path);
   },
@@ -1148,9 +1158,15 @@ export class GitClient {
     const checked = assertOptionsObject<PushOptions>(
       options,
       "push",
-      "push({ dir: string, url?: string, remote?: string, ref?: string, remoteRef?: string, force?: boolean })"
+      "push({ dir: string, url?: string, remote?: string, ref?: string, remoteRef?: string, force?: boolean, expectedRemoteHead?: string | null })"
     );
     assertDirString(checked.dir, "push");
+    if (
+      checked.expectedRemoteHead !== undefined &&
+      checked.expectedRemoteHead !== null &&
+      !FULL_OBJECT_ID.test(checked.expectedRemoteHead)
+    )
+      throw new TypeError("git.push: expectedRemoteHead must be a full object id or null");
 
     const onProgress = checked.onProgress
       ? (progress: { phase?: string; loaded?: number; total?: number }) => {
@@ -1172,9 +1188,28 @@ export class GitClient {
         ref: checked.ref,
         remoteRef: checked.remoteRef,
         force: checked.force ?? false,
+        // The hook reads the advertisement used by this actual receive-pack
+        // request. Git sends that same old object id, which the receiver checks
+        // atomically when updating the ref; a separate preflight cannot do this.
+        onPrePush:
+          checked.expectedRemoteHead === undefined
+            ? undefined
+            : ({ remoteRef }) => {
+                const actual = /^0{40}$/u.test(remoteRef.oid) ? null : remoteRef.oid;
+                const expectedIdentity = checked.expectedRemoteHead?.toLowerCase() ?? null;
+                const actualIdentity = actual?.toLowerCase() ?? null;
+                if (actualIdentity !== expectedIdentity)
+                  throw new GitRemoteChangedError(
+                    remoteRef.ref,
+                    checked.expectedRemoteHead!,
+                    actual
+                  );
+                return true;
+              },
         onProgress,
       });
     } catch (err) {
+      if (err instanceof GitRemoteChangedError) throw err;
       const authFailure = getAuthFailureInfo(err);
       if (authFailure) {
         throw new GitAuthError(authFailure.message, authFailure.statusCode);

@@ -976,16 +976,6 @@ export class EvalDO extends DurableObjectBase {
     );
   }
 
-  /**
-   * Keep the inbound `respond()` watchdog disabled explicitly: the synchronous panel/CLI `run`
-   * method legitimately runs for the eval's whole duration. Agent `startRun` returns immediately
-   * and executes under `waitUntil`. Only an explicit `timeoutMs` bounds either form; otherwise the
-   * run remains admitted until completion, explicit cancellation, or runtime lifecycle loss.
-   */
-  protected override get respondTimeoutMs(): number {
-    return 0;
-  }
-
   // ── public RPC methods (dispatched by the server `eval` service) ──────────────
 
   @schemaRpc()

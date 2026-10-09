@@ -428,6 +428,10 @@ describe("Iroh RPC client over real local QUIC", () => {
     const client = new NodePhysicalConnection(clientNative);
     const connectionId = `default-cdp-${"nested-panel/".repeat(32)}`;
     const serverMessagePayload = `independent:${"x".repeat(9 * 1024 * 1024)}`;
+    let requestReceived!: () => void;
+    const requestReceivedPromise = new Promise<void>((resolve) => {
+      requestReceived = resolve;
+    });
     const serverTask = (async () => {
       const control = await server.acceptBi();
       expect(await readIrohStreamPreamble(control.recv)).toEqual({
@@ -532,16 +536,21 @@ describe("Iroh RPC client over real local QUIC", () => {
       ) as RpcEnvelope;
       const request = requestEnvelope.message as RpcRequest;
       expect(request).toMatchObject({ type: "request", method: "echo", args: ["hello"] });
-      // Unary request bytes end with the envelope. The request half must be
-      // cleanly closed before the response is produced so completed calls do
-      // not retain QUIC stream credit under concurrent polling.
-      expect(await requestStream.recv.read(1)).toHaveLength(0);
+      requestReceived();
+      // Cancellation resets only the request half. The response half remains
+      // available for the terminal cleanup receipt.
+      await expect(requestStream.recv.read(1)).rejects.toThrow();
+      expect(await requestStream.recv.receivedReset()).toBe(0x202);
       const response: RpcEnvelope = {
         from: "main",
         target: request.fromId,
         delivery: { caller: { callerId: "main", callerKind: "shell" } },
         provenance: [],
-        message: { type: "response", requestId: request.requestId, result: request.args[0] },
+        message: {
+          type: "response",
+          requestId: request.requestId,
+          result: "cleanup complete",
+        },
       };
       await writeChunked(
         requestStream.send,
@@ -594,10 +603,18 @@ describe("Iroh RPC client over real local QUIC", () => {
         payload: null,
       },
     });
-    await expect(rpc.call("main", "echo", ["hello"])).resolves.toBe("hello");
-    await Promise.resolve();
+    const abort = new AbortController();
+    const cancellationReason = new Error("caller stopped waiting");
+    const call = rpc.call("main", "echo", ["hello"], { signal: abort.signal });
+    await requestReceivedPromise;
+    abort.abort(cancellationReason);
+    await expect(call).rejects.toMatchObject({
+      code: "RPC_ABORTED",
+      cause: cancellationReason,
+    });
     expect(diagnostics.some((snapshot) => snapshot.logicalSessions === 1)).toBe(true);
     expect(diagnostics.some((snapshot) => snapshot.activeRequests === 1)).toBe(true);
+    await vi.waitFor(() => expect(pipe.diagnostics()?.activeRequests).toBe(0));
     expect(pipe.diagnostics()).toMatchObject({
       logicalSessions: 1,
       activeRequests: 0,

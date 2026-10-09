@@ -1,5 +1,4 @@
-import type { EnvelopeRpcTransport, RpcEnvelope, RpcRequest } from "../types.js";
-import { responseEnvelopeFor } from "../envelope.js";
+import type { EnvelopeRpcTransport, RpcEnvelope } from "../types.js";
 import { decodeFramedResponseToStreaming } from "../protocol/streamCodec.js";
 import { decodeRpcJson, encodeRpcJson } from "../wireJson.js";
 
@@ -22,12 +21,19 @@ export interface HttpClientTransportConfig {
   authToken: string;
   fetch?: typeof fetch;
   runtimeIdHeader?: string;
-  /**
-   * Optional watchdog for inbound request handlers. Omitted or `<= 0` means no
-   * transport deadline; callers that need a bounded probe can opt in with a
-   * positive value.
-   */
-  respondTimeoutMs?: number;
+}
+
+/** One admitted inbound invocation and its authoritative terminal response. */
+export interface RpcInboundInvocation {
+  /** Resolves only after the receiver core has registered the request owner. */
+  admitted: Promise<void>;
+  /** Resolves with the receiver's terminal response (or an explicit reaper response). */
+  completion: Promise<RpcEnvelope | null>;
+}
+
+interface UnaryHttpRequest {
+  admitted: Promise<void>;
+  completion: Promise<void>;
 }
 
 /**
@@ -38,14 +44,15 @@ export interface HttpClientTransportConfig {
  *   response envelope.
  * - `deliver(envelope)` — feed an inbound envelope to the core's listeners
  *   (server→DO event push) with no response expected.
- * - `respond(envelope)` — feed an inbound REQUEST and capture the response
- *   envelope the core produces, so the DO's `fetch` can return it synchronously
- *   in the HTTP body (the server's relay reads the result from that body).
+ * - `respond(envelope)` — feed an inbound request to the core and return its
+ *   admission barrier separately from its terminal response. HTTP adapters
+ *   can acknowledge an admitted request while retaining the original response
+ *   body until the handler and its cleanup finish.
  */
 export type ConnectionlessTransport = EnvelopeRpcTransport & {
   request(envelope: RpcEnvelope): Promise<unknown>;
   deliver(envelope: RpcEnvelope): void;
-  respond(envelope: RpcEnvelope): Promise<RpcEnvelope | null>;
+  respond(envelope: RpcEnvelope): RpcInboundInvocation;
   stream(
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
@@ -87,6 +94,26 @@ function rpcFetchError(url: string, error: unknown): Error {
   return wrapped;
 }
 
+class HttpRpcResponseError extends Error {
+  constructor(
+    readonly status: number,
+    readonly detail: string
+  ) {
+    super(`RPC endpoint returned HTTP ${status}${detail ? `: ${detail}` : ""}`);
+    this.name = "HttpRpcResponseError";
+  }
+}
+
+function isInactiveRequestCancellation(error: unknown): boolean {
+  if (!(error instanceof HttpRpcResponseError) || error.status !== 409) return false;
+  try {
+    const body = decodeRpcJson(error.detail) as { error?: unknown };
+    return body.error === "RPC request is not active";
+  } catch {
+    return false;
+  }
+}
+
 function abortError(signal: AbortSignal): Error {
   // `AbortSignal.reason` is implemented by every runtime supported by the RPC
   // package, but React Native's TypeScript library still exposes the older
@@ -103,6 +130,10 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
   // produces a response envelope by calling `send()`, which resolves the
   // matching capture instead of POSTing it back to the server.
   const captures = new Map<string, (envelope: RpcEnvelope) => void>();
+  // A cancellation POST is allowed only after the corresponding request has
+  // received its authenticated admission headers. This orders two independent
+  // HTTP connections without retaining speculative unknown request ids.
+  const requestAdmissions = new Map<string, Promise<void>>();
   const fetchImpl = config.fetch ?? ambientRpcFetch;
   const runtimeIdHeader = config.runtimeIdHeader ?? "X-vibestudio-Runtime-Id";
   const rpcUrl = `${config.serverUrl}/rpc`;
@@ -132,13 +163,64 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
     if (response.status === 401) throw new Error("RPC authentication failed");
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
-      throw new Error(`RPC endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+      throw new HttpRpcResponseError(response.status, detail);
     }
     return decodeRpcJson(await response.text());
   }
 
   function deliverToListeners(envelope: RpcEnvelope): void {
     for (const listener of listeners) listener(envelope);
+  }
+
+  function sendUnaryRequest(envelope: RpcEnvelope, signal?: AbortSignal): UnaryHttpRequest {
+    let resolveAdmission!: () => void;
+    let rejectAdmission!: (error: Error) => void;
+    const admitted = new Promise<void>((resolve, reject) => {
+      resolveAdmission = resolve;
+      rejectAdmission = reject;
+    });
+    // Admission rejection is also observed by completion. Mark the separately
+    // exposed barrier handled when no cancellation races the initial request.
+    void admitted.catch(() => {});
+    const completion = (async () => {
+    let response: Response;
+    try {
+      response = await fetchImpl(rpcUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.authToken}`,
+          [runtimeIdHeader]: config.selfId,
+        },
+        body: encodeRpcJson(envelope),
+        signal: signal as RequestInit["signal"],
+      });
+    } catch (error) {
+      const failure = signal?.aborted ? abortError(signal) : rpcFetchError(rpcUrl, error);
+      rejectAdmission(failure);
+      throw failure;
+    }
+    if (response.status === 401) {
+      const failure = new Error("RPC authentication failed");
+      rejectAdmission(failure);
+      throw failure;
+    }
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      const failure = new Error(
+        `RPC endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`
+      );
+      rejectAdmission(failure);
+      throw failure;
+    }
+
+    // The server flushes headers only after registering its authenticated
+    // request. This barrier orders a later cancellation POST. Completion still
+    // owns and reads the original body so terminal failures propagate normally.
+    resolveAdmission();
+    deliverToListeners(decodeRpcJson(await response.text()) as RpcEnvelope);
+    })();
+    return { admitted, completion };
   }
 
   return {
@@ -163,7 +245,34 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
         );
         return;
       }
-      const response = (await postEnvelope(envelope, signal)) as unknown;
+      if (message.type === "request") {
+        const operation = sendUnaryRequest(envelope, signal);
+        requestAdmissions.set(message.requestId, operation.admitted);
+        try {
+          await operation.completion;
+        } finally {
+          if (requestAdmissions.get(message.requestId) === operation.admitted) {
+            requestAdmissions.delete(message.requestId);
+          }
+        }
+        return;
+      }
+      if (message.type === "request-cancel") {
+        await requestAdmissions.get(message.requestId);
+      }
+      let response: unknown;
+      try {
+        response = await postEnvelope(envelope, signal);
+      } catch (error) {
+        // The original request may finish between its terminal body and this
+        // independent cancellation POST. The server's exact 409 means there is
+        // no remaining invocation to cancel; every other delivery failure is
+        // retained and joined by the caller with the original terminal receipt.
+        if (message.type !== "request-cancel" || !isInactiveRequestCancellation(error)) {
+          throw error;
+        }
+        return;
+      }
       const returnedEnvelope = response as RpcEnvelope | undefined;
       if (
         returnedEnvelope &&
@@ -183,58 +292,33 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
     deliver(envelope): void {
       deliverToListeners(envelope);
     },
-    respond(inbound): Promise<RpcEnvelope | null> {
+    respond(inbound): RpcInboundInvocation {
       const message = inbound.message;
       if (message.type !== "request" && message.type !== "stream-request") {
         // Events / frames / cancels expect no response — just deliver them.
         deliverToListeners(inbound);
-        return Promise.resolve(null);
+        return { admitted: Promise.resolve(), completion: Promise.resolve(null) };
       }
-      const requestId = (message as RpcRequest).requestId;
-      const timeoutMs = config.respondTimeoutMs ?? 0;
-      return new Promise<RpcEnvelope | null>((resolve) => {
-        // No implicit transport deadline: handlers that wait for human approval
-        // can legitimately outlive short RPC watchdogs. Positive `respondTimeoutMs`
-        // remains as an explicit opt-in for tests/probes.
-        const timer =
-          timeoutMs > 0
-            ? setTimeout(() => {
-                captures.delete(requestId);
-                // Resolve with a REJECTING response envelope, not `null`. The
-                // server's relay reads this body and delivers it to the original
-                // caller; a `null` here was unwrapped downstream to `undefined`,
-                // silently handing the caller a wrong (empty) result instead of
-                // an error (silent-drop class). The held exemption above (`<= 0`)
-                // is untouched.
-                console.warn(
-                  `[httpClientTransport:${config.selfId}] respond() timed out after ${timeoutMs}ms ` +
-                    `for "${(message as RpcRequest).method}" (requestId=${requestId})`
-                );
-                resolve(
-                  responseEnvelopeFor(
-                    inbound,
-                    {
-                      callerId: inbound.target,
-                      callerKind: "unknown",
-                      ...(config.workspaceId ? { workspaceId: config.workspaceId } : {}),
-                    },
-                    {
-                      type: "response",
-                      requestId,
-                      error: `Handler timed out after ${timeoutMs}ms`,
-                      errorKind: "transport",
-                      errorCode: "RESPOND_TIMEOUT",
-                    }
-                  )
-                );
-              }, timeoutMs)
-            : null;
+      const requestId = message.requestId;
+      let admit!: () => void;
+      let rejectCompletion!: (error: unknown) => void;
+      const admitted = new Promise<void>((resolve) => {
+        admit = resolve;
+      });
+      const completion = new Promise<RpcEnvelope | null>((resolve, reject) => {
+        rejectCompletion = reject;
         captures.set(requestId, (responseEnvelope) => {
-          if (timer) clearTimeout(timer);
           resolve(responseEnvelope);
         });
-        deliverToListeners(inbound);
       });
+      try {
+        deliverToListeners(inbound);
+        admit();
+      } catch (error) {
+        captures.delete(requestId);
+        rejectCompletion(error);
+      }
+      return { admitted, completion };
     },
     async stream(envelope, signal, body): Promise<Response> {
       if (body) {

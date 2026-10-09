@@ -130,9 +130,12 @@ describe("createConnectionlessRpcClient", () => {
     it("dispatches an exposed method and captures the response synchronously", async () => {
       const fetchMock = vi.fn();
       const { client, respond } = makeClient(fetchMock as unknown as typeof fetch);
-      client.expose("ping", (req) => `pong-${(req.args as unknown[])[0]}`, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+      client.expose("ping", (req) => `pong-${(req.args as unknown[])[0]}`, {
+        kind: "eligible",
+        rationale: "This test explicitly permits website receiver entry.",
+      });
 
-      const response = await respond(requestEnvelope("ping", ["x"]));
+      const response = await respond(requestEnvelope("ping", ["x"])).completion;
       expect(response).not.toBeNull();
       expect(response!.message).toMatchObject({
         type: "response",
@@ -145,7 +148,7 @@ describe("createConnectionlessRpcClient", () => {
 
     it("returns an error response for an unexposed method", async () => {
       const { client: _client, respond } = makeClient(vi.fn() as unknown as typeof fetch);
-      const response = await respond(requestEnvelope("nope", []));
+      const response = await respond(requestEnvelope("nope", [])).completion;
       expect(response!.message).toMatchObject({ type: "response" });
       expect((response!.message as { error?: string }).error).toMatch(/not exposed/);
     });
@@ -155,7 +158,10 @@ describe("createConnectionlessRpcClient", () => {
     it("fires a matching event listener with no response", async () => {
       const { client, deliver } = makeClient(vi.fn() as unknown as typeof fetch);
       const seen: unknown[] = [];
-      client.on("vcs:publication", (ev) => seen.push(ev.payload), {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
+      client.on("vcs:publication", (ev) => seen.push(ev.payload), {
+        kind: "eligible",
+        rationale: "This test explicitly permits website receiver entry.",
+      });
       deliver({
         from: "main",
         target: SELF,
@@ -185,7 +191,8 @@ class FrameworkBase {
   }
 }
 class IntermediateBase extends FrameworkBase {
-  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
+  @rpc({
+    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
     effect: { kind: "open" },
     tier: "open",
     principals: ["code"],
@@ -196,7 +203,8 @@ class IntermediateBase extends FrameworkBase {
   }
 }
 class ConcreteDO extends IntermediateBase {
-  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
+  @rpc({
+    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
     effect: { kind: "open" },
     tier: "open",
     principals: ["code"],
@@ -236,12 +244,17 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
         rpcExposedMethodNames(new ConcreteDO()),
         FrameworkBase.prototype
       ),
-      Object.fromEntries([...rpcExposedMethodNames(new ConcreteDO())].map(name => [name, rpcMethodAuthority(new ConcreteDO(), name)!.website]))
+      Object.fromEntries(
+        [...rpcExposedMethodNames(new ConcreteDO())].map((name) => [
+          name,
+          rpcMethodAuthority(new ConcreteDO(), name)!.website,
+        ])
+      )
     );
-    const ok = await respond(requestEnvelope("run", [41]));
+    const ok = await respond(requestEnvelope("run", [41])).completion;
     expect((ok!.message as { result?: unknown }).result).toBe(42);
     for (const method of ["appendDurable", "dispatchInboundEnvelope"]) {
-      const denied = await respond(requestEnvelope(method, [{ forged: true }]));
+      const denied = await respond(requestEnvelope(method, [{ forged: true }])).completion;
       expect((denied!.message as { error?: string }).error).toMatch(/not exposed/);
     }
   });
@@ -249,7 +262,8 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
 
 // Direct authority declarations register both exposure and their compositional requirement.
 class PolicyBase {
-  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
+  @rpc({
+    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -260,7 +274,8 @@ class PolicyBase {
   }
 }
 class PolicyDO extends PolicyBase {
-  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
+  @rpc({
+    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
     principals: ["user", "code"],
     effect: { kind: "open" },
     tier: "open",
@@ -275,14 +290,20 @@ describe("@rpc direct authority declaration", () => {
   it("returns the complete declaration for own and inherited methods", () => {
     const inst = new PolicyDO();
     expect(rpcMethodAuthority(inst, "broad")).toEqual({
- website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."} as const,
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver exposure for this test fixture.",
+      } as const,
       principals: ["user", "code"],
       effect: { kind: "open" },
       tier: "open",
       sensitivity: "read",
     });
     expect(rpcMethodAuthority(inst, "serverOnly")).toEqual({
- website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."} as const,
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver exposure for this test fixture.",
+      } as const,
       principals: ["host"],
       effect: { kind: "open" },
       tier: "open",

@@ -67,6 +67,74 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
     expect(stream.send.finish).not.toHaveBeenCalled();
   });
 
+  it("keeps the original response route and authenticated caller after unary cancellation", async () => {
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+      writeControl: vi.fn(async () => undefined),
+      onClosed: vi.fn(),
+    });
+    const stream = fakeStream();
+    stream.recv.read.mockRejectedValueOnce(new Error("ReadError(Reset(514))"));
+    vi.mocked(stream.recv.receivedReset).mockResolvedValueOnce(514);
+    const delivered: unknown[] = [];
+    channel.onMessage((message) => delivered.push(message));
+    const original = requestEnvelope("shell:device");
+
+    channel.deliverEnvelope(original, stream);
+    await vi.waitFor(() => expect(delivered).toHaveLength(2));
+    expect(delivered[1]).toMatchObject({
+      type: "ws:rpc",
+      envelope: {
+        from: "shell:device",
+        target: "main",
+        delivery: { caller: { callerId: "shell:device", callerKind: "shell" } },
+        message: { type: "request-cancel", requestId: "request-1", fromId: "shell:device" },
+      },
+    });
+
+    channel.sendMessage({
+      type: "ws:rpc",
+      envelope: {
+        ...original,
+        from: "main",
+        target: "shell:device",
+        message: { type: "response", requestId: "request-1", result: "cleanup complete" },
+      },
+    });
+    await vi.waitFor(() => expect(stream.send.finish).toHaveBeenCalledOnce());
+    expect(stream.send.writeAll).toHaveBeenCalledOnce();
+  });
+
+  it("keeps routed unary cancellation on the routed dispatch path", async () => {
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+      writeControl: vi.fn(async () => undefined),
+      onClosed: vi.fn(),
+    });
+    const stream = fakeStream();
+    stream.recv.read.mockRejectedValueOnce(new Error("ReadError(Reset(514))"));
+    vi.mocked(stream.recv.receivedReset).mockResolvedValueOnce(514);
+    const delivered: unknown[] = [];
+    channel.onMessage((message) => delivered.push(message));
+    const original = { ...requestEnvelope(), target: "do:workers/agent:Chat:key" };
+
+    channel.deliverEnvelope(original, stream);
+    await vi.waitFor(() => expect(delivered).toHaveLength(2));
+    expect(delivered).toEqual([
+      { type: "ws:route", envelope: original },
+      expect.objectContaining({
+        type: "ws:route",
+        envelope: expect.objectContaining({
+          target: original.target,
+          delivery: original.delivery,
+          message: { type: "request-cancel", requestId: "request-1", fromId: "shell:device" },
+        }),
+      }),
+    ]);
+  });
+
   it("retires both halves of a client-originated event stream", async () => {
     const connection = {
       peerEndpointId: "peer",

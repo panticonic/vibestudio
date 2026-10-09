@@ -2,6 +2,7 @@ import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import type { AuthenticatedCaller, AuthorizationContext, RpcEnvelope } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { rpcMethodAuthority } from "@vibestudio/rpc";
+import { parseDurableWorkReady } from "@vibestudio/shared/durableWork";
 
 type BindParams = Parameters<Database["run"]>[1];
 
@@ -398,7 +399,18 @@ export async function createTestDO<T>(
           : `DO call ${method} failed: ${response.status}`
       );
     }
-    return (text ? JSON.parse(text) : undefined) as R;
+    const reply = text
+      ? (JSON.parse(text) as { value?: unknown; metadata?: { durableWorkReady?: unknown } })
+      : null;
+    if (!reply || !Object.prototype.hasOwnProperty.call(reply, "value")) {
+      throw new Error("DO dispatch success response must contain its canonical value field");
+    }
+    // The instance-token channel owns a result plus its durable-work receipt.
+    // Tests have no host supervisor to wake, but still validate that receipt.
+    if (reply.metadata?.durableWorkReady !== undefined) {
+      parseDurableWorkReady(reply.metadata.durableWorkReady);
+    }
+    return reply.value as R;
   };
 
   const call = <R = unknown>(method: string, ...args: unknown[]): Promise<R> =>

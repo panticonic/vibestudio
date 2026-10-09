@@ -57,8 +57,10 @@ import {
 import { secureRandomUuid } from "./randomId.js";
 
 /** A caller-owned cancellation, carrying the identity callers key on. */
-function callerAbortedError(): Error & { code: typeof RPC_ABORTED_CODE } {
-  return Object.assign(new Error("RPC call aborted by caller"), { code: RPC_ABORTED_CODE });
+function callerAbortedError(reason?: unknown): Error & { code: typeof RPC_ABORTED_CODE } {
+  return Object.assign(new Error("RPC call aborted by caller", { cause: reason }), {
+    code: RPC_ABORTED_CODE,
+  });
 }
 
 const FRAME_HEAD = 0x01;
@@ -399,6 +401,10 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       reject: (error: Error) => void;
       timeout: ReturnType<typeof setTimeout> | null;
       abortCleanup: (() => void) | null;
+      cancellationReason: Error | null;
+      cancellationSend: Promise<void> | null;
+      cancellationDeliveryError: Error | null;
+      responseSettling: boolean;
       /** Envelope target — drives the direct-server vs routed rejection policy (§3.4). */
       target: string;
       destination?: RpcDestination;
@@ -561,11 +567,16 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       signal?: AbortSignal;
       destination?: RpcDestination;
     },
-    provenance?: AuthenticatedCaller[]
+    provenance?: AuthenticatedCaller[],
+    physicalSignalOverride?: AbortSignal | null
   ): Promise<void> {
     requireActive();
     const envelope = makeEnvelope(targetId, message, options, provenance);
-    const operation = operationSignal(options?.signal);
+    const operation = operationSignal(
+      physicalSignalOverride === null
+        ? undefined
+        : (physicalSignalOverride ?? options?.signal)
+    );
     try {
       await deliverEnvelope(envelope, operation.signal ?? undefined);
     } finally {
@@ -648,26 +659,95 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     }
   }
 
+  function requestPendingCancellation(
+    requestId: string,
+    pending: {
+      cancellationReason: Error | null;
+      cancellationSend: Promise<void> | null;
+      cancellationDeliveryError: Error | null;
+      timeout: ReturnType<typeof setTimeout> | null;
+      target: string;
+      destination?: RpcDestination;
+    },
+    reason: Error,
+    provenance: AuthenticatedCaller[]
+  ): void {
+    if (pendingRequests.get(requestId) !== pending) return;
+    if (pending.cancellationReason) return;
+    pending.cancellationReason = reason;
+    if (pending.timeout) {
+      clearTimeout(pending.timeout);
+      pending.timeout = null;
+    }
+    const options = pending.destination ? { destination: pending.destination } : undefined;
+    const cancellation = send(
+      pending.target,
+      { type: "request-cancel", requestId, fromId: config.selfId },
+      options,
+      provenance
+    );
+    pending.cancellationSend = cancellation;
+    // The original request remains pending for its terminal response even if
+    // cancellation delivery fails; connection-loss handling is the authority
+    // that settles an otherwise stranded receiver invocation.
+    void cancellation.catch((error: unknown) => {
+      if (pendingRequests.get(requestId) !== pending) return;
+      pending.cancellationDeliveryError =
+        error instanceof Error ? error : new Error(String(error));
+    });
+  }
+
   function handleResponse(envelope: RpcEnvelope, response: RpcResponse): void {
     const pending = pendingRequests.get(response.requestId);
     if (!pending) return;
     if (!rpcDestinationMatchesCaller(pending.destination, envelope.delivery.caller)) return;
-    pendingRequests.delete(response.requestId);
-    if (pending.timeout) clearTimeout(pending.timeout);
-    pending.abortCleanup?.();
-    if ("error" in response) {
-      const err = new RemoteRpcError(
-        response.error,
-        response.errorKind,
-        response.errorCode,
-        response.errorData
-      );
-      if (response.diagnosticId) attachRpcDiagnosticId(err, response.diagnosticId);
-      if (response.errorStack) err.stack = response.errorStack;
-      pending.reject(err);
-      return;
-    }
-    pending.resolve(response.result);
+    if (pending.responseSettling) return;
+    pending.responseSettling = true;
+    const settle = (): void => {
+      if (pendingRequests.get(response.requestId) !== pending) return;
+      pendingRequests.delete(response.requestId);
+      if (pending.timeout) clearTimeout(pending.timeout);
+      pending.abortCleanup?.();
+      if ("error" in response) {
+        const err = new RemoteRpcError(
+          response.error,
+          response.errorKind,
+          response.errorCode,
+          response.errorData
+        );
+        if (response.diagnosticId) attachRpcDiagnosticId(err, response.diagnosticId);
+        if (response.errorStack) err.stack = response.errorStack;
+        if (pending.cancellationDeliveryError) {
+          pending.reject(
+            new AggregateError(
+              [err, pending.cancellationDeliveryError],
+              "RPC handler failed during cancellation and cancellation delivery also failed",
+              { cause: err }
+            )
+          );
+        } else {
+          pending.reject(err);
+        }
+      } else if (pending.cancellationReason) {
+        if (pending.cancellationDeliveryError) {
+          pending.reject(
+            new AggregateError(
+              [pending.cancellationReason, pending.cancellationDeliveryError],
+              "RPC cancellation was requested but could not be delivered"
+            )
+          );
+        } else {
+          pending.reject(pending.cancellationReason);
+        }
+      } else {
+        pending.resolve(response.result);
+      }
+    };
+    if (pending.cancellationSend) {
+      // The ordinary response is the receiver's terminal receipt. Also join
+      // delivery of our cancellation request before settling the owner.
+      void pending.cancellationSend.then(settle, settle);
+    } else settle();
   }
 
   function handleEvent(envelope: RpcEnvelope, event: RpcEvent): void {
@@ -973,7 +1053,9 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     options?: RpcCallOptions
   ): Promise<T> {
     if (retired) return Promise.reject(retiredError());
-    if (options?.signal?.aborted) return Promise.reject(callerAbortedError());
+    if (options?.signal?.aborted) {
+      return Promise.reject(callerAbortedError(options.signal.reason));
+    }
     const requestId = generateRequestId();
     const request: RpcRequest = {
       type: "request",
@@ -986,55 +1068,59 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | null = null;
       let abortCleanup: (() => void) | null = null;
-      const rejectPending = (err: Error): void => {
-        const pending = pendingRequests.get(requestId);
-        if (!pending) return;
-        pendingRequests.delete(requestId);
-        if (pending.timeout) clearTimeout(pending.timeout);
-        pending.abortCleanup?.();
-        pending.reject(err);
+      const pending = {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timeout: null as ReturnType<typeof setTimeout> | null,
+        abortCleanup: null as (() => void) | null,
+        cancellationReason: null as Error | null,
+        cancellationSend: null as Promise<void> | null,
+        cancellationDeliveryError: null as Error | null,
+        responseSettling: false,
+        target: targetId,
+        ...(options?.destination ? { destination: options.destination } : {}),
       };
       // No implicit deadline: callers opt in with a positive timeoutMs when a
       // specific operation should be time-bounded.
       const effectiveTimeoutMs = options?.timeoutMs;
       if (effectiveTimeoutMs !== undefined && effectiveTimeoutMs > 0) {
         timeout = setTimeout(() => {
-          void send(
-            targetId,
-            { type: "request-cancel", requestId, fromId: config.selfId },
-            options?.destination ? { destination: options.destination } : undefined,
+          requestPendingCancellation(
+            requestId,
+            pending,
+            new Error(`RPC call timed out after ${effectiveTimeoutMs}ms`),
             provenance
-          ).catch(() => {});
-          rejectPending(new Error(`RPC call timed out after ${effectiveTimeoutMs}ms`));
+          );
         }, effectiveTimeoutMs);
       }
       if (options?.signal) {
         const onAbort = (): void => {
-          void send(
-            targetId,
-            { type: "request-cancel", requestId, fromId: config.selfId },
-            options?.destination ? { destination: options.destination } : undefined,
+          requestPendingCancellation(
+            requestId,
+            pending,
+            callerAbortedError(options.signal?.reason),
             provenance
-          ).catch(() => {});
-          rejectPending(callerAbortedError());
+          );
         };
         options.signal.addEventListener("abort", onAbort, { once: true });
         abortCleanup = () => options.signal?.removeEventListener("abort", onAbort);
       }
-      pendingRequests.set(requestId, {
-        resolve: resolve as (value: unknown) => void,
-        reject,
-        timeout,
-        abortCleanup,
-        target: targetId,
-        ...(options?.destination ? { destination: options.destination } : {}),
-      });
-      void send(targetId, request, options, provenance).catch((error) => {
+      pending.timeout = timeout;
+      pending.abortCleanup = abortCleanup;
+      pendingRequests.set(requestId, pending);
+      // Caller cancellation is conveyed by request-cancel while the original
+      // transport request remains open to receive the handler's terminal
+      // response. Only client destruction/disconnect aborts that transport.
+      // The client lifetime is a physical transport owner; per-call aborts use
+      // request-cancel and must leave this response route intact. Keep the
+      // original options object so its invocation ancestry stays attached.
+      void send(targetId, request, options, provenance, config.lifetime ?? null).catch((error) => {
         const pending = pendingRequests.get(requestId);
+        if (!pending) return;
         pendingRequests.delete(requestId);
         if (pending?.timeout) clearTimeout(pending.timeout);
         pending?.abortCleanup?.();
-        reject(error);
+        pending.reject(error);
       });
     });
   }

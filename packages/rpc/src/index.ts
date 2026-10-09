@@ -14,6 +14,7 @@ export {
 export type {
   RpcRequest,
   RpcResponse,
+  RpcResponseMetadata,
   RpcEvent,
   RpcStreamRequest,
   RpcStreamFrameMessage,
@@ -155,7 +156,11 @@ export {
   type ConnectionlessRpcClient,
   type ConnectionlessRpcConfig,
 } from "./connectionless.js";
-export { httpClientTransport, type HttpClientTransportConfig } from "./transports/httpClient.js";
+export {
+  httpClientTransport,
+  type HttpClientTransportConfig,
+  type RpcInboundInvocation,
+} from "./transports/httpClient.js";
 export {
   authenticatedCaller,
   envelopeFromMessage,

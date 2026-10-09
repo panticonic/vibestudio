@@ -52,6 +52,13 @@ export interface RpcResponseSuccess {
   type: "response";
   requestId: string;
   result: unknown;
+  metadata?: RpcResponseMetadata;
+}
+
+/** Typed transport-neutral metadata attached to the authoritative final reply. */
+export interface RpcResponseMetadata {
+  /** Disposable wake hints; receivers still own durable queue state. */
+  durableWorkReady?: string[];
 }
 
 /** Stable error category for caller control flow across every RPC transport. */
@@ -87,6 +94,7 @@ export interface RpcResponseError {
   diagnosticId?: string;
   /** Original stack, when available. Intended for diagnostics, not control flow. */
   errorStack?: string;
+  metadata?: RpcResponseMetadata;
 }
 
 /**
@@ -336,6 +344,12 @@ export interface RpcTargetOptions {
 
 export interface RpcCallOptions extends RpcTargetOptions {
   timeoutMs?: number;
+  /**
+   * Request remote cancellation and keep this call owned until the receiver
+   * returns its terminal response (or the target/transport reports a terminal
+   * disconnect). The signal's reason is reported after remote cleanup settles;
+   * it does not abandon an in-flight handler.
+   */
   signal?: AbortSignal;
   idempotencyKey?: string;
   /** Request read-only containment: the server dispatcher refuses any non-`read`
@@ -429,10 +443,10 @@ export interface RpcEnvelope {
 
 export interface EnvelopeRpcTransport {
   /**
-   * Deliver one envelope. Connectionless transports bind `signal` to the
-   * physical request so cancellation cannot overtake admission on a second
-   * connection. Ordered transports may ignore it and consume the subsequent
-   * `request-cancel` envelope in channel order.
+   * Deliver one envelope. `signal` belongs to the physical transport
+   * operation (for example, client/session retirement). A caller's unary
+   * cancellation is carried by `request-cancel` while the original request
+   * remains available for its terminal response.
    */
   send(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void>;
   onMessage(handler: (envelope: RpcEnvelope) => void): () => void;

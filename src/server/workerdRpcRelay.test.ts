@@ -9,7 +9,6 @@ import {
   streamFromDurableObject,
 } from "./workerdRpcRelay.js";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
-import { DURABLE_WORK_READY_HEADER } from "@vibestudio/shared/durableWork";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -41,14 +40,14 @@ describe("workerdRpcRelay", () => {
   // Inbound dispatch converged on envelope-via-__rpc: the relay POSTs an
   // RpcEnvelope to the DO's single `__rpc` endpoint and unwraps a response
   // envelope; caller attribution rides in `envelope.delivery.caller`.
-  function responseEnvelope(result: unknown): Response {
+  function responseEnvelope(result: unknown, metadata?: { durableWorkReady?: string[] }): Response {
     return new Response(
       JSON.stringify({
         from: "do",
         target: "main",
         delivery: { caller: { callerId: "do", callerKind: "do" } },
         provenance: [],
-        message: { type: "response", requestId: "x", result },
+        message: { type: "response", requestId: "x", result, metadata },
       }),
       { status: 200, headers: { "Content-Type": "application/json" } }
     );
@@ -77,8 +76,6 @@ describe("workerdRpcRelay", () => {
   it("POSTs an envelope to __rpc, stamps the dispatch secret, and unwraps the result", async () => {
     const fetchMock = vi.fn().mockResolvedValue(responseEnvelope({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
-    const controller = new AbortController();
-
     await expect(
       postToDurableObject(
         { source: "workers/agent", className: "AgentDO", objectKey: "channel-1" },
@@ -90,8 +87,7 @@ describe("workerdRpcRelay", () => {
           workerdDispatchSecret: "dispatch-secret",
           idempotencyKey: "idem-1",
           readOnly: true,
-        },
-        controller.signal
+        }
       )
     ).resolves.toEqual({ ok: true });
 
@@ -99,21 +95,23 @@ describe("workerdRpcRelay", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       `http://127.0.0.1:8787/_u/${encodeURIComponent(encodeUniversalKey(ref))}/__rpc`,
       expect.objectContaining({
-        signal: controller.signal,
         headers: expect.objectContaining({
           Authorization: "Bearer gateway-token",
           "X-Vibestudio-Dispatch-Secret": "dispatch-secret",
         }),
       })
     );
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeUndefined();
     const body = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
     expect(body.delivery).toMatchObject({ idempotencyKey: "idem-1", readOnly: true });
     expect(body.message).toMatchObject({ type: "request", method: "ping", args: ["arg"] });
   });
 
   it("surfaces durable-work readiness from caller-attributed DO relays", async () => {
-    const response = responseEnvelope({ ok: true });
-    response.headers.set(DURABLE_WORK_READY_HEADER, "channel-delivery,workspace-publication");
+    const response = responseEnvelope(
+      { ok: true },
+      { durableWorkReady: ["channel-delivery", "workspace-publication"] }
+    );
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
     const onWorkReady = vi.fn();
 
@@ -130,6 +128,150 @@ describe("workerdRpcRelay", () => {
 
     expect(onWorkReady).toHaveBeenCalledOnce();
     expect(onWorkReady).toHaveBeenCalledWith(["channel-delivery", "workspace-publication"]);
+  });
+
+  it("sends cancellation only after DO admission and owns the original terminal body", async () => {
+    type TestEnvelope = {
+      from: string;
+      target: string;
+      delivery: unknown;
+      provenance: unknown;
+      message: { type: string; requestId: string; fromId?: string; result?: unknown };
+    };
+    const ref = { source: "workers/agent", className: "AgentDO", objectKey: "channel-1" };
+    const controller = new AbortController();
+    const posted: Array<{ url: string; init: RequestInit; envelope: TestEnvelope }> = [];
+    let releaseTerminal!: (envelope: TestEnvelope) => void;
+    const terminalBody = new ReadableStream<Uint8Array>({
+      start(streamController) {
+        releaseTerminal = (envelope) => {
+          streamController.enqueue(new TextEncoder().encode(JSON.stringify(envelope)));
+          streamController.close();
+        };
+      },
+    });
+    const fetchMock = vi.fn(async (url: string, input: RequestInit) => {
+      const envelope = JSON.parse(String(input.body)) as TestEnvelope;
+      posted.push({ url, init: input, envelope });
+      if (envelope.message.type === "request-cancel") return new Response("{}");
+      return new Response(terminalBody, { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let settled = false;
+    const pending = postToDurableObject(
+      ref,
+      "waitForCleanup",
+      [],
+      { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" },
+      controller.signal
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    controller.abort(new Error("caller stopped waiting"));
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
+
+    const original = posted[0]!;
+    const cancellation = posted[1]!;
+    expect(original.init.signal).toBeUndefined();
+    expect(cancellation.init.signal).toBeUndefined();
+    expect(cancellation.envelope).toMatchObject({
+      from: original.envelope.from,
+      target: original.envelope.target,
+      delivery: original.envelope.delivery,
+      provenance: original.envelope.provenance,
+      message: {
+        type: "request-cancel",
+        requestId: original.envelope.message.requestId,
+        fromId: original.envelope.message.fromId,
+      },
+    });
+    expect(settled).toBe(false);
+
+    const request = original.envelope.message;
+    releaseTerminal({
+      ...original.envelope,
+      from: original.envelope.target,
+      target: original.envelope.from,
+      delivery: { caller: { callerId: original.envelope.target, callerKind: "do" } },
+      message: {
+        type: "response",
+        requestId: request.requestId,
+        result: "cleanup joined",
+      },
+    });
+    await expect(pending).resolves.toBe("cleanup joined");
+    expect(settled).toBe(true);
+  });
+
+  it("observes committed readiness even when cancellation delivery fails", async () => {
+    const ref = { source: "workers/agent", className: "AgentDO", objectKey: "channel-1" };
+    const controller = new AbortController();
+    const onWorkReady = vi.fn();
+    let releaseTerminal!: (envelope: unknown) => void;
+    const terminalBody = new ReadableStream<Uint8Array>({
+      start(streamController) {
+        releaseTerminal = (envelope) => {
+          streamController.enqueue(new TextEncoder().encode(JSON.stringify(envelope)));
+          streamController.close();
+        };
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, input: RequestInit) => {
+        const envelope = JSON.parse(String(input.body)) as {
+          from: string;
+          target: string;
+          delivery: unknown;
+          provenance: unknown;
+          message: { type: string; requestId: string; fromId: string };
+        };
+        if (envelope.message.type === "request-cancel") {
+          return new Response("cancel unavailable", { status: 503 });
+        }
+        return new Response(terminalBody, { status: 200 });
+      })
+    );
+
+    const pending = postToDurableObject(
+      ref,
+      "commitThenCancel",
+      [],
+      {
+        workerdUrl: "http://127.0.0.1:8787",
+        workerdGatewayToken: "gateway-token",
+        onWorkReady,
+      },
+      controller.signal
+    );
+    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
+    controller.abort(new Error("caller cancelled"));
+    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2));
+    const request = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)) as {
+      from: string;
+      target: string;
+      message: { requestId: string };
+    };
+    releaseTerminal({
+      from: request.target,
+      target: request.from,
+      delivery: { caller: { callerId: request.target, callerKind: "do" } },
+      provenance: [],
+      message: {
+        type: "response",
+        requestId: request.message.requestId,
+        result: "committed",
+        metadata: { durableWorkReady: ["workspace-publication"] },
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      message: expect.stringContaining("cancel unavailable"),
+    });
+    expect(onWorkReady).toHaveBeenCalledWith(["workspace-publication"]);
   });
 
   it("preserves structured service failures while unwrapping the DO envelope", async () => {

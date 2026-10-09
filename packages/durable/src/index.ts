@@ -33,11 +33,7 @@ import {
   type EventIntakeRule,
   type HostControlDenial,
 } from "@vibestudio/shared/directRpcEnforcement";
-import {
-  DURABLE_WORK_READY_HEADER,
-  encodeDurableWorkReady,
-  type DurableWorkQueue,
-} from "@vibestudio/shared/durableWork";
+import { type DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import {
   acceptResidentChannelDelivery,
   acceptResidentChannelInvocation,
@@ -482,15 +478,6 @@ export abstract class DurableObjectBase {
   }
 
   /**
-   * Optional inbound `respond()` watchdog for this DO. `undefined` uses the
-   * transport default (unbounded); a positive value opts into a deadline, and
-   * `0` explicitly disables one.
-   */
-  protected get respondTimeoutMs(): number | undefined {
-    return undefined;
-  }
-
-  /**
    * The unified connectionless RPC client — the same `createRpcClient` core
    * every target runs, behind the envelope-native `httpClientTransport`, plus
    * the shared connectionless transport. The DO's own public methods are `exposeAll`'d
@@ -538,7 +525,6 @@ export abstract class DurableObjectBase {
             ? this.invocationContext.current()?.verifiedCaller?.authorization?.nonce
             : undefined,
         onOutboundOperation: this.causalRpcOperations.observe,
-        ...(this.respondTimeoutMs !== undefined ? { respondTimeoutMs: this.respondTimeoutMs } : {}),
       });
       // Expose ONLY this DO's `@rpc`-marked methods (opt-in / default-deny). Private/protected helpers
       // and all framework plumbing (`dispatchInboundEnvelope`, state-KV, alarms) are unreachable over
@@ -796,7 +782,7 @@ export abstract class DurableObjectBase {
                   return this.releaseForLifecycle(args[0] as LifecyclePrepareInput);
                 })()
               : await this.resumeAfterRestart(args[0] as LifecycleResumeInput);
-          return jsonResponse(result ?? null);
+          return jsonResponse({ value: result ?? null });
         });
       }
 
@@ -814,7 +800,7 @@ export abstract class DurableObjectBase {
               403
             );
           }
-          return jsonResponse({ nextAlarm: await this.alarm() });
+          return jsonResponse({ value: { nextAlarm: await this.alarm() } });
         });
       }
 
@@ -847,9 +833,11 @@ export abstract class DurableObjectBase {
       if (responseMessage?.type === "response" && "error" in responseMessage) {
         if (responseMessage.error.startsWith('Method "')) {
           return jsonResponse(
-            { error: `Unknown method: ${method}` },
-            404,
-            this.workReadyHeaders(dispatched.readyQueues)
+            {
+              error: `Unknown method: ${method}`,
+              metadata: { durableWorkReady: [...dispatched.readyQueues].sort() },
+            },
+            404
           );
         }
         const status =
@@ -868,17 +856,20 @@ export abstract class DurableObjectBase {
             ...(responseMessage.errorData !== undefined
               ? { errorData: responseMessage.errorData }
               : {}),
+            metadata: { durableWorkReady: [...dispatched.readyQueues].sort() },
           },
-          status,
-          this.workReadyHeaders(dispatched.readyQueues)
+          status
         );
       }
       return jsonResponse(
-        responseMessage?.type === "response" && "result" in responseMessage
-          ? (responseMessage.result ?? null)
-          : null,
-        200,
-        this.workReadyHeaders(dispatched.readyQueues)
+        {
+          value:
+            responseMessage?.type === "response" && "result" in responseMessage
+              ? (responseMessage.result ?? null)
+              : null,
+          metadata: { durableWorkReady: [...dispatched.readyQueues].sort() },
+        },
+        200
       );
     } catch (err) {
       const errorData = rpcErrorDataOf(err);
@@ -1019,8 +1010,7 @@ export abstract class DurableObjectBase {
     const dispatched = await this.dispatchInboundEnvelope(envelope, authorityAcceptedAt);
     return jsonResponse(
       dispatched.result ?? {},
-      200,
-      this.workReadyHeaders(dispatched.readyQueues)
+      200
     );
   }
 
@@ -1136,9 +1126,18 @@ export abstract class DurableObjectBase {
       };
     }
     const dispatched = await this.withRpcCaller(caller, message, envelope, () =>
-      connectionless.respond(envelope)
+      connectionless.respond(envelope).completion
     );
-    const response = dispatched.result;
+    const attachReadyMetadata = (result: RpcEnvelope | null): RpcEnvelope | null => {
+      if (result?.message.type === "response" && dispatched.readyQueues.length > 0) {
+        result.message.metadata = {
+          ...result.message.metadata,
+          durableWorkReady: [...dispatched.readyQueues].sort(),
+        };
+      }
+      return result;
+    };
+    const response = attachReadyMetadata(dispatched.result);
     if (
       wireMethod?.returns &&
       response?.message.type === "response" &&
@@ -1147,17 +1146,17 @@ export abstract class DurableObjectBase {
       const parsedResult = wireMethod.returns.safeParse(response.message.result);
       if (!parsedResult.success) {
         return {
-          result: this.schemaDenialResponse(
+          result: attachReadyMetadata(this.schemaDenialResponse(
             envelope,
             message,
             `Invalid result from ${method}: ${parsedResult.error.message}`
-          ),
+          )),
           readyQueues: dispatched.readyQueues,
         };
       }
       response.message.result = parsedResult.data;
     }
-    return dispatched;
+    return { ...dispatched, result: response };
   }
 
   private schemaDenialResponse(
@@ -1344,15 +1343,6 @@ export abstract class DurableObjectBase {
     return undefined;
   }
 
-  private workReadyHeaders(queues?: Iterable<DurableWorkQueue>): Headers {
-    const headers = new Headers({ "Content-Type": "application/json" });
-    const encoded = encodeDurableWorkReady(
-      queues ?? this.invocationContext.current()?.readyQueues ?? []
-    );
-    if (encoded) headers.set(DURABLE_WORK_READY_HEADER, encoded);
-    return headers;
-  }
-
   /** Start kernel-owned background work without retaining an inbound caller.
    * Guest effects must carry their separately admitted execution context. */
   protected runDetached<R>(operation: () => R): R {
@@ -1390,10 +1380,23 @@ export abstract class DurableObjectBase {
           await this.causalRpcOperations.drain(context);
         }
       });
+      const body = await response.text();
+      const decoded = body ? decodeRpcJson(body) : null;
+      const record =
+        decoded !== null && typeof decoded === "object" && !Array.isArray(decoded)
+          ? (decoded as Record<string, unknown>)
+          : { value: decoded };
       const headers = new Headers(response.headers);
-      const encoded = encodeDurableWorkReady(context.readyQueues);
-      if (encoded) headers.set(DURABLE_WORK_READY_HEADER, encoded);
-      return new Response(response.body, {
+      headers.set("Content-Type", "application/json");
+      return new Response(encodeRpcJson({
+        ...record,
+        metadata: {
+          ...(record["metadata"] && typeof record["metadata"] === "object"
+            ? (record["metadata"] as Record<string, unknown>)
+            : {}),
+          durableWorkReady: [...context.readyQueues].sort(),
+        },
+      }), {
         status: response.status,
         statusText: response.statusText,
         headers,

@@ -68,6 +68,8 @@ export interface PushOptions {
   remoteRef?: string;
   /** Force push (use with caution) */
   force?: boolean;
+  /** Atomic Git ref condition. null requires the receiving ref to be absent. */
+  expectedRemoteHead?: string | null;
   /** Progress callback */
   onProgress?: (progress: GitProgress) => void;
 }

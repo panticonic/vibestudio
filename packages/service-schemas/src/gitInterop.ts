@@ -566,7 +566,9 @@ export const gitPublishRepoResultSchema = z
     headCommit: z.string().nullable(),
     pushed: z
       .boolean()
-      .describe("The remote branch holds headCommit, whether this call or an earlier one pushed it."),
+      .describe(
+        "The remote branch holds headCommit, whether this call or an earlier one pushed it."
+      ),
   })
   .strict();
 export type GitPublishRepoResult = z.infer<typeof gitPublishRepoResultSchema>;
@@ -827,6 +829,43 @@ export const gitInteropMethods = defineServiceMethods({
     access: UPSTREAM_STATUS_ACCESS,
     examples: [{ args: [] }, { args: [["projects/bgkit"]] }],
   },
+  createBranch: {
+    website: {
+      kind: "closed",
+      reason: "Publishes private workspace source to an external Git repository.",
+    } as const,
+    capability: "git.publish",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.mutate",
+      rationale: "Creates an external Git branch from an exact semantic event.",
+    },
+    presentation: {
+      title: "Create an upstream Git branch",
+      action: "create an upstream Git branch",
+      description: "Publish the selected saved snapshot as a new branch.",
+      group: "files",
+      authorityCategory: { domain: "sharing", verb: "act" },
+    },
+    description:
+      "Create a new branch at the declared remote from an exact semantic event. Refuse an existing remote branch. Preserve protected main, the managed checkout, and upstream tracking configuration.",
+    args: z.tuple([
+      z
+        .object({ repoPath: z.string(), branch: z.string().min(1), from: z.string().min(1) })
+        .strict(),
+    ]),
+    returns: z
+      .object({
+        repoPath: z.string(),
+        branch: z.string(),
+        eventId: z.string(),
+        headCommit: z.string(),
+      })
+      .strict(),
+    access: UPSTREAM_OPERATION_ACCESS,
+  },
   pushUpstream: {
     website: {
       kind: "closed",
@@ -1019,6 +1058,7 @@ export const gitInteropProviderMethods = defineServiceMethods({
   detachUpstream: gitInteropMethods.detachUpstream,
   setAutoPush: gitInteropMethods.setAutoPush,
   upstreamStatus: gitInteropMethods.upstreamStatus,
+  createBranch: gitInteropMethods.createBranch,
   pushUpstream: gitInteropMethods.pushUpstream,
   pullUpstream: gitInteropMethods.pullUpstream,
   publishRepo: gitInteropMethods.publishRepo,
@@ -1089,6 +1129,7 @@ export const GIT_INTEROP_PROVIDER_METHOD_NAMES = Object.freeze(
 
 export const GIT_INTEROP_PROVIDER_OPERATIONS = [
   "upstreamStatus",
+  "createBranch",
   "pushUpstream",
   "pullUpstream",
   "publishRepo",

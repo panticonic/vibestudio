@@ -11,8 +11,9 @@ import * as nodeFs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { GitAuthError } from "./client.js";
+import { GitAuthError, GitRemoteChangedError } from "./client.js";
 import { GitClient, type FsPromisesLike } from "./client.js";
+import { GitRemoteChangedError as PublicGitRemoteChangedError } from "./index.js";
 
 describe("GitAuthError", () => {
   it("has correct name and message", () => {
@@ -259,7 +260,7 @@ describe("GitClient", () => {
       "git.pull: expected pull({ dir: string, url?: string, remote?: string, ref?: string, remoteRef?: string })"
     );
     await expect(client.push("/repo" as never)).rejects.toThrow(
-      "git.push: expected push({ dir: string, url?: string, remote?: string, ref?: string, remoteRef?: string, force?: boolean })"
+      "git.push: expected push({ dir: string, url?: string, remote?: string, ref?: string, remoteRef?: string, force?: boolean, expectedRemoteHead?: string | null })"
     );
     await expect(client.commit("/repo" as never)).rejects.toThrow(
       "git.commit: expected commit({ dir: string, message: string, author?: { name: string, email: string } })"
@@ -306,6 +307,117 @@ describe("GitClient", () => {
       object: "main",
       checkout: true,
     });
+  });
+
+  it.each([null, "a".repeat(40)])(
+    "checks the receive-pack advertisement against %s",
+    async (expected) => {
+      const push = vi.spyOn(git, "push").mockImplementationOnce(async (options) => {
+        expect(
+          await options.onPrePush?.({
+            remote: "origin",
+            url: "https://example.com/repo.git",
+            localRef: { ref: "refs/heads/topic", oid: "b".repeat(40) },
+            remoteRef: { ref: "refs/heads/topic", oid: expected ?? "0".repeat(40) },
+          })
+        ).toBe(true);
+        return { ok: true, error: null, refs: {} };
+      });
+      await new GitClient(fs, { http }).push({
+        dir: "/repo",
+        ref: "topic",
+        expectedRemoteHead: expected,
+      });
+      expect(push).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("exports the remote-head conflict error from the package entry point", () => {
+    expect(PublicGitRemoteChangedError).toBe(GitRemoteChangedError);
+  });
+
+  it("refuses a different advertised SHA for an expected existing branch", async () => {
+    const expected = "a".repeat(40);
+    const actual = "b".repeat(40);
+    vi.spyOn(git, "push").mockImplementationOnce(async (options) => {
+      await options.onPrePush?.({
+        remote: "origin",
+        url: "https://example.com/repo.git",
+        localRef: { ref: "refs/heads/topic", oid: "c".repeat(40) },
+        remoteRef: { ref: "refs/heads/topic", oid: actual },
+      });
+      return { ok: true, error: null, refs: {} };
+    });
+
+    await expect(
+      new GitClient(fs, { http }).push({
+        dir: "/repo",
+        ref: "topic",
+        expectedRemoteHead: expected,
+      })
+    ).rejects.toMatchObject({
+      name: "GitRemoteChangedError",
+      ref: "refs/heads/topic",
+      expected,
+      actual,
+    });
+  });
+
+  it("compares advertised object ids without treating hex letter case as a different identity", async () => {
+    const expected = "aBcD".repeat(10);
+    const push = vi.spyOn(git, "push").mockImplementationOnce(async (options) => {
+      expect(
+        await options.onPrePush?.({
+          remote: "origin",
+          url: "https://example.com/repo.git",
+          localRef: { ref: "refs/heads/topic", oid: "b".repeat(40) },
+          remoteRef: { ref: "refs/heads/topic", oid: expected.toLowerCase() },
+        })
+      ).toBe(true);
+      return { ok: true, error: null, refs: {} };
+    });
+
+    await new GitClient(fs, { http }).push({
+      dir: "/repo",
+      ref: "topic",
+      expectedRemoteHead: expected,
+    });
+
+    expect(push).toHaveBeenCalledOnce();
+  });
+
+  it("leaves the pre-push hook unset when no expected head was supplied", async () => {
+    const push = vi.spyOn(git, "push").mockResolvedValueOnce({ ok: true, error: null, refs: {} });
+
+    await new GitClient(fs, { http }).push({ dir: "/repo" });
+
+    expect(push).toHaveBeenCalledWith(expect.objectContaining({ onPrePush: undefined }));
+  });
+
+  it("refuses an existing branch through the actual push admission and preserves the typed failure", async () => {
+    const actual = "a".repeat(40);
+    vi.spyOn(git, "push").mockImplementationOnce(async (options) => {
+      await options.onPrePush?.({
+        remote: "origin",
+        url: "https://example.com/repo.git",
+        localRef: { ref: "refs/heads/topic", oid: "b".repeat(40) },
+        remoteRef: { ref: "refs/heads/topic", oid: actual },
+      });
+      throw new Error("The ref mismatch must refuse before sending objects");
+    });
+    const failure = await new GitClient(fs, { http })
+      .push({ dir: "/repo", ref: "topic", expectedRemoteHead: null })
+      .catch((error) => error);
+    expect(failure).toBeInstanceOf(GitRemoteChangedError);
+    expect(failure).toMatchObject({ ref: "refs/heads/topic", expected: null, actual });
+  });
+
+  it("rejects an invalid expected remote identity before invoking the transport", async () => {
+    const push = vi.spyOn(git, "push");
+    await expect(
+      new GitClient(fs, { http }).push({ dir: "/repo", expectedRemoteHead: "main" })
+    ).rejects.toThrow("full object id or null");
+    expect(push).not.toHaveBeenCalled();
   });
 
   it("forwards an operation-bound URL to every remote transport", async () => {

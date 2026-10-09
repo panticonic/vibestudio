@@ -11,6 +11,10 @@ This is an active progress record, not a completion claim.
 - Base: `54aa169` — runtime ownership, automation actions, workspace guidance.
   The Base semantic composition typecheck passed.
 - Other template repositories' earlier work was already committed and clean.
+- Base: `df3625c` — owned mission recovery, exact preparation retries, and
+  semantic-event branch publication. Base composition typecheck passed.
+- System Testing: `c96d9ae` — self-development handoffs use semantic commit
+  events and the canonical branch publication contract.
 
 ## Follow-ups implemented since those commits
 
@@ -45,8 +49,10 @@ This is an active progress record, not a completion claim.
     before its initial query and coalescing invalidations during a query into a
     subsequent read. Its interval is removed. Remote title and watch release
     regressions pass. MigrateTab now observes published browser-import updates;
-    closing the panel cancels only that observation. Automation overview remains
-    open.
+    closing the panel cancels only that observation. Automation overview now
+    observes the mission owner's versioned changes. It subscribes before
+    loading, retains changes during loading, and offers an explicit retry after
+    a provider failure. Unmount cancels only the observation.
 
 Verification so far: 19 report/supervision tests, 10 credential/publication tests,
 15 shared-command/mobile tests, 185 Base chat/channel/website tests, 14 System
@@ -60,7 +66,28 @@ and recovery changes remain to be run.
 
 Agent lifecycle recovery now drains parked automation Finish receipt debt.
 A storage-reopen regression proves that it redelivers the original terminal
-receipt without repeating execution. MissionsDO host ownership remains open.
+receipt without repeating execution. MissionsDO now acquires durable lifecycle
+ownership before admission, joins cancellation and retirement, and reopens each
+persisted phase with stable receiver identity. Forty-three mission regressions
+passed, and the sixty-second run polling guard is removed.
+The subsequent mission observation changes pass forty-seven mission tests,
+twelve host client tests, and three System Automation UI tests. System's
+composition typecheck passed.
+
+Preparation retains its exact canonical VCS command and full mutation receipt.
+Generation no longer preempts VCS's atomic destination admission. Callers can
+provide the original command identity and basis for an identical retry; changed
+payloads still fail VCS command reuse checks. Thirty preparation tests passed.
+
+Semantic-source branch publication now exports an exact event through the same
+Git projection engine into an owned private checkout, then requires an absent
+remote ref in the actual receive-pack advertisement. Git's ref update checks
+that same prior identity atomically. It preserves protected main, the managed
+checkout, and upstream tracking. SELF_IMPROVEMENT.md now uses semantic VCS and
+this publication contract rather than running Git on a workspace projection.
+Seventy-nine bridge regressions and twenty-five Git client tests passed,
+including a real Git tree containing changed and unchanged semantic files.
+The Base composition typecheck passed after these changes.
 
 ## Decisions verified against existing implementation
 
@@ -82,18 +109,12 @@ receipt without repeating execution. MissionsDO host ownership remains open.
 ## Still open
 
 1. Native method automation admission targeting the existing News agent,
-   mission-owned News cadence, timezone, and eliminating the reader timer.
-2. Durable MissionsDO advancement and completion delivery recovery. See
-   mission-recovery-follow-up-2026-10-09.md. The existing timer remains until
-   lifecycle recovery is proven; deleting it alone would strand admitted work.
-3. Preparation retry safety: separate generation from destination checks and
-   retain exact semantic command identity. No overwrite or name-derived command
-   key should impersonate a retry of an earlier preparation.
-4. Atomic Git import/config application. Existing compensating config rollback
+   mission-owned News cadence, and timezone. The reader timer is removed;
+   owner events refresh the reader and coalesce invalidations during queries.
+   News's composition typecheck passed.
+2. Atomic Git import/config application. Existing compensating config rollback
    is not an atomic semantic import; redesign ownership rather than extending it.
-5. Semantic-source remote branch publication and correcting SELF_IMPROVEMENT.md.
-6. SetupHub owner-source events (eight sources).
-7. Automation overview still polls.
+3. SetupHub owner-source events (eight sources).
 
 ## Integration verification and release boundary
 
