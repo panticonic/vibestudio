@@ -735,6 +735,56 @@ describe("workerService workspace service resolution", () => {
     });
   });
 
+  it.each([false, true])(
+    "resolves a context HTTP alias only with a published canonical route (published=%s)",
+    async (published) => {
+      const deps = createDeps();
+      const service = {
+        name: "context.http.alias",
+        source: "workers/stateless-api",
+        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
+        authority: { principals: ["code" as const] },
+        worker: { routePath: "api//" },
+      };
+      const contextDecls: WorkspaceDeclarations = {
+        singletons: new SingletonRegistry([]),
+        services: [service],
+        routes: [{ source: service.source, path: "/api", worker: true }],
+      };
+      if (!published) deps.workspaceDecls.routes = [];
+      const activateDurableObject = vi.fn(async () => {});
+      const prepareRuntimeImage = vi.fn();
+      const dispatcher = createTestServiceDispatcher();
+      dispatcher.registerService(
+        createWorkerService({
+          ...deps,
+          getCallerContextId: () => "ctx-http",
+          loadContextDeclarations: async () => contextDecls,
+          activateDurableObject,
+          prepareRuntimeImage,
+        } as never)
+      );
+      dispatcher.markInitialized();
+      const resolution = dispatcher.dispatch(panelCtx, "workers", "resolveService", [service.name]);
+      if (published) {
+        await expect(resolution).resolves.toMatchObject({
+          kind: "worker",
+          name: service.name,
+          routeBasePath: "/_r/w/workers/stateless-api/api",
+        });
+      } else {
+        await expect(resolution).rejects.toThrow(/no published canonical worker route/);
+      }
+      expect(activateDurableObject).not.toHaveBeenCalled();
+      if (published) {
+        expect(prepareRuntimeImage).toHaveBeenCalledWith(service.source, "main");
+        expect(prepareRuntimeImage.mock.calls.every((args) => args[1] === "main")).toBe(true);
+      } else {
+        expect(prepareRuntimeImage).not.toHaveBeenCalled();
+      }
+    }
+  );
+
   it("resolves services declared only in the caller context", async () => {
     const deps = createDeps();
     const contextDecls: WorkspaceDeclarations = {

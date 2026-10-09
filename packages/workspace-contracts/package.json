@@ -12,6 +12,7 @@
     "./sourceDirs": "./src/sourceDirs.ts",
     "./types": "./src/types.ts",
     "./workspaceSource": "./src/workspaceSource.ts",
+    "./workspaceRoutes": "./src/workspaceRoutes.ts",
     "./workspaceConfigSchema": "./src/workspaceConfigSchema.ts",
     "./automations": "./src/automations.ts",
     "./appCompatibility": "./src/appCompatibility.ts"

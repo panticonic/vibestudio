@@ -21,6 +21,7 @@ import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { selectedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import { workspaceServiceBindingTier } from "@vibestudio/workspace-contracts/types";
+import { hasWorkspaceWorkerRoute } from "@vibestudio/workspace-contracts/workspaceRoutes";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import {
@@ -744,9 +745,21 @@ export function createWorkerService(deps: {
     }
     const scoped = await declarationsForCallerContext(ctx);
     if (!scoped) throw new Error(`No workspace service registered for ${query}`);
+    const service = resolveWorkspaceService(scoped.decls, query, objectKey);
+    if (
+      service.kind === "worker" &&
+      !hasWorkspaceWorkerRoute(workspaceDecls.routes, service.source, service.routePath)
+    ) {
+      throw new Error(
+        `Workspace HTTP service ${service.name} has no published canonical worker route. ` +
+          `HTTP services address published canonical workers, not task-context worker versions. ` +
+          `Private context-local services use Durable Objects; a context-local HTTP alias may reference an existing published route.`
+      );
+    }
     return {
       ...scoped,
-      service: resolveWorkspaceService(scoped.decls, query, objectKey),
+      ...(service.kind === "worker" ? { buildRef: "main" } : {}),
+      service,
     };
   }
 

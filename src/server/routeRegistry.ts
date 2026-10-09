@@ -34,6 +34,7 @@ import type { Duplex } from "stream";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import type { WorkspaceRouteDecl } from "@vibestudio/workspace-contracts/types";
+import { normalizeRoutePath } from "@vibestudio/workspace-contracts/workspaceRoutes";
 import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("RouteRegistry");
@@ -133,19 +134,12 @@ export type LookupResult =
 
 const DEFAULT_METHODS: HttpMethod[] = ["GET", "POST"];
 
-function normalizePath(p: string): string {
-  if (!p.startsWith("/")) p = "/" + p;
-  // Collapse trailing slash (but keep "/")
-  if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
-  return p;
-}
-
 /**
  * Compile `:param`-style paths to a regex. Supports plain segments and
  * `:name` segments. No wildcards / optional segments in v1.
  */
 function compilePattern(rawPath: string): CompiledPattern {
-  const path = normalizePath(rawPath);
+  const path = normalizeRoutePath(rawPath);
   const paramNames: string[] = [];
   const segments = path.split("/").filter((s) => s.length > 0);
   const regexParts = segments.map((seg) => {
@@ -207,7 +201,7 @@ export class RouteRegistry {
       this.addWorkerEntry(source, {
         kind: "worker-do",
         source,
-        rawPath: normalizePath(r.path),
+        rawPath: normalizeRoutePath(r.path),
         pattern: compilePattern(r.path),
         methods: new Set(r.methods ?? DEFAULT_METHODS),
         auth: r.auth ?? "public",
@@ -234,7 +228,7 @@ export class RouteRegistry {
       this.addWorkerEntry(source, {
         kind: "worker-regular",
         source,
-        rawPath: normalizePath(r.path),
+        rawPath: normalizeRoutePath(r.path),
         pattern: compilePattern(r.path),
         methods: new Set(r.methods ?? DEFAULT_METHODS),
         auth: r.auth ?? "public",
@@ -307,7 +301,7 @@ export class RouteRegistry {
         this.addWorkerEntry(source, {
           kind: "worker-do",
           source,
-          rawPath: normalizePath(r.path),
+          rawPath: normalizeRoutePath(r.path),
           pattern: compilePattern(r.path),
           methods: new Set(r.methods ?? DEFAULT_METHODS),
           auth: r.auth ?? "public",
@@ -320,7 +314,7 @@ export class RouteRegistry {
         this.addWorkerEntry(source, {
           kind: "worker-regular",
           source,
-          rawPath: normalizePath(r.path),
+          rawPath: normalizeRoutePath(r.path),
           pattern: compilePattern(r.path),
           methods: new Set(r.methods ?? DEFAULT_METHODS),
           auth: r.auth ?? "public",
@@ -341,10 +335,17 @@ export class RouteRegistry {
 
   private addWorkerEntry(source: string, entry: WorkerRouteEntry): void {
     const list = this.workerRoutes.get(source) ?? [];
-    // Deduplicate by kind + rawPath + (DO: className+objectKey).
+    // Repeated registration replaces the same method set. Separate method
+    // declarations at one path remain separate routes with their own policy.
     const idx = list.findIndex((e) => {
       if (e.kind !== entry.kind) return false;
       if (e.rawPath !== entry.rawPath) return false;
+      if (
+        e.methods.size !== entry.methods.size ||
+        [...e.methods].some((method) => !entry.methods.has(method))
+      ) {
+        return false;
+      }
       if (e.kind === "worker-do" && entry.kind === "worker-do") {
         return e.className === entry.className && e.objectKey === entry.objectKey;
       }
@@ -373,7 +374,7 @@ export class RouteRegistry {
       const entry: ServiceRouteEntry = {
         kind: "service",
         serviceName: r.serviceName,
-        rawPath: normalizePath(r.path),
+        rawPath: normalizeRoutePath(r.path),
         pattern: compilePattern(r.path),
         methods: new Set(r.methods ?? DEFAULT_METHODS),
         auth: r.auth ?? "public",

@@ -16,6 +16,7 @@ import type {
   WorkspaceServiceDecl,
   WorkspaceSingletonObjectDecl,
 } from "@vibestudio/workspace-contracts/types";
+import { validateWorkspaceRoutes } from "@vibestudio/workspace-contracts/workspaceRoutes";
 
 /** Composite key `${source}::${className}` */
 type SingletonKey = string;
@@ -87,14 +88,14 @@ export interface WorkspaceDeclarations {
 
 /** One declaration owns each service name/protocol lookup key. */
 export function indexWorkspaceServices<T extends { name: string; protocols?: readonly string[] }>(
-  services: readonly T[],
+  services: readonly T[]
 ): Map<string, T> {
   const byKey = new Map<string, T>();
   for (const service of services) {
     for (const key of new Set([service.name, ...(service.protocols ?? [])])) {
       if (byKey.has(key)) {
         throw new Error(
-          `Workspace service key ${JSON.stringify(key)} is declared by both ${JSON.stringify(byKey.get(key)!.name)} and ${JSON.stringify(service.name)}`,
+          `Workspace service key ${JSON.stringify(key)} is declared by both ${JSON.stringify(byKey.get(key)!.name)} and ${JSON.stringify(service.name)}`
         );
       }
       byKey.set(key, service);
@@ -117,6 +118,7 @@ export function buildWorkspaceDeclarations(config: WorkspaceConfig): WorkspaceDe
   const services = config.services ?? [];
   const routes = config.routes ?? [];
   indexWorkspaceServices(services);
+  validateWorkspaceRoutes(routes, services);
 
   // DO-backed services without a matching singletonObjects row are factories;
   // callers must supply `objectKey` at resolve time. No validation needed here.
@@ -126,10 +128,6 @@ export function buildWorkspaceDeclarations(config: WorkspaceConfig): WorkspaceDe
         route.source,
         route.durableObject.className,
         `route ${route.source} ${route.path}`
-      );
-    } else if (!route.worker) {
-      throw new Error(
-        `Workspace route ${route.source} ${route.path} must set either durableObject or worker: true`
       );
     }
   }

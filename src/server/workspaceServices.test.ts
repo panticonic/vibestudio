@@ -7,12 +7,97 @@ import {
 import { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibestudio/shared/workspaceServiceRpc";
 import { resolveWorkspaceService } from "./workspaceServices.js";
 import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
+import type { WorkspaceRouteDecl } from "@vibestudio/workspace-contracts/types";
+import { RouteRegistry } from "./routeRegistry.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 const TEST_WORKSPACE_SERVICE_PRESENTATION = {
   action: "use the test service",
   presentation: { domain: "automation" as const, verb: "act" as const },
 };
+
+describe("joined HTTP service and route ownership", () => {
+  const service: WorkspaceServiceDecl = {
+    name: "fixture.http",
+    source: "workers/fixture-http",
+    ...TEST_WORKSPACE_SERVICE_PRESENTATION,
+    authority: { principals: ["code"] },
+    worker: { routePath: "/api/jobs" },
+  };
+  const route: WorkspaceRouteDecl = {
+    source: service.source,
+    path: "/api/jobs",
+    worker: true,
+  };
+  const build = (routes: WorkspaceRouteDecl[], declaredService = service) =>
+    buildWorkspaceDeclarations({
+      id: "http-service-contract",
+      systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      services: [declaredService],
+      routes,
+    });
+
+  const invalidRoutes: WorkspaceRouteDecl[][] = [
+    [],
+    [{ ...route, source: "workers/other" }],
+    [{ ...route, path: "/other" }],
+    [{ ...route, worker: false, durableObject: { className: "OtherDO" } }],
+  ];
+  it.each(invalidRoutes.map((routes) => ({ routes })))(
+    "rejects a service without its same-source worker route: $routes",
+    ({ routes }) => {
+      expect(() => build(routes)).toThrow(/stateless worker route.*not declared/);
+    }
+  );
+
+  it("rejects a route owned by both a worker and a Durable Object", () => {
+    expect(() => build([{ ...route, durableObject: { className: "OtherDO" } }])).toThrow(
+      /exactly one/
+    );
+  });
+
+  it.each([" api//jobs/// ", "/api/jobs", "api/jobs/"])(
+    "advertises the actual dispatched path for declaration %j",
+    (path) => {
+      const declarations = build(
+        [
+          { ...route, path, methods: ["GET"] },
+          { ...route, path: "/api/jobs", methods: ["POST"], auth: "admin-token" },
+        ],
+        { ...service, worker: { routePath: "api//jobs//" } }
+      );
+      const resolved = resolveWorkspaceService(declarations, service.name);
+      expect(resolved.kind).toBe("worker");
+      if (resolved.kind !== "worker") throw new Error("Expected HTTP service");
+      const registry = new RouteRegistry();
+      registry.registerWorkerRoutes(service.source, "fixture-http", [...declarations.routes]);
+      expect(resolved.routeBasePath).toBe("/_r/w/workers/fixture-http/api/jobs");
+      for (const method of ["GET", "POST"] as const) {
+        expect(registry.lookup(resolved.routeBasePath, method, false)).toMatchObject({
+          kind: "worker-regular",
+          source: service.source,
+          remainder: "/api/jobs",
+          auth: method === "GET" ? "public" : "admin-token",
+        });
+      }
+    }
+  );
+
+  it("resolves and dispatches the root route", () => {
+    const declarations = build([{ ...route, path: "///" }], {
+      ...service,
+      worker: { routePath: "/" },
+    });
+    const resolved = resolveWorkspaceService(declarations, service.name);
+    if (resolved.kind !== "worker") throw new Error("Expected HTTP service");
+    const registry = new RouteRegistry();
+    registry.registerWorkerRoutes(service.source, "fixture-http", [...declarations.routes]);
+    expect(registry.lookup(`${resolved.routeBasePath}/`, "GET", false)).toMatchObject({
+      kind: "worker-regular",
+      source: service.source,
+    });
+  });
+});
 
 function makeDecls(opts: { withSingleton?: boolean; context?: "creator" }): WorkspaceDeclarations {
   const singletons = new SingletonRegistry(

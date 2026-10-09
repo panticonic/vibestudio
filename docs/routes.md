@@ -72,6 +72,18 @@ distinct packages.
 
 Regular-worker routes disappear when the canonical instance is destroyed.
 
+Worker-backed service declarations must reference a worker-backed route on the
+same source and normalized path. A route has exactly one receiver transport:
+`worker: true` or `durableObject`, never both. Separate method declarations at
+one path retain their own authentication policy.
+
+HTTP service addresses always refer to published canonical workers. A task
+context may declare an alias for an existing published route, but resolving it
+does not serve the task's worker version. A context-only route without a
+published receiver cannot be consumed through HTTP service resolution. Use a
+Durable Object for a private context-owned service, or publish and run the
+canonical worker when a public HTTP lifecycle is intended.
+
 ## Userland Services
 
 The workspace can also advertise higher-level services in the top-level

@@ -4,6 +4,7 @@ import type {
   SingletonRegistry,
 } from "@vibestudio/workspace/singletonRegistry";
 import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
+import { requireWorkspaceWorkerRoute } from "@vibestudio/workspace-contracts/workspaceRoutes";
 
 // Keep the resolved shape tied to the canonical declaration. The former local
 // shadow type dropped `binding`, which let resolution and receiver admission
@@ -88,18 +89,12 @@ function buildResolution(
   }
 
   // worker-backed
-  const routePath = normalizeRoutePath(service.worker.routePath);
-  const hasRoute = routes.some(
-    (route) =>
-      route.source === source &&
-      route.worker === true &&
-      normalizeRoutePath(route.path) === routePath
+  const routePath = requireWorkspaceWorkerRoute(
+    routes,
+    source,
+    service.worker.routePath,
+    `Workspace service ${service.name}`
   );
-  if (!hasRoute) {
-    throw new Error(
-      `Workspace service ${service.name} references stateless worker route ${routePath}, but that route is not declared`
-    );
-  }
   return {
     kind: "worker",
     origin: "workspace",
@@ -114,14 +109,6 @@ function buildResolution(
     routePath,
     routeBasePath: `/_r/w/${source}${routePath === "/" ? "" : routePath}`,
   };
-}
-
-function normalizeRoutePath(routePath: string): string {
-  const trimmed = routePath.trim();
-  if (!trimmed || trimmed === "/") return "/";
-  return trimmed.startsWith("/")
-    ? trimmed.replace(/\/+$/u, "")
-    : `/${trimmed.replace(/\/+$/u, "")}`;
 }
 
 export function toDORef(resolution: ResolvedWorkspaceService): DORefParam {
