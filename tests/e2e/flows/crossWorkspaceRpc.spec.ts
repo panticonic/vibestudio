@@ -387,6 +387,19 @@ function configureCrossWorkspaceFixture(root: string) {
       entry: "index.ts",
       durable: { classes: [{ className: "CrossWorkspaceReceiver" }] },
       authority: { provides: [], requests: [] },
+      services: [
+        {
+          name: "cross-workspace.receiver",
+          title: "Cross-workspace receiver",
+          action: "read a greeting",
+          description: "Native RPC acceptance fixture",
+          notability: "everyday",
+          presentation: { domain: "computer", verb: "see" },
+          protocols: ["e2e.cross-workspace.v1"],
+          authority: { binding: "declared", principals: ["code"] },
+          durableObject: { className: "CrossWorkspaceReceiver" },
+        },
+      ],
     },
     dependencies: { "@workspace/runtime": "workspace:*" },
   });
@@ -429,14 +442,6 @@ function configureCrossWorkspaceFixture(root: string) {
   config.services.push({
     source: "workers/cross-workspace-receiver",
     name: "cross-workspace.receiver",
-    title: "Cross-workspace receiver",
-    action: "read a greeting",
-    description: "Native RPC acceptance fixture",
-    notability: "everyday",
-    presentation: { domain: "computer", verb: "see" },
-    protocols: ["e2e.cross-workspace.v1"],
-    authority: { binding: "declared", principals: ["code"] },
-    durableObject: { className: "CrossWorkspaceReceiver" },
   });
   fs.writeFileSync(configPath, YAML.stringify(config));
 }

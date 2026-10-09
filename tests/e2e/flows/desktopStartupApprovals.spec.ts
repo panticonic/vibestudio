@@ -54,19 +54,10 @@ function configureWorkspaceSourceForApproval(
   writeNativeApprovalReviewExtension(sourceRoot);
   const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(fsSync.readFileSync(configPath, "utf8")) ?? {}) as {
-    template?: { repositories?: string[] };
     defaultAgentConfig?: { model?: string };
     extensions?: unknown[];
     initPanels?: Array<{ source?: string; stateArgs?: Record<string, unknown> }>;
   };
-  const repositories = config.template?.repositories;
-  if (!Array.isArray(repositories)) {
-    throw new Error("Expected the workspace template to declare its repositories");
-  }
-  if (!repositories.includes("extensions/e2e-approval")) {
-    repositories.push("extensions/e2e-approval");
-  }
-  if (!repositories.includes(providerRepo)) repositories.push(providerRepo);
   config.defaultAgentConfig = {
     ...config.defaultAgentConfig,
     model: NATIVE_APPROVAL_MODEL,
@@ -213,7 +204,11 @@ async function capabilityApprovalUiSnapshot(
             return {
               text: card.innerText,
               buttons: Array.from(card.querySelectorAll("button"))
-                .map((button) => button.innerText.trim())
+                .map((button) => {
+                  const label = button.cloneNode(true);
+                  label.querySelectorAll('[aria-hidden="true"]').forEach((element) => element.remove());
+                  return (label.textContent ?? "").replace(/\\s+/g, " ").trim();
+                })
                 .filter(Boolean),
               role: card.getAttribute("role"),
               labelledByText: document.getElementById(card.getAttribute("aria-labelledby") ?? "")

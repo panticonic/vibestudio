@@ -253,58 +253,74 @@ export async function createManagedTestWorkspace(
   const testRoot = fs.mkdtempSync(
     runTempRoot ? path.join(runTempRoot, "case-") : path.join(os.tmpdir(), "vibestudio-e2e-")
   );
-  registerRunCleanupPath(testRoot);
-  // Source customization is a property of the root, not an edit applied to a
-  // copy of it: the workspace imports its semantic state from the pinned tree,
-  // so anything the case wants the runtime to read has to be committed into a
-  // root of its own before the workspace names it.
-  const rootTemplate =
-    options.configureSource || privateRole
-      ? await deriveE2eRootTemplate({
-          base: runRootTemplate,
-          workRoot: path.join(testRoot, "case-root-template"),
-          configureSource: options.configureSource ?? (() => {}),
-          template: privateRole,
-        })
-      : runRootTemplate;
-  if (rootTemplate !== runRootTemplate) {
-    fs.writeFileSync(
-      path.join(testRoot, CASE_ROOT_TEMPLATE_FILE),
-      `${JSON.stringify({ template: rootTemplate, workspaceKind }, null, 2)}\n`,
-      "utf8"
-    );
-  }
-  const env = getTestEnv(testRoot);
-  const workspaceName = `e2e_${crypto.randomBytes(6).toString("hex")}`;
-  const workspaceDir = path.join(getCentralDataDirFromEnv(env), "workspaces", workspaceName);
-
-  for (const dir of Object.values(env)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  // Test identity, workspace source, and mutable state remain private. Reuse
-  // only machine-scoped dependency caches, whose entries are keyed by content,
-  // so repeated cold workspace launches do not depend on external network
-  // latency or duplicate immutable installs.
-  linkSharedMachineCaches(getCentralDataDirFromEnv(env));
-
-  const centralData = new CentralDataManager({
-    databasePath: path.join(getCentralDataDirFromEnv(env), "server-auth", "identity.db"),
-  });
+  let registered = false;
   try {
-    // Use the product's one creation path: the hub owns an exact intent, then
-    // the selected child creates and admits the workspace. Pre-scaffolding the
-    // directory here bypasses launch-record dispatch and is no longer a valid
-    // first-run lifecycle.
-    if (!privateRole) centralData.addWorkspaceCreation(workspaceName, rootTemplate.pin);
-    // E2E owns the isolated hub lifecycle. Persist the explicit "stop" quit
-    // policy in this fixture's private identity database so Electron can take
-    // its normal graceful shutdown path without opening an interactive dialog.
-    centralData.setKeepServerOnQuit(false);
-  } finally {
-    centralData.close();
-  }
+    registered = registerRunCleanupPath(testRoot);
+    // Source customization is a property of the root, not an edit applied to
+    // a copy of it: the workspace imports its semantic state from the pinned
+    // tree, so anything the case wants the runtime to read has to be committed
+    // into a root of its own before the workspace names it.
+    const rootTemplate =
+      options.configureSource || privateRole
+        ? await deriveE2eRootTemplate({
+            base: runRootTemplate,
+            workRoot: path.join(testRoot, "case-root-template"),
+            configureSource: options.configureSource ?? (() => {}),
+            template: privateRole,
+          })
+        : runRootTemplate;
+    if (rootTemplate !== runRootTemplate) {
+      fs.writeFileSync(
+        path.join(testRoot, CASE_ROOT_TEMPLATE_FILE),
+        `${JSON.stringify({ template: rootTemplate, workspaceKind }, null, 2)}\n`,
+        "utf8"
+      );
+    }
+    const env = getTestEnv(testRoot);
+    const workspaceName = `e2e_${crypto.randomBytes(6).toString("hex")}`;
+    const workspaceDir = path.join(getCentralDataDirFromEnv(env), "workspaces", workspaceName);
 
-  return workspaceDir;
+    for (const dir of Object.values(env)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    // Test identity, workspace source, and mutable state remain private. Reuse
+    // only machine-scoped dependency caches, whose entries are keyed by content,
+    // so repeated cold workspace launches do not depend on external network
+    // latency or duplicate immutable installs.
+    linkSharedMachineCaches(getCentralDataDirFromEnv(env));
+
+    const centralData = new CentralDataManager({
+      databasePath: path.join(getCentralDataDirFromEnv(env), "server-auth", "identity.db"),
+    });
+    try {
+      // Use the product's one creation path: the hub owns an exact intent, then
+      // the selected child creates and admits the workspace. Pre-scaffolding
+      // the directory here bypasses launch-record dispatch and is no longer a
+      // valid first-run lifecycle.
+      if (!privateRole) centralData.addWorkspaceCreation(workspaceName, rootTemplate.pin);
+      // E2E owns the isolated hub lifecycle. Persist the explicit "stop" quit
+      // policy in this fixture's private identity database so Electron can take
+      // its normal graceful shutdown path without opening an interactive dialog.
+      centralData.setKeepServerOnQuit(false);
+    } finally {
+      centralData.close();
+    }
+
+    return workspaceDir;
+  } catch (error) {
+    try {
+      if (!registered || !releaseRunCleanupPath(testRoot)) {
+        fs.rmSync(testRoot, { recursive: true, force: true });
+      }
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "E2E workspace preparation failed and its owned fixture path could not be retired",
+        { cause: error }
+      );
+    }
+    throw error;
+  }
 }
 
 export function removeManagedTestWorkspace(workspaceDir: string): void {

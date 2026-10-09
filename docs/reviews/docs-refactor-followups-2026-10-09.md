@@ -94,3 +94,26 @@ receipt without repeating execution. MissionsDO host ownership remains open.
 5. Semantic-source remote branch publication and correcting SELF_IMPROVEMENT.md.
 6. SetupHub owner-source events (eight sources).
 7. Automation overview still polls.
+
+## Integration verification and release boundary
+
+The current follow-up checks passed: 68 host tests, 206 Base tests, 22 System
+tests, 43 Personal tests, 55 Google Workspace tests, and 3 System Testing tests.
+Three additional Personal browser-import UI tests verify versioned progress,
+terminal completion, visible provider errors, and observation cancellation on
+unmount without cancelling the import itself. All eight template compositions
+passed the host-owned semantic typecheck. The current pair-authority gate passed.
+These focused results supplement the earlier full-suite runs; they are not a
+claim that every agentic scenario or live-device smoke test passed.
+
+Packaged defaults still reference older published Base, Personal, and System
+tags in `build-resources/workspace-template-release.json`. Those releases do not
+implement the new source contracts. Pushing the source repositories to main
+does not promote the packaged defaults. Promotion must use each template's
+ordinary authoring inspection, review, and publish workflow, followed by
+`generate:workspace-template-release` with the actual publication receipts.
+The profile currently has no active GitHub publication credential accepted by
+that workflow. A GitHub connection with repository-publish access is required
+before promotion can proceed; Git's working push credentials do not supply
+that application authority. No receipt or pin was fabricated, and no legacy
+reader was added to accommodate the old releases.
