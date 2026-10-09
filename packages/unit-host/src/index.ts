@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+export { requireExactUnitAdmission } from "./exactUnitAdmission.js";
+export type { ExactUnitAdmissionReview } from "./exactUnitAdmission.js";
 import type {
   InstallReviewOrigin,
   UnitInstallSourceOrigin,
@@ -822,8 +824,16 @@ export class UnitHost<
       await opts.activateCurrent(entry, node, decl);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.markError(node.name, message);
-      opts.onError?.(node, decl, message);
+      try {
+        this.markError(node.name, message);
+        opts.onError?.(node, decl, message);
+      } catch (reconciliationError) {
+        throw new AggregateError(
+          [err, reconciliationError],
+          `Unit ${node.name} failed and its runtime state could not be reconciled`,
+          { cause: err }
+        );
+      }
       throw err;
     }
   }

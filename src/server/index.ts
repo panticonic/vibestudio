@@ -6217,6 +6217,7 @@ async function main() {
         // un-admitted version is offered at the launch gate once more.
         isAdmitted: (repoPath, effectiveVersion) =>
           unitAdmissionStore.hasVersion(repoPath, effectiveVersion),
+        openUnitReviewFor: unitReviewLookup.forUnavailableCode,
         notificationService: notificationResult.internal,
         entityCache,
         connectionGrants,

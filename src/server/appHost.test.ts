@@ -122,6 +122,7 @@ function makeHarness(
   opts: {
     root?: string;
     isAdmitted?: AppHostDeps["isAdmitted"];
+    openUnitReviewFor?: AppHostDeps["openUnitReviewFor"];
     seeded?: boolean;
     invalidManifest?: boolean;
     approvalDecision?: "accepted" | "deny";
@@ -310,6 +311,7 @@ function makeHarness(
     isSystemWorkspace: opts.isSystemWorkspace ?? (() => true),
     buildSystem,
     isAdmitted: opts.isAdmitted,
+    openUnitReviewFor: opts.openUnitReviewFor,
     eventService: eventService as never,
     approvalQueue,
     approvalCoordinator,
@@ -1848,6 +1850,7 @@ describe("AppHost", () => {
 
   it("publishes terminal availability only after its process start succeeds", async () => {
     const { host, buildSystem, eventService, graphNode, approvalQueue, entityCache } = makeHarness({
+      isAdmitted: () => true,
       configureTerminalRunner: true,
     });
     fs.writeFileSync(
@@ -2035,6 +2038,189 @@ describe("AppHost", () => {
     expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
     expect(entityCache.resolveActive(graphNode.name)).toBeNull();
     expect(host.registry.get(graphNode.name)).toMatchObject({ status: "error" });
+  });
+
+  it("keeps an unaccepted terminal build inspectable but prevents promotion and launch", async () => {
+    const review = { approvalId: "review-terminal", title: "Review Remote CLI" };
+    let openReview = true;
+    const { host, buildSystem, eventService, graphNode, entityCache } = makeHarness({
+      isAdmitted: () => false,
+      openUnitReviewFor: () => (openReview ? review : null),
+      configureTerminalRunner: true,
+    });
+    setAppManifestTarget(graphNode, "terminal", ["clipboard"]);
+    const terminalBuild = {
+      dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
+      metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
+        ev: "ev-terminal-unaccepted",
+        sourceStateHash: "state:terminal-unaccepted",
+        details: {
+          kind: "app",
+          target: "terminal",
+          integrity: null,
+          rnHostAbi: null,
+          provider: null,
+        },
+      },
+      artifacts: [
+        {
+          path: "index.mjs",
+          role: "primary",
+          contentType: "text/javascript; charset=utf-8",
+          encoding: "utf8",
+          content: "export {};\n",
+        },
+      ],
+    };
+    buildSystem.getBuild.mockResolvedValue(terminalBuild as never);
+    buildSystem.getBuildByKey.mockImplementation((key: string) =>
+      key === "terminal-key" ? (terminalBuild as never) : null
+    );
+
+    await expect(
+      host.prepareRelease(graphNode.relativePath, "candidate-ref")
+    ).resolves.toMatchObject({
+      buildKey: "terminal-key",
+      effectiveVersion: "ev-terminal-unaccepted",
+      source: graphNode.relativePath,
+    });
+    expect(host.registry.get(graphNode.name)?.activeBundleKey).toBeUndefined();
+
+    host.registry.upsert({
+      unitKind: "app",
+      name: graphNode.name,
+      version: "1.0.0",
+      target: "terminal",
+      capabilities: ["clipboard"],
+      source: { kind: "workspace-repo", repo: graphNode.relativePath, ref: "candidate-ref" },
+      installedAt: Date.now(),
+      activeEv: "ev-terminal-unaccepted",
+      activeSourceHash: "state:terminal-unaccepted",
+      activeBundleKey: "terminal-key",
+      activeDependencyEvs: {},
+      activeExternalDeps: {},
+      activeRuntimeDepsKey: null,
+      status: "available",
+      lastError: null,
+      previousVersions: [],
+    });
+    const terminalStart = vi.spyOn(host.terminal, "start");
+    await expect(host.activateRelease(graphNode.name)).rejects.toMatchObject({
+      name: "ServiceAccessError",
+      service: "runtime.supervision",
+      code: "EREVIEWPENDING",
+      errorData: {
+        authorityFailure: {
+          remediation: {
+            kind: "resolve-open-review",
+            review,
+          },
+        },
+      },
+    });
+    expect(terminalStart).not.toHaveBeenCalled();
+    expect(entityCache.resolveActive(graphNode.name)).toBeNull();
+    expect(host.registry.get(graphNode.name)).toMatchObject({
+      activeBundleKey: "terminal-key",
+      status: "available",
+    });
+    expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
+
+    openReview = false;
+    await expect(host.activateRelease(graphNode.name)).rejects.toMatchObject({
+      name: "ServiceAccessError",
+      service: "runtime.supervision",
+      code: "EACCES",
+      errorData: {
+        authorityFailure: {
+          reasonCode: "approval-required",
+          remediation: { kind: "request-user-approval" },
+        },
+      },
+    });
+    expect(terminalStart).not.toHaveBeenCalled();
+  });
+
+  it("keeps the prior admitted terminal image live when a candidate lacks exact admission", async () => {
+    const admitted = new Set(["ev-terminal-old"]);
+    const { host, buildSystem, graphNode, entityCache } = makeHarness({
+      isAdmitted: (_repo, ev) => admitted.has(ev),
+      configureTerminalRunner: true,
+    });
+    setAppManifestTarget(graphNode, "terminal", ["clipboard"]);
+    const makeTerminalBuild = (key: string, ev: string) => ({
+      dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", key),
+      metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
+        ev,
+        sourceStateHash: `state:${ev}`,
+        details: {
+          kind: "app",
+          target: "terminal",
+          integrity: null,
+          rnHostAbi: null,
+          provider: null,
+        },
+      },
+      artifacts: [
+        {
+          path: "index.mjs",
+          role: "primary",
+          contentType: "text/javascript; charset=utf-8",
+          encoding: "utf8",
+          content: "export {};\n",
+        },
+      ],
+    });
+    const oldBuild = makeTerminalBuild("terminal-old", "ev-terminal-old");
+    const candidateBuild = makeTerminalBuild("terminal-candidate", "ev-terminal-candidate");
+    buildSystem.getBuild.mockResolvedValue(candidateBuild as never);
+    buildSystem.getBuildByKey.mockImplementation((key: string) =>
+      key === "terminal-old"
+        ? (oldBuild as never)
+        : key === "terminal-candidate"
+          ? (candidateBuild as never)
+          : null
+    );
+    host.registry.upsert({
+      unitKind: "app",
+      name: graphNode.name,
+      version: "1.0.0",
+      target: "terminal",
+      capabilities: ["clipboard"],
+      source: { kind: "workspace-repo", repo: graphNode.relativePath, ref: "main" },
+      installedAt: Date.now(),
+      activeEv: "ev-terminal-old",
+      activeSourceHash: "state:ev-terminal-old",
+      activeBundleKey: "terminal-old",
+      activeDependencyEvs: {},
+      activeExternalDeps: {},
+      activeRuntimeDepsKey: null,
+      status: "running",
+      lastError: null,
+      previousVersions: [],
+    });
+    vi.spyOn(host.terminal, "isRunningBuild").mockImplementation(
+      (_name, buildKey) => buildKey === "terminal-old"
+    );
+    const terminalStart = vi.spyOn(host.terminal, "start");
+    await host.activateRelease(graphNode.name);
+    const priorPrincipal = entityCache.resolveActive(graphNode.name);
+    expect(priorPrincipal).toMatchObject({ activeBuildKey: "terminal-old" });
+
+    await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "candidate-ref" }]);
+    await host.whenSettled();
+
+    expect(terminalStart).not.toHaveBeenCalled();
+    expect(host.registry.get(graphNode.name)).toMatchObject({
+      activeBundleKey: "terminal-old",
+      activeEv: "ev-terminal-old",
+      status: "running",
+    });
+    expect(entityCache.resolveActive(graphNode.name)).toMatchObject({
+      activeBuildKey: "terminal-old",
+    });
   });
 
   it("preserves an already-running terminal build during reconciliation and launch refresh", async () => {

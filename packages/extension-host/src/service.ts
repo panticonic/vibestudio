@@ -65,6 +65,7 @@ import {
   normalizeUnitRepoPath as normalizeRepoPath,
   normalizeUnitRef as normalizeRef,
   requestUnitInstallReview,
+  requireExactUnitAdmission,
   unitAuthorityManifestFromPackageJson,
   unitBuildIdentityFromRegistryEntry,
   type UnitDeclaration,
@@ -2436,7 +2437,16 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         `Approved extension build is missing from build store: ${entry.activeBundleKey}`
       );
     }
-    this.requireExactAdmission(name, entry.source.repo, build.metadata.ev, "activate");
+    requireExactUnitAdmission({
+      service: "extensions",
+      operation: "activate",
+      unitLabel: "extension",
+      name,
+      repoPath: entry.source.repo,
+      effectiveVersion: build.metadata.ev,
+      isAdmitted: this.deps.isAdmitted,
+      openReviewFor: this.deps.openUnitReviewFor,
+    });
     const token = this.deps.tokenManager.ensureToken(name, "extension");
     this.registry.patch(name, { status: "building", lastError: null });
     await this.processes.start({
@@ -2448,45 +2458,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       rpcToken: token,
     });
     this.registerBuildProvidersFor(entry);
-  }
-
-  /** Native execution requires acceptance of the exact bytes, independently of
-   * the capability grants those bytes may request after they start. */
-  private requireExactAdmission(
-    name: string,
-    repoPath: string,
-    effectiveVersion: string,
-    operation: string
-  ): void {
-    if (!this.deps.isAdmitted || this.deps.isAdmitted(repoPath, effectiveVersion)) return;
-
-    const review = this.deps.openUnitReviewFor({ repoPath, effectiveVersion });
-    if (review) {
-      const reason = `Waiting for you to finish reviewing ${review.title}.`;
-      throw new ServiceAccessError("extensions", operation, reason, "EREVIEWPENDING", {
-        authorityFailure: {
-          reasonCode: "review-pending",
-          reason,
-          remediation: {
-            kind: "resolve-open-review",
-            message: "Finish the review that is already open, then retry the exact invocation.",
-            review,
-          },
-        },
-      });
-    }
-
-    const reason = `The exact extension build ${repoPath}@${effectiveVersion} has not been accepted to run.`;
-    throw new ServiceAccessError("extensions", operation, reason, "EACCES", {
-      authorityFailure: {
-        reasonCode: "approval-required",
-        reason,
-        remediation: {
-          kind: "request-user-approval",
-          message: `Accept ${name} in the workspace launch review, then retry.`,
-        },
-      },
-    });
   }
 
   private async buildAndActivate(
@@ -2508,7 +2479,16 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const shouldRun = this.activatesEagerly(node) || this.processes.isRunning(node.name);
     this.unitHost.markBuilding(node.name);
     try {
-      this.requireExactAdmission(node.name, node.relativePath, build.metadata.ev, "activate");
+      requireExactUnitAdmission({
+        service: "extensions",
+        operation: "activate",
+        unitLabel: "extension",
+        name: node.name,
+        repoPath: node.relativePath,
+        effectiveVersion: build.metadata.ev,
+        isAdmitted: this.deps.isAdmitted,
+        openReviewFor: this.deps.openUnitReviewFor,
+      });
     } catch (error) {
       this.registry.patch(node.name, {
         status: this.processes.isRunning(node.name) ? "running" : (previous?.status ?? "available"),

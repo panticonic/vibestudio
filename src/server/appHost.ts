@@ -19,6 +19,7 @@ import {
   normalizeUnitRepoPath as normalizeRepoPath,
   normalizeUnitRef as normalizeRef,
   requestUnitInstallReview,
+  requireExactUnitAdmission,
   unitBuildIdentityFromRegistryEntry,
   canonicalUnitBuildIdentity,
   unitAuthorityManifestFromPackageJson,
@@ -29,6 +30,7 @@ import {
   type UnitReconcileOptions,
   type UnitReconcileTrigger,
   type UnitRegistryEntryBase,
+  type ExactUnitAdmissionReview,
 } from "@vibestudio/unit-host";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { EventService } from "@vibestudio/shared/eventsService";
@@ -356,6 +358,10 @@ export interface AppHostDeps {
    * stands alone.
    */
   isAdmitted?(repoPath: string, effectiveVersion: string): boolean;
+  openUnitReviewFor?(code: {
+    repoPath: string;
+    effectiveVersion: string;
+  }): ExactUnitAdmissionReview | null;
   entityCache?: Pick<EntityCache, "resolve" | "listActive" | "_onActivate" | "_onRetire">;
   executionPublicationPort?: ExecutionPublicationPort;
   connectionGrants?: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
@@ -927,6 +933,21 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.assertHostTargetMatchesManifest(node, target);
     const build = await this.deps.buildSystem.getBuild(candidate.name, ref);
     this.validateBuildForTarget(candidate.name, target, build);
+    if (
+      isAppBuildDetailsLike(build.metadata.details) &&
+      build.metadata.details.target === "terminal"
+    ) {
+      // Building and inspecting an exact candidate remains available while
+      // its launch review is pending; only promotion requires acceptance.
+      if (this.deps.isAdmitted && !this.deps.isAdmitted(node.relativePath, build.metadata.ev)) {
+        return {
+          buildKey: path.basename(build.dir),
+          effectiveVersion: build.metadata.ev,
+          appId: candidate.name,
+          source: candidate.source,
+        };
+      }
+    }
     const activeSourceHash = requireBuildSourceStateHash(node.name, build);
     const externalDeps = this.externalDepsForBuild(node, build.metadata, decl);
     const dependencyEvs = this.currentDependencyEvs(node);
@@ -1115,6 +1136,21 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!prepared?.activeBundleKey) throw new Error(`App ${sourceOrName} has no active build`);
     if (!build) throw new Error(`Active app build is missing: ${prepared.activeBundleKey}`);
     this.validateBuildForTarget(prepared.name, prepared.target, build);
+    if (
+      isAppBuildDetailsLike(build.metadata.details) &&
+      build.metadata.details.target === "terminal"
+    ) {
+      requireExactUnitAdmission({
+        service: "runtime.supervision",
+        operation: "activate",
+        unitLabel: "terminal app",
+        name: prepared.name,
+        repoPath: prepared.source.repo,
+        effectiveVersion: build.metadata.ev,
+        isAdmitted: this.deps.isAdmitted,
+        openReviewFor: this.deps.openUnitReviewFor,
+      });
+    }
     const previousPrincipal =
       prepared.target === "terminal" ? this.deps.entityCache?.resolve(prepared.name) : null;
     const entry = this.registry.patch(prepared.name, { status: "running", lastError: null });
@@ -1699,7 +1735,23 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       activateCurrent: async (entry) => {
         this.emitStatus(entry.name, entry.status, null);
       },
-      onError: (_node, _decl, message) => this.emitStatus(node.name, "error", message),
+      onError: (_node, _decl, message) => {
+        const current = this.registry.get(node.name);
+        if (
+          current?.target === "terminal" &&
+          current.activeBundleKey &&
+          this.terminal.isRunningBuild(node.name, current.activeBundleKey)
+        ) {
+          // UnitHost marks every failed update as an error. The process owner
+          // is authoritative for whether the prior exact image is still live.
+          // Keep that real service available while reporting the candidate error.
+          this.registry.patch(node.name, {
+            status: "running",
+            lastError: message,
+          });
+        }
+        this.emitStatus(node.name, this.registry.get(node.name)?.status ?? "error", message);
+      },
     });
   }
 
@@ -1716,6 +1768,21 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       const target = this.appTarget(node, decl);
       diagnostic.target = target;
       this.validateBuildForTarget(node.name, target, build);
+      if (
+        isAppBuildDetailsLike(build.metadata.details) &&
+        build.metadata.details.target === "terminal"
+      ) {
+        requireExactUnitAdmission({
+          service: "runtime.supervision",
+          operation: "activate",
+          unitLabel: "terminal app",
+          name: node.name,
+          repoPath: node.relativePath,
+          effectiveVersion: build.metadata.ev,
+          isAdmitted: this.deps.isAdmitted,
+          openReviewFor: this.deps.openUnitReviewFor,
+        });
+      }
       const activeSourceHash = requireBuildSourceStateHash(node.name, build);
       diagnostic.phase = "activation";
       const capabilities = this.appCapabilities(node);
@@ -2083,7 +2150,12 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       target: previous.target,
       capabilities: previous.capabilities,
       previousVersions: previous.previousVersions ?? [],
-      status: "error",
+      status:
+        previous.target === "terminal" &&
+        previous.activeBundleKey &&
+        this.terminal.isRunningBuild(name, previous.activeBundleKey)
+          ? "running"
+          : "error",
       lastError: message,
       lastErrorDetails: diagnostic,
       activationTrust: previous.activationTrust ?? null,
