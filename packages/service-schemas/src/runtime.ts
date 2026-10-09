@@ -1708,7 +1708,8 @@ export const runtimeMethods = defineServiceMethods({
       family: "runtime.supervision-release",
       rationale: "Read-only release history addressed by exact release identity.",
     },
-    description: "List retained versions for an exact release identity.",
+    description:
+      "List retained versions for an exact release identity, including releases with no active process. For workspace apps, use the exact name from build.listUnits() as releaseId. runtime.supervision.list() returns live entity identities for process inspection; an empty live list does not prevent release-history lookup.",
     args: z.tuple([RuntimeSupervisionReleaseKeySchema]),
     returns: RuntimeSupervisionReleaseVersionsSchema,
     authority: RUNTIME_AGENT_READ_POLICY,

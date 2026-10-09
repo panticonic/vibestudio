@@ -558,7 +558,7 @@ Authority principals: `code`, `host`, `user`, `website`
 | `runtime.supervision.activate` | Activate one exact admitted app or extension release. |
 | `runtime.supervision.prepare` | Prepare an immutable app release from a source ref. |
 | `runtime.supervision.retire` | Retire one exact supervised entity through its owning driver. |
-| `runtime.supervision.versions` | List retained versions for an exact release identity. |
+| `runtime.supervision.versions` | List retained versions for an exact release identity, including releases with no active process. For workspace apps, use the exact name from build.listUnits() as releaseId. runtime.supervision.list() returns live entity identities for process inspection; an empty live list does not prevent release-history lookup. |
 | `runtime.supervision.rollback` | Roll back an exact release identity to a retained build. |
 
 ## `serverLog`
