@@ -1,3 +1,4 @@
+import type { ContextCloneResult } from "@vibestudio/shared/runtime/contextEdges";
 /**
  * Wire schema for the server "runtime" entity lifecycle service.
  */
@@ -354,17 +355,19 @@ export const RuntimeSupervisionHealthSchema = z
 export type RuntimeSupervisionHealth = z.infer<typeof RuntimeSupervisionHealthSchema>;
 
 /** Native evidence of an exact bounded health read; excludes diagnostic prose. */
-export const NativeRuntimeHealthObservationSchema = z.object({
-  protocol: z.literal("runtime-health-observation.v1"),
-  identity: RuntimeSupervisionEntityKeySchema,
-  source: z.string(),
-  logCount: z.number().int().nonnegative(),
-  errorCount: z.number().int().nonnegative(),
-  limit: z.number().int().positive(),
-  errorLimit: z.number().int().positive(),
-  dropped: z.object({ entries: z.number(), errors: z.number() }).strict(),
-  capacity: z.object({ entries: z.number(), errors: z.number() }).strict(),
-}).strict();
+export const NativeRuntimeHealthObservationSchema = z
+  .object({
+    protocol: z.literal("runtime-health-observation.v1"),
+    identity: RuntimeSupervisionEntityKeySchema,
+    source: z.string(),
+    logCount: z.number().int().nonnegative(),
+    errorCount: z.number().int().nonnegative(),
+    limit: z.number().int().positive(),
+    errorLimit: z.number().int().positive(),
+    dropped: z.object({ entries: z.number(), errors: z.number() }).strict(),
+    capacity: z.object({ entries: z.number(), errors: z.number() }).strict(),
+  })
+  .strict();
 
 const RuntimeSupervisionLogOptionsSchema = z
   .object({
@@ -667,7 +670,7 @@ export const CloneContextResultSchema = z
 export type ClonedEntity = z.infer<typeof ClonedEntitySchema>;
 export type ClonedContext = z.infer<typeof ClonedContextSchema>;
 export type RewiredEntity = z.infer<typeof RewiredEntitySchema>;
-export type CloneContextResult = z.infer<typeof CloneContextResultSchema>;
+export type CloneContextResult = ContextCloneResult;
 
 export const runtimeMethods = defineServiceMethods({
   createEntity: {
@@ -1488,13 +1491,11 @@ export const runtimeMethods = defineServiceMethods({
       family: "runtime.supervision",
       rationale: "Bounded health and diagnostic read from one exact executable-unit driver.",
     },
-    description: "Read bounded health for one exact supervised entity, including its persisted logs and separate retained error buffer with independent counts, capacities, and dropped counts. Use limit for logs and errorLimit for errors; both buffers are returned here.",
+    description:
+      "Read bounded health for one exact supervised entity, including its persisted logs and separate retained error buffer with independent counts, capacities, and dropped counts. Use limit for logs and errorLimit for errors; both buffers are returned here.",
     args: z.union([
       z.tuple([RuntimeSupervisionEntityKeySchema]),
-      z.tuple([
-        RuntimeSupervisionEntityKeySchema,
-        RuntimeSupervisionLogOptionsSchema.optional(),
-      ]),
+      z.tuple([RuntimeSupervisionEntityKeySchema, RuntimeSupervisionLogOptionsSchema.optional()]),
     ]),
     returns: RuntimeSupervisionHealthSchema,
     authority: RUNTIME_AGENT_READ_POLICY,
@@ -1513,7 +1514,8 @@ export const runtimeMethods = defineServiceMethods({
       family: "runtime.supervision-observability",
       rationale: "Bounded retained-log read from one exact executable-unit driver.",
     },
-    description: "Read only retained log records for one exact supervised entity. This array does not include the separate error buffer or buffer counts; use supervision.health to inspect those.",
+    description:
+      "Read only retained log records for one exact supervised entity. This array does not include the separate error buffer or buffer counts; use supervision.health to inspect those.",
     args: z.tuple([
       RuntimeSupervisionEntityKeySchema,
       RuntimeSupervisionLogOptionsSchema.optional(),

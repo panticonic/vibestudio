@@ -350,6 +350,28 @@ describe("WorkspaceDO.entityActivate", () => {
     });
   });
 
+  it("seals a reserved image without admitting it and rejects changed preparation", () => {
+    const reserved = instance.entityReserve(
+      panelInput({ source: { repoPath: SOURCE, effectiveVersion: "" } })
+    );
+    const sealed = instance.entityPrepareExecution(preparedPanelInput());
+    expect(sealed).toMatchObject({
+      status: "preparing",
+      authoritySessionId: reserved.authoritySessionId,
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+    });
+    expect(instance.entityResolveActive(reserved.id)).toBeNull();
+    expect(instance.entityPrepareExecution(preparedPanelInput())).toEqual(sealed);
+    expect(() =>
+      instance.entityPrepareExecution({ ...preparedPanelInput(), activeBuildKey: "c".repeat(64) })
+    ).toThrow(/sealed preparation changed/);
+    expect(instance.entityAdvanceExecution(preparedPanelInput()).status).toBe("active");
+    expect(() => instance.entityPrepareExecution(preparedPanelInput())).toThrow(
+      /reserved incarnation/
+    );
+  });
+
   it("reserves a non-executable panel and activates that same incarnation in place", () => {
     const reserved = instance.entityReserve(
       panelInput({ source: { repoPath: SOURCE, effectiveVersion: "" } })

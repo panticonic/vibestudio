@@ -496,6 +496,7 @@ type RelayErrorCode =
   | "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE"
   | "EVALUATED_EXECUTION_SESSION_STALE"
   | "EXECUTION_OWNER_NOT_AVAILABLE"
+  | "RUNTIME_ENTITY_NOT_ACTIVE"
   | "INVOCATION_AUTHORITY_PARENT_NOT_ACTIVE"
   | "RECONNECT_GRACE_EXPIRED"
   | "SERVER_SHUTTING_DOWN"
@@ -1046,6 +1047,13 @@ export class RpcServer {
   ): VerifiedCaller {
     // Every registered executable runtime carries its owning context, including
     // panels and apps. Context authority must follow that live host record.
+    const retainedEntity = this.deps.entityCache?.resolve(callerId);
+    if (retainedEntity && retainedEntity.status !== "active") {
+      throw createRelayError(
+        `Runtime ${callerId} is ${retainedEntity.status}; execution admission is not active`,
+        "RUNTIME_ENTITY_NOT_ACTIVE"
+      );
+    }
     const activeEntity = this.deps.entityCache?.resolveActive(callerId);
     const website = activeEntity?.source.repoPath.startsWith("browser:")
       ? this.deps.websiteDocuments?.fact(callerId)

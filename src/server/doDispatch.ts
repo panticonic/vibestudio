@@ -31,6 +31,7 @@ import type {
   LifecyclePrepareInput,
   LifecyclePrepareResult,
   LifecycleResumeInput,
+  LifecycleCloneInput,
 } from "@vibestudio/shared/doDispatcher";
 import { AmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
@@ -377,6 +378,9 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     | null = null;
   private workReadyObserver: ((hint: DurableWorkReadyHint) => void) | null = null;
   private runtimeRestartingProbe: (() => boolean) | null = null;
+  private preparingTargetReady:
+    | ((ref: DORef, witness: LifecycleCloneInput) => Promise<void>)
+    | null = null;
   constructor(private readonly ensureUserlandTargetReady: (ref: DORef) => Promise<void>) {
     if (typeof ensureUserlandTargetReady !== "function") {
       throw new Error("DODispatch requires a userland Durable Object readiness barrier");
@@ -463,6 +467,10 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
    */
   setRuntimeRestartingProbe(fn: () => boolean): void {
     this.runtimeRestartingProbe = fn;
+  }
+
+  setPreparingTargetReady(fn: (ref: DORef, witness: LifecycleCloneInput) => Promise<void>): void {
+    this.preparingTargetReady = fn;
   }
 
   private requireWorkerdUrl(): string {
@@ -653,7 +661,12 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   async dispatchLifecycle(ref: DORef, method: "resume", arg: LifecycleResumeInput): Promise<void>;
   async dispatchLifecycle(
     ref: DORef,
-    method: "prepare" | "resume",
+    method: "initializeClone",
+    arg: LifecycleCloneInput
+  ): Promise<void>;
+  async dispatchLifecycle(
+    ref: DORef,
+    method: "prepare" | "resume" | "initializeClone",
     arg: unknown
   ): Promise<unknown> {
     const label = `${doRefKey(ref)}.__lifecycle/${method}`;
@@ -677,11 +690,20 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   private async dispatchLifecycleImpl(
     ref: DORef,
-    method: "prepare" | "resume",
+    method: "prepare" | "resume" | "initializeClone",
     arg: unknown
   ): Promise<unknown> {
     const lifecycleMethod = `__lifecycle/${method}`;
-    await this.prepareTarget(ref);
+    if (method === "initializeClone") {
+      if (!this.preparingTargetReady) throw new Error("Clone preparation readiness is unavailable");
+      if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
+        throw new Error("DODispatch requires token-backed clone preparation");
+      }
+      if (this.runtimeRestartingProbe?.()) throw runtimeRestartingError();
+      await this.preparingTargetReady(ref, arg as LifecycleCloneInput);
+    } else {
+      await this.prepareTarget(ref);
+    }
     const serverCaller = await this.serverCaller(ref, lifecycleMethod, [arg]);
     if (!serverCaller.authorization || !this.authorityParentRunner) {
       throw new Error("DODispatch requires an authority parent runner");

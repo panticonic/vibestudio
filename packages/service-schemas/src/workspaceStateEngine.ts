@@ -1,3 +1,4 @@
+import { CloneContextResultSchema } from "./runtime.js";
 import { z } from "zod";
 import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { DURABLE_WORK_QUEUES } from "@vibestudio/shared/durableWork";
@@ -89,13 +90,26 @@ const entityActivationSchema = z
     ownerUserId: z.string().min(1).optional(),
   })
   .strict();
+const entityCloneProvenanceSchema = z
+  .object({
+    storage: z.enum(["snapshot", "fresh"]),
+    operationContextId: z.string().min(1),
+    sourceEntityId: z.string().min(1),
+    sourceContextId: z.string().min(1),
+    sourceAuthoritySessionId: z.string().min(1),
+    sourceBuildKey: z.string().min(1),
+    sourceExecutionDigest: z.string().min(1),
+  })
+  .strict();
 const entityReservationSchema = entityActivationSchema.extend({
+  cloneProvenance: entityCloneProvenanceSchema.optional(),
   lifecycleOwner: z
     .object({ contextId: z.string().min(1), entityId: z.string().min(1) })
     .strict()
     .optional(),
 });
 const entityRecordSchema = entityActivationSchema.extend({
+  cloneProvenance: entityCloneProvenanceSchema.optional(),
   id: z.string().min(1),
   authoritySessionId: z.string().min(1),
   createdAt: z.number().int().nonnegative(),
@@ -224,11 +238,56 @@ const alarmClaimSchema = LifecycleKeySchema.extend({
 });
 
 const contextEdgeKindSchema = z.enum(["lifecycle", "lineage"]);
+const contextCloneDefinitionSchema = z
+  .object({
+    request: z
+      .object({
+        sourceContextId: z.string().min(1),
+        include: z.array(z.string().min(1)).nullable(),
+        recursive: z.boolean(),
+      })
+      .strict(),
+    author: z
+      .object({
+        runtimeId: z.string().min(1),
+        runtimeKind: z.string().min(1),
+        authoritySessionId: z.string().min(1).optional(),
+        userId: z.string().min(1).optional(),
+        hostOriginated: z.boolean(),
+        executionAuthority: entityActivationSchema.shape.executionAuthority,
+      })
+      .strict(),
+    contexts: z.array(
+      z
+        .object({
+          sourceContextId: z.string().min(1),
+          targetContextId: z.string().min(1),
+          ownerSourceContextId: z.string().min(1).optional(),
+          ownerEntityId: z.string().nullable().optional(),
+        })
+        .strict()
+    ),
+    members: z.array(
+      z
+        .object({
+          source: entityRecordSchema,
+          targetId: z.string().min(1),
+          targetKey: z.string().min(1),
+        })
+        .strict()
+    ),
+  })
+  .strict();
+const contextCloneCompletionSchema = z
+  .object({ phase: z.literal("completed"), result: CloneContextResultSchema })
+  .strict();
 const ownerEdgeSchema = z
   .object({
     contextId: z.string().min(1),
     kind: contextEdgeKindSchema,
     ownerEntityId: z.string().nullable(),
+    cloneDefinition: contextCloneDefinitionSchema.optional(),
+    cloneCompletion: contextCloneCompletionSchema.optional(),
   })
   .strict();
 const childEdgeSchema = z
@@ -236,6 +295,8 @@ const childEdgeSchema = z
     ownerContextId: z.string().min(1),
     kind: contextEdgeKindSchema,
     ownerEntityId: z.string().nullable(),
+    cloneDefinition: contextCloneDefinitionSchema.optional(),
+    cloneCompletion: contextCloneCompletionSchema.optional(),
   })
   .strict();
 
@@ -270,6 +331,16 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     } as const,
     ...internal("write"),
     args: z.tuple([entityReservationSchema]),
+    returns: entityRecordSchema,
+  },
+  entityPrepareExecution: {
+    website: {
+      kind: "closed",
+      reason: "Storage and lifecycle engine entry points are internal implementation authority.",
+    } as const,
+    ...internal("write"),
+    description: "Seal a reserved incarnation without admitting ordinary execution.",
+    args: z.tuple([entityActivationSchema]),
     returns: entityRecordSchema,
   },
   entityAdvanceExecution: {
@@ -694,6 +765,8 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
           ownerContextId: z.string().min(1),
           kind: contextEdgeKindSchema,
           ownerEntityId: z.string().min(1).optional(),
+          cloneDefinition: contextCloneDefinitionSchema.optional(),
+          cloneCompletion: contextCloneCompletionSchema.optional(),
         })
         .strict(),
     ]),

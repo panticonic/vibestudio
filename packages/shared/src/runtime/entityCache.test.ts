@@ -35,6 +35,23 @@ describe("EntityCache", () => {
     cache = new EntityCache();
   });
 
+  it("retains a sealed preparing image without admitting execution until active", () => {
+    const record = makeRecord({
+      status: "preparing",
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "e".repeat(64),
+      activeAuthority: { provides: [], requests: [] },
+    });
+    cache._onActivate(record);
+    expect(cache.listExecutionOwners()).toEqual([record]);
+    expect(cache.listActive()).toEqual([]);
+    expect(cache.resolveActive(record.id)).toBeNull();
+    cache.hydrate([record]);
+    expect(cache.listExecutionOwners()).toEqual([record]);
+    cache._onRetire({ ...record, status: "retired", cleanupComplete: false });
+    expect(cache.listExecutionOwners()).toEqual([]);
+  });
+
   describe("resolveActive", () => {
     it("returns the record for active rows", () => {
       const rec = makeRecord({ id: "panel:active", status: "active" });

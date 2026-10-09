@@ -157,6 +157,50 @@ describe("DODispatch", () => {
   });
 
   describe("dispatch with token-backed workerd URL", () => {
+    it("uses exact preparing admission and normal host attestation for clone initialization", async () => {
+      const ordinary = vi.fn(async () => {});
+      const prepared = vi.fn(async () => {});
+      const guarded = new DODispatch(ordinary);
+      guarded.setPreparingTargetReady(prepared);
+      const attest = vi.fn(() => testAttestation({ method: "__lifecycle/initializeClone" }));
+      guarded.setAuthorityAttester(attest);
+      guarded.setAuthorityParentRunner(async (_id, _authorization, invoke) => invoke());
+      guarded.setTokenManager(new TokenManager());
+      guarded.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      guarded.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      const transport = vi.fn(async () => new Response("null", { status: 200 }));
+      vi.stubGlobal("fetch", transport);
+      const ref = makeRef();
+      const witness = {
+        provenance: {
+          storage: "snapshot" as const,
+          operationContextId: "target-context",
+          sourceEntityId: `do:${ref.source}:${ref.className}:source`,
+          sourceContextId: "source-context",
+          sourceAuthoritySessionId: "source-session",
+          sourceBuildKey: "b".repeat(64),
+          sourceExecutionDigest: "e".repeat(64),
+        },
+        source: { ...ref, objectKey: "source" },
+        sourceContextId: "source-context",
+        target: ref,
+        targetContextId: "target-context",
+        authoritySessionId: "clone-session",
+        buildKey: "b".repeat(64),
+        executionDigest: "e".repeat(64),
+      };
+      await guarded.dispatchLifecycle(ref, "initializeClone", witness);
+      expect(prepared).toHaveBeenCalledWith(ref, witness);
+      expect(ordinary).not.toHaveBeenCalled();
+      expect(attest).toHaveBeenCalledOnce();
+      expect(transport).toHaveBeenCalledOnce();
+      prepared.mockRejectedValueOnce(new Error("preparation witness mismatch"));
+      await expect(guarded.dispatchLifecycle(ref, "initializeClone", witness)).rejects.toThrow(
+        "preparation witness mismatch"
+      );
+      expect(transport).toHaveBeenCalledOnce();
+    });
+
     it("fails closed before authority or transport when no userland readiness barrier exists", async () => {
       expect(() => new DODispatch(undefined as never)).toThrow(
         /requires a userland Durable Object readiness barrier/

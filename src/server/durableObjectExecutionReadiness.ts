@@ -1,5 +1,5 @@
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import type { DORef } from "@vibestudio/shared/doDispatcher";
+import type { DORef, LifecycleCloneInput } from "@vibestudio/shared/doDispatcher";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { isPermanentRuntimeReadinessError } from "./runtimeReadinessError.js";
 
@@ -29,6 +29,7 @@ export interface DurableObjectExecutionReadinessDeps {
   resolveEntity(id: string): Promise<EntityRecord | null>;
   /** Rebuild only disposable runtime state from an exact durable identity. */
   restoreExactExecution(record: EntityRecord): Promise<void>;
+  verifyPreparedStorage?: (record: EntityRecord) => Promise<void>;
   /** Generation of the disposable workerd process that will receive the call. */
   getBootGeneration?: () => number;
   /** Surface an integrity incident without creating a second semantic owner. */
@@ -119,6 +120,50 @@ export class DurableObjectExecutionReadiness {
     this.metrics.cacheMisses += 1;
     await this.restore(record, readinessKey, false);
     return record;
+  }
+
+  /** Initialization control can reach only its exact, still-reserved incarnation. */
+  async ensurePrepared(ref: DORef, witness: LifecycleCloneInput): Promise<void> {
+    const id = canonicalEntityId({
+      kind: "do",
+      source: ref.source,
+      className: ref.className,
+      key: ref.objectKey,
+    });
+    const record = await this.deps.resolveEntity(id);
+    if (
+      !record ||
+      record.id !== id ||
+      record.kind !== "do" ||
+      record.status !== "preparing" ||
+      record.authoritySessionId !== witness.authoritySessionId ||
+      record.contextId !== witness.targetContextId ||
+      record.activeBuildKey !== witness.buildKey ||
+      record.activeExecutionDigest !== witness.executionDigest ||
+      !record.activeAuthority ||
+      !record.cloneProvenance ||
+      canonicalJson(record.cloneProvenance) !== canonicalJson(witness.provenance) ||
+      record.cloneProvenance.sourceContextId !== witness.sourceContextId ||
+      record.cloneProvenance.sourceEntityId !==
+        canonicalEntityId({
+          kind: "do",
+          source: witness.source.source,
+          className: witness.source.className,
+          key: witness.source.objectKey,
+        }) ||
+      canonicalJson(ref) !== canonicalJson(witness.target) ||
+      ref.source !== witness.source.source ||
+      ref.className !== witness.source.className ||
+      ref.objectKey === witness.source.objectKey
+    ) {
+      throw new Error(`Durable Object ${id} does not match its clone preparation`);
+    }
+    // The committed receipt proves the captured source boundary. The source
+    // may legitimately advance or retire after copying; it owns no child work.
+    if (!this.deps.verifyPreparedStorage)
+      throw new Error(`Clone storage receipt verifier is unavailable for ${id}`);
+    await this.deps.verifyPreparedStorage(record);
+    await this.restore(record, this.readinessKey(record), false);
   }
 
   private readinessKey(record: EntityRecord): string {

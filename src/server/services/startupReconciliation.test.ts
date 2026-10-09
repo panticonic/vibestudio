@@ -34,6 +34,34 @@ describe("runStartupReconciliation", () => {
     return Promise.resolve(fn.apply(workspaceDO, args)) as Promise<T>;
   }
 
+  it("rehydrates a sealed preparation as an image owner without restoring runnable execution", async () => {
+    const input = {
+      kind: "panel" as const,
+      source: { repoPath: "panels/clone", effectiveVersion: "" },
+      contextId: "prepared-context",
+      key: "prepared-key",
+    };
+    workspaceDO.entityReserve(input);
+    const prepared = workspaceDO.entityPrepareExecution({
+      ...input,
+      source: { ...input.source, effectiveVersion: "prepared-version" },
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "e".repeat(64),
+      activeAuthority: { provides: [], requests: [] },
+    });
+    const entityCache = new EntityCache();
+    const restoreRuntimes = vi.fn(async () => {});
+    await runStartupReconciliation({
+      dispatchWorkspaceDO,
+      entityCache,
+      onRetire: cleanup.retire,
+      restoreRuntimes,
+    });
+    expect(entityCache.listExecutionOwners()).toEqual([prepared]);
+    expect(entityCache.resolveActive(prepared.id)).toBeNull();
+    expect(restoreRuntimes).toHaveBeenCalledWith([]);
+  });
+
   it("hydrates active entities, GCs expired retired rows, and marks incomplete cleanups complete", async () => {
     // Seed: one active panel entity.
     workspaceDO.entityActivate({

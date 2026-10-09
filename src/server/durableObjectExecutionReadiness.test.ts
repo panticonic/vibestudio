@@ -28,6 +28,51 @@ const REF = {
 };
 
 describe("DurableObjectExecutionReadiness", () => {
+  it("restores only an exact sealed preparing witness without admitting ordinary calls", async () => {
+    const provenance = {
+      storage: "snapshot" as const,
+      operationContextId: "ctx-1",
+      sourceEntityId: "do:workers/pubsub-channel:PubSubChannel:source-chat",
+      sourceContextId: "source-context",
+      sourceAuthoritySessionId: "source-session",
+      sourceBuildKey: RECORD.activeBuildKey!,
+      sourceExecutionDigest: RECORD.activeExecutionDigest!,
+    };
+    const record = {
+      ...RECORD,
+      status: "preparing" as const,
+      authoritySessionId: "clone-session",
+      cloneProvenance: provenance,
+    };
+    const restoreExactExecution = vi.fn(async () => {});
+    const readiness = new DurableObjectExecutionReadiness({
+      // The original source is authoritatively gone after a committed copy.
+      resolveEntity: async (id) => (id === record.id ? record : null),
+      restoreExactExecution,
+      verifyPreparedStorage: async () => {},
+    });
+    const witness = {
+      provenance,
+      source: { ...REF, objectKey: "source-chat" },
+      sourceContextId: "source-context",
+      target: REF,
+      targetContextId: RECORD.contextId,
+      authoritySessionId: "clone-session",
+      buildKey: RECORD.activeBuildKey!,
+      executionDigest: RECORD.activeExecutionDigest!,
+    };
+    await readiness.ensurePrepared(REF, witness);
+    expect(restoreExactExecution).toHaveBeenCalledOnce();
+    await expect(readiness.ensureReady(REF)).rejects.toThrow();
+    await expect(
+      readiness.ensurePrepared(REF, { ...witness, authoritySessionId: "foreign" })
+    ).rejects.toThrow(/preparation/);
+    await expect(
+      readiness.ensurePrepared(REF, { ...witness, executionDigest: "foreign" })
+    ).rejects.toThrow(/preparation/);
+    expect(restoreExactExecution).toHaveBeenCalledOnce();
+  });
+
   it("reports one permanent incident per sealed incarnation", async () => {
     const onPermanentFailure = vi.fn();
     const restoreExactExecution = vi.fn(async () => {

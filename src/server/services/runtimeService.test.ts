@@ -11,6 +11,7 @@ import { createEntityRetirementCleanup } from "./entityRetirementCleanup.js";
 import { createRuntimeService, type RuntimeEntityHooks } from "./runtimeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { TaskAuthorityRegistry, taskAuthorityPrincipal } from "./taskAuthorityRegistry.js";
 import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
@@ -92,6 +93,8 @@ function makeDODispatch(instance: WorkspaceDO): {
 }
 
 interface BuildDepsOptions {
+  initializeDurableClone?: RuntimeEntityHooks["initializeDurableClone"];
+  onDurableObjectActivated?: RuntimeEntityHooks["onDurableObjectActivated"];
   prepareResourceBindings?: Parameters<typeof createRuntimeService>[0]["prepareResourceBindings"];
   approvalDecision?: Awaited<ReturnType<ApprovalQueue["request"]>>;
   prepareDurableObject?: (args: {
@@ -170,8 +173,8 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
 
   const prepareDurableObject =
     opts.prepareDurableObject ??
-    vi.fn(async (args: { className: string; key: string }) => ({
-      targetId: `target:${args.className}:${args.key}`,
+    vi.fn(async (args: { source: string; className: string; key: string }) => ({
+      targetId: canonicalEntityId({ kind: "do", ...args }),
       effectiveVersion: "ev-do",
       ...sealedExecution,
     }));
@@ -192,14 +195,22 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
   const resolveAppExecution =
     opts.resolveAppExecution ??
     vi.fn(async () => ({ effectiveVersion: "ev-app", ...sealedExecution }));
+  const initializeDurableClone = opts.initializeDurableClone ?? vi.fn(async () => {});
   const cloneDurableStorage = opts.cloneDurableStorage ?? vi.fn(async () => {});
   const destroyDurableStorage = opts.destroyDurableStorage ?? vi.fn(async () => {});
+  const semanticContextIds = new Set<string>();
   const semanticContexts = {
-    ensureContext: vi.fn(async () => {}),
-    dropContext: vi.fn(async () => {}),
+    ensureContext: vi.fn(async (contextId: string) => {
+      semanticContextIds.add(contextId);
+    }),
+    dropContext: vi.fn(async (contextId: string) => {
+      semanticContextIds.delete(contextId);
+    }),
     forkContext: vi.fn(async () => {}),
     resolveWorkingState: vi.fn(async () => ({ kind: "event" as const, eventId: "event:test" })),
-    listContexts: vi.fn(async () => []),
+    listContexts: vi.fn(async () => [
+      ...new Set([...semanticContextIds, ...contextFolders.existing]),
+    ]),
     ...opts.semanticContexts,
   };
 
@@ -219,6 +230,8 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     unitSupervisor,
     entityStore,
     hooks: {
+      initializeDurableClone,
+      onDurableObjectActivated: opts.onDurableObjectActivated,
       recoverExactExecution,
       restartDurableObjectIncarnation,
       prepare: (async ({ spec, key, contextId, existingBuildKey, parent }) => {
@@ -339,6 +352,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     taskAuthorities,
     unitSupervisor,
     contextFolders,
+    semanticContexts,
     approvalQueue,
     grantStore,
     prepareDurableObject,
@@ -349,6 +363,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     releaseEntity,
     preparePanel,
     resolveAppExecution,
+    initializeDurableClone,
     cloneDurableStorage,
     destroyDurableStorage,
     dispatch: invokeRuntime,
@@ -1351,7 +1366,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     expect(handle.id).toBe(
       canonicalEntityId({ kind: "do", source: "workers/example", className: "MyDO", key: "k1" })
     );
-    expect(handle.targetId).toBe("target:MyDO:k1");
+    expect(handle.targetId).toBe("do:workers/example:MyDO:k1");
     expect(entityCache.resolveActive(handle.id)).not.toBeNull();
     expect(prepareDurableObject).toHaveBeenCalledTimes(1);
   });
@@ -2544,7 +2559,7 @@ describe("runtimeService.retireEntity", () => {
   });
 
   it("reports hook cleanup failure and leaves cleanup_complete=0 for retry", async () => {
-    const onRetire = vi.fn(async () => {
+    const onRetire = vi.fn(async (): Promise<void> => {
       throw new Error("hook fail");
     });
     const { service, instance, spy } = await buildDeps({ onRetire });
@@ -2560,6 +2575,19 @@ describe("runtimeService.retireEntity", () => {
     expect(rec?.cleanupComplete).toBe(false);
     // entityCleanupComplete dispatch should NOT have been issued.
     expect(spy.mock.calls.some((c) => c[1] === "entityCleanupComplete")).toBe(false);
+    onRetire.mockResolvedValue(undefined);
+    await Promise.all([
+      service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]),
+      service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]),
+    ]);
+    expect(onRetire).toHaveBeenCalledTimes(2);
+    expect(instance.entityResolve(handle.id)).toMatchObject({
+      status: "retired",
+      cleanupComplete: true,
+      authoritySessionId: rec?.authoritySessionId,
+    });
+    await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
+    expect(onRetire).toHaveBeenCalledTimes(2);
   });
 
   it("does not prompt when an eval retires the entity it launched into an isolated context", async () => {
@@ -2707,7 +2735,7 @@ describe("runtimeService singleton DO + cross-panel sharing", () => {
     expect(lookupA?.contextId).toBe(singletonContextId);
     expect(lookupB?.contextId).toBe(singletonContextId);
     // Same targetId regardless of which panel "asked" — singletons are shared.
-    expect(handle.targetId).toBe("target:ExampleStoreDO:workspace-example");
+    expect(handle.targetId).toBe("do:workers/example-store:ExampleStoreDO:workspace-example");
   });
 
   it("an agent DO created by a panel records the requested panel context", async () => {
@@ -3274,6 +3302,520 @@ interface OwnedContexts {
 }
 
 describe("runtimeService.cloneContext", () => {
+  it("keeps a copied child preparing until initialization joins, then publishes it", async () => {
+    let release!: () => void;
+    let admitted!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      admitted = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const initializeDurableClone = vi.fn<RuntimeEntityHooks["initializeDurableClone"]>(async () => {
+      admitted();
+      await held;
+    });
+    const onDurableObjectActivated = vi.fn(async () => {});
+    const { service, instance, entityCache } = await buildDeps({
+      initializeDurableClone,
+      onDurableObjectActivated,
+    });
+    await seedDO(service, "ctx-preparation", "source");
+    onDurableObjectActivated.mockClear();
+    const operation = service.handler({ caller: serverCaller }, "cloneContext", [
+      { sourceContextId: "ctx-preparation", targetKey: "preparation-owned" },
+    ]);
+    await entered;
+    const witness = initializeDurableClone.mock.calls[0]![0] as unknown as {
+      target: { source: string; className: string; objectKey: string };
+    };
+    const id = `do:${witness.target.source}:${witness.target.className}:${witness.target.objectKey}`;
+    expect(instance.entityResolve(id)).toMatchObject({
+      status: "preparing",
+      activeBuildKey: sealedExecution.buildKey,
+      activeExecutionDigest: sealedExecution.executionDigest,
+    });
+    expect(entityCache.resolve(id)?.status).toBe("preparing");
+    expect(entityCache.listExecutionOwners().map((record) => record.id)).toContain(id);
+    expect(entityCache.listActive().some((record) => record.id === id)).toBe(false);
+    expect(onDurableObjectActivated).not.toHaveBeenCalled();
+    release();
+    await operation;
+    expect(instance.entityResolve(id)?.status).toBe("active");
+    expect(onDurableObjectActivated).toHaveBeenCalledOnce();
+  });
+
+  it("retires only its failed preparation and preserves the original initializer error", async () => {
+    const failure = new Error("copied journal initialization refused");
+    const initializeDurableClone = vi.fn(async () => {
+      throw failure;
+    });
+    const { service, instance, destroyDurableStorage, onRetire, releaseEntity } = await buildDeps({
+      initializeDurableClone,
+    });
+    const source = await seedDO(service, "ctx-init-error", "source");
+    await expect(
+      service.handler({ caller: serverCaller }, "cloneContext", [
+        { sourceContextId: "ctx-init-error", targetKey: "failed-preparation" },
+      ])
+    ).rejects.toThrow("copied journal initialization refused");
+    expect(instance.entityResolve(source.id)?.status).toBe("active");
+    expect(onRetire).toHaveBeenCalledOnce();
+    expect(onRetire).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "retired", cleanupComplete: false })
+    );
+    expect(releaseEntity).not.toHaveBeenCalled();
+    expect(destroyDurableStorage).toHaveBeenCalledOnce();
+  });
+
+  it("joins overlapping target-key clones and reuses the committed child without recopying", async () => {
+    let release!: () => void;
+    let admitted!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      admitted = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const initializeDurableClone = vi.fn<RuntimeEntityHooks["initializeDurableClone"]>(async () => {
+      admitted();
+      await held;
+    });
+    const forkContext = vi.fn(async () => {});
+    const { service, cloneDurableStorage } = await buildDeps({
+      initializeDurableClone,
+      semanticContexts: { forkContext },
+    });
+    await seedDO(service, "ctx-overlap", "source");
+    const input = [{ sourceContextId: "ctx-overlap", targetKey: "overlap-owner" }];
+    const first = service.handler({ caller: serverCaller }, "cloneContext", input);
+    await entered;
+    const second = service.handler({ caller: serverCaller }, "cloneContext", input);
+    release();
+    expect(await second).toEqual(await first);
+    expect(cloneDurableStorage).toHaveBeenCalledOnce();
+    expect(initializeDurableClone).toHaveBeenCalledOnce();
+    expect(forkContext).toHaveBeenCalledOnce();
+  });
+
+  it.each(["active", "preparing"] as const)(
+    "preserves a foreign %s child without copying or retiring it",
+    async (status) => {
+      const initializeDurableClone = vi.fn<RuntimeEntityHooks["initializeDurableClone"]>(
+        async () => {}
+      );
+      const cloneDurableStorage = vi.fn(async () => {});
+      const onRetire = vi.fn(async () => {});
+      const { service, instance } = await buildDeps({
+        initializeDurableClone,
+        cloneDurableStorage,
+        onRetire,
+      });
+      await seedDO(service, "ctx-foreign-reservation", "source");
+      const input = [
+        { sourceContextId: "ctx-foreign-reservation", targetKey: "foreign-reservation" },
+      ];
+      const result = (await service.handler(
+        { caller: serverCaller },
+        "cloneContext",
+        input
+      )) as CloneResult;
+      const id = result.entities[0]!.newId;
+      // A generic reservation has no clone provenance, even when the same caller
+      // owns identical context/key coordinates. It cannot be adopted by inference.
+      (
+        instance as unknown as { sql: { exec(query: string, ...args: unknown[]): unknown } }
+      ).sql.exec(
+        `UPDATE entities SET status = ?, clone_provenance = NULL WHERE id = ?`,
+        status,
+        id
+      );
+      (
+        instance as unknown as { sql: { exec(query: string, ...args: unknown[]): unknown } }
+      ).sql.exec(
+        `UPDATE context_edges SET clone_completion = NULL WHERE context_id = ?`,
+        result.contextId
+      );
+      const before = instance.entityResolve(id);
+      vi.mocked(initializeDurableClone).mockClear();
+      vi.mocked(cloneDurableStorage).mockClear();
+      await expect(
+        service.handler({ caller: serverCaller }, "cloneContext", input)
+      ).rejects.toThrow(/cloneProvenance/);
+      expect(instance.entityResolve(id)).toEqual(before);
+      expect(initializeDurableClone).not.toHaveBeenCalled();
+      expect(cloneDurableStorage).not.toHaveBeenCalled();
+      expect(onRetire).not.toHaveBeenCalled();
+    }
+  );
+
+  it("re-adopts its sealed interrupted preparation without reforking the context or rebuilding its image", async () => {
+    const initializeDurableClone = vi.fn<RuntimeEntityHooks["initializeDurableClone"]>(
+      async () => {}
+    );
+    const cloneDurableStorage = vi.fn(async () => {});
+    const forkContext = vi.fn(async () => {});
+    const { service, instance, prepareDurableObject, recoverExactExecution } = await buildDeps({
+      initializeDurableClone,
+      cloneDurableStorage,
+      semanticContexts: { forkContext },
+    });
+    const originalSource = await seedDO(service, "ctx-resumed", "source");
+    const input = [{ sourceContextId: "ctx-resumed", targetKey: "resumed-owner" }];
+    const first = (await service.handler(
+      { caller: serverCaller },
+      "cloneContext",
+      input
+    )) as CloneResult;
+    const id = first.entities[0]!.newId;
+    // This is the durable snapshot after initialization joined but before the
+    // active commit; disposable owner promises are absent after a host restart.
+    (instance as unknown as { sql: { exec(query: string, ...args: unknown[]): unknown } }).sql.exec(
+      `UPDATE entities SET status = 'preparing' WHERE id = ?`,
+      id
+    );
+    const preparation = instance.entityResolve(id)!;
+    (instance as unknown as { sql: { exec(query: string, ...args: unknown[]): unknown } }).sql.exec(
+      `UPDATE context_edges SET clone_completion = NULL WHERE context_id = ?`,
+      first.contextId
+    );
+    (instance as unknown as { sql: { exec(query: string, ...args: unknown[]): unknown } }).sql.exec(
+      `UPDATE entities SET status = 'retired', authority_session_id = 'advanced-source' WHERE id = ?`,
+      originalSource.id
+    );
+    vi.mocked(initializeDurableClone).mockClear();
+    vi.mocked(cloneDurableStorage).mockClear();
+    const preparationCalls = vi.mocked(prepareDurableObject).mock.calls.length;
+    expect(await service.handler({ caller: serverCaller }, "cloneContext", input)).toEqual(first);
+    expect(forkContext).toHaveBeenCalledOnce();
+    expect(vi.mocked(prepareDurableObject).mock.calls).toHaveLength(preparationCalls);
+    expect(recoverExactExecution).toHaveBeenCalledWith(preparation);
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({ reservation: preparation })
+    );
+    expect(initializeDurableClone).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authoritySessionId: preparation.authoritySessionId,
+        provenance: preparation.cloneProvenance,
+        buildKey: preparation.activeBuildKey,
+        executionDigest: preparation.activeExecutionDigest,
+      })
+    );
+  });
+
+  it("replays the captured member graph after source replacement and later lifecycle additions", async () => {
+    const { service, instance, cloneDurableStorage, initializeDurableClone } = await buildDeps();
+    const source = await seedDO(service, "captured-root", "source");
+    const input = [{ sourceContextId: "captured-root", targetKey: "captured-operation" }];
+    const first = await service.handler({ caller: serverCaller }, "cloneContext", input);
+    (instance as unknown as { sql: { exec(query: string, ...args: unknown[]): unknown } }).sql.exec(
+      `UPDATE entities SET status = 'retired', authority_session_id = 'replacement', active_execution_digest = ? WHERE id = ?`,
+      "f".repeat(64),
+      source.id
+    );
+    await seedDO(service, "captured-root", "later-source");
+    instance.contextEdgeUpsert({
+      contextId: "later-subtree",
+      ownerContextId: "captured-root",
+      kind: "lifecycle",
+    });
+    vi.mocked(cloneDurableStorage).mockClear();
+    vi.mocked(initializeDurableClone).mockClear();
+    expect(await service.handler({ caller: serverCaller }, "cloneContext", input)).toEqual(first);
+    expect(cloneDurableStorage).not.toHaveBeenCalled();
+    expect(initializeDurableClone).not.toHaveBeenCalled();
+    await expect(
+      service.handler({ caller: serverCaller }, "cloneContext", [{ ...input[0], recursive: true }])
+    ).rejects.toThrow(/cloneDefinition/);
+  });
+
+  it("refuses another authenticated author and a recreated same-key author without altering the captured child", async () => {
+    const { service, instance, cloneDurableStorage, onRetire } = await buildDeps();
+    const source = await seedDO(service, "author-root", "author");
+    const caller = createVerifiedCaller(source.id, "do");
+    const input = [{ sourceContextId: "author-root", targetKey: "author-operation" }];
+    const first = (await service.handler({ caller }, "cloneContext", input)) as CloneResult;
+    const child = instance.entityResolve(first.entities[0]!.newId);
+    vi.mocked(cloneDurableStorage).mockClear();
+    await expect(service.handler({ caller: serverCaller }, "cloneContext", input)).rejects.toThrow(
+      /cloneDefinition/
+    );
+    (instance as unknown as { sql: { exec(query: string, ...args: unknown[]): unknown } }).sql.exec(
+      `UPDATE entities SET authority_session_id = 'replacement-author' WHERE id = ?`,
+      source.id
+    );
+    await expect(service.handler({ caller }, "cloneContext", input)).rejects.toThrow(
+      /cloneDefinition/
+    );
+    expect(instance.entityResolve(first.entities[0]!.newId)).toEqual(child);
+    expect(cloneDurableStorage).not.toHaveBeenCalled();
+    expect(onRetire).not.toHaveBeenCalled();
+  });
+
+  it("retires its captured lineage reservation when the first semantic snapshot fails", async () => {
+    const original = new Error("semantic snapshot unavailable");
+    const forkContext = vi.fn(async () => {
+      throw original;
+    });
+    const { service, instance, cloneDurableStorage, initializeDurableClone } = await buildDeps({
+      semanticContexts: { forkContext },
+    });
+    await seedDO(service, "capture-failure", "source");
+    const targetKey = "capture-failure-key";
+    await expect(
+      service.handler({ caller: serverCaller }, "cloneContext", [
+        { sourceContextId: "capture-failure", targetKey },
+      ])
+    ).rejects.toBe(original);
+    expect(instance.contextEdgeListByChild(contextIdForTargetKey(targetKey))).toEqual([]);
+    expect(cloneDurableStorage).not.toHaveBeenCalled();
+    expect(initializeDurableClone).not.toHaveBeenCalled();
+  });
+
+  it("recovers under the same channel lifetime when the original panel attribution is absent", async () => {
+    const { service, instance } = await buildDeps();
+    const channel = await seedDO(service, "recovery-author", "channel");
+    const panel = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        execution: { surface: "code", source: "panels/chat" },
+        key: "recovery-panel",
+        contextId: "recovery-author",
+      },
+    ])) as RuntimeEntityHandle;
+    const caller = createVerifiedCaller(channel.id, "do");
+    const input = [{ sourceContextId: "recovery-author", targetKey: "recovery-attribution" }];
+    const result = await service.handler(
+      { caller, authorizingCaller: panelCaller(panel.id, "recovery-author") },
+      "cloneContext",
+      input
+    );
+    const edge = instance.contextEdgeListByChild((result as CloneResult).contextId)[0]!;
+    expect(edge.ownerEntityId).toBe(panel.id);
+    expect(edge.cloneDefinition?.author.runtimeId).toBe(channel.id);
+    expect(await service.handler({ caller }, "cloneContext", input)).toEqual(result);
+  });
+
+  it.each([false, true])(
+    "rolls back every captured crash-prefix member on definitive failure (cleanup failure=%s)",
+    async (cleanupFails) => {
+      const original = new Error("child B initialization refused");
+      const cleanup = new Error("owned prefix cleanup refused");
+      const initializeDurableClone = vi.fn<RuntimeEntityHooks["initializeDurableClone"]>(
+        async () => {}
+      );
+      const onRetire = vi.fn(async (_record: EntityRecord) => {});
+      const { service, instance, contextFolders, semanticContexts, destroyDurableStorage } =
+        await buildDeps({
+          initializeDurableClone,
+          onRetire,
+        });
+      await seedDO(service, "crash-prefix", "A");
+      await seedDO(service, "crash-prefix", "B");
+      const input = [{ sourceContextId: "crash-prefix", targetKey: "crash-prefix" }];
+      const result = (await service.handler(
+        { caller: serverCaller },
+        "cloneContext",
+        input
+      )) as CloneResult;
+      const prefix = result.entities[0]!.newId;
+      const pending = result.entities[1]!.newId;
+      const sql = (
+        instance as unknown as { sql: { exec(query: string, ...args: unknown[]): unknown } }
+      ).sql;
+      // Durable cut: first member active, second sealed but not committed, and
+      // the root completion receipt has not been recorded by the previous host.
+      sql.exec(`UPDATE entities SET status = 'preparing' WHERE id = ?`, pending);
+      sql.exec(
+        `UPDATE context_edges SET clone_completion = NULL WHERE context_id = ?`,
+        result.contextId
+      );
+      initializeDurableClone.mockImplementation(async () => {
+        throw original;
+      });
+      if (cleanupFails)
+        onRetire.mockImplementation(async (record: EntityRecord) => {
+          if (record.id === prefix) throw cleanup;
+        });
+      const failure = await service.handler({ caller: serverCaller }, "cloneContext", input).then(
+        () => null,
+        (error: unknown) => error
+      );
+      if (cleanupFails) {
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect((failure as AggregateError).errors).toContain(original);
+        expect((failure as AggregateError).errors).toEqual(
+          expect.arrayContaining([expect.objectContaining({ cause: cleanup })])
+        );
+        expect(destroyDurableStorage).not.toHaveBeenCalledWith(
+          expect.objectContaining({ key: result.entities[0]!.newKey })
+        );
+        expect(instance.contextEdgeListByChild(result.contextId)[0]?.cloneDefinition).toBeDefined();
+      } else {
+        expect(failure).toBe(original);
+        expect(instance.contextEdgeListByChild(result.contextId)).toEqual([]);
+      }
+      expect(instance.entityResolve(prefix)?.status).toBe("retired");
+      expect(instance.entityResolve(pending)?.status).toBe("retired");
+      if (cleanupFails) {
+        expect(semanticContexts.dropContext).not.toHaveBeenCalledWith(result.contextId);
+        expect(contextFolders.removeContext).not.toHaveBeenCalledWith(result.contextId);
+      } else {
+        expect(semanticContexts.dropContext).toHaveBeenCalledWith(result.contextId);
+        expect(contextFolders.removeContext).toHaveBeenCalledWith(result.contextId);
+      }
+    }
+  );
+
+  it("returns its original completed receipt without rematerializing a diverged child", async () => {
+    const {
+      service,
+      instance,
+      initializeDurableClone,
+      cloneDurableStorage,
+      recoverExactExecution,
+    } = await buildDeps();
+    await seedDO(service, "completed-divergence", "source");
+    const input = [{ sourceContextId: "completed-divergence", targetKey: "completed-divergence" }];
+    const result = (await service.handler(
+      { caller: serverCaller },
+      "cloneContext",
+      input
+    )) as CloneResult;
+    const target = result.entities[0]!.newId;
+    (instance as unknown as { sql: { exec(query: string, ...args: unknown[]): unknown } }).sql.exec(
+      `UPDATE entities SET active_execution_digest = ? WHERE id = ?`,
+      "f".repeat(64),
+      target
+    );
+    const diverged = instance.entityResolve(target);
+    vi.mocked(initializeDurableClone).mockClear();
+    vi.mocked(cloneDurableStorage).mockClear();
+    recoverExactExecution.mockClear();
+    expect(await service.handler({ caller: serverCaller }, "cloneContext", input)).toEqual(result);
+    expect(instance.entityResolve(target)).toEqual(diverged);
+    expect(initializeDurableClone).not.toHaveBeenCalled();
+    expect(cloneDurableStorage).not.toHaveBeenCalled();
+    expect(recoverExactExecution).not.toHaveBeenCalled();
+  });
+
+  it("refuses a pre-existing foreign descendant context before any clone mutation", async () => {
+    const forkContext = vi.fn(async () => {});
+    const { service, instance, contextFolders, cloneDurableStorage } = await buildDeps({
+      semanticContexts: { forkContext },
+    });
+    const root = await seedDO(service, "descendant-root", "root");
+    await seedDO(service, "descendant-source", "child");
+    instance.contextEdgeUpsert({
+      contextId: "descendant-source",
+      ownerContextId: "descendant-root",
+      kind: "lifecycle",
+      ownerEntityId: root.id,
+    });
+    const targetKey = "descendant-operation";
+    const foreignContext = contextIdForTargetKey(`${targetKey} descendant-source`);
+    const foreign = await seedDO(service, foreignContext, "foreign");
+    const before = instance.entityResolve(foreign.id);
+    await expect(
+      service.handler({ caller: serverCaller }, "cloneContext", [
+        { sourceContextId: "descendant-root", recursive: true, targetKey },
+      ])
+    ).rejects.toThrow(/cloneContextOwner/);
+    expect(instance.entityResolve(foreign.id)).toEqual(before);
+    expect(forkContext).not.toHaveBeenCalled();
+    expect(cloneDurableStorage).not.toHaveBeenCalled();
+    expect(contextFolders.removeContext).not.toHaveBeenCalled();
+    expect(instance.contextEdgeListByChild(contextIdForTargetKey(targetKey))).toEqual([]);
+  });
+
+  it("atomically refuses overlapping context captures, including another operation's descendant", async () => {
+    const { service, instance } = await buildDeps();
+    const source = await seedDO(service, "claim-root", "source");
+    await seedDO(service, "claim-child", "child");
+    instance.contextEdgeUpsert({
+      contextId: "claim-child",
+      ownerContextId: "claim-root",
+      kind: "lifecycle",
+      ownerEntityId: source.id,
+    });
+    const result = (await service.handler({ caller: serverCaller }, "cloneContext", [
+      { sourceContextId: "claim-root", recursive: true, targetKey: "claim" },
+    ])) as CloneResult;
+    const owner = instance.contextEdgeListByChild(result.contextId)[0]!;
+    const capture = owner.cloneDefinition!;
+    const otherRoot = "another-clone-root";
+    expect(() =>
+      instance.contextEdgeUpsert({
+        contextId: otherRoot,
+        ownerContextId: "claim-root",
+        kind: "lineage",
+        cloneDefinition: {
+          ...capture,
+          contexts: [
+            { sourceContextId: "claim-root", targetContextId: otherRoot },
+            capture.contexts[1]!,
+          ],
+        },
+      })
+    ).toThrow(/cloneContextOwner/);
+    expect(instance.contextEdgeListByChild(otherRoot)).toEqual([]);
+    expect(instance.contextEdgeListByChild(result.contextId)).toEqual([owner]);
+  });
+
+  it("preserves the initiating failure and unresolved context when rollback ownership lookup fails", async () => {
+    const original = new Error("child B failed");
+    const lookupFailure = new Error("captured owner lookup failed");
+    const initializeDurableClone = vi.fn<RuntimeEntityHooks["initializeDurableClone"]>(
+      async () => {}
+    );
+    const { service, instance, spy, semanticContexts, destroyDurableStorage } = await buildDeps({
+      initializeDurableClone,
+    });
+    await seedDO(service, "lookup-prefix", "A");
+    await seedDO(service, "lookup-prefix", "B");
+    const input = [{ sourceContextId: "lookup-prefix", targetKey: "lookup-prefix" }];
+    const result = (await service.handler(
+      { caller: serverCaller },
+      "cloneContext",
+      input
+    )) as CloneResult;
+    const prefix = result.entities[0]!;
+    const pending = result.entities[1]!;
+    const sql = (
+      instance as unknown as { sql: { exec(query: string, ...args: unknown[]): unknown } }
+    ).sql;
+    sql.exec(`UPDATE entities SET status = 'preparing' WHERE id = ?`, pending.newId);
+    sql.exec(
+      `UPDATE context_edges SET clone_completion = NULL WHERE context_id = ?`,
+      result.contextId
+    );
+    const dispatch = spy.getMockImplementation()!;
+    let failed = false;
+    initializeDurableClone.mockImplementation(async () => {
+      failed = true;
+      throw original;
+    });
+    spy.mockImplementation(async (ref: DORef, method: string, ...args: unknown[]) => {
+      if (failed && method === "entityResolve" && args[0] === prefix.newId) throw lookupFailure;
+      return dispatch(ref, method, ...args);
+    });
+    vi.mocked(destroyDurableStorage).mockClear();
+    const failure = await service.handler({ caller: serverCaller }, "cloneContext", input).then(
+      () => null,
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toContain(original);
+    expect((failure as AggregateError).errors).toContain(lookupFailure);
+    expect(instance.entityResolve(prefix.newId)?.status).toBe("active");
+    expect(instance.entityResolve(pending.newId)?.status).toBe("retired");
+    expect(destroyDurableStorage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ key: prefix.newKey })
+    );
+    expect(semanticContexts.dropContext).not.toHaveBeenCalledWith(result.contextId);
+    expect(instance.contextEdgeListByChild(result.contextId)[0]?.cloneDefinition).toBeDefined();
+  });
+
   it("clones every durable entity into a fresh isolated context, mapping source→clone", async () => {
     const forkContext = vi.fn(async () => {});
     const onContextCreated = vi.fn(async () => {});
@@ -3504,8 +4046,8 @@ describe("runtimeService.cloneContext", () => {
     expect(contextFolders.removeContext).toHaveBeenCalledWith(targetContextId);
     // The one clone that was activated before the failure is gone again.
     expect(entityCache.listActive().some((e) => e.contextId === targetContextId)).toBe(false);
-    // The first DO's already-cloned storage was reclaimed.
-    expect(destroyDurableStorage).toHaveBeenCalledTimes(1);
+    // Both reserved targets are joined and reclaimed, including the failed copy stage.
+    expect(destroyDurableStorage).toHaveBeenCalledTimes(2);
   });
 
   it("returns the context + entity rewiring maps (non-recursive)", async () => {
@@ -3629,7 +4171,7 @@ describe("runtimeService.cloneContext", () => {
   });
 
   it("recursively clones the LIFECYCLE subtree, re-parenting cloned children (never following lineage)", async () => {
-    const { service } = await buildDeps({
+    const { service, instance } = await buildDeps({
       semanticContexts: { forkContext: vi.fn(async () => {}) },
     });
     const rootAgent = await seedDO(service, "ctx-root", "root-agent");
@@ -3670,6 +4212,12 @@ describe("runtimeService.cloneContext", () => {
     ])) as OwnedContexts;
     expect(owned.contexts.map((c) => c.contextId)).toEqual([cloned.get("ctx-child")!.newContextId]);
     expect(result.rewired).toHaveLength(2);
+    instance.contextEdgeDeleteByChild("ctx-child");
+    expect(
+      await service.handler({ caller: serverCaller }, "cloneContext", [
+        { sourceContextId: "ctx-root", recursive: true, targetKey: "fork:rec" },
+      ])
+    ).toEqual(result);
   });
 });
 

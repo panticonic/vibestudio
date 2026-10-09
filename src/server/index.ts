@@ -719,7 +719,15 @@ async function main() {
     resolveEntity: (id) =>
       ensureEntityStore(
         container.get<import("./doDispatch.js").DODispatch>("doDispatch")
-      ).resolveActiveRecord(id),
+      ).resolveRecord(id),
+    verifyPreparedStorage: async (record) => {
+      const manager = workerdManagerForGateway;
+      if (!manager)
+        throw new Error(
+          `Cannot verify clone storage for ${record.id} before WorkerdManager starts`
+        );
+      manager.requireCloneStorageComplete(record);
+    },
     restoreExactExecution: async (record) => {
       const manager = workerdManagerForGateway;
       if (!manager) {
@@ -2639,13 +2647,16 @@ async function main() {
               id: "runtime-entity",
               owner: "runtime-entity",
               buildKeys: () =>
-                entityCache.listActive().flatMap((entity) =>
+                entityCache.listExecutionOwners().flatMap((entity) =>
                   entity.activeBuildKey
                     ? [
                         {
                           ownerId: entity.id,
                           buildKey: entity.activeBuildKey,
-                          reason: "active" as const,
+                          reason:
+                            entity.status === "preparing"
+                              ? ("in-flight" as const)
+                              : ("active" as const),
                           executionDigest: entity.activeExecutionDigest,
                         },
                       ]
@@ -4640,6 +4651,8 @@ async function main() {
                 objectKey: record.key,
               });
             },
+            initializeDurableClone: (input) =>
+              doDispatch.dispatchLifecycle(input.target, "initializeClone", input),
             onDurableObjectActivated: async (record) => {
               if (!record.className) return;
               const owner = {
@@ -4670,10 +4683,16 @@ async function main() {
               className,
               fromKey,
               toKey,
+              reservation,
               cooperativelyPaused,
             }) => {
               await workerdManager.cloneDO({ source, className, objectKey: fromKey }, toKey, {
                 cooperativelyPaused,
+                reservation,
+                resolveSource: () =>
+                  ensureEntityStore(doDispatch).resolveActiveRecord(
+                    reservation.cloneProvenance!.sourceEntityId
+                  ),
               });
             },
             destroyDurableStorage: async ({ source, className, key }) => {
@@ -6550,6 +6569,8 @@ async function main() {
     ensureUserlandDoReady: async (ref) => {
       await durableObjectExecutionReadiness.ensureReady(ref);
     },
+    ensureUserlandDoPrepared: (ref, witness) =>
+      durableObjectExecutionReadiness.ensurePrepared(ref, witness),
     onManagerStarted: (manager) => {
       workerdManagerForGateway = manager;
     },

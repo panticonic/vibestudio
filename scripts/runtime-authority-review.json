@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:c7fcdce260eb597e52d3889a0231a16c2f2316841471a380334bbd9ec7a920ff",
+  "censusDigest": "sha256:80800688714daef1c003d791539a95b5c8432cec589c94bd3e8d5f28e5cbf469",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -90,8 +90,12 @@
       "change": "Adds idempotent host registration of an exact active Durable Object and its enumerated work queues for recovery scanning."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListExecutionRoots": {
-      "review": "host-only-active-entity-execution-root-census",
-      "change": "Adds a host-only bounded read of exact execution identities held by active workspace entities for the mandatory retention provider. It exposes no entity payload and performs no lifecycle mutation."
+      "review": "host-only-sealed-entity-execution-root-census",
+      "change": "Returns host-only EntityRecord execution roots retained by active entities, sealed preparing entities, and panel-history references for the mandatory retention provider. It performs no lifecycle mutation and retention grants no ordinary execution admission or outbound authority."
+    },
+    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityPrepareExecution": {
+      "review": "host-only-exact-preactive-clone-execution-seal",
+      "change": "Seals one already reserved preparing entity to its exact runtime image and authority lifetime before receiver-owned clone initialization. Only host principals may invoke this gated internal write; preparing image retention does not admit ordinary incoming calls, outbound code authority, activation, or queue publication."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityRebindAgentChannel": {
       "review": "host-only-cloned-agent-binding-persistence",

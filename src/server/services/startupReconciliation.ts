@@ -43,7 +43,7 @@ export async function runStartupReconciliation(
 ): Promise<StartupReconciliationResult> {
   const log = deps.logger ?? { warn: (msg, ...args) => console.warn(msg, ...args) };
 
-  // 1. Hydrate entityCache from the DO's active set.
+  // 1. Hydrate live identities, including non-executable preparation owners.
   let hydratedCount = 0;
   try {
     // Runtime services are already live while this durable read is in flight.
@@ -51,7 +51,8 @@ export async function runStartupReconciliation(
     // of letting the older snapshot erase that newer cache mutation.
     const hydrationFence = deps.entityCache.beginHydration();
     const active = await deps.dispatchWorkspaceDO<EntityRecord[]>("entityListActive");
-    deps.entityCache.hydrate(active, hydrationFence);
+    const preparing = await deps.dispatchWorkspaceDO<EntityRecord[]>("entityListPreparing");
+    deps.entityCache.hydrate([...active, ...preparing], hydrationFence);
     hydratedCount = active.length;
   } catch (err) {
     log.warn("[Bootstrap] entityCache hydrate failed:", err);

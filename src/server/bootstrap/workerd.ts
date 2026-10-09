@@ -15,6 +15,7 @@ import type { RouteRegistry } from "../routeRegistry.js";
 import { attestDirectRpc, attestWorkspaceDoRpc } from "../services/authorityRuntime.js";
 import type { WorkerdManager, WorkerdWorkspaceProvider } from "../workerdManager.js";
 import type { DORef } from "../workerdRpcRelay.js";
+import type { LifecycleCloneInput } from "@vibestudio/shared/doDispatcher";
 import type { RpcServer } from "../rpcServer.js";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
@@ -61,6 +62,7 @@ export interface WorkerdBootstrapDeps {
   resolveEgressCaller(caller: VerifiedCaller): VerifiedCaller | null;
   /** Restore the exact active entity incarnation before any userland DO call. */
   ensureUserlandDoReady(ref: DORef): Promise<void>;
+  ensureUserlandDoPrepared(ref: DORef, witness: LifecycleCloneInput): Promise<void>;
   onManagerStarted(manager: WorkerdManager): void;
   /** Sole owner of source-build publication into durable and derived runtime state. */
   publishSourceBuild(
@@ -395,6 +397,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       const manager = assertPresent(resolve<WorkerdManager>("workerdManager"));
       const rpcServer = assertPresent(resolve<{ server: RpcServer }>("rpcServer")).server;
       const dispatch = new DODispatch(deps.ensureUserlandDoReady);
+      dispatch.setPreparingTargetReady(deps.ensureUserlandDoPrepared);
       dispatch.setTokenManager(deps.tokenManager);
       dispatch.setGetWorkerdGatewayToken(() => deps.gatewayToken);
       dispatch.setGetWorkerdUrl(() => {

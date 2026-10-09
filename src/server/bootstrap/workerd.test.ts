@@ -77,6 +77,7 @@ describe("workerd bootstrap policy", () => {
       eventService: inert as WorkerdBootstrapDeps["eventService"],
       resolveEgressCaller: (caller) => caller,
       ensureUserlandDoReady: vi.fn(async () => undefined),
+      ensureUserlandDoPrepared: vi.fn(async () => undefined),
       onManagerStarted: vi.fn(),
       publishSourceBuild: vi.fn(async () => undefined),
     });
@@ -138,6 +139,7 @@ describe("workerd bootstrap policy", () => {
       eventService: inert as WorkerdBootstrapDeps["eventService"],
       resolveEgressCaller: (caller) => caller,
       ensureUserlandDoReady: vi.fn(async () => undefined),
+      ensureUserlandDoPrepared: vi.fn(async () => undefined),
       onManagerStarted: vi.fn(),
       publishSourceBuild: vi.fn(async () => undefined),
     });
@@ -225,6 +227,7 @@ describe("workerd bootstrap policy", () => {
       eventService: inert as WorkerdBootstrapDeps["eventService"],
       resolveEgressCaller: (caller) => caller,
       ensureUserlandDoReady: vi.fn(async () => undefined),
+      ensureUserlandDoPrepared: vi.fn(async () => undefined),
       onManagerStarted: vi.fn(),
       publishSourceBuild,
     });

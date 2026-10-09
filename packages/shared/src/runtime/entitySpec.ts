@@ -246,7 +246,19 @@ export function canonicalizeWorkspaceFilePath(wsRelPath: string): string {
   return `${section}/${match[1]}/${leaf}`;
 }
 
+/** Immutable ownership of a context clone, including its exact source incarnation. */
+export interface EntityCloneProvenance {
+  storage: "snapshot" | "fresh";
+  operationContextId: string;
+  sourceEntityId: string;
+  sourceContextId: string;
+  sourceAuthoritySessionId: string;
+  sourceBuildKey: string;
+  sourceExecutionDigest: string;
+}
+
 export interface EntityRecord {
+  cloneProvenance?: EntityCloneProvenance;
   /** Host-owned scope for arbitrary execution launched by this entity. */
   executionAuthority?: import("@vibestudio/rpc").ExecutionAuthorityOrigin;
   // ── Identity (immutable after first write) ──
@@ -340,6 +352,7 @@ export interface EntityActivationInput {
  * existing ownership.
  */
 export interface EntityReservationInput extends EntityActivationInput {
+  cloneProvenance?: EntityCloneProvenance;
   lifecycleOwner?: {
     contextId: string;
     entityId: string;

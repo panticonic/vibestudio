@@ -118,6 +118,15 @@ export class EntityCache {
     return this.resolveActive(id)?.kind ?? null;
   }
 
+  /** Image retention owners include sealed preparation; this grants no invocation admission. */
+  listExecutionOwners(): EntityRecord[] {
+    return [...this.records.values()].filter(
+      (record) =>
+        record.status !== "retired" &&
+        Boolean(record.activeBuildKey && record.activeExecutionDigest && record.activeAuthority)
+    );
+  }
+
   listActive(): EntityRecord[] {
     return Array.from(this.records.values()).filter((r) => r.status === "active");
   }

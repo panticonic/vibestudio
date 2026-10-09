@@ -63,6 +63,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         parent_id TEXT,
         owner_user_id TEXT,
         authority_session_id TEXT NOT NULL,
+        clone_provenance TEXT,
         created_at INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         retired_at INTEGER,
@@ -226,6 +227,8 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         owner_context_id TEXT NOT NULL,
         kind             TEXT NOT NULL,
         owner_entity_id  TEXT,
+        clone_definition TEXT,
+        clone_completion TEXT,
         created_at       INTEGER NOT NULL,
         PRIMARY KEY (context_id, owner_context_id, kind)
       )

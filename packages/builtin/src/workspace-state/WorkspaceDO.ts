@@ -1,3 +1,7 @@
+import type {
+  ContextCloneDefinition,
+  ContextCloneCompletion,
+} from "@vibestudio/shared/runtime/contextEdges";
 import {
   WakePublicationStore,
   type WakePublication,
@@ -77,6 +81,7 @@ interface DbEntityRow {
   parent_id: string | null;
   owner_user_id: string | null;
   authority_session_id: string;
+  clone_provenance: string | null;
   created_at: number;
   status: "preparing" | "active" | "retired";
   retired_at: number | null;
@@ -85,6 +90,8 @@ interface DbEntityRow {
 }
 
 interface DbContextEdgeRow {
+  clone_definition: string | null;
+  clone_completion: string | null;
   context_id: string;
   owner_context_id: string;
   kind: "lifecycle" | "lineage";
@@ -271,6 +278,7 @@ const WORKSPACE_ENTITY_COLUMNS = [
   "parent_id",
   "owner_user_id",
   "authority_session_id",
+  "clone_provenance",
   "created_at",
   "status",
   "retired_at",
@@ -322,7 +330,7 @@ function assertWorkspaceAlarmColumns(sql: SchemaSqlStorage, label: string): void
 
 export class WorkspaceDO extends DurableObjectBase {
   static override rpcMethods = workspaceStateEngineMethods;
-  static override schemaVersion = 37;
+  static override schemaVersion = 38;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -356,6 +364,7 @@ export class WorkspaceDO extends DurableObjectBase {
         parent_id TEXT,
         owner_user_id TEXT,
         authority_session_id TEXT NOT NULL,
+        clone_provenance TEXT,
         created_at INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         retired_at INTEGER,
@@ -477,6 +486,8 @@ export class WorkspaceDO extends DurableObjectBase {
         owner_context_id TEXT NOT NULL,
         kind             TEXT NOT NULL,
         owner_entity_id  TEXT,
+        clone_definition TEXT,
+        clone_completion TEXT,
         created_at       INTEGER NOT NULL,
         PRIMARY KEY (context_id, owner_context_id, kind)
       )
@@ -791,6 +802,16 @@ export class WorkspaceDO extends DurableObjectBase {
       });
       const existing = this.readEntityRow(id);
       if (existing) {
+        if (
+          existing.clone_provenance !==
+          (input.cloneProvenance ? canonicalJson(input.cloneProvenance) : null)
+        ) {
+          throw new IdentityCollisionError(id, {
+            field: "cloneProvenance",
+            existing: existing.clone_provenance,
+            attempted: input.cloneProvenance ?? null,
+          });
+        }
         this.assertIdentityMatches(id, existing, input);
         if (existing.status === "retired") {
           throw new Error(`Cannot reserve retired entity ${id}`);
@@ -812,8 +833,8 @@ export class WorkspaceDO extends DurableObjectBase {
           id, kind, source_repo_path, source_effective_version, active_build_key,
           active_execution_digest, active_authority, execution_authority, context_id, class_name, key,
           state_args, agent_entity_id, agent_channel_id, parent_id, owner_user_id, authority_session_id,
-          created_at, status, retired_at, cleanup_complete, error
-        ) VALUES (?, ?, ?, '', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
+          clone_provenance, created_at, status, retired_at, cleanup_complete, error
+        ) VALUES (?, ?, ?, '', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
         id,
         input.kind,
         input.source.repoPath,
@@ -829,6 +850,7 @@ export class WorkspaceDO extends DurableObjectBase {
         input.parentId ?? null,
         input.ownerUserId ?? null,
         crypto.randomUUID(),
+        input.cloneProvenance ? canonicalJson(input.cloneProvenance) : null,
         now
       );
       if (input.lifecycleOwner) {
@@ -868,7 +890,40 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  private advanceEntityExecution(input: EntityActivateInput): EntityRecord {
+  @schemaRpc()
+  entityPrepareExecution(input: EntityActivateInput): EntityRecord {
+    return this.ctx.storage.transactionSync(() => {
+      const id = canonicalEntityId({
+        kind: input.kind,
+        source: input.source.repoPath,
+        className: input.className,
+        key: input.key,
+      });
+      const existing = this.readEntityRow(id);
+      if (!existing || existing.status !== "preparing") {
+        throw new Error(`entityPrepareExecution: ${id} is not a reserved incarnation`);
+      }
+      if (existing.active_build_key !== null) {
+        this.assertIdentityMatches(id, existing, input);
+        if (
+          existing.active_build_key !== input.activeBuildKey ||
+          existing.active_execution_digest !== input.activeExecutionDigest ||
+          existing.active_authority !== serializeActiveAuthority(input.activeAuthority) ||
+          existing.owner_user_id !== (input.ownerUserId ?? null)
+        ) {
+          throw new Error(`entityPrepareExecution: sealed preparation changed for ${id}`);
+        }
+        return this.rowToEntity(existing);
+      }
+      const record = this.advanceEntityExecution(input, "preparing");
+      return record;
+    });
+  }
+
+  private advanceEntityExecution(
+    input: EntityActivateInput,
+    status: "active" | "preparing" = "active"
+  ): EntityRecord {
     const nextBuildKey = validateActiveBuildKey(input.activeBuildKey);
     const nextExecutionDigest = validateActiveExecutionDigest(input.activeExecutionDigest);
     const nextAuthority = serializeActiveAuthority(input.activeAuthority);
@@ -901,12 +956,13 @@ export class WorkspaceDO extends DurableObjectBase {
       `UPDATE entities
           SET source_effective_version = ?, active_build_key = ?,
               active_execution_digest = ?, active_authority = ?,
-              status = 'active', error = NULL
+              status = ?, error = NULL
         WHERE id = ?`,
       input.source.effectiveVersion,
       nextBuildKey,
       nextExecutionDigest,
       nextAuthority,
+      status,
       id
     );
     const row = this.readEntityRow(id);
@@ -1881,7 +1937,8 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /**
-   * Executable entities that may still run or be selected from panel history.
+   * Sealed execution records retained by preparing/active entities or panel history.
+   * Retention does not admit a preparing or retired entity to execution.
    * Retired rows with no slot-history reference are deliberately excluded.
    */
   @schemaRpc()
@@ -1892,7 +1949,7 @@ export class WorkspaceDO extends DurableObjectBase {
            FROM entities e
           WHERE e.active_build_key IS NOT NULL
             AND (
-              e.status = 'active'
+              e.status IN ('preparing', 'active')
               OR EXISTS (SELECT 1 FROM slot_history h WHERE h.entity_id = e.id)
             )
           ORDER BY e.id`
@@ -1930,6 +1987,8 @@ export class WorkspaceDO extends DurableObjectBase {
     ownerContextId: string;
     kind: "lifecycle" | "lineage";
     ownerEntityId?: string;
+    cloneDefinition?: ContextCloneDefinition;
+    cloneCompletion?: ContextCloneCompletion;
   }): void {
     this.ctx.storage.transactionSync(() => this.upsertContextEdge(input));
   }
@@ -1939,6 +1998,8 @@ export class WorkspaceDO extends DurableObjectBase {
     ownerContextId: string;
     kind: "lifecycle" | "lineage";
     ownerEntityId?: string;
+    cloneDefinition?: ContextCloneDefinition;
+    cloneCompletion?: ContextCloneCompletion;
   }): void {
     if (input.contextId === input.ownerContextId) {
       throw new Error(`A context cannot be its own ${input.kind} owner: ${input.contextId}`);
@@ -1960,34 +2021,118 @@ export class WorkspaceDO extends DurableObjectBase {
         );
       }
     }
+    const existing = this.sql
+      .exec(
+        `SELECT clone_definition, clone_completion, owner_entity_id FROM context_edges WHERE context_id = ? AND owner_context_id = ? AND kind = ?`,
+        input.contextId,
+        input.ownerContextId,
+        input.kind
+      )
+      .toArray()[0] as unknown as DbContextEdgeRow | undefined;
+    if (input.cloneDefinition) {
+      if (input.kind !== "lineage")
+        throw new Error("Clone definitions belong to root lineage owners");
+      const root = input.cloneDefinition.contexts[0];
+      if (
+        input.cloneDefinition.request.sourceContextId !== input.ownerContextId ||
+        root?.sourceContextId !== input.ownerContextId ||
+        root.targetContextId !== input.contextId
+      ) {
+        throw new Error(
+          `Clone definition does not match lineage ${input.ownerContextId} -> ${input.contextId}`
+        );
+      }
+      const other = this.sql
+        .exec(
+          `SELECT owner_context_id FROM context_edges WHERE context_id = ? AND clone_definition IS NOT NULL AND owner_context_id != ?`,
+          input.contextId,
+          input.ownerContextId
+        )
+        .toArray()[0] as unknown as DbContextEdgeRow | undefined;
+      if (other)
+        throw new IdentityCollisionError(input.contextId, {
+          field: "cloneOwnerContext",
+          existing: other.owner_context_id,
+          attempted: input.ownerContextId,
+        });
+      const requestedContexts = new Set(
+        input.cloneDefinition.contexts.map((context) => context.targetContextId)
+      );
+      const owners = this.sql
+        .exec(
+          `SELECT context_id, clone_definition FROM context_edges WHERE clone_definition IS NOT NULL AND context_id != ?`,
+          input.contextId
+        )
+        .toArray() as unknown as DbContextEdgeRow[];
+      for (const owner of owners) {
+        const capture = JSON.parse(owner.clone_definition!) as ContextCloneDefinition;
+        const collision = capture.contexts.find((context) =>
+          requestedContexts.has(context.targetContextId)
+        );
+        if (collision)
+          throw new IdentityCollisionError(collision.targetContextId, {
+            field: "cloneContextOwner",
+            existing: owner.context_id,
+            attempted: input.contextId,
+          });
+      }
+      if (existing && existing.clone_definition !== canonicalJson(input.cloneDefinition)) {
+        throw new IdentityCollisionError(input.contextId, {
+          field: "cloneDefinition",
+          existing: existing.clone_definition ? JSON.parse(existing.clone_definition) : null,
+          attempted: input.cloneDefinition,
+        });
+      }
+    }
+    if (
+      input.cloneCompletion &&
+      (!existing?.clone_definition ||
+        !input.cloneDefinition ||
+        input.cloneCompletion.result.contextId !== input.contextId ||
+        (existing.clone_completion &&
+          existing.clone_completion !== canonicalJson(input.cloneCompletion)))
+    ) {
+      throw new IdentityCollisionError(input.contextId, {
+        field: "cloneCompletion",
+        existing: existing?.clone_completion ?? null,
+        attempted: input.cloneCompletion,
+      });
+    }
     this.sql.exec(
-      `INSERT INTO context_edges (context_id, owner_context_id, kind, owner_entity_id, created_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO context_edges (context_id, owner_context_id, kind, owner_entity_id, clone_definition, clone_completion, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(context_id, owner_context_id, kind)
-       DO UPDATE SET owner_entity_id = excluded.owner_entity_id`,
+       DO UPDATE SET owner_entity_id = CASE WHEN context_edges.clone_definition IS NOT NULL
+         THEN context_edges.owner_entity_id ELSE excluded.owner_entity_id END,
+         clone_completion = COALESCE(context_edges.clone_completion, excluded.clone_completion)`,
       input.contextId,
       input.ownerContextId,
       input.kind,
       input.ownerEntityId ?? null,
+      input.cloneDefinition ? canonicalJson(input.cloneDefinition) : null,
+      input.cloneCompletion ? canonicalJson(input.cloneCompletion) : null,
       Date.now()
     );
   }
 
   /** List edges owned BY a context (the owner side), optionally scoped to one kind. */
   @schemaRpc()
-  contextEdgeListByOwner(input: {
-    ownerContextId: string;
-    kind?: "lifecycle" | "lineage";
-  }): Array<{ contextId: string; kind: "lifecycle" | "lineage"; ownerEntityId: string | null }> {
+  contextEdgeListByOwner(input: { ownerContextId: string; kind?: "lifecycle" | "lineage" }): Array<{
+    contextId: string;
+    kind: "lifecycle" | "lineage";
+    ownerEntityId: string | null;
+    cloneDefinition?: ContextCloneDefinition;
+    cloneCompletion?: ContextCloneCompletion;
+  }> {
     const rows = (input.kind
       ? this.sql.exec(
-          `SELECT context_id, kind, owner_entity_id FROM context_edges
+          `SELECT context_id, kind, owner_entity_id, clone_definition, clone_completion FROM context_edges
              WHERE owner_context_id = ? AND kind = ? ORDER BY created_at`,
           input.ownerContextId,
           input.kind
         )
       : this.sql.exec(
-          `SELECT context_id, kind, owner_entity_id FROM context_edges
+          `SELECT context_id, kind, owner_entity_id, clone_definition, clone_completion FROM context_edges
              WHERE owner_context_id = ? ORDER BY created_at`,
           input.ownerContextId
         )
@@ -1996,6 +2141,12 @@ export class WorkspaceDO extends DurableObjectBase {
       contextId: row.context_id,
       kind: row.kind,
       ownerEntityId: row.owner_entity_id ?? null,
+      ...(row.clone_completion
+        ? { cloneCompletion: JSON.parse(row.clone_completion) as ContextCloneCompletion }
+        : {}),
+      ...(row.clone_definition
+        ? { cloneDefinition: JSON.parse(row.clone_definition) as ContextCloneDefinition }
+        : {}),
     }));
   }
 
@@ -2005,10 +2156,12 @@ export class WorkspaceDO extends DurableObjectBase {
     ownerContextId: string;
     kind: "lifecycle" | "lineage";
     ownerEntityId: string | null;
+    cloneDefinition?: ContextCloneDefinition;
+    cloneCompletion?: ContextCloneCompletion;
   }> {
     const rows = this.sql
       .exec(
-        `SELECT owner_context_id, kind, owner_entity_id FROM context_edges
+        `SELECT owner_context_id, kind, owner_entity_id, clone_definition, clone_completion FROM context_edges
          WHERE context_id = ? ORDER BY created_at`,
         contextId
       )
@@ -2017,6 +2170,12 @@ export class WorkspaceDO extends DurableObjectBase {
       ownerContextId: row.owner_context_id,
       kind: row.kind,
       ownerEntityId: row.owner_entity_id ?? null,
+      ...(row.clone_completion
+        ? { cloneCompletion: JSON.parse(row.clone_completion) as ContextCloneCompletion }
+        : {}),
+      ...(row.clone_definition
+        ? { cloneDefinition: JSON.parse(row.clone_definition) as ContextCloneDefinition }
+        : {}),
     }));
   }
 
@@ -3304,6 +3463,7 @@ export class WorkspaceDO extends DurableObjectBase {
       status: row.status,
       cleanupComplete: row.cleanup_complete === 1,
     };
+    if (row.clone_provenance) record.cloneProvenance = JSON.parse(row.clone_provenance);
     if (row.class_name) record.className = row.class_name;
     if (row.state_args !== null) record.stateArgs = JSON.parse(row.state_args);
     if (row.agent_channel_id !== null) {

@@ -6845,6 +6845,57 @@ describe("website dynamic endpoint admission", () => {
 });
 
 describe("delegated Durable Object authority lifetime", () => {
+  it("refuses ordinary outbound service calls from a sealed preparing receiver", async () => {
+    const { server, entityCache } = createServer();
+    const runtimeId = "do:workers/pubsub-channel:PubSubChannel:preparing-child";
+    const record = {
+      ...makeRecord(runtimeId, "do", { repoPath: "workers/pubsub-channel" }),
+      status: "preparing" as const,
+      authoritySessionId: "preparation-lifetime",
+    };
+    entityCache._onActivate(record);
+    const message: InternalRpcRequest = {
+      type: "request",
+      requestId: "preparing-outbound",
+      fromId: runtimeId,
+      method: "workspace.list",
+      args: [],
+    };
+    await expect(
+      testServer(server).handleEnvelopeRequest(
+        runtimeId,
+        "do",
+        undefined,
+        envelopeFromMessage({
+          selfId: runtimeId,
+          from: runtimeId,
+          target: "main",
+          callerKind: "do",
+          message,
+        }),
+        message,
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({ code: "RUNTIME_ENTITY_NOT_ACTIVE" });
+    expect(testServer(server).dispatcher.dispatch).not.toHaveBeenCalled();
+    entityCache._onActivate({ ...record, status: "active" });
+    await testServer(server).handleEnvelopeRequest(
+      runtimeId,
+      "do",
+      undefined,
+      envelopeFromMessage({
+        selfId: runtimeId,
+        from: runtimeId,
+        target: "main",
+        callerKind: "do",
+        message,
+      }),
+      message,
+      new AbortController().signal
+    );
+    expect(testServer(server).dispatcher.dispatch).toHaveBeenCalledOnce();
+  });
+
   it("carries a verified account through live system-owned deputies without changing code identity or leaking to later calls", async () => {
     const receiver = "do:workers/mission-control-store:MissionControlStore:main";
     const secondReceiver = "do:workers/mission-agent:MissionAgent:installer";

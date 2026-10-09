@@ -16,6 +16,7 @@ import {
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
 import type {
   PreparedAuthoritySelection,
@@ -31,7 +32,11 @@ import {
   type RuntimeExecutionRecoveryResult,
   type RuntimeSupervisionEntityKey,
 } from "@vibestudio/service-schemas/runtime";
-import type { ContextEdge, ContextEdgeKind } from "@vibestudio/shared/runtime/contextEdges";
+import type {
+  ContextCloneDefinition,
+  ContextEdge,
+  ContextEdgeKind,
+} from "@vibestudio/shared/runtime/contextEdges";
 import {
   verifiedInitiator,
   type ServiceContext,
@@ -41,6 +46,7 @@ import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type {
   LifecyclePrepareInput,
   LifecyclePrepareResult,
+  LifecycleCloneInput,
 } from "@vibestudio/shared/doDispatcher";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import {
@@ -50,6 +56,7 @@ import {
   runtimeEntitySource,
   type CodeExecution,
   type EntityRecord,
+  type EntityCloneProvenance,
   type ExternalDocumentExecution,
   type InertExecution,
   type RuntimeAgentBinding,
@@ -90,6 +97,8 @@ export interface RuntimeEntityHooks {
   /** Called after the entity row is active but before activation is returned
    * to its creator, so durable-work capability registration precedes work. */
   onDurableObjectActivated?: (record: EntityRecord) => Promise<void>;
+  /** Initializes copied receiver state while its sealed incarnation is still preparing. */
+  initializeDurableClone: (input: LifecycleCloneInput) => Promise<void>;
 
   /** Owns all resources, credential revocation and exact lifetime completion. */
   onRetire: (record: EntityRecord) => Promise<void>;
@@ -116,6 +125,7 @@ export interface RuntimeEntityHooks {
     className: string;
     fromKey: string;
     toKey: string;
+    reservation: EntityRecord;
     /**
      * True only when the verified clone caller is this exact source object.
      * Its actor turn is serialized and paused on the host call, so storage can
@@ -370,6 +380,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   // entity transition. Receipt inspection and domain settlement remain outside
   // this queue so an owner can finish teardown without awaiting itself.
   const entityTransitions = new Map<string, Promise<unknown>>();
+  const contextClones = new Map<string, Promise<unknown>>();
   const activationChains = new Map<string, Promise<RuntimeEntityHandle>>();
   let recoveryAttemptCount = 0;
 
@@ -768,7 +779,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     actors: RuntimeCreationActors,
     spec: RuntimeCodeEntityCreateSpec,
     key: string,
-    canonicalId: string
+    canonicalId: string,
+    cloneProvenance?: EntityCloneProvenance
   ): Promise<RuntimeEntityHandle> {
     const caller = actors.lifecycleCaller;
     const explicitContextId = spec.contextId;
@@ -835,6 +847,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       : externalAgentBinding;
     const record = await store.reserve({
       kind: spec.kind,
+      ...(cloneProvenance ? { cloneProvenance } : {}),
       source: { repoPath: spec.execution.source, effectiveVersion: "" },
       contextId,
       className: spec.kind === "do" ? spec.className : undefined,
@@ -1031,37 +1044,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return activation;
   }
 
-  /**
-   * Prepare runtime resources for an entity and commit its durable row — WITHOUT
-   * context-boundary resolution. `createEntity` calls this after dispatcher enforcement;
-   * `cloneContext` calls it per clone after one prepared source-context leaf. `parentId` is the
-   * caller, so a cloneContext caller owns (and may freely destroy) the clones.
-   */
-  async function activateEntity(
-    actors: RuntimeCreationActors,
-    spec: RuntimeEntityCreateSpec,
-    initialContextId: string,
-    externalAgentBinding?: RuntimeAgentBinding,
-    selfAgentChannelId?: string
-  ): Promise<RuntimeEntityHandle> {
-    const keyed = { ...spec, key: spec.key ?? randomUUID() };
-    const id = canonicalEntityId({
-      kind: keyed.kind,
-      source: runtimeEntitySource(keyed),
-      className: keyed.kind === "do" ? keyed.className : undefined,
-      key: keyed.key,
-    });
-    return serializeByKey(entityTransitions, id, () =>
-      activateEntityOnce(actors, keyed, initialContextId, externalAgentBinding, selfAgentChannelId)
-    );
-  }
-
   async function activateEntityOnce(
     actors: RuntimeCreationActors,
     spec: RuntimeEntityCreateSpec,
     initialContextId: string,
     externalAgentBinding?: RuntimeAgentBinding,
-    selfAgentChannelId?: string
+    selfAgentChannelId?: string,
+    cloneSource?: EntityRecord
   ): Promise<RuntimeEntityHandle> {
     const caller = actors.lifecycleCaller;
     let contextId = initialContextId;
@@ -1081,6 +1070,22 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       throw new Error(`Invalid external browser panel URL: ${spec.execution.url}`);
     }
     const existing = await store.resolveRecord(canonicalId);
+    if (cloneSource && existing) {
+      if (existing.contextId !== contextId || existing.parentId !== caller.runtime.id) {
+        throw new Error(`Clone target ${canonicalId} belongs to another operation`);
+      }
+      assertExecutionAuthorityMatches(
+        retainExecutionAuthority(
+          executionAuthorityForCaller(actors.initiatingCaller, store.cache),
+          actors.retainedExecutionAuthority
+        ),
+        existing.executionAuthority
+      );
+      if (existing.status === "active") return entityHandle(existing);
+      if (existing.status !== "preparing") {
+        throw new Error(`Clone target ${canonicalId} is ${existing.status}`);
+      }
+    }
     if (existing)
       assertExecutionAuthorityMatches(
         retainExecutionAuthority(
@@ -1111,29 +1116,48 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       spec.kind !== "session" && spec.execution.surface === "code"
         ? await store.resolveContext(actors.initiatingCaller.runtime.id)
         : null;
-    const prepared = (await deps.hooks.prepare({
-      spec:
-        spec.kind !== "session" && spec.execution.surface === "code"
-          ? {
-              ...spec,
-              execution: {
-                ...spec.execution,
-                ref: spec.execution.ref ?? (sourceContextId ? `ctx:${sourceContextId}` : "main"),
-              },
-            }
-          : spec,
-      key,
-      contextId,
-      ...(existing?.activeBuildKey ? { existingBuildKey: existing.activeBuildKey } : {}),
-      parent: {
-        parentId: caller.runtime.id,
-        parentEntityId: caller.runtime.id,
-        parentKind:
-          parentKind === "panel" || parentKind === "worker" || parentKind === "do"
-            ? parentKind
-            : undefined,
-      },
-    })) as PreparedIncarnation;
+    let prepared: PreparedIncarnation;
+    if (cloneSource && existing?.activeBuildKey) {
+      const identity = requireActiveExecutionIdentity(
+        {
+          executionDigest: existing.activeExecutionDigest,
+          authority: existing.activeAuthority,
+        },
+        `Clone preparation ${canonicalId}`
+      );
+      await deps.hooks.recoverExactExecution(existing);
+      prepared = {
+        surface: "code",
+        target: { id: canonicalId },
+        effectiveVersion: existing.source.effectiveVersion,
+        buildKey: existing.activeBuildKey,
+        executionDigest: identity.activeExecutionDigest,
+        authority: identity.activeAuthority,
+      };
+    } else
+      prepared = (await deps.hooks.prepare({
+        spec:
+          spec.kind !== "session" && spec.execution.surface === "code"
+            ? {
+                ...spec,
+                execution: {
+                  ...spec.execution,
+                  ref: spec.execution.ref ?? (sourceContextId ? `ctx:${sourceContextId}` : "main"),
+                },
+              }
+            : spec,
+        key,
+        contextId,
+        ...(existing?.activeBuildKey ? { existingBuildKey: existing.activeBuildKey } : {}),
+        parent: {
+          parentId: caller.runtime.id,
+          parentEntityId: caller.runtime.id,
+          parentKind:
+            parentKind === "panel" || parentKind === "worker" || parentKind === "do"
+              ? parentKind
+              : undefined,
+        },
+      })) as PreparedIncarnation;
     if (prepared.surface !== spec.execution.surface) {
       throw new Error(
         `Runtime preparation surface mismatch for ${canonicalId}: requested ${spec.execution.surface}, prepared ${prepared.surface}`
@@ -1207,7 +1231,42 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         actors.retainedExecutionAuthority
       ),
     };
-    const record = await store.activate(activateInput);
+    let record: EntityRecord;
+    if (cloneSource && spec.kind === "do") {
+      const reservation =
+        existing ??
+        (await store.reserve({
+          ...activateInput,
+          source: { repoPath: source, effectiveVersion: "" },
+          activeBuildKey: undefined,
+          activeExecutionDigest: undefined,
+          activeAuthority: undefined,
+        }));
+      if (reservation.status !== "preparing") {
+        throw new Error(`Clone target ${canonicalId} is not preparing`);
+      }
+      const sealed = await store.prepareExecution(activateInput);
+      if (!sealed.authoritySessionId) {
+        throw new Error(`Preparing clone ${canonicalId} has no authority lifecycle`);
+      }
+      await deps.hooks.initializeDurableClone({
+        provenance: sealed.cloneProvenance!,
+        source: {
+          source: cloneSource.source.repoPath,
+          className: cloneSource.className!,
+          objectKey: cloneSource.key,
+        },
+        sourceContextId: cloneSource.contextId,
+        target: { source, className: spec.className, objectKey: key },
+        targetContextId: contextId,
+        authoritySessionId: sealed.authoritySessionId,
+        buildKey: sealed.activeBuildKey!,
+        executionDigest: sealed.activeExecutionDigest!,
+      });
+      record = await store.advanceExecution(activateInput);
+    } else {
+      record = await store.activate(activateInput);
+    }
     if (createsRuntime) inheritTaskAuthority(record.id, actors, contextId);
     if (record.kind === "do") {
       await deps.hooks.onDurableObjectActivated?.(record);
@@ -1292,18 +1351,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   /** Body shared by ordinary retirement and rollback already owning this entity transition. */
   async function retireRecordOnce(id: string): Promise<EntityRecord | null> {
     const current = await store.resolveRecord(id);
-    if (!current || current.status === "retired") return null;
-    await prepareRecordForRetirement(current);
-
-    let record: EntityRecord | null;
-    try {
-      await deps.hooks.sealAndDrainEntityRelays?.(id);
-      record = await store.retire(id);
-    } finally {
-      // On success, the cache is already inactive before the seal is
-      // released. On failure, the durable row remains active and relays must
-      // be admitted again so retirement can be retried.
-      deps.hooks.releaseEntityRelaySeal?.(id);
+    if (!current || (current.status === "retired" && current.cleanupComplete)) return null;
+    let record: EntityRecord | null = current;
+    if (current.status !== "retired") {
+      await prepareRecordForRetirement(current);
+      try {
+        await deps.hooks.sealAndDrainEntityRelays?.(id);
+        record = await store.retire(id);
+      } finally {
+        // Admission is released only after durable retirement or its original failure.
+        deps.hooks.releaseEntityRelaySeal?.(id);
+      }
     }
     if (!record) return null;
     try {
@@ -1565,7 +1623,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     src: EntityRecord,
     contextId: string,
     newKey: string
-  ): RuntimeEntityCreateSpec {
+  ): RuntimeCodeEntityCreateSpec {
     if (src.kind === "do") {
       if (!src.className) {
         throw new Error(`cloneContext: DO entity ${src.id} has no className`);
@@ -1591,10 +1649,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   /**
    * Clone a whole context's durable substrate into a fresh, isolated context:
    * generic DO storage (server-internal cloneDO) + a VCS snapshot of the
-   * source's working files. Returns the new contextId + source→clone map. Does NOT
-   * invoke the cloned DOs — server→DO calls are out of band; a caller that needs to
-   * "activate" clones (re-root logs, rebind the channel) drives that via the clones'
-   * own methods (the fork's `postClone`). Gated on the SOURCE: cloning your own
+   * source's working files. Returns the new contextId + source→clone map.
+   * Prepares copied receiver storage through authenticated lifecycle control before
+   * admitting execution. Callers then apply domain semantics (the fork's `postClone`).
+   * Gated on the SOURCE: cloning your own
    * context is free; cloning a foreign existing one prompts.
    */
   async function cloneContext(
@@ -1606,9 +1664,67 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       targetKey?: string;
     }
   ): Promise<CloneContextResult> {
+    const key = args.targetKey ? contextIdForTargetKey(args.targetKey) : randomUUID();
+    return serializeByKey(contextClones, key, () => cloneContextOnce(actors, args));
+  }
+
+  async function cloneContextOnce(
+    actors: RuntimeCreationActors,
+    args: {
+      sourceContextId: string;
+      include?: string[];
+      recursive?: boolean;
+      targetKey?: string;
+    }
+  ): Promise<CloneContextResult> {
     const caller = actors.lifecycleCaller;
     const { sourceContextId, targetKey } = args;
-    const recursive = args.recursive === true;
+    const rootTarget = targetKey ? contextIdForTargetKey(targetKey) : randomUUID();
+    const request: ContextCloneDefinition["request"] = {
+      sourceContextId,
+      include: args.include ? [...new Set(args.include)].sort() : null,
+      recursive: args.recursive === true,
+    };
+    const initiatingEntity = await store.resolveRecord(actors.initiatingCaller.runtime.id);
+    if (
+      initiatingEntity &&
+      (initiatingEntity.status !== "active" || !initiatingEntity.authoritySessionId)
+    ) {
+      throw new Error(`Clone author ${initiatingEntity.id} has no active execution lifetime`);
+    }
+    const lifecycleEntity = await store.resolveRecord(caller.runtime.id);
+    if (
+      lifecycleEntity &&
+      (lifecycleEntity.status !== "active" || !lifecycleEntity.authoritySessionId)
+    ) {
+      throw new Error(`Clone author ${lifecycleEntity.id} has no active execution lifetime`);
+    }
+    const author: ContextCloneDefinition["author"] = {
+      runtimeId: caller.runtime.id,
+      runtimeKind: caller.runtime.kind,
+      authoritySessionId:
+        lifecycleEntity?.authoritySessionId ?? caller.executionSession?.authoritySessionId,
+      userId: caller.subject?.userId,
+      hostOriginated: caller.hostOriginated === true,
+      executionAuthority: executionAuthorityForCaller(caller, store.cache),
+    };
+    const rootEdges = await store.listContextEdgesByChild(rootTarget);
+    const capturedEdge = rootEdges.find((edge) => edge.kind === "lineage" && edge.cloneDefinition);
+    let definition = capturedEdge?.cloneDefinition;
+    if (
+      definition &&
+      (capturedEdge?.ownerContextId !== sourceContextId ||
+        canonicalJson(definition.request) !== canonicalJson(request) ||
+        canonicalJson(definition.author) !== canonicalJson(author))
+    ) {
+      throw new IdentityCollisionError(rootTarget, {
+        field: "cloneDefinition",
+        existing: definition,
+        attempted: { request, author },
+      });
+    }
+    if (capturedEdge?.cloneCompletion) return capturedEdge.cloneCompletion.result;
+    const recursive = request.recursive;
     // `include` scopes the ROOT context only; recursive descendants clone in full.
     const rootInclude = args.include ? new Set(args.include) : null;
     // Resolve the source contexts to clone: the root, plus (recursive) its
@@ -1619,7 +1735,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ownerSourceContextId: string;
       ownerEntityId: string | null;
     }> = [];
-    {
+    if (definition) {
+      for (const context of definition.contexts) {
+        if (context.ownerSourceContextId)
+          subtree.push({
+            sourceContextId: context.sourceContextId,
+            ownerSourceContextId: context.ownerSourceContextId,
+            ownerEntityId: context.ownerEntityId ?? null,
+          });
+      }
+    } else {
       const seen = new Set<string>([sourceContextId]);
       const queue: string[] = [sourceContextId];
       while (queue.length > 0) {
@@ -1661,14 +1786,21 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           ? isRoot
             ? contextIdForTargetKey(targetKey)
             : contextIdForTargetKey(`${targetKey} ${srcCtx}`)
-          : randomUUID()
+          : isRoot
+            ? rootTarget
+            : randomUUID()
       );
+    }
+    if (definition) {
+      for (const context of definition.contexts)
+        newContextIdOf.set(context.sourceContextId, context.targetContextId);
     }
 
     // Only durable kinds carry cloneable state. Panels/apps are UI/host-managed;
     // sessions are inert identity — not reproduced in the clone. Denial for an
     // empty root is non-destructive (thrown before any side effect).
-    const allActive = await store.listActive();
+    const allActive =
+      definition?.members.map((member) => member.source) ?? (await store.listActive());
     const clonableIn = (srcCtx: string, include: Set<string> | null): EntityRecord[] =>
       allActive.filter(
         (e) =>
@@ -1682,54 +1814,235 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       );
     }
 
-    const createdContexts: string[] = [];
-    const created: RuntimeEntityHandle[] = [];
-    const clonedStorage: Array<{ source: string; className: string; key: string }> = [];
     const entities: ClonedEntity[] = [];
     const entityIdMap = new Map<string, string>();
+    const existingContexts = new Set(await deps.semanticContexts.listContexts());
+    if (!definition) {
+      for (const targetContextId of newContextIdOf.values()) {
+        if (existingContexts.has(targetContextId)) {
+          throw new IdentityCollisionError(targetContextId, {
+            field: "cloneContextOwner",
+            existing: "pre-existing semantic context",
+            attempted: rootTarget,
+          });
+        }
+      }
+    }
+
+    if (existingContexts.has(rootTarget)) {
+      const edges = await store.listContextEdgesByChild(rootTarget);
+      if (
+        !edges.some(
+          (edge) =>
+            edge.kind === "lineage" &&
+            edge.cloneDefinition &&
+            edge.ownerContextId === sourceContextId
+        )
+      ) {
+        throw new Error(`Clone context ${rootTarget} belongs to another operation`);
+      }
+    }
+    const capturedProvenance = (source: EntityRecord): EntityCloneProvenance => {
+      if (!source.authoritySessionId || !source.activeBuildKey || !source.activeExecutionDigest) {
+        throw new Error(`Clone source ${source.id} has no sealed incarnation ownership`);
+      }
+      return {
+        storage: source.kind === "do" && !source.agentBinding ? "snapshot" : "fresh",
+        operationContextId: rootTarget,
+        sourceEntityId: source.id,
+        sourceContextId: source.contextId,
+        sourceAuthoritySessionId: source.authoritySessionId,
+        sourceBuildKey: source.activeBuildKey,
+        sourceExecutionDigest: source.activeExecutionDigest,
+      };
+    };
+    const originalResult = (): CloneContextResult => {
+      const rootNewContextId = newContextIdOf.get(sourceContextId) as string;
+      const contexts = sourceContexts.map((srcCtx) => {
+        const node = subtree.find((s) => s.sourceContextId === srcCtx);
+        return {
+          sourceContextId: srcCtx,
+          newContextId: newContextIdOf.get(srcCtx) as string,
+          ownerNewContextId: node
+            ? (newContextIdOf.get(node.ownerSourceContextId) as string)
+            : null,
+        };
+      });
+      // Runtime is channel-agnostic: it fills entity ids only. The caller (WS-5/6)
+      // fills sourceChannelId/newChannelId and settles unhomeable pending calls
+      // (`aborted-by-fork`).
+      const rewired = entities.map((e) => ({ sourceEntityId: e.sourceId, newEntityId: e.newId }));
+
+      return { contextId: rootNewContextId, entities, contexts, rewired };
+    };
+    let ownsDefinition = Boolean(definition);
     try {
+      if (!definition) {
+        definition = {
+          request,
+          author,
+          contexts: sourceContexts.map((srcCtx) => {
+            const node = subtree.find((entry) => entry.sourceContextId === srcCtx);
+            return {
+              sourceContextId: srcCtx,
+              targetContextId: newContextIdOf.get(srcCtx)!,
+              ...(node
+                ? {
+                    ownerSourceContextId: node.ownerSourceContextId,
+                    ownerEntityId: node.ownerEntityId,
+                  }
+                : {}),
+            };
+          }),
+          members: sourceContexts.flatMap((srcCtx) =>
+            clonableIn(srcCtx, srcCtx === sourceContextId ? rootInclude : null).map((source) => {
+              const key = targetKey
+                ? deriveEntityKey(source.key, targetKey, source.id)
+                : `${source.key}~clone~${randomUUID().slice(0, 8)}`;
+              return {
+                source,
+                targetKey: key,
+                targetId: canonicalEntityId({
+                  kind: source.kind,
+                  source: source.source.repoPath,
+                  className: source.className,
+                  key,
+                }),
+              };
+            })
+          ),
+        };
+        await store.recordContextEdge({
+          contextId: rootTarget,
+          ownerContextId: sourceContextId,
+          kind: "lineage",
+          cloneDefinition: definition,
+          ...(initiatingEntity?.contextId === sourceContextId
+            ? { ownerEntityId: initiatingEntity.id }
+            : {}),
+        });
+        ownsDefinition = true;
+      }
       for (const srcCtx of sourceContexts) {
         const isRoot = srcCtx === sourceContextId;
         const targetCtx = newContextIdOf.get(srcCtx) as string;
         // Fork semantic state first so every cloned runtime observes the exact
         // source working frontier and can then diverge independently.
-        await deps.semanticContexts.forkContext(srcCtx, targetCtx);
+        if (!existingContexts.has(targetCtx)) {
+          await deps.semanticContexts.forkContext(srcCtx, targetCtx);
+          if (isRoot) {
+            await store.recordContextEdge({
+              contextId: targetCtx,
+              ownerContextId: sourceContextId,
+              kind: "lineage",
+              ...(initiatingEntity?.contextId === sourceContextId
+                ? { ownerEntityId: initiatingEntity.id }
+                : {}),
+            });
+          }
+        }
         await deps.contextFolders.ensureContextFolder(targetCtx);
-        createdContexts.push(targetCtx);
 
         for (const src of clonableIn(srcCtx, isRoot ? rootInclude : null)) {
-          const newKey = targetKey
-            ? deriveEntityKey(src.key, targetKey, src.id)
-            : `${src.key}~clone~${randomUUID().slice(0, 8)}`;
+          const capturedMember = definition!.members.find((member) => member.source.id === src.id)!;
+          const newKey = capturedMember.targetKey;
           // Agent storage belongs to its authenticated execution lifetime. A
           // cloned agent starts fresh; its caller transfers transcript knowledge
           // through the native history boundary, never runnable state or authority.
-          if (src.kind === "do" && !src.agentBinding) {
-            const className = src.className;
-            if (className == null) {
-              throw new Error(`cloneContext: DO entity ${src.id} has no className`);
+          const targetId = canonicalEntityId({
+            kind: src.kind,
+            source: src.source.repoPath,
+            className: src.className,
+            key: newKey,
+          });
+          const handle = await serializeByKey(entityTransitions, targetId, async () => {
+            const existing = await store.resolveRecord(targetId);
+            if (existing?.status === "retired") {
+              throw new Error(`Clone target ${targetId} has been retired`);
             }
-            // Storage clone must precede activation so the DO reads cloned state on
-            // first access. Upsert-safe (skip-if-exists) for targetKey retries.
-            await deps.hooks.cloneDurableStorage?.({
-              source: src.source.repoPath,
-              className,
-              fromKey: src.key,
-              toKey: newKey,
-              ...(src.id === caller.runtime.id ? { cooperativelyPaused: true } : {}),
-            });
-            clonedStorage.push({ source: src.source.repoPath, className, key: newKey });
-          }
-          const handle = await activateEntity(
-            {
+            const cloneActors: RuntimeCreationActors = {
               lifecycleCaller: caller,
               initiatingCaller: caller,
               retainedExecutionAuthority: src.executionAuthority,
-            },
-            buildCloneSpec(src, targetCtx, newKey),
-            targetCtx
-          );
-          created.push(handle);
+            };
+            const spec = buildCloneSpec(src, targetCtx, newKey);
+            const cloneProvenance = capturedProvenance(src);
+            if (
+              existing &&
+              canonicalJson(existing.cloneProvenance ?? null) !== canonicalJson(cloneProvenance)
+            ) {
+              throw new IdentityCollisionError(targetId, {
+                field: "cloneProvenance",
+                existing: existing.cloneProvenance ?? null,
+                attempted: cloneProvenance,
+              });
+            }
+            if (existing)
+              assertExecutionAuthorityMatches(
+                retainExecutionAuthority(
+                  executionAuthorityForCaller(caller, store.cache),
+                  src.executionAuthority
+                ),
+                existing.executionAuthority
+              );
+            if (
+              existing &&
+              (existing.contextId !== targetCtx || existing.parentId !== caller.runtime.id)
+            ) {
+              throw new Error(`Clone target ${targetId} belongs to another operation`);
+            }
+            try {
+              // Reserve ownership before copying storage. A preparing record
+              // without a sealed image can replay its owned, idempotent copy;
+              // a sealed record resumes initialization of that exact image.
+              if (!existing)
+                await reserveEntityOnce(cloneActors, spec, newKey, targetId, cloneProvenance);
+              if (
+                (!existing || existing.status === "preparing") &&
+                src.kind === "do" &&
+                !src.agentBinding
+              ) {
+                const className = src.className;
+                if (className == null) {
+                  throw new Error(`cloneContext: DO entity ${src.id} has no className`);
+                }
+                await deps.hooks.cloneDurableStorage?.({
+                  source: src.source.repoPath,
+                  className,
+                  fromKey: src.key,
+                  toKey: newKey,
+                  reservation: (await store.resolveRecord(targetId))!,
+                  ...(src.id === caller.runtime.id ? { cooperativelyPaused: true } : {}),
+                });
+              }
+              const activated = await activateEntityOnce(
+                cloneActors,
+                spec,
+                targetCtx,
+                undefined,
+                undefined,
+                src
+              );
+              return activated;
+            } catch (cause) {
+              // Preparation can fail after reservation but before returning a handle.
+              if (!existing || existing.status === "preparing") {
+                const reserved = await store.resolveRecord(targetId);
+                if (reserved && reserved.status !== "retired") {
+                  try {
+                    await retireRecordOnce(targetId);
+                  } catch (cleanupCause) {
+                    throw new AggregateError(
+                      [cause, cleanupCause],
+                      `Clone preparation and retirement failed for ${targetId}`,
+                      { cause }
+                    );
+                  }
+                }
+              }
+              throw cause;
+            }
+          });
           entityIdMap.set(src.id, handle.id);
           entities.push({
             sourceId: src.id,
@@ -1758,11 +2071,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         });
       }
       // Record the top-level fork's LINEAGE edge (provenance to the source root).
-      const initiatingEntity = await store.resolveRecord(actors.initiatingCaller.runtime.id);
       await store.recordContextEdge({
         contextId: newContextIdOf.get(sourceContextId) as string,
         ownerContextId: sourceContextId,
         kind: "lineage",
+        cloneDefinition: definition,
         ...(initiatingEntity?.contextId === sourceContextId
           ? { ownerEntityId: initiatingEntity.id }
           : {}),
@@ -1777,7 +2090,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           ownerContextId: srcCtx,
         });
       }
+      const result = originalResult();
+      await store.recordContextEdge({
+        contextId: rootTarget,
+        ownerContextId: sourceContextId,
+        kind: "lineage",
+        cloneDefinition: definition,
+        cloneCompletion: { phase: "completed", result },
+      });
+      return result;
     } catch (err) {
+      if (!ownsDefinition) throw err;
       // Roll back every completed clone step, but retain every cleanup failure
       // alongside the initiating error. A failed rollback is material state,
       // not a reason to report only the first exception.
@@ -1789,17 +2112,58 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           rollbackFailures.push(cause);
         }
       };
-      for (const h of created) await retainFailure(() => retireRecord(h.id));
-      const destroyClonedStorage = deps.hooks.destroyDurableStorage;
-      for (const s of clonedStorage) {
-        if (destroyClonedStorage) {
-          await retainFailure(() => destroyClonedStorage(s));
+      const foreignContexts = new Set<string>();
+      const targets = new Map<string, EntityRecord>();
+      for (const member of definition!.members) {
+        const source = member.source;
+        const contextId = newContextIdOf.get(source.contextId)!;
+        try {
+          const target = await store.resolveRecord(member.targetId);
+          if (!target) continue;
+          if (
+            canonicalJson(target.cloneProvenance ?? null) !==
+              canonicalJson(capturedProvenance(source)) ||
+            target.contextId !== contextId ||
+            target.parentId !== caller.runtime.id ||
+            canonicalJson(target.executionAuthority ?? null) !==
+              canonicalJson(
+                retainExecutionAuthority(
+                  executionAuthorityForCaller(caller, store.cache),
+                  source.executionAuthority
+                ) ?? null
+              )
+          ) {
+            foreignContexts.add(contextId);
+            continue;
+          }
+          targets.set(target.id, target);
+        } catch (lookupFailure) {
+          foreignContexts.add(contextId);
+          rollbackFailures.push(lookupFailure);
         }
       }
-      for (const c of createdContexts) {
-        await retainFailure(() => store.deleteContextEdges(c));
-        await retainFailure(() => deps.semanticContexts.dropContext(c));
-        await retainFailure(() => deps.contextFolders.removeContext(c));
+      for (const target of targets.values()) {
+        try {
+          await retireRecord(target.id);
+          if (target.kind === "do" && target.className && deps.hooks.destroyDurableStorage) {
+            await deps.hooks.destroyDurableStorage({
+              source: target.source.repoPath,
+              className: target.className,
+              key: target.key,
+            });
+          }
+        } catch (cleanupFailure) {
+          foreignContexts.add(target.contextId);
+          rollbackFailures.push(cleanupFailure);
+        }
+      }
+      for (const context of [...definition!.contexts].reverse()) {
+        if (foreignContexts.has(context.targetContextId)) continue;
+        await retainFailure(() => deps.semanticContexts.dropContext(context.targetContextId));
+        await retainFailure(() => deps.contextFolders.removeContext(context.targetContextId));
+        if (context.targetContextId !== rootTarget || rollbackFailures.length === 0) {
+          await retainFailure(() => store.deleteContextEdges(context.targetContextId));
+        }
       }
       if (rollbackFailures.length > 0) {
         throw new AggregateError(
@@ -1812,22 +2176,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       }
       throw err instanceof Error ? err : new Error(String(err));
     }
-
-    const rootNewContextId = newContextIdOf.get(sourceContextId) as string;
-    const contexts = sourceContexts.map((srcCtx) => {
-      const node = subtree.find((s) => s.sourceContextId === srcCtx);
-      return {
-        sourceContextId: srcCtx,
-        newContextId: newContextIdOf.get(srcCtx) as string,
-        ownerNewContextId: node ? (newContextIdOf.get(node.ownerSourceContextId) as string) : null,
-      };
-    });
-    // Runtime is channel-agnostic: it fills entity ids only. The caller (WS-5/6)
-    // fills sourceChannelId/newChannelId and settles unhomeable pending calls
-    // (`aborted-by-fork`).
-    const rewired = entities.map((e) => ({ sourceEntityId: e.sourceId, newEntityId: e.newId }));
-
-    return { contextId: rootNewContextId, entities, contexts, rewired };
   }
 
   /**
@@ -1947,7 +2295,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ownerContextId: args.contextId,
       kind: args.kind,
     });
-    return { contexts };
+    return {
+      contexts: contexts.map(({ contextId, kind, ownerEntityId }) => ({
+        contextId,
+        kind,
+        ownerEntityId,
+      })),
+    };
   }
 
   /** Idempotently record a context-relationship edge (provenance/authz metadata). */

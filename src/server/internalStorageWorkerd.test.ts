@@ -1032,6 +1032,9 @@ describe("internal storage DOs under workerd", () => {
         listContexts: async () => [],
       },
       hooks: {
+        initializeDurableClone: async () => {
+          throw new Error("Retirement fixture does not clone");
+        },
         prepare: (async ({ spec, key, contextId }) => {
           if (spec.kind !== "do" || spec.execution.surface !== "code")
             throw new Error("Retirement proof only creates its DO");

@@ -1,3 +1,4 @@
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 /**
  * Integration test for the Phase 2b UniversalDO facet host — exercises the REAL
  * workerd binary end-to-end:
@@ -75,6 +76,14 @@ export class CounterDO extends DurableObject {
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS c (n INTEGER)");
   }
   async fetch(request) {
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true) {
+      return Response.json({
+        className: "CounterDO", version: 1,
+        freshSchemaFingerprint: JSON.stringify([...this.ctx.storage.sql.exec(
+          "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name = 'c' ORDER BY type, name"
+        )]),
+      });
+    }
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
     const userKey = parts[0] ? decodeURIComponent(parts[0]) : "";
@@ -281,15 +290,21 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
         return;
       }
       codeFetches.set(objectKey, (codeFetches.get(objectKey) ?? 0) + 1);
-      void manager.getDoCode(source, className, objectKey).then((code) => {
-        if (!code) {
-          res.writeHead(404);
-          res.end("nf");
-          return;
-        }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(code));
-      });
+      void Promise.resolve()
+        .then(() => manager.getDoCode(source, className, objectKey))
+        .then((code) => {
+          if (!code) {
+            res.writeHead(404);
+            res.end("nf");
+            return;
+          }
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(code));
+        })
+        .catch((error: unknown) => {
+          res.writeHead(500, { "content-type": "text/plain" });
+          res.end(error instanceof Error ? error.message : String(error));
+        });
       return;
     }
     res.writeHead(404);
@@ -339,6 +354,55 @@ afterEach(async () => {
     }
   }
 });
+
+function cloneReservation(
+  source: { source: string; className: string; objectKey: string },
+  key: string,
+  manager: WorkerdManager
+): EntityRecord {
+  const sourceId = `do:${source.source}:${source.className}:${source.objectKey}`;
+  const image = manager.listRuntimeImages().find((entry) => entry.id === sourceId);
+  if (!image) throw new Error(`Missing exact source fixture image ${sourceId}`);
+  return {
+    id: `do:${source.source}:${source.className}:${key}`,
+    kind: "do",
+    source: { repoPath: source.source, effectiveVersion: "" },
+    className: source.className,
+    key,
+    contextId: `clone:${key}`,
+    authoritySessionId: `clone-session:${key}`,
+    status: "preparing",
+    createdAt: 1,
+    cleanupComplete: true,
+    cloneProvenance: {
+      storage: "snapshot",
+      operationContextId: `clone:${key}`,
+      sourceEntityId: sourceId,
+      sourceContextId: "source-context",
+      sourceAuthoritySessionId: "source-session",
+      sourceBuildKey: image.artifact.buildKey,
+      sourceExecutionDigest: image.artifact.executionDigest,
+    },
+  };
+}
+
+function sourceOwner(reservation: EntityRecord): EntityRecord {
+  const source = reservation.cloneProvenance!;
+  return {
+    ...reservation,
+    id: source.sourceEntityId,
+    key: source.sourceEntityId.slice(
+      `do:${reservation.source.repoPath}:${reservation.className}:`.length
+    ),
+    contextId: source.sourceContextId,
+    authoritySessionId: source.sourceAuthoritySessionId,
+    activeBuildKey: source.sourceBuildKey,
+    activeExecutionDigest: source.sourceExecutionDigest,
+    activeAuthority: { provides: [], requests: [] },
+    status: "active",
+    cloneProvenance: undefined,
+  };
+}
 
 describe("UniversalDO facet host (real workerd)", () => {
   it("admits a fresh entity's exact schema before activation without a publication", async () => {
@@ -485,12 +549,27 @@ describe("UniversalDO facet host (real workerd)", () => {
 
     await manager.ensureDOClass("workers/counter", "CounterDO");
     const src = { source: "workers/counter", className: "CounterDO", objectKey: "orig" };
+    const prepared = await manager.ensureDurableObjectEntity({
+      source: src.source,
+      className: src.className,
+      key: src.objectKey,
+      contextId: "source-context",
+    });
+    const reservation = cloneReservation(src, "fork", manager);
+    await manager.restoreDurableObjectEntity({
+      ...sourceOwner(reservation),
+      source: { repoPath: src.source, effectiveVersion: prepared.effectiveVersion },
+      activeAuthority: prepared.authority,
+    });
     await dispatch(src, "incr");
     await dispatch(src, "incr");
     expect(await dispatch(src, "get")).toMatchObject({ count: 2 });
 
     const boot = manager.getBootGeneration();
-    const cloned = await manager.cloneDO(src, "fork");
+    const cloned = await manager.cloneDO(src, "fork", {
+      reservation,
+      resolveSource: async () => sourceOwner(reservation),
+    });
     expect(cloned.objectKey).toBe("fork");
     expect(manager.getBootGeneration()).toBe(boot); // clone never restarts
 
@@ -505,12 +584,56 @@ describe("UniversalDO facet host (real workerd)", () => {
     await manager.destroyDO(cloned);
   }, 30_000);
 
+  it("refuses a snapshot whose source image differs from its reserved provenance", async () => {
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, dispatch } = active;
+    await manager.ensureDOClass("workers/counter", "CounterDO");
+    const src = { source: "workers/counter", className: "CounterDO", objectKey: "drift-source" };
+    const prepared = await manager.ensureDurableObjectEntity({
+      source: src.source,
+      className: src.className,
+      key: src.objectKey,
+      contextId: "source-context",
+    });
+    const reservation = cloneReservation(src, "drift-child", manager);
+    await manager.restoreDurableObjectEntity({
+      ...sourceOwner(reservation),
+      source: { repoPath: src.source, effectiveVersion: prepared.effectiveVersion },
+      activeAuthority: prepared.authority,
+    });
+    await dispatch(src, "incr");
+    reservation.cloneProvenance = {
+      ...reservation.cloneProvenance!,
+      sourceExecutionDigest: "f".repeat(64),
+    };
+    await expect(
+      manager.cloneDO(src, "drift-child", {
+        reservation,
+        resolveSource: async () => sourceOwner(reservation),
+      })
+    ).rejects.toThrow(/changed its snapshot execution/);
+    expect(await dispatch(src, "get")).toMatchObject({ count: 1 });
+    await manager.destroyDO({ ...src, objectKey: "drift-child" });
+  });
+
   it("online-clones a cooperatively paused source without draining its active relay", async () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager, dispatch } = active;
 
     await manager.ensureDOClass("workers/counter", "CounterDO");
     const src = { source: "workers/counter", className: "CounterDO", objectKey: "self" };
+    const prepared = await manager.ensureDurableObjectEntity({
+      source: src.source,
+      className: src.className,
+      key: src.objectKey,
+      contextId: "source-context",
+    });
+    const reservation = cloneReservation(src, "self-fork", manager);
+    await manager.restoreDurableObjectEntity({
+      ...sourceOwner(reservation),
+      source: { repoPath: src.source, effectiveVersion: prepared.effectiveVersion },
+      activeAuthority: prepared.authority,
+    });
     await dispatch(src, "incr");
     await dispatch(src, "incr");
 
@@ -519,7 +642,11 @@ describe("UniversalDO facet host (real workerd)", () => {
     );
     let cloned: typeof src | null = null;
     try {
-      cloned = await manager.cloneDO(src, "self-fork", { cooperativelyPaused: true });
+      cloned = await manager.cloneDO(src, "self-fork", {
+        reservation,
+        resolveSource: async () => sourceOwner(reservation),
+        cooperativelyPaused: true,
+      });
     } finally {
       finishSourceCall();
     }

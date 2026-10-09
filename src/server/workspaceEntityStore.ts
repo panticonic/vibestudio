@@ -35,6 +35,8 @@ import type {
 } from "@vibestudio/shared/runtime/entitySpec";
 import type {
   ContextEdge,
+  ContextCloneDefinition,
+  ContextCloneCompletion,
   ContextEdgeByChild,
   ContextEdgeKind,
 } from "@vibestudio/shared/runtime/contextEdges";
@@ -98,6 +100,17 @@ export class WorkspaceEntityStore {
    */
   async reserve(input: EntityReservationInput): Promise<EntityRecord> {
     const record = await this.dispatch<EntityRecord>("entityReserve", input);
+    this.deps.entityCache._onActivate(record);
+    return record;
+  }
+
+  /** Pin the image while preparation owns the non-executable reservation. */
+  async prepareExecution(input: EntityActivateInput): Promise<EntityRecord> {
+    const record = await publishExecutionOwnerAsync(
+      this.deps.executionPublicationPort,
+      this.publication(input),
+      () => this.dispatch<EntityRecord>("entityPrepareExecution", input)
+    );
     this.deps.entityCache._onActivate(record);
     return record;
   }
@@ -246,6 +259,8 @@ export class WorkspaceEntityStore {
     ownerContextId: string;
     kind: ContextEdgeKind;
     ownerEntityId?: string;
+    cloneDefinition?: ContextCloneDefinition;
+    cloneCompletion?: ContextCloneCompletion;
   }): Promise<void> {
     return this.dispatch<undefined>("contextEdgeUpsert", input);
   }

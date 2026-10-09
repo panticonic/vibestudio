@@ -1,3 +1,4 @@
+import type { EntityCloneProvenance } from "./runtime/entitySpec.js";
 import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 
 /** Stable Durable Object identity used by host services. */
@@ -52,6 +53,18 @@ export interface LifecycleResumeInput {
   reason: "planned" | "crash" | "server_restart";
 }
 
+/** Host-owned storage preparation, completed before an incarnation becomes active. */
+export interface LifecycleCloneInput {
+  provenance: EntityCloneProvenance;
+  source: DORef;
+  sourceContextId: string;
+  target: DORef;
+  targetContextId: string;
+  authoritySessionId: string;
+  buildKey: string;
+  executionDigest: string;
+}
+
 /**
  * Minimal service-facing DO dispatch contract.
  *
@@ -81,6 +94,7 @@ export interface LifecycleDoDispatcher extends DoDispatcher {
     arg: LifecyclePrepareInput
   ): Promise<LifecyclePrepareResult>;
   dispatchLifecycle(ref: DORef, method: "resume", arg: LifecycleResumeInput): Promise<void>;
+  dispatchLifecycle(ref: DORef, method: "initializeClone", arg: LifecycleCloneInput): Promise<void>;
 }
 
 /** Alarm capability needed only by the alarm driver. */

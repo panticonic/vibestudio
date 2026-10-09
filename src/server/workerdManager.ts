@@ -46,6 +46,7 @@ import { encodeUniversalKey } from "./doDispatch.js";
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { DurableObjectStorageClone } from "./durableObjectStorageClone.js";
 import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
 import { resolveRequiredAppRoot } from "./appRoot.js";
 import { SqliteIntegrityWorkerClient } from "./storage/sqliteIntegrityWorkerClient.js";
@@ -621,6 +622,7 @@ export class WorkerdManager {
   private readonly egressSecret: string;
   private workspaceProvider: WorkerdWorkspaceProvider | null = null;
   private readonly doMaintenanceDb: DatabaseSync;
+  private readonly storageClones: DurableObjectStorageClone;
   private readonly doSchemaDescriptorDb: DatabaseSync;
   private readonly sqliteIntegrityWorker: SqliteIntegrityWorkerClient;
   private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
@@ -673,6 +675,10 @@ export class WorkerdManager {
         generation INTEGER NOT NULL CHECK(generation > 0)
       );
     `);
+    this.storageClones = new DurableObjectStorageClone(
+      this.doMaintenanceDb,
+      path.join(layout.root, "do-clone-staging")
+    );
     const maintenanceSchema = this.doMaintenanceDb
       .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'do_maintenance'`)
       .get() as { sql?: string } | undefined;
@@ -4082,9 +4088,12 @@ export class WorkerdManager {
     // workerd still holds the facet's connection) and recovers any residual
     // WAL, so the files a subsequent copy reads are locked-free and coherent.
     const { dir: storageDir, hash } = this.durableObjectStorageLocation(ref);
-    const files = (await fs.promises.readdir(storageDir).catch(() => [] as string[])).filter(
-      (file) => file.startsWith(`${hash}.`) && file.endsWith(".sqlite")
-    );
+    const files = (
+      await fs.promises.readdir(storageDir).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return [] as string[];
+        throw error;
+      })
+    ).filter((file) => file.startsWith(`${hash}.`) && file.endsWith(".sqlite"));
     try {
       await this.sqliteIntegrityWorker.verify(
         files.map((file) => path.join(storageDir, file)),
@@ -4114,13 +4123,19 @@ export class WorkerdManager {
     const { dir: storageDir, hash } = this.durableObjectStorageLocation(ref);
     const backupDir = this.durableObjectBackupDir(operationId);
     await fs.promises.mkdir(backupDir, { recursive: true });
-    const existing = await fs.promises.readdir(backupDir).catch(() => [] as string[]);
+    const existing = await fs.promises.readdir(backupDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [] as string[];
+      throw error;
+    });
     for (const file of existing) {
       if (file !== "manifest.json") await fs.promises.unlink(path.join(backupDir, file));
     }
-    const files = (await fs.promises.readdir(storageDir).catch(() => [] as string[])).filter(
-      (file) => file.startsWith(`${hash}.`)
-    );
+    const files = (
+      await fs.promises.readdir(storageDir).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return [] as string[];
+        throw error;
+      })
+    ).filter((file) => file.startsWith(`${hash}.`));
     for (const file of files) {
       await fs.promises.copyFile(path.join(storageDir, file), path.join(backupDir, file));
     }
@@ -4408,113 +4423,137 @@ export class WorkerdManager {
    * cooperative path uses SQLite's online backup API for each database and
    * copies the stable facet descriptor without retiring the caller.
    */
-  async cloneDO(
-    ref: DORef,
-    newObjectKey: string,
-    options: { cooperativelyPaused?: boolean } = {}
-  ): Promise<DORef> {
-    if (isInternalDOSource(ref.source)) {
-      throw new Error(`cloneDO is not supported for internal DO source "${ref.source}"`);
-    }
-    if (options.cooperativelyPaused) {
-      await this.cloneCooperativelyPausedDOStorage(ref, newObjectKey);
-      return { source: ref.source, className: ref.className, objectKey: newObjectKey };
-    }
-    const targetId = this.durableObjectTargetId(ref);
-    const sealOwnerId = `clone:${crypto.randomUUID()}`;
-    await sealAndDrainDurableObjectRelays(targetId, sealOwnerId, {
-      code: "DO_MAINTENANCE_IN_PROGRESS",
-      message: `Durable Object ${targetId} is being quiesced for a storage snapshot`,
-      errorData: { operation: "clone-snapshot", ...ref },
-    });
-    try {
-      await this.quiesceDurableObjectStorage(ref);
-      const dir = this.universalDoStorageDir();
-      const srcHash = this.universalHostHash(ref);
-      const tgtHash = this.universalHostHash({ ...ref, objectKey: newObjectKey });
+  requireCloneStorageComplete(record: EntityRecord): void {
+    this.storageClones.requireComplete(record);
+  }
 
-      const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
-      // Upsert-safe (idempotent) for cloneContext targetKey retries: if the target
-      // already has facet storage, a prior clone attempt succeeded — skip rather
-      // than double-write (which could clobber a clone that has since diverged).
-      if (files.some((f) => f.startsWith(`${tgtHash}.`))) {
-        return { source: ref.source, className: ref.className, objectKey: newObjectKey };
-      }
-      const srcFiles = files.filter((f) => f.startsWith(`${srcHash}.`));
-      if (srcFiles.length === 0) {
-        throw new Error(
-          `Source DO storage not found: ${ref.className}/${ref.objectKey} (no facet storage for host ${srcHash} under ${dir})`
-        );
-      }
-      for (const file of srcFiles) {
-        await fs.promises.copyFile(
-          path.join(dir, file),
-          path.join(dir, `${tgtHash}${file.slice(srcHash.length)}`)
-        );
-      }
-      return { source: ref.source, className: ref.className, objectKey: newObjectKey };
-    } finally {
-      releaseDurableObjectRelaySeal(targetId, sealOwnerId);
+  private async assertCloneSourceIdentity(
+    ref: DORef,
+    reservation: EntityRecord,
+    resolveSource: () => Promise<EntityRecord | null>
+  ): Promise<void> {
+    const object = this.doObjectBuilds.get(
+      doObjectBuildKey(ref.source, ref.className, ref.objectKey)
+    );
+    const imageId = object?.imageId;
+    const image = imageId
+      ? (this.sealedDoImages.get(imageId) ?? this.runtimeImages.get(imageId))
+      : null;
+    const provenance = reservation.cloneProvenance;
+    const owner = await resolveSource();
+    if (
+      !owner ||
+      !provenance ||
+      owner.status !== "active" ||
+      owner.id !== provenance.sourceEntityId ||
+      owner.contextId !== provenance.sourceContextId ||
+      owner.authoritySessionId !== provenance.sourceAuthoritySessionId ||
+      owner.activeBuildKey !== provenance.sourceBuildKey ||
+      owner.activeExecutionDigest !== provenance.sourceExecutionDigest
+    ) {
+      throw new Error(
+        `Clone source ${this.durableObjectTargetId(ref)} changed its snapshot owner: expected ${canonicalJson(
+          provenance
+        )}, observed ${canonicalJson(
+          owner
+            ? {
+                id: owner.id,
+                status: owner.status,
+                contextId: owner.contextId,
+                authoritySessionId: owner.authoritySessionId,
+                buildKey: owner.activeBuildKey,
+                executionDigest: owner.activeExecutionDigest,
+              }
+            : null
+        )}`
+      );
+    }
+    if (
+      !image ||
+      image.artifact.buildKey !== provenance.sourceBuildKey ||
+      image.artifact.executionDigest !== provenance.sourceExecutionDigest
+    ) {
+      throw new Error(
+        `Clone source ${this.durableObjectTargetId(ref)} changed its snapshot execution: expected ${
+          provenance?.sourceBuildKey
+        }/${provenance?.sourceExecutionDigest}, observed ${
+          image?.artifact.buildKey
+        }/${image?.artifact.executionDigest}`
+      );
     }
   }
 
-  private async cloneCooperativelyPausedDOStorage(ref: DORef, newObjectKey: string): Promise<void> {
-    const dir = this.universalDoStorageDir();
-    const srcHash = this.universalHostHash(ref);
-    const tgtHash = this.universalHostHash({ ...ref, objectKey: newObjectKey });
-    const files = await fs.promises.readdir(dir);
-
-    // A deterministic clone target is immutable at creation time. Once any
-    // target storage exists, a retry must preserve it rather than overwrite a
-    // clone that may already have advanced independently.
-    if (files.some((file) => file.startsWith(`${tgtHash}.`))) return;
-
-    const sourceDatabases = files.filter(
-      (file) => file.startsWith(`${srcHash}.`) && file.endsWith(".sqlite")
-    );
-    const facetDescriptor = `${srcHash}.facets`;
-    if (sourceDatabases.length === 0 || !files.includes(facetDescriptor)) {
-      throw new Error(
-        `Source DO storage not found: ${ref.className}/${ref.objectKey} ` +
-          `(incomplete facet storage for host ${srcHash} under ${dir})`
-      );
+  async cloneDO(
+    ref: DORef,
+    newObjectKey: string,
+    options: {
+      reservation: EntityRecord;
+      resolveSource: () => Promise<EntityRecord | null>;
+      cooperativelyPaused?: boolean;
     }
-
-    const createdTargets: string[] = [];
-    try {
-      for (const file of sourceDatabases) {
-        const sourcePath = path.join(dir, file);
-        const targetFile = `${tgtHash}${file.slice(srcHash.length)}`;
-        const targetPath = path.join(dir, targetFile);
-        createdTargets.push(targetPath);
-        const database = new DatabaseSync(path.toNamespacedPath(sourcePath), { readOnly: true });
+  ): Promise<DORef> {
+    if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
+    if (isInternalDOSource(ref.source)) {
+      throw new Error(`cloneDO is not supported for internal DO source "${ref.source}"`);
+    }
+    const target = { ...ref, objectKey: newObjectKey };
+    if (options.reservation.key !== newObjectKey)
+      throw new Error("Clone reservation target mismatch");
+    await this.storageClones.copy({
+      source: ref,
+      reservation: options.reservation,
+      storageDir: this.universalDoStorageDir(),
+      targetHash: this.universalHostHash(target),
+      snapshot: async (stage) => {
+        const sourceId = this.durableObjectTargetId(ref);
+        const sealOwnerId = `clone:${options.reservation.authoritySessionId}`;
         try {
-          await backup(database, path.toNamespacedPath(targetPath));
+          if (!options.cooperativelyPaused) {
+            await sealAndDrainDurableObjectRelays(sourceId, sealOwnerId, {
+              code: "DO_MAINTENANCE_IN_PROGRESS",
+              message: `Durable Object ${sourceId} is being quiesced for a storage snapshot`,
+              errorData: { operation: "clone-snapshot", ...ref },
+            });
+          }
+          await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
+          if (!options.cooperativelyPaused) await this.quiesceDurableObjectStorage(ref);
+          await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
+          const dir = this.universalDoStorageDir();
+          const hash = this.universalHostHash(ref);
+          const files = await fs.promises.readdir(dir);
+          const databases = files.filter(
+            (file) => file.startsWith(`${hash}.`) && file.endsWith(".sqlite")
+          );
+          const descriptor = `${hash}.facets`;
+          if (!databases.length || !files.includes(descriptor)) {
+            throw new Error(
+              `Source DO storage not found: ${ref.className}/${ref.objectKey} (incomplete facet storage)`
+            );
+          }
+          // Both source-release and cooperative snapshots use SQLite's coherent
+          // database backup, never a partial WAL/SHM copy. The exact source actor
+          // is already paused on its authenticated host call on the cooperative path.
+          for (const file of databases) {
+            const database = new DatabaseSync(path.toNamespacedPath(path.join(dir, file)), {
+              readOnly: true,
+            });
+            try {
+              await backup(
+                database,
+                path.toNamespacedPath(path.join(stage, file.slice(hash.length)))
+              );
+            } finally {
+              database.close();
+            }
+          }
+          await fs.promises.copyFile(path.join(dir, descriptor), path.join(stage, ".facets"));
+          await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
         } finally {
-          database.close();
+          if (!options.cooperativelyPaused) releaseDurableObjectRelaySeal(sourceId, sealOwnerId);
         }
-      }
-      const targetDescriptor = path.join(dir, `${tgtHash}.facets`);
-      createdTargets.push(targetDescriptor);
-      await fs.promises.copyFile(path.join(dir, facetDescriptor), targetDescriptor);
-    } catch (cause) {
-      const cleanupFailures: Error[] = [];
-      for (const target of createdTargets.reverse()) {
-        try {
-          await fs.promises.unlink(target);
-        } catch (cleanupCause) {
-          const error = cleanupCause as NodeJS.ErrnoException;
-          if (error.code !== "ENOENT") cleanupFailures.push(error);
-        }
-      }
-      if (cleanupFailures.length > 0) {
-        throw new AggregateError(
-          [cause, ...cleanupFailures],
-          `Cooperative clone of ${this.durableObjectTargetId(ref)} failed and cleanup was incomplete`
-        );
-      }
-      throw cause;
-    }
+      },
+    });
+    return target;
   }
 
   /**
@@ -4540,17 +4579,22 @@ export class WorkerdManager {
       intent: `reclaim storage for retired ${ref.className}/${ref.objectKey}`,
       journalOnly: true,
     });
+    await this.storageClones.retire(this.durableObjectTargetId(ref));
   }
 
   /** Delete one exact object's storage files. Maintenance-path primitive:
    *  callers own quiesce and fencing; internal refs are reachable only through
    *  the journaled maintenance flow, never the userland destroy surface. */
   private async destroyDurableObjectStorageFiles(ref: DORef): Promise<void> {
+    await this.storageClones.retire(this.durableObjectTargetId(ref));
     await this.destroyStorageFiles(this.durableObjectStorageLocation(ref));
   }
 
   private async destroyStorageFiles({ dir, hash }: { dir: string; hash: string }): Promise<void> {
-    const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
+    const files = await fs.promises.readdir(dir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [] as string[];
+      throw error;
+    });
     await Promise.all(
       files
         .filter((f) => f.startsWith(`${hash}.`))
@@ -4595,6 +4639,7 @@ export class WorkerdManager {
       });
     }
     await attempt(() => this.stopWorkerd("shutdown", "force"));
+    await attempt(() => this.storageClones.join());
     const schemaResults = await Promise.allSettled([...this.schemaAdmissions.values()]);
     for (const result of schemaResults) {
       if (result.status === "rejected") failures.push(result.reason);

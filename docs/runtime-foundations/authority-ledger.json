@@ -3441,8 +3441,8 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "host-only-active-entity-execution-root-census",
-        "change": "Adds a host-only bounded read of exact execution identities held by active workspace entities for the mandatory retention provider. It exposes no entity payload and performs no lifecycle mutation."
+        "review": "host-only-sealed-entity-execution-root-census",
+        "change": "Returns host-only EntityRecord execution roots retained by active entities, sealed preparing entities, and panel-history references for the mandatory retention provider. It performs no lifecycle mutation and retention grants no ordinary execution admission or outbound authority."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -3527,6 +3527,48 @@
       "r3b": {
         "review": "schema-authority",
         "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityPrepareExecution",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "entityPrepareExecution",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "host-only-exact-preactive-clone-execution-seal",
+        "change": "Seals one already reserved preparing entity to its exact runtime image and authority lifetime before receiver-owned clone initialization. Only host principals may invoke this gated internal write; preparing image retention does not admit ordinary incoming calls, outbound code authority, activation, or queue publication."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
