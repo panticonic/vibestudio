@@ -55,8 +55,18 @@ export interface CompiledAuthorityPlanLeaf extends CapabilityScope {
   };
 }
 
-export interface CompiledAuthorityPlanArtifact {
-  schemaVersion: 1;
+/** The compiler binds preparation to a live author, never to the scheduling deputy. */
+export interface AuthorityPlanAuthor {
+  workspaceId: string;
+  userId: string;
+  runtimeId: string;
+  authoritySessionId: string;
+  contextId: string;
+  code: { repoPath: string; effectiveVersion: string; executionDigest: string };
+  agentBinding: { entityId: string; contextId: string; channelId: string } | null;
+}
+
+interface CompiledAuthorityPlanBody {
   compilerVersion: string;
   catalogDigest: string;
   executionImageDigest: string;
@@ -64,6 +74,13 @@ export interface CompiledAuthorityPlanArtifact {
   bodyDigest: string;
   createdAt: number;
 }
+
+/** Existing v1 bytes remain historical artifacts; only v2 can install a new plan. */
+export type CompiledAuthorityPlanArtifact = CompiledAuthorityPlanBody &
+  (
+    | { schemaVersion: 1 }
+    | { schemaVersion: 2; executionIntentDigest: string; author: AuthorityPlanAuthor }
+  );
 
 export interface TargetAuthorityRequest {
   v: 1;

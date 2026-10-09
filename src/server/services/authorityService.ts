@@ -1,6 +1,9 @@
+import type { AuthorityPlanAuthor } from "@vibestudio/rpc";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { missionExecutionImageDigest } from "@vibestudio/automation/mission";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AcquisitionOwner, AuthorityAcquisitionRecord } from "./authorityAcquisitionStore.js";
 import {
   authorityAcquisitionReceiptSchema,
@@ -34,7 +37,58 @@ export function createAuthorityService(deps: {
   taskAuthorities?: TaskAuthorityRegistry;
   workspaceId?: string;
   resolveCodeIdentity?: (runtimeId: string) => VerifiedCodeIdentity | null;
+  resolveAuthorEntity?: (runtimeId: string) => EntityRecord | null;
 }): ServiceDefinition {
+  const planAuthor = (caller: VerifiedCaller): AuthorityPlanAuthor => {
+    const workspaceId = requireDependency(deps.workspaceId, "Authority plan author binding");
+    const resolveEntity = requireDependency(
+      deps.resolveAuthorEntity,
+      "Authority plan author binding"
+    );
+    const resolveCode = requireDependency(
+      deps.resolveCodeIdentity,
+      "Authority plan author binding"
+    );
+    const entity = resolveEntity(caller.runtime.id);
+    const code = resolveCode(caller.runtime.id);
+    const userId = callerAccountUserId(caller);
+    if (
+      (caller.workspaceId !== undefined && caller.workspaceId !== workspaceId) ||
+      entity?.status !== "active" ||
+      !entity.authoritySessionId ||
+      !code?.executionDigest ||
+      !caller.code ||
+      !userId ||
+      code.repoPath !== caller.code.repoPath ||
+      code.effectiveVersion !== caller.code.effectiveVersion ||
+      code.executionDigest !== caller.code.executionDigest ||
+      (caller.agentBinding &&
+        canonicalJson(caller.agentBinding) !== canonicalJson(entity.agentBinding))
+    ) {
+      throw Object.assign(
+        new Error("Authority plan author is not the exact active authenticated entity"),
+        { code: "EACCES" }
+      );
+    }
+    return {
+      workspaceId,
+      userId,
+      runtimeId: caller.runtime.id,
+      authoritySessionId: entity.authoritySessionId,
+      contextId: entity.contextId,
+      code: {
+        repoPath: code.repoPath,
+        effectiveVersion: code.effectiveVersion,
+        executionDigest: code.executionDigest,
+      },
+      agentBinding: entity.agentBinding ?? null,
+    };
+  };
+  const intentDigest = (execution: unknown) =>
+    createHash("sha256")
+      .update("authority-execution-intent-v1\0")
+      .update(canonicalJson(execution))
+      .digest("hex");
   return {
     name: "authority",
     description: "Acquisition lifecycle and side-effect-free authority inspection",
@@ -128,8 +182,9 @@ export function createAuthorityService(deps: {
         deps.dispatcher.preflightAuthority(ctx, input.service, input.method, input.args),
       compileAuthorityPlan: async (ctx, [input]) => {
         const authorityPlans = requireDependency(deps.authorityPlans, "Authority plan compilation");
+        const author = planAuthor(ctx.caller);
         const operations = [];
-        for (const operation of input.operations) {
+        for (const operation of input.execution.operations) {
           operations.push(
             await deps.dispatcher.compileAuthorityPlanOperation(ctx, {
               ...operation,
@@ -144,11 +199,92 @@ export function createAuthorityService(deps: {
           .digest("hex");
         const artifact = authorityPlans.publish({
           catalogDigest,
-          executionImageDigest: input.executionImageDigest,
+          executionImageDigest: missionExecutionImageDigest(input.execution.image),
           leaves,
+          author,
+          executionIntentDigest: intentDigest({
+            ...input.execution,
+            operations: operations.map((operation) => operation.intent),
+          }),
         });
         return {
-          schemaVersion: 1,
+          schemaVersion: 2,
+          digest: artifact.bodyDigest,
+          artifactRef: `authority-plan:${artifact.bodyDigest}` as const,
+          compilerVersion: artifact.compilerVersion,
+          catalogDigest: artifact.catalogDigest,
+        };
+      },
+      verifyAuthorityPlan: (ctx, [input]) => {
+        const plans = requireDependency(deps.authorityPlans, "Authority plan verification");
+        const artifact = plans.get(input.authorityPlanDigest);
+        if (!artifact || artifact.schemaVersion !== 2)
+          throw Object.assign(
+            new Error("New automation definitions require an author-bound authority plan"),
+            { code: "EACCES" }
+          );
+        // The live parent contains both the root review initiator and the actual
+        // immediate author. Neither identity replaces the controller's caller.
+        const invokingCaller = ctx.invokingCaller ?? ctx.caller;
+        const author = planAuthor(invokingCaller);
+        if (canonicalJson(author) !== canonicalJson(artifact.author))
+          throw Object.assign(
+            new Error("Authority plan belongs to a different author or entity lifecycle"),
+            { code: "EACCES" }
+          );
+        const operations = input.execution.operations.map((operation) =>
+          deps.dispatcher.normalizeAuthorityPlanOperation(
+            { caller: invokingCaller },
+            {
+              ...operation,
+              args: operation.args ?? [],
+            }
+          )
+        );
+        if (
+          artifact.executionImageDigest !== missionExecutionImageDigest(input.execution.image) ||
+          artifact.executionIntentDigest !== intentDigest({ ...input.execution, operations })
+        )
+          throw Object.assign(
+            new Error("Authority plan does not match the exact declared execution intent"),
+            { code: "EACCES" }
+          );
+        if (input.execution.kind === "agent" && input.execution.conversation.mode === "continue") {
+          const continuation = input.execution.conversation;
+          const resolveEntity = requireDependency(
+            deps.resolveAuthorEntity,
+            "Continuing automation target verification"
+          );
+          const target = resolveEntity(continuation.executorId);
+          const targetCode = deps.resolveCodeIdentity?.(continuation.executorId);
+          const targetOwner =
+            target?.ownerUserId ??
+            deps.executionAdmissions?.resolve(continuation.executorId)?.ownerUser.slice(5);
+          if (
+            target?.status !== "active" ||
+            !target.authoritySessionId ||
+            !target.agentBinding ||
+            !targetCode?.executionDigest ||
+            targetOwner !== author.userId ||
+            target.contextId !== continuation.contextId ||
+            target.agentBinding.contextId !== continuation.contextId ||
+            target.agentBinding.channelId !== continuation.channelId ||
+            target.className !== input.execution.image.className ||
+            target.key !== input.execution.image.objectKey ||
+            continuation.executorId !==
+              `do:${input.execution.image.source}:${input.execution.image.className}:${input.execution.image.objectKey}` ||
+            targetCode.repoPath !== input.execution.image.source ||
+            targetCode.effectiveVersion !== input.execution.image.effectiveVersion
+          )
+            throw Object.assign(
+              new Error(
+                "Continuing automation does not name its exact live authoring conversation"
+              ),
+              { code: "EACCES" }
+            );
+        }
+        return {
+          schemaVersion: 2,
           digest: artifact.bodyDigest,
           artifactRef: `authority-plan:${artifact.bodyDigest}` as const,
           compilerVersion: artifact.compilerVersion,
@@ -165,6 +301,13 @@ export function createAuthorityService(deps: {
         const targetSubject = input.targetSubject as `mission:${string}@${string}`;
         const registered = deps.acquisitions.targetSubject(targetSubject);
         const sourceUser = registered?.ownerUser ?? attributedUser(ctx);
+        if (
+          !registered &&
+          (artifact.schemaVersion !== 2 || artifact.author.userId !== sourceUser.slice(5))
+        )
+          throw Object.assign(new Error("New mission authority requires its owner's bound plan"), {
+            code: "EACCES",
+          });
         if (registered) {
           if (
             registered.state !== "active" ||
@@ -233,6 +376,14 @@ export function createAuthorityService(deps: {
         );
         const artifact = authorityPlans.get(input.authorityPlanDigest);
         if (!artifact) throw new Error(`Unknown authority plan ${input.authorityPlanDigest}`);
+        if (
+          artifact.schemaVersion !== 2 ||
+          canonicalJson(artifact.author) !== canonicalJson(planAuthor(ctx.caller))
+        )
+          throw Object.assign(
+            new Error("Task pre-acquisition requires its live author's bound plan"),
+            { code: "EACCES" }
+          );
         const targetSubject = ctx.caller.taskAuthority;
         if (!targetSubject) {
           throw Object.assign(

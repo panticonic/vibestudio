@@ -7441,7 +7441,7 @@
       "r3aRequirement": "allOf(capability(code,service:authority.compileAuthorityPlan),workspace-member)",
       "r3b": {
         "review": "host-compiled-content-addressed-authority-plan",
-        "change": "Accepts only semantic service-operation hints from installed code, resolves receiver-owned method contracts and resources in the host, and publishes an immutable launch-time acquisition plan. The plan is not a runtime allowlist or parallel authorization mechanism; callers cannot author capability names, tiers, grants, or executable policy."
+        "change": "Compiles one exact execution intent under its authenticated live author, resolves canonical receiver-owned operations and bounded resources, and seals both invocation meaning and author lifecycle in an immutable content-addressed artifact. Ordinary receiver authorization remains authoritative; callers cannot author capability names, tiers, grants, or executable policy."
       },
       "capability": "service:authority.compileAuthorityPlan",
       "parityAssertion": "generated-census:host-authority"
@@ -7724,6 +7724,50 @@
         "change": "Requires the attributed mission owner, refuses retirement while an admitted execution remains live, then fences the target, cancels pending acquisitions, and revokes its standing grants. Pause never uses this operation."
       },
       "capability": "service:authority.retireTarget",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:authority.verifyAuthorityPlan",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "verifyAuthorityPlan",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.compile",
+      "reviewRationale": "The host verifies a content-addressed compiled plan against its authenticated author and exact execution intent without acquiring authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.verifyAuthorityPlan"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:authority.verifyAuthorityPlan),workspace-member)",
+      "r3b": {
+        "review": "exact-author-bound-execution-intent-verification",
+        "change": "Verifies a retained compiled artifact against the immediate host-attested invoking author, concrete live entity lifecycle, exact canonical execution intent, and any continuing target ownership and conversation. This read-only consume stage neither recompiles receiver resources nor acquires or delegates authority."
+      },
+      "capability": "service:authority.verifyAuthorityPlan",
       "parityAssertion": "generated-census:host-authority"
     },
     {

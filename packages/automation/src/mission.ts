@@ -8,7 +8,7 @@ import {
 } from "./cronSchedule.js";
 
 export const MISSION_SCHEMA_VERSION = 3 as const;
-export const MISSION_AUTHORITY_PLAN_SCHEMA_VERSION = 1 as const;
+export const MISSION_AUTHORITY_PLAN_SCHEMA_VERSION = 2 as const;
 export const MISSION_COMPLETION_PROTOCOL = "automation-completion.v1" as const;
 
 export type MissionState = "active" | "paused" | "completed" | "retired";
@@ -35,7 +35,7 @@ export interface MissionOperationIntent {
 }
 
 export interface MissionAuthorityPlanReference {
-  schemaVersion: typeof MISSION_AUTHORITY_PLAN_SCHEMA_VERSION;
+  schemaVersion: 1 | typeof MISSION_AUTHORITY_PLAN_SCHEMA_VERSION;
   digest: string;
   artifactRef: `authority-plan:${string}`;
   compilerVersion: string;
@@ -397,6 +397,59 @@ export function missionExecutionImageDigest(image: MissionExecutionImage): strin
       "utf8"
     )
     .digest("hex");
+}
+
+/** Continuing schedules are ordinary input; isolated executions own mission authority. */
+export function missionUsesAuthority(execution: MissionExecution): boolean {
+  return !(execution.kind === "agent" && execution.conversation.mode === "continue");
+}
+
+/** One author-side composition for native tools, UI edits and installed defaults. */
+export async function compileMissionAuthorityPlan(
+  rpc: {
+    call(
+      target: string,
+      method: string,
+      args: unknown[],
+      options?: { idempotencyKey: string }
+    ): Promise<unknown>;
+  },
+  execution: MissionExecution,
+  idempotencyKey?: string
+): Promise<MissionAuthorityPlanReference> {
+  return (await rpc.call(
+    "main",
+    "authority.compileAuthorityPlan",
+    [{ execution }],
+    idempotencyKey ? { idempotencyKey } : undefined
+  )) as MissionAuthorityPlanReference;
+}
+
+/** Schedule/name changes do not change the compiled invocation meaning. */
+export function sameMissionExecution(left: MissionExecution, right: MissionExecution): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+/** Prepare a definition edit under its actual author's authenticated invocation. */
+export async function prepareMissionEdit<T extends { name?: string; charter?: MissionCharter }>(
+  rpc: Parameters<typeof compileMissionAuthorityPlan>[0],
+  current: Pick<MissionRecord, "charter" | "authorityPlan" | "seeded">,
+  patch: T,
+  idempotencyKey?: string
+): Promise<T & { authorityPlan?: MissionAuthorityPlanReference }> {
+  const execution = patch.charter?.execution ?? current.charter.execution;
+  const requiresBoundPlan =
+    current.authorityPlan.schemaVersion === 1 && missionUsesAuthority(execution);
+  if (
+    !current.seeded &&
+    !requiresBoundPlan &&
+    sameMissionExecution(current.charter.execution, execution)
+  )
+    return patch;
+  return {
+    ...patch,
+    authorityPlan: await compileMissionAuthorityPlan(rpc, execution, idempotencyKey),
+  };
 }
 
 export function missionPrincipal(

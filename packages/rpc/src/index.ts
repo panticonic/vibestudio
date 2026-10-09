@@ -99,6 +99,7 @@ export type {
   ResourceScope,
   CompiledAuthorityPlanLeaf,
   CompiledAuthorityPlanArtifact,
+  AuthorityPlanAuthor,
   TargetAuthorityRequest,
   ExecutionImageFact,
   ExecutionAdmissionExecutor,

@@ -1,3 +1,4 @@
+import { missionExecutionSchema, newAuthorityPlanReferenceSchema } from "./missions.js";
 import { AUTHORITY_FAILURE_REASON_CODES, AUTHORITY_REMEDIATION_KINDS } from "@vibestudio/rpc";
 import { z } from "zod";
 import { rpcCausalParentSchema } from "./rpcCausality.js";
@@ -398,36 +399,37 @@ export const authorityMethods = defineServiceMethods({
         "Installed code asks the host to compile receiver-owned declarations; it cannot author capability rows.",
     },
     description: "Compile and publish one immutable content-addressed authority plan.",
+    args: z.tuple([z.object({ execution: missionExecutionSchema }).strict()]),
+    returns: newAuthorityPlanReferenceSchema,
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
+  },
+  verifyAuthorityPlan: {
+    website: {
+      kind: "closed",
+      reason: "Authority plan installation belongs to trusted authoring code.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.compile",
+      rationale:
+        "The host verifies a content-addressed compiled plan against its authenticated author and exact execution intent without acquiring authority.",
+    },
+    description:
+      "Verify one newly compiled authority plan for its exact immutable execution intent and live invoking author; never compile or grant authority.",
     args: z.tuple([
       z
         .object({
-          executionImageDigest: z.string().regex(/^[0-9a-f]{64}$/u),
-          operations: z
-            .array(
-              z
-                .object({
-                  service: z.string().min(1),
-                  method: z.string().min(1),
-                  args: z.array(z.unknown()).optional(),
-                  use: z.enum(["action", "conditional"]),
-                })
-                .strict()
-            )
-            .max(256),
+          authorityPlanDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+          execution: missionExecutionSchema,
         })
         .strict(),
     ]),
-    returns: z
-      .object({
-        schemaVersion: z.literal(1),
-        digest: z.string().regex(/^[0-9a-f]{64}$/u),
-        artifactRef: z.string().regex(/^authority-plan:[0-9a-f]{64}$/u),
-        compilerVersion: z.string(),
-        catalogDigest: z.string().regex(/^[0-9a-f]{64}$/u),
-      })
-      .strict(),
+    returns: newAuthorityPlanReferenceSchema,
     authority: { principals: ["code"] },
-    access: { sensitivity: "write" },
+    access: { sensitivity: "read" },
   },
   acquireForTarget: {
     website: {

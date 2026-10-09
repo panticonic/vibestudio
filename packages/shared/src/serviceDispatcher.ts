@@ -444,6 +444,8 @@ export type ServiceContext = {
   /** Verified root initiator for prompts/audit when a deputy (notably EvalDO)
    * transports the operation. Domain routing still uses `caller`. */
   authorizingCaller?: VerifiedCaller;
+  /** Immediate authenticated caller entering this live deputy invocation. Artifact ownership only; never domain routing or grants. */
+  invokingCaller?: VerifiedCaller;
   /** Complete host-authenticated authority facts for compositional methods. */
   authorization?: AuthorizationContext;
   /**
@@ -2474,6 +2476,20 @@ export class ServiceDispatcher {
     };
   }
 
+  /** Canonical argument meaning, shared by compilation and immutable-plan verification. */
+  normalizeAuthorityPlanOperation(
+    ctx: ServiceContext,
+    input: {
+      service: string;
+      method: string;
+      args: readonly unknown[];
+      use: "action" | "conditional";
+    }
+  ): { service: string; method: string; args: unknown[]; use: "action" | "conditional" } {
+    const { args } = this.validateAuthorityInvocation(ctx, input.service, input.method, input.args);
+    return { service: input.service, method: input.method, args, use: input.use };
+  }
+
   /** Compile the current receiver-owned authority scopes without assessing or acquiring grants. */
   async compileAuthorityPlanOperation(
     ctx: ServiceContext,
@@ -2483,7 +2499,11 @@ export class ServiceDispatcher {
       args: readonly unknown[];
       use: "action" | "conditional";
     }
-  ): Promise<{ leaves: CompiledAuthorityPlanLeaf[]; definitionDigest: string }> {
+  ): Promise<{
+    leaves: CompiledAuthorityPlanLeaf[];
+    definitionDigest: string;
+    intent: { service: string; method: string; args: unknown[]; use: "action" | "conditional" };
+  }> {
     const { service, method } = input;
     const { serviceDef, methodDef, args } = this.validateAuthorityInvocation(
       ctx,
@@ -2586,6 +2606,7 @@ export class ServiceDispatcher {
     ];
     return {
       leaves,
+      intent: { service, method, args, use: input.use },
       definitionDigest: sha256Canonical({
         service,
         method,

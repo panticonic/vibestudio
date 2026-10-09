@@ -19,6 +19,58 @@ import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { createApprovalQueue } from "./approvalQueue.js";
 
+function planActorFixture(runtimeId = "do:compiler") {
+  const code = {
+    callerId: runtimeId,
+    callerKind: "do" as const,
+    repoPath: "workers/compiler",
+    effectiveVersion: "a".repeat(64),
+    executionDigest: "b".repeat(64),
+    requested: [],
+  };
+  const caller = createVerifiedCaller(runtimeId, "do", code, null, {
+    userId: "alice",
+    handle: "alice",
+  });
+  const author = {
+    workspaceId: "workspace:one",
+    userId: "alice",
+    runtimeId,
+    authoritySessionId: "lifecycle:compiler",
+    contextId: "context:compiler",
+    code: {
+      repoPath: code.repoPath,
+      effectiveVersion: code.effectiveVersion,
+      executionDigest: code.executionDigest,
+    },
+    agentBinding: null,
+  };
+  const deps = {
+    workspaceId: author.workspaceId,
+    resolveCodeIdentity: () => code,
+    resolveAuthorEntity: () =>
+      ({
+        status: "active",
+        authoritySessionId: author.authoritySessionId,
+        contextId: author.contextId,
+      }) as never,
+  };
+  return { caller, author, deps };
+}
+const plannedExecution = {
+  kind: "method" as const,
+  image: {
+    source: "workers/compiler",
+    ref: `state:${"c".repeat(64)}` as const,
+    effectiveVersion: "a".repeat(64),
+    className: "Compiler",
+    objectKey: "one",
+  },
+  method: "run",
+  args: [],
+  operations: [],
+};
+
 function executionInput(
   kind: "agent-turn" | "method" | "eval" = "agent-turn"
 ): Parameters<AgentExecutionSessionRegistry["admitExecution"]>[0] {
@@ -612,6 +664,7 @@ describe("authorityService", () => {
 
   it("joins context-aware operation compilation before publishing every receiver leaf", async () => {
     const compile = vi.fn(async (_ctx: unknown, input: { method: string }) => ({
+      intent: input,
       definitionDigest: `${input.method}:receiver-definition`,
       leaves: [
         {
@@ -638,19 +691,23 @@ describe("authorityService", () => {
       compilerVersion: "authority-plan.v1",
       catalogDigest: "b".repeat(64),
     }));
+    const actor = planActorFixture();
     const service = createAuthorityService({
+      ...actor.deps,
       dispatcher: { compileAuthorityPlanOperation: compile } as never,
       acquisitions: {} as never,
       authorityPlans: { publish } as never,
     });
-    const ctx = { caller: createVerifiedCaller("do:missions", "do") };
+    const ctx = { caller: actor.caller };
     await service.handler(ctx, "compileAuthorityPlan", [
       {
-        executionImageDigest: "c".repeat(64),
-        operations: [
-          { service: "files", method: "first", args: ["notes/a"], use: "action" },
-          { service: "files", method: "second", use: "conditional" },
-        ],
+        execution: {
+          ...plannedExecution,
+          operations: [
+            { service: "files", method: "first", args: ["notes/a"], use: "action" },
+            { service: "files", method: "second", use: "conditional" },
+          ],
+        },
       },
     ]);
     expect(compile.mock.calls[0]).toEqual([
@@ -674,25 +731,25 @@ describe("authorityService", () => {
     const failure = new Error("receiver snapshot unavailable");
     const compile = vi.fn().mockRejectedValue(failure);
     const publish = vi.fn();
+    const actor = planActorFixture();
     const service = createAuthorityService({
+      ...actor.deps,
       dispatcher: { compileAuthorityPlanOperation: compile } as never,
       acquisitions: {} as never,
       authorityPlans: { publish } as never,
     });
     await expect(
-      service.handler(
-        { caller: createVerifiedCaller("do:missions", "do") },
-        "compileAuthorityPlan",
-        [
-          {
-            executionImageDigest: "c".repeat(64),
+      service.handler({ caller: actor.caller }, "compileAuthorityPlan", [
+        {
+          execution: {
+            ...plannedExecution,
             operations: [
               { service: "files", method: "first", use: "action" },
               { service: "files", method: "second", use: "action" },
             ],
           },
-        ]
-      )
+        },
+      ])
     ).rejects.toBe(failure);
     expect(compile).toHaveBeenCalledOnce();
     expect(publish).not.toHaveBeenCalled();
@@ -741,7 +798,7 @@ describe("authorityService", () => {
         targetRequestsFor: () => [],
       } as never,
       authorityPlans: {
-        get: () => ({ leaves: [] }),
+        get: () => ({ schemaVersion: 2, author: { userId: "alice" }, leaves: [] }),
       } as never,
     });
     const context = {
@@ -768,7 +825,9 @@ describe("authorityService", () => {
   it("pre-acquires an immutable plan only for the caller's attested task", async () => {
     const requestTaskRulesForTarget = vi.fn();
     const task = `task:${"d".repeat(64)}` as const;
+    const actor = planActorFixture("agent:launcher");
     const service = createAuthorityService({
+      ...actor.deps,
       dispatcher: {} as never,
       acquisitions: {
         requestTaskRulesForTarget,
@@ -776,6 +835,8 @@ describe("authorityService", () => {
       } as never,
       authorityPlans: {
         get: () => ({
+          schemaVersion: 2,
+          author: actor.author,
           leaves: [
             {
               service: "notification",
@@ -795,13 +856,7 @@ describe("authorityService", () => {
         }),
       } as never,
     });
-    const caller = {
-      ...createVerifiedCaller("agent:launcher", "agent", undefined, null, {
-        userId: "alice",
-        handle: "alice",
-      }),
-      taskAuthority: task,
-    };
+    const caller = { ...actor.caller, taskAuthority: task };
 
     await expect(
       service.handler({ caller } as never, "acquireForCurrentTask", [

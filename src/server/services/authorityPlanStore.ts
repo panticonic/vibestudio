@@ -2,13 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import type { CompiledAuthorityPlanArtifact, CompiledAuthorityPlanLeaf } from "@vibestudio/rpc";
+import type {
+  CompiledAuthorityPlanArtifact,
+  CompiledAuthorityPlanLeaf,
+  AuthorityPlanAuthor,
+} from "@vibestudio/rpc";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
 import { stateLayout } from "../stateLayout.js";
 import { AUTHORITY_PLAN_SCHEMA } from "./authorityPlanSchema.js";
 
-export const AUTHORITY_PLAN_COMPILER_VERSION = "authority-plan.v1";
+export const AUTHORITY_PLAN_COMPILER_VERSION = "authority-plan.v2";
 
 export class AuthorityPlanStore {
   private readonly db: DatabaseSync;
@@ -29,17 +33,21 @@ export class AuthorityPlanStore {
     catalogDigest: string;
     executionImageDigest: string;
     leaves: readonly CompiledAuthorityPlanLeaf[];
+    executionIntentDigest: string;
+    author: AuthorityPlanAuthor;
     now?: number;
   }): CompiledAuthorityPlanArtifact {
     const leaves = [...input.leaves].sort((left, right) =>
       canonicalJson(left).localeCompare(canonicalJson(right))
     );
     const body = {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       compilerVersion: AUTHORITY_PLAN_COMPILER_VERSION,
       catalogDigest: input.catalogDigest,
       executionImageDigest: input.executionImageDigest,
       leaves,
+      executionIntentDigest: input.executionIntentDigest,
+      author: input.author,
     };
     const bodyDigest = digest(body);
     const existing = this.get(bodyDigest);
@@ -76,6 +84,7 @@ export class AuthorityPlanStore {
     if (!row) return null;
     const artifact = JSON.parse(row.artifact_json) as CompiledAuthorityPlanArtifact;
     if (
+      (artifact.schemaVersion !== 1 && artifact.schemaVersion !== 2) ||
       artifact.bodyDigest !== digestValue ||
       artifact.bodyDigest !==
         digest({
@@ -84,6 +93,12 @@ export class AuthorityPlanStore {
           catalogDigest: artifact.catalogDigest,
           executionImageDigest: artifact.executionImageDigest,
           leaves: artifact.leaves,
+          ...(artifact.schemaVersion === 2
+            ? {
+                executionIntentDigest: artifact.executionIntentDigest,
+                author: artifact.author,
+              }
+            : {}),
         }) ||
       artifact.compilerVersion !== row.compiler_version ||
       artifact.catalogDigest !== row.catalog_digest
@@ -100,7 +115,7 @@ export class AuthorityPlanStore {
 
 function digest(value: unknown): string {
   return createHash("sha256")
-    .update("authority-plan-artifact-v1\0")
+    .update(`authority-plan-artifact-v${(value as { schemaVersion: number }).schemaVersion}\0`)
     .update(canonicalJson(value))
     .digest("hex");
 }

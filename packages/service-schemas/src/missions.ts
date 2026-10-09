@@ -24,9 +24,9 @@ const executionImageSchema = z
   })
   .strict();
 
-const authorityPlanReferenceSchema = z
+export const authorityPlanReferenceSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     digest: hex64,
     artifactRef: authorityPlanRef,
     compilerVersion: z.string().min(1).max(128),
@@ -34,7 +34,7 @@ const authorityPlanReferenceSchema = z
   })
   .strict();
 
-const executionSchema = z.discriminatedUnion("kind", [
+export const missionExecutionSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("method"),
@@ -68,10 +68,15 @@ const executionSchema = z.discriminatedUnion("kind", [
 export const missionCharterSchema = z
   .object({
     summary: z.string().min(1).max(4_000),
-    execution: executionSchema,
+    execution: missionExecutionSchema,
     trigger: triggerSchema,
   })
   .strict();
+
+/** Newly installed plans must bind their exact author and operation intent. */
+export const newAuthorityPlanReferenceSchema = authorityPlanReferenceSchema.extend({
+  schemaVersion: z.literal(2),
+});
 
 const authorityProjectionSchema = z
   .object({
@@ -206,13 +211,15 @@ const runPageSchema = z
   .object({ items: z.array(missionRunRecordSchema), nextCursor: runCursorSchema.optional() })
   .strict();
 /** Aggregate counts cover the complete visible ledger, independently of item pagination. */
-export const missionOverviewStatsSchema = z.object({
-  total: z.number().int().nonnegative(),
-  active: z.number().int().nonnegative(),
-  running: z.number().int().nonnegative(),
-  issueRunsLast24Hours: z.number().int().nonnegative(),
-  completed: z.number().int().nonnegative(),
-}).strict();
+export const missionOverviewStatsSchema = z
+  .object({
+    total: z.number().int().nonnegative(),
+    active: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    issueRunsLast24Hours: z.number().int().nonnegative(),
+    completed: z.number().int().nonnegative(),
+  })
+  .strict();
 
 const overviewSchema = z
   .object({
@@ -239,7 +246,11 @@ const overviewSchema = z
   .strict();
 
 const createInputSchema = z
-  .object({ name: z.string().min(1).max(200), charter: missionCharterSchema })
+  .object({
+    name: z.string().min(1).max(200),
+    charter: missionCharterSchema,
+    authorityPlan: newAuthorityPlanReferenceSchema,
+  })
   .strict();
 const READERS: ServiceAuthorityPolicy = {
   principals: ["user", "code", "session", "mission", "host"],
@@ -319,7 +330,8 @@ export const missionsMethods = defineReceiverServiceMethods({
       "mission.create",
       "Launch creates an active definition; authority is acquired through the ordinary authority service."
     ),
-    description: "Idempotently compile, persist, and activate one automation revision.",
+    description:
+      "Idempotently validate its host-compiled plan, persist, and activate one automation revision.",
     args: z.tuple([createInputSchema]),
     returns: missionRecordSchema,
     authority: AUTOMATION_AUTHORS,
@@ -343,7 +355,11 @@ export const missionsMethods = defineReceiverServiceMethods({
     args: z.tuple([
       z.string(),
       z
-        .object({ name: z.string().min(1).optional(), charter: missionCharterSchema.optional() })
+        .object({
+          name: z.string().min(1).optional(),
+          charter: missionCharterSchema.optional(),
+          authorityPlan: newAuthorityPlanReferenceSchema.optional(),
+        })
         .strict(),
     ]),
     returns: missionRecordSchema,
@@ -373,7 +389,8 @@ export const missionsMethods = defineReceiverServiceMethods({
   },
   cancel: {
     ...lifecycle("Cancel", "cancel"),
-    description: "Pause scheduling and cancel and join every live run, preserving the automation and its history.",
+    description:
+      "Pause scheduling and cancel and join every live run, preserving the automation and its history.",
   },
   pause: lifecycle("Pause", "pause"),
   resume: lifecycle("Resume", "resume"),

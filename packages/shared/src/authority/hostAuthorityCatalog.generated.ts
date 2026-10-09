@@ -834,6 +834,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "authority.verifyAuthorityPlan": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.compile",
+      rationale:
+        "The host verifies a content-addressed compiled plan against its authenticated author and exact execution intent without acquiring authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "authority.withdrawAcquisition": {
     tier: {
       tier: "open",

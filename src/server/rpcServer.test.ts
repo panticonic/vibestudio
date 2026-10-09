@@ -185,7 +185,8 @@ type TestRpcServer = {
   beginAuthorityParent(
     receiverRuntimeId: string,
     authorization: import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
-    authorizingCaller?: ReturnType<typeof createVerifiedCaller> | null
+    authorizingCaller?: ReturnType<typeof createVerifiedCaller> | null,
+    invokingCaller?: ReturnType<typeof createVerifiedCaller> | null
   ): () => void;
   authorityParentFor(
     callerRuntimeId: string,
@@ -194,6 +195,7 @@ type TestRpcServer = {
     testPolicy: import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
     requested: readonly import("@vibestudio/rpc").CapabilityScope[] | null;
     authorizingCaller: ReturnType<typeof createVerifiedCaller> | null;
+    invokingCaller?: ReturnType<typeof createVerifiedCaller> | null;
   } | null;
   connectionReconnectWaiters: Map<string, { resolve: () => void; reject: (err: Error) => void }>;
   reconnectWaiters: Map<
@@ -1006,6 +1008,47 @@ describe("RpcServer relay behavior", () => {
     expect(() => testServer(server).authorityParentFor("panel:other", nonce)).toThrow(
       /another runtime/
     );
+  });
+
+  it("retains the immediate artifact author separately from the root initiator in one live parent", () => {
+    const { server } = createServer();
+    const root = createVerifiedCaller("agent:root", "agent");
+    const immediate = createVerifiedCaller("do:vibestudio/internal:EvalDO:one", "do");
+    const receiver = createVerifiedCaller("do:workers/missions:MissionsDO:workspace", "do");
+    const nonce = "verified-parent-artifact-author";
+    const release = testServer(server).beginAuthorityParent(
+      receiver.runtime.id,
+      {
+        nonce,
+        method: "launch",
+        context: {},
+      } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+      root,
+      immediate
+    );
+    const contextFor = (
+      server as unknown as {
+        serviceContextForInvocation(
+          caller: typeof receiver,
+          message: { authorityParentNonce: string }
+        ): ServiceContext;
+      }
+    ).serviceContextForInvocation.bind(server);
+    try {
+      const context = contextFor(receiver, {
+        authorityParentNonce: nonce,
+        invokingCaller: root,
+      } as never);
+      expect(context.caller.runtime).toEqual(receiver.runtime);
+      expect(context.authorizingCaller).toEqual(root);
+      expect(context.invokingCaller).toEqual(immediate);
+      expect(() => contextFor(immediate, { authorityParentNonce: nonce })).toThrow(
+        /another runtime/
+      );
+    } finally {
+      release();
+    }
+    expect(() => contextFor(receiver, { authorityParentNonce: nonce })).toThrow(/not active/);
   });
 
   it.each(["ws:rpc", "ws:route"] as const)(

@@ -3572,6 +3572,7 @@ async function main() {
         taskAuthorities,
         workspaceId,
         resolveCodeIdentity: (runtimeId) => resolveCodeIdentity(entityCache, runtimeId),
+        resolveAuthorEntity: (runtimeId) => entityCache.resolveActive(runtimeId),
       })
     );
   }

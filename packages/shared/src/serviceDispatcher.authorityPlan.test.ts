@@ -88,6 +88,9 @@ describe("receiver authority plan compilation", () => {
     const f = fixture();
     const result = await f.dispatcher.compileAuthorityPlanOperation(ctx, operation);
     expect(result.leaves).toHaveLength(1);
+    expect(result.intent).toEqual(operation);
+    expect(f.dispatcher.normalizeAuthorityPlanOperation(ctx, operation)).toEqual(operation);
+    expect(f.prepare).toHaveBeenCalledOnce();
     expect(result.leaves[0]).toMatchObject({
       capability: "service:bounded.inspect",
       tier: "open",

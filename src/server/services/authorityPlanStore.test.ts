@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +10,20 @@ import { AuthorityPlanStore } from "./authorityPlanStore.js";
 function statePath(): string {
   return mkdtempSync(join(tmpdir(), "authority-plan-store-"));
 }
+
+const author = {
+  workspaceId: "workspace:one",
+  userId: "alice",
+  runtimeId: "do:author",
+  authoritySessionId: "lifecycle:author",
+  contextId: "context:author",
+  agentBinding: null,
+  code: {
+    repoPath: "workers/author",
+    effectiveVersion: "a".repeat(64),
+    executionDigest: "b".repeat(64),
+  },
+};
 
 const leaf = {
   service: "notification",
@@ -33,6 +49,8 @@ describe("AuthorityPlanStore", () => {
     const input = {
       catalogDigest: "c".repeat(64),
       executionImageDigest: "d".repeat(64),
+      executionIntentDigest: "e".repeat(64),
+      author,
       leaves: [leaf, { ...leaf, method: "dismiss" }],
       now: 10,
     };
@@ -49,6 +67,8 @@ describe("AuthorityPlanStore", () => {
     const artifact = firstStore.publish({
       catalogDigest: "c".repeat(64),
       executionImageDigest: "d".repeat(64),
+      executionIntentDigest: "e".repeat(64),
+      author,
       leaves: [leaf],
       now: 10,
     });
@@ -69,5 +89,56 @@ describe("AuthorityPlanStore", () => {
     const corrupted = new AuthorityPlanStore({ statePath: root });
     expect(() => corrupted.get(artifact.bodyDigest)).toThrow(/content-address verification/);
     corrupted.close();
+  });
+  it("retains historical v1 bytes and digests without inventing an author binding", () => {
+    const store = new AuthorityPlanStore({ statePath: statePath() });
+    const body = {
+      schemaVersion: 1,
+      compilerVersion: "authority-plan.v1",
+      catalogDigest: "c".repeat(64),
+      executionImageDigest: "d".repeat(64),
+      leaves: [leaf],
+    };
+    const bodyDigest = createHash("sha256")
+      .update("authority-plan-artifact-v1\0")
+      .update(canonicalJson(body))
+      .digest("hex");
+    const artifact = { ...body, bodyDigest, createdAt: 10 };
+    const serialized = canonicalJson(artifact);
+    const database = new DatabaseSync(store.databasePath);
+    database
+      .prepare(
+        "INSERT INTO authority_plans (digest, artifact_json, compiler_version, catalog_digest, created_at) VALUES (?, ?, ?, ?, ?)"
+      )
+      .run(bodyDigest, serialized, body.compilerVersion, body.catalogDigest, 10);
+    database.close();
+    expect(store.get(bodyDigest)).toEqual(artifact);
+    const inspect = new DatabaseSync(store.databasePath);
+    expect(
+      inspect.prepare("SELECT artifact_json FROM authority_plans WHERE digest=?").get(bodyDigest)
+    ).toEqual({ artifact_json: serialized });
+    inspect.close();
+    store.close();
+  });
+
+  it("seals exact invocation intent and author lifecycle independently of receiver grants", () => {
+    const store = new AuthorityPlanStore({ statePath: statePath() });
+    const input = {
+      catalogDigest: "c".repeat(64),
+      executionImageDigest: "d".repeat(64),
+      executionIntentDigest: "e".repeat(64),
+      author,
+      leaves: [leaf],
+    };
+    const first = store.publish(input);
+    expect(store.publish({ ...input, executionIntentDigest: "f".repeat(64) }).bodyDigest).not.toBe(
+      first.bodyDigest
+    );
+    expect(
+      store.publish({ ...input, author: { ...author, authoritySessionId: "lifecycle:new" } })
+        .bodyDigest
+    ).not.toBe(first.bodyDigest);
+    expect(first.leaves).toEqual([leaf]);
+    store.close();
   });
 });

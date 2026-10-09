@@ -619,6 +619,7 @@ export class RpcServer {
       testPolicy: AgentExecutionTestPolicy | null;
       requested: readonly CapabilityScope[] | null;
       authorizingCaller: VerifiedCaller | null;
+      invokingCaller?: VerifiedCaller | null;
     }
   >();
   private workReadyObserver: ((hint: DurableWorkReadyHint) => void) | null = null;
@@ -1152,6 +1153,7 @@ export class RpcServer {
     testPolicy: AgentExecutionTestPolicy | null;
     requested: readonly CapabilityScope[] | null;
     authorizingCaller: VerifiedCaller | null;
+    invokingCaller?: VerifiedCaller | null;
   } | null {
     if (authorityParentNonce === undefined) return null;
     if (
@@ -1181,6 +1183,7 @@ export class RpcServer {
       testPolicy: AgentExecutionTestPolicy | null;
       requested: readonly CapabilityScope[] | null;
       authorizingCaller: VerifiedCaller | null;
+      invokingCaller?: VerifiedCaller | null;
     } | null
   ): VerifiedCaller {
     const attributed = this.callerWithParentInvocation(caller, parent?.authorizingCaller);
@@ -1225,7 +1228,8 @@ export class RpcServer {
   private beginAuthorityParent(
     receiverRuntimeId: string,
     authorization: DirectAuthorityAttestation,
-    authorizingCaller: VerifiedCaller | null = null
+    authorizingCaller: VerifiedCaller | null = null,
+    invokingCaller: VerifiedCaller | null = null
   ): () => void {
     const inheritedTestPolicy = authorization.context.testPolicy;
     const receiver = this.deps.entityCache?.resolveActive(receiverRuntimeId);
@@ -1242,6 +1246,7 @@ export class RpcServer {
       testPolicy,
       requested,
       authorizingCaller,
+      invokingCaller,
     });
   }
 
@@ -1252,6 +1257,7 @@ export class RpcServer {
       testPolicy: AgentExecutionTestPolicy | null;
       requested: readonly CapabilityScope[] | null;
       authorizingCaller: VerifiedCaller | null;
+      invokingCaller?: VerifiedCaller | null;
     }
   ): () => void {
     if (this.activeAuthorityParents.has(nonce))
@@ -1270,6 +1276,7 @@ export class RpcServer {
       receiverRuntimeId,
       requested: null,
       authorizingCaller: scope.authorizingCaller,
+      invokingCaller: scope.authenticatedCaller,
       testPolicy:
         scope.authenticatedCaller.testPolicy ??
         scope.authenticatedCaller.executionSession?.testPolicy ??
@@ -1401,6 +1408,9 @@ export class RpcServer {
       caller: this.callerWithAuthorityParent(caller, authorityParent),
       ...(authorityParent?.authorizingCaller
         ? { authorizingCaller: authorityParent.authorizingCaller }
+        : {}),
+      ...(authorityParent?.invokingCaller
+        ? { invokingCaller: authorityParent.invokingCaller }
         : {}),
       ...extras,
     };
@@ -4819,7 +4829,8 @@ export class RpcServer {
       const releaseAuthorityParent = this.beginAuthorityParent(
         targetId,
         authorization,
-        inheritedAuthorizingCaller
+        inheritedAuthorizingCaller,
+        attributedCaller
       );
       try {
         const result = await postToDurableObject(
@@ -4964,7 +4975,8 @@ export class RpcServer {
     const releaseAuthorityParent = this.beginAuthorityParent(
       targetId,
       authorization,
-      relayCallerScope?.authorizingCaller ?? invocationCaller
+      relayCallerScope?.authorizingCaller ?? invocationCaller,
+      invocationCaller
     );
     try {
       const response = await streamFromDurableObject(
