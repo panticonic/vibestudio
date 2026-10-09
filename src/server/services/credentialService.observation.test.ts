@@ -88,3 +88,18 @@ it("preserves an owner rejection whose original reason is undefined", async () =
   );
   await expect(service.handler({ caller }, "observeChanges", [{}])).rejects.toBeUndefined();
 });
+
+it("preserves an undefined peer failure after another owner changes", async () => {
+  const service = serviceWithObservers(
+    async () => ({ version: "credential-2" }),
+    ({ signal }) =>
+      new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(undefined), { once: true });
+      })
+  );
+  await expect(
+    service.handler({ caller }, "observeChanges", [
+      { afterVersion: JSON.stringify(["credential-1", "config-1"]) },
+    ])
+  ).rejects.toBeUndefined();
+});

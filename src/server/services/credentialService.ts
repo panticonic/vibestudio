@@ -1613,24 +1613,26 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       controller.abort(new Error("Credential setup observation completed"));
       await Promise.allSettled(tasks);
       ctx.signal?.removeEventListener("abort", aborted);
-      const cleanupErrors = taskFailures
-        .filter((failure) => !failure.aggregateCancellation && failure.error !== primaryError)
-        .map((failure) => failure.error);
-      if (failed && cleanupErrors.length > 0) {
-        throw new AggregateError(
-          [primaryError, ...cleanupErrors],
-          "Credential setup observation failed and another owner failed while closing.",
-          { cause: primaryError }
-        );
-      }
-      if (failed) throw primaryError;
-      if (cleanupErrors.length === 1) throw cleanupErrors[0];
-      if (cleanupErrors.length > 1) {
-        throw new AggregateError(
-          cleanupErrors,
-          "Credential setup observation owners failed while closing."
-        );
-      }
+    }
+    const cleanupErrors = taskFailures
+      .filter(
+        (failure) => !failure.aggregateCancellation && (!failed || failure.error !== primaryError)
+      )
+      .map((failure) => failure.error);
+    if (failed && cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [primaryError, ...cleanupErrors],
+        "Credential setup observation failed and another owner failed while closing.",
+        { cause: primaryError }
+      );
+    }
+    if (failed) throw primaryError;
+    if (cleanupErrors.length === 1) throw cleanupErrors[0];
+    if (cleanupErrors.length > 1) {
+      throw new AggregateError(
+        cleanupErrors,
+        "Credential setup observation owners failed while closing."
+      );
     }
     return { version: JSON.stringify(versions) };
   }
