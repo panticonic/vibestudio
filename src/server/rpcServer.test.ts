@@ -1051,6 +1051,89 @@ describe("RpcServer relay behavior", () => {
     expect(() => contextFor(receiver, { authorityParentNonce: nonce })).toThrow(/not active/);
   });
 
+  it("preserves the exact invoking author at the HTTP unary dispatch boundary", async () => {
+    const { server, entityCache } = createServer();
+    const root = createVerifiedCaller("agent:root", "agent");
+    const immediate = createVerifiedCaller("do:vibestudio/internal:EvalDO:author", "do");
+    const receiverId = "do:workers/missions:MissionsDO:workspace";
+    entityCache._onActivate(makeRecord(receiverId, "do", { repoPath: "workers/missions" }));
+    const nonce = "http-unary-artifact-author-parent";
+    const release = testServer(server).beginAuthorityParent(
+      receiverId,
+      {
+        nonce,
+        method: "launch",
+        context: {},
+      } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+      root,
+      immediate
+    );
+    const contexts: ServiceContext[] = [];
+    testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: ServiceContext) => {
+      contexts.push(ctx);
+      return "verified";
+    });
+    const signal = new AbortController().signal;
+    const request: InternalRpcRequest = {
+      type: "request",
+      requestId: "http-unary-author-verification",
+      fromId: receiverId,
+      method: "authority.verifyAuthorityPlan",
+      args: [{ authorityPlanDigest: "a".repeat(64) }],
+      authorityParentNonce: nonce,
+      invokingCaller: root,
+    } as InternalRpcRequest;
+    const invoke = (callerId: string, message = request) => {
+      const envelope = envelopeFromMessage({
+        selfId: callerId,
+        from: callerId,
+        target: "main",
+        callerKind: "do",
+        message,
+      });
+      return testServer(server).handleEnvelopeRequest(
+        callerId,
+        "do",
+        undefined,
+        {
+          ...envelope,
+          delivery: { ...envelope.delivery, idempotencyKey: "http-unary-command", readOnly: true },
+        },
+        message,
+        signal
+      );
+    };
+    try {
+      expect(await invoke(receiverId)).toBe("verified");
+      expect(contexts).toHaveLength(1);
+      expect(contexts[0]).toMatchObject({
+        caller: { runtime: { id: receiverId, kind: "do" } },
+        authorizingCaller: root,
+        invokingCaller: immediate,
+        requestId: request.requestId,
+        idempotencyKey: "http-unary-command",
+        readOnly: true,
+        signal,
+      });
+      expect(testServer(server).dispatcher.dispatch).toHaveBeenCalledWith(
+        contexts[0],
+        "authority",
+        "verifyAuthorityPlan",
+        request.args
+      );
+      await expect(invoke(immediate.runtime.id)).rejects.toThrow(/another runtime/);
+      expect(contexts).toHaveLength(1);
+    } finally {
+      release();
+    }
+    await expect(invoke(receiverId)).rejects.toThrow(/not active/);
+    expect(contexts).toHaveLength(1);
+    await invoke(receiverId, { ...request, authorityParentNonce: undefined });
+    expect(contexts[1]!.caller.runtime.id).toBe(receiverId);
+    expect(contexts[1]!.invokingCaller).toBeUndefined();
+    expect(contexts[1]!.authorizingCaller).toBeUndefined();
+  });
+
   it.each(["ws:rpc", "ws:route"] as const)(
     "does not dispatch a foreign workspace through %s",
     (type) => {

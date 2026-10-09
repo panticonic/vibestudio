@@ -3761,15 +3761,13 @@ export class RpcServer {
       const parsed = parseServiceMethod(method);
       if (!parsed) throw new Error(`Invalid method format: "${method}"`);
 
-      const ctx: ServiceContext = {
-        caller: invocationCaller,
-        ...(authorityParent?.authorizingCaller ? { authorizingCaller } : {}),
+      const ctx = this.serviceContextForInvocation(invocationCaller, message, {
         ...(causalParent ? { causalParent } : {}),
         ...(requestId ? { requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
         signal,
-      };
+      });
       const dispatched = await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
       return dispatched;
     }
