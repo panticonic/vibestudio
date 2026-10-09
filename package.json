@@ -121,7 +121,7 @@
     "test:remote-transport": "pnpm test:iroh && pnpm test:iroh-e2e && vitest run tests/remote-doctor.test.ts tests/remote-deploy.test.ts tests/remote-rotate-endpoint.test.ts tests/pair-server.behavior.test.ts",
     "test:terminal-app-smoke": "NODE_ENV=development node scripts/ensure-host-build.mjs && node --import tsx scripts/terminal-app-smoke.mjs",
     "test:watch": "vitest",
-    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "test:browser": "node --import tsx node_modules/vitest/vitest.mjs run --config vitest.browser.config.ts",
     "test:e2e": "NODE_ENV=development node scripts/ensure-host-build.mjs && playwright test -c tests/config/playwright.config.ts",
     "test:invention-smoke": "NODE_ENV=development node scripts/ensure-host-build.mjs && playwright test -c tests/config/playwright.config.ts tests/e2e/flows/websiteInventionsSmoke.spec.ts",
     "test:live-e2e": "NODE_ENV=development node scripts/ensure-host-build.mjs && playwright test -c tests/config/playwright.live.config.ts",
