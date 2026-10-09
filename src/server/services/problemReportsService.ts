@@ -256,6 +256,11 @@ export function createProblemReportsService(deps: {
       },
       get: (ctx, [id]) => store.get(owner(ctx), workspaceId, id),
       update: (ctx, [id, revision, value]) => {
+        const current = store.get(owner(ctx), workspaceId, id);
+        if (current.revision !== revision)
+          throw new Error("Report changed; refresh before editing");
+        if (canonicalJson(current.value.narrative) !== canonicalJson(value.narrative))
+          throw new Error("Edit narrative through appendNarrative or patchNarrative");
         return store.update(owner(ctx), workspaceId, id, revision, value);
       },
       appendNarrative: (ctx, [id, revision, sections]) => {

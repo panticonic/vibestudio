@@ -106,6 +106,14 @@
     ],
     "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface ImportJobSnapshot {\n  jobId: string;\n  hostId: string;\n  hostLabel?: string;\n  sourceId: string;\n  browser?: string;\n  phase: ImportJobPhase;\n  requestedDataTypes: BrowserImportDataType[];\n  startedAt: number;\n  updatedAt: number;\n  finishedAt?: number;\n  progress: ImportCategoryProgress[];\n  warnings: string[];\n  error?: string;\n  resumable: boolean;\n}\n\nexport type ImportJobPhase = (typeof IMPORT_JOB_PHASES)[number];\n```"
   },
+  "observeImportJob": {
+    "signature": "browserData.observeImportJob(\n    jobId: string,\n    options?: { afterVersion?: string; signal?: AbortSignal }\n  ): Promise<ImportJobObservation>",
+    "argumentNames": [
+      "jobId",
+      "options"
+    ],
+    "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface ImportJobObservation {\n  job: ImportJobSnapshot;\n  /** Opaque identity of this owner's published snapshot. */\n  version: string;\n}\n\nexport interface ImportJobSnapshot {\n  jobId: string;\n  hostId: string;\n  hostLabel?: string;\n  sourceId: string;\n  browser?: string;\n  phase: ImportJobPhase;\n  requestedDataTypes: BrowserImportDataType[];\n  startedAt: number;\n  updatedAt: number;\n  finishedAt?: number;\n  progress: ImportCategoryProgress[];\n  warnings: string[];\n  error?: string;\n  resumable: boolean;\n}\n\nexport type ImportJobPhase = (typeof IMPORT_JOB_PHASES)[number];\n```"
+  },
   "listImportJobs": {
     "signature": "browserData.listImportJobs(): Promise<ImportJobSnapshot[]>",
     "argumentNames": [],

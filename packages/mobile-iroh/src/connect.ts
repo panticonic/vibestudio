@@ -2,7 +2,13 @@ import "./polyfills.js";
 import { AppState, type AppStateStatus } from "react-native";
 import * as Keychain from "react-native-keychain";
 import { EndpointGenerationOwner } from "@vibestudio/iroh-transport";
-import { createRpcClient, secureRandomUuid, type RpcClient } from "@vibestudio/rpc";
+import {
+  CLOSE_TOKEN_REVOKED,
+  createRpcClient,
+  secureRandomUuid,
+  type RpcClient,
+} from "@vibestudio/rpc";
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import {
   createIrohClientPipe,
   type IrohClientSession,
@@ -40,6 +46,7 @@ export type {
 } from "./storedCredential.js";
 
 const KEYCHAIN_SERVICE = "vibestudio:iroh:shell-credential";
+const credentialWrites = new Map<string, Promise<unknown>>();
 
 export interface ShellTokenProvider {
   getToken(): string;
@@ -142,11 +149,13 @@ export function makeReturningShellTokenProvider(initial: ShellCredential): Shell
 export async function persistStoredMobileConnection(stored: StoredMobileConnection): Promise<void> {
   const payload = JSON.stringify(stored);
   if (!parseStoredMobileConnection(payload)) throw new Error("Cannot persist invalid Iroh state");
-  const result = await Keychain.setGenericPassword("shell", payload, {
-    service: KEYCHAIN_SERVICE,
-    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  await serializeByKey(credentialWrites, KEYCHAIN_SERVICE, async () => {
+    const result = await Keychain.setGenericPassword("shell", payload, {
+      service: KEYCHAIN_SERVICE,
+      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+    if (result === false) throw new Error("The OS secure store refused the Iroh credential update");
   });
-  if (result === false) throw new Error("The OS secure store refused the Iroh credential update");
 }
 
 export async function loadShellCredential(): Promise<StoredMobileConnection | null> {
@@ -154,11 +163,23 @@ export async function loadShellCredential(): Promise<StoredMobileConnection | nu
   return result ? parseStoredMobileConnection(result.password) : null;
 }
 
-export async function clearShellCredential(): Promise<void> {
-  const stored = await loadShellCredential();
-  const cleared = await Keychain.resetGenericPassword({ service: KEYCHAIN_SERVICE });
-  if (!cleared) throw new Error("The OS secure store refused to clear the Iroh credential");
-  if (stored) await mobileIrohIdentity.delete(stored.endpointIdentityId);
+export async function clearShellCredential(expected?: {
+  endpointIdentityId: string;
+  deviceId: string;
+}): Promise<void> {
+  await serializeByKey(credentialWrites, KEYCHAIN_SERVICE, async () => {
+    const stored = await loadShellCredential();
+    if (
+      expected &&
+      (!stored ||
+        stored.endpointIdentityId !== expected.endpointIdentityId ||
+        stored.credential.deviceId !== expected.deviceId)
+    )
+      return;
+    const cleared = await Keychain.resetGenericPassword({ service: KEYCHAIN_SERVICE });
+    if (!cleared) throw new Error("The OS secure store refused to clear the Iroh credential");
+    if (stored) await mobileIrohIdentity.delete(stored.endpointIdentityId);
+  });
 }
 
 export const createMobileIrohIdentity = mobileIrohIdentity.create;
@@ -180,6 +201,44 @@ function registerLifecycle(transport: LifecycleIrohClientPipe): () => void {
     }
   });
   return () => subscription.remove();
+}
+
+function collectRetirementFailures(results: readonly PromiseSettledResult<unknown>[]): unknown[] {
+  const failures: unknown[] = [];
+  const seen = new Set<unknown>();
+  const add = (failure: unknown): void => {
+    if (failure instanceof AggregateError && failure.errors.length > 0) {
+      for (const nested of failure.errors) add(nested);
+      return;
+    }
+    if (!seen.has(failure)) {
+      seen.add(failure);
+      failures.push(failure);
+    }
+  };
+  for (const result of results) if (result.status === "rejected") add(result.reason);
+  return failures;
+}
+
+async function retireOwnedConnection(
+  session: IrohClientSession,
+  transport: LifecycleIrohClientPipe,
+  getTerminalRetirement: () => Promise<void> | null
+): Promise<unknown[]> {
+  const results = await Promise.allSettled([
+    Promise.resolve().then(() => session.close()),
+    Promise.resolve().then(() => transport.close()),
+  ]);
+  const terminalRetirement = getTerminalRetirement();
+  if (terminalRetirement) {
+    results.push(...(await Promise.allSettled([terminalRetirement])));
+  }
+  return collectRetirementFailures(results);
+}
+
+function throwRetirementFailures(failures: readonly unknown[], message: string): void {
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, message);
 }
 
 async function waitUntilConnected(
@@ -234,6 +293,8 @@ export async function establishIrohConnection(
       }
     },
   });
+  let terminalRetirement: Promise<void> | null = null;
+  let removeLifecycle = () => {};
   console.log("[mobile-iroh] reconnect owner created");
   const connectionId = randomRequestId();
   console.log("[mobile-iroh] logical session identity created");
@@ -245,6 +306,37 @@ export async function establishIrohConnection(
     getToken: () => tokenProvider.getToken(),
     onPaired: handlers.onPaired,
     onRecovery: handlers.onRecovery,
+    onTerminalClose: (error) => {
+      if ((error as { code?: unknown }).code !== CLOSE_TOKEN_REVOKED) return;
+      const deviceId = /^refresh:([^:]+):/.exec(tokenProvider.getToken())?.[1];
+      tokenProvider.setCredential(null);
+      removeLifecycle();
+      terminalRetirement ??= (async () => {
+        const results = await Promise.allSettled([
+          deviceId ? clearShellCredential({ endpointIdentityId, deviceId }) : Promise.resolve(),
+          transport.close(),
+        ]);
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : []
+        );
+        throwRetirementFailures(failures, "Revoked mobile credential retirement failed");
+      })();
+      void terminalRetirement.catch((failure: unknown) => {
+        const error =
+          failure instanceof Error
+            ? failure
+            : new Error("Revoked mobile credential retirement failed", { cause: failure });
+        try {
+          handlers.onPersistError?.(error);
+        } catch (observerError) {
+          console.error(
+            "[mobile-iroh] revoked credential retirement observer failed",
+            observerError
+          );
+        }
+        console.error("[mobile-iroh] revoked credential retirement failed", failure);
+      });
+    },
   });
   console.log("[mobile-iroh] logical session opened");
   try {
@@ -252,8 +344,12 @@ export async function establishIrohConnection(
     await session.ready?.();
     console.log("[mobile-iroh] authenticated session ready");
   } catch (error) {
-    await session.close().catch(() => undefined);
-    await transport.close().catch(() => undefined);
+    const failures = await retireOwnedConnection(session, transport, () => terminalRetirement);
+    if (failures.length > 0) {
+      throw new AggregateError([error, ...failures], "Iroh session opening and cleanup failed", {
+        cause: error,
+      });
+    }
     throw error;
   }
   const callerId = session.callerId() || "shell:pending";
@@ -265,7 +361,7 @@ export async function establishIrohConnection(
     transport: session,
     publishExposures: true,
   });
-  const removeLifecycle = registerLifecycle(transport);
+  removeLifecycle = registerLifecycle(transport);
   return {
     rpc,
     session,
@@ -276,8 +372,8 @@ export async function establishIrohConnection(
     waitUntilConnected: (timeoutMs) => waitUntilConnected(transport, session, timeoutMs),
     async close() {
       removeLifecycle();
-      await session.close().catch(() => undefined);
-      await transport.close();
+      const failures = await retireOwnedConnection(session, transport, () => terminalRetirement);
+      throwRetirementFailures(failures, "Mobile Iroh connection cleanup failed");
     },
   };
 }

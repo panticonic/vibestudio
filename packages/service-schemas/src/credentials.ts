@@ -921,7 +921,7 @@ export const DeriveCredentialParamsSchema = z
         label: z.string().trim().min(1).max(256),
         audience: z.array(UrlAudienceSchema).min(1).max(32),
         injection: CredentialInjectionSchema,
-        expiresInMs: z.number().int().min(1_000).max(3_600_000),
+        expiry: z.literal("jwt"),
         metadata: z.record(z.string().max(1024)).optional(),
       })
       .strict(),

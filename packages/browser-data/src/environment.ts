@@ -115,6 +115,12 @@ export interface ImportJobSnapshot {
   resumable: boolean;
 }
 
+export interface ImportJobObservation {
+  job: ImportJobSnapshot;
+  /** Opaque identity of this owner's published snapshot. */
+  version: string;
+}
+
 export const ImportJobSnapshotSchema = z
   .object({
     jobId: z.string().min(1),

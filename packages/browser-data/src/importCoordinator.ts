@@ -8,6 +8,7 @@ import type {
   ImportBatch,
   ImportHostSummary,
   ImportJobSnapshot,
+  ImportJobObservation,
   ImportedBrowserOpenTab,
 } from "./environment.js";
 import type { ImportPreview } from "./client/browserDataClient.js";
@@ -50,6 +51,8 @@ function importHostKey(ownerUserId: string, hostId: string): string {
 export class BrowserImportCoordinator {
   private readonly hosts = new Map<string, BrowserImportHostRegistration>();
   private readonly jobs = new Map<string, JobState>();
+  private readonly published = new Map<string, ImportJobObservation>();
+  private readonly observers = new Set<() => void>();
 
   constructor(
     private readonly store: BrowserImportStore,
@@ -158,8 +161,9 @@ export class BrowserImportCoordinator {
     operationId: string,
     signal?: AbortSignal
   ): Promise<ImportJobSnapshot> {
-    if (!operationId || operationId.length > 200) throw new Error("Import operation ID is required");
-    if (this.jobs.has(operationId) || await this.store.getJob(identity, operationId))
+    if (!operationId || operationId.length > 200)
+      throw new Error("Import operation ID is required");
+    if (this.jobs.has(operationId) || (await this.store.getJob(identity, operationId)))
       throw new Error("Import operation already exists; observe or resume that job");
     const host = this.host(identity, selection.hostId);
     const startedAt = Date.now();
@@ -182,7 +186,7 @@ export class BrowserImportCoordinator {
       await this.persist(identity, snapshot);
     } catch (error) {
       this.failJob(snapshot, abort.signal, error);
-      this.onJobChanged?.(identity, this.clone(snapshot));
+      this.publish(identity, snapshot);
       throw error;
     }
     let read: BrowserImportRead;
@@ -195,7 +199,7 @@ export class BrowserImportCoordinator {
     } catch (error) {
       this.failJob(snapshot, abort.signal, error);
       await this.persist(identity, snapshot);
-      this.onJobChanged?.(identity, this.clone(snapshot));
+      this.publish(identity, snapshot);
       throw error;
     }
     const accepted = this.clone(snapshot);
@@ -258,6 +262,80 @@ export class BrowserImportCoordinator {
   getJob(identity: BrowserEnvironmentIdentity, jobId: string): ImportJobSnapshot | null {
     const job = this.jobs.get(jobId);
     return job && this.sameEnvironment(job.identity, identity) ? this.clone(job.snapshot) : null;
+  }
+
+  /** Subscribe before reading so a committed change cannot fall between them. */
+  observeJob(
+    identity: BrowserEnvironmentIdentity,
+    jobId: string,
+    options: { afterVersion?: string; signal?: AbortSignal } = {}
+  ): Promise<ImportJobObservation> {
+    const key = this.observationKey(identity, jobId);
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        this.observers.delete(changed);
+        options.signal?.removeEventListener("abort", aborted);
+      };
+      const changed = () => {
+        const current = this.published.get(key);
+        if (
+          !current ||
+          (current.version === options.afterVersion && !this.isTerminal(current.job.phase))
+        )
+          return;
+        cleanup();
+        resolve(this.clone(current));
+      };
+      const aborted = () => {
+        cleanup();
+        reject(options.signal?.reason);
+      };
+      this.observers.add(changed);
+      options.signal?.addEventListener("abort", aborted, { once: true });
+      if (options.signal?.aborted) {
+        aborted();
+        return;
+      }
+      changed();
+      if (!this.observers.has(changed)) return;
+      void this.store
+        .getJob(identity, jobId)
+        .then((persisted) => {
+          if (!this.observers.has(changed)) return;
+          // Prefer a new publication that raced the storage read over its
+          // potentially older persisted snapshot.
+          changed();
+          if (!this.observers.has(changed)) return;
+          // A live job's publication is owned by persist, never by a read of its
+          // mutable working snapshot. A persisted job without that owner stopped.
+          const active = this.jobs.get(jobId);
+          if (
+            persisted &&
+            !this.published.has(key) &&
+            (!active || !this.sameEnvironment(active.identity, identity))
+          ) {
+            if (!this.isTerminal(persisted.phase))
+              this.failJob(
+                persisted,
+                new AbortController().signal,
+                new Error("The previous browser import process stopped before the job completed")
+              );
+            this.publish(identity, persisted);
+          }
+          changed();
+          if (!persisted && this.observers.has(changed)) {
+            const currentOwner = this.jobs.get(jobId);
+            if (!currentOwner || !this.sameEnvironment(currentOwner.identity, identity)) {
+              cleanup();
+              reject(new Error(`Browser import job was not found: ${jobId}`));
+            }
+          }
+        })
+        .catch((error) => {
+          cleanup();
+          reject(error);
+        });
+    });
   }
 
   async waitForJob(
@@ -349,7 +427,7 @@ export class BrowserImportCoordinator {
         // failing operation, retain a terminal in-memory snapshot so polling,
         // cancellation, and health reporting remain available instead of
         // turning the detached job into an unhandled process rejection.
-        this.onJobChanged?.(identity, this.clone(snapshot));
+        this.publish(identity, snapshot);
       }
     }
   }
@@ -389,7 +467,21 @@ export class BrowserImportCoordinator {
   ): Promise<void> {
     const value = this.clone(snapshot);
     await this.store.persistJob(identity, value);
-    this.onJobChanged?.(identity, value);
+    this.publish(identity, value);
+  }
+
+  private observationKey(identity: BrowserEnvironmentIdentity, jobId: string): string {
+    return `${identity.environmentKey.length}:${identity.environmentKey}${jobId}`;
+  }
+
+  private publish(identity: BrowserEnvironmentIdentity, snapshot: ImportJobSnapshot): void {
+    const value = this.clone(snapshot);
+    this.published.set(this.observationKey(identity, snapshot.jobId), {
+      job: value,
+      version: crypto.randomUUID(),
+    });
+    for (const observer of [...this.observers]) observer();
+    this.onJobChanged?.(identity, this.clone(value));
   }
 
   private host(

@@ -24,7 +24,10 @@ export function createEntityUnitDriver(input: {
   };
   const describe = (record: EntityRecord): RuntimeSupervisionDescription => ({
     identity: { kind: input.kind, entityId: record.id },
-    release: null,
+    release: {
+      kind: input.kind === "panel" ? "panel" : "worker",
+      releaseId: record.source.repoPath,
+    },
     source: record.source.repoPath,
     status: record.error ? "error" : "running",
     lastError: record.error ?? null,

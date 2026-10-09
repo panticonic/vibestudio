@@ -207,7 +207,7 @@ export const problemReportsMethods = defineServiceMethods({
   update: {
     ...local,
     description:
-      "Revision-checked replacement of a manual draft's editable content. The host assigns revisions and submission IDs. Agents add and edit narrative with appendNarrative and patchNarrative.",
+      "Revision-checked replacement of a manual draft's editable content. Narrative must match the current draft; add and edit it through appendNarrative and patchNarrative. The host assigns revisions and submission IDs.",
     args: z.tuple([id, z.number().int().positive(), ReportDraftContentSchema]),
     returns: z.object({ id, revision: z.number().int() }),
     access: { sensitivity: "write" },

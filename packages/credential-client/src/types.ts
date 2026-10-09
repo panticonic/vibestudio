@@ -584,7 +584,8 @@ export interface DeriveUrlBoundCredentialRequest {
     label: string;
     audience: UrlAudience[];
     injection: CredentialInjection;
-    expiresInMs: number;
+    /** Read the provider-issued JWT's exp claim inside the credential broker. */
+    expiry: "jwt";
     metadata?: Record<string, string>;
   };
 }

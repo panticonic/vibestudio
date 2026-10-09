@@ -150,6 +150,7 @@ export type {
   ImportHostSummary,
   ImportJobPhase,
   ImportJobSnapshot,
+  ImportJobObservation,
   ImportPreviewSink,
   ImportPreviewSummary,
   ImportSourceStatus,

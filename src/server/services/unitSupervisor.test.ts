@@ -3,6 +3,8 @@ import type { RuntimeSupervisionDescription } from "@vibestudio/service-schemas/
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { UnitSupervisor, type UnitDriver } from "./unitSupervisor.js";
+import { createEntityUnitDriver } from "./entityUnitDriver.js";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
 const ctx: ServiceContext = { caller: createHostCaller("server") };
 
@@ -52,6 +54,45 @@ function driver(
 }
 
 describe("UnitSupervisor", () => {
+  it("groups worker and Durable Object incarnations by their source release", async () => {
+    const records = ["worker", "do", "panel"].map((kind) => ({
+      id: `${kind}:one`,
+      kind,
+      source: {
+        repoPath: kind === "panel" ? "panels/example" : "workers/example",
+        effectiveVersion: "ev",
+      },
+      contextId: "main",
+      key: "one",
+      createdAt: 1,
+      status: "active",
+    })) as EntityRecord[];
+    const supervisor = new UnitSupervisor();
+    for (const kind of ["worker", "do", "panel"] as const) {
+      supervisor.register(
+        createEntityUnitDriver({
+          kind,
+          entityCache: {
+            listActive: () => records,
+            resolveActive: (id) => records.find((row) => row.id === id) ?? null,
+          },
+          logs: () => [],
+          restart: () => {},
+          retire: () => {},
+        })
+      );
+    }
+    expect(
+      (await supervisor.describe({ kind: "worker", releaseId: "workers/example" })).map(
+        (row) => row.identity.kind
+      )
+    ).toEqual(["do", "worker"]);
+    expect(
+      (await supervisor.describe({ kind: "panel", releaseId: "panels/example" })).map(
+        (row) => row.identity.kind
+      )
+    ).toEqual(["panel"]);
+  });
   it("routes exact entity keys to one registered kind driver", async () => {
     const panels = driver("panel", "panel:one");
     const workers = driver("worker", "worker:one");

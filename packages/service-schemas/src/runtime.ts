@@ -21,10 +21,7 @@ export {
   RuntimeSupervisionEntityKeySchema,
   RuntimeSupervisionKindSchema,
 } from "./runtime/supervision.js";
-export type {
-  RuntimeSupervisionEntityKey,
-  RuntimeSupervisionKind,
-} from "./runtime/supervision.js";
+export type { RuntimeSupervisionEntityKey, RuntimeSupervisionKind } from "./runtime/supervision.js";
 import { AuthorityResourceScopeSchema, UnitAuthorityRequestSchema } from "./build.js";
 import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
 import { vcsStateNodeRefSchema } from "./vcs.js";
@@ -204,7 +201,7 @@ const RuntimeAgentBindingSchema = z
 
 export const RuntimeSupervisionReleaseKeySchema = z
   .object({
-    kind: z.enum(["worker", "app", "extension"]),
+    kind: z.enum(["panel", "worker", "app", "extension"]),
     releaseId: z.string().min(1),
   })
   .strict();

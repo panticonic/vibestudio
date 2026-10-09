@@ -158,22 +158,11 @@ it("edits only draft content while the host assigns identity and revision and pr
   const preview = await f.agent.prepare(draft.id, draft.revision);
   const { problem, references, narrative, evidence, attachments } = draft.value;
   const edit = {
-    problem,
     references,
     evidence,
     attachments,
-    narrative: [
-      ...narrative,
-      {
-        id: randomUUID(),
-        section: "findings" as const,
-        author: "agent" as const,
-        authorLabel: "Agent",
-        claims: "observed" as const,
-        markdown: "The supplied wrong result is preserved; reproduction remains unverified.",
-        evidenceIds: [],
-      },
-    ],
+    narrative,
+    problem: { ...problem, symptom: "A corrected symptom" },
   };
   const updated = await f.agent.update(draft.id, draft.revision, edit);
   const current = await f.agent.get(draft.id);
@@ -181,7 +170,7 @@ it("edits only draft content while the host assigns identity and revision and pr
   expect(current.value.reportRevision).toBe(2);
   expect(current.value.submissionId).not.toBe(preview.submissionId);
   expect(current.value.consent).toEqual(draft.value.consent);
-  expect(current.value.narrative).toHaveLength(1);
+  expect(current.value.narrative).toEqual(narrative);
   await expect(f.agent.update(draft.id, draft.revision, edit)).rejects.toThrow("changed");
   await expect(f.human.send(draft.id, draft.revision, preview.digest)).rejects.toThrow();
 });
@@ -319,4 +308,38 @@ it("does not upload a cancelled report after its pending approval is accepted", 
   accept(true);
   await expect(pending).rejects.toThrow();
   expect(f.store.submission("alice", "ws", preview.submissionId)["state"]).not.toBe("queued");
+});
+
+it("rejects full-replacement narrative forgery, deletion, and edits without changing the draft", async () => {
+  const f = fixture();
+  const draft = await f.human.create(reportFixture().problem);
+  const appended = await f.human.appendNarrative(draft.id, draft.revision, [
+    {
+      section: "symptom",
+      authorLabel: "User",
+      claims: "observed",
+      markdown: "The user's words",
+      evidenceIds: [],
+    },
+  ]);
+  const current = await f.agent.get(draft.id);
+  const { problem, references, narrative, evidence, attachments } = current.value;
+  for (const replacement of [
+    [],
+    [{ ...narrative[0]!, author: "agent" as const }],
+    [{ ...narrative[0]!, markdown: "Forged correction" }],
+    [...narrative, { ...narrative[0]!, id: randomUUID() }],
+  ]) {
+    await expect(
+      f.agent.update(draft.id, appended.revision, {
+        problem,
+        references,
+        narrative: replacement,
+        evidence,
+        attachments,
+      })
+    ).rejects.toThrow("Edit narrative through");
+  }
+  expect((await f.agent.get(draft.id)).revision).toBe(appended.revision);
+  expect((await f.agent.get(draft.id)).value.narrative).toEqual(narrative);
 });

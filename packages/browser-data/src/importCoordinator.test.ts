@@ -63,6 +63,156 @@ function store() {
 }
 
 describe("BrowserImportCoordinator", () => {
+  it("observes publication before admission and waits for real changes without cancelling the import", async () => {
+    const backing = store();
+    let finishStorageRead!: (job: ImportJobSnapshot | null) => void;
+    const storageRead = new Promise<ImportJobSnapshot | null>((resolve) => {
+      finishStorageRead = resolve;
+    });
+    vi.mocked(backing.value.getJob).mockImplementationOnce(async () => storageRead);
+    const coordinator = new BrowserImportCoordinator(backing.value);
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const importProvider = provider();
+    importProvider.openImport = vi.fn(async () => ({
+      consume: async () => {
+        await finished;
+        return { dataTypes: [], warnings: [] };
+      },
+    }));
+    coordinator.registerHost({
+      hostId: "desktop-a",
+      ownerUserId: identity.ownerUserId,
+      displayName: "Laptop",
+      platform: "linux",
+      location: "device",
+      connected: true,
+      provider: importProvider,
+    });
+    const admissionObservation = coordinator.observeJob(identity, "observed-operation");
+    await coordinator.start(
+      identity,
+      {
+        hostId: "desktop-a",
+        sourceId: "source-a",
+        dataTypes: ["bookmarks"],
+      },
+      "observed-operation"
+    );
+    expect((await admissionObservation).job.phase).toBe("discovering");
+    finishStorageRead(null);
+    const reading = await coordinator.observeJob(identity, "observed-operation");
+    expect(reading.job.phase).toBe("reading");
+    const observation = new AbortController();
+    const released = coordinator.observeJob(identity, "observed-operation", {
+      afterVersion: reading.version,
+      signal: observation.signal,
+    });
+    observation.abort(new Error("Panel closed"));
+    await expect(released).rejects.toThrow("Panel closed");
+    expect(coordinator.getJob(identity, "observed-operation")?.phase).toBe("reading");
+    const completion = coordinator.observeJob(identity, "observed-operation", {
+      afterVersion: reading.version,
+    });
+    finish();
+    expect((await completion).job.phase).toBe("complete");
+    await coordinator.waitForJob(identity, "observed-operation");
+    expect((await coordinator.observeJob(identity, "observed-operation")).job.phase).toBe(
+      "complete"
+    );
+  });
+
+  it("isolates observations by environment and releases missing-job waits on cancellation", async () => {
+    const coordinator = new BrowserImportCoordinator(store().value);
+    const observation = new AbortController();
+    const waiting = coordinator.observeJob(identity, "never-admitted", {
+      signal: observation.signal,
+    });
+    observation.abort(new Error("Invocation ended"));
+    await expect(waiting).rejects.toThrow("Invocation ended");
+    expect(coordinator.listJobs(identity)).toEqual([]);
+  });
+
+  it("rejects an observation for an unknown job instead of waiting without an owner", async () => {
+    const coordinator = new BrowserImportCoordinator(store().value);
+
+    await expect(coordinator.observeJob(identity, "missing-operation")).rejects.toThrow(
+      "Browser import job was not found: missing-operation"
+    );
+  });
+
+  it("recovers a persisted job when another environment has a live job with the same id", async () => {
+    const backing = store();
+    const coordinator = new BrowserImportCoordinator(backing.value);
+    const otherIdentity = {
+      ...identity,
+      workspaceId: "workspace-b",
+      environmentKey: "environment-b",
+    };
+    const stale = {
+      jobId: "shared-operation",
+      hostId: "desktop-a",
+      sourceId: "source-a",
+      phase: "reading" as const,
+      requestedDataTypes: ["bookmarks" as const],
+      startedAt: 1,
+      updatedAt: 1,
+      progress: [],
+      warnings: [],
+      resumable: true,
+    };
+    const getPersistedJob = vi.mocked(backing.value.getJob);
+    getPersistedJob.mockImplementation(async (requestedIdentity, jobId) =>
+      requestedIdentity.environmentKey === otherIdentity.environmentKey && jobId === stale.jobId
+        ? structuredClone(stale)
+        : null
+    );
+
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const importProvider = provider();
+    importProvider.openImport = vi.fn(async () => ({
+      consume: async () => {
+        await finished;
+        return { dataTypes: [], warnings: [] };
+      },
+    }));
+    coordinator.registerHost({
+      hostId: "desktop-a",
+      ownerUserId: identity.ownerUserId,
+      displayName: "Laptop",
+      platform: "linux",
+      location: "device",
+      connected: true,
+      provider: importProvider,
+    });
+
+    try {
+      await coordinator.start(
+        identity,
+        { hostId: "desktop-a", sourceId: "source-a", dataTypes: ["bookmarks"] },
+        stale.jobId
+      );
+      await vi.waitFor(() =>
+        expect(coordinator.getJob(identity, stale.jobId)?.phase).toBe("reading")
+      );
+
+      await expect(coordinator.observeJob(otherIdentity, stale.jobId)).resolves.toMatchObject({
+        job: {
+          phase: "failed",
+          error: "The previous browser import process stopped before the job completed",
+        },
+      });
+    } finally {
+      finish();
+      await coordinator.waitForJob(identity, stale.jobId);
+    }
+  });
+
   it("shows hosts only to their verified owner", () => {
     const coordinator = new BrowserImportCoordinator(store().value);
     coordinator.registerHost({
@@ -131,11 +281,15 @@ describe("BrowserImportCoordinator", () => {
       connected: true,
       provider: provider(),
     });
-    const started = await coordinator.start(identity, {
-      hostId: "desktop-a",
-      sourceId: "source-a",
-      dataTypes: ["bookmarks", "bookmarks"],
-    }, "public-operation");
+    const started = await coordinator.start(
+      identity,
+      {
+        hostId: "desktop-a",
+        sourceId: "source-a",
+        dataTypes: ["bookmarks", "bookmarks"],
+      },
+      "public-operation"
+    );
     const completed = await coordinator.waitForJob(identity, started.jobId);
     expect(completed.phase).toBe("complete");
     expect(completed.requestedDataTypes).toEqual(["bookmarks"]);
@@ -267,11 +421,15 @@ describe("BrowserImportCoordinator", () => {
       provider: provider(),
     });
 
-    const started = await coordinator.start(identity, {
-      hostId: "desktop-a",
-      sourceId: "source-a",
-      dataTypes: ["bookmarks"],
-    }, "public-operation");
+    const started = await coordinator.start(
+      identity,
+      {
+        hostId: "desktop-a",
+        sourceId: "source-a",
+        dataTypes: ["bookmarks"],
+      },
+      "public-operation"
+    );
     await vi.waitFor(() => expect(backing.jobs.get(started.jobId)?.phase).toBe("reconciling"));
 
     let completed = false;
@@ -306,11 +464,15 @@ describe("BrowserImportCoordinator", () => {
     });
 
     await expect(
-      coordinator.start(identity, {
-        hostId: "desktop-a",
-        sourceId: "source-a",
-        dataTypes: ["bookmarks"],
-      }, "public-operation")
+      coordinator.start(
+        identity,
+        {
+          hostId: "desktop-a",
+          sourceId: "source-a",
+          dataTypes: ["bookmarks"],
+        },
+        "public-operation"
+      )
     ).rejects.toThrow("durable store unavailable");
 
     expect(coordinator.listJobs(identity)[0]).toMatchObject({

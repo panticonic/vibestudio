@@ -146,6 +146,22 @@ describe("createBrowserDataClient", () => {
     ]);
   });
 
+  it("forwards observation cancellation as invocation ownership rather than provider arguments", async () => {
+    const rpc = makeRpc();
+    const client = createBrowserDataClient(rpc);
+    const observation = new AbortController();
+    await client.observeImportJob("job-1", {
+      afterVersion: "published-1",
+      signal: observation.signal,
+    });
+    expect(rpc.callService).toHaveBeenCalledWith(
+      "extensions",
+      "invokeProvider",
+      ["browserData", "observeImportJob", ["job-1", { afterVersion: "published-1" }]],
+      { signal: observation.signal }
+    );
+  });
+
   it("routes Electron-native browser effects directly to their resident service", async () => {
     const rpc = makeRpc();
     const client = createBrowserDataClient(rpc);

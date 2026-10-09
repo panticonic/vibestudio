@@ -18,6 +18,11 @@ export function isAgentInspectionMethod(value: string): value is AgentInspection
   return (AGENT_INSPECTION_METHODS as readonly string[]).includes(value);
 }
 
+/** Settings and suspension status are participant-facing; debug state requires channel administration. */
+export function isParticipantInspectionMethod(value: string): value is AgentInspectionMethod {
+  return value === "getAgentSettings" || value === "inspectMethodSuspensions";
+}
+
 /** A channel's read-only inspection request; `participantId` defaults to the
  * channel's sole Durable Object agent participant. */
 export const AgentInspectionRequestSchema = z

@@ -158,10 +158,7 @@ export interface HostCommandRegistry {
    * `panelId` is the slot the host transport received it from. Throws for a
    * request or response: the local shell accepts events only.
    */
-  deliverShellEnvelope(
-    panelId: string,
-    envelope: Pick<RpcEnvelope, "message">
-  ): void;
+  deliverShellEnvelope(panelId: string, envelope: Pick<RpcEnvelope, "message">): void;
   /**
    * Accept a contribution event the host RPC layer delivered with an
    * authenticated caller. Only panel and app callers may contribute; the slot
@@ -177,6 +174,8 @@ export interface HostCommandRegistry {
    * runtime. Without an id, forget every slot (host teardown).
    */
   release(panelId?: string): void;
+  /** Retire only contributions from this exact runtime incarnation. */
+  releaseRuntime(runtimeEntityId: string): void;
   /** Observe contribution changes; returns the unsubscribe function. */
   subscribe(listener: () => void): () => void;
 }
@@ -184,23 +183,25 @@ export interface HostCommandRegistry {
 export function createHostCommandRegistry(
   options: HostCommandRegistryOptions
 ): HostCommandRegistry {
-  const contributions = new Map<string, HostCommand[]>();
+  const contributions = new Map<string, { commands: HostCommand[]; runtimeEntityId: string }>();
   const listeners = new Set<() => void>();
   const warn = options.warn ?? ((message: string) => console.warn(message));
   const changed = () => {
     for (const listener of [...listeners]) listener();
   };
 
-  const accept = (panelId: string, payload: unknown): boolean => {
+  const accept = (panelId: string, payload: unknown, runtimeEntityId = panelId): boolean => {
     const commands = (payload as { commands?: unknown } | null)?.commands;
     if (!Array.isArray(commands) || !commands.every(isHostCommand)) {
       warn(`[host-commands] Rejected malformed command contribution from ${panelId}`);
       return false;
     }
     if (commands.length === 0) {
-      if (!contributions.delete(panelId)) return true;
+      const current = contributions.get(panelId);
+      if (!current || current.runtimeEntityId !== runtimeEntityId) return true;
+      contributions.delete(panelId);
     } else {
-      contributions.set(panelId, commands);
+      contributions.set(panelId, { commands, runtimeEntityId });
     }
     changed();
     return true;
@@ -213,7 +214,9 @@ export function createHostCommandRegistry(
         throw new Error(`The local shell accepts events only (from ${panelId})`);
       }
       if (message.event !== HOST_COMMAND_CONTRIBUTION_EVENT) {
-        warn(`[host-commands] Ignored unsupported local shell event ${message.event} from ${panelId}`);
+        warn(
+          `[host-commands] Ignored unsupported local shell event ${message.event} from ${panelId}`
+        );
         return;
       }
       accept(panelId, message.payload);
@@ -221,17 +224,15 @@ export function createHostCommandRegistry(
     acceptRpcEvent(event) {
       const { caller } = event;
       if (caller.callerKind !== "panel" && caller.callerKind !== "app") return false;
-      return accept(caller.callerPanelId ?? caller.callerId, event.payload);
+      return accept(caller.callerPanelId ?? caller.callerId, event.payload, caller.callerId);
     },
     get(panelId) {
-      return contributions.get(panelId) ?? [];
+      return contributions.get(panelId)?.commands ?? [];
     },
     list(focusedPanelId) {
       return [...contributions]
-        .map(([panelId, commands]) => ({ panelId, commands }))
-        .sort((a, b) =>
-          a.panelId === focusedPanelId ? -1 : b.panelId === focusedPanelId ? 1 : 0
-        );
+        .map(([panelId, { commands }]) => ({ panelId, commands }))
+        .sort((a, b) => (a.panelId === focusedPanelId ? -1 : b.panelId === focusedPanelId ? 1 : 0));
     },
     async run(panelId, commandId) {
       await options.dispatchRun(panelId, { commandId });
@@ -244,6 +245,14 @@ export function createHostCommandRegistry(
         return;
       }
       changed();
+    },
+    releaseRuntime(runtimeEntityId) {
+      let removed = false;
+      for (const [slotId, contribution] of contributions) {
+        if (contribution.runtimeEntityId === runtimeEntityId)
+          removed = contributions.delete(slotId) || removed;
+      }
+      if (removed) changed();
     },
     subscribe(listener) {
       listeners.add(listener);

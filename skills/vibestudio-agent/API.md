@@ -475,7 +475,7 @@ Authority principals: `code`, `host`, `user`
 | `problemReports.decide` | Trusted human shell/CLI only: persist automatic reporting choice. Agents cannot consent. |
 | `problemReports.create` | Create a local manual problem report. Does not send or enroll reporting. |
 | `problemReports.get` | Read an owned report draft. |
-| `problemReports.update` | Revision-checked replacement of a manual draft's editable content. The host assigns revisions and submission IDs. Agents add and edit narrative with appendNarrative and patchNarrative. |
+| `problemReports.update` | Revision-checked replacement of a manual draft's editable content. Narrative must match the current draft; add and edit it through appendNarrative and patchNarrative. The host assigns revisions and submission IDs. |
 | `problemReports.appendNarrative` | Revision-checked append of narrative sections to a manual draft. The host assigns each section ID (returned in order) and records the author from the verified caller: agents write agent sections. |
 | `problemReports.patchNarrative` | Revision-checked edit of one narrative section by its host-assigned ID. Omitted fields are kept; the section's ID and author never change. |
 | `problemReports.prepare` | Sanitize and freeze a draft revision for preview, download, and send. When sanitization changes content, the host saves the sanitized draft as the next revision and freezes that. Returns the frozen revision with its exact canonical bytes, submission ID, and digest. Never sends. |

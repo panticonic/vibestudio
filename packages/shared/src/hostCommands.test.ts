@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createHostCommandRegistry,
-  HOST_COMMAND_CONTRIBUTION_EVENT,
-} from "./hostCommands.js";
+import { createHostCommandRegistry, HOST_COMMAND_CONTRIBUTION_EVENT } from "./hostCommands.js";
 
 const registryForTest = () => createHostCommandRegistry({ dispatchRun: () => {}, warn: () => {} });
 
@@ -14,6 +11,34 @@ function contribution(
 }
 
 describe("createHostCommandRegistry", () => {
+  it("retires only the old runtime when a replacement has already contributed to the same slot", () => {
+    const registry = registryForTest();
+    const accept = (callerId: string) =>
+      registry.acceptRpcEvent(
+        contribution({ callerId, callerKind: "panel", callerPanelId: "slot" }, [
+          { id: callerId, label: callerId },
+        ])
+      );
+    accept("old-runtime");
+    accept("new-runtime");
+    registry.releaseRuntime("old-runtime");
+    expect(registry.get("slot")).toEqual([{ id: "new-runtime", label: "new-runtime" }]);
+    registry.releaseRuntime("new-runtime");
+    expect(registry.get("slot")).toEqual([]);
+  });
+  it("ignores an empty contribution from an old runtime after slot replacement", () => {
+    const registry = registryForTest();
+    const accept = (callerId: string, commands: unknown[]) =>
+      registry.acceptRpcEvent(
+        contribution({ callerId, callerKind: "panel", callerPanelId: "slot" }, commands)
+      );
+
+    accept("old-runtime", [{ id: "old", label: "Old" }]);
+    accept("new-runtime", [{ id: "new", label: "New" }]);
+    accept("old-runtime", []);
+
+    expect(registry.get("slot")).toEqual([{ id: "new", label: "New" }]);
+  });
   it("keys runtime panels by their durable visible slot", () => {
     const registry = registryForTest();
     expect(
@@ -72,7 +97,9 @@ describe("createHostCommandRegistry", () => {
       ],
     };
     expect(
-      registry.acceptRpcEvent(contribution({ callerId: "panel:chat", callerKind: "panel" }, [command]))
+      registry.acceptRpcEvent(
+        contribution({ callerId: "panel:chat", callerKind: "panel" }, [command])
+      )
     ).toBe(true);
     expect(registry.get("panel:chat")).toEqual([command]);
   });
@@ -102,9 +129,9 @@ describe("createHostCommandRegistry", () => {
     expect(reject([{ name: "a", label: "A", type: "widget", required: true }])).toBe(false);
     expect(reject([{ name: "a", label: "A", type: "string" }])).toBe(false);
     expect(reject([{ name: "", label: "A", type: "string", required: true }])).toBe(false);
-    expect(reject([{ name: "a", label: "A", type: "enum", required: true, options: [{ value: 1 }] }])).toBe(
-      false
-    );
+    expect(
+      reject([{ name: "a", label: "A", type: "enum", required: true, options: [{ value: 1 }] }])
+    ).toBe(false);
     // A pattern that cannot compile would reject every value the user types.
     expect(reject([{ name: "a", label: "A", type: "string", required: true, pattern: "([" }])).toBe(
       false
@@ -174,7 +201,13 @@ describe("createHostCommandRegistry", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("runtime:future-shell-capability"));
     expect(() =>
       registry.deliverShellEnvelope("panel:tree/a", {
-        message: { type: "request", requestId: "r1", fromId: "panel:tree/a", method: "x", args: [] },
+        message: {
+          type: "request",
+          requestId: "r1",
+          fromId: "panel:tree/a",
+          method: "x",
+          args: [],
+        },
       } as never)
     ).toThrow(/events only/);
   });

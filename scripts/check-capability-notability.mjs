@@ -78,9 +78,10 @@ function visitPackageManifests(directory) {
 
 for (const checkout of Object.values(templateCheckouts)) visitPackageManifests(checkout);
 
-// Dynamic workspace-service envelopes are authored by the workspace, so their
-// review classification belongs beside the service's action and presentation.
-// This is the same declaration the live build and install review consume.
+// A workspace selects a named provider export. Service review classification
+// lives on that export beside its action and presentation, while the root
+// manifest carries only the stable provider identity. Resolve the same
+// provider declaration the live build and install review consume.
 const workspaceServiceDeclarationGaps = [];
 for (const [templateName, checkout] of Object.entries(templateCheckouts)) {
   const relativeConfigPath = "meta/vibestudio.yml";
@@ -88,11 +89,31 @@ for (const [templateName, checkout] of Object.entries(templateCheckouts)) {
   const workspaceConfig = parseYaml(fs.readFileSync(workspaceConfigPath, "utf8"));
   for (const service of workspaceConfig.services ?? []) {
     const capability = `workspace-service:${service.name}`;
-    const source = `${templateName}/${relativeConfigPath} services.${service.name}.notability`;
-    if (service.notability !== "headline" && service.notability !== "everyday") {
+    const providerPath = path.join(checkout, service.source, "package.json");
+    if (!fs.existsSync(providerPath)) {
+      throw new Error(
+        `${templateName}/${relativeConfigPath} selects ${service.name} from ${service.source}, but ${service.source}/package.json is missing`
+      );
+    }
+    const providerManifest = JSON.parse(fs.readFileSync(providerPath, "utf8"));
+    const providerServices = providerManifest.vibestudio?.services;
+    if (!Array.isArray(providerServices)) {
+      throw new Error(
+        `${templateName}/${service.source}/package.json must declare vibestudio.services as a list`
+      );
+    }
+    const exports = providerServices.filter((entry) => entry.name === service.name);
+    if (exports.length !== 1) {
+      throw new Error(
+        `${templateName}/${service.source}/package.json must export ${service.name} exactly once`
+      );
+    }
+    const declared = exports[0].notability;
+    const source = `${templateName}/${service.source}/package.json vibestudio.services.${service.name}.notability`;
+    if (declared !== "headline" && declared !== "everyday") {
       workspaceServiceDeclarationGaps.push({ capability, source });
     }
-    note(capability, source, service.notability);
+    note(capability, source, declared);
   }
 }
 

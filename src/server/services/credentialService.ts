@@ -965,6 +965,20 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (typeof value !== "string" || value.length === 0 || value.length > 16_384) {
       throw new Error("Credential derivation result must be a bounded non-empty string");
     }
+    let expiresAt: number;
+    try {
+      const segments = value.split(".");
+      if (segments.length !== 3) throw new Error("Expected a JWT");
+      const payload = JSON.parse(Buffer.from(segments[1]!, "base64url").toString("utf8"));
+      if (typeof payload?.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= 0)
+        throw new Error("Expected a positive finite NumericDate exp claim");
+      expiresAt = payload.exp * 1000;
+      if (!Number.isFinite(expiresAt))
+        throw new Error("JWT expiry cannot be represented in epoch milliseconds");
+      if (expiresAt <= Date.now()) throw new Error("JWT is already expired");
+    } catch (cause) {
+      throw new Error("Credential derivation source returned no usable JWT expiry", { cause });
+    }
     const sourceUrl = new URL(params.source.url);
     return storeCredential(
       ctx,
@@ -987,7 +1001,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         material: { type: "bearer-token", token: value },
         accountIdentity: { providerUserId: sourceUrl.hostname },
         scopes: [],
-        expiresAt: Date.now() + params.credential.expiresInMs,
+        expiresAt,
         metadata: {
           ...(params.credential.metadata ?? {}),
           derivedFromOrigin: sourceUrl.origin,

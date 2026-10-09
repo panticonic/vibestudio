@@ -114,7 +114,7 @@ export class UnitSupervisor {
       const entity = await this.requireDriver(target.kind).describe(target.entityId);
       return entity ? [entity] : [];
     }
-    return (await this.list(target.kind)).filter(
+    return (await this.list()).filter(
       (entity) =>
         entity.release?.kind === target.kind && entity.release.releaseId === target.releaseId
     );

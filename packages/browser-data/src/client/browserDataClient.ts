@@ -14,6 +14,7 @@ import type {
   ImportedBrowserOpenTab,
   ImportHostSummary,
   ImportJobSnapshot,
+  ImportJobObservation,
   PageFavicon,
 } from "../environment.js";
 import type {
@@ -131,6 +132,11 @@ export interface BrowserDataClient {
   openBrowserPrivacyManager(section?: BrowserPrivacySection): Promise<void>;
   cancelImport(jobId: string): Promise<void>;
   getImportJob(jobId: string): Promise<ImportJobSnapshot | null>;
+  /** Wait for the next published snapshot; cancellation releases only observation. */
+  observeImportJob(
+    jobId: string,
+    options?: { afterVersion?: string; signal?: AbortSignal }
+  ): Promise<ImportJobObservation>;
   listImportJobs(): Promise<ImportJobSnapshot[]>;
   listOpenTabs(hostId: string, sourceId: string): Promise<ImportedBrowserOpenTab[]>;
   openTabsAsPanels(request: OpenTabsAsPanelsRequest): Promise<OpenTabsAsPanelsResult>;
@@ -243,6 +249,12 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     openBrowserPrivacyManager: (section) => callNative("openBrowserPrivacyManager", section),
     cancelImport: (jobId) => callNative("cancelImport", jobId),
     getImportJob: (jobId) => callNative("getImportJob", jobId),
+    observeImportJob: (jobId, options) =>
+      callExtension(
+        "invokeProvider",
+        ["browserData", "observeImportJob", [jobId, { afterVersion: options?.afterVersion }]],
+        { signal: options?.signal }
+      ),
     listImportJobs: () => callNative("listImportJobs"),
     listOpenTabs: (hostId, sourceId) => callNative("listOpenTabs", { hostId, sourceId }),
     openTabsAsPanels: (request) => callNative("openTabsAsPanels", request),

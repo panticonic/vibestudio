@@ -23,6 +23,7 @@ export type {
   ImportedBrowserOpenTab,
   ImportHostSummary,
   ImportJobSnapshot,
+  ImportJobObservation,
   PageFavicon,
 } from "./environment.js";
 export type {
