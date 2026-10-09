@@ -175,8 +175,8 @@ Commit in reviewable slices, per repo and per goal, not as one blob.
     credential expiry from that claim rather than imposing a local 15-minute lifetime.
 16. **SetupHub owner-state change events.** Too large for this pass; it needs its own task
     (8 owner sources).
-17. **Remaining polling.** Migration progress now follows the provider's event-observation
-    lifecycle; unmount cancels observation, not the import operation. Collection and
-    System Automations still use polling:
-    - collection panel `setInterval(refresh, 2000)` (`personal/about/collection/index.tsx:~313`)
-    - System Automations UI 5s polling
+17. **Observation updates.** Migration progress now follows the provider's event-observation
+    lifecycle; unmount cancels observation, not the import operation. Collection
+    follows panel-tree invalidations. System Automations follows MissionsDO's
+    user-scoped version observation, and News refreshes from channel events.
+    The final UI checks for the latter two changes remain part of integration.

@@ -495,6 +495,11 @@ export interface MissionDefinitionInput {
   charter: MissionCharter;
 }
 
+export interface MissionDefaultDefinitionInput extends MissionDefinitionInput {
+  /** The owner's initial state, admitted atomically with a new default. */
+  state?: "active" | "paused";
+}
+
 export interface MissionEditPatch {
   name?: string;
   charter?: MissionCharter;
@@ -532,7 +537,7 @@ export interface MissionsClient {
   launch(input: MissionDefinitionInput, options?: MissionCallOptions): Promise<MissionRecord>;
   provisionDefault(
     defaultId: string,
-    input: MissionDefinitionInput,
+    input: MissionDefaultDefinitionInput,
     options?: MissionCallOptions
   ): Promise<MissionRecord>;
   edit(

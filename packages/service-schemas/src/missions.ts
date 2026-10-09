@@ -276,7 +276,12 @@ export const missionsMethods = defineReceiverServiceMethods({
     ),
     description:
       "Provision one named workspace default, preserving any installed or retired definition.",
-    args: z.tuple([z.string().min(1), createInputSchema]),
+    args: z.tuple([
+      z.string().min(1),
+      createInputSchema.extend({
+        state: z.enum(["active", "paused"]).optional(),
+      }),
+    ]),
     returns: missionRecordSchema,
     authority: AUTOMATION_AUTHORS,
     access: { sensitivity: "write" },
