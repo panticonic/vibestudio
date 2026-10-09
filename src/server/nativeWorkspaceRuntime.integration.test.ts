@@ -122,8 +122,17 @@ it("runs bundled typechecking with its admitted native compiler and standard lib
   const statePath = path.join(root, "state");
   const sourceRoot = path.join(statePath, "source");
   await mkdir(sourceRoot, { recursive: true });
-  const source =
-    'import { answer } from "@vibestudio/fixture-sdk"; const result: number = answer;\n';
+  const source = `import { answer } from "@vibestudio/fixture-sdk";
+import type { Sha256 } from "@vibestudio/shared/execution/contracts";
+import type { UnitRegistryEntryBase } from "@vibestudio/unit-host/types";
+const result: number = answer;
+const digest = "a".repeat(64) as Sha256;
+declare const entry: UnitRegistryEntryBase;
+void result;
+void digest;
+void entry;
+process.env.NODE_ENV;
+`;
   await writeFile(path.join(sourceRoot, "index.ts"), source);
   const dependencies = path.join(root, "acquired-dependencies");
   const dependency = path.join(dependencies, "typed-dependency");
@@ -151,9 +160,23 @@ it("runs bundled typechecking with its admitted native compiler and standard lib
     'export { answer } from "typed-dependency";\n'
   );
   await writeFile(path.join(sdk, ".npmrc"), "host-only package-manager input");
+  const unrelatedOwner = path.join(root, "unrelated-node-owner");
+  const unrelatedOwnerNodeModules = path.join(root, "unrelated-node-owner-node_modules");
   let runtime: Awaited<ReturnType<typeof startNativeWorkspaceRuntime>> | undefined;
   let admitted: string | undefined;
   try {
+    await mkdir(unrelatedOwner, { recursive: true });
+    await writeFile(
+      path.join(unrelatedOwner, "package.json"),
+      JSON.stringify({ name: "@vibestudio/unrelated-node-owner", types: "index.d.ts" })
+    );
+    await writeFile(path.join(unrelatedOwner, "index.d.ts"), "export interface Marker {}\n");
+    await mkdir(path.join(unrelatedOwnerNodeModules, "@types"), { recursive: true });
+    await cp(
+      path.resolve("node_modules/@types/node"),
+      path.join(unrelatedOwnerNodeModules, "@types/node"),
+      { recursive: true }
+    );
     const bundled = await build({
       stdin: {
         contents: 'export { TypeCheckService } from "@vibestudio/typecheck";',
@@ -180,14 +203,28 @@ it("runs bundled typechecking with its admitted native compiler and standard lib
       runtime.admitDependencies({
         key: "fixture-dependencies",
         nodeModulesDir: dependencies,
-        workspacePackages: { "@vibestudio/fixture-sdk": sdk },
-        workspacePackageNodeModules: {},
+        workspacePackages: {
+          "@vibestudio/fixture-sdk": sdk,
+          "@vibestudio/shared": path.resolve("packages/shared"),
+          "@vibestudio/unit-host": path.resolve("packages/unit-host"),
+          "@vibestudio/unrelated-node-owner": unrelatedOwner,
+        },
+        workspacePackageNodeModules: {
+          "@vibestudio/unrelated-node-owner": unrelatedOwnerNodeModules,
+        },
       }),
       runtime.admitDependencies({
         key: "fixture-dependencies",
         nodeModulesDir: dependencies,
-        workspacePackages: { "@vibestudio/fixture-sdk": sdk },
-        workspacePackageNodeModules: {},
+        workspacePackages: {
+          "@vibestudio/fixture-sdk": sdk,
+          "@vibestudio/shared": path.resolve("packages/shared"),
+          "@vibestudio/unit-host": path.resolve("packages/unit-host"),
+          "@vibestudio/unrelated-node-owner": unrelatedOwner,
+        },
+        workspacePackageNodeModules: {
+          "@vibestudio/unrelated-node-owner": unrelatedOwnerNodeModules,
+        },
       }),
     ]);
     expect(concurrentAdmissions[0]).toBe(concurrentAdmissions[1]);
@@ -215,15 +252,23 @@ it("runs bundled typechecking with its admitted native compiler and standard lib
           assert.throws(() => fs.writeFileSync(${JSON.stringify(path.join(admitted, "typed-dependency", "index.d.ts"))}, 'mutated'));
         }
         const service = new TypeCheckService({panelPath: ${JSON.stringify(sourceRoot)}, nodeModulesPaths: [${JSON.stringify(admitted)}], workspaceContext: {
-          monorepoRoot: ${JSON.stringify(sourceRoot)}, packages: new Map([["@vibestudio/fixture-sdk", {
-            name: "@vibestudio/fixture-sdk", dir: ${JSON.stringify(sdkResource)},
-            packageJson: JSON.parse(fs.readFileSync(${JSON.stringify(path.join(sdkResource, "package.json"))}, 'utf8')),
-          }]])
+          monorepoRoot: ${JSON.stringify(sourceRoot)}, packages: new Map(Object.entries(${JSON.stringify(resources.workspacePackages)}).map(([name, dir]) => [name, {
+            name, dir, packageJson: JSON.parse(fs.readFileSync(dir + '/package.json', 'utf8')),
+          }]))
         }, disableTsconfigDiscovery: true});
         try {
           service.updateFile('index.ts', ${JSON.stringify(source)});
           const result = service.check();
           assert(result.diagnostics.some(diagnostic => diagnostic.code === 2322));
+          const missingProcess = result.diagnostics.find(diagnostic =>
+            /Cannot find name 'process'/.test(diagnostic.message)
+          );
+          assert(missingProcess, JSON.stringify(result.diagnostics.map(({ code, message, file }) => ({ code, message, file }))));
+          assert.equal(
+            result.diagnostics.length,
+            2,
+            JSON.stringify(result.diagnostics.map(({ code, message, file }) => ({ code, message, file })))
+          );
           assert(!result.diagnostics.some(diagnostic => diagnostic.code === 2307));
           assert(!result.diagnostics.some(diagnostic => diagnostic.message.includes('global type')));
         } finally { service.dispose(); }

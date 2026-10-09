@@ -1,89 +1,27 @@
 import { canonicalJson } from "@vibestudio/content-addressing";
-import { domainHash, parseSha256, type Sha256 } from "./identity.js";
-
-export type ExecutionOwnerKind =
-  | "runtime-entity"
-  | "panel-history"
-  | "app-generation"
-  | "extension-generation"
-  | "terminal-app"
-  | "runtime-image"
-  | "eval-run"
-  | "development-run"
-  | "product-seed";
-
-export type ExecutionRootReason =
-  | "active"
-  | "pinned"
-  | "rollback"
-  | "in-flight"
-  | "retained-result";
-
-export interface ExecutionSourceContentRoot {
-  readonly repoPath: string | null;
-  readonly stateHash: string;
-}
-
-export type ExecutionSourceStateRef =
-  | { readonly kind: "event"; readonly eventId: string }
-  | { readonly kind: "application"; readonly applicationId: string }
-  | { readonly kind: "bootstrap-snapshot"; readonly snapshotHash: string };
-
-interface ExecutionSourceIdentityBaseV1 {
-  readonly workspaceId: string;
-  readonly effectiveVersion: Sha256;
-  readonly contentRoots: readonly ExecutionSourceContentRoot[];
-  readonly sourceClosureDigest: Sha256;
-}
-
-export type ExecutionSourceIdentityV1 =
-  | (ExecutionSourceIdentityBaseV1 & {
-      readonly kind: "workspace";
-      readonly state: ExecutionSourceStateRef;
-    })
-  | (ExecutionSourceIdentityBaseV1 & {
-      readonly kind: "product-seed";
-      readonly state: null;
-    });
-
-/** Complete immutable identity used by every authoritative executable owner. */
-export interface ExecutionArtifactRefV1 {
-  readonly version: 1;
-  readonly sourceState: ExecutionSourceIdentityV1;
-  readonly recipeDigest: Sha256;
-  readonly buildKey: Sha256;
-  readonly artifactDigest: Sha256;
-  readonly executionDigest: Sha256;
-}
-
-export interface ExecutionRoot {
-  readonly owner: ExecutionOwnerKind;
-  readonly ownerId: string;
-  readonly reason: ExecutionRootReason;
-  readonly artifact: ExecutionArtifactRefV1;
-}
-
-export interface ExecutionRootProvider {
-  readonly id: string;
-  readonly mandatory: boolean;
-  snapshotRoots(epoch: number): Promise<readonly ExecutionRoot[]>;
-}
-
-export interface ExecutionPublicationArtifact {
-  readonly buildKey: string;
-  readonly executionDigest: string;
-}
-
-export interface ExecutionPublication {
-  readonly owner: ExecutionOwnerKind;
-  readonly ownerId: string;
-  readonly artifacts: readonly ExecutionPublicationArtifact[];
-}
-
-export interface ExecutionPublicationReservation {
-  readonly reservationId: string;
-  readonly epoch: number;
-}
+import { domainHash, parseSha256 } from "./identity.js";
+import type { Sha256 } from "./contracts.js";
+export type {
+  ExecutionArtifactRefV1,
+  ExecutionOwnerKind,
+  ExecutionPublication,
+  ExecutionPublicationArtifact,
+  ExecutionPublicationReservation,
+  ExecutionRoot,
+  ExecutionRootProvider,
+  ExecutionRootReason,
+  ExecutionSourceContentRoot,
+  ExecutionSourceIdentityV1,
+  ExecutionSourceStateRef,
+} from "./contracts.js";
+import type {
+  ExecutionArtifactRefV1,
+  ExecutionPublication,
+  ExecutionPublicationReservation,
+  ExecutionSourceContentRoot,
+  ExecutionSourceIdentityV1,
+  ExecutionSourceStateRef,
+} from "./contracts.js";
 
 /**
  * Portable owner-publication interlock.

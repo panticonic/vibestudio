@@ -15,8 +15,7 @@ import type {
   UserlandCapabilityDefinition,
   WorkspaceServiceProtocolRequest,
 } from "@vibestudio/shared/authorityManifest";
-import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retention";
-import type { Sha256 } from "@vibestudio/shared/execution/identity";
+import type { ExecutionArtifactRefV1, Sha256 } from "@vibestudio/shared/execution/contracts";
 import { AuthorityResourceScopeSchema, authorityRowSchema } from "./authority.js";
 import { PanelPlacementHintSchema } from "./panel.js";
 import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";

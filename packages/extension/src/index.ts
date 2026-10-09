@@ -1,5 +1,5 @@
-import type { UnitRegistryEntryBase } from "@vibestudio/unit-host";
-import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { UnitRegistryEntryBase } from "@vibestudio/unit-host/types";
+import type { CallerKind } from "@vibestudio/shared/principalKinds";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
 import { EXTENSIONS_METHOD_NAMES } from "@vibestudio/service-schemas/clients/generated/runtimeClientMethods";
 import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";

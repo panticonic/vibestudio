@@ -1,87 +1,29 @@
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@vibestudio/content-addressing";
-
-/** Full SHA-256 values are the only executable/security identifiers. */
-export interface Sha256Brand { readonly __sha256: unique symbol }
-export type Sha256 = string & Sha256Brand;
-
-export interface SourceRevisionRef {
-  repoPath: string;
-  sourceEv: Sha256;
-  stateHash: Sha256;
-}
-
-export type CanonicalBuildValue =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly CanonicalBuildValue[]
-  | { readonly [key: string]: CanonicalBuildValue };
-
-export type CanonicalBuildOptions = Readonly<Record<string, CanonicalBuildValue>>;
-
-export interface ToolchainManifestRef {
-  digest: Sha256;
-  components: Readonly<Record<string, Sha256>>;
-}
-
-export interface LockedDependencyGraphRef {
-  digest: Sha256;
-}
-
-export interface BuildRecipe {
-  target: string;
-  platform: string;
-  architecture: string;
-  abi: string | null;
-  options: CanonicalBuildOptions;
-  toolchain: ToolchainManifestRef;
-  dependencyGraph: LockedDependencyGraphRef;
-  /** Exact builder/plugin code, separate from the tool binaries it invokes. */
-  builderDigest: Sha256;
-  /** Names and values of the non-secret environment admitted to the build. */
-  declaredEnvironment: Readonly<Record<string, string>>;
-}
-
-export type ExecutionSelector =
-  | { kind: "head"; repoPath: string; head: "main" | { contextId: string } }
-  | { kind: "state"; repoPath: string; stateHash: Sha256 }
-  | { kind: "artifact"; executionDigest: Sha256 };
-
-export type SelectorPolicy = ExecutionSelector;
-
-export type AdoptionPolicy =
-  | { kind: "next-request" }
-  | { kind: "cache-invalidation" }
-  | { kind: "queued-user-action"; action: string }
-  | { kind: "mobile-install" }
-  | { kind: "process-restart" };
-
-export interface ArtifactManifestEntry {
-  path: string;
-  role: string;
-  size: number;
-  mode: 0o644 | 0o755;
-  contentType: string;
-  digest: Sha256;
-}
-
-export interface ArtifactManifest {
-  version: 1;
-  source: SourceRevisionRef;
-  recipeDigest: Sha256;
-  buildKey: Sha256;
-  entries: readonly ArtifactManifestEntry[];
-}
-
-export interface ArtifactBundleEntry {
-  path: string;
-  role: string;
-  mode: 0o644 | 0o755;
-  contentType: string;
-  bytes: Uint8Array;
-}
+import type {
+  ArtifactBundleEntry,
+  ArtifactManifest,
+  BuildRecipe,
+  CanonicalBuildValue,
+  Sha256,
+  SourceRevisionRef,
+} from "./contracts.js";
+export type {
+  AdoptionPolicy,
+  ArtifactBundleEntry,
+  ArtifactManifest,
+  ArtifactManifestEntry,
+  BuildRecipe,
+  CanonicalBuildOptions,
+  CanonicalBuildValue,
+  ExecutionSelector,
+  LockedDependencyGraphRef,
+  Sha256,
+  Sha256Brand,
+  SelectorPolicy,
+  SourceRevisionRef,
+  ToolchainManifestRef,
+} from "./contracts.js";
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const STATE_SHA256_RE = /^state:([0-9a-f]{64})$/;

@@ -1,5 +1,5 @@
 import type { CapabilityScope, ResourceScope } from "@vibestudio/rpc";
-import type { BuildRecipe, CanonicalBuildValue } from "./execution/identity.js";
+import type { BuildRecipe, CanonicalBuildValue } from "./execution/contracts.js";
 import type { AuthorityDomainId, AuthorityVerb } from "./authority/authorityDomains.js";
 import type { CapabilityNotability } from "./authority/capabilityNotability.js";
 

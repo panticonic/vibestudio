@@ -14,7 +14,8 @@ import {
   type ExecutionPublicationPort,
 } from "@vibestudio/shared/execution/retention";
 
-export type UnitKind = "extension" | "app";
+import type { UnitKind, UnitRegistryEntryBase, UnitRegistryStatus, UnitSource } from "./types.js";
+export type { UnitKind, UnitRegistryEntryBase, UnitRegistryStatus, UnitSource } from "./types.js";
 
 function unitErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -45,20 +46,6 @@ export interface UnitDescriptor<Kind extends UnitKind = UnitKind> {
     nativeCode: boolean;
   };
   seedTrustEligible: boolean;
-}
-
-export type UnitRegistryStatus =
-  | "running"
-  | "available"
-  | "stopped"
-  | "error"
-  | "pending-approval"
-  | "building";
-
-export interface UnitSource {
-  kind: "workspace-repo";
-  repo: string;
-  ref: string;
 }
 
 export interface UnitBuildIdentity<Kind extends UnitKind = UnitKind> {
@@ -112,22 +99,6 @@ export class UnitTrustResolver<Entry extends UnitRegistryEntryBase> {
     if (!entryIdentity) return false;
     return unitBuildIdentitiesMatch(entryIdentity, identity);
   }
-}
-
-export interface UnitRegistryEntryBase {
-  unitKind: UnitKind;
-  name: string;
-  version: string;
-  source: UnitSource;
-  installedAt: number;
-  activeEv: string | null;
-  activeSourceHash: string | null;
-  activeBundleKey: string | null;
-  activeDependencyEvs: Record<string, string>;
-  activeExternalDeps: Record<string, string>;
-  activeRuntimeDepsKey: string | null;
-  status: UnitRegistryStatus;
-  lastError: string | null;
 }
 
 export interface UnitDeclaration {

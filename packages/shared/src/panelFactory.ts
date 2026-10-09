@@ -7,6 +7,7 @@
 
 import { normalizeRelativePanelPath } from "./pathUtils.js";
 import type { PanelEntityId, PanelSlotId } from "./panel/ids.js";
+export { browserSourceFromHostname, generateContextId } from "./panelIdentity.js";
 
 // =============================================================================
 // Types
@@ -31,7 +32,6 @@ export interface BuildBootstrapConfigOpts {
   env?: Record<string, string>;
   stateArgs?: Record<string, unknown>;
 }
-
 export interface BuildPanelUrlOpts {
   source: string;
   contextId: string;
@@ -155,23 +155,4 @@ export function buildPanelEnv(opts: BuildPanelEnvOpts): Record<string, string> {
     __VIBESTUDIO_SOURCE_REPO: opts.sourceRepo,
     __VIBESTUDIO_GATEWAY_CONFIG: gatewayConfig,
   };
-}
-
-/**
- * Generate a contextId from a panelId.
- */
-export function generateContextId(panelId: string): string {
-  return `ctx-${panelId
-    .replace(/[^a-z0-9]/gi, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .toLowerCase()
-    .slice(0, 59)}`;
-}
-
-/**
- * Derive a normalized source path for browser panels from a hostname.
- */
-export function browserSourceFromHostname(hostname: string): string {
-  return `browser~${hostname.replace(/[^a-z0-9.-]/gi, "-")}`;
 }

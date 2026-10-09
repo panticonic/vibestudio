@@ -91,6 +91,7 @@
     "./desktopKeymap": "./src/desktopKeymap.ts",
     "./panelContracts": "./src/panelContracts.ts",
     "./panelFactory": "./src/panelFactory.ts",
+    "./panelIdentity": "./src/panelIdentity.ts",
     "./panelIdUtils": "./src/panelIdUtils.ts",
     "./panelInterfaces": "./src/panelInterfaces.ts",
     "./panelLocation": "./src/panelLocation.ts",
