@@ -29,6 +29,20 @@ implies display access.
 Playback requires document user activation by default. Opening a video link in
 another panel does not grant autoplay activation to that new page.
 
+YouTube iframes use Chromium's native `loading="lazy"` admission. Electron can
+keep a hidden panel schedulable with a full-sized viewport and a `visible`
+document visibility state while its native surface remains hidden. Starting
+YouTube in that state selects a tiny thumbnail which the player keeps after
+presentation. Preserving panel geometry alone does not prevent this. Native
+lazy loading starts the embed when it can be presented and preserves that same
+player through later panel switches.
+
+A native Electron reproduction with the onboarding video `emcaUhaFLzw` and a
+567×319 iframe loaded `default.jpg` (120×90) during an eager hidden boot, and
+retained it after showing the view. With native lazy loading, the frame remained
+unloaded during the hidden boot and fetched `sddefault.jpg` (640×480) when shown.
+Both tests kept background throttling disabled, matching workspace panel boots.
+
 A presented browser or workspace panel can use the standard Fullscreen API,
 including videos in cross-origin iframes that permit fullscreen. The compositor
 expands the existing native view to the whole window and removes sibling chrome
