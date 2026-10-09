@@ -44,6 +44,31 @@ describe("panel observation failures", () => {
     }
   });
 
+  it("classifies a bundle lost to transport as infrastructure, not panel code", () => {
+    const provenance = { source: "panels/chat", contextId: "ctx", requestedRef: "latest" };
+    const transport = new PanelOperationError(
+      panelFailure({
+        code: "asset_transport_failed",
+        stage: "boot",
+        message: "The panel bundle could not be loaded: net::ERR_CONNECTION_RESET",
+        provenance,
+      })
+    );
+    expect(transport.errorData).toMatchObject({
+      failureKind: "infrastructure",
+      recovery: { sameInputRetry: "reobserve-first", nextAction: "observe-and-reacquire" },
+    });
+    const missing = new PanelOperationError(
+      panelFailure({
+        code: "asset_unavailable",
+        stage: "boot",
+        message: "The panel bundle could not be loaded",
+        provenance,
+      })
+    );
+    expect(missing.errorData.failureKind).toBe("user-code");
+  });
+
   it("validates the canonical browser page observation", () => {
     expect(
       parsePanelPageObservation({

@@ -525,7 +525,10 @@ export class PanelRuntimeCoordinator {
         observedBoot?.stack ||
       (previousPage?.boot.kind === "observed"
         ? previousPage.boot.observation.failureStage
-        : undefined) !== observedBoot?.failureStage;
+        : undefined) !== observedBoot?.failureStage ||
+      (previousPage?.boot.kind === "observed"
+        ? previousPage.boot.observation.transportFailure?.netError
+        : undefined) !== observedBoot?.transportFailure?.netError;
     const previousBuild = this.buildStates.get(lease.slotId);
     const buildChanged = Boolean(
       observedBoot?.buildKey &&
@@ -557,18 +560,42 @@ export class PanelRuntimeCoordinator {
       // Preserve the loader's failure taxonomy. Records predating the
       // failureStage tag default to entry — the historical common case.
       const bootFailureStage = observedBoot.failureStage ?? "entry";
+      // Only the host can see why a bundle failed to load. Its observed
+      // transport failure makes this an environment failure, not panel code;
+      // the page cannot vouch for that evidence about itself.
+      const transportFailure =
+        bootFailureStage === "bundle-load" && evidence.principal === "host"
+          ? observedBoot.transportFailure
+          : undefined;
       const failure =
         observedBoot.phase === "failed"
           ? {
               stage: bootFailureStage,
-              code:
-                bootFailureStage === "bundle-load"
+              code: transportFailure
+                ? ("asset_transport_failed" as const)
+                : bootFailureStage === "bundle-load"
                   ? ("asset_unavailable" as const)
                   : bootFailureStage === "config"
                     ? ("unknown_failure" as const)
                     : ("entry_threw" as const),
-              ...(observedBoot.message ? { message: observedBoot.message } : {}),
+              ...(transportFailure
+                ? {
+                    message: `${observedBoot.message ?? "The panel bundle could not be loaded"}: ${
+                      transportFailure.netError
+                    } while loading ${transportFailure.url}`,
+                  }
+                : observedBoot.message
+                  ? { message: observedBoot.message }
+                  : {}),
               ...(observedBoot.stack ? { stack: observedBoot.stack } : {}),
+              ...(transportFailure
+                ? {
+                    diagnostics: {
+                      netError: transportFailure.netError,
+                      url: transportFailure.url,
+                    },
+                  }
+                : {}),
             }
           : undefined;
       advanced = this.reportAttemptPhase(attempt.attemptId, {

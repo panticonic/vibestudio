@@ -108,6 +108,7 @@ export const PanelFailureCodeSchema = z.enum([
   "lease_conflict",
   "navigation_failed",
   "asset_unavailable",
+  "asset_transport_failed",
   "entry_threw",
   "boot_stalled",
   "render_crashed",
@@ -154,6 +155,7 @@ export const PanelBootObservationSchema: z.ZodType<PanelBootObservation> = z.obj
   errorName: z.string().optional(),
   stack: z.string().optional(),
   failureStage: z.enum(["config", "bundle-load", "entry"]).optional(),
+  transportFailure: z.object({ url: z.string(), netError: z.string() }).strict().optional(),
   updatedAt: z.number().optional(),
 });
 

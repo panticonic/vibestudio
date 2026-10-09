@@ -19,6 +19,7 @@ import {
   type PanelEvaluateOptions,
   type PanelEvaluateResult,
 } from "@vibestudio/shared/panel/evaluate";
+import { PanelDocumentBootTransport } from "@vibestudio/shared/panel/bootTransport";
 import type { ViewManager } from "./viewManager.js";
 import type {
   RuntimeDiagnosticRecord,
@@ -30,6 +31,41 @@ const CONSOLE_LOG_HISTORY_CAPACITY = 1_000;
 const CONSOLE_ERROR_HISTORY_CAPACITY = 500;
 const PANEL_PAGE_OBSERVATION_TIMEOUT_MS = 2_000;
 const HOST_COMMAND_NOT_BUILT_IN = Symbol("host-command-not-built-in");
+
+type RequestErrorHandler = (details: Electron.OnErrorOccurredListenerDetails) => void;
+const requestErrorRoutes = new WeakMap<Electron.Session, Map<number, Set<RequestErrorHandler>>>();
+
+/**
+ * Electron keeps one `onErrorOccurred` listener per session, and panels of one
+ * context share a session. Install that listener once and route each request
+ * failure to the WebContents that issued it.
+ */
+function onWebContentsRequestError(
+  contents: Electron.WebContents,
+  handler: RequestErrorHandler
+): () => void {
+  const session = contents.session;
+  let routes = requestErrorRoutes.get(session);
+  if (!routes) {
+    const sessionRoutes = new Map<number, Set<RequestErrorHandler>>();
+    routes = sessionRoutes;
+    requestErrorRoutes.set(session, sessionRoutes);
+    session.webRequest.onErrorOccurred((details) => {
+      if (details.webContentsId === undefined) return;
+      for (const route of sessionRoutes.get(details.webContentsId) ?? []) route(details);
+    });
+  }
+  const contentsId = contents.id;
+  let handlers = routes.get(contentsId);
+  if (!handlers) routes.set(contentsId, (handlers = new Set()));
+  handlers.add(handler);
+  const contentsRoutes = routes;
+  const contentsHandlers = handlers;
+  return () => {
+    contentsHandlers.delete(handler);
+    if (contentsHandlers.size === 0) contentsRoutes.delete(contentsId);
+  };
+}
 
 export interface CdpHostProviderSocket {
   readonly readyState: number;
@@ -117,7 +153,11 @@ export interface CdpHostProviderOptions {
   hostConnectionId: string;
   getViewManager: () => Pick<
     ViewManager,
-    "captureView" | "openDevTools" | "getWebContents" | "setAutomationSurfaceActive"
+    | "captureView"
+    | "openDevTools"
+    | "getWebContents"
+    | "setAutomationSurfaceActive"
+    | "retryViewNavigation"
   > | null;
   /** First retry delay; each further consecutive failure doubles it. */
   reconnectDelayMs?: number;
@@ -186,6 +226,8 @@ export class CdpHostProvider {
     {
       contents: Electron.WebContents;
       handlers: Array<{ event: string; handler: (...args: unknown[]) => void }>;
+      bootTransport: PanelDocumentBootTransport;
+      releaseRequestErrors: () => void;
     }
   >();
   private socket: CdpHostProviderSocket | null = null;
@@ -366,6 +408,18 @@ export class CdpHostProvider {
    */
   async getBootObservation(targetId: string): Promise<PanelBootProbeResult> {
     const contents = this.requireTargetContents(targetId);
+    const listeners = this.targetListeners.get(targetId);
+    if (listeners?.contents !== contents) return this.probeBoot(contents);
+    return listeners.bootTransport.observe(
+      () => this.probeBoot(contents),
+      async () => {
+        if (contents.isDestroyed()) return;
+        await this.options.getViewManager()?.retryViewNavigation(targetId, contents.getURL());
+      }
+    );
+  }
+
+  private async probeBoot(contents: Electron.WebContents): Promise<PanelBootProbeResult> {
     const unavailable = Symbol("panel-page-observation-unavailable");
     let timer: ReturnType<typeof setTimeout> | undefined;
     const result = await Promise.race([
@@ -680,11 +734,19 @@ export class CdpHostProvider {
     const unresponsive = () => {
       this.recordLifecycleDiagnostic(targetId, contents, "error", "unresponsive");
     };
+    const bootTransport = new PanelDocumentBootTransport();
     const didNavigate = () => {
+      bootTransport.documentCommitted();
       // A new document needs its own compositor surface even when Electron
       // retains the WebContents and existing CDP clients across navigation.
       if (this.activeCdpTargets.has(targetId)) this.acquireAutomationSurface(targetId);
     };
+    // The network stack's own verdict on the document's script requests is
+    // the only evidence that tells a transport abort from a broken bundle.
+    const releaseRequestErrors = onWebContentsRequestError(contents, (details) => {
+      if (details.resourceType !== "script" || details.frame?.parent !== null) return;
+      bootTransport.scriptRequestFailed({ url: details.url, netError: details.error });
+    });
     const emitter = contents as unknown as EventEmitter;
     const handlers = [
       // consoleMessage uses the typed Event<...> signature; the registry stores
@@ -696,7 +758,7 @@ export class CdpHostProvider {
       { event: "did-navigate", handler: didNavigate },
     ];
     for (const entry of handlers) emitter.on(entry.event, entry.handler);
-    this.targetListeners.set(targetId, { contents, handlers });
+    this.targetListeners.set(targetId, { contents, handlers, bootTransport, releaseRequestErrors });
   }
 
   private detachTargetListeners(targetId: string): void {
@@ -704,6 +766,7 @@ export class CdpHostProvider {
     if (!existing) return;
     const emitter = existing.contents as unknown as EventEmitter;
     for (const entry of existing.handlers) emitter.off(entry.event, entry.handler);
+    existing.releaseRequestErrors();
     this.targetListeners.delete(targetId);
   }
 

@@ -54,7 +54,21 @@ function createHarness(
     detach: vi.fn(),
     sendCommand,
   });
+  let requestErrorListener:
+    | ((details: Partial<Electron.OnErrorOccurredListenerDetails>) => void)
+    | undefined;
+  const session = {
+    webRequest: {
+      onErrorOccurred: vi.fn(
+        (listener: (details: Partial<Electron.OnErrorOccurredListenerDetails>) => void) => {
+          requestErrorListener = listener;
+        }
+      ),
+    },
+  };
   const contents = Object.assign(new EventEmitter(), {
+    id: 7,
+    session,
     isDestroyed: vi.fn(() => false),
     getURL: vi.fn(() => "https://example.com/app"),
     loadURL: vi.fn(async () => undefined),
@@ -76,6 +90,7 @@ function createHarness(
     capture(contents as never)
   );
   const setAutomationSurfaceActive = vi.fn(async (): Promise<void> => undefined);
+  const retryViewNavigation = vi.fn(async (): Promise<boolean> => true);
   const provider = new CdpHostProvider({
     serverUrl,
     transport: {
@@ -94,6 +109,7 @@ function createHarness(
         openDevTools,
         captureView,
         setAutomationSurfaceActive,
+        retryViewNavigation,
       }) as never,
     ...options,
   });
@@ -105,6 +121,9 @@ function createHarness(
     openDevTools,
     captureView,
     setAutomationSurfaceActive,
+    retryViewNavigation,
+    emitRequestError: (details: Partial<Electron.OnErrorOccurredListenerDetails>) =>
+      requestErrorListener?.(details),
     getSocketUrl: () => socketUrl,
     getSocketProtocols: () => socketProtocols,
   };
@@ -818,6 +837,70 @@ describe("CdpHostProvider", () => {
     await vi.advanceTimersByTimeAsync(2_000);
 
     await expect(observation).resolves.toEqual({ kind: "unavailable" });
+  });
+
+  describe("boot transport evidence", () => {
+    const panelUrl = "http://127.0.0.1:4000/panels/chat/index.html";
+    const chunk = "http://127.0.0.1:4000/panels/chat/chunk-a.js";
+    const observed = (observation: Record<string, unknown>) => ({
+      view: { url: panelUrl, loading: false },
+      boot: { kind: "observed" as const, observation },
+    });
+    const bundleLoadFailed = observed({
+      phase: "failed",
+      failureStage: "bundle-load",
+      message: "The panel bundle could not be loaded",
+    });
+    const mainFrameScriptError = (error: string) => ({
+      webContentsId: 7,
+      resourceType: "script" as const,
+      frame: { parent: null } as never,
+      url: chunk,
+      error,
+    });
+
+    it("reloads a panel whose boot lost a script to a network change and observes the reload", async () => {
+      const { provider, contents, retryViewNavigation, emitRequestError } = createHarness();
+      contents.getURL.mockReturnValue(panelUrl);
+      provider.registerTarget("panel-1", 7);
+      emitRequestError(mainFrameScriptError("net::ERR_NETWORK_CHANGED"));
+      contents.executeJavaScript
+        .mockResolvedValueOnce(bundleLoadFailed as never)
+        .mockResolvedValueOnce(observed({ phase: "booting" }) as never);
+      retryViewNavigation.mockImplementationOnce(async () => {
+        contents.emit("did-navigate");
+        return true;
+      });
+
+      await expect(provider.getBootObservation("panel-1")).resolves.toEqual({
+        kind: "observed",
+        observation: { phase: "booting" },
+      });
+      expect(retryViewNavigation).toHaveBeenCalledTimes(1);
+      expect(retryViewNavigation).toHaveBeenCalledWith("panel-1", panelUrl);
+    });
+
+    it("classifies other transport failures without reloading", async () => {
+      const { provider, contents, retryViewNavigation, emitRequestError } = createHarness();
+      provider.registerTarget("panel-1", 7);
+      // Subframe and non-script failures are not the boot module graph.
+      emitRequestError({ ...mainFrameScriptError("net::ERR_NETWORK_CHANGED"), frame: {} as never });
+      emitRequestError({
+        ...mainFrameScriptError("net::ERR_NETWORK_CHANGED"),
+        resourceType: "image",
+      });
+      emitRequestError(mainFrameScriptError("net::ERR_CONNECTION_RESET"));
+      contents.executeJavaScript.mockResolvedValueOnce(bundleLoadFailed as never);
+
+      await expect(provider.getBootObservation("panel-1")).resolves.toEqual({
+        kind: "observed",
+        observation: {
+          ...bundleLoadFailed.boot.observation,
+          transportFailure: { url: chunk, netError: "net::ERR_CONNECTION_RESET" },
+        },
+      });
+      expect(retryViewNavigation).not.toHaveBeenCalled();
+    });
   });
 
   it("serves accessibility trees as a built-in host command", async () => {

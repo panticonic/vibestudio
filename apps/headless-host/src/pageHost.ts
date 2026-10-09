@@ -30,6 +30,10 @@ import {
   type PanelEvaluateOptions,
   type PanelEvaluateResult,
 } from "@vibestudio/shared/panel/evaluate";
+import {
+  isNetworkChangeAbort,
+  PanelDocumentBootTransport,
+} from "@vibestudio/shared/panel/bootTransport";
 import { CdpConnection } from "./browser/cdpConnection.js";
 import {
   ConsoleHistoryStore,
@@ -48,6 +52,10 @@ interface PanelPage {
   panelUrl: string;
   lastUsedAt: number;
   browserOwner?: AbortController;
+  /** Transport evidence for the current document's boot module graph. */
+  bootTransport: PanelDocumentBootTransport;
+  /** In-flight main-frame script requests of the current document, by request id. */
+  scriptRequests: Map<string, string>;
 }
 
 export interface LoadPanelInput {
@@ -172,6 +180,8 @@ export class PageHost {
       panelUrl: input.panelUrl,
       lastUsedAt: Date.now(),
       browserOwner: new AbortController(),
+      bootTransport: new PanelDocumentBootTransport(),
+      scriptRequests: new Map(),
     };
     this.pages.set(input.slotId, page);
 
@@ -187,6 +197,9 @@ export class PageHost {
         this.cdp.send("Page.enable", undefined, mgmtSessionId),
         this.cdp.send("Runtime.enable", undefined, mgmtSessionId),
         this.cdp.send("Log.enable", undefined, mgmtSessionId),
+        // The network stack's own verdict on the boot's script requests is
+        // the only evidence that tells a transport abort from a broken bundle.
+        this.cdp.send("Network.enable", undefined, mgmtSessionId),
       ]);
       await this.navigateAndWait(input.slotId, "panel navigation", async () => {
         const nav = (await this.cdp.send(
@@ -234,19 +247,34 @@ export class PageHost {
     operation: string,
     navigate: () => Promise<{ errorText?: string }>
   ): Promise<void> {
-    const documentReady = this.waitForDocumentReady(slotId);
-    try {
-      const result = await navigate();
-      if (result.errorText && result.errorText !== "net::ERR_ABORTED") {
-        throw new Error(`${operation} failed: ${result.errorText}`);
+    for (;;) {
+      const documentReady = this.waitForDocumentReady(slotId);
+      let failure: Error | null = null;
+      try {
+        const result = await navigate();
+        if (result.errorText && isNetworkChangeAbort(result.errorText)) {
+          // Chromium aborted this load because a host IP address changed. The
+          // load is idempotent, so it is repeated once for this observed
+          // failure; any other failure propagates below.
+          log.info(`${operation} for ${slotId} was aborted by a host network change; reloading`);
+          this.rejectDocumentReady(slotId, `${operation} was aborted by a host network change`);
+          await documentReady.catch(() => undefined);
+          continue;
+        }
+        if (result.errorText && result.errorText !== "net::ERR_ABORTED") {
+          failure = new Error(`${operation} failed: ${result.errorText}`);
+        }
+      } catch (error) {
+        failure = error instanceof Error ? error : new Error(String(error));
       }
-    } catch (error) {
-      const failure = error instanceof Error ? error : new Error(String(error));
-      this.documentReadyWaiters.get(slotId)?.reject(failure);
-      await documentReady.catch(() => undefined);
-      throw failure;
+      if (failure) {
+        this.documentReadyWaiters.get(slotId)?.reject(failure);
+        await documentReady.catch(() => undefined);
+        throw failure;
+      }
+      await documentReady;
+      return;
     }
-    await documentReady;
   }
 
   private rejectDocumentReady(slotId: string, reason: string): void {
@@ -428,6 +456,20 @@ export class PageHost {
    * A loaded CDP target alone is not evidence that the current build booted.
    */
   async panelPageObservation(slotId: string): Promise<PanelPageObservation> {
+    const page = this.requirePage(slotId);
+    let view: PanelPageObservation["view"] | undefined;
+    const boot = await page.bootTransport.observe(
+      async () => {
+        const observation = await this.probePanelPage(slotId);
+        view = observation.view;
+        return observation.boot;
+      },
+      () => this.navigate(slotId, "navigate", page.panelUrl)
+    );
+    return { view: view!, boot };
+  }
+
+  private async probePanelPage(slotId: string): Promise<PanelPageObservation> {
     const page = this.requirePage(slotId);
     const result = (await this.cdp.send(
       "Runtime.evaluate",
@@ -734,8 +776,45 @@ export class PageHost {
             page.browserOwner?.abort(new Error("Panel document navigated"));
             page.browserOwner = new AbortController();
             page.panelUrl = frame.url;
+            page.bootTransport.documentCommitted();
+            page.scriptRequests.clear();
           }
         }
+        return;
+      }
+      case "Network.requestWillBeSent": {
+        const params = event.params as {
+          requestId: string;
+          frameId?: string;
+          type?: string;
+          request: { url: string };
+        };
+        const page = this.pages.get(slotId);
+        // A page target's main frame shares its target id.
+        if (page && params.type === "Script" && params.frameId === page.targetId) {
+          page.scriptRequests.set(params.requestId, params.request.url);
+        }
+        return;
+      }
+      case "Network.loadingFinished":
+        this.pages
+          .get(slotId)
+          ?.scriptRequests.delete((event.params as { requestId: string }).requestId);
+        return;
+      case "Network.loadingFailed": {
+        const params = event.params as {
+          requestId: string;
+          errorText: string;
+          canceled?: boolean;
+          blockedReason?: string;
+          corsErrorStatus?: unknown;
+        };
+        const page = this.pages.get(slotId);
+        const url = page?.scriptRequests.get(params.requestId);
+        if (!page || url === undefined) return;
+        page.scriptRequests.delete(params.requestId);
+        if (params.canceled || params.blockedReason || params.corsErrorStatus) return;
+        page.bootTransport.scriptRequestFailed({ url, netError: params.errorText });
         return;
       }
       case "Page.frameDetached":

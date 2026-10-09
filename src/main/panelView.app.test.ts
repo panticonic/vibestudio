@@ -124,8 +124,7 @@ describe("PanelView app views", () => {
     expect(viewManager.createView).not.toHaveBeenCalled();
   });
 
-  it("retries transient main-frame load failures for app views", async () => {
-    vi.useFakeTimers();
+  it("reloads the main frame once per observed network-change abort", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const url = "https://server.example/_workspace/dev/_a/app/index.html";
     const webContents = Object.assign(new EventEmitter(), {
@@ -167,12 +166,18 @@ describe("PanelView app views", () => {
     await panelView.createViewForApp("@workspace-apps/shell", url, undefined, ["panel-hosting"]);
     webContents.emit("did-fail-load", {}, -3, "ERR_ABORTED", url, true);
     expect(warn).not.toHaveBeenCalled();
+    expect(viewManager.retryViewNavigation).not.toHaveBeenCalled();
     webContents.emit("did-fail-load", {}, -21, "ERR_NETWORK_CHANGED", url, true);
-    await vi.advanceTimersByTimeAsync(500);
-
+    expect(viewManager.retryViewNavigation).toHaveBeenCalledTimes(1);
     expect(viewManager.retryViewNavigation).toHaveBeenCalledWith("@workspace-apps/shell", url);
+    // A further network change aborting the reload is a distinct observed
+    // failure and earns its own reload; nothing is retried on a clock.
+    webContents.emit("did-fail-load", {}, -21, "ERR_NETWORK_CHANGED", url, true);
+    expect(viewManager.retryViewNavigation).toHaveBeenCalledTimes(2);
+    // Any other main-frame failure propagates to the error surface.
+    webContents.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", url, true);
+    expect(viewManager.retryViewNavigation).toHaveBeenCalledTimes(2);
     warn.mockRestore();
-    vi.useRealTimers();
   });
 
   it("reports failure of the selected privileged app preload", async () => {

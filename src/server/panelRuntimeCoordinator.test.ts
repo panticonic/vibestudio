@@ -600,6 +600,55 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     });
   });
 
+  it.each([
+    [
+      "host evidence classifies it as a transport failure",
+      { principal: "host", route: "presentation-only" } as const,
+      {
+        code: "asset_transport_failed",
+        message:
+          "The panel bundle could not be loaded: net::ERR_CONNECTION_RESET while loading http://panel/chunk.js",
+        diagnostics: { netError: "net::ERR_CONNECTION_RESET", url: "http://panel/chunk.js" },
+      },
+    ],
+    [
+      "the page cannot vouch for its own transport evidence",
+      { principal: "renderer" } as const,
+      { code: "asset_unavailable", message: "The panel bundle could not be loaded" },
+    ],
+  ])("classifies a bundle-load failure when %s", (_name, evidence, expected) => {
+    const { coordinator, attempt } = resident();
+    coordinator.reportView(
+      "panel:nav-a",
+      "route-a",
+      {
+        url: "http://panel/",
+        loading: false,
+        boot: {
+          kind: "observed" as const,
+          observation: {
+            phase: "failed",
+            message: "The panel bundle could not be loaded",
+            failureStage: "bundle-load",
+            transportFailure: {
+              url: "http://panel/chunk.js",
+              netError: "net::ERR_CONNECTION_RESET",
+            },
+          },
+        },
+      },
+      evidence
+    );
+    const result = coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId });
+    expect(result).toMatchObject({
+      kind: "report",
+      attempt: { phase: "failed", failure: { stage: "bundle-load", ...expected } },
+    });
+    if (result.kind === "report" && !("diagnostics" in expected)) {
+      expect(result.attempt.failure?.diagnostics).toBeUndefined();
+    }
+  });
+
   it("accepts a host-originated typed failure on the push channel", () => {
     const { coordinator, attempt } = resident();
     expect(

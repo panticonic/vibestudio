@@ -182,7 +182,7 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   });
   reportBoot("booting");
 
-  await new Promise((resolve, reject) => {
+  const transportLoaded = await new Promise((resolve) => {
     const s = document.createElement("script");
     const loaderUrl = new URL(loaderScriptUrl || document.baseURI || location.href);
     const transportUrl = new URL("__transport.js", loaderUrl);
@@ -190,10 +190,16 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
     // the loader's exact version query so both share one immutable identity.
     transportUrl.search = loaderUrl.search;
     s.src = transportUrl.href;
-    s.onload = resolve;
-    s.onerror = reject;
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
     document.head.appendChild(s);
   });
+  if (!transportLoaded) {
+    // A script that failed to load is a bundle-load failure, which the host
+    // can classify from its own network evidence. It is not an entry throw.
+    reportBoot("failed", new Error("The panel transport could not be loaded"), "bundle-load");
+    return;
+  }
   delete globalThis.__vibestudioConnectionId;
 
   // A headless host's fallback shell owns an asynchronous authenticated

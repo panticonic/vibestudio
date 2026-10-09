@@ -34,6 +34,7 @@ import {
   type PanelLocation,
 } from "@vibestudio/shared/panelLocation";
 import { classifyPanelUrl, isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
+import { isNetworkChangeAbort } from "@vibestudio/shared/panel/bootTransport";
 import {
   parseShellSurfaceLink,
   type ShellSurfaceDescriptor,
@@ -63,9 +64,6 @@ export function elideForMenu(text: string, limit = 42): string {
 }
 
 const log = createDevLogger("PanelView");
-const TRANSIENT_MAIN_FRAME_LOAD_RETRY_CODES = new Set([-21]); // ERR_NETWORK_CHANGED
-const MAX_TRANSIENT_MAIN_FRAME_LOAD_RETRIES = 2;
-const TRANSIENT_MAIN_FRAME_LOAD_RETRY_DELAY_MS = 500;
 
 // syncSnapshotFromManifest moved server-side (panelService snapshot replacement handles autoArchiveWhenEmpty)
 
@@ -657,8 +655,6 @@ export class PanelView implements PanelViewLike {
   ): void {
     let pendingState: Partial<PanelNavigationState> = {};
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    let transientMainFrameLoadRetries = 0;
-    let transientLoadRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let cleaned = false;
 
     const flushPendingState = () => {
@@ -729,27 +725,19 @@ export class PanelView implements PanelViewLike {
         if (code === -3) return;
         console.warn(`[PanelView] Panel ${panelId} failed to load: ${desc} (${code}) - ${url}`);
         if (isMainFrame) {
-          if (
-            TRANSIENT_MAIN_FRAME_LOAD_RETRY_CODES.has(code) &&
-            /^https?:\/\//i.test(url) &&
-            transientMainFrameLoadRetries < MAX_TRANSIENT_MAIN_FRAME_LOAD_RETRIES
-          ) {
-            transientMainFrameLoadRetries += 1;
-            if (transientLoadRetryTimer) clearTimeout(transientLoadRetryTimer);
-            transientLoadRetryTimer = setTimeout(() => {
-              transientLoadRetryTimer = null;
-              if (cleaned || contents.isDestroyed()) return;
-              log.info(
-                `Retrying transient main-frame load for ${panelId} (${transientMainFrameLoadRetries}/${MAX_TRANSIENT_MAIN_FRAME_LOAD_RETRIES}): ${url}`
+          if (isNetworkChangeAbort(desc) && /^https?:\/\//i.test(url)) {
+            // Chromium aborted this load because a host IP address changed.
+            // The load is repeated once for this observed failure (shared with
+            // the boot module graph and the headless host); a repeat that
+            // fails differently reaches the error page below.
+            log.info(`Reloading main frame of ${panelId} after a host network change: ${url}`);
+            this.viewManager.retryViewNavigation(panelId, url).catch((error: unknown) => {
+              log.warn(
+                `[PanelView] Reload after network change failed for ${panelId}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
               );
-              this.viewManager.retryViewNavigation(panelId, url).catch((error: unknown) => {
-                log.warn(
-                  `[PanelView] Retry load failed for ${panelId}: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`
-                );
-              });
-            }, TRANSIENT_MAIN_FRAME_LOAD_RETRY_DELAY_MS);
+            });
             return;
           }
           const panel = this.panelRegistry.getPanel(panelId);
@@ -794,13 +782,6 @@ export class PanelView implements PanelViewLike {
         });
         this.onPanelViewTransition?.(panelId);
       },
-      didFinishLoad: () => {
-        transientMainFrameLoadRetries = 0;
-        if (transientLoadRetryTimer) {
-          clearTimeout(transientLoadRetryTimer);
-          transientLoadRetryTimer = null;
-        }
-      },
       pageTitleUpdated: (_event: Electron.Event, title: string) => {
         queueStateUpdate({ pageTitle: title });
         const panel = this.panelRegistry.getPanel(panelId);
@@ -826,7 +807,6 @@ export class PanelView implements PanelViewLike {
     contents.on("responsive", handlers.responsive);
     contents.on("did-start-loading", handlers.didStartLoading);
     contents.on("did-stop-loading", handlers.didStopLoading);
-    contents.on("did-finish-load", handlers.didFinishLoad);
     contents.on("page-title-updated", handlers.pageTitleUpdated);
     contents.on("media-started-playing", handlers.mediaStartedPlaying);
     contents.on("media-paused", handlers.mediaPaused);
@@ -835,7 +815,6 @@ export class PanelView implements PanelViewLike {
       if (cleaned) return;
       cleaned = true;
       if (debounceTimer) clearTimeout(debounceTimer);
-      if (transientLoadRetryTimer) clearTimeout(transientLoadRetryTimer);
       if (!contents.isDestroyed()) {
         contents.off("did-navigate", handlers.didNavigate);
         contents.off("did-navigate-in-page", handlers.didNavigateInPage);
@@ -846,7 +825,6 @@ export class PanelView implements PanelViewLike {
         contents.off("responsive", handlers.responsive);
         contents.off("did-start-loading", handlers.didStartLoading);
         contents.off("did-stop-loading", handlers.didStopLoading);
-        contents.off("did-finish-load", handlers.didFinishLoad);
         contents.off("page-title-updated", handlers.pageTitleUpdated);
         contents.off("media-started-playing", handlers.mediaStartedPlaying);
         contents.off("media-paused", handlers.mediaPaused);

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConsoleHistoryStore } from "./consoleHistory.js";
+import { PanelDocumentBootTransport } from "@vibestudio/shared/panel/bootTransport";
 import { PageHost } from "./pageHost.js";
 
 function png(width: number, height: number): string {
@@ -54,6 +55,8 @@ function harness(data: string) {
     relaySessionId: null,
     panelUrl: "https://example.com",
     lastUsedAt: 0,
+    bootTransport: new PanelDocumentBootTransport(),
+    scriptRequests: new Map(),
   });
   return { host, send };
 }
@@ -99,6 +102,8 @@ function lifecycleHarness(navigateResult: { errorText?: string } = {}) {
       eventHandler?.({ method: "Page.domContentEventFired", params: {}, sessionId: "mgmt-1" }),
     fireLoad: () =>
       eventHandler?.({ method: "Page.loadEventFired", params: {}, sessionId: "mgmt-1" }),
+    emit: (method: string, params: unknown) =>
+      eventHandler?.({ method, params, sessionId: "mgmt-1" }),
   };
 }
 
@@ -178,6 +183,21 @@ describe("PageHost navigation readiness", () => {
     expect(send).toHaveBeenCalledWith("Target.closeTarget", { targetId: "target-1" });
   });
 
+  it("repeats a navigation once per observed network-change abort", async () => {
+    const { host, input, send, fireDocumentReady } = lifecycleHarness();
+    const navigations = [{ errorText: "net::ERR_NETWORK_CHANGED" }, {}];
+    const base = send.getMockImplementation()!;
+    send.mockImplementation(async (method: string, ...rest: unknown[]) =>
+      method === "Page.navigate" ? (navigations.shift() ?? {}) : base(method, ...(rest as []))
+    );
+    const loading = host.loadPanel(input);
+    await vi.waitFor(() =>
+      expect(send.mock.calls.filter(([method]) => method === "Page.navigate")).toHaveLength(2)
+    );
+    fireDocumentReady();
+    await expect(loading).resolves.toBeUndefined();
+  });
+
   it("rejects an outstanding readiness wait when the panel is unloaded", async () => {
     const { host, input, send } = lifecycleHarness();
     const loading = host.loadPanel(input);
@@ -232,6 +252,8 @@ describe("PageHost navigation readiness", () => {
       relaySessionId: null,
       panelUrl: input.panelUrl,
       lastUsedAt: 0,
+      bootTransport: new PanelDocumentBootTransport(),
+      scriptRequests: new Map(),
     });
 
     await host.retireContext(input.contextId);
@@ -305,6 +327,8 @@ describe("PageHost.domSnapshot", () => {
       relaySessionId: null,
       panelUrl: "https://example.com",
       lastUsedAt: 0,
+      bootTransport: new PanelDocumentBootTransport(),
+      scriptRequests: new Map(),
     });
 
     await expect(host.domSnapshot("panel-1")).resolves.toEqual({
@@ -349,6 +373,8 @@ describe("PageHost.panelPageObservation", () => {
       relaySessionId: null,
       panelUrl: "http://127.0.0.1/panel",
       lastUsedAt: 0,
+      bootTransport: new PanelDocumentBootTransport(),
+      scriptRequests: new Map(),
     });
 
     await expect(host.panelPageObservation("panel-1")).resolves.toEqual(value);
@@ -363,6 +389,97 @@ describe("PageHost.panelPageObservation", () => {
   });
 });
 
+
+describe("PageHost boot transport evidence", () => {
+  const chunk = "https://example.com/chunk-a.js";
+  const observed = (observation: Record<string, unknown>) => ({
+    result: {
+      value: {
+        view: { url: "https://example.com", loading: false },
+        boot: { kind: "observed", observation },
+      },
+    },
+  });
+  const bundleLoadFailed = {
+    phase: "failed",
+    failureStage: "bundle-load",
+    message: "The panel bundle could not be loaded",
+  };
+
+  async function loadedPanel(probes: unknown[]) {
+    const h = lifecycleHarness();
+    const base = h.send.getMockImplementation()!;
+    h.send.mockImplementation(async (method: string, ...rest: unknown[]) =>
+      method === "Runtime.evaluate" ? probes.shift() : base(method, ...(rest as []))
+    );
+    const loading = h.host.loadPanel(h.input);
+    await vi.waitFor(() =>
+      expect(h.send).toHaveBeenCalledWith("Page.navigate", { url: h.input.panelUrl }, "mgmt-1")
+    );
+    expect(h.send).toHaveBeenCalledWith("Network.enable", undefined, "mgmt-1");
+    h.fireDocumentReady();
+    await loading;
+    const failScript = (requestId: string, errorText: string, frameId = "target-1") => {
+      h.emit("Network.requestWillBeSent", {
+        requestId,
+        frameId,
+        type: "Script",
+        request: { url: chunk },
+      });
+      h.emit("Network.loadingFailed", { requestId, errorText });
+    };
+    const navigations = () =>
+      h.send.mock.calls.filter(([method]) => method === "Page.navigate").length;
+    return { ...h, failScript, navigations };
+  }
+
+  it("reloads a panel whose boot lost a script to a network change and observes the reload", async () => {
+    const h = await loadedPanel([observed(bundleLoadFailed), observed({ phase: "booting" })]);
+    h.failScript("r1", "net::ERR_NETWORK_CHANGED");
+
+    const observation = h.host.panelPageObservation(h.input.slotId);
+    await vi.waitFor(() => expect(h.navigations()).toBe(2));
+    h.emit("Page.frameNavigated", { frame: { id: "target-1", url: h.input.panelUrl } });
+    h.fireDocumentReady();
+
+    await expect(observation).resolves.toMatchObject({
+      boot: { kind: "observed", observation: { phase: "booting" } },
+    });
+    expect(h.navigations()).toBe(2);
+  });
+
+  it("classifies other script transport failures without reloading", async () => {
+    const h = await loadedPanel([observed(bundleLoadFailed)]);
+    // A subframe's script and a cancelled request are not boot transport evidence.
+    h.failScript("r0", "net::ERR_NETWORK_CHANGED", "child-frame");
+    h.emit("Network.requestWillBeSent", {
+      requestId: "r1",
+      frameId: "target-1",
+      type: "Script",
+      request: { url: chunk },
+    });
+    h.emit("Network.loadingFailed", { requestId: "r1", errorText: "net::ERR_ABORTED", canceled: true });
+    h.failScript("r2", "net::ERR_CONNECTION_REFUSED");
+
+    await expect(h.host.panelPageObservation(h.input.slotId)).resolves.toMatchObject({
+      boot: {
+        kind: "observed",
+        observation: {
+          ...bundleLoadFailed,
+          transportFailure: { url: chunk, netError: "net::ERR_CONNECTION_REFUSED" },
+        },
+      },
+    });
+    expect(h.navigations()).toBe(1);
+  });
+
+  it("leaves a bundle failure without transport evidence to propagate unchanged", async () => {
+    const h = await loadedPanel([observed(bundleLoadFailed)]);
+    const result = await h.host.panelPageObservation(h.input.slotId);
+    expect(result.boot).toEqual({ kind: "observed", observation: bundleLoadFailed });
+    expect(h.navigations()).toBe(1);
+  });
+});
 
 describe("PageHost relay ownership", () => {
   function deferred<T>() {
@@ -387,6 +504,7 @@ describe("PageHost relay ownership", () => {
     (host as unknown as { pages: Map<string, unknown> }).pages.set("panel-1", {
       slotId: "panel-1", contextId: "context-1", targetId: "target-1",
       mgmtSessionId: "mgmt-1", relaySessionId: null, panelUrl: "https://example.com", lastUsedAt: 0,
+      bootTransport: new PanelDocumentBootTransport(), scriptRequests: new Map(),
     });
     return { host, cdp, send, attach, detach };
   }

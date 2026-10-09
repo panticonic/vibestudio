@@ -45,6 +45,12 @@ describe("PANEL_BOOTSTRAP_SCRIPT", () => {
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain("Reload panel");
   });
 
+  it("reports a transport script that cannot load as a bundle-load failure, not an entry throw", () => {
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain(
+      'reportBoot("failed", new Error("The panel transport could not be loaded"), "bundle-load")'
+    );
+  });
+
   it("publishes a machine-readable boot handshake instead of using DOM presence as readiness", () => {
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain("__vibestudioPanelBoot");
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain('reportBoot("loading")');

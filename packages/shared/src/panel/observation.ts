@@ -35,6 +35,7 @@ export type PanelFailureCode =
   | "lease_conflict"
   | "navigation_failed"
   | "asset_unavailable"
+  | "asset_transport_failed"
   | "entry_threw"
   | "boot_stalled"
   | "render_crashed"
@@ -73,6 +74,13 @@ export type PanelOperationFailureData = PanelRuntimeFailure & {
   recovery: PanelOperationRecovery;
 };
 
+/** A panel document's script request that the host saw the network stack fail. */
+export interface PanelBootTransportFailure {
+  url: string;
+  /** Chromium net error, e.g. `net::ERR_NETWORK_CHANGED`. */
+  netError: string;
+}
+
 export interface PanelBootObservation {
   phase: "loading" | "booting" | "ready" | "failed";
   runtimeEntityId?: string | null;
@@ -84,6 +92,11 @@ export interface PanelBootObservation {
   errorName?: string;
   stack?: string;
   failureStage?: PanelBootFailureStage;
+  /**
+   * Host-attached evidence (never written by the page): the transport failure
+   * that made a `bundle-load` failure happen. Present only on host reports.
+   */
+  transportFailure?: PanelBootTransportFailure;
   updatedAt?: number;
 }
 
