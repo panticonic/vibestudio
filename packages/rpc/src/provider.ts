@@ -2,6 +2,7 @@ import type { EnvelopeBridge } from "./transports/bridge.js";
 
 /** Public runtime coordinates; credentials and host configuration are never bootstrap data. */
 export interface RuntimeConnectionInfo {
+  workspaceId: string;
   runtimeId: string;
   slotId: string;
   contextId: string;
@@ -25,9 +26,15 @@ export function runtimeConnectionInfoFromBootstrap(
   if (!raw || typeof raw !== "object")
     throw new Error("Browser runtime configuration is unavailable");
   const config = raw as Record<string, unknown>;
-  if (config["entityId"] !== runtimeId || typeof config["contextId"] !== "string")
+  if (
+    config["entityId"] !== runtimeId ||
+    typeof config["contextId"] !== "string" ||
+    typeof config["workspaceId"] !== "string" ||
+    !config["workspaceId"]
+  )
     throw new Error("Browser runtime configuration does not match this document");
   return {
+    workspaceId: config["workspaceId"] as string,
     runtimeId,
     slotId: typeof config["slotId"] === "string" ? config["slotId"] : runtimeId,
     contextId: config["contextId"],

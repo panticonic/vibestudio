@@ -129,6 +129,17 @@ afterEach(() => {
 });
 
 describe("DurableObjectBase alarm dispatch", () => {
+  it("consumes workspace-addressed replies using its host-injected workspace identity", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const response = await successfulTestRpcFetch(input, init);
+      const envelope = await response.json();
+      return new Response(
+        JSON.stringify({ ...envelope, destination: { kind: "workspace", workspaceId: "test" } })
+      );
+    });
+    const { call } = await createTestDO(AlarmProbeDO);
+    await expect(call("schedule", 123)).resolves.toBe("scheduled");
+  });
   it("joins an asynchronous wake before acknowledging the request and persists its exact schedule", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(successfulTestRpcFetch);
     const { instance, call, db } = await createTestDO(AsyncWakeProbeDO);

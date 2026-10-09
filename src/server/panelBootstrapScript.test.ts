@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
 
 describe("PANEL_BOOTSTRAP_SCRIPT", () => {
+  it("publishes the authenticated workspace identity with panel runtime coordinates", () => {
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain("__vibestudioWorkspaceId: cfg.workspaceId");
+  });
   it("requires canonical entityId bootstrap identity without the old panelId alias", () => {
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain("const entityId = cfg?.entityId;");
     expect(PANEL_BOOTSTRAP_SCRIPT).not.toContain("cfg?.panelId");

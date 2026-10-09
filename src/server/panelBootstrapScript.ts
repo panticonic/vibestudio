@@ -145,7 +145,7 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   const url = new URL(location.href);
   const connectionId = typeof cfg?.connectionId === "string" ? cfg.connectionId : undefined;
 
-  if (!cfg || !entityId || !cfg.gatewayConfig || !cfg.gatewayConfig.serverUrl || !cfg.gatewayConfig.token) {
+  if (!cfg || typeof cfg.workspaceId !== "string" || !cfg.workspaceId || !entityId || !cfg.gatewayConfig || !cfg.gatewayConfig.serverUrl || !cfg.gatewayConfig.token) {
     reportBoot("failed", new Error("Panel bootstrap configuration is incomplete"), "config");
     const root = document.getElementById("root");
     if (root) root.innerHTML = "<p>Open this panel from Vibestudio.</p>";
@@ -166,6 +166,7 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
     try { effectiveStateArgs = JSON.parse(url.searchParams.get("stateArgs")); } catch { /* ignore */ }
   }
   Object.assign(globalThis, {
+    __vibestudioWorkspaceId: cfg.workspaceId,
     __vibestudioContextId: cfg.contextId,
     __vibestudioParentId: cfg.parentId,
     __vibestudioParentEntityId: cfg.parentEntityId,

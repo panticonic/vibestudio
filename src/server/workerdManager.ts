@@ -1905,6 +1905,7 @@ export class WorkerdManager {
       WORKER_EFFECTIVE_VERSION: instance.effectiveVersion,
       WORKER_SOURCE_REF: workerSourceRef(image, instance.source),
       CONTEXT_ID: instance.contextId,
+      WORKSPACE_ID: this.deps.workspaceId,
       GATEWAY_URL: this.deps.getServerUrl(),
       WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
     };
@@ -3356,6 +3357,8 @@ export class WorkerdManager {
   }
 
   private waitForProcessExitEvent(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
+    // An already-exited child never emits 'exit' again.
+    if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve(true);
     return new Promise<boolean>((resolve) => {
       const onExit = () => {
         clearTimeout(timer);

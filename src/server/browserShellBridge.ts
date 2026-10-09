@@ -4,6 +4,7 @@ import { PanelShellClient } from "@vibestudio/service-schemas/clients/panelShell
 import { createWsTransport } from "../preload/wsTransport.js";
 
 export type PanelInitPayload = {
+  workspaceId?: unknown;
   entityId?: unknown;
   slotId?: unknown;
   gatewayConfig?: {
@@ -34,6 +35,7 @@ export type ShellEnvelopeBridge = {
 export type BrowserShellBridgeGlobals = typeof globalThis & {
   __vibestudioShell?: ShellEnvelopeBridge;
   __vibestudioPanelInit?: PanelInitPayload;
+  __vibestudioWorkspaceId?: string;
   __vibestudioEntityId?: string;
   __vibestudioSlotId?: string;
   __vibestudioGatewayConfig?: PanelInitPayload["gatewayConfig"];
@@ -60,13 +62,14 @@ export function installFallbackShellBridge(
 
   const init = globals.__vibestudioPanelInit ?? {};
   const gatewayConfig = globals.__vibestudioGatewayConfig ?? init.gatewayConfig;
+  const workspaceId = stringOrUndefined(globals.__vibestudioWorkspaceId ?? init.workspaceId);
   const entityId = stringOrUndefined(globals.__vibestudioEntityId ?? init.entityId);
   const slotId = stringOrUndefined(globals.__vibestudioSlotId ?? init.slotId) ?? entityId;
   const serverUrl = stringOrUndefined(gatewayConfig?.serverUrl);
   const token = stringOrUndefined(globals.__vibestudioGatewayToken ?? gatewayConfig?.token);
   const connectionId = stringOrUndefined(globals.__vibestudioConnectionId ?? init.connectionId);
 
-  if (!entityId || !slotId || !serverUrl || !token || !connectionId) {
+  if (!workspaceId || !entityId || !slotId || !serverUrl || !token || !connectionId) {
     return existing;
   }
 
@@ -89,6 +92,7 @@ export function installFallbackShellBridge(
   // request/stream-request handling.
   const rpc = createRpcClient({
     selfId: entityId,
+    workspaceId,
     callerKind: "panel",
     transport: createRpcInitiatorTransport(transport),
   });

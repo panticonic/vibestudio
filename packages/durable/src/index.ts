@@ -513,11 +513,15 @@ export abstract class DurableObjectBase {
       if (typeof gatewayUrl !== "string" || gatewayUrl.length === 0) {
         throw new Error("RPC not available: GATEWAY_URL not configured");
       }
+      const workspaceId = this.env["WORKSPACE_ID"];
+      if (typeof workspaceId !== "string" || !workspaceId)
+        throw new Error("RPC not available: WORKSPACE_ID not configured");
       const connectionless = createInternalConnectionlessRpcClient({
         selfId: this.rpcSelfId,
         serverUrl: gatewayUrl,
         authToken: token,
         callerKind: "do",
+        workspaceId,
         ...(typeof rpcFetch === "function" ? { fetch: rpcFetch as typeof fetch } : {}),
         // Continue only the currently executing host-attested invocation.
         // The callback is evaluated when an outbound envelope is created, so

@@ -1042,6 +1042,7 @@ describe("PanelManager", () => {
     expect(init.contextId).toBe(created.contextId);
     expect(init.sourceRepo).toBe("panels/example");
     expect(init.effectiveVersion).toBe("test");
+    expect(init).toMatchObject({ workspaceId: "workspace-test" });
     expect(init.gatewayConfig).toEqual({
       serverUrl: "http://127.0.0.1:42773",
       token: `rpc-${currentEntityId}`,
@@ -1326,6 +1327,7 @@ describe("PanelManager", () => {
     const slot = mem.state.slots.get(created.panelId);
     const currentEntityId = slot?.current_entity_id;
     expect(currentEntityId).toBeTruthy();
+    expect(init).toMatchObject({ workspaceId: "workspace-test" });
     expect(init.gatewayConfig).toEqual({
       serverUrl: "https://vibestudio.example.com",
       token: `rpc-${currentEntityId}`,

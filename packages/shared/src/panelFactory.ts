@@ -14,6 +14,7 @@ export { browserSourceFromHostname, generateContextId } from "./panelIdentity.js
 // =============================================================================
 
 export interface BuildBootstrapConfigOpts {
+  workspaceId: string;
   entityId: PanelEntityId;
   slotId: PanelSlotId;
   contextId: string;
@@ -71,6 +72,7 @@ export function resolveSource(
  */
 export function buildBootstrapConfig(opts: BuildBootstrapConfigOpts): unknown {
   return {
+    workspaceId: opts.workspaceId,
     entityId: opts.entityId,
     slotId: opts.slotId,
     contextId: opts.contextId,

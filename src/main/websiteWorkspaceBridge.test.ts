@@ -27,6 +27,7 @@ function fixture() {
     };
   });
   const bootstrap = vi.fn(async () => ({
+    workspaceId: "workspace:test",
     entityId: "panel:browser",
     slotId: "slot-1",
     contextId: "context-1",
@@ -85,6 +86,7 @@ describe("native website workspace provider", () => {
       origin: "https://example.com",
       documentId: expect.any(String),
       bootstrap: {
+        workspaceId: "workspace:test",
         runtimeId: "panel:browser",
         slotId: "slot-1",
         contextId: "context-1",

@@ -1150,6 +1150,7 @@ export class PanelManager {
       : (this.serverInfo.gatewayConfig.token ?? "");
 
     return buildBootstrapConfig({
+      workspaceId: this.registry.workspaceId,
       entityId,
       slotId,
       contextId: getPanelContextId(panel),

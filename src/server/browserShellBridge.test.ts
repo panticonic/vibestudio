@@ -35,6 +35,7 @@ describe("installFallbackShellBridge", () => {
     });
     const globals = {
       __vibestudioPanelInit: {
+        workspaceId: "workspace:test",
         entityId: "panel:nav-entry-a",
         slotId: "panel:tree/slot-a",
         gatewayConfig: {
@@ -115,6 +116,7 @@ describe("installFallbackShellBridge", () => {
     });
     const shell = installFallbackShellBridge({
       __vibestudioPanelInit: {
+        workspaceId: "workspace:test",
         entityId: "panel:nav-entry-a",
         slotId: "panel:tree/slot-a",
         gatewayConfig: { serverUrl: "http://127.0.0.1:4567", token: "grant-token" },
@@ -150,6 +152,7 @@ describe("installFallbackShellBridge", () => {
 
     installFallbackShellBridge({
       __vibestudioPanelInit: {
+        workspaceId: "workspace:test",
         entityId: "panel:nav-entry-a",
         slotId: "panel:tree/slot-a",
         gatewayConfig: { serverUrl: "http://127.0.0.1:4567", token: "grant-token" },
@@ -190,6 +193,7 @@ describe("installFallbackShellBridge", () => {
     });
     const shell = installFallbackShellBridge({
       __vibestudioPanelInit: {
+        workspaceId: "workspace:test",
         entityId: "panel:nav-entry-a",
         slotId: "panel:tree/slot-a",
         gatewayConfig: { serverUrl: "http://127.0.0.1:4567", token: "grant-token" },
@@ -233,6 +237,7 @@ describe("installFallbackShellBridge", () => {
   it("does not install a fallback bridge without a runtime lease connection id", () => {
     const globals = {
       __vibestudioPanelInit: {
+        workspaceId: "workspace:test",
         entityId: "panel:nav-entry-a",
         slotId: "panel:tree/slot-a",
         gatewayConfig: { serverUrl: "http://127.0.0.1:4567", token: "grant-token" },
