@@ -8,7 +8,6 @@ import {
 
 export { __setSafeStorageForTests };
 
-const DEFAULT_POLL_INTERVAL_MS = 250;
 const URL_BOUND_PROVIDER_NAMESPACE = "url-bound";
 
 export class CredentialStore extends EncryptedJsonStore<Credential> {
@@ -62,63 +61,5 @@ export class CredentialStore extends EncryptedJsonStore<Credential> {
     assertValidStoreIdentifier("providerId", providerId);
     assertValidStoreIdentifier("connectionId", connectionId);
     await this.removeRecord(providerId, connectionId);
-  }
-
-  watch(callback: (credential: Credential) => void): () => void {
-    const knownFiles = new Map<string, string>();
-    let stopped = false;
-    let polling = false;
-
-    const syncKnownFiles = async (emitChanges: boolean): Promise<void> => {
-      const currentFiles = await this.collectRecordSignatures();
-
-      for (const [filePath, signature] of Array.from(currentFiles.entries())) {
-        const previousSignature = knownFiles.get(filePath);
-        if (emitChanges && previousSignature !== signature) {
-          const credential = await this.readRecordFile(filePath);
-          if (credential) {
-            callback(credential);
-          }
-        }
-      }
-
-      for (const filePath of Array.from(knownFiles.keys())) {
-        if (!currentFiles.has(filePath)) {
-          knownFiles.delete(filePath);
-        }
-      }
-
-      for (const [filePath, signature] of Array.from(currentFiles.entries())) {
-        knownFiles.set(filePath, signature);
-      }
-    };
-
-    const poll = async (): Promise<void> => {
-      if (stopped || polling) {
-        return;
-      }
-
-      polling = true;
-      try {
-        await syncKnownFiles(true);
-      } finally {
-        polling = false;
-      }
-    };
-
-    void syncKnownFiles(false);
-
-    const timer = setInterval(() => {
-      void poll();
-    }, DEFAULT_POLL_INTERVAL_MS);
-
-    if (typeof timer.unref === "function") {
-      timer.unref();
-    }
-
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
   }
 }

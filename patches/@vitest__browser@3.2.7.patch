@@ -1,0 +1,17 @@
+diff --git a/dist/client/__vitest_browser__/tester-BYDMHqQ9.js b/dist/client/__vitest_browser__/tester-BYDMHqQ9.js
+index 9916c1f32e9af801b6d425d1ec785f23e830a236..21ca8767f03a943eaa06b33217edfc9fe6e9fcbd 100644
+--- a/dist/client/__vitest_browser__/tester-BYDMHqQ9.js
++++ b/dist/client/__vitest_browser__/tester-BYDMHqQ9.js
+@@ -3310,10 +3310,10 @@ class ModuleMocker {
+   resolveMockPath(path) {
+     const config = this.config;
+     const fsRoot = join("/@fs/", config.root);
+-    if (path.startsWith(config.root)) {
++    if (path === config.root || path.startsWith(`${config.root}/`)) {
+       return path.slice(config.root.length);
+     }
+-    if (path.startsWith(fsRoot)) {
++    if (path === fsRoot || path.startsWith(`${fsRoot}/`)) {
+       return path.slice(fsRoot.length);
+     }
+     return path;

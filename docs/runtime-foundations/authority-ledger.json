@@ -14038,6 +14038,53 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:credentials.observeChanges",
+      "rpcPlane": "host-service",
+      "owner": "credentials",
+      "method": "observeChanges",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "secret",
+      "mechanismFamily": "credentials.read",
+      "reviewRationale": "Secret-free setup revision; credential contents and use remain separately gated",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:credentials.observeChanges"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:credentials.observeChanges),allOf(capability(user,service:credentials.observeChanges),workspace-member),allOf(capability(code,service:credentials.observeChanges),workspace-member))",
+      "r3b": {
+        "review": "profile-credential-opaque-revision-observation",
+        "change": "Authenticated workspace clients observe an opaque revision of credential and provider-client configuration owners. The receiver returns no record, secret, or mutation authority; cancellation closes and joins both file observations, preserving independent failures."
+      },
+      "capability": "service:credentials.observeChanges",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:credentials.proxyFetch",
       "rpcPlane": "host-service",
       "owner": "credentials",
@@ -21066,6 +21113,51 @@
         "change": null
       },
       "capability": "service:hubControl.listWorkspaces",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hubControl.observeDevices",
+      "rpcPlane": "host-service",
+      "owner": "hubControl",
+      "method": "observeDevices",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "hubControl.read",
+      "reviewRationale": "Only an opaque revision of the caller-visible device set is returned; device inspection remains gated",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hubControl.observeDevices"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.observeDevices),allOf(capability(user,service:hubControl.observeDevices),workspace-member))",
+      "r3b": {
+        "review": "caller-visible-device-readiness-observation",
+        "change": "Observe an opaque revision of the paired-device configuration visible to the authenticated caller. Membership and role changes re-evaluate visibility; activity timestamps do not self-invalidate the observation. No device mutation or device-detail inspection authority is granted."
+      },
+      "capability": "service:hubControl.observeDevices",
       "parityAssertion": "generated-census:host-authority"
     },
     {

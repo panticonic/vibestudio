@@ -492,6 +492,23 @@
           }
         }
       },
+      "observeDevices": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.read",
+          "rationale": "Only an opaque revision of the caller-visible device set is returned; device inspection remains gated"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "pairDevice": {
         "authority": {
           "inherits": true

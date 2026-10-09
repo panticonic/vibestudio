@@ -1,5 +1,10 @@
 # Handoff: skill-docs pass + design-smell refactors (2026-10-09)
 
+The seventeen source follow-ups have now been implemented or resolved. See
+[the final integration record](./docs-refactor-followups-2026-10-09.md) for commits
+and verification. Template release promotion still requires the application's
+GitHub publication credential; the historical working-tree status below is superseded.
+
 This is the historical handoff supplied before final integration. The working-tree
 and validation status below describe that moment; they are not the final commit or
 verification record. Open design proposals remain follow-up work unless a later
@@ -7,8 +12,9 @@ implementation explicitly closes them.
 
 Nothing is committed. The working trees in the host repo and in every template repo
 (`/home/werg/vibestudio-templates/*`) mix several authors' uncommitted work:
+
 - this effort (Claude subagents, then Codex, then Claude reviewers);
-- a separate review/cleanup session (rpc streamCodec/httpClient, hostConfig GATEWAY_*,
+- a separate review/cleanup session (rpc streamCodec/httpClient, hostConfig GATEWAY\_\*,
   shell/mobile UI and others; already finished);
 - another session still editing `packages/workspace-contracts/src/serviceMutation.ts`,
   the harness `workspace-service` tool and `base/skills/workspace-dev/create-project.ts`.
@@ -17,6 +23,7 @@ Nothing is committed. The working trees in the host repo and in every template r
 Commit in reviewable slices, per repo and per goal, not as one blob.
 
 ## Done (reviewed and tested by focused tests)
+
 - **Skill docs language pass:** all templates. Stale facts fixed throughout.
 - **Bug fixes:**
   - ui.feedback starts a repair turn (the dead `FeedbackIngest` class was removed).
@@ -60,7 +67,7 @@ Commit in reviewable slices, per repo and per goal, not as one blob.
 - **Dead code removed:** the agent-outbox idea is dropped. The dead `agent-wake` and
   `agent-effect` durable-work queues are deleted (`packages/shared/src/durableWork.ts`,
   `durableWorkDriver.ts`, tests renamed to the real queues), and the stale `channel_call`
-  comments are gone. Direct agent-to-agent calls were *replaced*, not lost:
+  comments are gone. Direct agent-to-agent calls were _replaced_, not lost:
   - `notify` with `to:` from `list_addressees`/`discover_agents`;
   - `chat.callMethod`/`callMethodByHandle` (durable, `native-channel-method.ts`);
   - the `*_subagent` tools.
@@ -126,6 +133,7 @@ Commit in reviewable slices, per repo and per goal, not as one blob.
   continuation and preserved. Avoid overlapping edits to this feature.
 
 ## Open decisions (yours)
+
 1. **News scheduling.** The panel's 60s reader timer is now replaced by channel-driven
    refreshes, with an initial read after channel readiness. The remaining scheduling
    question is still open: method-charter missions cannot target the live News agent, and
@@ -151,9 +159,12 @@ Commit in reviewable slices, per repo and per goal, not as one blob.
    recovery contract.
 6. **`commit({concludes})`.** Accept the single source per commit, or migrate the decisions
    table (it has a `UNIQUE(work_unit_id)` constraint).
-7. **Transactional git import.** The git config now lives in git-bridge state, so it can't
-   be atomic with the semantic import. Move it back into the snapshot, or use staging plus
-   a discardable candidate.
+7. **Transactional git import.** Imports now own isolated checkout/context candidates.
+   Configuration and candidate selection are published together in the Git owner's
+   state; failures before selection retire the candidate, and a lost publication
+   response is resolved from the persisted selection. Activation retires interrupted
+   candidates while preserving selected checkouts. The focused bridge/upstream/activation
+   projection passes 86 tests.
 8. **`git.createBranch` semantics.** Implemented as an event-bound remote branch creation
    in Base, gated by the same publication authority as `pushUpstream`. The projection-based
    `GitClient` example was removed from the guidance.
@@ -173,10 +184,14 @@ Commit in reviewable slices, per repo and per goal, not as one blob.
     runtime.
 15. **Cloudflare upload credential.** Base requests the provider's JWT expiry and derives
     credential expiry from that claim rather than imposing a local 15-minute lifetime.
-16. **SetupHub owner-state change events.** Too large for this pass; it needs its own task
-    (8 owner sources).
+16. **SetupHub owner-state change events.** SetupHub subscribes before reading its
+    snapshot and follows credential, model-setting, automation and device revisions,
+    plus the existing setup lifecycle event streams. Changes during a refresh remain
+    pending for a subsequent read. Observation cancellation joins owned work and
+    preserves independent cleanup failures; device activity does not invalidate readiness.
+    The focused SetupHub projection passes 12 tests and its responsive Chromium test passes.
 17. **Observation updates.** Migration progress now follows the provider's event-observation
     lifecycle; unmount cancels observation, not the import operation. Collection
     follows panel-tree invalidations. System Automations follows MissionsDO's
     user-scoped version observation, and News refreshes from channel events.
-    The final UI checks for the latter two changes remain part of integration.
+    System Automations' three focused UI tests and News's five Chromium reader tests pass.

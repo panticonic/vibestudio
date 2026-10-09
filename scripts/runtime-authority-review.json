@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:4d6451fae4774e24eec1adc24d88b341aca13d8b1bd0cd9a90cd3a3407846a34",
+  "censusDigest": "sha256:0f5682b9ab45444695910d78c12df671d7da81b2244d55b0d4faad29587b0b11",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -1720,6 +1720,14 @@
     "host:workspace-state.slot.patchCurrentStateArgs": {
       "review": "owner-serialized-current-panel-state-patch",
       "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
+    },
+    "host:credentials.observeChanges": {
+      "review": "profile-credential-opaque-revision-observation",
+      "change": "Authenticated workspace clients observe an opaque revision of credential and provider-client configuration owners. The receiver returns no record, secret, or mutation authority; cancellation closes and joins both file observations, preserving independent failures."
+    },
+    "host:hubControl.observeDevices": {
+      "review": "caller-visible-device-readiness-observation",
+      "change": "Observe an opaque revision of the paired-device configuration visible to the authenticated caller. Membership and role changes re-evaluate visibility; activity timestamps do not self-invalidate the observation. No device mutation or device-detail inspection authority is granted."
     }
   },
   "version": 1

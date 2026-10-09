@@ -636,7 +636,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp,
             firstPanelId,
-            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
+            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ gad }) => gad.inspectAgent({ channelId: ${JSON.stringify(channelName)}, participantId: ${JSON.stringify(agentId)}, method: "getDebugState" }))`
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -1004,7 +1004,7 @@ async function collectStartupAgentCompletion(
       const debugState = await executePanelScript(
         testApp,
         firstPanelId,
-        `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
+        `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ gad }) => gad.inspectAgent({ channelId: ${JSON.stringify(channelName)}, participantId: ${JSON.stringify(agentId)}, method: "getDebugState" }))`
       );
       const state = (debugState as { result?: unknown } | null)?.result ?? debugState;
       const inspection =

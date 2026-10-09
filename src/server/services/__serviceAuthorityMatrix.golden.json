@@ -3137,6 +3137,23 @@
         "capability": null,
         "presentation": null
       },
+      "observeChanges": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "secret",
+          "family": "credentials.read",
+          "rationale": "Secret-free setup revision; credential contents and use remain separately gated"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "proxyFetch": {
         "authority": {
           "inherits": true

@@ -2598,6 +2598,17 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "credentials.observeChanges": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale: "Secret-free setup revision; credential contents and use remain separately gated",
+    },
+    capability: null,
+    presentation: null,
+  },
   "credentials.proxyFetch": {
     tier: {
       tier: "open",
@@ -4533,6 +4544,18 @@ export const HOST_AUTHORITY_METHODS = {
         verb: "see",
       },
     },
+  },
+  "hubControl.observeDevices": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale:
+        "Only an opaque revision of the caller-visible device set is returned; device inspection remains gated",
+    },
+    capability: null,
+    presentation: null,
   },
   "hubControl.pairDevice": {
     tier: {

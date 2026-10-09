@@ -1691,6 +1691,88 @@ describe("hub RPC pairing surfacing (§5)", () => {
     expect(payload.rootInvite).not.toHaveProperty("serverUrl");
   });
 
+  it("observes device revocation and cancels only the waiting observation", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    state.controlTransport!.rpcServer = { retireCaller: vi.fn(async () => undefined) } as never;
+    const subject = { userId: rootUserId, handle: "root", role: "root" as const };
+    const invite = state.deviceAuthStore.createPairingInvite(30_000, {
+      userId: rootUserId,
+      intent: "pair-device",
+    });
+    const paired = state.deviceAuthStore.completePairing({
+      code: invite.code,
+      label: "phone",
+      transport: { kind: "local" },
+    });
+    const current = vi.fn();
+    const controller = new AbortController();
+    try {
+      await executeHubControl(state, subject, "observeDevices", [{}], current, controller.signal);
+      const updated = vi.fn();
+      const waiting = executeHubControl(
+        state,
+        subject,
+        "observeDevices",
+        [{ afterVersion: current.mock.calls[0]![0].version }],
+        updated,
+        controller.signal
+      );
+      expect(updated).not.toHaveBeenCalled();
+      await revokeHubDevice(state, subject, paired.deviceId);
+      await waiting;
+      expect(updated.mock.calls[0]![0].version).not.toBe(current.mock.calls[0]![0].version);
+      const cancelled = executeHubControl(
+        state,
+        subject,
+        "observeDevices",
+        [{ afterVersion: updated.mock.calls[0]![0].version }],
+        vi.fn(),
+        controller.signal
+      );
+      const reason = new Error("SetupHub closed");
+      controller.abort(reason);
+      await expect(cancelled).rejects.toBe(reason);
+      const read = vi.fn();
+      await executeHubControl(state, subject, "listDevices", [], read);
+      expect(read).toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      state.identityDb.close();
+    }
+  });
+
+  it("does not wake a paired-device setup observation for activity telemetry", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId, rootDeviceId } = makeState(runtime);
+    const subject = { userId: rootUserId, handle: "root", role: "root" as const };
+    const current = vi.fn();
+    const controller = new AbortController();
+    let settled = false;
+    try {
+      await executeHubControl(state, subject, "observeDevices", [{}], current, controller.signal);
+      const waiting = executeHubControl(
+        state,
+        subject,
+        "observeDevices",
+        [{ afterVersion: current.mock.calls[0]![0].version }],
+        vi.fn(),
+        controller.signal
+      ).finally(() => {
+        settled = true;
+      });
+      state.identityDb.touchDevice(rootDeviceId);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      const reason = new Error("setup closed");
+      controller.abort(reason);
+      await expect(waiting).rejects.toBe(reason);
+    } finally {
+      controller.abort();
+      state.identityDb.close();
+    }
+  });
+
   it("revokes a device immediately and retires its authenticated caller", async () => {
     const runtime = fakeRuntime(9, {});
     const { state, rootUserId } = makeState(runtime);

@@ -1187,6 +1187,25 @@ export type CredentialProxyFetchResponse = z.infer<typeof CredentialProxyFetchRe
 export type CredentialAuditParams = AuditParams;
 
 export const credentialsMethods = defineServiceMethods({
+  observeChanges: {
+    website: {
+      kind: "closed",
+      reason: "Profile setup observation belongs to authenticated workspace clients.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale: "Secret-free setup revision; credential contents and use remain separately gated",
+    },
+    description:
+      "Observe changes to stored credentials and provider client configuration. Cancellation releases the file observation.",
+    args: z.tuple([z.object({ afterVersion: z.string().optional() }).strict().default({})]),
+    returns: z.object({ version: z.string() }).strict(),
+    access: { sensitivity: "read" as const },
+  },
+
   storeCredential: {
     website: {
       kind: "closed",

@@ -88,6 +88,7 @@ import { throwIfAborted } from "./credentialMechanisms/async.js";
 import { OAuthConnectionError } from "./credentialMechanisms/errors.js";
 import { basicAuthHeader } from "./credentialMechanisms/oauth2.js";
 import { normalizeAccountIdentity } from "./credentialMechanisms/tokens.js";
+import { isRpcAborted } from "@vibestudio/rpc";
 import {
   buildCredentialRuntimeIndex,
   findNearestCredentialPanelEntity,
@@ -1555,12 +1556,92 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     } as Credential & { id: string });
   }
 
+  async function observeChanges(ctx: ServiceContext, afterVersion?: string) {
+    let previous: string[] | undefined;
+    if (afterVersion) {
+      try {
+        const value: unknown = JSON.parse(afterVersion);
+        if (
+          Array.isArray(value) &&
+          value.length === 2 &&
+          value.every((part) => typeof part === "string")
+        )
+          previous = value;
+      } catch {
+        /* An unknown version requests the current owner revision. */
+      }
+    }
+    const controller = new AbortController();
+    const aborted = () => controller.abort(ctx.signal?.reason);
+    ctx.signal?.addEventListener("abort", aborted, { once: true });
+    if (ctx.signal?.aborted) aborted();
+    const versions = previous ? [...previous] : [];
+    let resolveChange!: () => void;
+    let rejectChange!: (error: unknown) => void;
+    const changed = new Promise<void>((resolve, reject) => {
+      resolveChange = resolve;
+      rejectChange = reject;
+    });
+    const taskFailures: Array<{ error: unknown; aggregateCancellation: boolean }> = [];
+    const tasks = [credentialStore, clientConfigStore].map(async (store, index) => {
+      try {
+        const result = await store.observeChanges({
+          afterVersion: previous?.[index],
+          signal: controller.signal,
+        });
+        versions[index] = result.version;
+        if (previous || versions.filter(Boolean).length === 2) resolveChange();
+      } catch (error) {
+        taskFailures.push({
+          error,
+          aggregateCancellation:
+            controller.signal.aborted &&
+            (isRpcAborted(error) || error === controller.signal.reason),
+        });
+        rejectChange(error);
+        throw error;
+      }
+    });
+    let primaryError: unknown;
+    let failed = false;
+    try {
+      await changed;
+    } catch (error) {
+      failed = true;
+      primaryError = error;
+    } finally {
+      controller.abort(new Error("Credential setup observation completed"));
+      await Promise.allSettled(tasks);
+      ctx.signal?.removeEventListener("abort", aborted);
+      const cleanupErrors = taskFailures
+        .filter((failure) => !failure.aggregateCancellation && failure.error !== primaryError)
+        .map((failure) => failure.error);
+      if (failed && cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [primaryError, ...cleanupErrors],
+          "Credential setup observation failed and another owner failed while closing.",
+          { cause: primaryError }
+        );
+      }
+      if (failed) throw primaryError;
+      if (cleanupErrors.length === 1) throw cleanupErrors[0];
+      if (cleanupErrors.length > 1) {
+        throw new AggregateError(
+          cleanupErrors,
+          "Credential setup observation owners failed while closing."
+        );
+      }
+    }
+    return { version: JSON.stringify(versions) };
+  }
+
   const definition: ServiceDefinition = {
     name: "credentials",
     description: "URL-bound userland credential storage and egress",
     authority: { principals: ["user", "code", "host", "website"] },
     methods: credentialsMethods,
     handler: defineServiceHandler("credentials", credentialsMethods, {
+      observeChanges: (ctx, [input]) => observeChanges(ctx, input.afterVersion),
       storeCredential: (ctx, [input]) => storeCredential(ctx, input),
       connect: (ctx, [input]) => connectionCoordinator.connect(ctx, input),
       configureClient: (ctx, [input]) => configureClient(ctx, input),

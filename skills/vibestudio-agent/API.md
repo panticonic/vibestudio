@@ -157,6 +157,7 @@ Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
+| `credentials.observeChanges` | Observe changes to stored credentials and provider client configuration. Cancellation releases the file observation. |
 | `credentials.connect` | Run a connection flow (OAuth2/OAuth1a/API-key/SSH/browser-session) to obtain and store a credential; interactive flows open a browser sign-in. |
 | `credentials.configureClient` | Store (versioned) OAuth client configuration — authorize/token URLs and client fields such as client id/secret; userland callers are prompted to submit the material, and secrets are never returned in the status. |
 | `credentials.requestCredentialInput` | Prompt the user to enter exactly one secret field, then store the resulting credential; the submitted secret is never returned in the summary. |

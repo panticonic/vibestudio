@@ -818,7 +818,70 @@ function workspaceCatalogForUser(state: HubRuntimeState, userId: string) {
   };
 }
 
+const deviceObservers = new WeakMap<HubRuntimeState, Set<() => void>>();
+
+function notifyDeviceObservers(state: HubRuntimeState): void {
+  for (const notify of deviceObservers.get(state) ?? []) notify();
+}
+
+function observeHubDevices(
+  state: HubRuntimeState,
+  subject: HubSubject,
+  afterVersion?: string,
+  signal?: AbortSignal
+): Promise<{ version: string }> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const observers = deviceObservers.get(state) ?? new Set<() => void>();
+    deviceObservers.set(state, observers);
+    const cleanup = () => {
+      observers.delete(read);
+      signal?.removeEventListener("abort", aborted);
+    };
+    const fail = (error: unknown) => {
+      cleanup();
+      reject(error);
+    };
+    const aborted = () => fail(signal?.reason);
+    const read = () => {
+      try {
+        const user = state.userStore.getUser(subject.userId);
+        if (!user || user.revokedAt !== undefined)
+          throw new Error("Device observation user was revoked");
+        const devices =
+          user.role === "root" || user.role === "admin"
+            ? state.deviceAuthStore.listDevices()
+            : state.identityDb.listDevicesForUser(user.id);
+        const version = hashSecret(
+          JSON.stringify(
+            devices
+              .map((device) => ({
+                deviceId: device.deviceId,
+                userId: device.userId,
+                label: device.label,
+                platform: device.platform,
+                createdAt: device.createdAt,
+                revokedAt: device.revokedAt,
+              }))
+              .sort((a, b) => a.deviceId.localeCompare(b.deviceId))
+          )
+        );
+        if (version !== afterVersion) {
+          cleanup();
+          resolve({ version });
+        }
+      } catch (error) {
+        fail(error);
+      }
+    };
+    observers.add(read);
+    signal?.addEventListener("abort", aborted, { once: true });
+    read();
+  });
+}
+
 function emitWorkspaceCatalogChanged(state: HubRuntimeState): void {
+  notifyDeviceObservers(state);
   state.controlTransport?.eventService.emitProjected("hub:workspace-catalog-changed", (owner) =>
     owner.userId ? workspaceCatalogForUser(state, owner.userId) : undefined
   );
@@ -1180,6 +1243,7 @@ export async function completeControlPairing(
     platform: input.platform,
     transport: input.transport,
   });
+  notifyDeviceObservers(state);
   const invite = transport.invites.get(codeHash);
   const device = state.identityDb.getDevice(credential.deviceId);
   if (invite && device)
@@ -1399,6 +1463,8 @@ async function handleInternalRoute(
       if (!state.membershipStore.has(device.userId, boundWorkspaceId)) {
         throw authError("EACCES", "Device owner is not a workspace member", 403);
       }
+      // Device activity is telemetry, not pairing/readiness state. Emitting an
+      // observation here would make a refresh cause its own next refresh.
       state.identityDb.touchDevice(body.deviceId);
       sendJson(res, 200, { touched: true });
       return;
@@ -1563,6 +1629,7 @@ export async function revokeHubUser(
     .filter((entry) => state.membershipStore.has(target.id, entry.workspaceId))
     .map((entry) => entry.workspaceId);
   const revoked = state.userStore.revokeUser(target.id, workspaceIds);
+  if (revoked) notifyDeviceObservers(state);
   // Revocation deleted the account's pending invites; end their lifecycles.
   const controlTransport = state.controlTransport;
   for (const [codeHash, invite] of controlTransport?.invites ?? []) {
@@ -1597,6 +1664,7 @@ export async function revokeHubDevice(
   if (device.userId !== subject.userId) requireRole(subject, "admin");
   const revoked = state.deviceAuthStore.revokeDevice(deviceId);
   if (revoked) {
+    notifyDeviceObservers(state);
     state.tokenManager.revokeToken(shellCallerId(deviceId));
     retireDeviceControlReach(state, deviceId);
   }
@@ -2025,6 +2093,7 @@ export async function executeHubControl(
       state.userStore.setRole(target.id, priorRole);
       throw error;
     }
+    notifyDeviceObservers(state);
     respond({ userId: target.id, handle: target.handle, role });
     return;
   }
@@ -2075,6 +2144,18 @@ export async function executeHubControl(
             ...(user.avatarBlob !== undefined ? { avatar: user.avatarBlob } : {}),
           }
         : null
+    );
+    return;
+  }
+  if (method === "observeDevices") {
+    const input = asRecord(args[0]) ?? {};
+    respond(
+      await observeHubDevices(
+        state,
+        subject,
+        typeof input["afterVersion"] === "string" ? input["afterVersion"] : undefined,
+        signal
+      )
     );
     return;
   }

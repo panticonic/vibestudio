@@ -154,6 +154,80 @@ export abstract class EncryptedJsonStore<TRecord> {
     this.processPortable = options.processPortable ?? false;
   }
 
+  /** Subscribe before observing the encrypted owner files. Atomic replacement,
+   * removal, and writes by another profile process all invalidate this read. */
+  async observeChanges(
+    options: {
+      afterVersion?: string;
+      signal?: AbortSignal;
+    } = {}
+  ): Promise<{ version: string }> {
+    const { signal, afterVersion } = options;
+    signal?.throwIfAborted();
+    await fs.mkdir(this.basePath, { recursive: true });
+    signal?.throwIfAborted();
+    const watcher = fsSync.watch(this.basePath, { recursive: true });
+    const closed = new Promise<void>((resolve) => watcher.once("close", resolve));
+    return new Promise<{ version: string }>((resolve, reject) => {
+      let settled = false;
+      let reading = false;
+      let dirty = false;
+      let readCompletion: Promise<void> = Promise.resolve();
+      const finish = (outcome: { version: string } | { error: unknown }) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", aborted);
+        watcher.close();
+        void closed
+          .then(() => readCompletion)
+          .then(() => {
+            if ("error" in outcome) reject(outcome.error);
+            else resolve(outcome);
+          });
+      };
+      const aborted = () => finish({ error: signal?.reason });
+      const read = async () => {
+        dirty = true;
+        if (reading || settled) return;
+        reading = true;
+        try {
+          while (dirty && !settled) {
+            dirty = false;
+            const files = await this.collectRecordSignatures();
+            const hash = crypto.createHash("sha256");
+            for (const file of [...files.keys()].sort()) {
+              try {
+                const bytes = await fs.readFile(file);
+                hash.update(JSON.stringify(path.relative(this.basePath, file)));
+                hash.update(crypto.createHash("sha256").update(bytes).digest());
+              } catch (error) {
+                if (!isNotFoundError(error)) throw error;
+              }
+            }
+            const version = hash.digest("hex");
+            if (version !== afterVersion) finish({ version });
+          }
+        } catch (error) {
+          finish({ error });
+        } finally {
+          reading = false;
+        }
+      };
+      const requestRead = () => {
+        dirty = true;
+        if (!reading && !settled) readCompletion = read();
+      };
+      watcher.on("change", requestRead);
+      watcher.on("error", (error) => finish({ error }));
+      watcher.on("close", () => {
+        if (!settled) finish({ error: new Error("Credential owner file observation closed") });
+      });
+      signal?.addEventListener("abort", aborted, { once: true });
+      if (signal?.aborted) aborted();
+      else requestRead();
+    });
+  }
+
   protected async saveRecord(
     namespaceId: string,
     recordId: string,

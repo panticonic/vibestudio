@@ -29,6 +29,9 @@ patchedDependencies:
   '@react-native-firebase/messaging@23.8.8':
     hash: 0bae9da8492dfa88b73e36505b1e0c197aa0456317fb58f53904c7ff1df9167e
     path: patches/@react-native-firebase__messaging@23.8.8.patch
+  '@vitest/browser@3.2.7':
+    hash: 36712d8e8b3e2709706bed2253a3c60dff70ec993d5be250b0ad7b4ed80292f0
+    path: patches/@vitest__browser@3.2.7.patch
   app-builder-lib@26.15.3:
     hash: 435bc4df4fb16704ed1f7b2b4cb73af20a835cc8e721a014487add5993e3f504
     path: patches/app-builder-lib@26.15.3.patch
@@ -412,7 +415,7 @@ importers:
         version: 8.18.1
       '@vitest/browser':
         specifier: 3.2.7
-        version: 3.2.7(playwright@1.58.1)(vite@7.3.6(@types/node@24.10.9)(jiti@2.7.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))(vitest@3.2.7)
+        version: 3.2.7(patch_hash=36712d8e8b3e2709706bed2253a3c60dff70ec993d5be250b0ad7b4ed80292f0)(playwright@1.58.1)(vite@7.3.6(@types/node@24.10.9)(jiti@2.7.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))(vitest@3.2.7)
       dts-bundle-generator:
         specifier: ^9.5.1
         version: 9.5.1
@@ -13108,7 +13111,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 
@@ -13809,7 +13814,7 @@ snapshots:
       d3-selection: 3.0.0
       d3-transition: 3.0.1(d3-selection@3.0.0)
 
-  '@vitest/browser@3.2.7(playwright@1.58.1)(vite@7.3.6(@types/node@24.10.9)(jiti@2.7.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))(vitest@3.2.7)':
+  '@vitest/browser@3.2.7(patch_hash=36712d8e8b3e2709706bed2253a3c60dff70ec993d5be250b0ad7b4ed80292f0)(playwright@1.58.1)(vite@7.3.6(@types/node@24.10.9)(jiti@2.7.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))(vitest@3.2.7)':
     dependencies:
       '@testing-library/dom': 10.4.1
       '@testing-library/user-event': 14.6.1(@testing-library/dom@10.4.1)
@@ -19580,7 +19585,7 @@ snapshots:
     optionalDependencies:
       '@types/debug': 4.1.12
       '@types/node': 24.10.9
-      '@vitest/browser': 3.2.7(playwright@1.58.1)(vite@7.3.6(@types/node@24.10.9)(jiti@2.7.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))(vitest@3.2.7)
+      '@vitest/browser': 3.2.7(patch_hash=36712d8e8b3e2709706bed2253a3c60dff70ec993d5be250b0ad7b4ed80292f0)(playwright@1.58.1)(vite@7.3.6(@types/node@24.10.9)(jiti@2.7.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))(vitest@3.2.7)
       jsdom: 29.0.1(@noble/hashes@2.2.0)
     transitivePeerDependencies:
       - jiti

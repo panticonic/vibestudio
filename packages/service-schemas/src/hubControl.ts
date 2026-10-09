@@ -701,6 +701,25 @@ export const hubControlMethods = defineServiceMethods({
     }),
     access: writeAccess,
   },
+  observeDevices: {
+    website: {
+      kind: "closed",
+      reason: "Account setup observations belong to authenticated workspace clients.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale:
+        "Only an opaque revision of the caller-visible device set is returned; device inspection remains gated",
+    },
+    description:
+      "Observe changes to the caller-visible paired device set. Cancellation releases the observation.",
+    args: z.tuple([z.object({ afterVersion: z.string().optional() }).strict().default({})]),
+    returns: z.object({ version: z.string() }).strict(),
+    access: readAccess,
+  },
   listDevices: {
     website: {
       kind: "closed",

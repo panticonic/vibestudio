@@ -2,7 +2,8 @@
 
 The user authorized all seventeen follow-ups in cleanup-handoff-2026-10-09.md,
 and committing the already-ready work without exact authorship separation.
-This is an active progress record, not a completion claim.
+All seventeen source follow-ups are now implemented or resolved against the existing design.
+Template release promotion remains at the publication boundary described below.
 
 ## Ready work committed
 
@@ -61,8 +62,7 @@ System Testing, Google Workspace, and Personal composition typechecks passed.
 Another 21 Base automation/advertisement tests, 19 browser-import owner and
 client tests, 30 Personal tests, and 5 shell client tests passed. The shell
 regression proves a failed reload retains commands until runtime retirement.
-The host integration gate passed. Final compositions after the observation API
-and recovery changes remain to be run.
+The host integration gate passed. Subsequent composition checks are recorded in the final source integration section.
 
 Agent lifecycle recovery now drains parked automation Finish receipt debt.
 A storage-reopen regression proves that it redelivers the original terminal
@@ -106,15 +106,37 @@ The Base composition typecheck passed after these changes.
    concludes adds one net-zero/convergent source. Separate conclusions remain
    separate semantic decisions and commits; no decisions-table migration is needed.
 
-## Still open
+## Final source integration
 
-1. Native method automation admission targeting the existing News agent,
-   mission-owned News cadence, and timezone. The reader timer is removed;
-   owner events refresh the reader and coalesce invalidations during queries.
-   News's composition typecheck passed.
-2. Atomic Git import/config application. Existing compensating config rollback
-   is not an atomic semantic import; redesign ownership rather than extending it.
-3. SetupHub owner-source events (eight sources).
+1. News cadence now belongs to Missions. The two defaults invoke the selected
+   native `refreshNow` tool in the existing News agent, retaining exact execution
+   image, lifecycle ownership and cancellation. Daily briefings use an explicit
+   IANA timezone and cron trigger. Invalid unzoned requests fail before admission.
+   Initial pause is admitted atomically by Missions, and pause/resume are
+   idempotent. The reader observes both channel and mission changes; no refresh
+   interval or private cadence mirror remains. Commits: News `d17852b`, `7723766`;
+   Base `678dfa4`, `f9346da`; host `794c37d07`, `0218ba12c`.
+2. Git imports clone into an owned staged checkout and semantic context. One
+   atomic provider-state replacement selects configuration and candidate together.
+   Failed unselected candidates are retired; cleanup debt survives reopening.
+   A lost selection acknowledgment reads the committed receipt before cleanup.
+   Ordinary clone uses this same pipeline, and all review readers use the selected
+   context. Base commit `e8e135f`; 84 focused bridge/upstream tests passed.
+3. SetupHub now admits all observations before its first snapshot and coalesces
+   invalidations during a read. Credential and provider configuration changes use
+   native file notifications, including other-process replacement and deletion.
+   Model defaults, credentials, Missions and paired devices expose owned versioned
+   observations. Local models, browser import, installed catalog/workspace config,
+   workspace catalog and connection/topology changes use their existing events.
+   Failure remains visible until an explicit retry; unmount cancels and joins only
+   the observations. Base commit `f439c15`, Personal commit `d97fba8`.
+
+Final focused checks: 49 model-settings tests, 13 SetupHub/observation tests,
+44 News worker tests, five News browser tests, and the SetupHub phone-width
+browser regression passed. Base and Personal composition typechecks passed.
+The browser regression also verifies that the external-checkout mock is applied.
+A pinned two-line Vitest patch repairs its false root-prefix match for sibling
+checkout paths. pnpm applies it reproducibly; no browser resolver fallback remains.
 
 ## Integration verification and release boundary
 
