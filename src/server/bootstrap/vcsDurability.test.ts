@@ -55,7 +55,7 @@ describe("wireVcsDurability", () => {
 
   it("durably publishes the manifest source-provider entity before attaching it", async () => {
     const dispatch = {
-      dispatch: vi.fn(async () => "direct-result"),
+      dispatch: vi.fn(async () => ["direct-result"]),
     } as unknown as DODispatch;
     const manager = {
       ensureDurableObjectEntity: vi.fn(async () => ({
@@ -67,7 +67,12 @@ describe("wireVcsDurability", () => {
       })),
     } as unknown as WorkerdManager;
     let gadClient: WorkspaceSemanticPort | undefined;
+    let semanticReady = Promise.resolve();
     const workspaceVcs = {
+      startSemanticInitialization: vi.fn(
+        (operation: () => Promise<void>) => (semanticReady = Promise.resolve().then(operation))
+      ),
+      whenSemanticReady: vi.fn(() => semanticReady),
       attachGad: vi.fn(async (client) => {
         gadClient = client;
       }),
@@ -115,12 +120,17 @@ describe("wireVcsDurability", () => {
     expect(workspaceVcs.attachGad).toHaveBeenCalledOnce();
     expect(workspaceVcs.attachWorkspaceSourceProvider).toHaveBeenCalledOnce();
 
-    await expect(gadClient?.listContexts({ prefix: "a" })).resolves.toBe("direct-result");
+    await expect(gadClient?.listContexts({ prefix: "a" })).resolves.toEqual(["direct-result"]);
     expect(dispatch.dispatch).toHaveBeenCalledWith(gadRef, "vcsListContexts", { prefix: "a" });
   });
 
-  it("does not release semanticWorkspace until initialization completes", async () => {
+  it("releases attachment while semanticWorkspace awaits the owned initialization", async () => {
+    let semanticReady = Promise.resolve();
     const workspaceVcs = {
+      startSemanticInitialization: vi.fn(
+        (operation: () => Promise<void>) => (semanticReady = Promise.resolve().then(operation))
+      ),
+      whenSemanticReady: vi.fn(() => semanticReady),
       attachGad: vi.fn(async () => undefined),
       attachWorkspaceSourceProvider: vi.fn(),
     } as unknown as WorkspaceVcs;
@@ -133,7 +143,11 @@ describe("wireVcsDurability", () => {
         authority: { provides: [], requests: [] },
       })),
     } as unknown as WorkerdManager;
-    const activateSemanticWorkspace = vi.fn(async () => undefined);
+    let finishInitialization!: () => void;
+    const initialization = new Promise<void>((resolve) => {
+      finishInitialization = resolve;
+    });
+    const activateSemanticWorkspace = vi.fn(() => initialization);
     const publishWorkspaceSourceEntity = vi.fn(async () => undefined);
     const { services } = captureServices({
       workspaceVcs,
@@ -155,7 +169,23 @@ describe("wireVcsDurability", () => {
         workerdManager: manager,
       })[name as "doDispatch" | "workerdManager"] as D | undefined;
     await attach?.start?.(bootstrapResolve);
-    await expect(semantic?.start?.(resolve)).resolves.toBe(workspaceVcs);
+    const attachmentStop = attach?.stop?.(workspaceVcs);
+    let attachmentRetired = false;
+    void attachmentStop?.then(() => {
+      attachmentRetired = true;
+    });
+    const semanticStart = semantic?.start?.(resolve);
+    let semanticComplete = false;
+    void semanticStart?.then(() => {
+      semanticComplete = true;
+    });
+    await Promise.resolve();
+    expect(semanticComplete).toBe(false);
+    expect(attachmentRetired).toBe(false);
+    finishInitialization();
+    await expect(semanticStart).resolves.toBe(workspaceVcs);
+    await attachmentStop;
+    expect(attachmentRetired).toBe(true);
     expect(activateSemanticWorkspace).toHaveBeenCalledWith(workspaceVcs);
     expect(manager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
     expect(publishWorkspaceSourceEntity).toHaveBeenCalledOnce();

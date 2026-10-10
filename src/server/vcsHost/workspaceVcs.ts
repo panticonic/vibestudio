@@ -298,6 +298,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * verified again.
    */
   private readonly verifiedBuildTrees = new Map<string, string>();
+  private semanticInitialization: Promise<void> | null = null;
   private ensureFreshInFlight: Promise<{ stateHash: string }> | null = null;
 
   constructor(private readonly deps: WorkspaceVcsDeps) {
@@ -449,10 +450,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     contextIds: readonly string[],
     references: readonly { kind: string; value: unknown }[]
   ): Promise<boolean> {
+    await this.whenSemanticReady();
     return this.gad().referencesReachable({ contextIds, references });
   }
 
   async listSemanticContexts(prefix?: string): Promise<string[]> {
+    await this.whenSemanticReady();
     return this.gad().listContexts({
       ...(prefix === undefined ? {} : { prefix }),
     });
@@ -462,6 +465,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     ancestor: VcsStateNodeRef,
     descendant: VcsStateNodeRef
   ): Promise<boolean> {
+    await this.whenSemanticReady();
     return this.gad().isStateDescendant({
       ancestor,
       descendant,
@@ -469,12 +473,30 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
+  /** The attachment owns one initialization flight. Content reads keep using
+   * the prepared snapshot; semantic operations await its publication. */
+  startSemanticInitialization(operation: () => Promise<void>): Promise<void> {
+    if (this.semanticInitialization) return this.semanticInitialization;
+    const initialization = Promise.resolve().then(operation);
+    this.semanticInitialization = initialization;
+    // The managed semanticWorkspace service observes failure; retain the same
+    // rejected promise for every editing caller, including later requests.
+    void initialization.catch(() => {});
+    return initialization;
+  }
+
+  whenSemanticReady(signal?: AbortSignal): Promise<void> {
+    const initialized = this.semanticInitialization ?? Promise.resolve();
+    return signal ? abortableSemanticCall(() => initialized, signal) : initialized;
+  }
+
   async attachGad(gad: WorkspaceSemanticPort): Promise<void> {
     if (this.gadCaller) throw new Error("semantic workspace is already attached");
     this.gadCaller = gad;
   }
 
-  readTemplateInstallation(eventId: string) {
+  async readTemplateInstallation(eventId: string) {
+    await this.whenSemanticReady();
     return this.workspaceSourceProvider().readTemplateInstallation({ eventId });
   }
 
@@ -504,6 +526,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     request: SemanticRequest,
     publicationGateContext?: CallerPublicationGateContext
   ): Promise<T> {
+    await this.whenSemanticReady(
+      publicationGateContext?.kind === "caller" ? publicationGateContext.signal : undefined
+    );
     return this.dispatchSemanticCall(method, request, publicationGateContext);
   }
 
@@ -542,8 +567,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     } satisfies SemanticRequest);
   }
 
+  private dispatchSemanticInput<T>(method: string, input: unknown): Promise<T> {
+    return this.dispatchSemanticCall<T>(method, {
+      ...(input === undefined ? {} : { input }),
+      ingress: { causalParent: null },
+    } satisfies SemanticRequest);
+  }
+
   private semanticWorkspaceInitializationPush<T>(input: unknown): Promise<T> {
-    return this.withProtectedMainMutation(() =>
+    return this.mutateProtectedMain(() =>
       this.dispatchSemanticCall<T>(
         "vcsPush",
         {
@@ -575,15 +607,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     caller: VerifiedCaller,
     signal?: AbortSignal
   ): Promise<T> {
-    return this.withProtectedMainMutation(() =>
-      this.semanticCall<T>(
-        "vcsPush",
-        {
-          input,
-          ingress: { causalParent },
-        } satisfies SemanticRequest,
-        { kind: "caller", caller, ...(signal ? { signal } : {}) }
-      )
+    return this.withProtectedMainMutation(
+      () =>
+        this.semanticCall<T>(
+          "vcsPush",
+          {
+            input,
+            ingress: { causalParent },
+          } satisfies SemanticRequest,
+          { kind: "caller", caller, ...(signal ? { signal } : {}) }
+        ),
+      signal
     );
   }
 
@@ -593,15 +627,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     caller: VerifiedCaller,
     signal?: AbortSignal
   ): Promise<T> {
-    return this.withProtectedMainMutation(() =>
-      this.semanticCall<T>(
-        "vcsPush",
-        {
-          input,
-          ingress: { causalParent },
-        } satisfies SemanticRequest,
-        { kind: "caller", caller, epochTransition: true, ...(signal ? { signal } : {}) }
-      )
+    return this.withProtectedMainMutation(
+      () =>
+        this.semanticCall<T>(
+          "vcsPush",
+          {
+            input,
+            ingress: { causalParent },
+          } satisfies SemanticRequest,
+          { kind: "caller", caller, epochTransition: true, ...(signal ? { signal } : {}) }
+        ),
+      signal
     );
   }
 
@@ -612,7 +648,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * through `semanticPublishCall`, so no second serialization domain can move
    * main between preparation and publication.
    */
-  async withProtectedMainMutation<T>(operation: () => Promise<T>): Promise<T> {
+  async withProtectedMainMutation<T>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    await this.whenSemanticReady(signal);
+    return this.mutateProtectedMain(operation);
+  }
+
+  private async mutateProtectedMain<T>(operation: () => Promise<T>): Promise<T> {
     if (this.protectedMainMutationScope.getStore()) return operation();
     const previous = this.protectedMainMutationTail;
     let release!: () => void;
@@ -1020,6 +1064,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * which materializes the disposable projection on first use.
    */
   async ensureSemanticContext(contextId: string): Promise<VcsStateNodeRef> {
+    await this.whenSemanticReady();
     const active = this.semanticContextInitializations.get(contextId);
     if (active) return active;
     const initialization = this.locked(`context-lifecycle:${contextId}`, () =>
@@ -1034,6 +1079,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   async ensureContext(contextId: string): Promise<VcsStateNodeRef> {
+    await this.whenSemanticReady();
     const active = this.contextInitializations.get(contextId);
     if (active) return active;
     const initialization = this.locked(`context-lifecycle:${contextId}`, () =>
@@ -1175,10 +1221,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       return { ...fresh, initialized: true, timings };
     }
     let spanStartedAt = performance.now();
-    const state = await this.ensureContext(contextId);
+    const state = await this.ensureContextOnce(contextId);
     timings.ensureContextAndMaterializationMs = performance.now() - spanStartedAt;
     spanStartedAt = performance.now();
-    const inspected = await this.semanticDirectCall<VcsInspectResult>("vcsInspect", {
+    const inspected = await this.dispatchSemanticInput<VcsInspectResult>("vcsInspect", {
       node: state,
       edgeLimit: 1,
     });
@@ -1239,7 +1285,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         evidence.snapshotRevision === localSnapshotRevision
     );
     if (!localAlreadyImported) {
-      const importResult = await this.semanticDirectCall<VcsImportSnapshotResult>(
+      const importResult = await this.dispatchSemanticInput<VcsImportSnapshotResult>(
         "vcsImportSnapshot",
         {
           contextId,
@@ -1282,7 +1328,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   ): Promise<
     import("@vibestudio/workspace-contracts/workspaceSource").WorkspaceSourceInitializationReceipt
   > {
-    return this.withProtectedMainMutation(async () => {
+    return this.mutateProtectedMain(async () => {
       const startedAt = performance.now();
       let providerMs = 0;
       let effectMs = 0;
@@ -1402,7 +1448,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (cursor.kind !== "event") {
         throw new Error("Workspace initialization history contains a non-event state");
       }
-      const inspected = await this.semanticDirectCall<VcsInspectResult>("vcsInspect", {
+      const inspected = await this.dispatchSemanticInput<VcsInspectResult>("vcsInspect", {
         node: cursor,
         edgeLimit: 1,
       });
@@ -1438,18 +1484,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     let cursor = state;
     for (;;) {
       if (cursor.kind !== "event") break;
-      const event = await this.semanticDirectCall<VcsInspectResult>("vcsInspect", {
+      const event = await this.dispatchSemanticInput<VcsInspectResult>("vcsInspect", {
         node: cursor,
         edgeLimit: 1,
       });
       if (event.node.kind !== "event" || event.node.value.kind === "genesis") break;
       for (const applicationId of event.node.value.applicationIds) {
-        const application = await this.semanticDirectCall<VcsInspectResult>("vcsInspect", {
+        const application = await this.dispatchSemanticInput<VcsInspectResult>("vcsInspect", {
           node: { kind: "application", applicationId },
           edgeLimit: 1,
         });
         if (application.node.kind !== "application") continue;
-        const workUnit = await this.semanticDirectCall<VcsInspectResult>("vcsInspect", {
+        const workUnit = await this.dispatchSemanticInput<VcsInspectResult>("vcsInspect", {
           node: { kind: "work-unit", workUnitId: application.node.value.workUnitId },
           edgeLimit: 1,
         });
@@ -1468,6 +1514,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   async forkContext(sourceContextId: string, targetContextId: string): Promise<VcsStateNodeRef> {
+    await this.whenSemanticReady();
     this.projector.contextDir(sourceContextId);
     this.projector.contextDir(targetContextId);
     return this.locked(`context-lifecycle:${targetContextId}`, async () => {
@@ -1492,6 +1539,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   async dropContext(contextId: string): Promise<void> {
+    await this.whenSemanticReady();
     await this.locked(`context-lifecycle:${contextId}`, async () => {
       // Projection bytes are disposable and reconstructible from semantic
       // authority. Remove them first so every interrupted ordering is

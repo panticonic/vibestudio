@@ -78,7 +78,15 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
       console.log(
         `[Vcs] Attached manifest-declared workspace source provider (${gadRef.source}:${gadRef.className})`
       );
+      deps.workspaceVcs.startSemanticInitialization(() =>
+        deps.activateSemanticWorkspace(deps.workspaceVcs)
+      );
       return deps.workspaceVcs;
+    },
+    async stop() {
+      // Attachment owns initialization even if another required service fails
+      // before the background semanticWorkspace service has started.
+      await deps.workspaceVcs.whenSemanticReady();
     },
   });
 
@@ -89,7 +97,7 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
     dependencies: ["vcsAttach"],
     async start(resolve) {
       const workspaceVcs = assertPresent(resolve<WorkspaceVcs>("vcsAttach"));
-      await deps.activateSemanticWorkspace(workspaceVcs);
+      await workspaceVcs.whenSemanticReady();
       return workspaceVcs;
     },
   });

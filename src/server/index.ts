@@ -7295,7 +7295,7 @@ async function main() {
 
   // Start the readiness dependency closure; extend the lifecycle in the background.
   await container.startRequired([
-    "semanticWorkspace",
+    "vcsAttach",
     "runtime",
     "workspace-state",
     "build",
@@ -7674,7 +7674,8 @@ async function main() {
     .get<import("@vibestudio/extension-host").ExtensionHost>("extensionHost")
     .setDeclared(runtimeExtensionDeclarations(workspaceConfig));
   resolveInitialExtensionDeclarations();
-  startupWorkspaceUnitReconcile = Promise.resolve()
+  startupWorkspaceUnitReconcile = workspaceVcs
+    .whenSemanticReady()
     .then(runStartupWorkspaceUnitReconcile)
     .then(async () => {
       // publishPending starts the queue entries synchronously; its promise is the

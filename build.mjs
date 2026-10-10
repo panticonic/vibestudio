@@ -777,7 +777,7 @@ async function build() {
     // ========================================================================
     // STEP 2: Build main application
     // ========================================================================
-    // Compatible entrypoints share one compiler graph; compiler realms are joined in order.
+    // Compatible entrypoints share one compiler graph; independent compiler realms run concurrently and are joined before returning.
     // Dependencies: buildVibestudioPackages
     // Required by: None (final outputs)
     const workerdPrograms = await buildWorkerdPrograms({ minify: !isDev, logOverride });

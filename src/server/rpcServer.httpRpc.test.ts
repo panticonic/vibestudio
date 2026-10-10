@@ -4,10 +4,7 @@ import { WebSocket } from "ws";
 import { RpcServer } from "./rpcServer.js";
 import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
 import { Gateway } from "./gateway.js";
-import type {
-  ServiceDispatcher,
-  ServiceContext,
-} from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceDispatcher, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";

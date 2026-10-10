@@ -27,21 +27,37 @@ test("compatible entries share one graph while compiler realms retain their opti
   assert.deepEqual(groups[2].external, ["native"]);
 });
 
-test("failure settles the owned compiler before returning and admits no later realm", async () => {
-  let reject;
+test("independent compiler realms run concurrently and retain result order", async () => {
+  const finish = [];
+  const pending = buildArtifactGroups(
+    [artifact("a"), artifact("b", { format: "cjs" })],
+    () => new Promise((resolve) => finish.push(resolve))
+  );
+  assert.equal(finish.length, 2);
+  finish[1]("second");
+  finish[0]("first");
+  assert.deepEqual(await pending, ["first", "second"]);
+});
+
+test("a failed compiler joins admitted siblings before returning its original error", async () => {
   const failure = new Error("compiler failure");
-  const started = [];
+  let finish;
+  let settled = false;
   const pending = buildArtifactGroups(
     [artifact("a"), artifact("b", { format: "cjs" })],
     (config) => {
-      started.push(config);
-      return new Promise((_, fail) => {
-        reject = fail;
+      if (config.format === "esm") throw failure;
+      return new Promise((resolve) => {
+        finish = resolve;
       });
     }
   );
-  assert.equal(started.length, 1);
-  reject(failure);
+  void pending.catch(() => {
+    settled = true;
+  });
+  assert.equal(typeof finish, "function");
+  await Promise.resolve();
+  assert.equal(settled, false);
+  finish("second");
   await assert.rejects(pending, (error) => error === failure);
-  assert.equal(started.length, 1);
 });

@@ -21,6 +21,19 @@ import { WorkspaceVcs } from "./workspaceVcs.js";
 const roots: string[] = [];
 const TEST_PROVIDER = { source: "test/provider", className: "TestProvider", objectKey: "test" };
 
+function semanticContextResult(working: import("@vibestudio/service-schemas/vcs").VcsStateNodeRef) {
+  return {
+    contextId: "context:test",
+    committed: {
+      ref:
+        working.kind === "event" ? working : { kind: "event" as const, eventId: "event:genesis" },
+      workspaceFactRootId: "workspace-fact-root:committed",
+    },
+    working: { ref: working, workspaceFactRootId: "workspace-fact-root:working" },
+    workingHeadApplicationId: working.kind === "application" ? working.applicationId : null,
+  };
+}
+
 function providerFromWireCall(call: (method: string, input: unknown) => Promise<unknown>) {
   return createWorkspaceSemanticPort(
     {
@@ -73,6 +86,77 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("serves prepared content while context requests await one semantic initialization", async () => {
+    const { deps } = await harness();
+    const initialContentState = `state:${"a".repeat(64)}`;
+    const vcs = new WorkspaceVcs({ ...deps, initialContentState });
+    const ensureContext = vi.fn(async () => ({
+      kind: "complete",
+      result: semanticContextResult({ kind: "event", eventId: "event:initialized" }),
+    }));
+    await vcs.attachGad({ ensureContext } as never);
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const initialize = vi.fn(() => pending);
+    const flight = vcs.startSemanticInitialization(initialize);
+    expect(vcs.startSemanticInitialization(initialize)).toBe(flight);
+    const first = vcs.ensureSemanticContext("context:editing");
+    const second = vcs.ensureSemanticContext("context:editing");
+    await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: initialContentState });
+    expect(initialize).toHaveBeenCalledOnce();
+    expect(ensureContext).not.toHaveBeenCalled();
+    finish();
+    await expect(first).resolves.toEqual({ kind: "event", eventId: "event:initialized" });
+    await expect(second).resolves.toEqual({ kind: "event", eventId: "event:initialized" });
+    expect(ensureContext).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a waiting mutation without cancelling the shared initialization or acquiring its lease", async () => {
+    const { vcs } = await harness();
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const flight = vcs.startSemanticInitialization(() => pending);
+    const controller = new AbortController();
+    const operation = vi.fn(async () => undefined);
+    const mutation = vcs.withProtectedMainMutation(operation, controller.signal);
+    const reason = new Error("Caller cancelled editing");
+    const cancelled = expect(mutation).rejects.toBe(reason);
+    controller.abort(reason);
+    await cancelled;
+    expect(operation).not.toHaveBeenCalled();
+    finish();
+    await flight;
+    await vcs.withProtectedMainMutation(operation);
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it("propagates the original initialization failure to pending and later editing requests", async () => {
+    const { vcs } = await harness();
+    const ensureContext = vi.fn();
+    await vcs.attachGad({ ensureContext } as never);
+    let fail!: (error: Error) => void;
+    const pending = new Promise<void>((_resolve, reject) => {
+      fail = reject;
+    });
+    const failure = new Error("Initial snapshot could not be persisted");
+    const flight = vcs.startSemanticInitialization(() => pending);
+    const request = vcs.ensureSemanticContext("context:editing");
+    const flightFailure = expect(flight).rejects.toBe(failure);
+    const requestFailure = expect(request).rejects.toBe(failure);
+    fail(failure);
+    await Promise.all([flightFailure, requestFailure]);
+    await expect(vcs.ensureContext("context:later")).rejects.toBe(failure);
+    await expect(vcs.semanticDirectCall("vcsStatus", { contextId: "context:later" })).rejects.toBe(
+      failure
+    );
+    await expect(vcs.withProtectedMainMutation(async () => undefined)).rejects.toBe(failure);
+    expect(ensureContext).not.toHaveBeenCalled();
+  });
+
   it("uses one source owner before and after semantic publication", async () => {
     const { deps, refs } = await harness();
     const initialContentState = `state:${"a".repeat(64)}`;
@@ -499,7 +583,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
     await vcs.attachGad(providerFromWireCall(call));
 
-    await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({ initialized: true });
+    await vcs.startSemanticInitialization(async () => {
+      await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({ initialized: true });
+    });
 
     expect(importedSnapshots).toHaveLength(1);
     const coordinateRepository = importedSnapshots[0]?.repositories.find(
@@ -998,55 +1084,70 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   it("refuses to reconstruct an initial publication without its source plan", async () => {
     const { refs, vcs } = await harness();
     const imported = { kind: "event", eventId: "event:initial-import" } as const;
-    vi.spyOn(vcs, "ensureContext").mockResolvedValue(imported);
     vi.spyOn(refs, "listMains").mockReturnValue([]);
     const updateMains = vi.spyOn(refs, "updateMains");
-    const semanticDirectCall = vi
-      .spyOn(vcs, "semanticDirectCall")
-      .mockImplementation(async (method: string, input: unknown) => {
-        if (method === "vcsInspect") {
-          const node = (input as { node: { eventId?: string } }).node;
-          if (node.eventId === "event:genesis") {
-            return {
-              root: { kind: "event", eventId: "event:genesis" },
-              node: {
-                kind: "event",
-                value: {
-                  eventId: "event:genesis",
-                  kind: "genesis",
-                  parentEventIds: [],
-                  applicationIds: [],
-                },
-              },
-              edges: [],
-              hasMoreEdges: false,
-            };
-          }
+    const inspect = vi.fn(async (method: string, input: unknown) => {
+      if (method === "vcsInspect") {
+        const node = (input as { node: { eventId?: string } }).node;
+        if (node.eventId === "event:genesis") {
           return {
-            root: imported,
+            root: { kind: "event", eventId: "event:genesis" },
             node: {
               kind: "event",
               value: {
-                eventId: imported.eventId,
+                eventId: "event:genesis",
                 workspaceId: "workspace:test",
-                commandId: "command:initial-import",
-                kind: "commit",
-                workspaceFactRootId: "workspace-fact-root:initial",
-                parentEventIds: ["event:genesis"],
-                applicationIds: ["application:initial-import"],
+                commandId: "command:genesis",
+                workspaceFactRootId: "workspace-fact-root:genesis",
+                snapshotSource: null,
                 decisionIds: [],
-                message: "Import initial workspace snapshot",
+                message: null,
                 semanticProtocol: "semantic-vcs:test",
                 createdAt: "2026-07-16T12:00:00.000Z",
+                kind: "genesis",
+                parentEventIds: [],
+                applicationIds: [],
               },
             },
             edges: [],
             hasMoreEdges: false,
           };
         }
-        throw new Error(`unexpected ${method}`);
-      });
-    const call = vi.fn(async (method: string) => {
+        return {
+          root: imported,
+          node: {
+            kind: "event",
+            value: {
+              eventId: imported.eventId,
+              workspaceId: "workspace:test",
+              commandId: "command:initial-import",
+              kind: "commit",
+              workspaceFactRootId: "workspace-fact-root:initial",
+              snapshotSource: null,
+              parentEventIds: ["event:genesis"],
+              applicationIds: ["application:initial-import"],
+              decisionIds: [],
+              message: "Import initial workspace snapshot",
+              semanticProtocol: "semantic-vcs:test",
+              createdAt: "2026-07-16T12:00:00.000Z",
+            },
+          },
+          edges: [],
+          hasMoreEdges: false,
+        };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    const call = vi.fn(async (method: string, input: unknown) => {
+      if (method === "vcsEnsureContext")
+        return { kind: "complete", result: semanticContextResult(imported) };
+      if (method === "vcsContextMaterializationCommand")
+        return emptyRepairCommand(input as never, imported);
+      if (method === "vcsInspect")
+        return {
+          kind: "complete",
+          result: await inspect(method, (input as { input: unknown }).input),
+        };
       if (method === "vcsPush") {
         return {
           kind: "effects-pending",
@@ -1065,6 +1166,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
               },
               payloadDigest: "effect-digest:initial-publication-retry",
               status: "pending",
+              receipt: null,
+              createdAt: "2026-07-16T12:00:00.000Z",
             },
           ],
         };
@@ -1079,7 +1182,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(vcs.activateWorkspaceFromSource()).rejects.toThrow(
       "workspace source is missing meta/vibestudio.yml"
     );
-    expect(semanticDirectCall).toHaveBeenCalledTimes(4);
+    expect(inspect).toHaveBeenCalledTimes(4);
     expect(updateMains).not.toHaveBeenCalled();
   });
 
@@ -1103,6 +1206,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
     const first = vcs.ensureContext("context:large");
     const second = vcs.ensureContext("context:large");
+    await Promise.resolve();
     expect(call).toHaveBeenCalledOnce();
 
     complete({
@@ -1165,6 +1269,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
     const initialization = vcs.ensureContext(contextId);
     const deletion = vcs.dropContext(contextId);
+    await Promise.resolve();
     expect(call).toHaveBeenCalledTimes(1);
     expect(call).toHaveBeenLastCalledWith("vcsEnsureContext", expect.anything());
 

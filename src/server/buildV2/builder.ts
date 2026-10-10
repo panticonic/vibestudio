@@ -428,15 +428,18 @@ function traceBuildStages(label: string): { enter(stage: string): void; done(): 
   timer.unref?.();
   return {
     enter(next: string): void {
-      console.log(`[BuildV2] ${label} ${stage} -> ${next} (${Date.now() - stageStarted}ms)`);
+      if (isVerboseBuildLogEnabled())
+        console.log(`[BuildV2] ${label} ${stage} -> ${next} (${Date.now() - stageStarted}ms)`);
       stage = next;
       stageStarted = Date.now();
     },
     done(): void {
       clearInterval(timer);
-      console.log(
-        `[BuildV2] ${label} left ${stage} after ${Math.round((Date.now() - started) / 1000)}s total`
-      );
+      if (isVerboseBuildLogEnabled()) {
+        console.log(
+          `[BuildV2] ${label} left ${stage} after ${Math.round((Date.now() - started) / 1000)}s total`
+        );
+      }
     },
   };
 }

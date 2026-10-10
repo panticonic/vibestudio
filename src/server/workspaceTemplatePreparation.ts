@@ -26,6 +26,8 @@ import { acquireRootTemplateSnapshot } from "./acquireRootTemplateSnapshot.js";
 import { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
 import { createProtectedRefStore } from "./services/protectedRefStore.js";
 import { initBuildSystemV2 } from "./buildV2/index.js";
+import { withBuilderWorkers } from "./buildV2/builder.js";
+import { prepareWorkspaceRuntimeBuilds } from "./workspaceTemplateBuilds.js";
 import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
 import { getExistingAppNodeModulesRoots } from "@vibestudio/shared/runtimePaths";
 import { exportReleaseBuild } from "../../scripts/prebuild-release-userland.mjs";
@@ -219,34 +221,38 @@ export async function prepareWorkspaceTemplates(input: {
             admitNativeDependencies: (deps) => native.admitDependencies(deps),
           }
         );
-        for (const node of builds.getGraph().allNodes()) {
-          if (
-            node.kind === "package" ||
-            node.kind === "template" ||
-            (node.kind === "app" && node.manifest.app?.target === "react-native")
+        const preparedAt = performance.now();
+        console.log(`[workspace-release] Preparing runtimes for ${role}`);
+        const owner = builds;
+        const runtimeBuilds = await withBuilderWorkers(() =>
+          prepareWorkspaceRuntimeBuilds(
+            owner.getGraph().allNodes(),
+            (source) => owner.getBuild(source, stateHash),
+            (binding) =>
+              exportReleaseBuild(
+                path.join(statePath, "builds", binding.buildKey),
+                path.join(input.output, "userland-builds", binding.buildKey),
+                binding.buildKey
+              ),
+            input.signal
           )
-            continue;
-          input.signal?.throwIfAborted();
-          console.log(`[workspace-release] Preparing ${role}: ${node.relativePath}`);
-          const binding = await builds.getBuild(node.relativePath, stateHash);
-          const key = binding.buildKey;
+        );
+        for (const { source, binding } of runtimeBuilds) {
           releaseBuilds.push({
             workspace: role,
-            source: node.relativePath,
-            buildKey: key,
+            source,
+            buildKey: binding.buildKey,
             builtAt: binding.metadata.builtAt,
           });
           preparedBuilds.push({
-            source: node.relativePath,
-            buildKey: key,
+            source,
+            buildKey: binding.buildKey,
             effectiveVersion: binding.metadata.ev,
           });
-          await exportReleaseBuild(
-            path.join(statePath, "builds", key),
-            path.join(input.output, "userland-builds", key),
-            key
-          );
         }
+        console.log(
+          `[workspace-release] Prepared ${role}: ${runtimeBuilds.length} runtimes in ${Math.round(performance.now() - preparedAt)}ms`
+        );
       } finally {
         try {
           await retireResources();

@@ -2,7 +2,7 @@ import * as path from "node:path";
 import * as esbuild from "esbuild";
 
 // Separate calls each parse the same dependency graph. Compatible entrypoints
-// belong to one compiler invocation; incompatible compiler realms run in order.
+// belong to one compiler invocation; independent compiler realms can run concurrently.
 export function groupBuildArtifacts(configs) {
   const identities = new Map();
   const identity = (value) => {
@@ -46,9 +46,13 @@ export function groupBuildArtifacts(configs) {
 }
 
 export async function buildArtifactGroups(configs, build = esbuild.build) {
+  const outcomes = await Promise.allSettled(
+    groupBuildArtifacts(configs).map(async (group) => build({ ...group, metafile: true }))
+  );
   const results = [];
-  for (const group of groupBuildArtifacts(configs))
-    results.push(await build({ ...group, metafile: true }));
-  // There are no detached siblings: return/failure is a joined compiler boundary.
+  for (const outcome of outcomes) {
+    if (outcome.status === "rejected") throw outcome.reason;
+    results.push(outcome.value);
+  }
   return results;
 }
