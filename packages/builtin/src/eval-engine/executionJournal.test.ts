@@ -613,10 +613,10 @@ describe("execution-owned native operation evidence", () => {
       };
     }).createExecutionContext({ contextId: "owner" });
 
-    await owner.rpc.call("main", "runtime.supervision.list", [undefined]);
+    await owner.rpc.call("main", "runtime.supervision.list", []);
     const runtime = {
       supervision: {
-        list: () => owner.rpc.call("main", "runtime.supervision.list", [undefined]),
+        list: () => owner.rpc.call("main", "runtime.supervision.list", []),
       },
     };
     await runtime.supervision.list();
@@ -647,6 +647,13 @@ describe("execution-owned native operation evidence", () => {
         },
       },
     ]);
+  });
+
+  it("validates only successful list results for the canonical runtime inventory method", () => {
+    const owner = new ExecutionJournal();
+    expect(() => owner.recordRuntimeInventory("runtime.supervision.list", {})).toThrow();
+    expect(() => owner.recordRuntimeInventory("runtime.supervision.describe", {})).not.toThrow();
+    expect(owner.entries).toEqual([]);
   });
 
   it("marks incomplete evidence without exceeding the wire budget", () => {

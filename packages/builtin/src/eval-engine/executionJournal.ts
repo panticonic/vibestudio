@@ -193,9 +193,8 @@ export class ExecutionJournal {
     }) });
   }
 
-  recordRuntimeInventory(method: string, args: unknown[], result: unknown): void {
+  recordRuntimeInventory(method: string, result: unknown): void {
     if (this.closed || method !== "runtime.supervision.list") return;
-    runtimeMethods["supervision.list"].args.parse(args);
     const entities = runtimeMethods["supervision.list"].returns!.parse(result);
     this.append({
       type: "runtime.inventory",
