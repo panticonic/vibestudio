@@ -42,7 +42,7 @@ jobs:
         run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
 
       - name: GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           draft: true
           generate_release_notes: true
@@ -232,7 +232,7 @@ jobs:
           bash publisher/scripts/publish/sign-linux-installers.sh release
 
       - name: Attach Linux installers to the release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           draft: true
           files: |
@@ -364,7 +364,7 @@ jobs:
         run: sha256sum --check SHA256SUMS-macos
 
       - name: Attach DMG to the release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           draft: true
           files: |
@@ -438,7 +438,7 @@ jobs:
         working-directory: release
         run: sha256sum --check SHA256SUMS-windows
       - name: Attach installer to the release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           draft: true
           files: |
