@@ -13,7 +13,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getCentralDataPath } from "@vibestudio/env-paths";
-import { createConnectionlessRpcClient } from "@vibestudio/rpc";
+import { createInternalConnectionlessRpcClient as createConnectionlessRpcClient } from "@vibestudio/rpc/internal";
 import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
 import type { CentralDataManager, HubProcessOwnerRecord } from "@vibestudio/shared/centralData";
 import { bootstrapInstanceCliFromDevice } from "../dev/bootstrapInstanceCli.js";

@@ -1,3 +1,4 @@
+import { createTypedRpcServiceClient } from "@vibestudio/shared/typedRpcServiceClient";
 /**
  * WorkspaceClient -- Shared workspace RPC wrappers.
  *
@@ -7,10 +8,7 @@
  * absent from this current-workspace client.
  */
 import type { RpcClient } from "@vibestudio/rpc";
-import {
-  createTypedServiceClient,
-  type TypedServiceClient,
-} from "@vibestudio/shared/typedServiceClient";
+import { type TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "../workspace.js";
 import { runtimeMethods } from "../runtime.js";
 
@@ -18,11 +16,15 @@ export class WorkspaceClient {
   private typed: TypedServiceClient<typeof workspaceMethods>;
   private runtime: TypedServiceClient<typeof runtimeMethods>;
   constructor(rpc: Pick<RpcClient, "call">) {
-    this.typed = createTypedServiceClient("workspace", workspaceMethods, (service, method, args) =>
-      rpc.call("main", `${service}.${method}`, args)
+    this.typed = createTypedRpcServiceClient(
+      rpc,
+      { targetId: "main", namespace: "workspace" },
+      workspaceMethods
     );
-    this.runtime = createTypedServiceClient("runtime", runtimeMethods, (service, method, args) =>
-      rpc.call("main", `${service}.${method}`, args)
+    this.runtime = createTypedRpcServiceClient(
+      rpc,
+      { targetId: "main", namespace: "runtime" },
+      runtimeMethods
     );
   }
   getInfo(): ReturnType<TypedServiceClient<typeof workspaceMethods>["getInfo"]> {

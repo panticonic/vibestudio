@@ -52,6 +52,13 @@ import {
   omitTrailingUndefined,
   parseDoTargetId,
 } from "@vibestudio/shared/workspaceServiceRpc";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import {
+  workspacePresentationMethods,
+  type WorkspacePresentationClient,
+} from "@vibestudio/service-schemas/workspacePresentation";
+import { workspaceStateMethods } from "@vibestudio/service-schemas/workspaceState";
+import { workspaceStateEngineMethods } from "@vibestudio/service-schemas/workspaceStateEngine";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
 import { eventWatchOwner } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
@@ -954,13 +961,13 @@ async function main() {
     taskAuthorities,
     getDispatch: () => resolvedDoDispatchForTitles,
   });
-  let presentationDispatch: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
+  let workspacePresentationClient: WorkspacePresentationClient | null = null;
   let workspacePresentationRevision = 0;
-  const dispatchWorkspacePresentation = (method: string, args: unknown[]): Promise<unknown> => {
-    if (!presentationDispatch) {
+  const getWorkspacePresentationClient = (): WorkspacePresentationClient => {
+    if (!workspacePresentationClient) {
       throw new Error("workspace.presentation is not available");
     }
-    return presentationDispatch(method, args);
+    return workspacePresentationClient;
   };
   let developmentDispatch: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
@@ -1368,7 +1375,7 @@ async function main() {
         });
       },
       clearPresentationTitle: async (entityId: string) => {
-        await dispatchWorkspacePresentation("setEntityTitle", [entityId, null]);
+        await getWorkspacePresentationClient().setEntityTitle(entityId, null);
         entityTitleProjection.remove(entityId);
       },
       resourceHandles: userlandResourceHandles,
@@ -2324,9 +2331,10 @@ async function main() {
       await coordinator.quiescePresentations();
     },
   });
-  const { createWorkspaceCreationService } = await import("./services/workspaceCreationService.js");
+  const { createWorkspaceHubControlService } =
+    await import("./services/workspaceHubControlService.js");
   container.registerRpc(
-    createWorkspaceCreationService({ workspaceId: entryWorkspaceId, hub: workspaceChildHub })
+    createWorkspaceHubControlService({ workspaceId: entryWorkspaceId, hub: workspaceChildHub })
   );
   const { createWorkspaceTemplateSourceService } =
     await import("./services/workspaceTemplateSourceService.js");
@@ -4203,19 +4211,20 @@ async function main() {
             ...omitTrailingUndefined(args)
           );
         };
-        presentationDispatch = dispatchPresentation;
+        workspacePresentationClient = createTypedServiceClient(
+          "workspace-presentation",
+          workspacePresentationMethods,
+          (_service, method, args) => dispatchPresentation(method, args)
+        );
         resolvedDoDispatchForTitles = doDispatch;
-        await entityTitleProjection.hydrate(
-          () =>
-            dispatchPresentation("listEntityTitles", []) as Promise<
-              Array<{ id: string; title: string }>
-            >
+        await entityTitleProjection.hydrate(() =>
+          getWorkspacePresentationClient().listEntityTitles()
         );
         workspaceStateDefinition = createWorkspaceStateService({
           doDispatch,
           workspaceId,
           storageIncarnation: (key) => workerdManager.durableObjectStorageIncarnation(key),
-          presentationDispatch: dispatchPresentation,
+          presentation: getWorkspacePresentationClient(),
           panelAccess: (
             await import("./services/createPanelAccessPermissionDeps.js")
           ).createPanelAccessPermissionDeps({
@@ -4327,18 +4336,17 @@ async function main() {
             const hostCtx = {
               caller: createHostCaller("server", "server", SYSTEM_SUBJECT),
             };
+            const workspaceStateClient = createTypedServiceClient(
+              "workspace-state",
+              workspaceStateMethods,
+              (_service, method, args) =>
+                dispatcher.dispatch(hostCtx, "workspace-state", method, args)
+            );
             const prepared = await prepareRuntimeResourceBindings(
               {
                 grantStore: capabilityGrantStore,
                 resolvePanel: async (slotId) => {
-                  const detail = (await dispatcher.dispatch(
-                    hostCtx,
-                    "workspace-state",
-                    "panelTree.detail",
-                    [slotId]
-                  )) as {
-                    currentHistory?: { source?: string; context_id?: string };
-                  } | null;
+                  const detail = await workspaceStateClient.panelTree.detail(slotId);
                   return {
                     source: detail?.currentHistory?.source ?? null,
                     contextId: detail?.currentHistory?.context_id ?? null,
@@ -4681,11 +4689,11 @@ async function main() {
               );
               return;
             }
-            await dispatchWorkspacePresentation("setEntityTitle", [
+            await getWorkspacePresentationClient().setEntityTitle(
               entityId,
               title ?? null,
-              options ?? {},
-            ]);
+              options ?? {}
+            );
             entityTitleProjection.observe(entityId, title);
           },
           onExecutionRecovery: (event) => {
@@ -4934,23 +4942,16 @@ async function main() {
   });
   const { reconcilePanelPresentationChange } = await import("./panelPresentationReconciler.js");
   const { PanelExecutionReconciler } = await import("./panelExecutionReconciler.js");
+  const panelLifecycleCaller = createHostCaller("server");
+  const workspaceStateClient = createTypedServiceClient(
+    "workspace-state",
+    workspaceStateMethods,
+    (_service, method, args) =>
+      dispatcher.dispatch({ caller: panelLifecycleCaller }, "workspace-state", method, args)
+  );
   const panelExecutionReconciler = new PanelExecutionReconciler({
-    getDetail: (slotId) =>
-      dispatcher.dispatch(
-        { caller: createHostCaller("server") },
-        "workspace-state",
-        "panelTree.detail",
-        [slotId]
-      ) as Promise<
-        import("@vibestudio/shared/panel/workspaceStateSnapshot").WorkspacePanelDetail | null
-      >,
-    resolveSlotByEntity: (entityId) =>
-      dispatcher.dispatch(
-        { caller: createHostCaller("server") },
-        "workspace-state",
-        "slot.resolveByEntity",
-        [entityId]
-      ) as Promise<string | null>,
+    getDetail: (slotId) => workspaceStateClient.panelTree.detail(slotId),
+    resolveSlotByEntity: (entityId) => workspaceStateClient.slot.resolveByEntity(entityId),
     listPreparingPanels: () => {
       if (!runtimeServiceInternal) throw new Error("Runtime service is not available");
       return runtimeServiceInternal.listPreparingPanels();
@@ -5134,15 +5135,13 @@ async function main() {
           }
           const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
           if (!doDispatch) throw new Error("Workspace state dispatcher is unavailable");
-          const detail = (await doDispatch.dispatch(
-            { source, className, objectKey },
-            "panelTreeDetail",
-            slotId
-          )) as {
-            slot: { current_entity_title?: string | null };
-            currentHistory: { source: string; context_id: string };
-            entity: { id: string };
-          } | null;
+          const workspaceStateEngineClient = createTypedServiceClient(
+            "workspace-state-engine",
+            workspaceStateEngineMethods,
+            (_service, method, methodArgs) =>
+              doDispatch.dispatch({ source, className, objectKey }, method, ...methodArgs)
+          );
+          const detail = await workspaceStateEngineClient.panelTreeDetail(slotId);
           if (!detail) throw new Error(`Unknown panel slot: ${slotId}`);
           let requestedContext = contextBoundary.requestedContextPath
             ? selectPath(argument, contextBoundary.requestedContextPath)
@@ -5630,21 +5629,23 @@ async function main() {
           },
           userId
         );
-        const archived = (await dispatcher.dispatch(
-          { caller: createHostCaller("server") },
+        const workspaceStateClient = createTypedServiceClient(
           "workspace-state",
-          "slot.closeOwnedRoots",
-          [userId]
-        )) as { rootIds: string[]; closedIds: string[] };
+          workspaceStateMethods,
+          (_service, method, args) =>
+            dispatcher.dispatch(
+              { caller: createHostCaller("server") },
+              "workspace-state",
+              method,
+              args
+            )
+        );
+        const archived = await workspaceStateClient.slot.closeOwnedRoots(userId);
         for (;;) {
-          const page = (await dispatcher.dispatch(
-            { caller: createHostCaller("server") },
-            "workspace-state",
-            "slot.closeCleanupPage",
-            [{ ownerUserId: userId, limit: 200 }]
-          )) as {
-            items: Array<{ slotId: string; entityId: string | null }>;
-          };
+          const page = await workspaceStateClient.slot.closeCleanupPage({
+            ownerUserId: userId,
+            limit: 200,
+          });
           if (page.items.length === 0) break;
           for (const item of page.items) {
             if (!item.entityId) continue;
@@ -5940,29 +5941,41 @@ async function main() {
           currentEntityForSlot: async (slotId) => {
             const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
             const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-            const detail = (await doDispatch.dispatch(
-              {
-                source: INTERNAL_DO_SOURCE,
-                className: "WorkspaceDO",
-                objectKey: entryWorkspaceId,
-              },
-              "panelTreeDetail",
-              slotId
-            )) as { entity?: { id?: string } } | null;
+            const workspaceStateEngineClient = createTypedServiceClient(
+              "workspace-state-engine",
+              workspaceStateEngineMethods,
+              (_service, method, args) =>
+                doDispatch.dispatch(
+                  {
+                    source: INTERNAL_DO_SOURCE,
+                    className: "WorkspaceDO",
+                    objectKey: entryWorkspaceId,
+                  },
+                  method,
+                  ...args
+                )
+            );
+            const detail = await workspaceStateEngineClient.panelTreeDetail(slotId);
             return detail?.entity?.id ?? null;
           },
           browserSourceForSlot: async (slotId) => {
             const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
             const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-            const detail = (await doDispatch.dispatch(
-              {
-                source: INTERNAL_DO_SOURCE,
-                className: "WorkspaceDO",
-                objectKey: entryWorkspaceId,
-              },
-              "panelTreeDetail",
-              slotId
-            )) as { currentHistory?: { source?: string } } | null;
+            const workspaceStateEngineClient = createTypedServiceClient(
+              "workspace-state-engine",
+              workspaceStateEngineMethods,
+              (_service, method, args) =>
+                doDispatch.dispatch(
+                  {
+                    source: INTERNAL_DO_SOURCE,
+                    className: "WorkspaceDO",
+                    objectKey: entryWorkspaceId,
+                  },
+                  method,
+                  ...args
+                )
+            );
+            const detail = await workspaceStateEngineClient.panelTreeDetail(slotId);
             return detail?.currentHistory?.source ?? null;
           },
           isRuntimeRouteReachable: (runtimeEntityId, connectionId) =>
@@ -6398,10 +6411,17 @@ async function main() {
     const { FsService } = await import("./services/fsService.js");
     const { isWritableVcsPath } = await import("./vcsHost/paths.js");
     type FsCausalParent = import("@vibestudio/rpc").RpcCausalParent | null;
-    const callSemantic = <T>(method: string, input: unknown, causalParent?: FsCausalParent) =>
+    type SemanticMethod = import("./vcsHost/workspaceVcs.js").WorkspaceSemanticMethod;
+    type SemanticInput<M extends SemanticMethod> =
+      import("./vcsHost/workspaceVcs.js").WorkspaceSemanticInput<M>;
+    const callSemantic = <M extends SemanticMethod>(
+      method: M,
+      input: SemanticInput<M>,
+      causalParent?: FsCausalParent
+    ) =>
       causalParent === undefined
-        ? workspaceVcs.semanticDirectCall<T>(method, input)
-        : workspaceVcs.semanticCausalCall<T>(method, input, causalParent);
+        ? workspaceVcs.semanticDirectCall(method, input)
+        : workspaceVcs.semanticCausalCall(method, input, causalParent);
     const vcsBridge: import("./services/fsService.js").FsVcsBridge = {
       isTracked: async (relPath) => isWritableVcsPath(relPath),
       edit: (input, causalParent) => callSemantic("vcsEdit", input, causalParent),
@@ -7367,15 +7387,12 @@ async function main() {
     const manifest = initialPanelGraph
       .allNodes()
       .find((unit) => unit.relativePath === source)?.manifest;
-    await assertPresent<
-      | import("./services/workspaceStateService.js").WorkspaceStateServiceDeps["presentationDispatch"]
-      | null
-    >(presentationDispatch)("bindSlot", [
+    await getWorkspacePresentationClient().bindSlot(
       detail.slot.slot_id,
       detail.entity.id,
       source,
-      manifest?.title ?? source,
-    ]);
+      manifest?.title ?? source
+    );
   }
 
   // The webhook + credential services are built now, so their refs are set:
@@ -7433,9 +7450,6 @@ async function main() {
     className: "WorkspaceDO",
     objectKey: workspaceId,
   };
-  const dispatchWorkspaceDO = <T>(method: string, ...args: unknown[]) =>
-    doDispatchForBootstrap.dispatch(workspaceDORefForBootstrap, method, ...args) as Promise<T>;
-
   const { createCleanupReaper } = await import("./services/cleanupReaper.js");
   const cleanupReaper = createCleanupReaper({
     doDispatch: doDispatchForBootstrap,
@@ -7457,11 +7471,15 @@ async function main() {
     // factored into `runStartupReconciliation` so both the boot path and tests
     // can call them.
     const bootstrapReconciliationStartedAt = Date.now();
-    const { runStartupReconciliation } = await import("./services/startupReconciliation.js");
+    const { createStartupReconciliationWorkspaceState, runStartupReconciliation } =
+      await import("./services/startupReconciliation.js");
+    const workspaceState = createStartupReconciliationWorkspaceState((method, args) =>
+      doDispatchForBootstrap.dispatch(workspaceDORefForBootstrap, method, ...args)
+    );
     const lifecycleDriver =
       container.get<import("./services/lifecycleDriver.js").LifecycleDriver>("lifecycleDriver");
     const reconciliation = await runStartupReconciliation({
-      dispatchWorkspaceDO,
+      workspaceState,
       entityCache,
       onRetire: cleanupRuntimeEntityRecord,
       recoverLifecycle: () => lifecycleDriver.recoverStartup("server_restart"),

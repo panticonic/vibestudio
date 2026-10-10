@@ -1,6 +1,6 @@
+import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import { describe, expect, it, vi } from "vitest";
-import { createCredentialClient } from "./index.js";
-import type { RpcCaller } from "@vibestudio/rpc";
+import { createCredentialClient } from "@vibestudio/service-schemas/clients/credentialClient";
 
 describe("credential client HTTP mediation", () => {
   it("serializes FormData with the same multipart boundary sent in Content-Type", async () => {
@@ -13,7 +13,7 @@ describe("credential client HTTP mediation", () => {
       expect(body).toContain('name="manifest"');
       return new Response("ok");
     });
-    const rpc = { call: vi.fn(), stream } as unknown as RpcCaller;
+    const rpc = schemaRpcCaller({ call: vi.fn(), stream });
     const form = new FormData();
     form.set("manifest", "{}");
 
@@ -25,7 +25,7 @@ describe("credential client HTTP mediation", () => {
 
   it("sends publication intent separately and retains the caller audience ceiling", async () => {
     const stream = vi.fn(async () => new Response("ok"));
-    const rpc = { call: vi.fn(), stream } as unknown as RpcCaller;
+    const rpc = schemaRpcCaller({ call: vi.fn(), stream });
     const publication = {
       operationId: "publish-1",
       artifactDigest: `sha256:${"a".repeat(64)}`,

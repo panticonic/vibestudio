@@ -3,10 +3,15 @@ import {
   vcsMethods,
   type VcsMethodName,
   type VcsStateNodeRef,
+  type VcsInspectInput,
+  type VcsCompareInput,
+  type VcsStatusInput,
+  type VcsSemanticNodeRef,
+  type VcsListDirectoryInput,
+  type VcsListFilesInput,
   type VcsInspectResult,
   type VcsCompareResult,
   type VcsStatusResult,
-  type VcsSemanticNodeRef,
   type VcsListDirectoryResult,
   type VcsListFilesResult,
 } from "@vibestudio/service-schemas/vcs";
@@ -14,13 +19,22 @@ import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import type { WorkspaceFileAccess } from "@vibestudio/shared/authority/workspaceFiles";
 import { workspaceFileSelections } from "./workspaceFileAuthority.js";
 
-type Read = <T>(method: string, input: unknown) => Promise<T>;
+export interface SemanticReads {
+  inspect(input: VcsInspectInput): Promise<VcsInspectResult>;
+  compare(input: VcsCompareInput): Promise<VcsCompareResult>;
+  status(input: VcsStatusInput): Promise<VcsStatusResult>;
+  listDirectory(input: VcsListDirectoryInput): Promise<VcsListDirectoryResult>;
+  listFiles(input: VcsListFilesInput): Promise<VcsListFilesResult>;
+}
 
 /** Select paths from authoritative identities at the exact admitted semantic state. */
-export async function vcsFileSelections(method: VcsMethodName, input: unknown, read: Read) {
+export async function vcsFileSelections(
+  method: VcsMethodName,
+  input: unknown,
+  read: SemanticReads
+) {
   const accesses: WorkspaceFileAccess[] = [];
-  const inspectNode = (node: VcsSemanticNodeRef) =>
-    read<VcsInspectResult>("vcsInspect", { node, edgeLimit: 1 });
+  const inspectNode = (node: VcsSemanticNodeRef) => read.inspect({ node, edgeLimit: 1 });
   const inspect = (
     state: VcsStateNodeRef,
     kind: "repository" | "file",
@@ -73,7 +87,7 @@ export async function vcsFileSelections(method: VcsMethodName, input: unknown, r
     for (const directory of directories) {
       let cursor: string | undefined;
       do {
-        const page = await read<VcsListDirectoryResult>("vcsListDirectory", {
+        const page = await read.listDirectory({
           state,
           path: directory,
           limit: 500,
@@ -91,7 +105,7 @@ export async function vcsFileSelections(method: VcsMethodName, input: unknown, r
   async function findFile(state: VcsStateNodeRef, repositoryId: string, fileId: string) {
     let cursor: string | undefined;
     do {
-      const page = await read<VcsListFilesResult>("vcsListFiles", {
+      const page = await read.listFiles({
         state,
         repositoryId,
         limit: 500,
@@ -257,7 +271,7 @@ export async function vcsFileSelections(method: VcsMethodName, input: unknown, r
         }
       } else if (method === "discard") {
         const [request] = vcsMethods.discard.args.parse([input]);
-        const status = await read<VcsStatusResult>("vcsStatus", { contextId: request.contextId });
+        const status = await read.status({ contextId: request.contextId });
         target = status.committed;
         source = request.expectedWorkingHead;
       } else {
@@ -267,7 +281,7 @@ export async function vcsFileSelections(method: VcsMethodName, input: unknown, r
       }
       let cursor: string | undefined;
       do {
-        const comparison = await read<VcsCompareResult>("vcsCompare", {
+        const comparison = await read.compare({
           target,
           source,
           limit: 500,

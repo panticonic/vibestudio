@@ -1,3 +1,5 @@
+import { formatRpcFailure } from "@vibestudio/rpc";
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import { workspaceRpcDestination, isPanelRuntimeLeaseConflict } from "@vibestudio/rpc";
 /**
  * IPC Dispatcher — replaces Electron-side RpcServer for shell communication.
@@ -14,9 +16,7 @@ import {
   isRpcConnectionLost,
   responseEnvelopeFor,
   stampEnvelopeCaller,
-  rpcErrorDataOf,
   rpcErrorKindOf,
-  rpcDiagnosticIdOf,
   RpcBoundaryError,
   type BridgeBodyChunk,
   type BridgeStreamOpen,
@@ -299,9 +299,7 @@ export class IpcDispatcher {
             event.sender.send("vibestudio:rpc:stream-message", {
               kind: "error",
               opId: msg.opId,
-              message: error instanceof Error ? error.message : String(error),
-              errorKind: "transport",
-              code: SESSION_CONNECTION_LOST_CODE,
+              error: serializeRpcFailure(error, "transport"),
             });
           });
       }
@@ -780,8 +778,7 @@ export class IpcDispatcher {
           {
             type: "response",
             requestId: req.requestId,
-            error: `Invalid method format: ${req.method}`,
-            errorKind: "protocol",
+            error: { message: `Invalid method format: ${req.method}`, errorKind: "protocol" },
           },
           runtime.workspaceId
         );
@@ -854,7 +851,7 @@ export class IpcDispatcher {
             try {
               this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
             } catch (cause) {
-              const message = cause instanceof Error ? cause.message : String(cause);
+              const message = formatRpcFailure(cause);
               const code = (cause as { code?: unknown } | null)?.code;
               throw new RpcBoundaryError(
                 message,
@@ -897,20 +894,14 @@ export class IpcDispatcher {
         );
       } catch (err) {
         outcome = "error";
-        const diagnosticId = rpcDiagnosticIdOf(err);
-        const error = err instanceof Error ? err.message : String(err);
-        const errorCode = (err as { code?: string })?.code;
+
         this.sendResponse(
           sender,
           envelope,
           {
             type: "response",
             requestId: req.requestId,
-            error,
-            errorKind: rpcErrorKindOf(err, "internal"),
-            ...(diagnosticId ? { diagnosticId } : {}),
-            ...(errorCode ? { errorCode } : {}),
-            ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
+            error: serializeRpcFailure(err, "internal"),
           },
           runtime.workspaceId
         );
@@ -1003,8 +994,10 @@ export class IpcDispatcher {
         FRAME_ERROR,
         JSON.stringify({
           status: 409,
-          message: `Duplicate streaming request id: ${request.requestId}`,
-          errorKind: "protocol",
+          error: {
+            message: `Duplicate streaming request id: ${request.requestId}`,
+            errorKind: "protocol",
+          },
         }),
         runtime.workspaceId
       );
@@ -1020,8 +1013,7 @@ export class IpcDispatcher {
         FRAME_ERROR,
         JSON.stringify({
           status: 400,
-          message: `Invalid method format: ${request.method}`,
-          errorKind: "protocol",
+          error: { message: `Invalid method format: ${request.method}`, errorKind: "protocol" },
         }),
         runtime.workspaceId
       );
@@ -1152,13 +1144,7 @@ export class IpcDispatcher {
           envelope,
           request.requestId,
           FRAME_ERROR,
-          JSON.stringify({
-            status: 502,
-            message: error instanceof Error ? error.message : String(error),
-            code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-            errorKind: rpcErrorKindOf(error, "transport"),
-            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-          }),
+          JSON.stringify({ status: 502, error: serializeRpcFailure(error, "transport") }),
           runtime.workspaceId
         );
       }
@@ -1204,10 +1190,8 @@ export class IpcDispatcher {
     error: unknown,
     responderWorkspaceId = this.deps.workspaceId
   ): void {
-    const messageText = error instanceof Error ? error.message : String(error);
     const errorKind = rpcErrorKindOf(error, "access");
-    const errorCode = (error as { code?: unknown } | null)?.code;
-    const errorData = rpcErrorDataOf(error);
+
     const message = envelope.message;
     const responder = envelope.destination?.kind === "hub" ? HUB_CALLER : undefined;
     if (message?.type === "stream-request") {
@@ -1222,10 +1206,7 @@ export class IpcDispatcher {
         FRAME_ERROR,
         JSON.stringify({
           status: errorKind === "access" ? 403 : 502,
-          message: messageText,
-          errorKind,
-          ...(typeof errorCode === "string" ? { code: errorCode } : {}),
-          ...(errorData !== undefined ? { errorData } : {}),
+          error: serializeRpcFailure(error, "access"),
         }),
         responderWorkspaceId,
         responder
@@ -1239,10 +1220,7 @@ export class IpcDispatcher {
       {
         type: "response",
         requestId: (message as RpcRequest).requestId,
-        error: messageText,
-        errorKind,
-        ...(typeof errorCode === "string" ? { errorCode } : {}),
-        ...(errorData !== undefined ? { errorData } : {}),
+        error: serializeRpcFailure(error, "access"),
       },
       responderWorkspaceId,
       responder
@@ -1300,17 +1278,14 @@ export class IpcDispatcher {
           this.sendResponse(sender, envelope, {
             type: "response",
             requestId: (message as RpcRequest).requestId,
-            error: err instanceof Error ? err.message : String(err),
-            errorKind: "transport",
-            ...(errorCode ? { errorCode } : {}),
+            error: serializeRpcFailure(err, "transport"),
           });
         }
         // A lost session and a lease that moved are both transitions the next
         // attempt resolves; only an unrecognised failure is worth reporting.
         if (errorCode !== SESSION_CONNECTION_LOST_CODE && !isPanelRuntimeLeaseConflict(err)) {
           console.warn(
-            `[IpcDispatcher] panel relay failed for ${callerId}: ` +
-              `${err instanceof Error ? err.message : String(err)}`
+            `[IpcDispatcher] panel relay failed for ${callerId}: ` + `${formatRpcFailure(err)}`
           );
         }
       });

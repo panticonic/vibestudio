@@ -1,3 +1,4 @@
+import { schemaRpcStream } from "@vibestudio/rpc/internal";
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -143,11 +144,11 @@ export function createBrowserCookieProjectionService(deps: {
   let lastWorkerdState: unknown;
 
   const events = new EventsClient({
-    stream(targetId, method, args, options) {
+    stream: schemaRpcStream((targetId, method, args, options) => {
       if (targetId !== "main") throw new Error(`Unexpected browser projection target: ${targetId}`);
       const dot = method.indexOf(".");
       return deps.serverClient.stream(method.slice(0, dot), method.slice(dot + 1), args, options);
-    },
+    }),
   });
 
   const stopHostIntegration = async (): Promise<void> => {

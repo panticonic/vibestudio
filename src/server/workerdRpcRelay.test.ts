@@ -63,10 +63,12 @@ describe("workerdRpcRelay", () => {
         message: {
           type: "response",
           requestId: "x",
-          error: "human diagnostic may change",
-          errorKind: "service",
-          errorCode: "RevisionChanged",
-          errorData,
+          error: {
+            message: "human diagnostic may change",
+            errorKind: "service",
+            code: "RevisionChanged",
+            errorData,
+          },
         },
       }),
       { status: 200, headers: { "Content-Type": "application/json" } }
@@ -84,6 +86,7 @@ describe("workerdRpcRelay", () => {
         {
           workerdUrl: "http://127.0.0.1:8787",
           workerdGatewayToken: "gateway-token",
+          resolveExecutableVersion: () => "test-executable",
           workerdDispatchSecret: "dispatch-secret",
           idempotencyKey: "idem-1",
           readOnly: true,
@@ -98,6 +101,7 @@ describe("workerdRpcRelay", () => {
         headers: expect.objectContaining({
           Authorization: "Bearer gateway-token",
           "X-Vibestudio-Dispatch-Secret": "dispatch-secret",
+          "X-Vibestudio-Executable-Version": "test-executable",
         }),
       })
     );
@@ -122,6 +126,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
         onWorkReady,
       }
     );
@@ -163,7 +168,11 @@ describe("workerdRpcRelay", () => {
       ref,
       "waitForCleanup",
       [],
-      { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" },
+      {
+        workerdUrl: "http://127.0.0.1:8787",
+        workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
+      },
       controller.signal
     ).then((result) => {
       settled = true;
@@ -243,6 +252,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
         onWorkReady,
       },
       controller.signal
@@ -286,7 +296,11 @@ describe("workerdRpcRelay", () => {
         { source: "workers/agent", className: "AgentDO", objectKey: "channel-1" },
         "ping",
         [],
-        { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" }
+        {
+          workerdUrl: "http://127.0.0.1:8787",
+          workerdGatewayToken: "gateway-token",
+          resolveExecutableVersion: () => "test-executable",
+        }
       )
     ).rejects.toMatchObject({
       name: "RemoteRpcError",
@@ -321,7 +335,11 @@ describe("workerdRpcRelay", () => {
         { source: "workers/presentation", className: "WorkspacePresentationDO", objectKey: "main" },
         "indexPanel",
         [{ id: "p" }, "e", null],
-        { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" }
+        {
+          workerdUrl: "http://127.0.0.1:8787",
+          workerdGatewayToken: "gateway-token",
+          resolveExecutableVersion: () => "test-executable",
+        }
       )
     ).rejects.toMatchObject({ name: "RemoteRpcError", errorData });
   });
@@ -332,10 +350,12 @@ describe("workerdRpcRelay", () => {
       vi.fn().mockResolvedValue(
         new Response(
           JSON.stringify({
-            error: "schema refused",
-            errorKind: "service",
-            errorCode: "DO_SCHEMA_INCOMPATIBLE",
-            errorData: { reason: "shape-drift" },
+            error: {
+              message: "schema refused",
+              errorKind: "service",
+              code: "DO_SCHEMA_INCOMPATIBLE",
+              errorData: { reason: "shape-drift" },
+            },
           }),
           { status: 500 }
         )
@@ -346,7 +366,11 @@ describe("workerdRpcRelay", () => {
         { source: "workers/agent", className: "AgentDO", objectKey: "channel-1" },
         "ping",
         [],
-        { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" }
+        {
+          workerdUrl: "http://127.0.0.1:8787",
+          workerdGatewayToken: "gateway-token",
+          resolveExecutableVersion: () => "test-executable",
+        }
       )
     ).rejects.toMatchObject({
       name: "RemoteRpcError",
@@ -355,11 +379,6 @@ describe("workerdRpcRelay", () => {
       message: expect.stringContaining("workers/agent:AgentDO/channel-1"),
       errorData: {
         reason: "shape-drift",
-        durableObject: {
-          source: "workers/agent",
-          className: "AgentDO",
-          objectKey: "channel-1",
-        },
       },
     });
   });
@@ -383,6 +402,7 @@ describe("workerdRpcRelay", () => {
     const admitted = postToDurableObject(ref, "first", [], {
       workerdUrl: "http://127.0.0.1:8787",
       workerdGatewayToken: "gateway-token",
+      resolveExecutableVersion: () => "test-executable",
     });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const drained = sealAndDrainDurableObjectRelays(targetId, "test-retirement");
@@ -391,6 +411,7 @@ describe("workerdRpcRelay", () => {
       postToDurableObject(ref, "late", [], {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
       })
     ).rejects.toMatchObject({ code: "DO_NOT_CREATED" });
     let drainSettled = false;
@@ -409,6 +430,7 @@ describe("workerdRpcRelay", () => {
       postToDurableObject(ref, "after-reactivation", [], {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
       })
     ).resolves.toEqual({ reopened: true });
   });
@@ -425,6 +447,7 @@ describe("workerdRpcRelay", () => {
       postToDurableObject(ref, "late", [], {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
       })
     ).rejects.toMatchObject({
       name: "RemoteRpcError",
@@ -445,6 +468,7 @@ describe("workerdRpcRelay", () => {
       postToDurableObject(ref, "still-sealed", [], {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
       })
     ).rejects.toMatchObject({ code: "DO_NOT_CREATED" });
     releaseDurableObjectRelaySeal(targetId, "retirement");
@@ -471,6 +495,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
       }
     );
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
@@ -510,7 +535,11 @@ describe("workerdRpcRelay", () => {
       ref,
       "updates",
       [],
-      { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" },
+      {
+        workerdUrl: "http://127.0.0.1:8787",
+        workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
+      },
       new AbortController().signal
     );
     const drained = sealAndDrainDurableObjectRelays(targetId, "stream-test");
@@ -533,10 +562,12 @@ describe("workerdRpcRelay", () => {
       vi.fn().mockResolvedValue(
         new Response(
           JSON.stringify({
-            error: "schema refused",
-            errorKind: "service",
-            errorCode: "DO_SCHEMA_INCOMPATIBLE",
-            errorData: { reason: "shape-drift" },
+            error: {
+              message: "schema refused",
+              errorKind: "service",
+              code: "DO_SCHEMA_INCOMPATIBLE",
+              errorData: { reason: "shape-drift" },
+            },
           }),
           { status: 500 }
         )
@@ -548,7 +579,11 @@ describe("workerdRpcRelay", () => {
         { source: "workers/agent", className: "AgentDO", objectKey: "channel-1" },
         "updates",
         [],
-        { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" },
+        {
+          workerdUrl: "http://127.0.0.1:8787",
+          workerdGatewayToken: "gateway-token",
+          resolveExecutableVersion: () => "test-executable",
+        },
         new AbortController().signal
       )
     ).rejects.toMatchObject({
@@ -557,11 +592,6 @@ describe("workerdRpcRelay", () => {
       errorKind: "service",
       errorData: {
         reason: "shape-drift",
-        durableObject: {
-          source: "workers/agent",
-          className: "AgentDO",
-          objectKey: "channel-1",
-        },
       },
     });
   });
@@ -594,6 +624,7 @@ describe("workerdRpcRelay", () => {
       postToDurableObject(ref, "ping", [], {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
       })
     ).rejects.toThrow(
       `DO RPC fetch to ${url} failed: fetch failed (cause: Error: other side closed code=UND_ERR_SOCKET localAddress=127.0.0.1 localPort=9000 remoteAddress=127.0.0.1 remotePort=8787 bytesWritten=512 bytesRead=0)`
@@ -611,6 +642,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
         callerId: "panel:parent-entity",
         callerKind: "panel",
         callerPanelId: "parent-slot",
@@ -648,6 +680,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableVersion: () => "test-executable",
         callerId: "panel:nav-a",
         callerKind: "panel",
         causalParent,

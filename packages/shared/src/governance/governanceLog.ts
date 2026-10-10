@@ -10,7 +10,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import { getCentralDataPath } from "@vibestudio/env-paths";
-import { z } from "zod";
+import { ApprovalRecordSchema, GovernanceRecordSchema, MembershipRecordSchema } from "./schemas.js";
 
 import { openCanonicalSqliteDatabase, type CanonicalSqliteSchema } from "@vibestudio/sqlite";
 import {
@@ -21,109 +21,6 @@ import {
   type GovernanceRecord,
   type MembershipGovernanceRecord,
 } from "./types.js";
-
-const UserActorSchema = z
-  .object({
-    userId: z.string().min(1),
-    handle: z.string().min(1),
-    deviceId: z.string().min(1).optional(),
-  })
-  .strict();
-
-export const ApprovalRecordSchema = z
-  .object({
-    approvalId: z.string().min(1),
-    approvalKind: z.enum([
-      "credential",
-      "capability",
-      "client-config",
-      "credential-input",
-      "secret-input",
-      "userland",
-      "unit-install-review",
-      "device-code",
-      "external-agent",
-      "browser-permission",
-    ]),
-    decision: z.enum([
-      "once",
-      "task",
-      "agent",
-      "lock",
-      "session",
-      "version",
-      "always",
-      "block",
-      "deny",
-      "dismiss",
-      "approve",
-      "submit",
-    ]),
-    granted: z.boolean(),
-    workspaceId: z.string().min(1),
-    resolvedAt: z.number().finite(),
-    resolvedBy: UserActorSchema.extend({ deviceLabel: z.string().min(1).optional() }),
-    resolvedVia: z.enum(["shell", "mobile-notification", "app", "server"]),
-    requestedBy: z
-      .object({
-        callerId: z.string().min(1),
-        callerKind: z.string().min(1),
-        repoPath: z.string().min(1).optional(),
-        effectiveVersion: z.string().min(1).optional(),
-        userId: z.string().min(1).optional(),
-      })
-      .strict(),
-    resource: z
-      .object({
-        capability: z.string().min(1).optional(),
-        key: z.string().min(1).optional(),
-        value: z.string().optional(),
-        credentialId: z.string().min(1).optional(),
-        subjectId: z.string().min(1).optional(),
-      })
-      .strict()
-      .optional(),
-    grantScopeStored: z
-      .enum(["task", "agent", "lock", "session", "version", "always", "block", "mission"])
-      .nullable()
-      .optional(),
-    operationId: z.string().min(1).optional(),
-    taskSubject: z.string().min(1).optional(),
-    securityIdentity: z.string().min(1).optional(),
-    semanticFamily: z.string().min(1).optional(),
-    sourcesShown: z.array(z.string().min(1)).optional(),
-    repeatReason: z
-      .enum([
-        "none",
-        "new-source",
-        "new-resource",
-        "new-actor",
-        "changed-effect",
-        "restart-undecided",
-        "duplicate",
-      ])
-      .optional(),
-    surface: z
-      .object({ title: z.string(), description: z.string(), rows: z.array(z.string()) })
-      .strict()
-      .optional(),
-  })
-  .strict();
-
-const MembershipRecordSchema = z
-  .object({
-    kind: z.literal("membership"),
-    operationId: z.string().min(1).optional(),
-    op: z.enum(["invite-user", "revoke-user", "add-member", "remove-member", "role-change"]),
-    actor: UserActorSchema,
-    target: z.object({ userId: z.string().min(1), handle: z.string().min(1).optional() }).strict(),
-    workspaceId: z.string().min(1).optional(),
-    role: z.enum(["root", "admin", "member"]).optional(),
-    at: z.number().finite(),
-  })
-  .strict();
-
-export const GovernanceRecordSchema = z.union([MembershipRecordSchema, ApprovalRecordSchema]);
 
 const MEMBERSHIP_OPERATION_INDEX_SQL = `CREATE UNIQUE INDEX governance_membership_operation_idx
   ON governance_records (json_extract(payload, '$.operationId')) WHERE record_kind = 'membership'`;
@@ -168,7 +65,11 @@ const GOVERNANCE_SCHEMA: CanonicalSqliteSchema = {
       sql: `CREATE INDEX governance_records_time_idx
         ON governance_records (timestamp DESC, sequence DESC)`,
     },
-    { type: "index", name: "governance_membership_operation_idx", sql: MEMBERSHIP_OPERATION_INDEX_SQL },
+    {
+      type: "index",
+      name: "governance_membership_operation_idx",
+      sql: MEMBERSHIP_OPERATION_INDEX_SQL,
+    },
     {
       type: "index",
       name: "governance_records_membership_idx",
@@ -254,7 +155,15 @@ export class GovernanceLog {
     try {
       openCanonicalSqliteDatabase(this.db, GOVERNANCE_SCHEMA, {
         description: `governance database ${databasePath}`,
-        migrations: [{ fromVersion: 1, toVersion: 2, migrate: db => { db.exec(MEMBERSHIP_OPERATION_INDEX_SQL); } }],
+        migrations: [
+          {
+            fromVersion: 1,
+            toVersion: 2,
+            migrate: (db) => {
+              db.exec(MEMBERSHIP_OPERATION_INDEX_SQL);
+            },
+          },
+        ],
       });
       this.db.exec("PRAGMA journal_mode = WAL");
       this.db.exec("PRAGMA synchronous = FULL");
@@ -369,11 +278,18 @@ export class GovernanceLog {
       return;
     }
     if (record.operationId) {
-      const existing = this.db.prepare(`SELECT payload FROM governance_records
-        WHERE record_kind = 'membership' AND json_extract(payload, '$.operationId') = ?`).get(record.operationId);
+      const existing = this.db
+        .prepare(
+          `SELECT payload FROM governance_records
+        WHERE record_kind = 'membership' AND json_extract(payload, '$.operationId') = ?`
+        )
+        .get(record.operationId);
       if (existing) {
         const parsed = MembershipRecordSchema.parse(JSON.parse(String(existing["payload"])));
-        if (JSON.stringify(parsed) !== payload) throw new Error(`Conflicting governance replay for membership operation ${record.operationId}`);
+        if (JSON.stringify(parsed) !== payload)
+          throw new Error(
+            `Conflicting governance replay for membership operation ${record.operationId}`
+          );
         return;
       }
     }

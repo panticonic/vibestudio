@@ -20,7 +20,7 @@ export function createBrowserVaultNativeService(deps: {
   doDispatch: DoDispatcher;
   workspaceId: string;
 }): ServiceDefinition {
-  const call = <T>(ctx: ServiceContext, method: string, args: unknown[]): Promise<T> => {
+  const call = (ctx: ServiceContext, method: string, args: unknown[]): Promise<unknown> => {
     // `shell` is already the native-host caller kind: the literal id "shell" is
     // refused over WebSocket, and every admitted shell principal — the desktop
     // console (`electron-main`, `headless-host`) as much as a paired
@@ -43,7 +43,7 @@ export function createBrowserVaultNativeService(deps: {
       },
       method,
       ...args
-    ) as Promise<T>;
+    );
   };
 
   return {

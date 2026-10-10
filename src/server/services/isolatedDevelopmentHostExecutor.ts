@@ -686,7 +686,7 @@ async function createIsolatedDevelopmentManager(input: {
   const credentials = requireDeviceCliCredentials(loaded, "isolated development manager");
   const client = new RpcClient(credentials);
   try {
-    await client.call("developmentClientExecutor.bindIsolatedManager", [
+    await client.mainCall("developmentClientExecutor.bindIsolatedManager", [
       { instanceId: input.instance.id, generationId: input.instance.generationId },
     ]);
   } finally {
@@ -713,11 +713,9 @@ async function createIsolatedDevelopmentManager(input: {
         while (Date.now() < deadline) {
           signal.throwIfAborted();
           assertGeneration();
-          const receipt = await rpc.call<{
-            requestId: string;
-            childRuntimeId: string;
-            attestedAt: number;
-          } | null>("developmentClientExecutor.consumeAttestation", [{ requestId }]);
+          const receipt = await rpc.mainCall("developmentClientExecutor.consumeAttestation", [
+            { requestId },
+          ]);
           signal.throwIfAborted();
           if (receipt) return receipt;
           await delay(100);

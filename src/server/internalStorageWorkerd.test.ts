@@ -216,7 +216,9 @@ async function createWorkerdHarness(
           message: {
             type: "response",
             requestId: envelope.message.requestId,
-            ...(error === undefined ? { result } : { error, errorKind: "internal" }),
+            ...(error === undefined
+              ? { result }
+              : { error: { message: error, errorKind: "internal" } }),
           },
         })
       );

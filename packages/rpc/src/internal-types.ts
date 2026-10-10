@@ -17,12 +17,24 @@ export interface InvocationParentTransport {
   caller?: AuthenticatedCaller;
   provenance?: readonly AuthenticatedCaller[];
 }
-export function bindInvocationParent<T extends RpcCallOptions | RpcStreamOptions>(options: T, parent: InvocationParentTransport): T {
-  Object.defineProperty(options, INVOCATION_PARENT, { value: Object.freeze({ ...parent }), enumerable: false });
+export function bindInvocationParent<T extends RpcCallOptions | RpcStreamOptions>(
+  options: T,
+  parent: InvocationParentTransport
+): T {
+  Object.defineProperty(options, INVOCATION_PARENT, {
+    value: Object.freeze({ ...parent }),
+    enumerable: false,
+  });
   return options;
 }
-export function invocationParentFor(options: RpcCallOptions | RpcStreamOptions | undefined): InvocationParentTransport | undefined {
-  return options ? (options as Record<PropertyKey, unknown>)[INVOCATION_PARENT] as InvocationParentTransport | undefined : undefined;
+export function invocationParentFor(
+  options: RpcCallOptions | RpcStreamOptions | undefined
+): InvocationParentTransport | undefined {
+  return options
+    ? ((options as Record<PropertyKey, unknown>)[INVOCATION_PARENT] as
+        | InvocationParentTransport
+        | undefined)
+    : undefined;
 }
 
 /**
@@ -87,3 +99,35 @@ export interface InternalRpcEvent extends RpcEvent {
   authorityParentNonce?: string;
   executionSessionNonce?: string;
 }
+
+/** Wire dispatch is host/runtime infrastructure; application callers use schema contracts. */
+export interface RpcWireCaller {
+  call(
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: import("./types.js").RpcCallOptions
+  ): Promise<unknown>;
+  stream(
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: import("./types.js").RpcStreamOptions
+  ): Promise<Response>;
+}
+export type RpcWireClient = Omit<
+  import("./types.js").RpcClient,
+  "call" | "stream" | "streamReadable" | "peer"
+> &
+  RpcWireCaller & {
+    streamReadable(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: import("./types.js").RpcStreamOptions
+    ): Promise<import("./types.js").DecodedFramedStream>;
+    peer(
+      targetId: string,
+      options?: import("./types.js").RpcTargetOptions
+    ): import("./types.js").RpcPeer;
+  };

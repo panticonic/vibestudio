@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RemoteRpcError, type RpcCaller } from "@vibestudio/rpc";
+import { RemoteRpcError } from "@vibestudio/rpc";
+import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import {
   encodeEventWatchRecord,
   type EventName,
@@ -52,7 +53,12 @@ function makeRpc() {
     }
   );
   return {
-    rpc: { stream } as Pick<RpcCaller, "stream">,
+    rpc: schemaRpcCaller({
+      stream,
+      call: async () => {
+        throw new Error("Unexpected unary call");
+      },
+    }),
     stream,
     controllers,
     signals,

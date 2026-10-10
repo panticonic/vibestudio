@@ -17,7 +17,11 @@ const route = {
 };
 
 function clientWith(result: unknown) {
-  const call = vi.fn(async () => result);
+  const call = vi.fn(async (
+    _target: string,
+    method: { name: string; invoke: (args: unknown[], dispatch: (args: unknown[]) => Promise<unknown>) => Promise<unknown> },
+    args: unknown[]
+  ) => method.invoke(args, async () => result));
   return {
     client: createMobileHubControlClient({ rpc: { call } } as never),
     call,
@@ -33,21 +37,21 @@ describe("mobile Iroh hub-control client", () => {
     const { client, call } = clientWith(list);
 
     await expect(client.listWorkspaces()).resolves.toEqual(list);
-    expect(call).toHaveBeenCalledWith("main", "hubControl.listWorkspaces", []);
+    expect(call).toHaveBeenCalledWith("main", expect.objectContaining({ name: "hubControl.listWorkspaces" }), [], undefined);
   });
 
   it("routes through the strict current Iroh schemas", async () => {
     const { client, call } = clientWith(route);
 
     await expect(client.routeWorkspace({ workspaceId: "ws-b" })).resolves.toEqual(route);
-    expect(call).toHaveBeenCalledWith("main", "hubControl.routeWorkspace", [
+    expect(call).toHaveBeenCalledWith("main", expect.objectContaining({ name: "hubControl.routeWorkspace" }), [
       { workspaceId: "ws-b" },
-    ]);
+    ], undefined);
 
     await expect(
       client.routeWorkspace({ workspaceId: "ws-b", retiredRoom: "old" } as never)
     ).rejects.toThrow();
-    expect(call).toHaveBeenCalledTimes(1);
+    expect(call).toHaveBeenCalledTimes(2);
   });
 
   it("rejects malformed, extra-field, and legacy-shaped hub responses", async () => {

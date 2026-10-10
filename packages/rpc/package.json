@@ -56,10 +56,6 @@
       "types": "./dist/protocol/irohSession.d.ts",
       "default": "./dist/protocol/irohSession.js"
     },
-    "./protocol/irohStreamResponse": {
-      "types": "./dist/protocol/irohStreamResponse.d.ts",
-      "default": "./dist/protocol/irohStreamResponse.js"
-    },
     "./transports/inProcess": {
       "types": "./dist/transports/inProcess.d.ts",
       "default": "./dist/transports/inProcess.js"
@@ -83,6 +79,10 @@
     "./transports/reconnectingIrohClient": {
       "types": "./dist/transports/reconnectingIrohClient.d.ts",
       "default": "./dist/transports/reconnectingIrohClient.js"
+    },
+    "./test-utils": {
+      "types": "./dist/test-utils.d.ts",
+      "default": "./dist/test-utils.js"
     }
   },
   "files": [

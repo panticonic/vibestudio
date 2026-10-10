@@ -42,7 +42,8 @@ function clientWithEntities() {
     }
     throw new Error(`unexpected method ${method}`);
   });
-  return { call, client: { call } as unknown as RpcClient };
+  const mainCall = vi.fn((method: string) => call(method));
+  return { call: mainCall, client: { mainCall } as unknown as RpcClient };
 }
 
 describe("channel diagnostics", () => {
@@ -59,6 +60,7 @@ describe("channel diagnostics", () => {
         id: 6,
         messageId: "native:4:41:0",
         type: "agentic.trajectory.v1/event",
+        senderId: "agent-1",
         payload,
         ts: 10,
       })

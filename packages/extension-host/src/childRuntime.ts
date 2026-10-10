@@ -1,3 +1,10 @@
+import { createCredentialClient } from "@vibestudio/service-schemas/clients/credentialClient";
+import { createMainRpcCaller, mainRpcMethods, type MainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import {
+  schemaRpcClient,
+  createInternalRpcClient,
+  type RpcWireClient,
+} from "@vibestudio/rpc/internal";
 import * as nodeFs from "node:fs/promises";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -5,7 +12,6 @@ import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
-  createRpcClient,
   decodeRpcJson,
   encodeRpcJson,
   envelopeFromMessage,
@@ -13,20 +19,25 @@ import {
   rpcErrorDataOf,
   rpcErrorKindOf,
   type EnvelopeRpcTransport,
-  type RpcClient,
   type RpcEnvelope,
   type StreamingMethodFrame,
 } from "@vibestudio/rpc";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   createExtensionProxy,
-  type ExtensionStatus,
   type ExtensionsClient,
 } from "@vibestudio/extension";
-import { createCredentialClient } from "@vibestudio/credential-client";
+
 import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
+import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import { webhookIngressMethods } from "@vibestudio/service-schemas/webhookIngress";
+import { notificationMethods } from "@vibestudio/service-schemas/notification";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import {
+  createTypedServiceClient,
+  type ServiceMethodSchemas,
+  type TypedServiceClient,
+} from "@vibestudio/shared/typedServiceClient";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/remoteSession";
 
@@ -198,35 +209,32 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-async function rpcCall<T>(serviceMethod: string, args: unknown[], targetId = "main"): Promise<T> {
-  const bridge = getRuntimeBridge();
-  return bridge.call<T>(targetId, serviceMethod, args);
+function runtimeSchemaCaller(): import("@vibestudio/rpc").RpcCaller {
+  return {
+    call: (...args) => schemaRpcClient(getRuntimeBridge()).call(...args),
+    stream: (...args) => schemaRpcClient(getRuntimeBridge()).stream(...args),
+  };
 }
 
-function serviceProxy(service: string): Record<string, (...args: unknown[]) => Promise<unknown>> {
-  return new Proxy(Object.create(null), {
-    get(_target, prop) {
-      if (typeof prop !== "string" || prop === "then") return undefined;
-      return (...args: unknown[]) => rpcCall(`${service}.${prop}`, args);
-    },
+const mainRpc = createMainRpcCaller(runtimeSchemaCaller());
+
+function createMainServiceClient<M extends ServiceMethodSchemas>(
+  service: string,
+  methods: M,
+): TypedServiceClient<M> {
+  return createTypedServiceClient(service, methods, (serviceName, method, args) => {
+    const methodName = `${serviceName}.${method}` as keyof MainRpcMethods & string;
+    return runtimeSchemaCaller().call("main", mainRpcMethods[methodName], args);
   });
 }
 
 function createGitInteropClient() {
-  return createTypedServiceClient("gitInterop", gitInteropMethods, (service, method, args) =>
-    rpcCall(`${service}.${method}`, args)
-  );
+  return createMainServiceClient("gitInterop", gitInteropMethods);
 }
 
 function createExtensionsClient(): ExtensionsClient {
   const proxyRpc = {
-    call: (_target: string, method: string, args: unknown[]) => rpcCall(method, args),
-    stream: (
-      _target: string,
-      method: string,
-      args: unknown[],
-      options?: { signal?: AbortSignal }
-    ) => getRuntimeBridge().stream("main", method, args, options),
+    ...runtimeSchemaCaller(),
     on: (eventName: string, listener: (event: import("@vibestudio/rpc").RpcEventContext) => void) =>
       getRuntimeBridge().on(eventName, listener, {
         kind: "closed",
@@ -239,7 +247,7 @@ function createExtensionsClient(): ExtensionsClient {
   const declaredStreaming = (name: string): Promise<Set<string>> => {
     let cached = streamingCache.get(name);
     if (!cached) {
-      cached = rpcCall<string[]>("extensions.streamingMethods", [name])
+      cached = mainRpc("extensions.streamingMethods", [name])
         .then((methods) => new Set(methods))
         .catch((error) => {
           // Don't pin a transient failure as "no streaming methods" for the
@@ -290,11 +298,11 @@ function createExtensionsClient(): ExtensionsClient {
         },
       };
     },
-    invoke: (name, method, args) => rpcCall<unknown>("extensions.invoke", [name, method, args]),
+    invoke: (name, method, args) => mainRpc("extensions.invoke", [name, method, args]),
     invokeProvider: (provider, method, args) =>
-      rpcCall<unknown>("extensions.invokeProvider", [provider, method, args]),
-    status: (name) => rpcCall<ExtensionStatus>("extensions.status", [name]),
-    update: (name) => rpcCall<ExtensionStatus>("extensions.update", [name]),
+      mainRpc("extensions.invokeProvider", [provider, method, args]),
+    status: (name) => mainRpc("extensions.status", [name]),
+    update: (name) => mainRpc("extensions.update", [name]),
   };
   return client;
 }
@@ -307,9 +315,7 @@ async function requestBodyFromEnvelope(
   if (!isStreamEnvelope(body)) return undefined;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const next = await rpcCall<StreamChunkEnvelope>("extensions.fetchRequestBodyChunk", [
-        body.id,
-      ]);
+      const next = await mainRpc("extensions.fetchRequestBodyChunk", [body.id]);
       if (next.done) {
         controller.close();
         return;
@@ -317,7 +323,7 @@ async function requestBodyFromEnvelope(
       if (next.chunk) controller.enqueue(next.chunk);
     },
     async cancel() {
-      await rpcCall("extensions.fetchRequestBodyClose", [body.id]).catch(() => {});
+      await mainRpc("extensions.fetchRequestBodyClose", [body.id]).catch(() => {});
     },
   });
 }
@@ -337,63 +343,66 @@ function createFsClient() {
   return {
     constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 },
     async readFile(filePath: string, encoding?: BufferEncoding) {
-      const result = await rpcCall<unknown>("fs.readFile", [filePath, encoding]);
+      const result = await mainRpc("fs.readFile", [filePath, encoding]);
       return result instanceof Uint8Array ? Buffer.from(result) : result;
     },
     async writeFile(filePath: string, data: string | Uint8Array) {
-      await rpcCall("fs.writeFile", [filePath, data]);
+      await mainRpc("fs.writeFile", [filePath, data]);
     },
     async appendFile(filePath: string, data: string | Uint8Array) {
-      await rpcCall("fs.appendFile", [filePath, data]);
+      await mainRpc("fs.appendFile", [filePath, data]);
     },
-    async readdir(filePath: string, options?: unknown) {
-      return rpcCall("fs.readdir", [filePath, options]);
+    async readdir(
+      filePath: string,
+      options?: { withFileTypes?: boolean; recursive?: boolean },
+    ) {
+      return mainRpc("fs.readdir", [filePath, options]);
     },
-    async mkdir(filePath: string, options?: unknown) {
-      return rpcCall("fs.mkdir", [filePath, options]);
+    async mkdir(filePath: string, options?: { recursive?: boolean }) {
+      return mainRpc("fs.mkdir", [filePath, options]);
     },
     async rmdir(filePath: string) {
-      return rpcCall("fs.rmdir", [filePath]);
+      return mainRpc("fs.rmdir", [filePath]);
     },
-    async rm(filePath: string, options?: unknown) {
-      return rpcCall("fs.rm", [filePath, options]);
+    async rm(filePath: string, options?: { recursive?: boolean; force?: boolean }) {
+      return mainRpc("fs.rm", [filePath, options]);
     },
     async stat(filePath: string) {
-      return toStats(await rpcCall<SerializedFileStats>("fs.stat", [filePath]));
+      return toStats(await mainRpc("fs.stat", [filePath]));
     },
     async lstat(filePath: string) {
-      return toStats(await rpcCall<SerializedFileStats>("fs.lstat", [filePath]));
+      return toStats(await mainRpc("fs.lstat", [filePath]));
     },
     async access(filePath: string, mode?: number) {
-      await rpcCall("fs.access", [filePath, mode]);
+      await mainRpc("fs.access", [filePath, mode]);
     },
     async exists(filePath: string) {
-      return rpcCall("fs.exists", [filePath]);
+      return mainRpc("fs.exists", [filePath]);
     },
     async unlink(filePath: string) {
-      await rpcCall("fs.unlink", [filePath]);
+      await mainRpc("fs.unlink", [filePath]);
     },
     async copyFile(src: string, dest: string) {
-      await rpcCall("fs.copyFile", [src, dest]);
+      await mainRpc("fs.copyFile", [src, dest]);
     },
     async rename(oldPath: string, newPath: string) {
-      await rpcCall("fs.rename", [oldPath, newPath]);
+      await mainRpc("fs.rename", [oldPath, newPath]);
     },
     async nativeRoots() {
-      return rpcCall<{ source: string; scratch: string }>("fs.nativeRoots", []);
+      return mainRpc("fs.nativeRoots", []);
     },
     async realpath(filePath: string) {
-      return rpcCall("fs.realpath", [filePath]);
+      return mainRpc("fs.realpath", [filePath]);
     },
     async ensureMaterialized(scope: string | string[] | "all") {
-      return rpcCall<string>("fs.ensureMaterialized", [scope]);
+      return mainRpc("fs.ensureMaterialized", [scope]);
     },
     async open(filePath: string, flags?: string, mode?: number) {
-      const { handleId } = await rpcCall<{ handleId: number }>("fs.open", [filePath, flags, mode]);
+      const { handleId } = await mainRpc("fs.open", [filePath, flags, mode]);
       return {
         fd: handleId,
         async read(buffer: Uint8Array, offset: number, length: number, position: number | null) {
-          const result = await rpcCall<{ bytesRead: number; buffer: Uint8Array }>("fs.handleRead", [
+          const result = await mainRpc("fs.handleRead", [
             handleId,
             length,
             position,
@@ -408,7 +417,7 @@ function createFsClient() {
           position: number | null = null
         ) {
           const slice = buffer.subarray(offset, offset + length);
-          const result = await rpcCall<{ bytesWritten: number }>("fs.handleWrite", [
+          const result = await mainRpc("fs.handleWrite", [
             handleId,
             slice,
             position,
@@ -416,27 +425,31 @@ function createFsClient() {
           return { bytesWritten: result.bytesWritten, buffer };
         },
         async close() {
-          await rpcCall("fs.handleClose", [handleId]);
+          await mainRpc("fs.handleClose", [handleId]);
         },
         async stat() {
-          return toStats(await rpcCall<SerializedFileStats>("fs.handleStat", [handleId]));
+          return toStats(await mainRpc("fs.handleStat", [handleId]));
         },
       };
     },
     async truncate(filePath: string, len?: number) {
-      await rpcCall("fs.truncate", [filePath, len]);
+      await mainRpc("fs.truncate", [filePath, len]);
     },
     async readlink(filePath: string) {
-      return rpcCall("fs.readlink", [filePath]);
+      return mainRpc("fs.readlink", [filePath]);
     },
     async symlink(target: string, filePath: string, type?: "file" | "dir" | "junction") {
-      await rpcCall("fs.symlink", [target, filePath, type]);
+      await mainRpc("fs.symlink", [target, filePath, type]);
     },
     async chmod(filePath: string, mode: number) {
-      await rpcCall("fs.chmod", [filePath, mode]);
+      await mainRpc("fs.chmod", [filePath, mode]);
     },
     async utimes(filePath: string, atime: number | Date, mtime: number | Date) {
-      await rpcCall("fs.utimes", [filePath, atime, mtime]);
+      await mainRpc("fs.utimes", [
+        filePath,
+        atime instanceof Date ? atime.getTime() / 1000 : atime,
+        mtime instanceof Date ? mtime.getTime() / 1000 : mtime,
+      ]);
     },
   };
 }
@@ -481,16 +494,9 @@ function createContext() {
     },
     fs: createFsClient(),
     git: createGitInteropClient(),
-    workspace: serviceProxy("workspace"),
+    workspace: createMainServiceClient("workspace", workspaceMethods),
     rpc: {
-      call: <T>(targetId: string, method: string, ...args: unknown[]) =>
-        rpcCall<T>(method, args, targetId),
-      stream: (
-        targetId: string,
-        method: string,
-        args: unknown[],
-        options?: { signal?: AbortSignal }
-      ) => getRuntimeBridge().stream(targetId, method, args, options),
+      ...runtimeSchemaCaller(),
       on: (eventName: string, cb: (event: { payload: unknown }) => void) =>
         getRuntimeBridge().on(eventName, cb, {
           kind: "closed",
@@ -498,15 +504,15 @@ function createContext() {
         }),
     },
     workers: {
-      listServices: () => rpcCall("workers.listServices", []),
+      listServices: () => mainRpc("workers.listServices", []),
       resolveService: (query: string, objectKey?: string | null) =>
-        rpcCall("workers.resolveService", [query, objectKey ?? null]),
+        mainRpc("workers.resolveService", [query, objectKey ?? null]),
       resolveDurableObject: (source: string, className: string, objectKey: string) =>
-        rpcCall("workers.resolveDurableObject", [source, className, objectKey]),
+        mainRpc("workers.resolveDurableObject", [source, className, objectKey]),
     },
-    credentials: createCredentialClient(getRuntimeBridge()),
-    webhooks: serviceProxy("webhookIngress"),
-    notifications: serviceProxy("notification"),
+    credentials: createCredentialClient(schemaRpcClient(getRuntimeBridge())),
+    webhooks: createMainServiceClient("webhookIngress", webhookIngressMethods),
+    notifications: createMainServiceClient("notification", notificationMethods),
     extensions: createExtensionsClient(),
     invocation: {
       current: () => invocationStore.getStore()?.invocation ?? null,
@@ -537,26 +543,26 @@ function createContext() {
     },
     health: {
       report: (state: "healthy" | "degraded" | "unhealthy", detail?: HealthDetail) => {
-        void rpcCall("runtime.supervision.reportHealth", [{ state, detail }]).catch((err) => {
+        void mainRpc("runtime.supervision.reportHealth", [{ state, detail }]).catch((err) => {
           console.error("[ExtensionRuntime] Failed to report health:", err);
         });
       },
       healthy: (detail?: HealthDetail) => {
-        void rpcCall("runtime.supervision.reportHealth", [{ state: "healthy", detail }]).catch(
+        void mainRpc("runtime.supervision.reportHealth", [{ state: "healthy", detail }]).catch(
           (err) => {
             console.error("[ExtensionRuntime] Failed to report health:", err);
           }
         );
       },
       degraded: (detail: HealthDetail) => {
-        void rpcCall("runtime.supervision.reportHealth", [{ state: "degraded", detail }]).catch(
+        void mainRpc("runtime.supervision.reportHealth", [{ state: "degraded", detail }]).catch(
           (err) => {
             console.error("[ExtensionRuntime] Failed to report health:", err);
           }
         );
       },
       unhealthy: (detail: HealthDetail) => {
-        void rpcCall("runtime.supervision.reportHealth", [{ state: "unhealthy", detail }]).catch(
+        void mainRpc("runtime.supervision.reportHealth", [{ state: "unhealthy", detail }]).catch(
           (err) => {
             console.error("[ExtensionRuntime] Failed to report health:", err);
           }
@@ -564,7 +570,7 @@ function createContext() {
       },
     },
     emit: (event: string, payload: unknown) => {
-      void rpcCall("extensions.emit", [event, payload]).catch((err) => {
+      void mainRpc("extensions.emit", [event, payload]).catch((err) => {
         console.error(`[ExtensionRuntime] Failed to emit ${event}:`, err);
       });
     },
@@ -572,14 +578,14 @@ function createContext() {
   return ctx;
 }
 
-let runtimeBridge: RpcClient | null = null;
+let runtimeBridge: RpcWireClient | null = null;
 
-function getRuntimeBridge(): RpcClient {
+function getRuntimeBridge(): RpcWireClient {
   if (!runtimeBridge) throw new Error("Extension process RPC is not connected");
   return runtimeBridge;
 }
 
-async function connectRuntimeBridge(): Promise<RpcClient> {
+async function connectRuntimeBridge(): Promise<RpcWireClient> {
   const token = requiredEnv("VIBESTUDIO_EXTENSION_RPC_TOKEN");
   const extensionName = requiredEnv("VIBESTUDIO_EXTENSION_NAME");
   if (!process.send || !process.connected)
@@ -620,7 +626,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
     ready: () => Promise.resolve(),
     onStatusChange: () => () => {},
   };
-  const bridge = createRpcClient({
+  const bridge = createInternalRpcClient({
     selfId: extensionName,
     callerKind: "extension",
     transport,
@@ -674,14 +680,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
         from: message.targetId,
         target: extensionName,
         callerKind: "unknown",
-        message: {
-          type: "response",
-          requestId: message.requestId,
-          error: message.error,
-          errorKind: message.errorKind,
-          ...(message.errorCode ? { errorCode: message.errorCode } : {}),
-          ...(message.errorData !== undefined ? { errorData: message.errorData } : {}),
-        },
+        message: { type: "response", requestId: message.requestId, error: message.error },
       });
       for (const listener of listeners) listener(envelope);
     } else if (message.type === "ws:routed-event-error") {
@@ -731,7 +730,7 @@ function writeExtensionLog(
   message: string,
   fields?: Record<string, unknown>
 ): Promise<unknown> {
-  return rpcCall("runtime.supervision.appendLog", [
+  return mainRpc("runtime.supervision.appendLog", [
     fields === undefined ? { level, message } : { level, message, fields },
   ]);
 }
@@ -1176,14 +1175,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  await rpcCall("runtime.supervision.reportHealth", [
+  await mainRpc("runtime.supervision.reportHealth", [
     { state: "healthy", detail: { summary: "Activated" } },
   ]).catch((err) => {
     console.error("[ExtensionRuntime] Failed to report initial health:", err);
   });
   console.info("[ExtensionRuntime] readiness report started", { extension: extensionName });
   try {
-    await rpcCall("runtime.supervision.reportReady", [
+    await mainRpc("runtime.supervision.reportReady", [
       { methods, providerMethods, hasFetch: !!fetchHandler },
     ]);
     console.info("[ExtensionRuntime] readiness report completed", { extension: extensionName });

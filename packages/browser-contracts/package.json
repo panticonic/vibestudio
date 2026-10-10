@@ -7,7 +7,8 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./import": "./src/import.ts"
+    "./import": "./src/import.ts",
+    "./favicon": "./src/favicon.ts"
   },
   "dependencies": {
     "zod": "^3.25.76"

@@ -1,3 +1,4 @@
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { WebSocket } from "ws";
@@ -54,7 +55,7 @@ export class RemoteCdpHostBridgeSocket extends EventEmitter implements CdpHostBr
   send(data: string): void {
     if (this.readyState !== WebSocket.OPEN || this.closed) return;
     void this.options.rpc
-      .call("main", "panelCdp.hostProvider.send", [this.sessionId, data])
+      .call("main", mainRpcMethods["panelCdp.hostProvider.send"], [this.sessionId, data])
       .catch((error: unknown) => {
         this.fail(error);
       });
@@ -68,20 +69,21 @@ export class RemoteCdpHostBridgeSocket extends EventEmitter implements CdpHostBr
     this.reader = null;
     void reader?.cancel().catch(() => {});
     void this.options.rpc
-      .call("main", "panelCdp.hostProvider.close", [this.sessionId])
+      .call("main", mainRpcMethods["panelCdp.hostProvider.close"], [this.sessionId])
       .catch(() => {});
     this.emit("close");
   }
 
   private async open(): Promise<void> {
     try {
-      const response = await this.options.rpc.stream("main", "panelCdp.hostProvider.open", [
-        this.sessionId,
-        this.options.hostConnectionId,
-      ]);
+      const response = await this.options.rpc.stream(
+        "main",
+        mainRpcMethods["panelCdp.hostProvider.open"],
+        [this.sessionId, this.options.hostConnectionId]
+      );
       if (this.closed) {
         void this.options.rpc
-          .call("main", "panelCdp.hostProvider.close", [this.sessionId])
+          .call("main", mainRpcMethods["panelCdp.hostProvider.close"], [this.sessionId])
           .catch(() => {});
         return;
       }
@@ -112,11 +114,7 @@ export class RemoteCdpHostBridgeSocket extends EventEmitter implements CdpHostBr
       if (value.byteLength > this.maxNdjsonChunkBytes) {
         throw new Error(`CDP host provider frame exceeded ${this.maxNdjsonChunkBytes} bytes`);
       }
-      bufferedLineBytes = observeNdjsonLineBytes(
-        value,
-        bufferedLineBytes,
-        this.maxNdjsonLineBytes
-      );
+      bufferedLineBytes = observeNdjsonLineBytes(value, bufferedLineBytes, this.maxNdjsonLineBytes);
       buffered += decoder.decode(value, { stream: true });
       buffered = this.emitBufferedMessages(buffered);
       if (buffered.length === 0) bufferedLineBytes = 0;

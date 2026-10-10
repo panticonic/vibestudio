@@ -689,6 +689,9 @@ importers:
       '@vibestudio/browser-contracts':
         specifier: workspace:*
         version: link:../browser-contracts
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../service-schemas
@@ -782,6 +785,9 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
+      electron:
+        specifier: '*'
+        version: 43.2.0
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -830,6 +836,9 @@ importers:
 
   packages/extension:
     dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../service-schemas
@@ -1013,6 +1022,9 @@ importers:
 
   packages/service-schemas:
     dependencies:
+      '@vibestudio/automation':
+        specifier: workspace:*
+        version: link:../automation
       '@vibestudio/browser-contracts':
         specifier: workspace:*
         version: link:../browser-contracts
@@ -1171,6 +1183,9 @@ importers:
 
   packages/unit-host:
     dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared

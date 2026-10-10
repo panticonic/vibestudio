@@ -21,6 +21,98 @@
 
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { createReceiverRpcMethods } from "@vibestudio/shared/rpcMethods";
+
+/** Canonical wire DTOs shared by the CLI and the userland channel receiver. */
+export interface ChannelConversationSeed {
+  messages?: Array<{ content: string; author: string }>;
+  openingRequest?: string;
+}
+export interface ChannelConversationInitialization {
+  firstAgentPending: boolean;
+  openingRequest?: string;
+}
+export interface ChannelConfig {
+  policies?: string[];
+  membershipPolicy?: { kind: "locked"; participants: string[] };
+  [key: string]: unknown;
+  seed?: ChannelConversationSeed;
+  initialization?: ChannelConversationInitialization;
+  title?: string;
+  titleExplicit?: boolean;
+  approvalLevel?: 0 | 1 | 2;
+  conversationPolicy?: "open" | "directed" | "moderated";
+  agentHopLimit?: number;
+}
+export interface ChannelProtocolParticipantRef {
+  kind: "user" | "agent" | "system" | "external" | "panel";
+  id: string;
+  displayName?: string;
+  metadata?: Record<string, unknown>;
+  participantId?: string;
+}
+export interface ChannelProtocolEvent<T = unknown> {
+  id: number;
+  messageId: string;
+  type: string;
+  payload: T;
+  senderId: string;
+  senderMetadata?: Record<string, unknown>;
+  contentClass?: "internal" | "external";
+  externalKeys?: string[];
+  contentType?: string;
+  ts: number;
+  attachments?: Array<{ id: string; type?: string; data: string; mimeType: string; filename?: string; size: number }>;
+  annotations?: Record<string, unknown>;
+}
+export type ChannelProtocolBootstrapSnapshot =
+  | {
+      kind: "roster-snapshot";
+      participants: Array<{ id: string; ref: ChannelProtocolParticipantRef; metadata: Record<string, unknown> }>;
+      ts: number;
+    }
+  | { kind: "receipt-snapshot"; events: ChannelProtocolEvent[]; ts: number };
+export interface ChannelProtocolReplayReady {
+  contextId?: string;
+  channelConfig?: ChannelConfig;
+  totalCount: number;
+  envelopeCount: number;
+  firstEnvelopeSeq?: number;
+  replayFromId?: number;
+  replayToId?: number;
+  snapshotLastSeq?: number;
+  hasMoreBefore?: boolean;
+  hasMoreAfter?: boolean;
+}
+export interface ChannelReplayAfterRequest { after: number; limit?: number; throughSeq?: number }
+export interface ChannelReplayEnvelope {
+  mode: "initial" | "after" | "before";
+  logEvents: ChannelProtocolEvent[];
+  snapshots: ChannelProtocolBootstrapSnapshot[];
+  ready: ChannelProtocolReplayReady;
+}
+
+/** Host-driven subset of the actual channel Durable Object receiver. */
+export interface ChannelCliRpc {
+  subscribe(participantId: string, metadata: Record<string, unknown>, subscriptionId?: string): Promise<Response>;
+  sendAsCaller(text: string, opts?: {
+    handle?: string;
+    to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
+    mentions?: string[];
+    idempotencyKey?: string;
+  }): Promise<{ id?: number; messageId: string }>;
+  getReplayAfter(request: ChannelReplayAfterRequest): Promise<ChannelReplayEnvelope>;
+  getParticipants(): Promise<Array<{
+    participantId: string;
+    ref: ChannelProtocolParticipantRef;
+    metadata: Record<string, unknown>;
+    transport: string;
+    doRef?: { source: string; className: string; objectKey: string };
+  }>>;
+}
+export const channelClientRpcMethods = createReceiverRpcMethods<ChannelCliRpc>([
+  "subscribe", "sendAsCaller", "getReplayAfter", "getParticipants",
+]);
 
 /**
  * One record in the destructive `subscribe` response.

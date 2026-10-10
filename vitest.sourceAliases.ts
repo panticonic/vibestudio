@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { Alias } from "vite";
 import type { GraphNode } from "./src/server/buildV2/packageGraph";
@@ -14,7 +14,25 @@ export function hostSourceAliases(hostRoot: string): Alias[] {
     readFileSync(path.resolve(hostRoot, "tsconfig.json"), "utf8")
   ) as { compilerOptions?: { paths?: Record<string, string[]> } };
   const tsconfigPaths = hostTsconfig.compilerOptions?.paths ?? {};
-  const aliases: Alias[] = [];
+  // Source-only SDK packages publish executable source exports. Resolve those
+  // from this host even when the importer is in an external template checkout.
+  // Their manifest is authoritative; new subpaths need no duplicate path entry.
+  const sdkUnits = readdirSync(path.join(hostRoot, "packages"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const packageRoot = path.join(hostRoot, "packages", entry.name);
+      let manifest: { name?: string; vibestudio?: { buildProfile?: string } };
+      try {
+        manifest = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
+      }
+      return manifest.name && manifest.vibestudio?.buildProfile === "source-only"
+        ? [{ name: manifest.name, path: packageRoot }]
+        : [];
+    });
+  const aliases: Alias[] = discoveredUserlandSourceAliases(sdkUnits);
 
   // Subpath mappings must precede their less-specific bare-package mapping.
   for (const [importPath, sourcePaths] of Object.entries(tsconfigPaths).sort(
@@ -35,7 +53,7 @@ export function hostSourceAliases(hostRoot: string): Alias[] {
       });
     } else {
       aliases.push({
-        find: importPath,
+        find: new RegExp(`^${escapeRegex(importPath)}$`),
         replacement: path.resolve(hostRoot, sourcePath),
       });
     }
@@ -45,9 +63,20 @@ export function hostSourceAliases(hostRoot: string): Alias[] {
 }
 
 /** Exact aliases contributed by the semantic package graph and its export maps. */
-export function discoveredUserlandSourceAliases(units: readonly GraphNode[]): Alias[] {
+export function discoveredUserlandSourceAliases(
+  units: readonly Pick<GraphNode, "name" | "path">[]
+): Alias[] {
+  return discoveredUserlandSourceMappings(units).map(({ find, replacement }) => ({
+    find: new RegExp(`^${escapeRegex(find).replace("\\*", "(.+)")}$`),
+    replacement: replacement.replace("*", "$1"),
+  }));
+}
+
+export function discoveredUserlandSourceMappings(
+  units: readonly Pick<GraphNode, "name" | "path">[]
+): Array<{ find: string; replacement: string }> {
   return units
-    .flatMap((unit): Alias[] => {
+    .flatMap((unit): Array<{ find: string; replacement: string }> => {
       const manifest = JSON.parse(readFileSync(path.join(unit.path, "package.json"), "utf8")) as {
         exports?: string | Record<string, unknown>;
         main?: string;
@@ -63,7 +92,11 @@ export function discoveredUserlandSourceAliases(units: readonly GraphNode[]): Al
           replacement: path.resolve(unit.path, target),
         }));
     })
-    .sort((left, right) => String(right.find).length - String(left.find).length);
+    .sort(
+      (left, right) =>
+        Number(left.find.includes("*")) - Number(right.find.includes("*")) ||
+        right.find.length - left.find.length
+    );
 }
 
 function normalizedExports(

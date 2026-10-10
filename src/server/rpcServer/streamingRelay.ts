@@ -1,3 +1,4 @@
+import { serializeRpcFailure, formatRpcFailure } from "@vibestudio/rpc";
 import { writeHttpBytes } from "../httpStreamWrite.js";
 import * as codec from "@vibestudio/rpc/protocol/streamCodec";
 import {
@@ -5,7 +6,6 @@ import {
   decodeRpcJson,
   rpcErrorDataOf,
   rpcDiagnosticIdOf,
-  rpcErrorKindOf,
   stampEnvelopeCaller,
   type RpcCausalParent,
   type RpcEnvelope,
@@ -218,7 +218,7 @@ export class StreamingRelay {
       verifiedCaller = this.deps.verifiedCaller(admission.caller, request);
     } catch (error) {
       writeJson(res, 403, {
-        error: error instanceof Error ? error.message : String(error),
+        error: formatRpcFailure(error),
         errorCode: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
       });
       return;
@@ -230,7 +230,7 @@ export class StreamingRelay {
       causalParent = causal.parent;
     } catch (error) {
       writeJson(res, 403, {
-        error: error instanceof Error ? error.message : String(error),
+        error: formatRpcFailure(error),
         errorCode: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
       });
       return;
@@ -262,10 +262,7 @@ export class StreamingRelay {
         await emitFrame({
           kind: "error",
           status: 502,
-          message: error instanceof Error ? error.message : String(error),
-          errorKind: rpcErrorKindOf(error, "transport"),
-          ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-          ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+          error: serializeRpcFailure(error, "transport"),
         }).catch(() => {});
       } finally {
         releaseAbort();
@@ -320,7 +317,7 @@ export class StreamingRelay {
       await this.deps.dispatcher.assertAuthority(context, "credentials", "proxyFetch", args);
     } catch (error) {
       writeJson(res, 403, {
-        error: error instanceof Error ? error.message : String(error),
+        error: formatRpcFailure(error),
         errorCode: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
         ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
@@ -341,9 +338,7 @@ export class StreamingRelay {
         await emitFrame({
           kind: "error",
           status: 502,
-          message: error instanceof Error ? error.message : String(error),
-          code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-          errorKind: "transport",
+          error: serializeRpcFailure(error, "transport"),
         });
       } catch {
         // The connection may already be closed.
@@ -376,13 +371,7 @@ export class StreamingRelay {
         client.caller.subject
       );
     } catch (error) {
-      await emitFrame({
-        kind: "error",
-        status: 403,
-        message: error instanceof Error ? error.message : String(error),
-        code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-        errorKind: "access",
-      });
+      await emitFrame({ kind: "error", status: 403, error: serializeRpcFailure(error, "access") });
       return;
     }
     let causalParent: RpcCausalParent | undefined;
@@ -391,13 +380,7 @@ export class StreamingRelay {
       invocationCaller = causal.caller;
       causalParent = causal.parent;
     } catch (error) {
-      await emitFrame({
-        kind: "error",
-        status: 403,
-        message: error instanceof Error ? error.message : String(error),
-        code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-        errorKind: "access",
-      });
+      await emitFrame({ kind: "error", status: 403, error: serializeRpcFailure(error, "access") });
       return;
     }
     const effectiveInboundBody = inboundBody ?? client.ws.takeInboundBody(request.requestId);
@@ -409,8 +392,10 @@ export class StreamingRelay {
         await emitFrame({
           kind: "error",
           status: 400,
-          message: "Streaming request bodies cannot be relayed to another RPC endpoint",
-          errorKind: "protocol",
+          error: {
+            message: "Streaming request bodies cannot be relayed to another RPC endpoint",
+            errorKind: "protocol",
+          },
         });
         return;
       }
@@ -424,9 +409,7 @@ export class StreamingRelay {
         await emitFrame({
           kind: "error",
           status: 403,
-          message: authorization.reason,
-          code: "EACCES",
-          errorKind: "access",
+          error: { message: authorization.reason, code: "EACCES", errorKind: "access" },
         });
         return;
       }
@@ -445,11 +428,7 @@ export class StreamingRelay {
           await emitFrame({
             kind: "error",
             status: 502,
-            message: error instanceof Error ? error.message : String(error),
-            code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-            errorKind: rpcErrorKindOf(error, "transport"),
-            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-            ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+            error: serializeRpcFailure(error, "transport"),
           });
         } catch {
           // The client may already be gone.
@@ -482,8 +461,10 @@ export class StreamingRelay {
           await emitFrame({
             kind: "error",
             status: 500,
-            message: `Streaming service ${request.method} did not return a Response`,
-            errorKind: "internal",
+            error: {
+              message: `Streaming service ${request.method} did not return a Response`,
+              errorKind: "internal",
+            },
           });
           return;
         }
@@ -495,11 +476,7 @@ export class StreamingRelay {
           await emitFrame({
             kind: "error",
             status: 502,
-            message: error instanceof Error ? error.message : String(error),
-            code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-            errorKind: rpcErrorKindOf(error, "internal"),
-            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-            ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+            error: serializeRpcFailure(error, "internal"),
           });
         } catch {
           // The client may already be gone.
@@ -518,8 +495,10 @@ export class StreamingRelay {
       await emitFrame({
         kind: "error",
         status: validation.status,
-        message: validation.error,
-        errorKind: validation.status === 403 ? "access" : "protocol",
+        error: {
+          message: validation.error,
+          errorKind: validation.status === 403 ? "access" : "protocol",
+        },
       });
       return;
     }
@@ -527,9 +506,11 @@ export class StreamingRelay {
       await emitFrame({
         kind: "error",
         status: 400,
-        message:
-          "proxyFetch request declared both a streamed body (bodyStreamId) and an args body — send exactly one",
-        errorKind: "protocol",
+        error: {
+          message:
+            "proxyFetch request declared both a streamed body (bodyStreamId) and an args body — send exactly one",
+          errorKind: "protocol",
+        },
       });
       return;
     }
@@ -550,15 +531,7 @@ export class StreamingRelay {
         request.args
       );
     } catch (error) {
-      await emitFrame({
-        kind: "error",
-        status: 403,
-        message: error instanceof Error ? error.message : String(error),
-        code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-        errorKind: "access",
-        ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-        ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
-      });
+      await emitFrame({ kind: "error", status: 403, error: serializeRpcFailure(error, "access") });
       return;
     }
 
@@ -578,9 +551,7 @@ export class StreamingRelay {
         await emitFrame({
           kind: "error",
           status: 502,
-          message: error instanceof Error ? error.message : String(error),
-          code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-          errorKind: "transport",
+          error: serializeRpcFailure(error, "transport"),
         });
       } catch {
         // The client may already be gone.
@@ -676,14 +647,7 @@ export class StreamingRelay {
       res.writeHead(200, STREAM_HEADERS);
       await writeHttpBytes(
         res,
-        codec.encodeErrorFrame({
-          status: 502,
-          message: error instanceof Error ? error.message : String(error),
-          code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-          errorKind: rpcErrorKindOf(error, "internal"),
-          ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-          ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
-        })
+        codec.encodeErrorFrame({ status: 502, error: serializeRpcFailure(error, "internal") })
       ).catch(() => {});
       res.end();
       releaseAbort();
@@ -741,14 +705,7 @@ export class StreamingRelay {
       } else {
         await writeHttpBytes(
           res,
-          codec.encodeErrorFrame({
-            status: frame.status,
-            message: frame.message,
-            code: frame.code,
-            errorKind: frame.errorKind,
-            ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
-            ...(frame.diagnosticId ? { diagnosticId: frame.diagnosticId } : {}),
-          })
+          codec.encodeErrorFrame({ status: frame.status, error: frame.error })
         );
       }
     };
@@ -809,11 +766,7 @@ export class StreamingRelay {
         await emitFrame({
           kind: "error",
           status: 502,
-          message: error instanceof Error ? error.message : String(error),
-          code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-          errorKind: rpcErrorKindOf(error, "transport"),
-          ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-          ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+          error: serializeRpcFailure(error, "transport"),
         });
         return;
       } finally {

@@ -1,3 +1,5 @@
+import { browserVaultNativeMethods } from "@vibestudio/service-schemas/browserVaultNative";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type {
   ApplyCookieMutationsRequest,
   BrowserCookieInput,
@@ -80,52 +82,48 @@ export interface BrowserVaultNativeClient {
 export function createBrowserVaultNativeClient(
   serverClient: ServerClient
 ): BrowserVaultNativeClient {
-  const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
-    serverClient.call("browserVaultNative", method, args) as Promise<T>;
+  const client = (signal?: AbortSignal) =>
+    createTypedServiceClient(
+      "browserVaultNative",
+      browserVaultNativeMethods,
+      (service, method, args) =>
+        serverClient.call(service, method, args, signal ? { signal } : undefined)
+    );
+  const vault = client();
   return {
-    listPasswordSummaries: () => call("listPasswordSummaries"),
-    listPasswordSummariesPage: (offset, limit) => call("listPasswordSummariesPage", offset, limit),
-    getPasswordForSite: (url) => call("getPasswordForSite", url),
-    listPasswordsPage: (offset, limit) => call("listPasswordsPage", offset, limit),
-    addPassword: (input) => call("addPassword", input),
-    updatePassword: (id, input) => call("updatePassword", id, input),
-    deletePassword: (id) => call("deletePassword", id),
-    addNeverSavePassword: (origin) => call("addNeverSave", origin),
-    isNeverSavePassword: (origin) => call("isNeverSave", origin),
-    getNeverSavePasswordOrigins: () => call("getNeverSaveOrigins"),
+    listPasswordSummaries: () => vault.listPasswordSummaries(),
+    listPasswordSummariesPage: (offset, limit) => vault.listPasswordSummariesPage(offset, limit),
+    getPasswordForSite: (url) => vault.getPasswordForSite(url),
+    listPasswordsPage: (offset, limit) => vault.listPasswordsPage(offset, limit),
+    addPassword: (input) => vault.addPassword(input),
+    updatePassword: (id, input) => vault.updatePassword(id, input),
+    deletePassword: (id) => vault.deletePassword(id),
+    addNeverSavePassword: (origin) => vault.addNeverSave(origin),
+    isNeverSavePassword: (origin) => vault.isNeverSave(origin),
+    getNeverSavePasswordOrigins: () => vault.getNeverSaveOrigins(),
     getNeverSavePasswordOriginsPage: (offset, limit) =>
-      call("getNeverSaveOriginsPage", offset, limit),
-    removeNeverSavePassword: (origin) => call("removeNeverSave", origin),
-    updatePasswordLastUsed: (id) => call("updateLastUsed", id),
-    getFormFillSuggestions: (query) => call("getFormFillSuggestions", query),
-    listFormFillValues: () => call("listFormFillValues"),
-    listFormFillValuesPage: (offset, limit) => call("listFormFillValuesPage", offset, limit),
-    addFormFillValue: (input, sourceId) => call("addFormFillValue", input, sourceId),
-    updateFormFillValue: (id, input) => call("updateFormFillValue", id, input),
-    markFormFillValueUsed: (id) => call("markFormFillValueUsed", id),
-    deleteFormFillValue: (id) => call("deleteFormFillValue", id),
-    clearFormFillValues: () => call("clearFormFillValues"),
-    applyCookieMutations: (input, signal) =>
-      serverClient.call("browserVaultNative", "applyCookieMutations", [input], {
-        signal,
-      }) as Promise<{ revision: number }>,
-    listCookieOrigins: (signal) =>
-      serverClient.call("browserVaultNative", "listCookieOrigins", [], { signal }) as Promise<{
-        revision: number;
-        origins: string[];
-      }>,
-    listCookieOriginsPage: (offset, limit) => call("listCookieOriginsPage", offset, limit),
-    getCookiesForOrigin: (origin, signal) =>
-      serverClient.call("browserVaultNative", "getCookiesForOrigin", [origin], {
-        signal,
-      }) as Promise<StoredCookie[]>,
-    listCookiesPage: (offset, limit) => call("listCookiesPage", offset, limit),
-    clearCookiesForOrigin: (origin) => call("clearCookiesForOrigin", origin),
-    clearAllCookies: () => call("clearAllCookies"),
-    endBrowserSession: () => call("endBrowserSession"),
-    getCookieSiteSummary: (origin) => call("getCookieSiteSummary", origin),
-    addCookiesBatch: (input) => call("addCookiesBatch", input),
-    addPasswordsBatch: (passwords, meta) => call("addPasswordsBatch", passwords, meta),
-    addFormFillBatch: (values, meta) => call("addFormFillBatch", values, meta),
+      vault.getNeverSaveOriginsPage(offset, limit),
+    removeNeverSavePassword: (origin) => vault.removeNeverSave(origin),
+    updatePasswordLastUsed: (id) => vault.updateLastUsed(id),
+    getFormFillSuggestions: (query) => vault.getFormFillSuggestions(query),
+    listFormFillValues: () => vault.listFormFillValues(),
+    listFormFillValuesPage: (offset, limit) => vault.listFormFillValuesPage(offset, limit),
+    addFormFillValue: (input, sourceId) => vault.addFormFillValue(input, sourceId),
+    updateFormFillValue: (id, input) => vault.updateFormFillValue(id, input),
+    markFormFillValueUsed: (id) => vault.markFormFillValueUsed(id),
+    deleteFormFillValue: (id) => vault.deleteFormFillValue(id),
+    clearFormFillValues: () => vault.clearFormFillValues(),
+    applyCookieMutations: (input, signal) => client(signal).applyCookieMutations(input),
+    listCookieOrigins: (signal) => client(signal).listCookieOrigins(),
+    listCookieOriginsPage: (offset, limit) => vault.listCookieOriginsPage(offset, limit),
+    getCookiesForOrigin: (origin, signal) => client(signal).getCookiesForOrigin(origin),
+    listCookiesPage: (offset, limit) => vault.listCookiesPage(offset, limit),
+    clearCookiesForOrigin: (origin) => vault.clearCookiesForOrigin(origin),
+    clearAllCookies: () => vault.clearAllCookies(),
+    endBrowserSession: () => vault.endBrowserSession(),
+    getCookieSiteSummary: (origin) => vault.getCookieSiteSummary(origin),
+    addCookiesBatch: (input) => vault.addCookiesBatch(input),
+    addPasswordsBatch: (passwords, meta) => vault.addPasswordsBatch(passwords, meta),
+    addFormFillBatch: (values, meta) => vault.addFormFillBatch(values, meta),
   };
 }

@@ -1,3 +1,5 @@
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { wireClientFor } from "@vibestudio/rpc/internal";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@vibestudio/durable/test-utils";
@@ -41,9 +43,10 @@ function profile(): BuildPerformanceProfileWire {
 describe("execution-owned native operation evidence", () => {
   it("records a settled provider transport call before guest mutation without retaining secrets", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const nativeRpc = (
-      instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } }
-    ).rpc;
+    const nativeRpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
     vi.spyOn(nativeRpc, "call").mockResolvedValueOnce([]);
     const owner = (
       instance as unknown as {
@@ -109,9 +112,10 @@ describe("execution-owned native operation evidence", () => {
 
   it("retains the original failed RPC and records neither failed calls nor calls to another receiver", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const nativeRpc = (
-      instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } }
-    ).rpc;
+    const nativeRpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
     const failure = new Error("original extension failure");
     vi.spyOn(nativeRpc, "call").mockRejectedValueOnce(failure).mockResolvedValueOnce([]);
     const owner = (
@@ -147,60 +151,122 @@ describe("execution-owned native operation evidence", () => {
 
   it("records permission inventory before guest summarization without retaining grant data", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const nativeRpc = (instance as unknown as {
-      rpc: { call: (...args: unknown[]) => Promise<unknown> };
-    }).rpc;
-    const grant = { id: "private-grant", kind: "capability", callerLabel: "PRIVATE CALLER",
-      scopeLabel: "PRIVATE SCOPE", why: "PRIVATE PURPOSE", approvedBy: "PRIVATE USER",
-      duration: "Until revoked", revokeEffect: "Stops future access" };
+    const nativeRpc = wireClientFor(
+      (
+        instance as unknown as {
+          rpc: { call: (...args: unknown[]) => Promise<unknown> };
+        }
+      ).rpc as import("@vibestudio/rpc").RpcClient
+    );
+    const grant = {
+      id: "private-grant",
+      kind: "capability",
+      callerLabel: "PRIVATE CALLER",
+      scopeLabel: "PRIVATE SCOPE",
+      why: "PRIVATE PURPOSE",
+      approvedBy: "PRIVATE USER",
+      duration: "Until revoked",
+      revokeEffect: "Stops future access",
+    };
     vi.spyOn(nativeRpc, "call").mockResolvedValueOnce([grant]);
-    const owner = (instance as unknown as {
-      createExecutionContext: (input: { contextId: string }) => {
-        rpc: typeof nativeRpc; operationJournal: ExecutionJournal;
-      };
-    }).createExecutionContext({ contextId: "owner" });
-    const returned = await owner.rpc.call("main", "permissions.list", []) as unknown[];
+    const owner = (
+      instance as unknown as {
+        createExecutionContext: (input: { contextId: string }) => {
+          rpc: typeof nativeRpc;
+          operationJournal: ExecutionJournal;
+        };
+      }
+    ).createExecutionContext({ contextId: "owner" });
+    const returned = (await owner.rpc.call("main", "permissions.list", [])) as unknown[];
     returned.length = 0;
     const journal = owner.operationJournal.close();
-    expect(journal.entries).toEqual([{ type: "permissions.inventory", receipt: {
-      protocol: "permission-inventory-observation.v1", method: "permissions.list", total: 1,
-      counts: { capability: 1, "credential-use": 0, "browser-site": 0 },
-    } }]);
+    expect(journal.entries).toEqual([
+      {
+        type: "permissions.inventory",
+        receipt: {
+          protocol: "permission-inventory-observation.v1",
+          method: "permissions.list",
+          total: 1,
+          counts: { capability: 1, "credential-use": 0, "browser-site": 0 },
+        },
+      },
+    ]);
     expect(JSON.stringify(journal)).not.toContain("PRIVATE");
     expect(JSON.stringify(journal)).not.toContain("private-grant");
   });
 
   it("records credential misses without retaining the audience or credential data", () => {
     const journal = new ExecutionJournal();
-    journal.recordCredentialResolution("credentials.resolveCredential", [{ url: "https://private.example/resource" }], null);
-    expect(journal.close().entries).toEqual([{ type: "credentials.resolution", receipt: {
-      protocol: "credential-resolution-observation.v1", method: "credentials.resolveCredential",
-      requestDigest: expect.stringMatching(/^[a-f0-9]{64}$/u), found: false,
-    } }]);
+    journal.recordCredentialResolution(
+      "credentials.resolveCredential",
+      [{ url: "https://private.example/resource" }],
+      null
+    );
+    expect(journal.close().entries).toEqual([
+      {
+        type: "credentials.resolution",
+        receipt: {
+          protocol: "credential-resolution-observation.v1",
+          method: "credentials.resolveCredential",
+          requestDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          found: false,
+        },
+      },
+    ]);
     expect(JSON.stringify(journal.close())).not.toContain("private.example");
     const invalid = new ExecutionJournal();
-    expect(() => invalid.recordCredentialResolution("credentials.resolveCredential", [{}], null)).toThrow();
-    expect(() => invalid.recordCredentialResolution("credentials.resolveCredential", [{ url: "https://private.example" }], { secret: "PRIVATE" })).toThrow();
+    expect(() =>
+      invalid.recordCredentialResolution("credentials.resolveCredential", [{}], null)
+    ).toThrow();
+    expect(() =>
+      invalid.recordCredentialResolution(
+        "credentials.resolveCredential",
+        [{ url: "https://private.example" }],
+        { secret: "PRIVATE" }
+      )
+    ).toThrow();
     expect(invalid.close().entries).toEqual([]);
   });
 
   it("records accepted notification identity and labels before guest mutation and joins explicit dismissal", () => {
     const journal = new ExecutionJournal();
-    const input = { type: "info", title: "PRIVATE TITLE", message: "PRIVATE MESSAGE", actions: [{ id: "accept", label: "Accept" }] };
+    const input = {
+      type: "info",
+      title: "PRIVATE TITLE",
+      message: "PRIVATE MESSAGE",
+      actions: [{ id: "accept", label: "Accept" }],
+    };
     journal.recordNotificationLifecycle("notification.show", [input], "host-notification");
     input.actions[0]!.label = "forged";
     journal.recordNotificationLifecycle("notification.dismiss", ["host-notification"], undefined);
     const observed = journal.close();
     expect(observed.entries).toEqual([
-      { type: "notification.lifecycle", receipt: { protocol: "notification-lifecycle-observation.v1", method: "notification.show", notificationId: "host-notification", actionLabels: ["Accept"] } },
-      { type: "notification.lifecycle", receipt: { protocol: "notification-lifecycle-observation.v1", method: "notification.dismiss", notificationId: "host-notification" } },
+      {
+        type: "notification.lifecycle",
+        receipt: {
+          protocol: "notification-lifecycle-observation.v1",
+          method: "notification.show",
+          notificationId: "host-notification",
+          actionLabels: ["Accept"],
+        },
+      },
+      {
+        type: "notification.lifecycle",
+        receipt: {
+          protocol: "notification-lifecycle-observation.v1",
+          method: "notification.dismiss",
+          notificationId: "host-notification",
+        },
+      },
     ]);
     expect(JSON.stringify(observed)).not.toContain("PRIVATE");
   });
 
   it("does not record malformed, failed or closed permission reads as inventory completion", () => {
     const journal = new ExecutionJournal();
-    expect(() => journal.recordPermissionInventory("permissions.list", [], [{ id: "invalid" }])).toThrow();
+    expect(() =>
+      journal.recordPermissionInventory("permissions.list", [], [{ id: "invalid" }])
+    ).toThrow();
     journal.recordPermissionInventory("permissions.revoke", [], undefined);
     expect(journal.close().entries).toEqual([]);
     journal.recordPermissionInventory("permissions.list", [], []);
@@ -226,9 +292,10 @@ describe("execution-owned native operation evidence", () => {
 
   it("retains native receipts when the caller only returns a summary", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const nativeRpc = (
-      instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } }
-    ).rpc;
+    const nativeRpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
     vi.spyOn(nativeRpc, "call").mockResolvedValueOnce(profile());
     const owner = (
       instance as unknown as {
@@ -249,9 +316,10 @@ describe("execution-owned native operation evidence", () => {
 
   it("records bounded native log facts before guest summarization and mutation", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const nativeRpc = (
-      instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } }
-    ).rpc;
+    const nativeRpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
     const envelope = {
       serverBootId: "boot-a",
       workspaceId: "workspace-a",
@@ -344,8 +412,10 @@ describe("execution-owned native operation evidence", () => {
 
   it("joins native blob reads without retaining document or search text", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const rpc = (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
-      .rpc;
+    const rpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
     const text = "PRIVATE DOCUMENT\nPRIVATE MARKER\n";
     const digest = sha256HexSyncText(text);
     const matches = [{ lineNumber: 2, line: "PRIVATE MARKER", before: [], after: [] }];
@@ -398,8 +468,10 @@ describe("execution-owned native operation evidence", () => {
 
   it("retains canonical tree identities, listing basis, diff and materialization before guest mutation", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const rpc = (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
-      .rpc;
+    const rpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
     const treeHash = `manifest:${"a".repeat(64)}`;
     const stateHash = `state:${"b".repeat(64)}`;
     const second = `state:${"c".repeat(64)}`;
@@ -455,8 +527,10 @@ describe("execution-owned native operation evidence", () => {
 
   it("captures webhook identities and counts without retaining secrets or verifier configuration", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const rpc = (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
-      .rpc;
+    const rpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
     const subscription = {
       subscriptionId: "subscription-a",
       ownerCallerId: "owner",
@@ -537,9 +611,10 @@ describe("execution-owned native operation evidence", () => {
 
   it("records filesystem access from native dispatch without copying file contents", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const nativeRpc = (
-      instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } }
-    ).rpc;
+    const nativeRpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
     vi.spyOn(nativeRpc, "call").mockResolvedValue("PRIVATE FILE CONTENT");
     const owner = (
       instance as unknown as {
@@ -571,31 +646,76 @@ describe("execution-owned native operation evidence", () => {
   it("records effective default bounds and rejects foreign health identity", () => {
     const owner = new ExecutionJournal();
     const identity = { kind: "extension" as const, entityId: "extension:one" };
-    const health = { entity: { identity, release: { kind: "extension" as const, releaseId: identity.entityId }, source: "extensions/one", status: "running",
-      lastError: null, artifact: { effectiveVersion: null, buildKey: null, executionDigest: null },
-      facets: { activation: true, release: false, inspector: false } },
-      state: "healthy", summary: "private diagnostic prose", logs: [{ identity, timestamp: 1, level: "info", message: "private log prose" }],
+    const health = {
+      entity: {
+        identity,
+        release: { kind: "extension" as const, releaseId: identity.entityId },
+        source: "extensions/one",
+        status: "running",
+        lastError: null,
+        artifact: { effectiveVersion: null, buildKey: null, executionDigest: null },
+        facets: { activation: true, release: false, inspector: false },
+      },
+      state: "healthy",
+      summary: "private diagnostic prose",
+      logs: [{ identity, timestamp: 1, level: "info", message: "private log prose" }],
       errors: [{ identity, timestamp: 2, level: "error", message: "private failure" }],
-      dropped: { entries: 7, errors: 2 }, capacity: { entries: 100, errors: 50 } };
+      dropped: { entries: 7, errors: 2 },
+      capacity: { entries: 100, errors: 50 },
+    };
     owner.recordRuntimeHealth("runtime.supervision.health", [identity], health);
-    expect(owner.entries[0]).toMatchObject({ type: "runtime.health", receipt: {
-      identity, logCount: 1, errorCount: 1, limit: 100, errorLimit: 50,
-      dropped: { entries: 7, errors: 2 }, capacity: { entries: 100, errors: 50 },
-    } });
-    owner.recordRuntimeHealth("runtime.supervision.health", [identity, { limit: 8, errorLimit: 5 }], health);
+    expect(owner.entries[0]).toMatchObject({
+      type: "runtime.health",
+      receipt: {
+        identity,
+        logCount: 1,
+        errorCount: 1,
+        limit: 100,
+        errorLimit: 50,
+        dropped: { entries: 7, errors: 2 },
+        capacity: { entries: 100, errors: 50 },
+      },
+    });
+    owner.recordRuntimeHealth(
+      "runtime.supervision.health",
+      [identity, { limit: 8, errorLimit: 5 }],
+      health
+    );
     health.logs.length = 0;
     const wire = { entries: owner.entries };
-    expect(wire.entries[1]).toMatchObject({ type: "runtime.health", receipt: { identity, logCount: 1, errorCount: 1, limit: 8, errorLimit: 5 } });
+    expect(wire.entries[1]).toMatchObject({
+      type: "runtime.health",
+      receipt: { identity, logCount: 1, errorCount: 1, limit: 8, errorLimit: 5 },
+    });
     expect(JSON.stringify(wire)).not.toContain("private");
-    expect(() => owner.recordRuntimeHealth("runtime.supervision.health", [identity, { limit: 8, errorLimit: 5 }],
-      { ...health, errors: [{ identity: { ...identity, entityId: "extension:other" }, timestamp: 2, level: "error", message: "foreign" }] })).toThrow("different supervised entity identity");
+    expect(() =>
+      owner.recordRuntimeHealth(
+        "runtime.supervision.health",
+        [identity, { limit: 8, errorLimit: 5 }],
+        {
+          ...health,
+          errors: [
+            {
+              identity: { ...identity, entityId: "extension:other" },
+              timestamp: 2,
+              level: "error",
+              message: "foreign",
+            },
+          ],
+        }
+      )
+    ).toThrow("different supervised entity identity");
   });
 
   it("records the native supervision roster for direct and aliased list calls", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const nativeRpc = (instance as unknown as {
-      rpc: { call: (...args: unknown[]) => Promise<unknown> };
-    }).rpc;
+    const nativeRpc = wireClientFor(
+      (
+        instance as unknown as {
+          rpc: { call: (...args: unknown[]) => Promise<unknown> };
+        }
+      ).rpc as import("@vibestudio/rpc").RpcClient
+    );
     const entity = {
       identity: { kind: "worker", entityId: "worker:one" },
       release: { kind: "worker", releaseId: "workers/one" },
@@ -606,12 +726,14 @@ describe("execution-owned native operation evidence", () => {
       facets: { activation: false, release: false, inspector: false },
     };
     vi.spyOn(nativeRpc, "call").mockResolvedValue([entity]);
-    const owner = (instance as unknown as {
-      createExecutionContext: (input: { contextId: string }) => {
-        rpc: typeof nativeRpc;
-        operationJournal: ExecutionJournal;
-      };
-    }).createExecutionContext({ contextId: "owner" });
+    const owner = (
+      instance as unknown as {
+        createExecutionContext: (input: { contextId: string }) => {
+          rpc: typeof nativeRpc;
+          operationJournal: ExecutionJournal;
+        };
+      }
+    ).createExecutionContext({ contextId: "owner" });
 
     await owner.rpc.call("main", "runtime.supervision.list", []);
     const runtime = {
@@ -630,11 +752,13 @@ describe("execution-owned native operation evidence", () => {
         receipt: {
           protocol: "runtime-unit-observation.v1",
           method: "runtime.supervision.list",
-          entities: [{
-            identity: entity.identity,
-            source: entity.source,
-            status: entity.status,
-          }],
+          entities: [
+            {
+              identity: entity.identity,
+              source: entity.source,
+              status: entity.status,
+            },
+          ],
         },
       },
       {
@@ -642,11 +766,13 @@ describe("execution-owned native operation evidence", () => {
         receipt: {
           protocol: "runtime-unit-observation.v1",
           method: "runtime.supervision.list",
-          entities: [{
-            identity: entity.identity,
-            source: entity.source,
-            status: entity.status,
-          }],
+          entities: [
+            {
+              identity: entity.identity,
+              source: entity.source,
+              status: entity.status,
+            },
+          ],
         },
       },
       {
@@ -654,11 +780,13 @@ describe("execution-owned native operation evidence", () => {
         receipt: {
           protocol: "runtime-unit-observation.v1",
           method: "runtime.supervision.describe",
-          entities: [{
-            identity: entity.identity,
-            source: entity.source,
-            status: entity.status,
-          }],
+          entities: [
+            {
+              identity: entity.identity,
+              source: entity.source,
+              status: entity.status,
+            },
+          ],
         },
       },
     ]);
@@ -680,4 +808,37 @@ describe("execution-owned native operation evidence", () => {
     expect(terminal.truncated).toBe(true);
     expect(terminal.entries).toHaveLength(1);
   });
+});
+
+it("gives eval code the same receiver-validated RPC facade as workspace code", async () => {
+  const { instance } = await createTestDO(EvalDO);
+  const internal = instance as unknown as {
+    rpc: import("@vibestudio/rpc").RpcClient;
+    createExecutionContext(input: { contextId: string }): unknown;
+    createActiveRuntimeRpc(): import("@vibestudio/rpc").RpcClient;
+    activeEvalExecution: { run<T>(execution: unknown, operation: () => T): T };
+  };
+  const wire = vi.spyOn(wireClientFor(internal.rpc), "call").mockResolvedValue(true);
+  const execution = internal.createExecutionContext({ contextId: "owner" });
+  const publicRpc = internal.createActiveRuntimeRpc();
+  await expect(
+    internal.activeEvalExecution.run(execution, () =>
+      publicRpc.call("main", mainRpcMethods["fs.exists"], ["file.txt"])
+    )
+  ).resolves.toBe(true);
+  expect(wire).toHaveBeenCalled();
+  wire.mockClear();
+  await expect(
+    internal.activeEvalExecution.run(execution, () =>
+      // @ts-expect-error Workspace and eval share the same receiver argument contract.
+      publicRpc.call("main", mainRpcMethods["fs.exists"], [42])
+    )
+  ).rejects.toThrow();
+  expect(wire).not.toHaveBeenCalled();
+  wire.mockResolvedValueOnce("wrong result");
+  await expect(
+    internal.activeEvalExecution.run(execution, () =>
+      publicRpc.call("main", mainRpcMethods["fs.exists"], ["file.txt"])
+    )
+  ).rejects.toThrow();
 });

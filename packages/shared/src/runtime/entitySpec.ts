@@ -318,6 +318,11 @@ export interface EntityRecord {
   error?: string;
 }
 
+/** An entity persisted by WorkspaceDO, with its owned authority lifetime. */
+export interface DurableEntityRecord extends EntityRecord {
+  authoritySessionId: string;
+}
+
 /**
  * Complete durable input for one runtime incarnation activation.
  *

@@ -1,3 +1,4 @@
+import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { doTargetId, type DORefParam } from "@vibestudio/shared/workspaceServiceRpc";
 import {
   decodeRpcJson,
@@ -373,32 +374,16 @@ async function assertDurableObjectResponseOk(ref: DORef, res: Response): Promise
   if (res.ok) return;
   const text = await res.text();
   const identity = `${ref.source}:${ref.className}/${ref.objectKey}`;
+  let parsed: { error?: import("@vibestudio/rpc").RpcFailure };
   try {
-    const parsed = decodeRpcJson(text) as {
-      error?: unknown;
-      errorKind?: unknown;
-      errorCode?: unknown;
-      errorData?: unknown;
-    };
-    if (typeof parsed.error === "string") {
-      throw new RemoteRpcError(
-        `${parsed.error} [Durable Object: ${identity}]`,
-        parsed.errorKind === "access" ||
-          parsed.errorKind === "service" ||
-          parsed.errorKind === "transport" ||
-          parsed.errorKind === "protocol" ||
-          parsed.errorKind === "application" ||
-          parsed.errorKind === "internal"
-          ? parsed.errorKind
-          : "transport",
-        typeof parsed.errorCode === "string" ? parsed.errorCode : undefined,
-        parsed.errorData && typeof parsed.errorData === "object"
-          ? { ...(parsed.errorData as Record<string, unknown>), durableObject: ref }
-          : { durableObject: ref }
-      );
-    }
-  } catch (error) {
-    if (error instanceof RemoteRpcError) throw error;
+    parsed = decodeRpcJson(text) as typeof parsed;
+  } catch (cause) {
+    throw new Error(`DO RPC relay failed (${res.status}) for ${identity}: ${text}`, { cause });
+  }
+  if (parsed.error) {
+    const error = deserializeRpcFailure(parsed.error);
+    error.message += ` [Durable Object: ${identity}]`;
+    throw error;
   }
   throw new Error(`DO RPC relay failed (${res.status}) for ${identity}: ${text}`);
 }
@@ -408,13 +393,8 @@ function unwrapResponseEnvelope(raw: unknown): unknown {
   const message = responseEnvelope?.message as RpcResponse | undefined;
   if (message && message.type === "response") {
     if ("error" in message) {
-      const err = new RemoteRpcError(
-        message.error,
-        message.errorKind,
-        message.errorCode,
-        message.errorData
-      );
-      if (message.errorStack) err.stack = message.errorStack;
+      const err = deserializeRpcFailure(message.error);
+
       throw err;
     }
     return message.result;

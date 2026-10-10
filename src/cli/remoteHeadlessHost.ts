@@ -1,3 +1,4 @@
+import { formatRpcFailure } from "@vibestudio/rpc";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -62,16 +63,16 @@ async function createIrohHeadlessHostOverrides(
   try {
     await client.ready();
     const rpc = {
-      call<T = unknown>(
+      call(
         targetId: string,
         method: string,
         args: unknown[] = [],
         options?: unknown
-      ): Promise<T> {
+      ): Promise<unknown> {
         void options;
         return targetId === "main"
-          ? client.call<T>(method, args)
-          : client.callTarget<T>(targetId, method, args);
+          ? client.call(method, args)
+          : client.callTarget(targetId, method, args);
       },
       stream(
         targetId: string,
@@ -174,7 +175,7 @@ async function runRemoteHeadlessHost(inv: ParsedInvocation): Promise<number> {
   try {
     creds = requireDeviceCliCredentials(loaded, "remote headless host");
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(formatRpcFailure(error));
     return 3;
   }
   if (creds.transport !== "iroh") {
@@ -223,7 +224,7 @@ async function runRemoteHeadlessHost(inv: ParsedInvocation): Promise<number> {
         await host.start();
       } catch (error) {
         throw new CliError(
-          `headless host failed to start: ${redactCliSecrets(error instanceof Error ? error.message : String(error))}`
+          `headless host failed to start: ${redactCliSecrets(formatRpcFailure(error))}`
         );
       }
       await host.done;

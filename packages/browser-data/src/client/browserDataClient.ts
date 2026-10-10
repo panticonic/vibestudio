@@ -1,4 +1,13 @@
-import type { extensionsMethods } from "@vibestudio/service-schemas/extensions";
+import type { browserProductMethods } from "@vibestudio/service-schemas/browserData";
+import type { TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import {
+  createReceiverRpcMethods,
+  createRpcMethodCaller,
+  type RpcMethodArgs,
+} from "@vibestudio/shared/rpcMethods";
+import { schemaRpcCaller } from "@vibestudio/rpc/internal";
+import type { browserEnvironmentMethods } from "@vibestudio/service-schemas/browserEnvironment";
+import { callTypedServiceMethod, type MethodFn } from "@vibestudio/shared/typedServiceClient";
 import type { BrowserAddressSuggestion } from "@vibestudio/shared/webSearch";
 import type { WebSearchEngineInput } from "@vibestudio/shared/webSearch";
 import type {
@@ -126,7 +135,7 @@ export interface BrowserDataClient {
    */
   observeSensitiveImport(
     operationId: string,
-    options?: { afterVersion?: string }
+    options?: { afterVersion?: string; signal?: AbortSignal }
   ): Promise<SensitiveBrowserImportStatus>;
   cancelSensitiveImport(operationId: string): Promise<SensitiveBrowserImportStatus>;
   openBrowserPrivacyManager(section?: BrowserPrivacySection): Promise<void>;
@@ -199,38 +208,128 @@ export interface BrowserDataClient {
   exportBookmarks(format: "html" | "json" | "chrome-json"): Promise<string>;
 }
 
+/** Shared provider contract. The installed receiver must satisfy this surface. */
+type ProductProviderMethods = Pick<
+  TypedServiceClient<typeof browserProductMethods>,
+  Extract<keyof BrowserDataClient, keyof typeof browserProductMethods>
+>;
+export type BrowserDataProvider = ProductProviderMethods &
+  Omit<
+    BrowserDataClient,
+    | keyof ProductProviderMethods
+    | "listDownloads"
+    | "pauseDownload"
+    | "resumeDownload"
+    | "cancelDownload"
+    | "openDownload"
+    | "revealDownload"
+    | "getBrowserEnvironment"
+    | "observeImportJob"
+    | "observeSensitiveImport"
+    | "listDownloadRecords"
+    | "listOpenTabs"
+    | "searchHistoryForAutocomplete"
+  > & {
+    resumeImport(jobId: string): Promise<ImportJobSnapshot>;
+    listOpenTabs(request: { hostId: string; sourceId: string }): Promise<ImportedBrowserOpenTab[]>;
+    searchHistoryForAutocomplete(request: {
+      query: string;
+      limit?: number;
+    }): Promise<StoredHistory[]>;
+    getBrowserEnvironment(): Promise<BrowserEnvironmentIdentity>;
+    observeSensitiveImport(
+      operationId: string,
+      options?: { afterVersion?: string }
+    ): Promise<SensitiveBrowserImportStatus>;
+    observeImportJob(
+      jobId: string,
+      options?: { afterVersion?: string }
+    ): Promise<ImportJobObservation>;
+    listDownloadRecords(hostId: string): Promise<BrowserDownloadRecord[]>;
+  };
+export const browserDataProviderRpcMethods = createReceiverRpcMethods<BrowserDataProvider>([
+  "resumeImport",
+  "getBrowserEnvironment",
+  "listImportHosts",
+  "listImportAcquisitionOptions",
+  "beginImportAcquisition",
+  "releaseImportSource",
+  "listImportSources",
+  "previewImport",
+  "previewSensitiveImport",
+  "startImport",
+  "startSensitiveImport",
+  "observeSensitiveImport",
+  "cancelSensitiveImport",
+  "openBrowserPrivacyManager",
+  "cancelImport",
+  "getImportJob",
+  "observeImportJob",
+  "listImportJobs",
+  "listOpenTabs",
+  "openTabsAsPanels",
+  "getSitePreferences",
+  "setSiteZoom",
+  "getBookmarks",
+  "addBookmark",
+  "updateBookmark",
+  "deleteBookmark",
+  "moveBookmark",
+  "searchBookmarks",
+  "getHistory",
+  "deleteHistoryEntry",
+  "deleteHistoryRange",
+  "clearAllHistory",
+  "searchHistory",
+  "searchHistoryForAutocomplete",
+  "recordHistoryVisit",
+  "updateHistoryTitle",
+  "getSearchEngines",
+  "setDefaultEngine",
+  "saveSearchEngine",
+  "getSearchSuggestions",
+  "listDownloadRecords",
+  "upsertDownloadRecord",
+  "putPageFavicon",
+  "getPageFavicon",
+  "exportBookmarks",
+]);
+
 /** Canonical client for the manifest-declared browser environment provider. */
 export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient {
-  const callExtension = async <T>(
-    method: keyof typeof extensionsMethods & string,
-    args: unknown[],
-    options?: { signal?: AbortSignal }
-  ): Promise<T> => {
-    const { callTypedServiceMethod } = await import("@vibestudio/shared/typedServiceClient");
-    return callTypedServiceMethod(
-      "extensions",
-      (await import("@vibestudio/service-schemas/extensions")).extensionsMethods,
-      (service, wireMethod, wireArgs) =>
-        options
-          ? rpc.callService(service, wireMethod, wireArgs, options)
-          : rpc.callService(service, wireMethod, wireArgs),
-      method,
-      args
-    ) as Promise<T>;
-  };
-  const callNative = <T>(method: string, ...args: unknown[]): Promise<T> =>
-    callExtension("invokeProvider", ["browserData", method, args]);
-  const callBrowserEnvironment = <T>(method: BrowserEnvironmentMethod, ...args: unknown[]) =>
-    rpc.callService("browserEnvironment", method, args) as Promise<T>;
-  // Workspace-visible browser product records stay on the installed provider.
-  // Protected records deliberately have no client methods here: their sealed
-  // import and no-data-return manager handoff are separate provider intents.
-  const callData = <T>(method: string, ...args: unknown[]): Promise<T> =>
-    callNative(method, ...args);
+  const providerRpc = schemaRpcCaller({
+    call: (_target, method, args, options) =>
+      options?.signal
+        ? rpc.callService("extensions", "invokeProvider", ["browserData", method, args], {
+            signal: options.signal,
+          })
+        : rpc.callService("extensions", "invokeProvider", ["browserData", method, args]),
+    stream: async () => {
+      throw new Error("Browser data provider does not expose response streams");
+    },
+  });
+  const invoke = createRpcMethodCaller(providerRpc, "browserData", browserDataProviderRpcMethods);
+  const callNative = <K extends keyof BrowserDataProvider & string>(
+    method: K,
+    ...args: RpcMethodArgs<(typeof browserDataProviderRpcMethods)[K]>
+  ) => invoke(method, args);
+  const callBrowserEnvironment = <K extends BrowserEnvironmentMethod>(
+    method: K,
+    ...args: Parameters<MethodFn<(typeof browserEnvironmentMethods)[K]>>
+  ) =>
+    import("@vibestudio/service-schemas/browserEnvironment").then(({ browserEnvironmentMethods }) =>
+      callTypedServiceMethod(
+        "browserEnvironment",
+        browserEnvironmentMethods,
+        rpc.callService.bind(rpc),
+        method,
+        args
+      )
+    );
+  const callData = callNative;
 
   return {
-    getBrowserEnvironment: (signal) =>
-      callExtension("invokeProvider", ["browserData", "getBrowserEnvironment", []], { signal }),
+    getBrowserEnvironment: (signal) => invoke("getBrowserEnvironment", [], { signal }),
     listImportHosts: () => callNative("listImportHosts"),
     listImportAcquisitionOptions: (hostId) => callNative("listImportAcquisitionOptions", hostId),
     beginImportAcquisition: (hostId, acquisitionId) =>
@@ -242,19 +341,21 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     startImport: (selection, operationId) => callNative("startImport", selection, operationId),
     startSensitiveImport: (request) => callNative("startSensitiveImport", request),
     observeSensitiveImport: (operationId, options) =>
-      options?.afterVersion === undefined
-        ? callNative("observeSensitiveImport", operationId)
-        : callNative("observeSensitiveImport", operationId, { afterVersion: options.afterVersion }),
+      invoke(
+        "observeSensitiveImport",
+        options?.afterVersion === undefined
+          ? [operationId]
+          : [operationId, { afterVersion: options.afterVersion }],
+        { signal: options?.signal }
+      ),
     cancelSensitiveImport: (operationId) => callNative("cancelSensitiveImport", operationId),
     openBrowserPrivacyManager: (section) => callNative("openBrowserPrivacyManager", section),
     cancelImport: (jobId) => callNative("cancelImport", jobId),
     getImportJob: (jobId) => callNative("getImportJob", jobId),
     observeImportJob: (jobId, options) =>
-      callExtension(
-        "invokeProvider",
-        ["browserData", "observeImportJob", [jobId, { afterVersion: options?.afterVersion }]],
-        { signal: options?.signal }
-      ),
+      invoke("observeImportJob", [jobId, { afterVersion: options?.afterVersion }], {
+        signal: options?.signal,
+      }),
     listImportJobs: () => callNative("listImportJobs"),
     listOpenTabs: (hostId, sourceId) => callNative("listOpenTabs", { hostId, sourceId }),
     openTabsAsPanels: (request) => callNative("openTabsAsPanels", request),
@@ -280,8 +381,7 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     saveSearchEngine: (engine) => callData("saveSearchEngine", engine),
     getSearchSuggestions: (query) => callData("getSearchSuggestions", query),
     listDownloads: () => callBrowserEnvironment("listDownloads"),
-    listDownloadRecords: (hostId, signal) =>
-      callExtension("invokeProvider", ["browserData", "listDownloadRecords", [hostId]], { signal }),
+    listDownloadRecords: (hostId, signal) => invoke("listDownloadRecords", [hostId], { signal }),
     upsertDownloadRecord: (record) => callData("upsertDownloadRecord", record),
     pauseDownload: (id) => callBrowserEnvironment("pauseDownload", id),
     resumeDownload: (id) => callBrowserEnvironment("resumeDownload", id),

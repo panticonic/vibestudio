@@ -1,4 +1,4 @@
-import type { RpcErrorData, RpcErrorKind } from "./types.js";
+import type { RpcErrorData, RpcErrorKind, RpcFailure, RpcFailureReference } from "./types.js";
 import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
 
 /** True only for a structured authority decision made by the user. */
@@ -40,6 +40,38 @@ export function isRpcConnectionLost(error: unknown): boolean {
 
 /** A caller cancelled its own call; nothing failed and nothing needs recovery. */
 export const RPC_ABORTED_CODE = "RPC_ABORTED" as const;
+
+/** Preserve the cancelling owner's reason at the local RPC boundary. */
+export function rpcCallerAbortedError(reason?: unknown): Error & { code: typeof RPC_ABORTED_CODE } {
+  return Object.assign(new Error("RPC call aborted by caller", { cause: reason }), {
+    code: RPC_ABORTED_CODE,
+  });
+}
+
+/** True only for cancellation caused by this exact owner, including pure aggregate cancellation. */
+export function isRpcAbortedBy(error: unknown, reason: unknown): boolean {
+  if (reason === undefined) return false;
+  const visited = new Set<object>();
+  const visit = (value: unknown): boolean => {
+    if (value === reason) return true;
+    if (!value || typeof value !== "object" || visited.has(value)) return false;
+    visited.add(value);
+    try {
+      const fields = value as { cause?: unknown; errors?: unknown[] };
+      if (Array.isArray(fields.errors)) {
+        return (
+          fields.errors.length > 0 &&
+          fields.errors.every(visit) &&
+          (fields.cause === undefined || visit(fields.cause))
+        );
+      }
+      return isRpcAborted(value) && fields.cause === reason;
+    } finally {
+      visited.delete(value);
+    }
+  };
+  return visit(error);
+}
 
 /**
  * True when a call ended because its caller abandoned it — an unmounted view, a
@@ -156,4 +188,132 @@ export function attachRpcDiagnosticId(error: unknown, id: string): void {
   if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)) return;
   if (error && typeof error === "object" && !rpcDiagnosticIdOf(error))
     diagnosticOrigins.set(error, id);
+}
+
+/** Aggregate failures retain the native AggregateError contract remotely. */
+export class RemoteRpcAggregateError extends AggregateError {
+  constructor(
+    errors: unknown[],
+    message: string,
+    public readonly errorKind: RpcErrorKind,
+    public readonly code?: string,
+    public readonly errorData?: RpcErrorData
+  ) {
+    super(errors, message);
+  }
+}
+
+export function isRemoteRpcError(
+  error: unknown
+): error is RemoteRpcError | RemoteRpcAggregateError {
+  return error instanceof RemoteRpcError || error instanceof RemoteRpcAggregateError;
+}
+
+/** Serialize the complete failure graph once, at the boundary which owns it. */
+export function serializeRpcFailure(
+  error: unknown,
+  fallback: RpcErrorKind = "application"
+): RpcFailure {
+  const seen = new Map<object, number>();
+  const visit = (value: unknown): RpcFailure | RpcFailureReference => {
+    if (value === null || typeof value !== "object")
+      return { message: String(value), errorKind: fallback };
+    const previous = seen.get(value);
+    if (previous !== undefined) return { reference: previous };
+    const id = seen.size;
+    seen.set(value, id);
+    const fields = value as {
+      message?: unknown;
+      name?: unknown;
+      stack?: unknown;
+      code?: unknown;
+      cause?: unknown;
+      errors?: unknown;
+    };
+    return {
+      id,
+      message: typeof fields.message === "string" ? fields.message : String(value),
+      errorKind: rpcErrorKindOf(value, fallback),
+      ...(typeof fields.name === "string" ? { name: fields.name } : {}),
+      ...(typeof fields.stack === "string" ? { stack: fields.stack } : {}),
+      ...(typeof fields.code === "string" ? { code: fields.code } : {}),
+      ...(rpcErrorDataOf(value) !== undefined ? { errorData: rpcErrorDataOf(value) } : {}),
+      ...(rpcDiagnosticIdOf(value) ? { diagnosticId: rpcDiagnosticIdOf(value) } : {}),
+      ...("cause" in value ? { cause: visit(fields.cause) } : {}),
+      ...(Array.isArray(fields.errors) ? { errors: fields.errors.map(visit) } : {}),
+    };
+  };
+  return visit(error) as RpcFailure;
+}
+
+/** Restore causes, aggregate children and their identity on the waiting side. */
+export function deserializeRpcFailure(failure: unknown): RemoteRpcError | RemoteRpcAggregateError {
+  const restored = new Map<number, RemoteRpcError | RemoteRpcAggregateError>();
+  const invalid = (detail: string): never => {
+    throw new RemoteRpcError(`Invalid RPC failure: ${detail}`, "protocol");
+  };
+  const visit = (input: unknown): RemoteRpcError | RemoteRpcAggregateError => {
+    if (!input || typeof input !== "object" || Array.isArray(input))
+      return invalid("expected an object");
+    const node = input as RpcFailure | RpcFailureReference;
+    if ("reference" in node) {
+      const existing = restored.get(node.reference);
+      if (!existing) return invalid(`unknown reference ${node.reference}`);
+      return existing;
+    }
+    if (
+      typeof node.message !== "string" ||
+      !["access", "service", "transport", "protocol", "application", "internal"].includes(
+        node.errorKind
+      )
+    )
+      return invalid("missing message or errorKind");
+    for (const key of ["name", "stack", "code", "diagnosticId"] as const) {
+      if (node[key] !== undefined && typeof node[key] !== "string")
+        return invalid(`${key} must be a string`);
+    }
+    if (
+      node.id !== undefined &&
+      (!Number.isSafeInteger(node.id) || node.id < 0 || restored.has(node.id))
+    )
+      return invalid(`invalid or repeated id ${node.id}`);
+    if (node.errors !== undefined && !Array.isArray(node.errors))
+      return invalid("errors must be an array");
+    const error =
+      node.errors !== undefined
+        ? new RemoteRpcAggregateError([], node.message, node.errorKind, node.code, node.errorData)
+        : new RemoteRpcError(node.message, node.errorKind, node.code, node.errorData);
+    if (node.id !== undefined) restored.set(node.id, error);
+    if (node.name !== undefined) error.name = node.name;
+    if (node.stack !== undefined) error.stack = node.stack;
+    if (node.diagnosticId !== undefined) attachRpcDiagnosticId(error, node.diagnosticId);
+    if (node.cause !== undefined)
+      Object.defineProperty(error, "cause", {
+        value: visit(node.cause),
+        writable: true,
+        configurable: true,
+      });
+    if (node.errors !== undefined)
+      (error as RemoteRpcAggregateError).errors.push(...node.errors.map(visit));
+    return error;
+  };
+  return visit(failure);
+}
+
+/** Render the failure graph rather than discarding it at a UI/logging boundary. */
+export function formatRpcFailure(error: unknown): string {
+  const seen = new Set<object>();
+  const visit = (value: unknown): string => {
+    if (value === null || typeof value !== "object") return String(value);
+    if (seen.has(value)) return "";
+    seen.add(value);
+    const fields = value as { message?: unknown; cause?: unknown; errors?: unknown };
+    const message = typeof fields.message === "string" ? fields.message : String(value);
+    const details = [
+      ...(Array.isArray(fields.errors) ? fields.errors.map(visit) : []),
+      ...("cause" in value ? [visit(fields.cause)] : []),
+    ].filter(Boolean);
+    return details.length === 0 ? message : `${message}: ${details.join("; ")}`;
+  };
+  return visit(error);
 }

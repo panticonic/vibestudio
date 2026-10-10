@@ -1,13 +1,8 @@
+import { deserializeRpcFailure } from "@vibestudio/rpc";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import type { AuthenticatedCaller, AuthorizationContext, RpcEnvelope } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
-import {
-  attachRpcDiagnosticId,
-  decodeRpcJson,
-  encodeRpcJson,
-  RemoteRpcError,
-  rpcMethodAuthority,
-} from "@vibestudio/rpc";
+import { decodeRpcJson, encodeRpcJson, rpcMethodAuthority } from "@vibestudio/rpc";
 import { parseDurableWorkReady } from "@vibestudio/shared/durableWork";
 
 type BindParams = Parameters<Database["run"]>[1];
@@ -48,20 +43,69 @@ interface AcceptedWebSocket {
   tags: string[];
 }
 
-interface TestDOResult<T> {
+type IsAny<Value> = 0 extends 1 & Value ? true : false;
+type PublicMethodResult<T, Method extends string> = Method extends keyof T
+  ? T[Method] extends (...args: infer _Args) => infer Result
+    ? Awaited<Result>
+    : unknown
+  : unknown;
+type PublicMethodNames<T> = {
+  [Method in keyof T]-?: T[Method] extends (...args: infer _Args) => unknown
+    ? Method
+    : never;
+}[keyof T] & string;
+type NarrowSchemaMethodNames<Methods> = string extends keyof NonNullable<Methods>
+  ? never
+  : keyof NonNullable<Methods> & string;
+type ReceiverMethodNames<T, DOClass> = DOClass extends {
+  rpcMethods?: infer Methods;
+}
+  ? NarrowSchemaMethodNames<Methods> | PublicMethodNames<T>
+  : PublicMethodNames<T>;
+type ReceiverMethodResult<T, DOClass, Method extends string> = DOClass extends {
+  rpcMethods?: infer Methods;
+}
+  ? Method extends NarrowSchemaMethodNames<Methods>
+    ? NonNullable<Methods>[Method] extends { returns: infer ReturnSchema }
+      ? ReturnSchema extends { _output: infer Result }
+        ? IsAny<Result> extends true
+          ? unknown
+          : Result
+        : PublicMethodResult<T, Method>
+      : PublicMethodResult<T, Method>
+    : PublicMethodResult<T, Method>
+  : PublicMethodResult<T, Method>;
+type ReceiverMethodCall<T, DOClass> = <Method extends string>(
+  method: Method,
+  ...args: unknown[]
+) => Promise<
+  Method extends ReceiverMethodNames<T, DOClass>
+    ? ReceiverMethodResult<T, DOClass, Method>
+    : unknown
+>;
+type ReceiverMethodCallAs<T, DOClass> = <Method extends string>(
+  caller: Pick<AuthenticatedCaller, "callerId" | "callerKind"> &
+    Partial<Pick<AuthenticatedCaller, "callerPanelId" | "userId">>,
+  method: Method,
+  ...args: unknown[]
+) => Promise<
+  Method extends ReceiverMethodNames<T, DOClass>
+    ? ReceiverMethodResult<T, DOClass, Method>
+    : unknown
+>;
+
+interface TestDOResult<T, DOClass = unknown> {
   instance: T;
   sql: { exec(query: string, ...bindings: unknown[]): SqlResult };
   db: Database;
   alarms: number[];
   acceptedWebSockets: AcceptedWebSocket[];
-  call: <R = unknown>(method: string, ...args: unknown[]) => Promise<R>;
-  callAs: <R = unknown>(
-    caller: Pick<AuthenticatedCaller, "callerId" | "callerKind"> &
-      Partial<Pick<AuthenticatedCaller, "callerPanelId" | "userId">>,
-    method: string,
-    ...args: unknown[]
-  ) => Promise<R>;
+  call: ReceiverMethodCall<T, DOClass>;
+  callAs: ReceiverMethodCallAs<T, DOClass>;
 }
+
+/** Method-keyed call type exposed by a `createTestDO` fixture. */
+export type TestDOCall<T, DOClass = unknown> = TestDOResult<T, DOClass>["call"];
 
 let sqlJsPromise: Promise<SqlJsStatic> | null = null;
 
@@ -147,25 +191,33 @@ const AGENTIC_ENV_DEFAULTS: Record<string, string> = {
   WORKER_CLASS_NAME: "TestDO",
 };
 
-/** Deterministic host transport for unit tests whose subject schedules durable work. */
-export const successfulTestRpcFetch: typeof fetch = async (_input, init) => {
-  const request = JSON.parse(String(init?.body ?? "{}")) as RpcEnvelope;
-  const requestMessage = request.message as { requestId?: string };
-  return new Response(
-    JSON.stringify({
-      from: request.target,
-      target: request.from,
-      delivery: request.delivery,
-      provenance: request.provenance ?? [],
-      message: {
-        type: "response",
-        requestId: requestMessage.requestId ?? "",
-        result: null,
-      },
-    }),
-    { status: 200, headers: { "Content-Type": "application/json" } }
-  );
-};
+/** Reply through the real envelope boundary using the test's receiver-owned fixtures. */
+export function createTestRpcFetch(
+  reply: (request: RpcEnvelope) => unknown | Promise<unknown>
+): typeof fetch {
+  return async (_input, init) => {
+    const request = decodeRpcJson(String(init?.body ?? "{}")) as RpcEnvelope;
+    if (request.message.type !== "request") throw new Error("Expected RPC request envelope");
+    const result = await reply(request);
+    return new Response(
+      encodeRpcJson({
+        from: request.target,
+        target: request.from,
+        delivery: request.delivery,
+        provenance: request.provenance ?? [],
+        message: {
+          type: "response",
+          requestId: request.message.requestId,
+          result,
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  };
+}
+
+/** Deterministic acknowledgement for tests which do not consume a host reply. */
+export const successfulTestRpcFetch = createTestRpcFetch(() => null);
 
 export function createTestDirectAuthority(input: {
   callerKind: AuthenticatedCaller["callerKind"];
@@ -250,12 +302,12 @@ export function createTestDirectAuthority(input: {
   };
 }
 
-export async function createTestDO<T>(
+export async function createTestDO<DOClass extends new (ctx: any, env: any) => object>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  DOClass: new (ctx: any, env: any) => T,
+  DOClass: DOClass,
   env?: Record<string, unknown>,
   opts?: { db?: Database; initialize?: boolean }
-): Promise<TestDOResult<T>> {
+): Promise<TestDOResult<InstanceType<DOClass>, DOClass>> {
   const SQL = await getSqlJs();
   const db = opts?.db ?? new SQL.Database();
   const sqlProxy = createSqlProxy(db);
@@ -328,17 +380,17 @@ export async function createTestDO<T>(
   };
 
   const mergedEnv = { ...AGENTIC_ENV_DEFAULTS, ...env };
-  const instance = new DOClass(ctx, mergedEnv);
+  const instance = new DOClass(ctx, mergedEnv) as InstanceType<DOClass>;
   if (opts?.initialize !== false) {
     await (instance as unknown as { initializeSchema?: () => Promise<void> }).initializeSchema?.();
   }
 
-  const dispatch = async <R = unknown>(
+  const dispatch = async (
     caller: Pick<AuthenticatedCaller, "callerId" | "callerKind"> &
       Partial<Pick<AuthenticatedCaller, "callerPanelId" | "userId">>,
     method: string,
     args: unknown[]
-  ): Promise<R> => {
+  ): Promise<unknown> => {
     const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
     if (typeof fetchable.fetch !== "function") {
       throw new Error("DO instance does not have a fetch() method");
@@ -429,18 +481,13 @@ export async function createTestDO<T>(
       if (reply.message?.type !== "response")
         throw new Error("DO request did not return a terminal response");
       if ("error" in reply.message) {
-        const failure = new RemoteRpcError(
-          reply.message.error,
-          reply.message.errorKind,
-          reply.message.errorCode,
-          reply.message.errorData
-        );
-        if (reply.message.diagnosticId) attachRpcDiagnosticId(failure, reply.message.diagnosticId);
+        const failure = deserializeRpcFailure(reply.message.error);
+
         throw failure;
       }
       if (reply.message.metadata?.durableWorkReady !== undefined)
         parseDurableWorkReady(reply.message.metadata.durableWorkReady);
-      return reply.message.result as R;
+      return reply.message.result;
     }
     const reply = text
       ? (decodeRpcJson(text) as { value?: unknown; metadata?: { durableWorkReady?: unknown } })
@@ -449,18 +496,26 @@ export async function createTestDO<T>(
       throw new Error("DO lifecycle response must contain its canonical value field");
     if (reply.metadata?.durableWorkReady !== undefined)
       parseDurableWorkReady(reply.metadata.durableWorkReady);
-    return reply.value as R;
+    return reply.value;
   };
 
-  const call = <R = unknown>(method: string, ...args: unknown[]): Promise<R> =>
-    dispatch<R>({ callerId: "main", callerKind: "server" }, method, args);
+  // RPC results are wire data, but for a test fixture the named public method
+  // is the receiver-owned result contract. Unknown/private method names remain unknown.
+  const call = ((method: string, ...args: unknown[]) =>
+    dispatch({ callerId: "main", callerKind: "server" }, method, args)) as TestDOResult<
+    InstanceType<DOClass>,
+    DOClass
+  >["call"];
 
-  const callAs = <R = unknown>(
+  const callAs = ((
     caller: Pick<AuthenticatedCaller, "callerId" | "callerKind"> &
       Partial<Pick<AuthenticatedCaller, "callerPanelId" | "userId">>,
     method: string,
     ...args: unknown[]
-  ): Promise<R> => dispatch<R>(caller, method, args);
+  ) => dispatch(caller, method, args)) as TestDOResult<
+    InstanceType<DOClass>,
+    DOClass
+  >["callAs"];
 
   return {
     instance,

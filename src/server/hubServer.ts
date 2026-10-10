@@ -111,6 +111,7 @@ import {
   WorkspaceChildCreationCompleteInputSchema,
   WorkspaceChildCreateInputSchema,
   WorkspaceChildCreationReceiptInputSchema,
+  WorkspaceChildObserveDevicesInputSchema,
 } from "./workspaceChildHubPort.js";
 import { receiveHubWorkspaceRpcHttp } from "./workspaceRpcHubTransport.js";
 import { WORKSPACE_RPC_INTERNAL_ROUTE } from "./workspaceRpcTransport.js";
@@ -880,6 +881,28 @@ function observeHubDevices(
   });
 }
 
+/**
+ * A workspace child may observe only a live member's own hub device view.
+ * The workspace id comes from the authenticated child token, never the body.
+ */
+export async function observeWorkspaceChildDevices(
+  state: HubRuntimeState,
+  workspaceId: string,
+  input: z.infer<typeof WorkspaceChildObserveDevicesInputSchema>,
+  signal?: AbortSignal
+): Promise<{ version: string }> {
+  const user = state.userStore.getUser(input.userId);
+  if (!user || user.revokedAt !== undefined || !state.membershipStore.has(user.id, workspaceId)) {
+    throw authError("EACCES", "Device observation requires a live workspace member", 403);
+  }
+  return await observeHubDevices(
+    state,
+    { userId: user.id, handle: user.handle, role: user.role },
+    input.input.afterVersion,
+    signal
+  );
+}
+
 function emitWorkspaceCatalogChanged(state: HubRuntimeState): void {
   notifyDeviceObservers(state);
   state.controlTransport?.eventService.emitProjected("hub:workspace-catalog-changed", (owner) =>
@@ -1469,6 +1492,37 @@ async function handleInternalRoute(
       sendJson(res, 200, { touched: true });
       return;
     }
+    if (route === "device/observe") {
+      const body = WorkspaceChildObserveDevicesInputSchema.parse(rawBody);
+      const controller = new AbortController();
+      const abortOnDisconnect = () => {
+        if (!res.writableEnded && !controller.signal.aborted) {
+          controller.abort(new Error("Workspace child device observation was cancelled"));
+        }
+      };
+      const abortOnRequest = () => {
+        if (!controller.signal.aborted) {
+          controller.abort(new Error("Workspace child device observation request was aborted"));
+        }
+      };
+      req.once("aborted", abortOnRequest);
+      res.once("close", abortOnDisconnect);
+      if (req.aborted) abortOnRequest();
+      if (res.destroyed) abortOnDisconnect();
+      try {
+        const result = await observeWorkspaceChildDevices(
+          state,
+          boundWorkspaceId,
+          body,
+          controller.signal
+        );
+        if (!res.destroyed && !res.writableEnded) sendJson(res, 200, result);
+      } finally {
+        req.off("aborted", abortOnRequest);
+        res.off("close", abortOnDisconnect);
+      }
+      return;
+    }
     if (route === "device/invite") {
       const body = WorkspaceChildDeviceInviteInputSchema.parse(rawBody);
       const user = state.userStore.getUser(body.userId);
@@ -1600,7 +1654,9 @@ async function handleInternalRoute(
     }
     sendJson(res, 404, { error: "Unknown internal route", code: "NOT_FOUND" });
   } catch (error) {
-    sendJson(res, authErrorStatus(error) ?? 400, remoteErrorPayload(error));
+    if (!res.destroyed && !res.writableEnded) {
+      sendJson(res, authErrorStatus(error) ?? 400, remoteErrorPayload(error));
+    }
   }
 }
 

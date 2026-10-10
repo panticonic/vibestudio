@@ -1,3 +1,4 @@
+import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { base64ToBytes } from "@vibestudio/rpc";
 
 const RECEIVE_CAP_BYTES = 8 * 1024 * 1024;
@@ -72,7 +73,7 @@ export class WsUploadBodies {
     seq: number;
     payload?: string;
     done?: boolean;
-    error?: string;
+    error?: import("@vibestudio/rpc").RpcFailure;
   }): Promise<void> {
     const entry = this.entries.get(input.requestId);
     if (!entry) throw new Error(`Unknown upload request ${input.requestId}`);
@@ -84,7 +85,7 @@ export class WsUploadBodies {
     }
     entry.nextSeq += 1;
     if (input.error) {
-      this.fail(input.requestId, new Error(input.error));
+      this.fail(input.requestId, deserializeRpcFailure(input.error));
       return;
     }
     if (input.done) {

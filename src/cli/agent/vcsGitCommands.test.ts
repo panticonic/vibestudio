@@ -16,9 +16,9 @@ vi.mock("../credentialStore.js", () => ({
 
 vi.mock("../rpcClient.js", () => ({
   RpcClient: class {
-    async call<T>(method: string, args: unknown[]): Promise<T> {
+    async call(method: string, args: unknown[]): Promise<unknown> {
       fixture.calls.push({ method, args });
-      return fixture.result as T;
+      return fixture.result;
     }
 
     async close(): Promise<void> {}
@@ -111,7 +111,8 @@ describe("vcs git CLI", () => {
             sourceKind: "git",
             sourceUri: "https://example.test/demo.git",
             snapshotRevision: "abc123",
-            snapshotDigest: "snapshot:abc123",
+            canonicalSnapshot: `v1-sha256:${"b".repeat(64)}`,
+            snapshotDigest: `snapshot:${"a".repeat(64)}`,
             targetRepositoryIds: ["repository:demo"],
           },
         },
@@ -177,7 +178,8 @@ describe("vcs git CLI", () => {
             sourceKind: "git",
             sourceUri: "https://example.test/demo.git",
             snapshotRevision: "abcdef0123456789",
-            snapshotDigest: "snapshot:pull",
+            canonicalSnapshot: `v1-sha256:${"c".repeat(64)}`,
+            snapshotDigest: `snapshot:${"d".repeat(64)}`,
             targetRepositoryIds: ["repository:demo"],
           },
         },
@@ -229,7 +231,8 @@ describe("vcs git CLI", () => {
               sourceKind: "git",
               sourceUri: "https://example.test/demo.git",
               snapshotRevision: "abc123",
-              snapshotDigest: "a".repeat(64),
+              canonicalSnapshot: `v1-sha256:${"b".repeat(64)}`,
+              snapshotDigest: `snapshot:${"a".repeat(64)}`,
               targetRepositoryIds: ["repository:demo"],
             },
           },
@@ -310,6 +313,10 @@ describe("vcs git CLI", () => {
     {
       command: "pull",
       result: {
+        remote: "origin",
+        branch: "main",
+        observedCommit: null,
+        changed: false,
         behindBy: 0,
         aheadBy: 0,
         remoteBranchExists: true,
@@ -341,6 +348,6 @@ describe("vcs git CLI", () => {
     await expect(run("push", "--repo", "projects/demo", "--json")).resolves.toBe(0);
 
     expect(log).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(JSON.stringify(fixture.result));
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual(fixture.result);
   });
 });

@@ -78,12 +78,14 @@ describe("durable receiver caller attribution", () => {
         );
         expect(response.status).toBe(status);
         await expect(response.json()).resolves.toMatchObject({
-          error: "Original receiver failure",
-          errorCode: "RECEIVER_FAILED",
-          errorKind: kind,
-          errorData: { operation: "reportFailure" },
-          diagnosticId: "ca91003e-5630-479c-8c49-640c9a0fd644",
-          errorStack: expect.stringContaining("Original receiver failure"),
+          error: {
+            message: "Original receiver failure",
+            code: "RECEIVER_FAILED",
+            errorKind: kind,
+            errorData: { operation: "reportFailure" },
+            diagnosticId: "ca91003e-5630-479c-8c49-640c9a0fd644",
+            stack: expect.stringContaining("Original receiver failure"),
+          },
         });
       } finally {
         db.close();
@@ -126,8 +128,10 @@ describe("durable receiver caller attribution", () => {
           );
           expect(denied.status).toBe(403);
           await expect(denied.json()).resolves.toMatchObject({
-            errorCode: "EACCES",
-            error: expect.stringContaining("does not accept cross-workspace RPC"),
+            error: {
+              code: "EACCES",
+              message: expect.stringContaining("does not accept cross-workspace RPC"),
+            },
           });
         } else {
           const deliver = (method: string) =>
@@ -170,8 +174,10 @@ describe("durable receiver caller attribution", () => {
           expect(deniedReply.message).toMatchObject({
             type: "response",
             requestId: "request:inspectLocalCaller",
-            errorCode: "EACCES",
-            error: expect.stringContaining("does not accept cross-workspace RPC"),
+            error: {
+              code: "EACCES",
+              message: expect.stringContaining("does not accept cross-workspace RPC"),
+            },
           });
         }
       } finally {

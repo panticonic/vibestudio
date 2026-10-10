@@ -7,13 +7,15 @@ import {
   type CliStoredPairing,
 } from "./credentialStore.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
-import { decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc";
+import { deserializeRpcFailure, decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc";
 import type { RpcErrorData, RpcErrorKind, RpcStreamOptions } from "@vibestudio/rpc";
 import { Agent, type Dispatcher } from "undici";
 import {
   RefreshAgentResponseSchema,
   RefreshShellResponseSchema,
 } from "@vibestudio/service-schemas/auth";
+import { createMainRpcCaller, type MainRpcCaller } from "@vibestudio/service-schemas/mainRpc";
+import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import type { z } from "zod";
 
 /**
@@ -64,7 +66,7 @@ export type RpcClientCredential = CliCredentials | DeviceEndpointCredential | Ra
 
 /** Shared surface of the persistent local-WebSocket and remote-Iroh clients. */
 interface PersistentRpcClient {
-  callTarget<T = unknown>(targetId: string, method: string, args?: unknown[]): Promise<T>;
+  callTarget(targetId: string, method: string, args?: unknown[]): Promise<unknown>;
   stream(
     targetId: string,
     method: string,
@@ -224,6 +226,7 @@ export function clearShellTokenCache(): void {
 }
 
 export class RpcClient {
+  readonly mainCall: MainRpcCaller;
   private readonly url: string;
   /** Non-null for a raw agent-token credential (`agent:<agentId>:<token>`). */
   private readonly rawToken: string | null;
@@ -276,6 +279,12 @@ export class RpcClient {
       this.callerId = shellCallerId(creds.deviceId);
       this.callerKind = "shell";
     }
+    this.mainCall = createMainRpcCaller(
+      schemaRpcCaller({
+        call: (target, method, args) => this.callTarget(target, method, args),
+        stream: (target, method, args, options) => this.stream(target, method, args, options),
+      })
+    );
   }
 
   /** Result of the most recent shell refresh, if one occurred. */
@@ -342,20 +351,16 @@ export class RpcClient {
   }
 
   /** Direct service dispatch: `service.method` on the server dispatcher. */
-  async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
-    return await this.callTarget<T>("main", method, args);
+  async call(method: string, args: unknown[] = []): Promise<unknown> {
+    return this.callTarget("main", method, args);
   }
 
   /** Relay call to a runtime target (worker, DO, panel) by entity/target id. */
-  async callTarget<T = unknown>(
-    targetId: string,
-    method: string,
-    args: unknown[] = []
-  ): Promise<T> {
+  async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
     if (this.isIroh) {
-      return await this.dispatchIroh<T>(targetId, method, args);
+      return await this.dispatchIroh(targetId, method, args);
     }
-    return await this.dispatch<T>(targetId, method, args);
+    return await this.dispatch(targetId, method, args);
   }
 
   /**
@@ -364,14 +369,10 @@ export class RpcClient {
    * routed callbacks over the same authenticated connection. Long-lived
    * resources use {@link stream} so the response itself owns their lifetime.
    */
-  async callTargetPush<T = unknown>(
-    targetId: string,
-    method: string,
-    args: unknown[] = []
-  ): Promise<T> {
+  async callTargetPush(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
     this.keepPushOpen = true;
     const client = await this.persistentClient();
-    return await client.callTarget<T>(targetId, method, args);
+    return await client.callTarget(targetId, method, args);
   }
 
   async stream(
@@ -510,7 +511,7 @@ export class RpcClient {
   }
 
   /** Build an `RpcEnvelope` and POST it to the envelope-native `/rpc`. */
-  private async dispatch<T>(targetId: string, method: string, args: unknown[]): Promise<T> {
+  private async dispatch(targetId: string, method: string, args: unknown[]): Promise<unknown> {
     const token = await this.ensureBearerToken();
     const requestId =
       typeof globalThis.crypto?.randomUUID === "function"
@@ -524,10 +525,10 @@ export class RpcClient {
       provenance: [caller],
       message: { type: "request", requestId, fromId: caller.callerId, method, args },
     };
-    return await this.post<T>(envelope, token);
+    return await this.post(envelope, token);
   }
 
-  private async post<T>(body: Record<string, unknown>, initialToken?: string): Promise<T> {
+  private async post(body: Record<string, unknown>, initialToken?: string): Promise<unknown> {
     let token = initialToken ?? (await this.ensureBearerToken());
     let response = await this.postRpc(token, body);
     if (response.status === 401) {
@@ -564,25 +565,11 @@ export class RpcClient {
     if (!message || message.type !== "response") {
       throw new RpcError("malformed rpc response (non-envelope or proxy response?)");
     }
-    if (typeof message.error === "string") {
-      if (!isRpcErrorKind(message.errorKind)) {
-        throw new RpcError(
-          "malformed rpc error response (missing errorKind)",
-          undefined,
-          "protocol"
-        );
-      }
-      throw new RpcError(
-        message.error,
-        typeof message.errorCode === "string" ? message.errorCode : undefined,
-        message.errorKind,
-        message.errorData as RpcErrorData | undefined
-      );
-    }
+    if ("error" in message) throw deserializeRpcFailure(message.error);
     if (!("result" in message)) {
       throw new RpcError("malformed rpc response (no result)");
     }
-    return message.result as T;
+    return message.result;
   }
 
   private postRpc(token: string, body: Record<string, unknown>): Promise<Response> {
@@ -606,12 +593,12 @@ export class RpcClient {
     });
   }
 
-  private async dispatchIroh<T>(targetId: string, method: string, args: unknown[]): Promise<T> {
+  private async dispatchIroh(targetId: string, method: string, args: unknown[]): Promise<unknown> {
     const client = await this.ensureIrohClient();
     try {
       return targetId === "main"
-        ? await client.call<T>(method, args)
-        : await client.callTarget<T>(targetId, method, args);
+        ? await client.call(method, args)
+        : await client.callTarget(targetId, method, args);
     } catch (error) {
       throw toRpcError(error);
     } finally {
@@ -682,29 +669,6 @@ export class RpcClient {
 }
 
 function toRpcError(error: unknown): Error {
-  if (error instanceof RpcError || error instanceof AuthError) return error;
-  const message = error instanceof Error ? error.message : String(error);
-  const code =
-    typeof (error as { code?: unknown })?.code === "string"
-      ? (error as { code?: string }).code
-      : undefined;
-  const kind = isRpcErrorKind((error as { errorKind?: unknown } | null)?.errorKind)
-    ? (error as { errorKind: RpcErrorKind }).errorKind
-    : "application";
-  const errorData =
-    error !== null && typeof error === "object" && "errorData" in error
-      ? (error as { errorData?: RpcErrorData }).errorData
-      : undefined;
-  return new RpcError(message, code, kind, errorData);
-}
-
-function isRpcErrorKind(value: unknown): value is RpcErrorKind {
-  return (
-    value === "access" ||
-    value === "service" ||
-    value === "transport" ||
-    value === "protocol" ||
-    value === "application" ||
-    value === "internal"
-  );
+  // Transport failures already carry their complete causes and aggregate members.
+  return error instanceof Error ? error : new Error(String(error));
 }

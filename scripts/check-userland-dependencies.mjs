@@ -166,7 +166,7 @@ export function collectHostReuseRangeFindings(appRoot, userlandRoot) {
 }
 
 /**
- * Startup artifacts are part of remote readiness, so their complete external
+ * Startup artifacts are part of remote readiness, so their required external
  * closures must already belong to the published Host dependency realm. A
  * package that only happens to be hoisted from another dependency is not a
  * product contract: a fresh npm install may nest or remove it and silently
@@ -215,8 +215,11 @@ export async function collectStartupHostReuseFindings(appRoot, userlandRoot) {
       appNodeModules
     );
     const patches = await collectTransitiveDependencyPatches(unit, graph, workspaceRoot);
+    const optionalProvidedPeers = new Set(closure.optionalProvidedPeers);
     const missing = Object.entries(closure.installSet)
-      .filter(([name]) => typeof hostDependencies[name] !== "string")
+      .filter(
+        ([name]) => typeof hostDependencies[name] !== "string" && !optionalProvidedPeers.has(name)
+      )
       .map(([name, specifier]) => `${name}@${specifier}`)
       .sort();
     const incompatible = Object.entries(closure.installSet)
@@ -312,7 +315,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
           console.error(`    isolated policies: ${finding.policies.join(", ")}`);
       }
       console.error(
-        "\nDeclare the complete canonical startup closure in Host dependencies, or remove the\n" +
+        "\nDeclare the required canonical startup dependencies in Host dependencies, or remove the\n" +
           "startup unit's isolated dependency policy. Do not make first launch run npm install.\n"
       );
     }

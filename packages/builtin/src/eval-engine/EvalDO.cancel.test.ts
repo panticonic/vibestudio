@@ -19,9 +19,16 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
-import type { RpcCallOptions } from "@vibestudio/rpc";
-import { executionSessionNonceFor } from "@vibestudio/rpc/internal";
+import type { RpcCallOptions, RpcCaller, RpcClient } from "@vibestudio/rpc";
+import {
+  executionSessionNonceFor,
+  registerRpcWireClient,
+  wireClientFor,
+  type RpcWireClient,
+} from "@vibestudio/rpc/internal";
 import { EVAL_ENGINE_HOST_CONTRACT_VERSION } from "@vibestudio/service-schemas/evalEngine";
+import { createReceiverRpcMethods } from "@vibestudio/shared/rpcMethods";
+import { mainRpcMethod, mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import type { Sha256 } from "@vibestudio/shared/execution/identity";
 import {
   executionArtifactDigest,
@@ -46,6 +53,125 @@ function priv<T = unknown>(instance: object, key: string): T {
 function setPriv(instance: object, key: string, value: unknown): void {
   (instance as unknown as Record<string, unknown>)[key] = value;
 }
+
+function ownedRpc(
+  call: (
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: RpcCallOptions
+  ) => Promise<unknown>,
+  overrides: Partial<Pick<RpcWireClient, "stream" | "emit">> = {}
+): RpcWireClient {
+  return registerRpcWireClient({
+    selfId: "do:test:EvalDO:test-key",
+    call,
+    stream:
+      overrides.stream ??
+      vi.fn(async () => {
+        throw new Error("Unexpected streaming RPC");
+      }),
+    streamReadable: vi.fn(async () => {
+      throw new Error("Unexpected readable RPC");
+    }),
+    emit: overrides.emit ?? vi.fn(async () => undefined),
+    on: vi.fn(() => () => undefined),
+    expose: vi.fn(),
+    exposeAll: vi.fn(),
+    exposeStreaming: vi.fn(),
+    peer: vi.fn(() => {
+      throw new Error("Unexpected peer RPC");
+    }),
+    status: vi.fn((): "connected" => "connected"),
+    ready: vi.fn(async () => undefined),
+    onStatusChange: vi.fn(() => () => undefined),
+  });
+}
+
+function mockOwnedCall(
+  instance: EvalDO,
+  implementation: (
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: RpcCallOptions
+  ) => Promise<unknown>
+): void {
+  const owner = wireClientFor(stablePublicRpc(instance));
+  vi.spyOn(owner, "call").mockImplementation((target, method, args, options) =>
+    implementation(target, method, args, options)
+  );
+}
+
+function mockOwnedCallOnce(
+  instance: EvalDO,
+  implementation: (
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: RpcCallOptions
+  ) => Promise<unknown>
+): void {
+  vi.spyOn(wireClientFor(stablePublicRpc(instance)), "call").mockImplementationOnce(
+    (target, method, args, options) => implementation(target, method, args, options)
+  );
+}
+
+function stablePublicRpc(instance: EvalDO): RpcClient {
+  const rpc = priv<RpcClient>(instance, "rpc");
+  Object.defineProperty(instance, "rpc", { value: rpc, configurable: true });
+  return rpc;
+}
+
+function mockOwnedStream(
+  instance: EvalDO,
+  implementation: (
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: import("@vibestudio/rpc").RpcStreamOptions
+  ) => Promise<Response>
+): void {
+  vi.spyOn(wireClientFor(stablePublicRpc(instance)), "stream").mockImplementation(
+    (targetId, method, args, options) => implementation(targetId, method, args, options)
+  );
+}
+
+function mockOwnedEmit(
+  instance: EvalDO,
+  implementation: (
+    targetId: string,
+    event: string,
+    payload: unknown,
+    options?: RpcCallOptions
+  ) => Promise<void>
+): void {
+  vi.spyOn(wireClientFor(stablePublicRpc(instance)), "emit").mockImplementation(
+    (targetId, event, payload, options) => implementation(targetId, event, payload, options)
+  );
+}
+
+const testProbeRpcMethods = createReceiverRpcMethods<{
+  "run-b-before-a-resumes": () => Promise<unknown>;
+  "run-a-after-b-started": () => Promise<unknown>;
+  "svc.method": () => Promise<unknown>;
+  ping: () => Promise<unknown>;
+  method: () => Promise<unknown>;
+  "panel.rebuild": (panelId: string) => Promise<unknown>;
+}>(
+  [
+    "run-b-before-a-resumes",
+    "run-a-after-b-started",
+    "svc.method",
+    "ping",
+    "method",
+    "panel.rebuild",
+  ],
+  ""
+);
+const testPanelRebuildRpcMethods = createReceiverRpcMethods<{
+  "panel.rebuild": () => Promise<unknown>;
+}>(["panel.rebuild"], "");
 
 function executionArtifact(seed = "e"): ExecutionArtifactRefV1 {
   const effectiveVersion = seed.repeat(64) as Sha256;
@@ -178,6 +304,38 @@ describe("EvalDO cancellation + forced recovery", () => {
     await expect(ensureEngine.call(instance, {})).resolves.toBe(compatible);
   });
 
+  it("uses the shared peer contract for execution and retained eval RPC", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    let result: unknown = 42;
+    const dispatch = vi.fn(async (_target: string, method: string) => {
+      expect(method).toBe("fs.readFile");
+      return result;
+    });
+    mockOwnedCall(instance, dispatch);
+    const execution = priv<(input: { contextId: string }) => { rpc: RpcWireClient }>(
+      instance,
+      "createExecutionContext"
+    ).call(instance, { contextId: "ctx" });
+    const retained = priv<() => RpcClient>(instance, "createActiveRuntimeRpc").call(instance);
+    const active = priv<{ run<T>(store: unknown, callback: () => T): T }>(
+      instance,
+      "activeEvalExecution"
+    );
+    const contract = { filesystem: { methods: { read: mainRpcMethods["fs.readFile"] } } };
+    for (const caller of [execution.rpc, retained]) {
+      const peer = caller.peer("main").withContract(contract, "filesystem");
+      await expect(
+        active.run(execution, () => peer.call.read("file.txt", "utf8"))
+      ).rejects.toThrow();
+      result = "contents";
+      await expect(active.run(execution, () => peer.call.read("file.txt", "utf8"))).resolves.toBe(
+        "contents"
+      );
+      result = 42;
+    }
+    expect(dispatch).toHaveBeenCalledTimes(4);
+  });
+
   it("injects resident delivery registration from the exact EvalDO activation", async () => {
     const { instance } = await createTestDO(EvalDO);
     const activeExecution = priv<{
@@ -190,9 +348,7 @@ describe("EvalDO cancellation + forced recovery", () => {
           receiver: (payload: unknown) => void | Promise<void>,
           relationship: { targetId: string }
         ): {
-          transport: {
-            call<T = unknown>(targetId: string, method: string, args: unknown[]): Promise<T>;
-          };
+          transport: Pick<RpcCaller, "call">;
           close(): void | Promise<void>;
         };
       }
@@ -201,7 +357,19 @@ describe("EvalDO cancellation + forced recovery", () => {
     const contextualCall = vi.fn(
       (target: string, method: string, _args: unknown[], _options?: unknown) => {
         if (target === "main" && method === "workers.resolveService") {
-          return Promise.resolve({ kind: "durable-object", targetId: "channel-target" });
+          return Promise.resolve({
+            kind: "durable-object",
+            origin: "workspace",
+            name: "pubsub-channel",
+            action: "Use the channel",
+            presentation: { domain: "people", verb: "act" },
+            authority: { principals: ["session"] },
+            protocols: [],
+            source: "workers/pubsub-channel",
+            className: "PubSubChannel",
+            objectKey: "channel-eval",
+            targetId: "channel-target",
+          });
         }
         if (target === "channel-target" && method === "detach") return Promise.resolve(undefined);
         return Promise.resolve("context-restored");
@@ -209,7 +377,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
     const residentSessionCleanups = new Set<() => Promise<void>>();
     const execution = {
-      rpc: { call: contextualCall },
+      rpc: ownedRpc(contextualCall),
       residentSessionCleanups,
     };
     let registration!: ReturnType<typeof runtimeRpc.registerResidentSession>;
@@ -218,7 +386,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         "channel-eval",
         async (payload) => {
           received.push(payload);
-          await registration.transport.call("target", "method", []);
+          await registration.transport.call("target", testProbeRpcMethods.method, []);
         },
         { targetId: "channel-target" }
       )
@@ -249,16 +417,19 @@ describe("EvalDO cancellation + forced recovery", () => {
         message: { kind: "message.completed" },
       },
     ]);
-    expect(contextualCall).toHaveBeenCalledWith("target", "method", []);
+    expect(contextualCall).toHaveBeenCalledWith("target", "method", [], undefined);
 
     await priv<(execution: unknown) => Promise<void>>(instance, "settleResidentSessions").call(
       instance,
       execution
     );
     expect(residentSessionCleanups.size).toBe(0);
-    expect(contextualCall).toHaveBeenCalledWith("channel-target", "detach", [
-      { participantId: "do:test:TestDO:test-key" },
-    ]);
+    expect(contextualCall).toHaveBeenCalledWith(
+      "channel-target",
+      "detach",
+      [{ participantId: "do:test:TestDO:test-key" }],
+      undefined
+    );
     await expect(
       instance.acceptChannelDelivery({
         deliveryId: "delivery-eval-after-terminal",
@@ -349,10 +520,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     try {
       const { instance } = await createTestDO(EvalDO);
       const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
-      Object.defineProperty(instance, "rpc", {
-        value: { call: lifecycleCall },
-        configurable: true,
-      });
+      mockOwnedCall(instance, lifecycleCall);
       const first = await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
       await instance.attachKernelLeaseHolder("kernel-1");
       const held = instance.holdKernelLease("kernel-1");
@@ -382,13 +550,15 @@ describe("EvalDO cancellation + forced recovery", () => {
               leaseId: "kernel-1",
             },
           }),
-        ]
+        ],
+        undefined
       );
       expect(lifecycleCall).toHaveBeenNthCalledWith(
         2,
         "main",
         "workspace-state.lifecycleLeaseClear",
-        [expect.any(Object)]
+        [expect.any(Object)],
+        undefined
       );
     } finally {
       vi.useRealTimers();
@@ -400,10 +570,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     try {
       const { instance, sql } = await createTestDO(EvalDO);
       const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
-      Object.defineProperty(instance, "rpc", {
-        value: { call: lifecycleCall },
-        configurable: true,
-      });
+      mockOwnedCall(instance, lifecycleCall);
       const { runLocked, started } = blockUntilAborted();
       setPriv(instance, "runLocked", runLocked);
       await instance.acquireKernelLease({ leaseId: "active-kernel", idleMs: 1_000 });
@@ -434,7 +601,8 @@ describe("EvalDO cancellation + forced recovery", () => {
       expect(lifecycleCall).toHaveBeenLastCalledWith(
         "main",
         "workspace-state.lifecycleLeaseClear",
-        [expect.any(Object)]
+        [expect.any(Object)],
+        undefined
       );
     } finally {
       vi.useRealTimers();
@@ -444,10 +612,7 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("releases the inter-cell kernel hold during planned lifecycle shutdown", async () => {
     const { instance } = await createTestDO(EvalDO);
     const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
-    Object.defineProperty(instance, "rpc", {
-      value: { call: lifecycleCall },
-      configurable: true,
-    });
+    mockOwnedCall(instance, lifecycleCall);
     await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 60_000 });
     await instance.attachKernelLeaseHolder("kernel-1");
     const held = instance.holdKernelLease("kernel-1");
@@ -461,13 +626,16 @@ describe("EvalDO cancellation + forced recovery", () => {
       })
     ).resolves.toEqual({ status: "ready" });
     await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "released" });
-    expect(lifecycleCall).toHaveBeenLastCalledWith("main", "workspace-state.lifecycleLeaseClear", [
-      expect.any(Object),
-    ]);
+    expect(lifecycleCall).toHaveBeenLastCalledWith(
+      "main",
+      "workspace-state.lifecycleLeaseClear",
+      [expect.any(Object)],
+      undefined
+    );
   });
 
   it("retires resident channels through their recorded target without contextual rediscovery", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
+    const { instance, sql } = await createTestDO(EvalDO, { WORKER_CLASS_NAME: "EvalDO" });
     sql.exec(
       `INSERT INTO resident_channel_memberships (channel_id, target_id, registered_at)
        VALUES ('channel-retire', 'channel-target', 1),
@@ -487,10 +655,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       }
       return Promise.resolve(undefined);
     });
-    Object.defineProperty(instance, "rpc", {
-      value: { selfId: "do:test:EvalDO:test-key", call: lifecycleCall },
-      configurable: true,
-    });
+    mockOwnedCall(instance, lifecycleCall);
 
     await expect(
       instance.releaseForLifecycle({
@@ -504,24 +669,28 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(lifecycleCall).not.toHaveBeenCalledWith(
       "main",
       "workers.resolveService",
-      expect.anything()
+      expect.anything(),
+      undefined
     );
-    expect(lifecycleCall).toHaveBeenCalledWith("channel-target", "relationshipState", [
-      "do:test:EvalDO:test-key",
-    ]);
-    expect(lifecycleCall).toHaveBeenCalledWith("channel-target", "leave", [
-      { participantId: "do:test:EvalDO:test-key", revision: 5 },
-    ]);
+    expect(lifecycleCall).toHaveBeenCalledWith(
+      "channel-target",
+      "relationshipState",
+      ["do:test:EvalDO:test-key"],
+      undefined
+    );
+    expect(lifecycleCall).toHaveBeenCalledWith(
+      "channel-target",
+      "leave",
+      [{ participantId: "do:test:EvalDO:test-key", revision: 5 }],
+      undefined
+    );
     expect(sql.exec(`SELECT * FROM resident_channel_memberships`).toArray()).toEqual([]);
   });
 
   it("cancels active durable runs before claiming lifecycle release", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
-    Object.defineProperty(instance, "rpc", {
-      value: { call: lifecycleCall },
-      configurable: true,
-    });
+    mockOwnedCall(instance, lifecycleCall);
     const { runLocked, started } = blockUntilAborted();
     setPriv(instance, "runLocked", runLocked);
 
@@ -577,10 +746,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       }
       return Promise.resolve({ delivered: false });
     });
-    Object.defineProperty(instance, "rpc", {
-      value: { call: rpcCall },
-      configurable: true,
-    });
+    mockOwnedCall(instance, rpcCall);
     const append = priv<(runId: string, kind: string, payload: unknown) => void>(
       instance,
       "appendRunEvent"
@@ -636,7 +802,7 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("runs startRun in the DO lifetime and delivers its terminal result directly to its agent", async () => {
     const { instance } = await createTestDO(EvalDO);
     const call = vi.fn(() => Promise.resolve(undefined));
-    Object.defineProperty(instance, "rpc", { value: { call }, configurable: true });
+    mockOwnedCall(instance, call);
     setPriv(instance, "runLocked", () =>
       Promise.resolve({ success: true, console: "ok", returnValue: 7 })
     );
@@ -679,7 +845,10 @@ describe("EvalDO cancellation + forced recovery", () => {
 
   it("retains verified workspace import provenance through terminal preparation", async () => {
     const { instance } = await createTestDO(EvalDO);
-    Object.defineProperty(instance, "rpc", { value: { call: vi.fn(async () => undefined) } });
+    mockOwnedCall(
+      instance,
+      vi.fn(async () => undefined)
+    );
     setPriv(instance, "runLocked", () =>
       Promise.resolve({ success: true, console: "", returnValue: 1 })
     );
@@ -1009,10 +1178,8 @@ describe("EvalDO cancellation + forced recovery", () => {
     seedPendingRun(sql, "rpc-over-lease");
     sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'rpc-over-lease'`);
     let release!: () => void;
-    vi.spyOn(
-      priv<{ call: (...args: unknown[]) => Promise<unknown> }>(instance, "rpc"),
-      "call"
-    ).mockImplementationOnce(
+    mockOwnedCallOnce(
+      instance,
       () =>
         new Promise<void>((resolve) => {
           release = resolve;
@@ -1049,10 +1216,8 @@ describe("EvalDO cancellation + forced recovery", () => {
     seedPendingRun(sql, "panel-boot-wait");
     sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'panel-boot-wait'`);
     let release!: () => void;
-    vi.spyOn(
-      priv<{ call: (...args: unknown[]) => Promise<unknown> }>(instance, "rpc"),
-      "call"
-    ).mockImplementationOnce(
+    mockOwnedCallOnce(
+      instance,
       () =>
         new Promise<void>((resolve) => {
           release = resolve;
@@ -1096,7 +1261,7 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("reports authority waiting as lifecycle state and clears it on decision", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const call = vi.fn(() => Promise.resolve(undefined));
-    Object.defineProperty(instance, "rpc", { value: { call }, configurable: true });
+    mockOwnedCall(instance, call);
     seedPendingRun(sql, "authority-lifecycle", {
       code: "return 1",
       contextId: "ctx",
@@ -1248,7 +1413,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).mockImplementation(() => undefined);
     seedPendingRun(sql, "held-run");
 
-    const held = call<RunResult>("executeRun", "held-run");
+    const held = call("executeRun", "held-run");
     await started;
 
     await expect(call("getRun", "held-run")).resolves.toMatchObject({ status: "running" });
@@ -2098,10 +2263,7 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("terminal preparation retains jobs while releasing every loaded kernel reference", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
-    Object.defineProperty(instance, "rpc", {
-      value: { call: lifecycleCall },
-      configurable: true,
-    });
+    mockOwnedCall(instance, lifecycleCall);
     await instance.acquireKernelLease({ leaseId: "finite-kernel", idleMs: 60_000 });
     await instance.attachKernelLeaseHolder("finite-kernel");
     const held = instance.holdKernelLease("finite-kernel");
@@ -2148,9 +2310,12 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(priv(instance, "hostedRuntimeIdentity")).toBeNull();
     expect(priv(instance, "moduleMap")).toEqual({});
     expect(Object.keys(priv(instance, "isolateModuleMap"))).toEqual(["node:async_hooks"]);
-    expect(lifecycleCall).toHaveBeenLastCalledWith("main", "workspace-state.lifecycleLeaseClear", [
-      expect.any(Object),
-    ]);
+    expect(lifecycleCall).toHaveBeenLastCalledWith(
+      "main",
+      "workspace-state.lifecycleLeaseClear",
+      [expect.any(Object)],
+      undefined
+    );
   });
 
   it("keeps orphaned and replacement runs in distinct immutable execution contexts", async () => {
@@ -2191,7 +2356,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       ready: vi.fn(() => Promise.resolve()),
       onStatusChange: vi.fn(() => vi.fn()),
     };
-    Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
+    mockOwnedCall(instance, fakeRpc.call);
+    mockOwnedStream(instance, fakeRpc.stream);
+    mockOwnedEmit(instance, fakeRpc.emit);
     (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
       "@workspace/runtime";
     setPriv(instance, "portableHelpers", { journal: { current: () => null } });
@@ -2205,14 +2372,14 @@ describe("EvalDO cancellation + forced recovery", () => {
         createPanelRuntime: () => ({ getPanelHandle: () => null }),
         createRuntimeSelfHandle: () => ({}),
         createRuntimeScopeRehydrators: () => ({}),
-        createGatewayFetch: (config: {
-          rpc?: { stream(target: string, method: string, args: unknown[]): Promise<Response> };
-        }) => {
+        createGatewayFetch: (config: { rpc?: Pick<RpcClient, "stream"> }) => {
           if (!config.rpc)
             throw new Error("Sandbox gateway requires an authenticated RPC transport");
           const rpc = config.rpc;
           return (path: string) =>
-            rpc.stream("main", "gateway.fetch", [{ path, method: "GET", headers: {} }]);
+            rpc.stream("main", mainRpcMethod("gateway.fetch"), [
+              { path, method: "GET", headers: {} },
+            ]);
         },
         createRpcFs: () => ({}),
         createRuntimeParentHandle: () => null,
@@ -2247,21 +2414,18 @@ describe("EvalDO cancellation + forced recovery", () => {
           code: string,
           options: { bindings: Record<string, unknown>; signal?: AbortSignal }
         ) => {
-          const rpc = options.bindings["rpc"] as {
-            call(target: string, method: string, args: unknown[]): Promise<unknown>;
-            peer(target: string): {
-              call: Record<string, (...args: unknown[]) => Promise<unknown>>;
-              emit(event: string, payload: unknown): Promise<void>;
-            };
-          };
+          const rpc = options.bindings["rpc"] as RpcClient;
           runSignals.set(code, options.signal);
           if (code === "A") {
             startA();
             await aResumed;
-            await rpc.peer("main").call["run-a-after-b-started"]!();
+            await rpc
+              .peer("main")
+              .withContract({ test: { methods: testProbeRpcMethods } }, "test")
+              .call["run-a-after-b-started"]();
             calledA();
           } else {
-            await rpc.call("main", "run-b-before-a-resumes", []);
+            await rpc.call("main", testProbeRpcMethods["run-b-before-a-resumes"], []);
             startB();
             await bResumed;
             await rpc.peer("main").emit("run-b-after-a-finished", {});
@@ -2382,7 +2546,8 @@ describe("EvalDO cancellation + forced recovery", () => {
       ready: vi.fn(() => Promise.resolve()),
       onStatusChange: vi.fn(() => vi.fn()),
     };
-    Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
+    mockOwnedCall(instance, fakeRpc.call);
+    mockOwnedEmit(instance, fakeRpc.emit);
     (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
       "@workspace/runtime";
     setPriv(instance, "portableHelpers", { journal: { current: () => null } });
@@ -2616,6 +2781,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     "joins invocation panel retirement after %s and preserves session panels",
     async (outcome) => {
       const { instance, sql } = await createTestDO(EvalDO);
+      stablePublicRpc(instance);
       const archived: string[] = [];
       setPriv(instance, "clearLifecycleRelease", async () => {});
       let ownerOptions!: Record<string, unknown>;
@@ -2898,12 +3064,10 @@ describe("EvalDO cancellation + forced recovery", () => {
     type Handle = { rebuild(): Promise<unknown> };
     const support = {
       createPanelRuntime: (options: Record<string, unknown>) => {
-        const rpc = options["rpc"] as {
-          call(target: string, method: string, args: unknown[]): Promise<unknown>;
-        };
+        const rpc = options["rpc"] as Pick<RpcCaller, "call">;
         return {
           getPanelHandle: (id: string): Handle => ({
-            rebuild: () => rpc.call("main", "panel.rebuild", [id]),
+            rebuild: () => rpc.call("main", testProbeRpcMethods["panel.rebuild"], [id]),
           }),
         };
       },
@@ -2931,7 +3095,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     >(instance, "ensureScopeManager").call(instance, engine, 0, persistence, maintenance);
     const handle = manager.current["handle"] as Handle;
     expect(maintenanceRpc.call).not.toHaveBeenCalled();
-    expect(() => handle.rebuild()).toThrow(/actively executing/);
+    await expect(handle.rebuild()).rejects.toThrow(/actively executing/);
     const active = priv<{ run<T>(execution: unknown, callback: () => T): T }>(
       instance,
       "activeEvalExecution"
@@ -2951,7 +3115,11 @@ describe("EvalDO cancellation + forced recovery", () => {
     const env = (instance as unknown as { env: Record<string, unknown> }).env;
     env["EVAL_CDP_CLIENT_SOURCE"] = "@workspace/cdp-client";
     const rpcA = { call: vi.fn(async () => "cell-a") };
-    const rpcB = { call: vi.fn(async () => "cell-b") };
+    const rpcB = {
+      call: vi.fn(async (_target: string, method: string) =>
+        method === "fs.exists" ? true : "cell-b"
+      ),
+    };
     let retainedLoadModule!: (id: string) => Promise<unknown>;
     let recordOperation!: (entry: Record<string, unknown>) => void;
     const journalA = { append: vi.fn() };
@@ -2972,13 +3140,12 @@ describe("EvalDO cancellation + forced recovery", () => {
       createPanelRuntime: (options: Record<string, unknown>) => {
         retainedLoadModule = options["loadModule"] as (id: string) => Promise<unknown>;
         recordOperation = options["recordOperation"] as typeof recordOperation;
-        const retainedRpc = options["rpc"] as {
-          call(targetId: string, method: string, args: unknown[]): Promise<unknown>;
-        };
+        const retainedRpc = options["rpc"] as Pick<RpcCaller, "call">;
         return {
           getPanelHandle: () => ({
             cdp: { session: () => retainedLoadModule("@workspace/cdp-client") },
-            rebuild: () => retainedRpc.call("main", "panel.rebuild", []),
+            rebuild: () =>
+              retainedRpc.call("main", testPanelRebuildRpcMethods["panel.rebuild"], []),
           }),
         };
       },
@@ -3030,7 +3197,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     };
     expect(() => recordOperation(receipt)).toThrow(/actively executing/);
     await expect(retainedHandle.cdp.session()).rejects.toThrow(/actively executing/);
-    expect(() => retainedHandle.rebuild()).toThrow(/actively executing/);
+    await expect(retainedHandle.rebuild()).rejects.toThrow(/actively executing/);
     const activeExecution = priv<{
       run<T>(store: unknown, callback: () => T): T;
     }>(instance, "activeEvalExecution");
@@ -3051,7 +3218,11 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("routes runtime clients retained by a cell-A module through cell B's execution", async () => {
     const { instance } = await createTestDO(EvalDO);
     const rpcA = { call: vi.fn(async () => "cell-a") };
-    const rpcB = { call: vi.fn(async () => "cell-b") };
+    const rpcB = {
+      call: vi.fn(async (_target: string, method: string) =>
+        method === "fs.exists" ? true : "cell-b"
+      ),
+    };
     const openA = vi.fn(async () => ({ openedBy: "cell-a" }));
     const openB = vi.fn(async () => ({ openedBy: "cell-b" }));
     const executionA = {
@@ -3075,8 +3246,8 @@ describe("EvalDO cancellation + forced recovery", () => {
       createRuntimeSelfHandle: () => ({}),
       createRuntimeScopeRehydrators: () => ({}),
       createGatewayFetch: () => () => undefined,
-      createRpcFs: (rpc: { call: (...args: unknown[]) => Promise<unknown> }) => ({
-        exists: () => rpc.call("main", "fs.exists", ["workers/vibe-board-agent"]),
+      createRpcFs: (rpc: Pick<RpcCaller, "call">) => ({
+        exists: () => rpc.call("main", mainRpcMethod("fs.exists"), ["workers/vibe-board-agent"]),
       }),
       createRuntimeParentHandle: () => null,
       createWorkerdClient: () => ({}),
@@ -3099,13 +3270,11 @@ describe("EvalDO cancellation + forced recovery", () => {
       null
     );
 
-    expect(() => runtime.fs.exists()).toThrow(/actively executing/);
+    await expect(runtime.fs.exists()).rejects.toThrow(/actively executing/);
     const activeExecution = priv<{
       run<T>(store: unknown, callback: () => T): T;
     }>(instance, "activeEvalExecution");
-    await expect(activeExecution.run(executionB, () => runtime.fs.exists())).resolves.toBe(
-      "cell-b"
-    );
+    await expect(activeExecution.run(executionB, () => runtime.fs.exists())).resolves.toBe(true);
     await expect(
       activeExecution.run(executionB, () => runtime.openExternal("https://example.test"))
     ).resolves.toEqual({ openedBy: "cell-b" });
@@ -3147,7 +3316,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       onStatusChange: vi.fn(() => vi.fn()),
     };
     // `runLocked` reads `this.rpc` for the binding closures — stub it.
-    Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
+    mockOwnedCall(instance, fakeRpc.call);
 
     // The runtime factories are loaded dynamically from the manifest-declared
     // runtime unit (providers.evalRuntime → EVAL_RUNTIME_SOURCE binding); the
@@ -3195,16 +3364,9 @@ describe("EvalDO cancellation + forced recovery", () => {
         ) => {
           expect(opts.moduleMap["node:async_hooks"]).toBeUndefined();
           expect(() => opts.require("node:async_hooks")).toThrow(/not available in EvalDO/);
-          const rpcBinding = opts.bindings["rpc"] as {
-            call: (
-              t: string,
-              m: string,
-              a: unknown[],
-              options?: Record<string, unknown>
-            ) => Promise<unknown>;
-          };
+          const rpcBinding = opts.bindings["rpc"] as Pick<RpcCaller, "call">;
           // Eval uses the same portable RpcClient call shape as panels/workers.
-          await rpcBinding.call("main", "svc.method", [], {
+          await rpcBinding.call("main", testProbeRpcMethods["svc.method"], [], {
             causalParent: {
               kind: "trajectory-invocation",
               logId: "trajectory:forged",
@@ -3212,7 +3374,7 @@ describe("EvalDO cancellation + forced recovery", () => {
               invocationId: "invocation:forged",
             },
           });
-          await rpcBinding.call("do:peer", "ping", []);
+          await rpcBinding.call("do:peer", testProbeRpcMethods.ping, []);
           return { success: true, consoleOutput: "", returnValue: undefined };
         },
       })
@@ -3280,7 +3442,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       ready: vi.fn(() => Promise.resolve()),
       onStatusChange: vi.fn(() => vi.fn()),
     };
-    Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
+    mockOwnedCall(instance, fakeRpc.call);
     const controller = new AbortController();
     const cleanupPhase = { active: false };
     const execution = priv<
@@ -3312,7 +3474,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       if (method === "evalEventIngress.publish") return new Promise<never>(() => {});
       return Promise.resolve(undefined);
     });
-    Object.defineProperty(instance, "rpc", { value: { call }, configurable: true });
+    mockOwnedCall(instance, call);
     setPriv(instance, "runLocked", () => Promise.resolve({ success: true, console: "" }));
     seedPendingRun(sql, "hung-publisher", {
       code: "return 1;",
@@ -3377,7 +3539,7 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("stamps planned lifecycle cancellation as runtime_generation_lost, distinct from user cancel", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
-    Object.defineProperty(instance, "rpc", { value: { call: lifecycleCall }, configurable: true });
+    mockOwnedCall(instance, lifecycleCall);
     seedPendingRun(sql, "lifecycle-pending");
     seedPendingRun(sql, "user-cancelled");
     await priv<(id: string) => Promise<unknown>>(instance, "cancel").call(
@@ -3424,7 +3586,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       }
       return Promise.resolve(undefined);
     });
-    Object.defineProperty(instance, "rpc", { value: { call }, configurable: true });
+    mockOwnedCall(instance, call);
     setPriv(instance, "runLocked", () =>
       Promise.resolve({ success: true, console: "", returnValue: 3 })
     );
@@ -3469,7 +3631,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       if (method === "onEvalComplete") return Promise.reject(new Error("receiver gone"));
       return Promise.resolve(undefined);
     });
-    Object.defineProperty(instance, "rpc", { value: { call }, configurable: true });
+    mockOwnedCall(instance, call);
     setPriv(instance, "runLocked", () => Promise.resolve({ success: true, console: "" }));
 
     await instance.startRun({
@@ -3551,7 +3713,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       }
       return Promise.resolve(undefined);
     });
-    Object.defineProperty(instance, "rpc", { value: { call }, configurable: true });
+    mockOwnedCall(instance, call);
 
     priv<(runId: string) => void>(instance, "scheduleResultRedelivery").call(
       instance,

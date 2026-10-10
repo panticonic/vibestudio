@@ -28,7 +28,8 @@ export interface PanelAccessPermissionTarget extends PanelAccessTarget {
 }
 
 type PanelAccessDetail = {
-  slot: { current_entity_title?: string | null };
+  /** WorkspaceStateService adds a projected title; the raw WorkspaceDO owner does not. */
+  slot?: object;
   currentHistory: { source: string; context_id: string };
   entity: { id: string };
 };
@@ -39,12 +40,16 @@ export function panelAccessTargetFromDetail(
   detail: PanelAccessDetail
 ): PanelAccessPermissionTarget {
   const source = detail.currentHistory.source;
+  const slotTitle =
+    detail.slot && "current_entity_title" in detail.slot
+      ? detail.slot.current_entity_title
+      : undefined;
   return {
     id: panelId,
     // A slot id is an address, never presentation copy. The workspace-state
     // boundary already resolves the current entity title and falls back to the
     // presented source while title propagation is in flight.
-    title: detail.slot.current_entity_title?.trim() || source,
+    title: typeof slotTitle === "string" ? slotTitle.trim() || source : source,
     source,
     kind: source.startsWith("browser:") ? "browser" : "workspace",
     runtimeEntityId: detail.entity.id,

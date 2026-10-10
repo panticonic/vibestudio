@@ -1,3 +1,5 @@
+import { schemaRpcCaller } from "@vibestudio/rpc/internal";
+import { createMissionsClient } from "@vibestudio/service-schemas/clients/missionsClient";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
@@ -8,7 +10,6 @@ import {
   missionRevisionDigest,
   missionExecutionImageDigest,
   validateMissionCharter,
-  createMissionsClient,
   type MissionCharter,
 } from "./mission.js";
 
@@ -32,6 +33,43 @@ const charter = (): MissionCharter => ({
     ],
   },
   trigger: { kind: "schedule", everyMs: 86_400_000, anchorAt: 1_000 },
+});
+
+const authorityPlan = () => ({
+  schemaVersion: 2 as const,
+  digest: hex,
+  artifactRef: `authority-plan:${hex}` as const,
+  compilerVersion: "test",
+  catalogDigest: hex,
+});
+const resolvedMissions = () => ({
+  kind: "durable-object",
+  targetId: "missions",
+  source: "workers/missions",
+  name: "missions",
+  className: "MissionsDO",
+  objectKey: "workspace",
+  action: "automate",
+  presentation: { domain: "automation", verb: "act" },
+  authority: { principals: ["code"], binding: "declared" },
+  origin: "workspace",
+  protocols: ["missions.v1"],
+});
+const missionRecord = () => ({
+  schemaVersion: 3,
+  missionId: "mission-1",
+  name: "Backup",
+  revision: 1,
+  charter: charter(),
+  authorityPlan: authorityPlan(),
+  owner: { userId: "author" },
+  state: "active",
+  revisionDigest: hex,
+  authority: { requestIds: [], grantIds: [], denialIds: [] },
+  createdAt: 1000,
+  updatedAt: 1000,
+  activatedAt: 1000,
+  runCount: 0,
 });
 
 describe("author-side missions client", () => {
@@ -58,12 +96,17 @@ describe("author-side missions client", () => {
   it("passes observation cancellation as invocation metadata and keeps the version in wire arguments", async () => {
     const controller = new AbortController();
     const call = vi.fn(async (_target: string, method: string) =>
-      method === "workers.resolveService"
-        ? { kind: "durable-object", targetId: "missions" }
-        : { version: "new" }
+      method === "workers.resolveService" ? resolvedMissions() : { version: "new" }
     );
     await expect(
-      createMissionsClient({ call }).observeChanges({
+      createMissionsClient(
+        schemaRpcCaller({
+          call,
+          stream: async () => {
+            throw new Error("Unexpected stream");
+          },
+        })
+      ).observeChanges({
         afterVersion: "old",
         signal: controller.signal,
       })
@@ -74,15 +117,18 @@ describe("author-side missions client", () => {
   });
   it("compiles the author's plan before dispatch and gives each operation its own idempotency key", async () => {
     const call = vi.fn(async (_target: string, method: string) => {
-      if (method === "authority.compileAuthorityPlan") return { schemaVersion: 2, digest: hex };
-      if (method === "workers.resolveService")
-        return { kind: "durable-object", targetId: "missions" };
-      return { missionId: "mission-1" };
+      if (method === "authority.compileAuthorityPlan") return authorityPlan();
+      if (method === "workers.resolveService") return resolvedMissions();
+      return missionRecord();
     });
-    await createMissionsClient({ call }).launch(
-      { name: "Backup", charter: charter() },
-      { idempotencyKey: "request-1" }
-    );
+    await createMissionsClient(
+      schemaRpcCaller({
+        call,
+        stream: async () => {
+          throw new Error("Unexpected stream");
+        },
+      })
+    ).launch({ name: "Backup", charter: charter() }, { idempotencyKey: "request-1" });
     expect(call.mock.calls.map((args) => args[1])).toEqual([
       "authority.compileAuthorityPlan",
       "workers.resolveService",
@@ -99,7 +145,7 @@ describe("author-side missions client", () => {
       3,
       "missions",
       "launch",
-      [expect.objectContaining({ authorityPlan: { schemaVersion: 2, digest: hex } })],
+      [expect.objectContaining({ authorityPlan: authorityPlan() })],
       { idempotencyKey: "request-1" }
     );
   });
@@ -110,7 +156,14 @@ describe("author-side missions client", () => {
       throw original;
     });
     await expect(
-      createMissionsClient({ call }).launch({ name: "Backup", charter: charter() })
+      createMissionsClient(
+        schemaRpcCaller({
+          call,
+          stream: async () => {
+            throw new Error("Unexpected stream");
+          },
+        })
+      ).launch({ name: "Backup", charter: charter() })
     ).rejects.toBe(original);
     expect(call).toHaveBeenCalledOnce();
   });
@@ -118,14 +171,19 @@ describe("author-side missions client", () => {
   it("keeps a current non-seeded plan for a name-only edit and recompiles a seeded default", async () => {
     let seeded = false;
     const call = vi.fn(async (_target: string, method: string) => {
-      if (method === "workers.resolveService")
-        return { kind: "durable-object", targetId: "missions" };
-      if (method === "get")
-        return { charter: charter(), authorityPlan: { schemaVersion: 2, digest: hex }, seeded };
-      if (method === "authority.compileAuthorityPlan") return { schemaVersion: 2, digest: hex };
-      return { missionId: "mission-1" };
+      if (method === "workers.resolveService") return resolvedMissions();
+      if (method === "get") return { ...missionRecord(), seeded };
+      if (method === "authority.compileAuthorityPlan") return authorityPlan();
+      return missionRecord();
     });
-    const client = createMissionsClient({ call });
+    const client = createMissionsClient(
+      schemaRpcCaller({
+        call,
+        stream: async () => {
+          throw new Error("Unexpected stream");
+        },
+      })
+    );
     await client.edit("mission-1", { name: "Renamed" });
     expect(call.mock.calls.map((args) => args[1])).toEqual([
       "workers.resolveService",

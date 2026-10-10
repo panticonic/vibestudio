@@ -122,10 +122,7 @@ function rpcError(error: string, errorCode?: string, errorData?: unknown): strin
     message: {
       type: "response",
       requestId: "test-request",
-      error,
-      errorKind: "application",
-      errorCode,
-      errorData,
+      error: { message: error, errorKind: "application", code: errorCode, errorData },
     },
   });
 }
@@ -319,10 +316,10 @@ describe("rpcClient", () => {
     );
     const client = new RpcClient(CREDS);
     await expect(client.call("fs.readFile", ["/missing"])).rejects.toMatchObject({
-      name: "RpcError",
+      name: "RemoteRpcError",
       message: "boom",
       errorKind: "application",
-      errorCode: "ENOENT",
+      code: "ENOENT",
       errorData: { path: "/missing", retryable: false },
     });
   });

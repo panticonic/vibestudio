@@ -37,10 +37,10 @@ function fixture(
   } = {}
 ) {
   const events: string[] = [];
-  const call = vi.fn(async (_target: string, method: string) => {
-    events.push(method);
-    if (method === "hubControl.ensureUserWorkspaces")
-      return {
+  const call = vi.fn(async (_target: string, method: { name: string; invoke: (args: unknown[], dispatch: (args: unknown[]) => Promise<unknown>) => Promise<unknown> }, args: unknown[]) => {
+    events.push(method.name);
+    const value = method.name === "hubControl.ensureUserWorkspaces"
+      ? {
         personal: {
           workspaceId: "personal-private",
           name: "Personal",
@@ -57,9 +57,11 @@ function fixture(
           running: true,
           privateRole: "system",
         },
-      };
-    if (method === "hubControl.routeWorkspace") return overrides.route ?? route;
-    throw new Error(`unexpected method: ${method}`);
+      }
+      : method.name === "hubControl.routeWorkspace"
+        ? overrides.route ?? route
+        : (() => { throw new Error(`unexpected method: ${method.name}`); })();
+    return method.invoke(args, async () => value);
   });
   const close = vi.fn(async () => {
     events.push("close");
@@ -132,9 +134,9 @@ describe("fresh mobile Iroh pairing commit", () => {
       "persist-routed",
       "connect-workspace",
     ]);
-    expect(fixtureValue.call).toHaveBeenCalledWith("main", "hubControl.routeWorkspace", [
+    expect(fixtureValue.call).toHaveBeenNthCalledWith(2, "main", expect.objectContaining({ name: "hubControl.routeWorkspace" }), [
       { workspaceId: "system-private" },
-    ]);
+    ], undefined);
     expect(connection.hubControlRpc).toBe(fixtureValue.controlConnection.rpc);
     await connection.close();
     expect(fixtureValue.events.slice(-2)).toEqual(["workspace-close", "close"]);

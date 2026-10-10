@@ -40,27 +40,27 @@ describe("WebhookStoreDO", () => {
   it("creates, reads, lists, replaces, and revokes subscriptions", async () => {
     const { call } = await createTestDO(WebhookStoreDO);
 
-    const a = await call<WebhookIngressSubscription>("create", input({ label: "alpha" }));
+    const a = await call("create", input({ label: "alpha" }));
     expect(a.subscriptionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(a.createdAt).toBeGreaterThan(0);
     expect(a.updatedAt).toBe(a.createdAt);
 
-    const b = await call<WebhookIngressSubscription>(
+    const b = await call(
       "create",
       input({ label: "beta", ownerCallerId: "panel-other" })
     );
     expect(b.subscriptionId).not.toBe(a.subscriptionId);
 
-    const fetched = await call<WebhookIngressSubscription | null>("get", a.subscriptionId);
+    const fetched = await call("get", a.subscriptionId);
     expect(fetched).toMatchObject({
       subscriptionId: a.subscriptionId,
       label: "alpha",
       bodyBudget: { mode: "fixed", maxBodyBytes: 1_500_000 },
     });
 
-    const all = await call<WebhookIngressSubscription[]>("list");
+    const all = await call("list");
     expect(all).toHaveLength(2);
-    const ownerScoped = await call<WebhookIngressSubscription[]>("list", "panel-abc");
+    const ownerScoped = await call("list", "panel-abc");
     expect(ownerScoped).toHaveLength(1);
     expect(ownerScoped[0]!.label).toBe("alpha");
 
@@ -70,7 +70,7 @@ describe("WebhookStoreDO", () => {
       updatedAt: a.updatedAt + 1,
     };
     await call("replace", rotated);
-    const reread = await call<WebhookIngressSubscription | null>("get", a.subscriptionId);
+    const reread = await call("get", a.subscriptionId);
     expect((reread!.verifier as { secret: string }).secret).toBe("rotated");
 
     const revoked: WebhookIngressSubscription = {
@@ -79,7 +79,7 @@ describe("WebhookStoreDO", () => {
       updatedAt: rotated.updatedAt + 1,
     };
     await call("replace", revoked);
-    const afterRevoke = await call<WebhookIngressSubscription | null>("get", a.subscriptionId);
+    const afterRevoke = await call("get", a.subscriptionId);
     expect(afterRevoke!.revokedAt).toBeTruthy();
   });
 
@@ -91,7 +91,7 @@ describe("WebhookStoreDO", () => {
 
   it("preserves complex verifier and replay payloads through JSON round-trip", async () => {
     const { call } = await createTestDO(WebhookStoreDO);
-    const created = await call<WebhookIngressSubscription>(
+    const created = await call(
       "create",
       input({
         verifier: {
@@ -110,7 +110,7 @@ describe("WebhookStoreDO", () => {
       })
     );
 
-    const fetched = await call<WebhookIngressSubscription | null>("get", created.subscriptionId);
+    const fetched = await call("get", created.subscriptionId);
     expect(fetched!.verifier).toMatchObject({
       type: "timestamped-hmac-sha256",
       toleranceMs: 300000,

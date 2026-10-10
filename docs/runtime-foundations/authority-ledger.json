@@ -21131,7 +21131,8 @@
       },
       "authorityPrincipals": [
         "user",
-        "host"
+        "host",
+        "code"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -21152,10 +21153,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:hubControl.observeDevices),allOf(capability(user,service:hubControl.observeDevices),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.observeDevices),allOf(capability(user,service:hubControl.observeDevices),workspace-member),allOf(capability(code,service:hubControl.observeDevices),workspace-member))",
       "r3b": {
         "review": "caller-visible-device-readiness-observation",
-        "change": "Observe an opaque revision of the paired-device configuration visible to the authenticated caller. Membership and role changes re-evaluate visibility; activity timestamps do not self-invalidate the observation. No device mutation or device-detail inspection authority is granted."
+        "change": "Observe an opaque revision of the paired-device configuration visible to the authenticated caller. Membership and role changes re-evaluate visibility; activity timestamps do not self-invalidate the observation. No device mutation or device-detail inspection authority is granted. Both the workspace route and hub route declare user, host, and code callers consistently; website callers remain excluded. The hub route derives workspace access from the authenticated subject and existing membership before observing devices."
       },
       "capability": "service:hubControl.observeDevices",
       "parityAssertion": "generated-census:host-authority"

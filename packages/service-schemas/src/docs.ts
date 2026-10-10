@@ -108,7 +108,11 @@ export type SerializedServiceDefinition = z.infer<typeof serializedServiceSchema
 
 export const docsMethods = defineServiceMethods({
   search: {
-    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Discovery must project only methods and metadata available to this connected website.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -126,7 +130,11 @@ export const docsMethods = defineServiceMethods({
     examples: [{ args: ["store a blob and get a digest", { limit: 5 }] }],
   },
   describe: {
-    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Discovery must project only methods and metadata available to this connected website.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -144,7 +152,11 @@ export const docsMethods = defineServiceMethods({
     examples: [{ args: ["service:blobstore.putText"] }],
   },
   getSchema: {
-    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Discovery must project only methods and metadata available to this connected website.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -165,7 +177,11 @@ export const docsMethods = defineServiceMethods({
     access: READONLY_ACCESS,
   },
   listSurfaces: {
-    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Discovery must project only methods and metadata available to this connected website.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -180,7 +196,11 @@ export const docsMethods = defineServiceMethods({
     access: READONLY_ACCESS,
   },
   listServices: {
-    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Discovery must project only methods and metadata available to this connected website.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -190,13 +210,17 @@ export const docsMethods = defineServiceMethods({
         "P-discovery: capability discovery and introspection; §2 default {code, session} family",
     },
     description:
-      "List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Invoke a listed method with rpc.call(\"main\", \"<service>.<method>\", args). Service names are not necessarily named exports of @workspace/runtime; its services binding provides service clients, and names shared with runtime APIs use the ergonomic runtime client.",
+      'List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Invoke a listed method through its canonical mainRpcMethods descriptor with rpc.call("main", mainRpcMethods["<service>.<method>"], args). Service names are not necessarily named exports of @workspace/runtime; its services binding provides service clients, and names shared with runtime APIs use the ergonomic runtime client.',
     args: z.union([z.tuple([]), z.tuple([z.object({}).strict()])]),
     returns: z.array(serializedServiceSchema),
     access: READONLY_ACCESS,
   },
   describeService: {
-    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
+    website: {
+      kind: "eligible",
+      rationale:
+        "Discovery must project only methods and metadata available to this connected website.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

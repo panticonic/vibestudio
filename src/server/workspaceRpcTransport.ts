@@ -1,3 +1,5 @@
+import { deserializeRpcFailure } from "@vibestudio/rpc";
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { once } from "node:events";
 import { Readable } from "node:stream";
@@ -10,14 +12,10 @@ import {
 import {
   RemoteRpcError,
   RpcBoundaryError,
-  attachRpcDiagnosticId,
   decodeRpcJson,
   encodeRpcJson,
-  rpcDiagnosticIdOf,
-  rpcErrorDataOf,
   rpcErrorKindOf,
   type RpcEnvelope,
-  type RpcResponse,
 } from "@vibestudio/rpc";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { authErrorStatus } from "./hostCore/auth/errors.js";
@@ -318,18 +316,11 @@ export async function receiveWorkspaceRpcHttp(
       const status =
         authErrorStatus(error) ??
         (errorKind === "access" ? 403 : errorKind === "protocol" ? 400 : 500);
-      const message = error instanceof Error ? error.message : String(error);
-      const failure: Omit<Extract<RpcResponse, { error: string }>, "type" | "requestId"> & {
-        requestId?: string;
-      } = {
+      const failure = {
         ...(requestId ? { requestId } : {}),
-        error: `${message} [Workspace RPC receiver :${req.socket.localPort}, ${phase}, HTTP ${status}]`,
-        errorKind,
-        ...(typeof code === "string" ? { errorCode: code } : {}),
-        ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
-        ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-        ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+        error: serializeRpcFailure(error, errorKind),
       };
+      failure.error.message += ` [Workspace RPC receiver :${req.socket.localPort}, ${phase}, HTTP ${status}]`;
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(encodeRpcJson(failure));
     }
@@ -404,7 +395,7 @@ export async function forwardWorkspaceRpcHttp(options: {
       } catch {
         // An infrastructure response may not speak RPC; retain its actual body.
       }
-      if (record(failure) && typeof failure["error"] === "string") {
+      if (record(failure) && "error" in failure) {
         const expectedId =
           "requestId" in invocation.envelope.message
             ? invocation.envelope.message.requestId
@@ -416,15 +407,8 @@ export async function forwardWorkspaceRpcHttp(options: {
             "EPROTOCOL"
           );
         }
-        const error = new RemoteRpcError(
-          `${failure["error"]} ${context}`,
-          rpcErrorKindOf(failure, "transport"),
-          typeof failure["errorCode"] === "string" ? failure["errorCode"] : undefined,
-          failure["errorData"]
-        );
-        if (typeof failure["errorStack"] === "string") error.stack = failure["errorStack"];
-        if (typeof failure["diagnosticId"] === "string")
-          attachRpcDiagnosticId(error, failure["diagnosticId"]);
+        const error = deserializeRpcFailure(failure["error"]);
+        error.message += ` ${context}`;
         throw error;
       }
       throw new RemoteRpcError(

@@ -10,7 +10,6 @@ import type { BrowserCookiePartitionKey } from "./cookies.js";
 import { FAVICON_MIME_TYPES, type FaviconMimeType } from "./favicon.js";
 import {
   BrowserImportDataTypeSchema,
-  ImportCategoryProgressSchema,
   type BrowserImportAcquisitionOption,
   type BrowserImportAcquisitionResult,
   type BrowserImportDataType,
@@ -19,6 +18,7 @@ import {
 } from "@vibestudio/browser-contracts/import";
 export {
   BROWSER_IMPORT_DATA_TYPES,
+  ImportCategoryProgressSchema,
   BrowserImportAcquisitionOptionSchema,
   BrowserImportAcquisitionResultSchema,
   BrowserImportDataTypeSchema,
@@ -26,7 +26,6 @@ export {
   IMPORT_ACQUISITION_KINDS,
   IMPORT_HOST_PLATFORMS,
   IMPORT_SOURCE_STATUSES,
-  ImportCategoryProgressSchema,
   ImportHostSummarySchema,
   type BrowserImportAcquisitionOption,
   type BrowserImportAcquisitionResult,
@@ -82,63 +81,18 @@ export const BrowserEnvironmentIdentitySchema = z
   })
   .strict();
 
-export const IMPORT_JOB_PHASES = [
-  "queued",
-  "discovering",
-  "copying",
-  "reading",
-  "decrypting",
-  "normalizing",
-  "storing",
-  "reconciling",
-  "complete",
-  "cancelled",
-  "failed",
-  "partial",
-] as const;
-export type ImportJobPhase = (typeof IMPORT_JOB_PHASES)[number];
-
-export interface ImportJobSnapshot {
-  jobId: string;
-  hostId: string;
-  hostLabel?: string;
-  sourceId: string;
-  browser?: string;
-  phase: ImportJobPhase;
-  requestedDataTypes: BrowserImportDataType[];
-  startedAt: number;
-  updatedAt: number;
-  finishedAt?: number;
-  progress: ImportCategoryProgress[];
-  warnings: string[];
-  error?: string;
-  resumable: boolean;
-}
-
+export {
+  IMPORT_JOB_PHASES,
+  ImportJobSnapshotSchema,
+  type ImportJobPhase,
+  type ImportJobSnapshot,
+} from "@vibestudio/browser-contracts/import";
+import type { ImportJobSnapshot } from "@vibestudio/browser-contracts/import";
 export interface ImportJobObservation {
   job: ImportJobSnapshot;
   /** Opaque identity of this owner's published snapshot. */
   version: string;
 }
-
-export const ImportJobSnapshotSchema = z
-  .object({
-    jobId: z.string().min(1),
-    hostId: z.string().min(1),
-    hostLabel: z.string().min(1).optional(),
-    sourceId: z.string().min(1),
-    browser: z.string().min(1).optional(),
-    phase: z.enum(IMPORT_JOB_PHASES),
-    requestedDataTypes: z.array(BrowserImportDataTypeSchema),
-    startedAt: z.number().finite(),
-    updatedAt: z.number().finite(),
-    finishedAt: z.number().finite().optional(),
-    progress: z.array(ImportCategoryProgressSchema),
-    warnings: z.array(z.string()),
-    error: z.string().optional(),
-    resumable: z.boolean(),
-  })
-  .strict();
 
 export interface BrowserImportSelection {
   hostId: string;

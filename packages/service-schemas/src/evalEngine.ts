@@ -162,7 +162,7 @@ const rawEvalEngineMethods = defineServiceMethods({
       .object({
         runId: runIdSchema,
         runDigest: z.string().min(1),
-        scopeInputRevision: z.string().min(1),
+        scopeInputRevision: z.string().min(1).optional(),
         status: z.enum([
           "pending",
           "running",
@@ -173,7 +173,17 @@ const rawEvalEngineMethods = defineServiceMethods({
         ]),
         existing: z.boolean(),
       })
-      .strict(),
+      .strict()
+      .superRefine((reply, context) => {
+        // Cancellation may win before admission captures any notebook state.
+        if (!reply.scopeInputRevision && !(reply.status === "cancelled" && reply.existing)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["scopeInputRevision"],
+            message: "An admitted run must identify its scope input revision.",
+          });
+        }
+      }),
   },
   executeRun: {
     website: {

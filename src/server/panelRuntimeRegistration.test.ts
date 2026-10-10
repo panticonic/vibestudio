@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { workspacePresentationMethods } from "@vibestudio/service-schemas/workspacePresentation";
 import {
   cdpDefaultHostAssignmentError,
   createKnownPanelSlotResolver,
@@ -46,7 +48,11 @@ describe("createKnownPanelSlotResolver", () => {
         workspaceId: "ws-test",
         stateArgsSchemaForBuild: () => undefined,
         storageIncarnation: () => ({ incarnation: "test-incarnation", generation: 1 }),
-        presentationDispatch: async () => undefined,
+        presentation: createTypedServiceClient(
+          "workspace-presentation",
+          workspacePresentationMethods,
+          async () => undefined
+        ),
         panelAccess: {
           contextExists: () => false,
           resolveCallerContext: async () => null,

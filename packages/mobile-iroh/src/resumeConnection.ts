@@ -1,4 +1,4 @@
-import { HubWorkspaceRouteSchema, hubControlMethods } from "@vibestudio/service-schemas/hubControl";
+import { createMobileHubControlClient } from "./hubControlClient.js";
 import type { IrohConnection } from "./connect.js";
 import { composeMobileSession } from "./connectionPair.js";
 import {
@@ -46,15 +46,10 @@ export async function resumeMobileConnection(
   };
   const control = await dependencies.connect(current, "control", updateCurrent);
   try {
-    const pair = hubControlMethods.ensureUserWorkspaces.returns.parse(
-      await control.rpc.call("main", "hubControl.ensureUserWorkspaces", [])
-    );
+    const hub = createMobileHubControlClient(control);
+    const pair = await hub.ensureUserWorkspaces();
     const source = selectMobileConnectionWorkspace(current, pair.system.workspaceId);
-    const route = HubWorkspaceRouteSchema.parse(
-      await control.rpc.call("main", "hubControl.routeWorkspace", [
-        { workspaceId: source.selectedWorkspaceId },
-      ])
-    );
+    const route = await hub.routeWorkspace({ workspaceId: source.selectedWorkspaceId });
     if (route.workspaceId !== source.selectedWorkspaceId) {
       throw new Error("Workspace route changed the System app source");
     }

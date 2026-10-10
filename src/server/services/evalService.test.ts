@@ -1,3 +1,4 @@
+import { evalEngineMethods } from "@vibestudio/service-schemas/evalEngine";
 import { parseSha256 } from "@vibestudio/shared/execution/identity";
 import {
   executionArtifactDigest,
@@ -6,6 +7,16 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+function acceptedRunFixture(runId: string) {
+  return evalEngineMethods.startRun.returns.parse({
+    runId,
+    runDigest: "d".repeat(64),
+    scopeInputRevision: "scope:initial",
+    status: "pending",
+    existing: false,
+  });
+}
+
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import { AmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
 import {
@@ -26,10 +37,23 @@ import { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { createActivityRegistry } from "./activityRegistry.js";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { workspaceStateEngineMethods } from "@vibestudio/service-schemas/workspaceStateEngine";
 import type { EvalStartInput } from "@vibestudio/service-schemas/eval";
-import { createTestDO } from "@vibestudio/durable/test-utils";
+import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
 import { EvalDO } from "../../../packages/builtin/src/eval-engine/EvalDO.js";
+
+function activatedEntity(input: unknown): EntityRecord {
+  const spec = workspaceStateEngineMethods.entityActivate.args.parse([input])[0];
+  return workspaceStateEngineMethods.entityActivate.returns.parse({
+    ...spec,
+    id: canonicalEntityId({ ...spec, source: spec.source.repoPath }),
+    authoritySessionId: "authority:eval-activation",
+    createdAt: 0,
+    status: "active",
+    cleanupComplete: true,
+  });
+}
 
 const WORKSPACE_REF = {
   source: INTERNAL_DO_SOURCE,
@@ -135,9 +159,7 @@ function createHarness(
       if (method === "entityResolveContext") {
         return contexts[String(args[0])] ?? null;
       }
-      if (method === "entityActivate") {
-        return undefined;
-      }
+      if (method === "entityActivate") return activatedEntity(args[0]);
       if (method === "entityResolve") {
         const id = String(args[0]);
         if (id.startsWith(`do:${INTERNAL_DO_SOURCE}:EvalDO:`) && contexts[id]) {
@@ -148,6 +170,7 @@ function createHarness(
             contextId: contexts[id],
             className: "EvalDO",
             key: id.slice(id.lastIndexOf(":") + 1),
+            authoritySessionId: "authority:eval-test",
             createdAt: 0,
             status: options.retiredEvalEntityIds?.has(id) ? "retired" : "active",
             cleanupComplete: true,
@@ -183,7 +206,7 @@ function createHarness(
       if (method === "cancel") {
         await options.cancel?.(String(args[0]));
         if (options.evalDomain) return options.evalDomain.cancel(String(args[0]));
-        return { ok: true };
+        return { ok: true, forcedReset: false };
       }
       if (method === "startRun") {
         if (options.rejectStartRun) throw options.rejectStartRun;
@@ -278,6 +301,7 @@ function createHarness(
             agentExecutionAdmission: { v: 1, ownerId: "session:default" },
             ...(finite ? { lifecycle: "finite" } : {}),
           },
+          authoritySessionId: "authority:eval-test",
           createdAt: 0,
           status: "active",
           cleanupComplete: true,
@@ -291,6 +315,7 @@ function createHarness(
         className: "AiChatWorker",
         key: id,
         agentBinding: { entityId: `session:${id}`, contextId, channelId: "chan_1" },
+        authoritySessionId: "authority:eval-test",
         createdAt: 0,
         status: "active",
         cleanupComplete: true,
@@ -464,6 +489,7 @@ describe("createEvalService", () => {
         contextId: "ctx_agent",
         channelId: "chan_1",
       },
+      authoritySessionId: "authority:eval-test",
       createdAt: 0,
       status: "active",
       cleanupComplete: true,
@@ -657,6 +683,13 @@ describe("createEvalService", () => {
         ]
       );
     }
+    const failedAdmissionClosed = new Promise<void>((resolve) => {
+      const end = harness.activity.end.bind(harness.activity);
+      vi.spyOn(harness.activity, "end").mockImplementation((id) => {
+        end(id);
+        if (id.endsWith(":run:failed-shutdown")) resolve();
+      });
+    });
     let settled = false;
     const preparation = harness.shutdown();
     const observed = preparation.then(
@@ -669,7 +702,7 @@ describe("createEvalService", () => {
     );
     try {
       await entered;
-      await Promise.resolve();
+      await failedAdmissionClosed;
       expect(settled).toBe(false);
       expect(harness.activity.getActivity().activeRuns).toBe(1);
       release();
@@ -859,6 +892,7 @@ describe("createEvalService", () => {
       source: { repoPath: "src", effectiveVersion: "v" },
       contextId: "ctx_agent",
       key: over.id,
+      authoritySessionId: "authority:eval-test",
       createdAt: 0,
       status: "active",
       cleanupComplete: true,
@@ -889,13 +923,13 @@ describe("createEvalService", () => {
       },
       async dispatch(_ref: unknown, method: string, ...args: unknown[]) {
         calls.push({ method, args });
-        if (method === "entityActivate") return undefined;
+        if (method === "entityActivate") return activatedEntity(args[0]);
         if (method === "entityResolve") return records[String(args[0])] ?? null;
         // Durable nav→slot: the panel entity "panel:p" is the current entity of open slot "panel:tree/p".
         if (method === "slotResolveByEntity")
           return String(args[0]) === "panel:p" ? "panel:tree/p" : null;
         if (method === "startRun")
-          return { runId: String((args[0] as { runId?: string }).runId), status: "pending" };
+          return acceptedRunFixture(String((args[0] as { runId?: string }).runId));
         if (method === "executeRun") return { success: true, console: "", scopeKeys: [] };
         if (method === "getRun") return { status: "done" };
         throw new Error(`unexpected dispatch ${method}`);
@@ -953,6 +987,7 @@ describe("createEvalService", () => {
       contextId: "ctx_panel",
       className: "AiChatWorker",
       key: "quickfire",
+      authoritySessionId: "authority:eval-test",
       createdAt: 0,
       status: "active",
       cleanupComplete: true,
@@ -970,7 +1005,7 @@ describe("createEvalService", () => {
       },
       async dispatch(_ref: unknown, method: string, ...args: unknown[]) {
         calls.push({ method, args });
-        if (method === "entityActivate") return undefined;
+        if (method === "entityActivate") return activatedEntity(args[0]);
         if (method === "entityResolve") return String(args[0]) === agentId ? agent : null;
         if (method === "slotResolveByEntity") return null;
         if (method === "runtimeResourceBindingsForEntity")
@@ -980,7 +1015,7 @@ describe("createEvalService", () => {
             scope: { kind: "agent-channel", channelId: "quickfire-channel" },
           }));
         if (method === "startRun")
-          return { runId: String((args[0] as { runId?: string }).runId), status: "pending" };
+          return acceptedRunFixture(String((args[0] as { runId?: string }).runId));
         if (method === "executeRun") return { success: true, console: "", scopeKeys: [] };
         if (method === "getRun") return { status: "done" };
         throw new Error(`unexpected dispatch ${method}`);
@@ -1191,9 +1226,8 @@ describe("createEvalService", () => {
 
   it("fences an ambiguous original start when authenticated cancellation reaches the real domain first", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:cancel-before-reconcile";
-    const { instance: domain } = await createTestDO(EvalDO);
+    const { instance: domain } = await createTestDO(EvalDO, { RPC_FETCH: successfulTestRpcFetch });
     const domainStart = vi.spyOn(domain, "startRun");
-    Object.defineProperty(domain, "rpc", { value: { call: vi.fn(async () => undefined) } });
     const execute = vi.fn(async () => ({ success: true, console: "must not execute" }));
     Object.defineProperty(domain, "runLocked", { value: execute });
     let releaseRetry!: () => void;
@@ -1722,7 +1756,7 @@ describe("createEvalService", () => {
     const ret = await service.handler({ caller: authenticatedCaller(ownerId, "do") }, "cancel", [
       { scopeKey: "chan_1", runId: "inv-42" },
     ]);
-    expect(ret).toEqual({ ok: true });
+    expect(ret).toEqual({ ok: true, forcedReset: false });
 
     const objectKey = evalKey(ownerId, "chan_1");
     expect(calls.find((c) => c.method === "cancel")).toMatchObject({
@@ -1753,11 +1787,10 @@ function createHeldFailHarness(opts: {
     async dispatch(ref: unknown, method: string, ...args: unknown[]) {
       calls.push({ ref, method, args });
       if (method === "entityResolveContext") return opts.contextId;
-      if (method === "entityActivate") return undefined;
+      if (method === "entityActivate") return activatedEntity(args[0]);
       if (method === "entityResolve") return null;
       if (method === "slotResolveByEntity") return null;
-      if (method === "startRun")
-        return { runId: (args[0] as { runId: string }).runId, status: "pending" };
+      if (method === "startRun") return acceptedRunFixture((args[0] as { runId: string }).runId);
       if (method === "getRun") {
         if (opts.getRunPlan) {
           const step =
@@ -1794,6 +1827,7 @@ function createHeldFailHarness(opts: {
               contextId: opts.contextId,
               channelId: "chan_1",
             },
+            authoritySessionId: "authority:eval-test",
             createdAt: 0,
             status: "active",
             cleanupComplete: true,

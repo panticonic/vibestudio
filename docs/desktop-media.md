@@ -176,10 +176,24 @@ rpc.exposeStreaming(
 );
 ```
 
-A worker or DO uses its ordinary runtime RPC client:
+A worker or DO uses its ordinary runtime RPC client and a neutral contract module
+shared with the panel that exposes the stream. Define and export the receiver
+descriptor from that module:
 
 ```ts
-const response = await rpc.stream(panelId, "recording", [], { signal });
+import { createReceiverRpcMethods } from "@vibestudio/shared/rpcMethods";
+
+export const recordingRpcMethods = createReceiverRpcMethods<{
+  recording(): Promise<Response>;
+}>(["recording"]);
+```
+
+The receiving client imports that exported descriptor:
+
+```ts
+import { recordingRpcMethods } from "./contract.js";
+
+const response = await rpc.stream(panelId, recordingRpcMethods.recording, [], { signal });
 const reader = response.body!.getReader();
 try {
   while (true) {

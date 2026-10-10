@@ -1,3 +1,8 @@
+import { residentChannelRpcMethods } from "@vibestudio/shared/residentSession";
+import { schemaRpcClient } from "@vibestudio/rpc/internal";
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { wireClientFor, registerRpcWireClient, createRpcPeer } from "@vibestudio/rpc/internal";
+import { type RpcWireClient } from "@vibestudio/rpc/internal";
 import {
   DurableObjectBase,
   schemaRpc,
@@ -10,8 +15,8 @@ import { createHash } from "node:crypto";
 import {
   type RpcCallOptions,
   type RpcCausalParent,
-  type RpcClient,
   type RpcStreamOptions,
+  type RpcTargetOptions,
 } from "@vibestudio/rpc";
 import { bindExecutionSession } from "@vibestudio/rpc/internal";
 import {
@@ -332,15 +337,15 @@ type ExternalOpenClient = TypedServiceClient<typeof externalOpenMethods>;
 /** One run's immutable outbound authority/provenance boundary. */
 interface EvalExecutionContext {
   readonly operationJournal: ExecutionJournal;
-  readonly rpc: RpcClient;
+  readonly rpc: RpcWireClient;
   /** Owner-infrastructure RPC carries only this run's durable admission. It
    * deliberately excludes guest causality, read-only attenuation, and abort
    * state so cached scope persistence cannot retain one cell's effect context. */
-  readonly callInfrastructure: <T = unknown>(
+  readonly callInfrastructure: (
     targetId: string,
     method: string,
     args: unknown[]
-  ) => Promise<T>;
+  ) => Promise<unknown>;
   readonly signal?: AbortSignal;
   readonly contextId: string;
   readonly runId?: string;
@@ -771,7 +776,7 @@ export class EvalDO extends DurableObjectBase {
   ): EvalExecutionContext {
     const causalParent = input.causalParent ? Object.freeze({ ...input.causalParent }) : null;
     const readOnly = input.readOnly === true;
-    const base = this.rpc;
+    const base = wireClientFor(this.rpc);
     const operationJournal = new ExecutionJournal();
     const mergeOptions = <T extends RpcCallOptions | RpcStreamOptions>(value?: T): T => {
       const options = {
@@ -786,12 +791,12 @@ export class EvalDO extends DurableObjectBase {
       }
       return options as T;
     };
-    const call = async <T = unknown>(
+    const call = async (
       targetId: string,
       method: string,
       args: unknown[],
       options?: RpcCallOptions
-    ): Promise<T> => {
+    ): Promise<unknown> => {
       const progressSemantics = progressSemanticsForRpcMethod(method);
       const checkpoint =
         progressSemantics?.kind === "external-wait"
@@ -817,7 +822,7 @@ export class EvalDO extends DurableObjectBase {
         operationJournal.append({ type: "fs.read", method, path: args[0] });
       }
       try {
-        const result = await base.call<T>(targetId, method, args, mergeOptions(options));
+        const result = await base.call(targetId, method, args, mergeOptions(options));
         if (targetId === "main") {
           operationJournal.recordExtensionInvocation(method, args, result);
           operationJournal.recordServerLogRead(method, args, result);
@@ -853,58 +858,43 @@ export class EvalDO extends DurableObjectBase {
     };
     const emit = (targetId: string, event: string, payload: unknown, options?: RpcCallOptions) =>
       base.emit(targetId, event, payload, mergeOptions(options));
-    const peerFor = (targetId: string) => {
-      const inbound = base.peer(targetId);
-      const contextual = {
-        id: targetId,
-        call: new Proxy(
-          {},
-          {
-            get:
-              (_target, method) =>
-              (...args: unknown[]) =>
-                call(targetId, String(method), args),
-          }
-        ),
-        on: inbound.on.bind(inbound),
-        emit: (event: string, payload: unknown) => emit(targetId, event, payload),
-        withContract: () => contextual,
-      };
-      return contextual;
-    };
-    const rpc: RpcClient = Object.freeze({
-      selfId: base.selfId,
-      expose: base.expose.bind(base),
-      exposeAll: base.exposeAll.bind(base),
-      exposeStreaming: base.exposeStreaming.bind(base),
-      call,
-      stream: (targetId: string, method: string, args: unknown[], options?: RpcStreamOptions) =>
-        base.stream(targetId, method, args, mergeOptions(options)),
-      streamReadable: (
-        targetId: string,
-        method: string,
-        args: unknown[],
-        options?: RpcStreamOptions
-      ) => base.streamReadable(targetId, method, args, mergeOptions(options)),
-      emit,
-      on: base.on.bind(base),
-      peer: ((targetId: string) => peerFor(targetId)) as RpcClient["peer"],
-      status: base.status.bind(base),
-      ready: base.ready.bind(base),
-      onStatusChange: base.onStatusChange.bind(base),
-    });
+
+    const rpc: RpcWireClient = registerRpcWireClient(
+      Object.freeze({
+        selfId: base.selfId,
+        expose: base.expose.bind(base),
+        exposeAll: base.exposeAll.bind(base),
+        exposeStreaming: base.exposeStreaming.bind(base),
+        call,
+        stream: (targetId: string, method: string, args: unknown[], options?: RpcStreamOptions) =>
+          base.stream(targetId, method, args, mergeOptions(options)),
+        streamReadable: (
+          targetId: string,
+          method: string,
+          args: unknown[],
+          options?: RpcStreamOptions
+        ) => base.streamReadable(targetId, method, args, mergeOptions(options)),
+        emit,
+        on: base.on.bind(base),
+        peer: (targetId: string, options?: RpcTargetOptions) =>
+          createRpcPeer({ call, on: base.on.bind(base), emit }, targetId, options),
+        status: base.status.bind(base),
+        ready: base.ready.bind(base),
+        onStatusChange: base.onStatusChange.bind(base),
+      })
+    );
     const callMainService = (service: string, method: string, args: unknown[]) =>
       rpc.call("main", `${service}.${method}`, args);
-    const callInfrastructure = <T = unknown>(
+    const callInfrastructure = (
       targetId: string,
       method: string,
       args: unknown[]
-    ): Promise<T> => {
+    ): Promise<unknown> => {
       const options: RpcCallOptions = {};
       if (input.executionSessionNonce) {
         bindExecutionSession(options, input.executionSessionNonce);
       }
-      return base.call<T>(targetId, method, args, options);
+      return base.call(targetId, method, args, options);
     };
     return Object.freeze({
       rpc,
@@ -1413,7 +1403,7 @@ export class EvalDO extends DurableObjectBase {
     }
     const options: RpcCallOptions = {};
     await this.runDetached(() =>
-      this.rpc.call(
+      wireClientFor(this.rpc).call(
         args.resultReceiverRef!,
         "onEvalComplete",
         [{ runId, agentInvocationId: args.agentInvocationId, result, channelId: args.channelId }],
@@ -2143,7 +2133,7 @@ export class EvalDO extends DurableObjectBase {
     const options: RpcCallOptions = signal ? { signal } : {};
     const agentRef = args.agentRef;
     await this.runDetached(() =>
-      this.rpc.call(
+      wireClientFor(this.rpc).call(
         agentRef,
         "onEvalProgress",
         [
@@ -2409,7 +2399,9 @@ export class EvalDO extends DurableObjectBase {
       "evalEventIngress",
       evalEventIngressMethods,
       (service, method, callArgs) =>
-        this.runDetached(() => this.rpc.call("main", `${service}.${method}`, callArgs, options))
+        this.runDetached(() =>
+          wireClientFor(this.rpc).call("main", `${service}.${method}`, callArgs, options)
+        )
     );
     const previous = this.liveEventDeliveries.get(runId) ?? Promise.resolve();
     let publish: Promise<void>;
@@ -3048,7 +3040,7 @@ export class EvalDO extends DurableObjectBase {
       guidance:
         "Use rich runtime bindings directly (`workers`, `vcs`, `fs`, ...), or import them from " +
         `\`${runtimeModuleName}\`. For raw service catalog methods, use ` +
-        '`services.<svc>.<method>(...)` or `rpc.call("main", "<svc>.<method>", [...])`; ' +
+        '`services.<svc>.<method>(...)` or `rpc.call("main", mainRpcMethods["<svc>.<method>"], [...])`; ' +
         "`services.<name>` is always the raw server service, even when a rich runtime binding " +
         "shares the name (`services.workers` is the raw service, `workers` the binding). Call " +
         "help('<name>') for a binding's methods — for the rich bindings this describes what you " +
@@ -3122,8 +3114,10 @@ export class EvalDO extends DurableObjectBase {
       // Same signal threading as `rpcBinding`: owner ops the agent forwards
       // are outbound rpc.calls too, so a cancelled run unwinds them instead of wedging the chain.
       hardenBoundary(
-        buildOwnerBindings(args, (target, method, values) =>
-          execution.rpc.call(target, method, values)
+        buildOwnerBindings(
+          args,
+          (target, method, values) => execution.rpc.call(target, method, values),
+          this.createActiveRuntimeRpc()
         )
       )
     );
@@ -3789,7 +3783,7 @@ export class EvalDO extends DurableObjectBase {
       evalExecutionRootsMethods,
       // Artifact retention belongs to the sealed kernel, not evaluated code.
       (service, method, args) =>
-        this.runDetached(() => this.rpc.call("main", `${service}.${method}`, args))
+        this.runDetached(() => wireClientFor(this.rpc).call("main", `${service}.${method}`, args))
     );
     await roots.retain(
       execution.runId,
@@ -3820,123 +3814,104 @@ export class EvalDO extends DurableObjectBase {
    * context at call time; no retained object can keep an earlier cell's abort
    * signal, execution-session nonce, causal parent, or authority attenuation.
    */
-  private createActiveRuntimeRpc(): RpcClient & ResidentSessionRegistrar {
-    const call = <T = unknown>(
-      targetId: string,
-      method: string,
-      args: unknown[],
-      options?: RpcCallOptions
-    ) => this.requireActiveEvalExecution().rpc.call<T>(targetId, method, args, options);
+  private createActiveRuntimeRpc(): import("@vibestudio/rpc").RpcClient & ResidentSessionRegistrar {
+    const call = (targetId: string, method: string, args: unknown[], options?: RpcCallOptions) =>
+      this.requireActiveEvalExecution().rpc.call(targetId, method, args, options);
     const emit = (targetId: string, event: string, payload: unknown, options?: RpcCallOptions) =>
       this.requireActiveEvalExecution().rpc.emit(targetId, event, payload, options);
-    const peerFor = (targetId: string) => {
-      const inbound = this.rpc.peer(targetId);
-      const contextual = {
-        id: targetId,
-        call: new Proxy(
-          {},
-          {
-            get:
-              (_target, method) =>
-              (...args: unknown[]) =>
-                call(targetId, String(method), args),
-          }
-        ),
-        on: inbound.on.bind(inbound),
-        emit: (event: string, payload: unknown) => emit(targetId, event, payload),
-        withContract: () => contextual,
-      };
-      return contextual;
-    };
-    return Object.freeze({
-      selfId: this.rpc.selfId,
-      registerResidentSession: (
-        channelId: string,
-        receiver: ResidentSessionReceiver,
-        relationship: { targetId: string }
-      ): ResidentSessionRegistration => {
-        const execution = this.requireActiveEvalExecution();
-        this.sql.exec(
-          `INSERT INTO resident_channel_memberships (channel_id, target_id, registered_at)
+
+    const wire = registerRpcWireClient(
+      Object.freeze({
+        selfId: this.rpc.selfId,
+        registerResidentSession: (
+          channelId: string,
+          receiver: ResidentSessionReceiver,
+          relationship: { targetId: string }
+        ): ResidentSessionRegistration => {
+          const execution = this.requireActiveEvalExecution();
+          this.sql.exec(
+            `INSERT INTO resident_channel_memberships (channel_id, target_id, registered_at)
            VALUES (?, ?, ?)
            ON CONFLICT(channel_id) DO UPDATE SET target_id = excluded.target_id`,
-          channelId,
-          relationship.targetId,
-          Date.now()
-        );
-        const inFlight = new Set<Promise<void>>();
-        let accepting = true;
-        const unregisterOwnerReceiver = this.registerResidentChannelSession(
-          channelId,
-          (payload) => {
-            if (!accepting) {
-              throw Object.assign(
-                new Error(`resident channel receiver ${channelId} is no longer active`),
-                { code: "ResidentSessionUnavailable" }
+            channelId,
+            relationship.targetId,
+            Date.now()
+          );
+          const inFlight = new Set<Promise<void>>();
+          let accepting = true;
+          const unregisterOwnerReceiver = this.registerResidentChannelSession(
+            channelId,
+            (payload) => {
+              if (!accepting) {
+                throw Object.assign(
+                  new Error(`resident channel receiver ${channelId} is no longer active`),
+                  { code: "ResidentSessionUnavailable" }
+                );
+              }
+              // Finite delivery arrives as a separate inbound DO invocation and
+              // therefore has no ambient eval AsyncLocalStorage. Re-enter the
+              // exact bounded execution that registered the receiver so retained
+              // runtime clients borrow its signal, causal parent, and execution
+              // authority rather than the delivery invocation's authority.
+              const delivery = Promise.resolve(
+                this.activeEvalExecution.run(execution, () => receiver(payload))
               );
+              inFlight.add(delivery);
+              void delivery.finally(() => inFlight.delete(delivery)).catch(() => undefined);
+              return delivery;
             }
-            // Finite delivery arrives as a separate inbound DO invocation and
-            // therefore has no ambient eval AsyncLocalStorage. Re-enter the
-            // exact bounded execution that registered the receiver so retained
-            // runtime clients borrow its signal, causal parent, and execution
-            // authority rather than the delivery invocation's authority.
-            const delivery = Promise.resolve(
-              this.activeEvalExecution.run(execution, () => receiver(payload))
-            );
-            inFlight.add(delivery);
-            void delivery.finally(() => inFlight.delete(delivery)).catch(() => undefined);
-            return delivery;
-          }
-        );
-        let cleanupPromise: Promise<void> | null = null;
-        const cleanup = (): Promise<void> => {
-          if (cleanupPromise) return cleanupPromise;
-          accepting = false;
-          receiver.abortAll?.();
-          unregisterOwnerReceiver();
-          cleanupPromise = Promise.allSettled([...inFlight]).then(async () => {
-            await this.detachResidentChannelMembership(channelId, execution.rpc);
-            execution.residentSessionCleanups.delete(cleanup);
+          );
+          let cleanupPromise: Promise<void> | null = null;
+          const cleanup = (): Promise<void> => {
+            if (cleanupPromise) return cleanupPromise;
+            accepting = false;
+            receiver.abortAll?.();
+            unregisterOwnerReceiver();
+            cleanupPromise = Promise.allSettled([...inFlight]).then(async () => {
+              await this.detachResidentChannelMembership(channelId, schemaRpcClient(execution.rpc));
+              execution.residentSessionCleanups.delete(cleanup);
+            });
+            return cleanupPromise;
+          };
+          execution.residentSessionCleanups.add(cleanup);
+          // Guest callbacks can cross the sandbox isolate boundary, where host
+          // AsyncLocalStorage is not an authority carrier. Return the exact
+          // execution transport explicitly; its signal, causal parent, nonce,
+          // and ceiling remain those of this finite session's owning cell.
+          return Object.freeze({
+            transport: schemaRpcClient(execution.rpc),
+            close: () => cleanup(),
+            relationshipEnded: () => {
+              this.sql.exec(
+                `DELETE FROM resident_channel_memberships WHERE channel_id = ?`,
+                channelId
+              );
+            },
           });
-          return cleanupPromise;
-        };
-        execution.residentSessionCleanups.add(cleanup);
-        // Guest callbacks can cross the sandbox isolate boundary, where host
-        // AsyncLocalStorage is not an authority carrier. Return the exact
-        // execution transport explicitly; its signal, causal parent, nonce,
-        // and ceiling remain those of this finite session's owning cell.
-        return Object.freeze({
-          transport: Object.freeze({
-            call: <T = unknown>(targetId: string, method: string, args: unknown[]) =>
-              execution.rpc.call<T>(targetId, method, args),
-          }),
-          close: () => cleanup(),
-          relationshipEnded: () => {
-            this.sql.exec(
-              `DELETE FROM resident_channel_memberships WHERE channel_id = ?`,
-              channelId
-            );
-          },
-        });
-      },
-      expose: this.rpc.expose.bind(this.rpc),
-      exposeAll: this.rpc.exposeAll.bind(this.rpc),
-      exposeStreaming: this.rpc.exposeStreaming.bind(this.rpc),
-      call,
-      stream: (targetId: string, method: string, args: unknown[], options?: RpcStreamOptions) =>
-        this.requireActiveEvalExecution().rpc.stream(targetId, method, args, options),
-      streamReadable: (
-        targetId: string,
-        method: string,
-        args: unknown[],
-        options?: RpcStreamOptions
-      ) => this.requireActiveEvalExecution().rpc.streamReadable(targetId, method, args, options),
-      emit,
-      on: this.rpc.on.bind(this.rpc),
-      peer: ((targetId: string) => peerFor(targetId)) as RpcClient["peer"],
-      status: this.rpc.status.bind(this.rpc),
-      ready: this.rpc.ready.bind(this.rpc),
-      onStatusChange: this.rpc.onStatusChange.bind(this.rpc),
+        },
+        expose: this.rpc.expose.bind(this.rpc),
+        exposeAll: this.rpc.exposeAll.bind(this.rpc),
+        exposeStreaming: this.rpc.exposeStreaming.bind(this.rpc),
+        call,
+        stream: (targetId: string, method: string, args: unknown[], options?: RpcStreamOptions) =>
+          this.requireActiveEvalExecution().rpc.stream(targetId, method, args, options),
+        streamReadable: (
+          targetId: string,
+          method: string,
+          args: unknown[],
+          options?: RpcStreamOptions
+        ) => this.requireActiveEvalExecution().rpc.streamReadable(targetId, method, args, options),
+        emit,
+        on: this.rpc.on.bind(this.rpc),
+        peer: (targetId: string, options?: RpcTargetOptions) =>
+          createRpcPeer({ call, on: this.rpc.on.bind(this.rpc), emit }, targetId, options),
+        status: this.rpc.status.bind(this.rpc),
+        ready: this.rpc.ready.bind(this.rpc),
+        onStatusChange: this.rpc.onStatusChange.bind(this.rpc),
+      })
+    );
+    return Object.assign(schemaRpcClient(wire), {
+      registerResidentSession: wire.registerResidentSession,
     });
   }
 
@@ -3948,13 +3923,12 @@ export class EvalDO extends DurableObjectBase {
 
   private async residentChannelTarget(
     channelId: string,
-    rpc: Pick<RpcClient, "call">
+    rpc: Pick<import("@vibestudio/rpc").RpcClient, "call">
   ): Promise<string> {
-    const service = await rpc.call<{ kind?: string; targetId?: string }>(
-      "main",
-      "workers.resolveService",
-      ["vibestudio.channel.v1", channelId]
-    );
+    const service = await rpc.call("main", mainRpcMethods["workers.resolveService"], [
+      "vibestudio.channel.v1",
+      channelId,
+    ]);
     if (service.kind !== "durable-object" || !service.targetId) {
       throw new Error(`channel ${channelId} did not resolve to a Durable Object`);
     }
@@ -3963,10 +3937,12 @@ export class EvalDO extends DurableObjectBase {
 
   private async detachResidentChannelMembership(
     channelId: string,
-    rpc: Pick<RpcClient, "call">
+    rpc: Pick<import("@vibestudio/rpc").RpcClient, "call">
   ): Promise<void> {
     const targetId = await this.residentChannelTarget(channelId, rpc);
-    await rpc.call(targetId, "detach", [{ participantId: this.rpc.selfId }]);
+    await rpc.call(targetId, residentChannelRpcMethods.detach, [
+      { participantId: this.rpc.selfId },
+    ]);
   }
 
   private async endResidentChannelMemberships(): Promise<void> {
@@ -3980,13 +3956,11 @@ export class EvalDO extends DurableObjectBase {
     for (const { channelId, targetId: recordedTargetId } of channels) {
       const targetId = recordedTargetId ?? (await this.residentChannelTarget(channelId, this.rpc));
       try {
-        const state = await this.rpc.call<{ revision: number; active: boolean }>(
-          targetId,
-          "relationshipState",
-          [this.rpc.selfId]
-        );
+        const state = await this.rpc.call(targetId, residentChannelRpcMethods.relationshipState, [
+          this.rpc.selfId,
+        ]);
         if (state.active) {
-          await this.rpc.call(targetId, "leave", [
+          await this.rpc.call(targetId, residentChannelRpcMethods.leave, [
             { participantId: this.rpc.selfId, revision: state.revision + 1 },
           ]);
         }

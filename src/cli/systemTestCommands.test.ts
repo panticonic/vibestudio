@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type {
+  SystemTestRunnerClient,
+  SystemTestRunnerSnapshot,
+} from "@vibestudio/service-schemas/systemTestRunner";
 import type { SessionScope } from "./agent/sessionContext.js";
 import {
   loadSystemTestArtifact,
@@ -281,7 +285,7 @@ describe("system-test startup preparation", () => {
     const resolveInstallReview = vi.fn(async () => undefined);
     await expect(
       settleSystemTestStartup(
-        async () => ({ ok: true }),
+        async () => ({ ok: true, checks: [] }),
         {
           getWorkspaceCreationReviewState: async () => ({ status: "not-required" }),
           listPending: async () =>
@@ -362,28 +366,72 @@ describe("system-test startup preparation", () => {
 });
 
 describe("system-test durable driver lifecycle", () => {
+  function runnerClient(overrides: Partial<SystemTestRunnerClient> = {}): SystemTestRunnerClient {
+    const unexpected = async (name: string): Promise<never> => {
+      throw new Error(`unexpected ${name}`);
+    };
+    return {
+      doctor: async () => unexpected("doctor"),
+      listSystemTests: async () => unexpected("listSystemTests"),
+      startSystemTestRun: async () => unexpected("startSystemTestRun"),
+      getSystemTestRunSnapshot: async () => unexpected("getSystemTestRunSnapshot"),
+      getSystemTestRunResult: async () => unexpected("getSystemTestRunResult"),
+      releaseSystemTestRunExecution: async () => unexpected("releaseSystemTestRunExecution"),
+      cancelSystemTestRun: async () => unexpected("cancelSystemTestRun"),
+      inspectSystemTestRun: async () => unexpected("inspectSystemTestRun"),
+      readSystemTestTrajectoryPage: async () => unexpected("readSystemTestTrajectoryPage"),
+      getFailedSystemTestRun: async () => unexpected("getFailedSystemTestRun"),
+      ...overrides,
+    };
+  }
+
   it("observes the durable owner without consulting a separate coordinator", async () => {
     const methods: string[] = [];
-    const snapshot = { status: "running", progress: { completed: [{ name: "one" }] } };
-    const call = async <T>(method: string): Promise<T> => {
-      methods.push(method);
-      return snapshot as T;
+    const snapshot: SystemTestRunnerSnapshot = {
+      status: "running",
+      progress: { completed: [{ name: "one" }] },
     };
-    expect(await readSystemTestDriverState(call, "st_probe")).toBe(snapshot);
+    const call = runnerClient({
+      getSystemTestRunSnapshot: async () => {
+        methods.push("getSystemTestRunSnapshot");
+        return snapshot;
+      },
+    });
+    expect(await readSystemTestDriverState(call, "st_probe")).toEqual(snapshot);
     expect(methods).toEqual(["getSystemTestRunSnapshot"]);
   });
 
   it("stores a terminal result before releasing execution and remains observable afterward", async () => {
     const methods: string[] = [];
-    const summary = { passed: 1 };
-    const call = async <T>(method: string): Promise<T> => {
-      methods.push(method);
-      if (method === "getSystemTestRunSnapshot")
-        return { status: "done", result: { success: true } } as T;
-      if (method === "getSystemTestRunResult") return { summary } as T;
-      if (method === "releaseSystemTestRunExecution") return { released: true } as T;
-      throw new Error(`unexpected ${method}`);
+    const summary = {
+      runId: "st_probe",
+      status: "completed" as const,
+      total: 1,
+      passed: 1,
+      failed: 0,
+      errored: 0,
+      toolFailureCount: 0,
+      testsWithToolFailures: 0,
+      skipped: 0,
+      notInstalled: [],
+      durationMs: 1,
+      failedTests: [],
+      testsWithUnexpectedToolFailures: [],
     };
+    const call = runnerClient({
+      getSystemTestRunSnapshot: async () => {
+        methods.push("getSystemTestRunSnapshot");
+        return { status: "done", result: { success: true } };
+      },
+      getSystemTestRunResult: async () => {
+        methods.push("getSystemTestRunResult");
+        return { summary };
+      },
+      releaseSystemTestRunExecution: async () => {
+        methods.push("releaseSystemTestRunExecution");
+        return { released: true };
+      },
+    });
     for (let observation = 0; observation < 2; observation++) {
       expect(await readSystemTestDriverState(call, "st_probe")).toMatchObject({
         status: "done",
@@ -402,10 +450,12 @@ describe("system-test durable driver lifecycle", () => {
 
   it("never releases an execution whose status observation failed", async () => {
     const methods: string[] = [];
-    const call = async <T>(method: string): Promise<T> => {
-      methods.push(method);
-      throw new Error("connection reset");
-    };
+    const call = runnerClient({
+      getSystemTestRunSnapshot: async () => {
+        methods.push("getSystemTestRunSnapshot");
+        throw new Error("connection reset");
+      },
+    });
     await expect(readSystemTestDriverState(call, "st_probe")).rejects.toThrow("connection reset");
     expect(methods).toEqual(["getSystemTestRunSnapshot"]);
   });

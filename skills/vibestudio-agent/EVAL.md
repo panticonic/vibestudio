@@ -122,7 +122,10 @@ import {
 } from "@workspace/runtime";
 ```
 
-- `callMain("svc.method", ...args)` is sugar for `rpc.call("main", "svc.method", args)`.
+- `callMain("svc.method", ...args)` uses the canonical main receiver contract to
+  type-check arguments and validate arguments and results. For direct RPC, pass
+  the descriptor: `rpc.call("main", mainRpcMethods["svc.method"], args)`,
+  importing `mainRpcMethods` from `@vibestudio/service-schemas/mainRpc`.
 - `services`, `hosts`, and `runtime` are ordinary portable runtime exports,
   not EvalDO-only helpers. You can import them for code intended to run in a
   panel, worker, Durable Object, or eval session.

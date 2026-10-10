@@ -1,4 +1,4 @@
-import type { EntityRecord } from "./entitySpec.js";
+import type { DurableEntityRecord } from "./entitySpec.js";
 import type { ExecutionAuthorityOrigin } from "@vibestudio/rpc";
 
 /**
@@ -66,7 +66,7 @@ export interface ContextCloneDefinition {
     ownerSourceContextId?: string;
     ownerEntityId?: string | null;
   }>;
-  members: Array<{ source: EntityRecord; targetId: string; targetKey: string }>;
+  members: Array<{ source: DurableEntityRecord; targetId: string; targetKey: string }>;
 }
 
 /** An owner→child edge as seen from the OWNER side (listOwnedContexts). */

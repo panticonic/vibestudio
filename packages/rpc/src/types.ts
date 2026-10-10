@@ -79,21 +79,33 @@ export type RpcErrorKind =
  */
 export type RpcErrorData = unknown;
 
+/** One failure representation for unary responses, stream frames and relays.
+ * References preserve shared causes and cycles without duplicating or losing
+ * members of an aggregate. Domain errorData belongs to its original node. */
+export interface RpcFailure {
+  id?: number;
+  message: string;
+  name?: string;
+  stack?: string;
+  errorKind: RpcErrorKind;
+  code?: string;
+  errorData?: RpcErrorData;
+  diagnosticId?: string;
+  cause?: RpcFailure | RpcFailureReference;
+  errors?: Array<RpcFailure | RpcFailureReference>;
+}
+
+export interface RpcFailureReference {
+  reference: number;
+}
+
 /**
  * RPC response message (error case).
  */
 export interface RpcResponseError {
   type: "response";
   requestId: string;
-  error: string;
-  errorKind: RpcErrorKind;
-  /** Original error code (e.g. "ENOENT", "EACCES") preserved across the RPC boundary */
-  errorCode?: string;
-  /** Structured service-domain failure data; callers must not parse `error`. */
-  errorData?: RpcErrorData;
-  diagnosticId?: string;
-  /** Original stack, when available. Intended for diagnostics, not control flow. */
-  errorStack?: string;
+  error: RpcFailure;
   metadata?: RpcResponseMetadata;
 }
 
@@ -314,11 +326,7 @@ export type StreamingMethodFrame =
   | {
       kind: "error";
       status: number;
-      message: string;
-      code?: string;
-      errorKind: RpcErrorKind;
-      errorData?: RpcErrorData;
-      diagnosticId?: string;
+      error: RpcFailure;
     };
 
 export type StreamingMethodHandler = (
@@ -399,29 +407,25 @@ export interface RpcStreamOptions extends RpcTargetOptions {
 
 export type RpcStreamTrafficClass = "interactive" | "bulk";
 
+/** A receiver-owned method contract. Application calls carry this descriptor;
+ * untyped wire names exist only inside transport infrastructure. */
+export interface RpcMethod<Args extends unknown[], Result> {
+  readonly name: string;
+  invoke(args: Args, dispatch: (args: unknown[]) => Promise<unknown>): Promise<Result>;
+  parseArgs(args: Args): Promise<unknown[]>;
+}
+
 export interface RpcCaller {
-  call<T = unknown>(
+  call<Args extends unknown[], Result>(
     targetId: string,
-    method: string,
-    args: unknown[],
+    method: RpcMethod<Args, Result>,
+    args: NoInfer<Args>,
     options?: RpcCallOptions
-  ): Promise<T>;
-  /**
-   * Streaming call. Returns a `Response` whose body is a real
-   * `ReadableStream<Uint8Array>` — the upstream's response bytes,
-   * delivered chunk-by-chunk over whichever transport this caller
-   * uses. Transports that can't physically stream wrap a buffered
-   * response in a synthetic stream so the API surface is uniform
-   * across all bridges (no callers need to duck-type capability).
-   *
-   * Only `credentials.proxyFetch` is currently routed through this
-   * path; other methods continue to use `call` for their JSON
-   * request/response shape.
-   */
-  stream(
+  ): Promise<Result>;
+  stream<Args extends unknown[], Result>(
     targetId: string,
-    method: string,
-    args: unknown[],
+    method: RpcMethod<Args, Result>,
+    args: NoInfer<Args>,
     options?: RpcStreamOptions
   ): Promise<Response>;
 }
@@ -540,7 +544,7 @@ export type TypedCallProxy<TMethods extends MethodMap> = {
 };
 
 export interface RpcPeer<
-  TMethods extends MethodMap = MethodMap,
+  TMethods extends MethodMap = {},
   TEvents extends EventMap = EventMap,
   TEmitEvents extends EventMap = TEvents,
 > {
@@ -557,7 +561,13 @@ export interface RpcPeer<
     contract: C,
     role: Role
   ): RpcPeer<
-    C[Role] extends { methods: infer M extends MethodMap } ? M : MethodMap,
+    C[Role] extends { methods: infer M extends Record<string, RpcMethod<unknown[], unknown>> }
+      ? {
+          [K in keyof M]: M[K] extends RpcMethod<infer A, infer R>
+            ? (...args: A) => Promise<R>
+            : never;
+        }
+      : {},
     C[Role] extends { events: infer E extends EventMap } ? E : EventMap,
     C[Role] extends { emits: infer EE extends EventMap } ? EE : EventMap
   >;
@@ -566,7 +576,7 @@ export interface RpcPeer<
 export type RpcContract = Record<
   string,
   {
-    methods?: MethodMap;
+    methods?: Record<string, RpcMethod<unknown[], unknown>>;
     events?: EventMap;
     emits?: EventMap;
   }
@@ -603,7 +613,7 @@ export interface RpcClientConfig {
   authorityAcquisition?: "wait" | "return";
 }
 
-export interface RpcClient {
+export interface RpcClient extends RpcCaller {
   readonly selfId: string;
   expose<TArgs extends unknown[], TReturn>(
     method: string,
@@ -619,28 +629,16 @@ export interface RpcClient {
     handler: RpcContextStreamingHandler,
     website: WebsiteMethodPolicy
   ): void;
-  call<T = unknown>(
-    targetId: string,
-    method: string,
-    args: unknown[],
-    options?: RpcCallOptions
-  ): Promise<T>;
-  stream(
-    targetId: string,
-    method: string,
-    args: unknown[],
-    options?: RpcStreamOptions
-  ): Promise<Response>;
   /**
    * Like `stream`, but returns the decoded head + a raw `ReadableStream<Uint8Array>`
    * body instead of a `Response` — for React Native, whose whatwg-fetch `Response`
    * cannot consume a ReadableStream body (the caller reads it via `getReader()`).
    * Node callers should prefer `stream`.
    */
-  streamReadable(
+  streamReadable<Args extends unknown[], Result>(
     targetId: string,
-    method: string,
-    args: unknown[],
+    method: RpcMethod<Args, Result>,
+    args: NoInfer<Args>,
     options?: RpcStreamOptions
   ): Promise<DecodedFramedStream>;
   emit(targetId: string, event: string, payload: unknown, options?: RpcCallOptions): Promise<void>;
@@ -649,14 +647,8 @@ export interface RpcClient {
     listener: (event: RpcEventContext) => void,
     website: WebsiteMethodPolicy
   ): () => void;
-  peer<
-    TMethods extends MethodMap = MethodMap,
-    TEvents extends EventMap = EventMap,
-    TEmitEvents extends EventMap = TEvents,
-  >(
-    targetId: string,
-    options?: RpcTargetOptions
-  ): RpcPeer<TMethods, TEvents, TEmitEvents>;
+  peer(targetId: string, options?: RpcTargetOptions): RpcPeer;
+
   status(): RpcConnectionStatus;
   ready(): Promise<void>;
   onStatusChange(handler: (status: RpcConnectionStatus) => void): () => void;

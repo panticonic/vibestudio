@@ -1,3 +1,5 @@
+import { browserVaultMethods } from "@vibestudio/service-schemas/browserData";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { shellBrowserPrivacyMethods } from "@vibestudio/service-schemas/shellBrowserPrivacy";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 import { callerAccountUserId } from "@vibestudio/shared/serviceDispatcher";
@@ -14,7 +16,7 @@ export function createShellBrowserPrivacyService(deps: {
   doDispatch: DoDispatcher;
   workspaceId: string;
 }): ServiceDefinition {
-  const call = <T>(ctx: ServiceContext, method: string, args: unknown[]): Promise<T> => {
+  const call = (ctx: ServiceContext, method: string, args: unknown[]): Promise<unknown> => {
     if (
       ctx.caller.runtime.kind !== "shell" ||
       !ctx.caller.runtime.id.startsWith("shell:") ||
@@ -31,7 +33,7 @@ export function createShellBrowserPrivacyService(deps: {
       },
       method,
       ...args
-    ) as Promise<T>;
+    );
   };
 
   const forward = (method: string) => (ctx: ServiceContext, args: unknown[]) =>
@@ -63,7 +65,12 @@ export function createShellBrowserPrivacyService(deps: {
           throw new Error("Password-site inspection requires an HTTP(S) origin");
         }
         const origin = parsed.origin;
-        const rows = await call<unknown[]>(ctx, "getPasswordForSite", [origin]);
+        const vault = createTypedServiceClient(
+          "browserVault",
+          browserVaultMethods,
+          (_service, method, args) => call(ctx, method, args)
+        );
+        const rows = await vault.getPasswordForSite(origin);
         return { origin, passwordCount: rows.length };
       },
     }),

@@ -1,3 +1,7 @@
+import {
+  createInternalRpcClient,
+  type RpcWireClient as CoreRpcClient,
+} from "@vibestudio/rpc/internal";
 /**
  * WebSocket RPC client for the CLI.
  *
@@ -7,11 +11,7 @@
  * its own identity.
  */
 
-import {
-  createRpcClient,
-  type RpcClient as CoreRpcClient,
-  type RpcStreamOptions,
-} from "@vibestudio/rpc";
+import { type RpcStreamOptions } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
@@ -40,18 +40,14 @@ export class WsRpcClient {
     await this.ensureConnected();
   }
 
-  async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
+  async call(method: string, args: unknown[] = []): Promise<unknown> {
     const { core } = await this.ensureConnected();
-    return await core.call<T>("main", method, args);
+    return await core.call("main", method, args);
   }
 
-  async callTarget<T = unknown>(
-    targetId: string,
-    method: string,
-    args: unknown[] = []
-  ): Promise<T> {
+  async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
     const { core } = await this.ensureConnected();
-    return await core.call<T>(targetId, method, args);
+    return await core.call(targetId, method, args);
   }
 
   async stream(
@@ -134,7 +130,7 @@ export class WsRpcClient {
       await transport.close();
       throw error;
     }
-    const core = createRpcClient({
+    const core = createInternalRpcClient({
       selfId: this.config.callerId,
       callerKind: this.config.callerKind,
       transport,

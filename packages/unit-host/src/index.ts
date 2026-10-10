@@ -1,3 +1,4 @@
+import { formatRpcFailure } from "@vibestudio/rpc";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
@@ -18,7 +19,7 @@ import type { UnitKind, UnitRegistryEntryBase, UnitRegistryStatus, UnitSource } 
 export type { UnitKind, UnitRegistryEntryBase, UnitRegistryStatus, UnitSource } from "./types.js";
 
 function unitErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatRpcFailure(error);
 }
 
 /** Parse the candidate package.json without resolving it against live state. */
@@ -770,7 +771,7 @@ export class UnitHost<
       opts.validateBeforeActivateCurrent?.(entry, node, decl);
       await opts.activateCurrent(entry, node, decl);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatRpcFailure(err);
       try {
         this.markError(node.name, message);
         opts.onError?.(node, decl, message);
@@ -936,7 +937,7 @@ export class UnitHost<
       try {
         this.opts.validateBeforeApproval?.(node, decl);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatRpcFailure(err);
         // A rejected candidate is still a declared unit. Keep its failure in
         // the same registry readiness probes and invocation callers observe.
         // An already admitted image remains usable while its update is invalid.

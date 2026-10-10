@@ -22,7 +22,8 @@
       "@vibestudio/identity/*": ["../identity/src/*"],
       "@vibestudio/rpc": ["../rpc/src/index.ts"],
       "@vibestudio/sqlite": ["../sqlite/src/index.ts"],
-      "@vibestudio/types": ["../types/src/index.ts"]
+      "@vibestudio/types": ["../types/src/index.ts"],
+      "@vibestudio/rpc/*": ["../rpc/src/*"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.json"],

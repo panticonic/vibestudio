@@ -1,35 +1,130 @@
 import { describe, expect, it } from "vitest";
-import { vcsFileSelections } from "./vcsFileAuthority.js";
+import { vcsFileSelections, type SemanticReads } from "./vcsFileAuthority.js";
+import { vcsMethods, type VcsChange, type VcsInspectResult } from "@vibestudio/service-schemas/vcs";
 
 const state = { kind: "event", eventId: "event:one" } as const;
-function metadata() {
-  return async <T>(method: string, input: unknown): Promise<T> => {
-    const request = input as { path?: string; cursor?: string; node?: { kind: string } };
+type RawRead = (method: string, input: unknown) => Promise<unknown>;
+function metadata(): RawRead {
+  return async (method: string, input: unknown): Promise<unknown> => {
+    const request = input as {
+      path?: string;
+      cursor?: string;
+      state?: typeof state;
+      node?: { kind: string; state?: typeof state; repositoryId?: string; fileId?: string };
+    };
     if (method === "vcsListDirectory")
-      return {
+      return vcsMethods.listDirectory.returns.parse({
+        state: request.state,
+        path: request.path ?? "",
         entries:
           request.path === ""
-            ? [{ kind: "directory", path: "projects" }]
+            ? [
+                {
+                  name: "projects",
+                  path: "projects",
+                  kind: "directory",
+                  identity: "directory:projects",
+                  repositoryId: null,
+                  repositoryRoot: false,
+                  fileId: null,
+                  lineage: {
+                    authoredChangeId: null,
+                    authoredByWorkUnitId: "work-unit:one",
+                    contentClass: "internal",
+                    externalKeys: [],
+                  },
+                },
+              ]
             : [
                 {
-                  kind: "directory",
+                  name: "demo",
                   path: "projects/demo",
-                  repositoryRoot: true,
+                  kind: "directory",
+                  identity: "repository:one",
                   repositoryId: "repo:one",
+                  repositoryRoot: true,
+                  fileId: null,
+                  lineage: {
+                    authoredChangeId: null,
+                    authoredByWorkUnitId: "work-unit:one",
+                    contentClass: "internal",
+                    externalKeys: [],
+                  },
                 },
               ],
         nextCursor: null,
-      } as T;
+      });
     if (method === "vcsListFiles")
-      return {
-        files: request.cursor ? [{ fileId: "file:one", path: "src/file.txt" }] : [],
+      return vcsMethods.listFiles.returns.parse({
+        state: request.state,
+        repositoryId: "repo:one",
+        files: request.cursor
+          ? [
+              {
+                fileId: "file:one",
+                path: "src/file.txt",
+                contentHash: "hash:content",
+                authoredChangeId: "change:one",
+                authoredByWorkUnitId: "work-unit:one",
+                contentClass: "internal",
+                externalKeys: [],
+                mode: 0o644,
+                contentKind: "text",
+                byteLength: 0,
+                coordinateExtent: 0,
+              },
+            ]
+          : [],
         nextCursor: request.cursor ? null : "next",
-      } as T;
-    if (method === "vcsInspect")
-      return {
-        node: { kind: "repository", value: { kind: "present", repoPath: "projects/demo" } },
-      } as T;
+      });
+    if (method === "vcsInspect") {
+      const node = request.node!;
+      const inspected =
+        node.kind === "repository"
+          ? {
+              kind: "repository",
+              state: node.state,
+              value: {
+                kind: "present",
+                repositoryId: node.repositoryId ?? "repo:one",
+                repoPath: "projects/demo",
+                manifestId: "manifest:one",
+              },
+            }
+          : {
+              kind: "file",
+              state: node.state,
+              value: {
+                kind: "placed",
+                fileId: node.fileId ?? "file:one",
+                repositoryId: "repo:one",
+                path: "src/file.txt",
+                contentHash: "hash:content",
+                mode: 0o644,
+                contentKind: "text",
+                byteLength: 0,
+                coordinateExtent: 0,
+              },
+            };
+      return vcsMethods.inspect.returns.parse({
+        root: node,
+        node: inspected,
+        edges: [],
+        hasMoreEdges: false,
+      });
+    }
     throw new Error(`Unexpected metadata read ${method}`);
+  };
+}
+function typedReads(read: RawRead): SemanticReads {
+  return {
+    inspect: async (input) => vcsMethods.inspect.returns.parse(await read("vcsInspect", input)),
+    compare: async (input) => vcsMethods.compare.returns.parse(await read("vcsCompare", input)),
+    status: async (input) => vcsMethods.status.returns.parse(await read("vcsStatus", input)),
+    listDirectory: async (input) =>
+      vcsMethods.listDirectory.returns.parse(await read("vcsListDirectory", input)),
+    listFiles: async (input) =>
+      vcsMethods.listFiles.returns.parse(await read("vcsListFiles", input)),
   };
 }
 const scopes = (selections: Awaited<ReturnType<typeof vcsFileSelections>>) =>
@@ -37,15 +132,15 @@ const scopes = (selections: Awaited<ReturnType<typeof vcsFileSelections>>) =>
 
 describe("website semantic file consent", () => {
   it("separates workspace structure from file contents", async () => {
-    expect(scopes(await vcsFileSelections("mainState", undefined, metadata()))).toEqual([
-      { capability: "filesystem.list", resource: { kind: "prefix", prefix: "workspace-path/" } },
-    ]);
+    expect(scopes(await vcsFileSelections("mainState", undefined, typedReads(metadata())))).toEqual(
+      [{ capability: "filesystem.list", resource: { kind: "prefix", prefix: "workspace-path/" } }]
+    );
     expect(
       scopes(
         await vcsFileSelections(
           "readFile",
           { state, repositoryId: "repo:one", file: { kind: "id", fileId: "file:one" } },
-          metadata()
+          typedReads(metadata())
         )
       )
     ).toEqual([
@@ -61,7 +156,7 @@ describe("website semantic file consent", () => {
         await vcsFileSelections(
           "readFile",
           { state, repositoryId: "repo:one", file: { kind: "id", fileId: "missing" } },
-          metadata()
+          typedReads(metadata())
         )
       )
     ).toEqual([
@@ -75,7 +170,7 @@ describe("website semantic file consent", () => {
         await vcsFileSelections(
           "readFile",
           { state, repositoryId: "missing", file: { kind: "path", path: "file.txt" } },
-          metadata()
+          typedReads(metadata())
         )
       )
     ).toEqual([
@@ -88,7 +183,7 @@ describe("website semantic file consent", () => {
         await vcsFileSelections(
           "listFiles",
           { state, repositoryId: "repo:one", prefix: "src/a" },
-          metadata()
+          typedReads(metadata())
         )
       )
     ).toEqual([
@@ -100,10 +195,16 @@ describe("website semantic file consent", () => {
   });
   it("derives write scopes from every page of comparison coordinates", async () => {
     let calls = 0;
-    const read = async <T>(_method: string, input: unknown): Promise<T> => {
+    const read: RawRead = async (_method: string, input: unknown) => {
       calls++;
       const { cursor } = input as { cursor?: string };
-      return {
+      return vcsMethods.compare.returns.parse({
+        target: state,
+        source: { kind: "event", eventId: "event:committed" },
+        base: state,
+        resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+        counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
+        intentCounts: { merged: 0, settled: 0, split: 0, contested: 0, pending: 0 },
         coordinates: [
           {
             coordinate: {
@@ -111,10 +212,17 @@ describe("website semantic file consent", () => {
               id: cursor ? "two" : "one",
               paths: cursor ? { theirs: "projects/demo/b.txt" } : { ours: "projects/demo/a.txt" },
             },
+            status: "adopt",
+            aspects: [{ aspect: "content", base: null, ours: null, theirs: null, status: "adopt" }],
+            attribution: { ours: [], theirs: [] },
+            resolutions: [],
+            summary: "fixture",
           },
         ],
+        intents: [],
+        intentsTruncated: false,
         nextCursor: cursor ? null : "next",
-      } as T;
+      });
     };
     expect(
       scopes(
@@ -126,7 +234,7 @@ describe("website semantic file consent", () => {
             expectedMainEventId: "event:main",
             expectedCommittedEventId: "event:committed",
           },
-          read
+          typedReads(read)
         )
       )
     ).toEqual([
@@ -142,9 +250,9 @@ describe("website semantic file consent", () => {
     expect(calls).toBe(2);
   });
   it("resolves restored repository paths across all reverted changes", async () => {
-    const read = async <T>(_method: string, input: unknown): Promise<T> => {
+    const read: RawRead = async (_method: string, input: unknown) => {
       const { node } = input as { node: { changeId: string } };
-      const effects =
+      const effects: VcsChange["effects"] =
         node.changeId === "change:repo"
           ? [
               {
@@ -162,7 +270,23 @@ describe("website semantic file consent", () => {
                 after: null,
               },
             ];
-      return { node: { kind: "change", value: { effects } } } as T;
+      const change: VcsChange = {
+        changeId: node.changeId,
+        authoredByWorkUnitId: "work-unit:one",
+        operation: 0,
+        kind: "repository-delete",
+        effects,
+        counteractsChangeIds: [],
+        effectDigest: "digest:one",
+        normalizationProtocol: "v1",
+      };
+      const inspected: VcsInspectResult = {
+        root: { kind: "change", changeId: node.changeId },
+        node: { kind: "change", value: change },
+        edges: [],
+        hasMoreEdges: false,
+      };
+      return inspected;
     };
     expect(
       scopes(
@@ -174,7 +298,7 @@ describe("website semantic file consent", () => {
             expectedWorkingHead: state,
             changeIds: ["change:repo", "change:file"],
           },
-          read
+          typedReads(read)
         )
       )
     ).toEqual([

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
+import type { ContextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
 import { buildWorktreeManifest, EMPTY_STATE_HASH, sha256Hex } from "@vibestudio/content-addressing";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
@@ -31,6 +32,102 @@ function semanticContextResult(working: import("@vibestudio/service-schemas/vcs"
     },
     working: { ref: working, workspaceFactRootId: "workspace-fact-root:working" },
     workingHeadApplicationId: working.kind === "application" ? working.applicationId : null,
+  };
+}
+const editInput = (contextId = "context:test") => ({
+  commandId: "command:test",
+  contextId,
+  expectedWorkingHead: { kind: "event" as const, eventId: "event:test" },
+  changes: [{ kind: "repository-delete" as const, repositoryId: "repository:test" }],
+});
+const moveInput = (contextId = "context:test") => ({
+  commandId: "command:test",
+  contextId,
+  expectedWorkingHead: { kind: "event" as const, eventId: "event:test" },
+  moves: [
+    {
+      kind: "repository" as const,
+      repositoryId: "repository:test",
+      destinationPath: "packages/renamed",
+    },
+  ],
+});
+const pushInput = (contextId = "context:test") => ({
+  commandId: "command:test",
+  contextId,
+  expectedCommittedEventId: "event:test",
+  expectedMainEventId: "event:main",
+});
+const importInput = {
+  commandId: "command:test",
+  contextId: "context:test",
+  expectedWorkingHead: { kind: "event" as const, eventId: "event:test" },
+  source: {
+    kind: "generated" as const,
+    uri: "https://example.test/source",
+    snapshotRevision: "test",
+  },
+  repositories: [{ repoPath: "packages/test", files: [] }],
+};
+
+function materializationEffect(command: ContextMaterializationCommand, effectId: string) {
+  return {
+    effectId,
+    scopeKind: "context" as const,
+    scopeId: command.contextId,
+    commandId: command.commandId,
+    kind: "materialize-context" as const,
+    payload: command,
+    payloadDigest: `digest:${effectId}`,
+    status: "pending" as const,
+    receipt: null,
+    createdAt: "2026-07-16T12:00:00.000Z",
+  };
+}
+
+function pushResult(contextId: string, eventId: string, effectId: string) {
+  return {
+    contextId,
+    eventId,
+    mainEventId: eventId,
+    effectId,
+    appliedAt: "2026-07-16T12:00:00.000Z",
+  };
+}
+
+function mutationResult(input: {
+  commandId: string;
+  contextId: string;
+  expectedWorkingHead: { kind: "event" | "application"; eventId?: string; applicationId?: string };
+}) {
+  return {
+    commandId: input.commandId,
+    contextId: input.contextId,
+    workUnitId: "work-unit:test",
+    applicationId: "application:test",
+    changeCount: 0,
+    changeIds: [],
+    incorporatedChangeCount: 0,
+    incorporatedChangeIds: [],
+    decisionIds: [],
+    workingHead: input.expectedWorkingHead,
+  };
+}
+
+function importedSnapshotResult() {
+  return {
+    contextId: importInput.contextId,
+    eventId: "event:import",
+    workUnitId: "work-unit:import",
+    applicationId: "application:import",
+    externalSnapshot: {
+      sourceKind: "generated" as const,
+      sourceUri: "https://example.test/source",
+      snapshotRevision: "test",
+      snapshotDigest: `snapshot:${"0".repeat(64)}`,
+      targetRepositoryIds: ["repository:test"],
+    },
+    importedRepositoryIds: ["repository:test"],
   };
 }
 
@@ -204,6 +301,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         kind: "host-read",
         request: {
           kind: "read-semantic-blob",
+          state: { kind: "event", eventId: "event:test" },
           contentHash: stored.digest,
           contentKind,
           byteLength: bytes.length,
@@ -217,7 +315,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         },
       }),
     } as never);
-    const read = () => vcs.semanticDirectCall("vcsReadFile", {});
+    const read = () =>
+      vcs.semanticDirectCall("vcsReadFile", {
+        state: { kind: "event", eventId: "event:test" },
+        repositoryId: "repository:test",
+        file: { kind: "id", fileId: "file:test" },
+      });
     await expect(read()).resolves.toMatchObject({
       content: { kind: "bytes", base64: bytes.toString("base64") },
       ...lineage,
@@ -353,7 +456,16 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
   it("reads channel provenance through the GAD log API, outside semantic VCS dispatch", async () => {
     const { vcs } = await harness();
-    const call = vi.fn(async () => ({ contentClass: "external" as const }));
+    const call = vi.fn(async () => ({
+      envelopeId: "message:one",
+      channelId: "channel:one",
+      seq: 1,
+      from: { kind: "user", id: "user:one" },
+      payload: null,
+      contentClass: "external" as const,
+      externalKeys: [],
+      publishedAt: "2026-07-16T12:00:00.000Z",
+    }));
     await vcs.attachGad(providerFromWireCall(call));
 
     await expect(
@@ -500,7 +612,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         calls.push(input);
         return {
           kind: "complete" as const,
-          result: { working: { ref: { kind: "event" as const, eventId: "event:main" } } },
+          result: semanticContextResult({ kind: "event" as const, eventId: "event:main" }),
         };
       }),
     };
@@ -557,27 +669,87 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       if (method === "vcsEnsureContext") {
         return {
           kind: "complete",
-          result: { working: { ref: { kind: "event", eventId: "event:genesis" } } },
+          result: semanticContextResult({ kind: "event", eventId: "event:genesis" }),
         };
       }
       const dispatch = { method, request: input as { input: unknown } };
       if (dispatch.method === "vcsInspect") {
+        const requestedEventId = (
+          dispatch.request.input as { node?: { eventId?: string } } | undefined
+        )?.node?.eventId;
+        const imported = requestedEventId === "event:import" && importedSnapshots.length > 0;
+        const eventId = imported ? "event:import" : "event:genesis";
         return {
           kind: "complete",
           result: {
             root: { kind: "event", eventId: "event:genesis" },
-            node: { kind: "event", value: { kind: "genesis", eventId: "event:genesis" } },
+            node: {
+              kind: "event",
+              value: imported
+                ? {
+                    eventId,
+                    workspaceId: "workspace:test",
+                    commandId: "command:initial-import",
+                    kind: "commit",
+                    workspaceFactRootId: "workspace-fact-root:initial",
+                    snapshotSource: null,
+                    parentEventIds: ["event:genesis"],
+                    applicationIds: ["application:initial-import"],
+                    decisionIds: [],
+                    message: "Import initial workspace snapshot",
+                    semanticProtocol: "semantic-vcs:test",
+                    createdAt: "2026-07-16T12:00:00.000Z",
+                  }
+                : {
+                    eventId,
+                    workspaceId: "workspace:test",
+                    commandId: "command:genesis",
+                    kind: "genesis",
+                    workspaceFactRootId: "workspace-fact-root:genesis",
+                    snapshotSource: null,
+                    parentEventIds: [],
+                    applicationIds: [],
+                    decisionIds: [],
+                    message: null,
+                    semanticProtocol: "semantic-vcs:test",
+                    createdAt: "2026-07-16T12:00:00.000Z",
+                  },
+            },
             edges: [],
             hasMoreEdges: false,
           },
         };
       }
       if (dispatch.method === "vcsImportSnapshot") {
-        importedSnapshots.push(dispatch.request.input as ImportedSnapshot);
-        return { kind: "complete", result: { eventId: "event:import" } };
+        const input = dispatch.request.input as ImportedSnapshot;
+        importedSnapshots.push(input);
+        return {
+          kind: "complete",
+          result: {
+            contextId: "context:workspace-initialization",
+            eventId: "event:import",
+            workUnitId: "work-unit:initial-import",
+            applicationId: "application:initial-import",
+            externalSnapshot: {
+              sourceKind: "filesystem",
+              sourceUri: "vibestudio://workspace/source",
+              snapshotRevision: "source-revision",
+              snapshotDigest: `snapshot:${"a".repeat(64)}`,
+              targetRepositoryIds: ["repository:coordinates"],
+            },
+            importedRepositoryIds: ["repository:coordinates"],
+          },
+        };
       }
       if (dispatch.method === "vcsPush") {
-        return { kind: "complete", result: { eventId: "event:import" } };
+        return {
+          kind: "complete",
+          result: pushResult(
+            "context:workspace-initialization",
+            "event:import",
+            "effect:initial-push"
+          ),
+        };
       }
       throw new Error(`unexpected ${dispatch.method}`);
     });
@@ -821,7 +993,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       if (method === "vcsEnsureContext") {
         return {
           kind: "complete",
-          result: { working: { ref: { kind: "event", eventId: importedEventId } } },
+          result: semanticContextResult({ kind: "event", eventId: importedEventId }),
         };
       }
       if (method === "vcsContextMaterializationCommand") {
@@ -847,6 +1019,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
                 commandId: "initial-import:source-state",
                 kind: "commit",
                 workspaceFactRootId: "workspace-fact-root:initial",
+                snapshotSource: null,
                 parentEventIds: [genesisEventId],
                 applicationIds: ["application:initial-import"],
                 decisionIds: [],
@@ -886,6 +1059,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       },
       payloadDigest: "effect-digest:caller-push",
       status: "pending",
+      receipt: null,
+      createdAt: "2026-07-16T12:00:00.000Z",
     } as const;
     const call = vi.fn(async (method: string) => {
       if (method === "vcsPendingSemanticEffects") return [publishEffect];
@@ -916,6 +1091,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       },
       payloadDigest: "effect-digest:unapplied-publication",
       status: "pending",
+      receipt: null,
+      createdAt: "2026-07-16T12:00:00.000Z",
     } as const;
     const observation = {
       effectId: "effect:observation",
@@ -926,6 +1103,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       payload: { representation: "descriptor", files: [] },
       payloadDigest: "effect-digest:observation",
       status: "pending",
+      receipt: null,
+      createdAt: "2026-07-16T12:00:00.000Z",
     } as const;
     const appliedPublication = {
       ...unauthorizedPublication,
@@ -1004,13 +1183,15 @@ describe("WorkspaceVcs semantic host orchestration", () => {
             },
             payloadDigest: "effect-digest:generic-host-push",
             status: "pending",
+            receipt: null,
+            createdAt: "2026-07-16T12:00:00.000Z",
           },
         ],
       };
     });
     await vcs.attachGad(providerFromWireCall(call));
 
-    await expect(vcs.semanticDirectCall("vcsPush", {})).rejects.toThrow(
+    await expect(vcs.semanticDirectCall("vcsPush", pushInput())).rejects.toThrow(
       "protected publication has no verified gate context"
     );
     expect(updateMains).not.toHaveBeenCalled();
@@ -1025,7 +1206,19 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const call = vi.fn(async (method: string, _request: unknown) => {
       const semanticMethod = method;
       if (semanticMethod === "vcsStatus") {
-        return { kind: "complete", result: { recovered: true } };
+        return {
+          kind: "complete",
+          result: {
+            contextId: "context:aborted-publication",
+            committed: { kind: "event", eventId: "event:aborted" },
+            workingHead: { kind: "event", eventId: "event:aborted" },
+            clean: true,
+            mainEventId: "event:aborted",
+            mainRelation: "at",
+            workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+            integrating: [],
+          },
+        };
       }
       if (semanticMethod !== "vcsPush") throw new Error(`unexpected ${semanticMethod}`);
       return {
@@ -1045,6 +1238,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
             },
             payloadDigest: "effect-digest:aborted-publication",
             status: "pending",
+            receipt: null,
+            createdAt: "2026-07-16T12:00:00.000Z",
           },
         ],
       };
@@ -1059,7 +1254,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
 
     const publication = vcs.semanticPublishCall(
-      { contextId: "context:aborted-publication" },
+      pushInput("context:aborted-publication"),
       null,
       caller,
       controller.signal
@@ -1078,7 +1273,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           causalParent: null,
         },
       })
-    ).resolves.toEqual({ recovered: true });
+    ).resolves.toMatchObject({ contextId: "context:aborted-publication" });
   });
 
   it("refuses to reconstruct an initial publication without its source plan", async () => {
@@ -1211,7 +1406,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
     complete({
       kind: "complete",
-      result: { working: { ref: { kind: "event", eventId: "event:main" } } },
+      result: semanticContextResult({ kind: "event", eventId: "event:main" }),
     });
     await expect(Promise.all([first, second])).resolves.toEqual([
       { kind: "event", eventId: "event:main" },
@@ -1227,7 +1422,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       expect(input).toMatchObject({ projection: "deferred" });
       return {
         kind: "complete",
-        result: { working: { ref: { kind: "event", eventId: "event:main" } } },
+        result: semanticContextResult({ kind: "event", eventId: "event:main" }),
       };
     });
     await vcs.attachGad(providerFromWireCall(call));
@@ -1275,7 +1470,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
     completeEnsure({
       kind: "complete",
-      result: { working: { ref: { kind: "event", eventId: "event:main" } } },
+      result: semanticContextResult({ kind: "event", eventId: "event:main" }),
     });
     await initialization;
     await deletion;
@@ -1316,14 +1511,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       ],
       blobs: [],
     });
-    const effect = {
-      ...command,
-      scopeKind: "context" as const,
-      scopeId: command.contextId,
-      kind: "materialize-context" as const,
-      payload: command,
-      status: "pending" as const,
-    };
+    const effect = materializationEffect(command, "effect:materialize");
     let receipt: Record<string, unknown> | null = null;
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsEdit") {
@@ -1332,7 +1520,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       if (method === "vcsSemanticEffectAck") {
         receipt = (input as { acknowledgement: { receipt: Record<string, unknown> } })
           .acknowledgement.receipt;
-        return { kind: "complete", result: { ok: true } };
+        return { kind: "complete", result: mutationResult(editInput()) };
       }
       throw new Error(`unexpected ${method}`);
     });
@@ -1340,10 +1528,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
     await expect(
       vcs.semanticCall("vcsEdit", {
-        input: {},
+        input: editInput(),
         ingress: { causalParent: null },
       })
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual(mutationResult(editInput()));
     await expect(
       fsp.readFile(
         path.join(root, "contexts", "context:one", "packages", "app", "index.ts"),
@@ -1391,14 +1579,17 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         for (const [index, blob] of blobs.entries()) {
           expect(await getBytes(blobsDir, blob.contentHash)).toEqual(contents[index]);
         }
-        return { kind: "complete", result: { ok: true } };
+        return { kind: "complete", result: mutationResult(editInput("context:semantic-only")) };
       }
       throw new Error(`unexpected ${method}`);
     });
     await vcs.attachGad(providerFromWireCall(call));
     await expect(
-      vcs.semanticCall("vcsEdit", { input: request.input, ingress: request.ingress as never })
-    ).resolves.toEqual({ ok: true });
+      vcs.semanticCall("vcsEdit", {
+        input: editInput("context:semantic-only"),
+        ingress: request.ingress,
+      })
+    ).resolves.toEqual(mutationResult(editInput("context:semantic-only")));
     await expect(
       fsp.stat(path.join(root, "contexts", "context:semantic-only"))
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -1422,7 +1613,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       },
     }));
     await vcs.attachGad(providerFromWireCall(call));
-    await expect(vcs.semanticDirectCall("vcsEdit", {})).rejects.toThrow("bytes do not match");
+    await expect(vcs.semanticDirectCall("vcsEdit", editInput())).rejects.toThrow(
+      "bytes do not match"
+    );
     expect(call).toHaveBeenCalledOnce();
     expect(await getBytes(blobsDir, sha256Hex(valid))).toBeNull();
   });
@@ -1460,13 +1653,13 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         acknowledgeStarted();
         await finish;
         committed = true;
-        return { kind: "complete", result: { ok: true } };
+        return { kind: "complete", result: mutationResult(editInput()) };
       }
       throw new Error(`unexpected ${method}`);
     });
     await vcs.attachGad(providerFromWireCall(call));
     const gc = await vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
-    const edit = vcs.semanticDirectCall("vcsEdit", {});
+    const edit = vcs.semanticDirectCall("vcsEdit", editInput());
     await started;
     const sweep = gc.commit();
     finishAcknowledgement();
@@ -1487,7 +1680,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsEnsureContext") {
-        return { kind: "complete", result: { working: { ref: command.targetState } } };
+        return { kind: "complete", result: semanticContextResult(command.targetState) };
       }
       if (method === "vcsContextMaterializationCommand") {
         expect(input).toEqual({ contextId: command.contextId, materializedState: null });
@@ -1510,7 +1703,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const targetState = { kind: "event" as const, eventId: "event:main" };
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsEnsureContext") {
-        return { kind: "complete", result: { working: { ref: targetState } } };
+        return { kind: "complete", result: semanticContextResult(targetState) };
       }
       if (method === "vcsContextMaterializationCommand") {
         return emptyRepairCommand(input as never, targetState);
@@ -1564,6 +1757,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         files: [{ contentHash }],
       },
       status: "pending" as const,
+      receipt: null,
+      createdAt: "2026-07-16T12:00:00.000Z",
     };
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsImportSnapshot") {
@@ -1581,16 +1776,16 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           },
         ],
       });
-      return { kind: "complete", result: { eventId: "event:import" } };
+      return { kind: "complete", result: importedSnapshotResult() };
     });
     await vcs.attachGad(providerFromWireCall(call));
 
     await expect(
       vcs.semanticCall("vcsImportSnapshot", {
-        input: {},
+        input: importInput,
         ingress: { causalParent: null },
       })
-    ).resolves.toEqual({ eventId: "event:import" });
+    ).resolves.toEqual(importedSnapshotResult());
   });
 
   it("drains observation then materialization without an authorship channel", async () => {
@@ -1619,15 +1814,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         files: [{ contentHash }],
       },
       status: "pending" as const,
+      receipt: null,
+      createdAt: "2026-07-16T12:00:00.000Z",
     };
-    const materializeEffect = {
-      ...materialization,
-      scopeKind: "context" as const,
-      scopeId: "context:one",
-      kind: "materialize-context" as const,
-      payload: materialization,
-      status: "pending" as const,
-    };
+    const materializeEffect = materializationEffect(materialization, "effect:materialize");
     let acknowledgements = 0;
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsEdit") {
@@ -1642,15 +1832,15 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         });
         return { kind: "effects-pending", result: null, effects: [materializeEffect] };
       }
-      return { kind: "complete", result: { applicationId: "application:one" } };
+      return { kind: "complete", result: mutationResult(editInput("context:one")) };
     });
     await vcs.attachGad(providerFromWireCall(call));
     await expect(
       vcs.semanticCall("vcsEdit", {
-        input: {},
+        input: editInput("context:one"),
         ingress: { causalParent: null },
       })
-    ).resolves.toEqual({ applicationId: "application:one" });
+    ).resolves.toEqual(mutationResult(editInput("context:one")));
     expect(acknowledgements).toBe(2);
   });
 
@@ -1690,14 +1880,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       ],
       blobs: [],
     });
-    const effect = {
-      ...command,
-      scopeKind: "context" as const,
-      scopeId: command.contextId,
-      kind: "materialize-context" as const,
-      payload: command,
-      status: "pending" as const,
-    };
+    const effect = materializationEffect(command, "effect:materialize");
     let receipt: Record<string, unknown> | null = null;
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsMove") {
@@ -1705,12 +1888,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       receipt = (input as { acknowledgement: { receipt: Record<string, unknown> } }).acknowledgement
         .receipt;
-      return { kind: "complete", result: { ok: true } };
+      return { kind: "complete", result: mutationResult(moveInput("context:delta")) };
     });
     await vcs.attachGad(providerFromWireCall(call));
 
     await vcs.semanticCall("vcsMove", {
-      input: {},
+      input: moveInput("context:delta"),
       ingress: { causalParent: null },
     });
 
@@ -1743,6 +1926,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       kind: "publish-main" as const,
       payloadDigest: "digest:publish",
       status: "pending" as const,
+      receipt: null,
+      createdAt: "2026-07-16T12:00:00.000Z",
       payload: {
         contextId: "context:one",
         previousEventId: "event:genesis",
@@ -1803,13 +1988,16 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         .acknowledgement.receipt;
       expect(Object.keys(receipt).sort()).toEqual(["applied", "appliedAt"]);
       expect(receipt).toEqual({ applied: true, appliedAt: expect.any(String) });
-      return { kind: "complete", result: { eventId: "event:one" } };
+      return {
+        kind: "complete",
+        result: pushResult("context:one", "event:one", "effect:publish-two"),
+      };
     });
     await vcs.attachGad(providerFromWireCall(call));
     await vcs.semanticCall(
       "vcsPush",
       {
-        input: {},
+        input: pushInput("context:one"),
         ingress: { causalParent: null },
       },
       {
@@ -1850,7 +2038,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await vcs.semanticCall(
       "vcsPush",
       {
-        input: {},
+        input: pushInput("context:other"),
         ingress: { causalParent: null },
       },
       {

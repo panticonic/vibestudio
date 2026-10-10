@@ -139,7 +139,10 @@
     "./workspaceServiceRpc": "./src/workspaceServiceRpc.ts",
     "./ws/*": "./src/ws/*.ts",
     "./ownedProcessRegistration": "./src/ownedProcessRegistration.mjs",
-    "./byteBudgetCache": "./src/byteBudgetCache.ts"
+    "./byteBudgetCache": "./src/byteBudgetCache.ts",
+    "./rpcMethods": "./src/rpcMethods.ts",
+    "./typedRpcServiceClient": "./src/typedRpcServiceClient.ts",
+    "./logIds": "./src/logIds.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/shared/src"

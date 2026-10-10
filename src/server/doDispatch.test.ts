@@ -276,14 +276,20 @@ describe("DODispatch", () => {
       guarded.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
       vi.stubGlobal(
         "fetch",
-        vi.fn(async (url: string, init?: RequestInit) =>
-          url.endsWith("/__rpc")
-            ? rpcSuccessResponse(init, null)
-            : new Response(JSON.stringify({ value: null }), {
-                status: 200,
-                headers: { "Content-Type": "application/json" },
-              })
-        )
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (!url.endsWith("/__rpc")) {
+            return new Response(JSON.stringify({ value: null }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          const envelope = decodeRpcJson(String(init?.body)) as RpcEnvelope;
+          if (envelope.message.type !== "request") throw new Error("Expected RPC request");
+          return rpcSuccessResponse(
+            init,
+            envelope.message.method === "__alarm" ? { nextAlarm: null } : null
+          );
+        })
       );
       const ref = makeRef();
 
@@ -470,10 +476,12 @@ describe("DODispatch", () => {
           message: {
             type: "response",
             requestId: envelope.message.requestId,
-            error: "remote cleanup failed",
-            errorKind: "internal",
-            errorCode: "CLEANUP_FAILED",
-            errorData: { owner: "receiver" },
+            error: {
+              message: "remote cleanup failed",
+              errorKind: "internal",
+              code: "CLEANUP_FAILED",
+              errorData: { owner: "receiver" },
+            },
           },
         };
         return new Response(
@@ -543,6 +551,21 @@ describe("DODispatch", () => {
         releaseTerminal?.();
         await operation.catch(() => {});
       }
+    });
+
+    it("rejects malformed alarm replies at the transport boundary", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init?: RequestInit) =>
+          rpcSuccessResponse(init, { nextAlarm: { wakeAt: "tomorrow" } })
+        )
+      );
+      dispatch.setTokenManager(new TokenManager());
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+
+      await expect(dispatch.dispatchAlarm(makeRef())).rejects.toThrow("Invalid __alarm result");
     });
 
     it("does not impose Undici response deadlines on DO method lifetimes", async () => {
@@ -831,9 +854,11 @@ describe("DODispatch", () => {
               message: {
                 type: "response",
                 requestId: request.message.requestId,
-                error: "revision does not resolve",
-                errorKind: "application",
-                errorData,
+                error: {
+                  message: "revision does not resolve",
+                  errorKind: "application",
+                  errorData,
+                },
               },
             } satisfies RpcEnvelope),
             { status: 200, headers: { "Content-Type": "application/json" } }

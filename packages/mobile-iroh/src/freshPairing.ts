@@ -1,4 +1,4 @@
-import { HubWorkspaceRouteSchema, hubControlMethods } from "@vibestudio/service-schemas/hubControl";
+import { createMobileHubControlClient } from "./hubControlClient.js";
 import type { IrohConnection } from "./connect.js";
 import { composeMobileSession } from "./connectionPair.js";
 import {
@@ -47,9 +47,8 @@ export async function completeFreshMobilePairing(
     if (!credential) {
       throw new Error("Fresh pairing did not issue a current mobile device credential");
     }
-    const pair = hubControlMethods.ensureUserWorkspaces.returns.parse(
-      await controlConnection.rpc.call("main", "hubControl.ensureUserWorkspaces", [])
-    );
+    const hub = createMobileHubControlClient(controlConnection);
+    const pair = await hub.ensureUserWorkspaces();
     const source = createPairedMobileConnection(
       credential,
       controlPairing,
@@ -57,11 +56,7 @@ export async function completeFreshMobilePairing(
       controlConnection.endpointIdentityId
     );
     await persistConnection(source);
-    const route = HubWorkspaceRouteSchema.parse(
-      await controlConnection.rpc.call("main", "hubControl.routeWorkspace", [
-        { workspaceId: source.selectedWorkspaceId },
-      ])
-    );
+    const route = await hub.routeWorkspace({ workspaceId: source.selectedWorkspaceId });
     if (route.workspaceId !== source.selectedWorkspaceId) {
       throw new Error("Workspace route changed the System app source");
     }

@@ -1,3 +1,4 @@
+import { schemaRpcStream } from "@vibestudio/rpc/internal";
 import type { EventName } from "@vibestudio/shared/events";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import type { ServerClient } from "./serverClient.js";
@@ -34,7 +35,7 @@ export function createServerEventSubscriptionBridge(deps: {
       return client.stream(method.slice(0, dot), method.slice(dot + 1), args, options);
     },
   };
-  const events = new EventsClient(rpc);
+  const events = new EventsClient({ stream: schemaRpcStream(rpc.stream) });
   const references = new Map<EventName, number>();
   const stopListening = new Map<EventName, () => void>();
   const log = deps.log ?? console;

@@ -1,7 +1,8 @@
+import { schemaRpcClient, type RpcWireClient as RpcClient } from "@vibestudio/rpc/internal";
 import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import type { RpcClient, RpcRequestContext } from "@vibestudio/rpc";
+import type { RpcRequestContext } from "@vibestudio/rpc";
 import { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { testAuthority } from "@vibestudio/shared/serviceDispatcherTestUtils";
@@ -83,7 +84,7 @@ describe("desktop host-service publication", () => {
         method: "desktopProbe.inspect",
         args: [],
         signal: new AbortController().signal,
-        rpc,
+        rpc: schemaRpcClient(rpc),
       }) satisfies RpcRequestContext;
 
     expect(() => exposed?.(request("worker:untrusted", "worker"))).toThrow("authenticated server");
@@ -154,7 +155,7 @@ describe("desktop host-service publication", () => {
     const request: RpcRequestContext = {
       origin: { callerId: "main", callerKind: "server" },
       method: "progress",
-      rpc,
+      rpc: schemaRpcClient(rpc),
       args: [],
       caller: { callerId: "worker:untrusted", callerKind: "worker" },
       signal: new AbortController().signal,
@@ -192,7 +193,7 @@ describe("desktop host-service publication", () => {
     const request: RpcRequestContext = {
       origin: { callerId: "main", callerKind: "server" },
       method: "progress",
-      rpc,
+      rpc: schemaRpcClient(rpc),
       args: [],
       caller: { callerId: "main", callerKind: "server" },
       signal: abort.signal,

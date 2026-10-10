@@ -1,10 +1,11 @@
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { describe, expect, it, vi } from "vitest";
 import { PanelInitClient } from "./panelInitClient.js";
 
 function clientWithPanelManager(currentEntityId: string | null) {
   const client = new PanelInitClient(
-    { call: vi.fn() },
+    schemaRpcMock({ call: vi.fn() }),
     "http://127.0.0.1:3030",
     "Headless Test",
     "headless-test",

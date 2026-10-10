@@ -1,4 +1,4 @@
-import { HubWorkspaceRouteSchema } from "@vibestudio/service-schemas/hubControl";
+import { createMobileHubControlClient } from "./hubControlClient.js";
 import type { IrohConnection } from "./connect.js";
 import type { StoredShellPairing } from "./storedCredential.js";
 import { MobileConnectionAggregateError } from "./connectionPair.js";
@@ -37,9 +37,7 @@ export class MobileWorkspaceAccount {
     workspaceId: string,
     onRecovery?: MobileRecoveryHandler
   ): Promise<IrohConnection> {
-    const route = HubWorkspaceRouteSchema.parse(
-      await this.control.rpc.call("main", "hubControl.routeWorkspace", [{ workspaceId }])
-    );
+    const route = await createMobileHubControlClient(this.control).routeWorkspace({ workspaceId });
     if (route.workspaceId !== workspaceId) {
       throw new Error("The server routed a different workspace than requested");
     }

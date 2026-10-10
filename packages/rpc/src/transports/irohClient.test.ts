@@ -1,3 +1,4 @@
+import { createInternalRpcClient as createRpcClient } from "@vibestudio/rpc/internal";
 import {
   IROH_WIRE_VERSION,
   MAX_CONTROL_FRAME_BYTES,
@@ -17,10 +18,10 @@ import {
   VIBESTUDIO_IROH_ALPN,
 } from "@vibestudio/iroh-transport/node";
 import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
-import { createRpcClient } from "../client.js";
+
 import { isRpcConnectionLost } from "../errors.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
-import { encodeIrohStreamResponseHead } from "../protocol/irohStreamResponse.js";
+import { encodeHeadFrame, encodeDataFrame, encodeEndFrame } from "../protocol/streamCodec.js";
 import {
   decodeIrohSessionControlFrame,
   encodeIrohSessionControlFrame,
@@ -760,17 +761,16 @@ describe("Iroh RPC client over real local QUIC", () => {
       await headAdmission;
 
       const responseBody = new TextEncoder().encode("response-body");
-      await writeFrame(
-        requestStream.send,
-        encodeIrohStreamResponseHead({
+      await requestStream.send.writeAll(
+        encodeHeadFrame({
           status: 201,
           statusText: "Created",
           headerPairs: [["content-type", "text/plain"]],
           finalUrl: "https://example.test/result",
-        }),
-        MAX_ENVELOPE_FRAME_BYTES
+        })
       );
-      await requestStream.send.writeAll(responseBody);
+      await requestStream.send.writeAll(encodeDataFrame(responseBody));
+      await requestStream.send.writeAll(encodeEndFrame({ bytesIn: responseBody.byteLength }));
       await requestStream.send.finish();
 
       progress.server = "failed upload cancellation receipt";
@@ -798,17 +798,16 @@ describe("Iroh RPC client over real local QUIC", () => {
       // trusts Content-Length is not required to pull one extra EOF chunk just
       // to release native QUIC stream credit.
       expect(await bodyless.recv.read(1)).toHaveLength(0);
-      await writeFrame(
-        bodyless.send,
-        encodeIrohStreamResponseHead({
+      await bodyless.send.writeAll(
+        encodeHeadFrame({
           status: 200,
           statusText: "OK",
           headerPairs: [["content-length", "5"]],
           finalUrl: "https://example.test/download",
-        }),
-        MAX_ENVELOPE_FRAME_BYTES
+        })
       );
-      await bodyless.send.writeAll(new TextEncoder().encode("hello"));
+      await bodyless.send.writeAll(encodeDataFrame(new TextEncoder().encode("hello")));
+      await bodyless.send.writeAll(encodeEndFrame({ bytesIn: 5 }));
       await bodyless.send.finish();
 
       for (const body of [false, true]) {
@@ -843,18 +842,18 @@ describe("Iroh RPC client over real local QUIC", () => {
           k: "stream",
         });
         await readFrame(duplex.recv, MAX_ENVELOPE_FRAME_BYTES);
-        await writeFrame(
-          duplex.send,
-          encodeIrohStreamResponseHead({
+        await duplex.send.writeAll(
+          encodeHeadFrame({
             status: 200,
             statusText: "OK",
             headerPairs: [],
             finalUrl: "",
-          }),
-          MAX_ENVELOPE_FRAME_BYTES
+          })
         );
-        if (finishResponse) await duplex.send.finish();
-        else await duplex.send.writeAll(new Uint8Array([1]));
+        if (finishResponse) {
+          await duplex.send.writeAll(encodeEndFrame({ bytesIn: 0 }));
+          await duplex.send.finish();
+        } else await duplex.send.writeAll(encodeDataFrame(new Uint8Array([1])));
         progress.server = "duplex cancellation receipt";
         if (closeOwner === "pipe" && cancellationCode === 0x201) {
           // Physical retirement owns the whole connection, so its terminal

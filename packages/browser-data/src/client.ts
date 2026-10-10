@@ -40,3 +40,8 @@ export type {
   StoredPageFavicon,
   StoredSearchEngine,
 } from "./storage/types.js";
+
+export {
+  browserDataProviderRpcMethods,
+  type BrowserDataProvider,
+} from "./client/browserDataClient.js";

@@ -1,3 +1,4 @@
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { HeadlessHost } from "./headlessHost.js";
 import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
@@ -27,7 +28,7 @@ describe("HeadlessHost lifecycle guards", () => {
       contextIds: vi.fn(() => [...observed]),
       reconcileContextOwners: vi.fn(async () => {}),
     };
-    const rpc = {
+    const rpc = schemaRpcMock({
       call: vi.fn(async (_target: string, method: string) => {
         if (method === "panelRuntime.getSnapshot")
           return { version: { epoch: "test", counter: 1 }, leases: [] };
@@ -37,7 +38,7 @@ describe("HeadlessHost lifecycle guards", () => {
         }
         throw new Error(`Unexpected method: ${method}`);
       }),
-    };
+    });
     Object.assign(host, { pages, connection: { rpc } });
     await (host as unknown as { reconcile(): Promise<void> }).reconcile();
     expect(pages.reconcileContextOwners).toHaveBeenCalledExactlyOnceWith(
@@ -62,7 +63,7 @@ describe("HeadlessHost lifecycle guards", () => {
     };
     const tracker = new LeaseTracker(host.registration.clientSessionId);
     tracker.reconcile({ version: { epoch: "test", counter: 1 }, leases: [lease] });
-    const rpc = { call: vi.fn(async () => undefined) };
+    const rpc = schemaRpcMock({ call: vi.fn(async () => "reported") });
     const pages = {
       panelPageObservation: vi.fn(async () => ({
         view: { url: "http://127.0.0.1/panels/chat/", loading: false },
@@ -85,24 +86,29 @@ describe("HeadlessHost lifecycle guards", () => {
       host as unknown as { reportPageObservation(slotId: string): Promise<void> }
     ).reportPageObservation(lease.slotId);
 
-    expect(rpc.call).toHaveBeenCalledWith("main", "panelRuntime.reportView", [
-      lease.runtimeEntityId,
-      lease.connectionId,
-      {
-        url: "http://127.0.0.1/panels/chat/",
-        loading: false,
-        boot: {
-          kind: "observed" as const,
-          observation: { phase: "ready", runtimeEntityId: lease.runtimeEntityId },
+    expect(rpc.call).toHaveBeenCalledWith(
+      "main",
+      "panelRuntime.reportView",
+      [
+        lease.runtimeEntityId,
+        lease.connectionId,
+        {
+          url: "http://127.0.0.1/panels/chat/",
+          loading: false,
+          boot: {
+            kind: "observed" as const,
+            observation: { phase: "ready", runtimeEntityId: lease.runtimeEntityId },
+          },
         },
-      },
-    ]);
+      ],
+      undefined
+    );
   });
 
   it("re-registers and reopens the lease watch after injected connection recovery", async () => {
     let recover: (() => void | Promise<void>) | null = null;
-    const rpc = {
-      call: vi.fn(async <T = unknown>(_targetId: string, method: string): Promise<T> => {
+    const rpc = schemaRpcMock({
+      call: vi.fn(async (_targetId: string, method: string): Promise<unknown> => {
         if (method === "workspace.getInfo") {
           return {
             appVersion: "0.1.84",
@@ -113,12 +119,12 @@ describe("HeadlessHost lifecycle guards", () => {
             statePath: "/state",
             contextProjectionsPath: "/contexts",
             config: { id: "workspace-test", systemEpoch: 0 },
-          } as T;
+          };
         }
         if (method === "panelRuntime.getSnapshot") {
-          return { version: { epoch: "e1", counter: 0 }, leases: [] } as T;
+          return { version: { epoch: "e1", counter: 0 }, leases: [] };
         }
-        return undefined as T;
+        return undefined;
       }),
       stream: vi.fn(
         async (
@@ -142,7 +148,7 @@ describe("HeadlessHost lifecycle guards", () => {
             })
           )
       ),
-    };
+    });
     const close = vi.fn(async () => undefined);
     const host = new HeadlessHost({
       ...config(),
@@ -169,13 +175,20 @@ describe("HeadlessHost lifecycle guards", () => {
     );
 
     await host.start();
-    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "workspace.getInfo", []);
-    expect(rpc.call).toHaveBeenNthCalledWith(2, "main", "panelRuntime.registerClient", [
-      { ...host.registration, loadOnLeaseAssignment: false },
-    ]);
-    expect(rpc.call).toHaveBeenCalledWith("main", "panelRuntime.registerClient", [
-      host.registration,
-    ]);
+    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "workspace.getInfo", [], undefined);
+    expect(rpc.call).toHaveBeenNthCalledWith(
+      2,
+      "main",
+      "panelRuntime.registerClient",
+      [{ ...host.registration, loadOnLeaseAssignment: false }],
+      undefined
+    );
+    expect(rpc.call).toHaveBeenCalledWith(
+      "main",
+      "panelRuntime.registerClient",
+      [host.registration],
+      undefined
+    );
     expect(rpc.stream).toHaveBeenCalledWith(
       "main",
       "events.watch",
@@ -197,12 +210,19 @@ describe("HeadlessHost lifecycle guards", () => {
       "main",
       "panelRuntime.registerClient",
       [{ ...host.registration, loadOnLeaseAssignment: false }],
+      undefined,
     ]);
-    expect(registerCalls[1]).toEqual(["main", "panelRuntime.registerClient", [host.registration]]);
+    expect(registerCalls[1]).toEqual([
+      "main",
+      "panelRuntime.registerClient",
+      [host.registration],
+      undefined,
+    ]);
     expect(registerCalls[2]).toEqual([
       "main",
       "panelRuntime.registerClient",
       [{ ...host.registration, loadOnLeaseAssignment: false }],
+      undefined,
     ]);
     expect(rpc.stream).toHaveBeenCalledTimes(2);
     expect(reconcile).toHaveBeenCalledTimes(2);
@@ -279,7 +299,9 @@ describe("HeadlessHost lifecycle guards", () => {
   it("joins failed shutdowns and releases the remaining native owners", async () => {
     const host = new HeadlessHost(config());
     const failure = new Error("browser retirement failed");
-    const stopBrowser = vi.fn(async () => { throw failure; });
+    const stopBrowser = vi.fn(async () => {
+      throw failure;
+    });
     const closeConnection = vi.fn(async () => undefined);
     const stopLeaseEvents = vi.fn();
     const stopContextEvents = vi.fn();
@@ -287,7 +309,8 @@ describe("HeadlessHost lifecycle guards", () => {
       browser: { stop: stopBrowser },
       cdp: { close: vi.fn(), send: vi.fn(async () => undefined) },
       connection: { rpc: { call: vi.fn(async () => undefined) }, close: closeConnection },
-      stopLeaseEvents, stopContextEvents,
+      stopLeaseEvents,
+      stopContextEvents,
     });
     const first = host.stop("failed shutdown");
     expect(host.stop("duplicate shutdown")).toBe(first);

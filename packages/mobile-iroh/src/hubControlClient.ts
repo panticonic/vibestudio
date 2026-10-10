@@ -1,15 +1,14 @@
+import { createTypedRpcServiceClient } from "@vibestudio/shared/typedRpcServiceClient";
 import {
   HubWorkspaceEntrySchema,
   HubWorkspaceRouteSchema,
   hubControlMethods,
 } from "@vibestudio/service-schemas/hubControl";
-import {
-  createTypedServiceClient,
-  type TypedServiceClient,
-} from "@vibestudio/shared/typedServiceClient";
+import { type TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type { IrohConnection } from "./connect.js";
 
 const mobileHubControlMethods = {
+  ensureUserWorkspaces: hubControlMethods.ensureUserWorkspaces,
   listWorkspaces: hubControlMethods.listWorkspaces,
   routeWorkspace: hubControlMethods.routeWorkspace,
 } as const;
@@ -26,15 +25,9 @@ export type MobileHubWorkspaceRoute = ReturnType<typeof HubWorkspaceRouteSchema.
 export function createMobileHubControlClient(
   connection: Pick<IrohConnection, "rpc">
 ): MobileHubControlClient {
-  return createTypedServiceClient(
-    "hubControl",
-    mobileHubControlMethods,
-    async (_service, method, args) => {
-      const definition = mobileHubControlMethods[method as keyof typeof mobileHubControlMethods];
-      if (!definition) throw new Error(`Unknown mobile hub-control method: ${method}`);
-      const parsedArgs = definition.args.parse(args);
-      const result = await connection.rpc.call("main", `hubControl.${method}`, parsedArgs);
-      return definition.returns.parse(result);
-    }
+  return createTypedRpcServiceClient(
+    connection.rpc,
+    { targetId: "main", namespace: "hubControl" },
+    mobileHubControlMethods
   );
 }

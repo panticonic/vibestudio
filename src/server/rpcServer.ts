@@ -1,9 +1,7 @@
-import {
-  rpcDiagnosticIdOf,
-  attachRpcDiagnosticId,
-  decodeRpcJson,
-  encodeRpcJson,
-} from "@vibestudio/rpc";
+import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
+import { rpcCallerAbortedError, serializeRpcFailure } from "@vibestudio/rpc";
+import { deserializeRpcFailure } from "@vibestudio/rpc";
+import { attachRpcDiagnosticId, decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { bindInvocationParent } from "@vibestudio/rpc/internal";
 import {
@@ -33,16 +31,11 @@ import type { WorkspaceChildHubPort } from "./workspaceChildHubPort.js";
 import { receiveWorkspaceRpcHttp, type WorkspaceRpcDelivery } from "./workspaceRpcTransport.js";
 import type { ExtensionInvocation } from "@vibestudio/extension";
 import {
-  createRpcClient,
-  RemoteRpcError,
   RpcBoundaryError,
-  rpcErrorDataOf,
-  rpcErrorKindOf,
   envelopeFromMessage,
   responseEnvelopeFor,
   stampEnvelopeCaller,
   type EnvelopeRpcTransport,
-  type RpcClient,
   type RpcEnvelope,
   type RpcEvent,
   type RpcMessage,
@@ -1655,7 +1648,7 @@ export class RpcServer {
   private setBridge(
     callerId: string,
     connectionId: string,
-    bridge: RpcClient,
+    bridge: RpcWireClient,
     transport: SessionServerTransportInternal
   ): void {
     this.connections.setBridge(callerId, connectionId, bridge, transport);
@@ -2223,7 +2216,7 @@ export class RpcServer {
       ws,
       clientId: `${callerId}:${connectionId}`,
     });
-    const bridge = createRpcClient({
+    const bridge = createInternalRpcClient({
       selfId: "server",
       callerKind: "server",
       transport: envelopeTransportFromSessionServer(transport),
@@ -2653,7 +2646,7 @@ export class RpcServer {
             type: "ws:stream-body-ack",
             requestId: msg.requestId,
             seq: msg.seq,
-            error: "WebSocket upload registry is unavailable",
+            error: serializeRpcFailure(new Error("WebSocket upload registry is unavailable")),
           });
           break;
         }
@@ -2668,13 +2661,15 @@ export class RpcServer {
             })
           )
           .catch((error) => {
-            const message = error instanceof Error ? error.message : String(error);
-            uploadBodies.fail(msg.requestId, new Error(message));
+            uploadBodies.fail(
+              msg.requestId,
+              error instanceof Error ? error : new Error(String(error))
+            );
             this.sendToSession(client.ws, {
               type: "ws:stream-body-ack",
               requestId: msg.requestId,
               seq: msg.seq,
-              error: message,
+              error: serializeRpcFailure(error),
             });
           });
         break;
@@ -2732,7 +2727,7 @@ export class RpcServer {
       this.inboundRequestControllers
         .get(client.ws)
         ?.get(message.requestId)
-        ?.abort(new Error("RPC call aborted by caller"));
+        ?.abort(rpcCallerAbortedError());
       return;
     }
     if (message.type === "stream-frame") {
@@ -2754,8 +2749,10 @@ export class RpcServer {
           {
             type: "response",
             requestId: request.requestId,
-            error: `Invalid method format: "${request.method}". Expected "service.method"`,
-            errorKind: "protocol",
+            error: {
+              message: `Invalid method format: "${request.method}". Expected "service.method"`,
+              errorKind: "protocol",
+            },
           }
         ),
       });
@@ -2798,7 +2795,6 @@ export class RpcServer {
         ),
       });
     } catch (error) {
-      const errorCode = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
       this.sendToSession(client.ws, {
         type: "ws:rpc",
         envelope: responseEnvelopeFor(
@@ -2807,11 +2803,7 @@ export class RpcServer {
           {
             type: "response",
             requestId: request.requestId,
-            error: error instanceof Error ? error.message : String(error),
-            errorKind: rpcErrorKindOf(error, "internal"),
-            ...(errorCode ? { errorCode } : {}),
-            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-            ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+            error: serializeRpcFailure(error, "internal"),
           }
         ),
       });
@@ -2828,7 +2820,14 @@ export class RpcServer {
     body?: ReadableStream<Uint8Array>
   ): void {
     const message = envelope.message;
-    if (message.type === "request-cancel" || message.type === "stream-cancel") {
+    if (message.type === "request-cancel") {
+      this.workspaceRpcControllers
+        .get(client.ws)
+        ?.get(message.requestId)
+        ?.abort(rpcCallerAbortedError());
+      return;
+    }
+    if (message.type === "stream-cancel") {
       this.workspaceRpcControllers
         .get(client.ws)
         ?.get(message.requestId)
@@ -3112,19 +3111,10 @@ export class RpcServer {
             });
           },
           (err) => {
-            const errorCode = getErrorCode(err);
             void this.sendRoutedResponseToOrigin(
               { callerId: client.caller.runtime.id, connectionId: client.connectionId },
               targetId,
-              {
-                type: "response",
-                requestId,
-                error: err instanceof Error ? err.message : String(err),
-                errorKind: rpcErrorKindOf(err, "transport"),
-                ...(errorCode ? { errorCode } : {}),
-                ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
-                ...(rpcDiagnosticIdOf(err) ? { diagnosticId: rpcDiagnosticIdOf(err) } : {}),
-              }
+              { type: "response", requestId, error: serializeRpcFailure(err, "transport") }
             ).catch((sendErr) => this.sendRouteError(client, targetId, message, sendErr));
           }
         );
@@ -3193,11 +3183,7 @@ export class RpcServer {
           {
             type: "response",
             requestId: message.requestId,
-            error: errorMessage,
-            errorKind: rpcErrorKindOf(err, "transport"),
-            ...(errorCode ? { errorCode } : {}),
-            ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
-            ...(rpcDiagnosticIdOf(err) ? { diagnosticId: rpcDiagnosticIdOf(err) } : {}),
+            error: serializeRpcFailure(err, "transport"),
           },
           workspaceRpcDestination(destination) ?? this.deps.workspaceId
         ),
@@ -3217,14 +3203,7 @@ export class RpcServer {
             requestId: message.requestId,
             fromId: targetId,
             frameType: FRAME_ERROR,
-            payload: JSON.stringify({
-              status: 403,
-              message: errorMessage,
-              code: errorCode,
-              errorKind: rpcErrorKindOf(err, "transport"),
-              ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
-              ...(rpcDiagnosticIdOf(err) ? { diagnosticId: rpcDiagnosticIdOf(err) } : {}),
-            }),
+            payload: JSON.stringify({ status: 403, error: serializeRpcFailure(err, "transport") }),
           },
           workspaceRpcDestination(destination) ?? this.deps.workspaceId
         ),
@@ -3239,20 +3218,14 @@ export class RpcServer {
         targetId,
         ...(destination ? { destination } : {}),
         requestId: message.requestId,
-        error: errorMessage,
-        errorKind: rpcErrorKindOf(err, "transport"),
-        errorCode,
+        error: serializeRpcFailure(err, "transport"),
       });
       this.sendToSession(client.ws, {
         type: "ws:routed-response-error",
         targetId,
         ...(destination ? { destination } : {}),
         requestId: message.requestId,
-        error: errorMessage,
-        errorKind: rpcErrorKindOf(err, "transport"),
-        ...(errorCode ? { errorCode } : {}),
-        ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
-        ...(rpcDiagnosticIdOf(err) ? { diagnosticId: rpcDiagnosticIdOf(err) } : {}),
+        error: serializeRpcFailure(err, "transport"),
       });
       return;
     }
@@ -3276,11 +3249,7 @@ export class RpcServer {
         targetId,
         ...(destination ? { destination } : {}),
         event: eventMessage.event,
-        error: errorMessage,
-        errorKind: rpcErrorKindOf(err, "transport"),
-        ...(errorCode ? { errorCode } : {}),
-        ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
-        ...(rpcDiagnosticIdOf(err) ? { diagnosticId: rpcDiagnosticIdOf(err) } : {}),
+        error: serializeRpcFailure(err, "transport"),
       });
     }
   }
@@ -3292,6 +3261,7 @@ export class RpcServer {
     );
     const errorMessage = err.message;
     const errorCode = getErrorCode(err);
+    const failure = serializeRpcFailure(err, "protocol");
 
     log.warn("server-bound routed response", {
       callerId: client.caller.runtime.id,
@@ -3306,9 +3276,7 @@ export class RpcServer {
       transport.deliver(client.caller.runtime.id, {
         type: "response",
         requestId: message.requestId,
-        error: errorMessage,
-        errorKind: "protocol",
-        ...(errorCode ? { errorCode } : {}),
+        error: failure,
       });
     }
 
@@ -3316,9 +3284,7 @@ export class RpcServer {
       type: "ws:routed-response-error",
       targetId: "server",
       requestId: message.requestId,
-      error: errorMessage,
-      errorKind: "protocol",
-      ...(errorCode ? { errorCode } : {}),
+      error: failure,
     });
   }
 
@@ -3580,9 +3546,11 @@ export class RpcServer {
             type: "ws:routed-response-error",
             targetId: callee.targetId,
             requestId,
-            error: `Target ${callee.targetId} did not reconnect within grace window`,
-            errorKind: "transport",
-            errorCode: "RECONNECT_GRACE_EXPIRED",
+            error: {
+              message: `Target ${callee.targetId} did not reconnect within grace window`,
+              errorKind: "transport",
+              code: "RECONNECT_GRACE_EXPIRED",
+            },
           });
         },
         (deliveryErr) => {
@@ -3609,7 +3577,7 @@ export class RpcServer {
    *
    * The server can use this client to call methods exposed by the client.
    */
-  getClientBridge(callerId: string): RpcClient | undefined {
+  getClientBridge(callerId: string): RpcWireClient | undefined {
     return this.connections.getPrimaryBridge(callerId);
   }
 
@@ -3942,12 +3910,12 @@ export class RpcServer {
     );
   }
 
-  async callTarget<T = unknown>(
+  async callTarget(
     targetId: string,
     method: string,
     args: unknown[] = [],
     options?: RpcCallOptions
-  ): Promise<T> {
+  ): Promise<unknown> {
     const hostCaller = null;
     return this.relayCall(
       "main",
@@ -3958,7 +3926,7 @@ export class RpcServer {
       undefined,
       options,
       hostCaller ? { authenticatedCaller: hostCaller, authorizingCaller: hostCaller } : undefined
-    ) as Promise<T>;
+    );
   }
 
   async streamCallTarget(targetId: string, method: string, ...args: unknown[]): Promise<Response> {
@@ -4000,7 +3968,7 @@ export class RpcServer {
     if (isPanelOrShellTarget) {
       const options = relayCallOptions(meta);
       const routedTargetId = this.resolveRoutableTargetId(targetId);
-      const invokeBridge = async (bridge: RpcClient, receiverRuntimeId: string) => {
+      const invokeBridge = async (bridge: RpcWireClient, receiverRuntimeId: string) => {
         const authenticatedCaller =
           relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind);
         const scope = relayCallerScope ?? {
@@ -5077,14 +5045,9 @@ export class RpcServer {
     const responseMessage = responseEnvelope?.message as RpcResponse | undefined;
     if (responseMessage && responseMessage.type === "response") {
       if ("error" in responseMessage) {
-        const error = new RemoteRpcError(
-          responseMessage.error,
-          responseMessage.errorKind,
-          responseMessage.errorCode,
-          responseMessage.errorData
-        );
-        if (responseMessage.diagnosticId)
-          attachRpcDiagnosticId(error, responseMessage.diagnosticId);
+        const error = deserializeRpcFailure(responseMessage.error);
+        if (responseMessage.error.diagnosticId)
+          attachRpcDiagnosticId(error, responseMessage.error.diagnosticId);
         throw error;
       }
       return responseMessage.result;
@@ -5924,11 +5887,7 @@ export class RpcServer {
             frameType: FRAME_ERROR,
             payload: JSON.stringify({
               status: errorCode === "EACCES" ? 403 : 500,
-              message: error instanceof Error ? error.message : String(error),
-              ...(errorCode ? { code: errorCode } : {}),
-              errorKind: rpcErrorKindOf(error, "internal"),
-              ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-              ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+              error: serializeRpcFailure(error, "internal"),
             }),
           })
         );
@@ -5968,17 +5927,11 @@ export class RpcServer {
         })
       );
     } catch (error) {
-      const errorCode = getErrorCode(error);
       await delivery.send(
         responseEnvelopeFor(invocation.envelope, responder, {
           type: "response",
           requestId: message.requestId,
-          error: error instanceof Error ? error.message : String(error),
-          errorKind: rpcErrorKindOf(error, "internal"),
-          ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
-          ...(errorCode ? { errorCode } : {}),
-          ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-          ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+          error: serializeRpcFailure(error, "internal"),
         })
       );
     }

@@ -176,7 +176,7 @@ describe("host-to-host workspace RPC transport", () => {
       .forwardWorkspaceRpc(invocation(), { onEnvelope() {} })
       .catch((error: unknown) => error);
     expect(failure).toMatchObject({
-      name: "RemoteRpcError",
+      name: "RpcBoundaryError",
       errorKind: "service",
       code: "ERECEIVER",
       errorData: data,
@@ -197,10 +197,12 @@ describe("host-to-host workspace RPC transport", () => {
     expect(response.status).toBe(403);
     const failure = await response.json();
     expect(failure).toMatchObject({
-      errorCode: "EACCES",
-      errorKind: "access",
-      error: expect.stringContaining("denied [Workspace RPC receiver"),
-      errorStack: expect.stringContaining("denied"),
+      error: {
+        code: "EACCES",
+        errorKind: "access",
+        message: expect.stringContaining("denied [Workspace RPC receiver"),
+        stack: expect.stringContaining("denied"),
+      },
     });
     expect(failure).not.toHaveProperty("requestId");
     expect(failure).not.toHaveProperty("type");
@@ -224,9 +226,11 @@ describe("host-to-host workspace RPC transport", () => {
     expect(response.status).toBe(401);
     const failure = await response.json();
     expect(failure).toMatchObject({
-      errorCode: "UNAUTHORIZED",
-      errorKind: "access",
-      error: expect.stringContaining("Source runtime token is not authenticated"),
+      error: {
+        code: "UNAUTHORIZED",
+        errorKind: "access",
+        message: expect.stringContaining("Source runtime token is not authenticated"),
+      },
     });
     expect(failure).not.toHaveProperty("requestId");
   });
@@ -237,9 +241,7 @@ describe("host-to-host workspace RPC transport", () => {
       res.end(
         JSON.stringify({
           requestId: "other-request",
-          error: "Another operation failed",
-          errorKind: "service",
-          errorCode: "EOTHER",
+          error: { message: "Another operation failed", errorKind: "service", code: "EOTHER" },
         })
       );
     });
@@ -300,9 +302,11 @@ describe("host-to-host workspace RPC transport", () => {
       });
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({
-        errorKind: "protocol",
-        errorCode: "EPROTOCOL",
-        error: expect.stringContaining(reason),
+        error: {
+          errorKind: "protocol",
+          code: "EPROTOCOL",
+          message: expect.stringContaining(reason),
+        },
       });
       expect(f.resolveDestination).not.toHaveBeenCalled();
       expect(f.receiver).not.toHaveBeenCalled();
@@ -313,10 +317,12 @@ describe("host-to-host workspace RPC transport", () => {
     const result = reply(input, {
       type: "response",
       requestId: "request-one",
-      error: "Conflict",
-      errorCode: "ECONFLICT",
-      errorKind: "application",
-      errorData: { current: 7 },
+      error: {
+        message: "Conflict",
+        code: "ECONFLICT",
+        errorKind: "application",
+        errorData: { current: 7 },
+      },
     });
     const f = await fixture(async (delivery) => {
       expect(delivery.invocation).toEqual(input);
@@ -578,8 +584,7 @@ describe("host-to-host workspace RPC transport", () => {
     expect(response.status).toBe(400);
     const failure = await response.json();
     expect(failure).toMatchObject({
-      errorKind: "protocol",
-      error: expect.stringContaining("read frame, HTTP 400"),
+      error: { errorKind: "protocol", message: expect.stringContaining("read frame, HTTP 400") },
     });
     expect(failure.error).not.toContain("Invalid workspace RPC transport");
     expect(failure).not.toHaveProperty("requestId");

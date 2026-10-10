@@ -1,3 +1,4 @@
+import { formatRpcFailure, deserializeRpcFailure, serializeRpcFailure } from "../errors.js";
 import { workspaceRpcDestination } from "../destination.js";
 import type {
   EnvelopeRpcTransport,
@@ -174,7 +175,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
   const sendUploadChunk = async (
     requestId: string,
     seq: number,
-    fields: { payload?: string; done?: boolean; error?: string }
+    fields: { payload?: string; done?: boolean; error?: import("../types.js").RpcFailure }
   ): Promise<void> => {
     const acknowledged = waitForUploadAck(requestId, seq);
     try {
@@ -221,8 +222,9 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       if ((error as { code?: unknown })?.code === "UPLOAD_TRANSPORT_FAILED") {
         abort.abort(error);
       } else if (!abort.signal.aborted) {
-        const message = error instanceof Error ? error.message : String(error);
-        await sendUploadChunk(requestId, seq, { error: message }).catch(() => undefined);
+        await sendUploadChunk(requestId, seq, { error: serializeRpcFailure(error) }).catch(
+          () => undefined
+        );
       }
     } finally {
       abort.signal.removeEventListener("abort", cancelReader);
@@ -428,16 +430,12 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         // call settles instead of hanging forever (silent-drop class).
         const prefix = config.logPrefix ?? "wsClientTransport";
         console.warn(
-          `[${prefix}] routed request to ${msg.targetId} failed (requestId=${msg.requestId}): ${msg.error}`
+          `[${prefix}] routed request to ${msg.targetId} failed (requestId=${msg.requestId}): ${formatRpcFailure(deserializeRpcFailure(msg.error))}`
         );
         const errorMessage: RpcMessage = {
           type: "response",
           requestId: msg.requestId,
           error: msg.error,
-          errorKind: msg.errorKind,
-          ...(msg.diagnosticId ? { diagnosticId: msg.diagnosticId } : {}),
-          ...(msg.errorCode ? { errorCode: msg.errorCode } : {}),
-          ...(msg.errorData !== undefined ? { errorData: msg.errorData } : {}),
         };
         const envelope: RpcEnvelope = {
           from: msg.targetId,
@@ -470,7 +468,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         // promise to reject, but the drop MUST be observable rather than silent.
         const prefix = config.logPrefix ?? "wsClientTransport";
         console.warn(
-          `[${prefix}] routed event "${msg.event}" to ${msg.targetId} dropped: ${msg.error}`
+          `[${prefix}] routed event "${msg.event}" to ${msg.targetId} dropped: ${formatRpcFailure(deserializeRpcFailure(msg.error))}`
         );
         return;
       }
@@ -480,8 +478,13 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         if (!acknowledgement) return;
         pending!.delete(msg.seq);
         if (pending!.size === 0) uploadAcks.delete(msg.requestId);
-        if (msg.error) acknowledgement.reject(new Error(msg.error));
-        else acknowledgement.resolve();
+        if (msg.error) {
+          try {
+            acknowledgement.reject(deserializeRpcFailure(msg.error));
+          } catch (error) {
+            acknowledgement.reject(asError(error));
+          }
+        } else acknowledgement.resolve();
         return;
       }
     }

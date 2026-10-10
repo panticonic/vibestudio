@@ -1,8 +1,24 @@
+import { formatRpcFailure } from "@vibestudio/rpc";
+import { schemaRpcCaller } from "@vibestudio/rpc/internal";
+import { isRemoteRpcError } from "@vibestudio/rpc";
 import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
-import type { evalRunStatusSchema } from "@vibestudio/service-schemas/eval";
-import type { z } from "zod";
+import {
+  systemTestFailedRunSchema,
+  systemTestDescriptorSchema,
+  systemTestDoctorResultSchema,
+  systemTestRunCompletionSchema,
+  systemTestRunReleaseResultSchema,
+  systemTestRunStartResultSchema,
+  systemTestRunConfigSchema,
+  systemTestTrajectoryPageSchema,
+  systemTestRunnerSnapshotSchema,
+  systemTestRunnerRpcMethods,
+  type SystemTestDoctorResult,
+  type SystemTestRunnerClient,
+  type SystemTestRunnerSnapshot,
+} from "@vibestudio/service-schemas/systemTestRunner";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
@@ -45,7 +61,9 @@ import {
   type StoredSystemTestRun,
 } from "./systemTestStore.js";
 
-type EvalStatus = z.infer<typeof evalRunStatusSchema>;
+type EvalStatus = Omit<SystemTestRunnerSnapshot, "result"> & {
+  result?: NonNullable<SystemTestRunnerSnapshot["result"]> & { returnValue?: unknown };
+};
 
 const DEFAULT_POLL_MS = 1_000;
 type SystemTestThinkingLevel = NonNullable<StoredSystemTestRun["config"]["thinkingLevel"]>;
@@ -68,10 +86,58 @@ const STARTUP_READINESS_DEADLINE_MS = 60_000;
 const STALE_STATUS_ATTESTATION_RE =
   /host authority attestation nonce was replayed or is outside the receiver's retention bound/u;
 
-type SystemTestDoctorResult = {
-  ok?: boolean;
-  checks?: Array<{ name: string; ok: boolean; detail: string; data?: unknown }>;
-};
+function makeSystemTestRunnerCaller(scope: SessionScope, targetId: string): SystemTestRunnerClient {
+  const call = (method: { name: string }, args: unknown[]) =>
+    scope.client.callTarget(targetId, method.name, args);
+  return {
+    doctor: async (model) =>
+      systemTestDoctorResultSchema.parse(await call(systemTestRunnerRpcMethods.doctor, [model])),
+    listSystemTests: async (category) =>
+      systemTestDescriptorSchema
+        .array()
+        .parse(await call(systemTestRunnerRpcMethods.listSystemTests, [category])),
+    startSystemTestRun: async (options) =>
+      systemTestRunStartResultSchema.parse(
+        await call(systemTestRunnerRpcMethods.startSystemTestRun, [
+          systemTestRunConfigSchema.parse(options),
+        ])
+      ),
+    getSystemTestRunSnapshot: async (runId) =>
+      systemTestRunnerSnapshotSchema.parse(
+        await call(systemTestRunnerRpcMethods.getSystemTestRunSnapshot, [runId])
+      ),
+    getSystemTestRunResult: async (runId) =>
+      systemTestRunCompletionSchema.parse(
+        await call(systemTestRunnerRpcMethods.getSystemTestRunResult, [runId])
+      ),
+    releaseSystemTestRunExecution: async (runId) =>
+      systemTestRunReleaseResultSchema.parse(
+        await call(systemTestRunnerRpcMethods.releaseSystemTestRunExecution, [runId])
+      ),
+    cancelSystemTestRun: async (runId) =>
+      systemTestRunCompletionSchema.parse(
+        await call(systemTestRunnerRpcMethods.cancelSystemTestRun, [runId])
+      ),
+    inspectSystemTestRun: (runId, testName) =>
+      call(systemTestRunnerRpcMethods.inspectSystemTestRun, [runId, testName]),
+    readSystemTestTrajectoryPage: async (runId, testName, full, offset, limit) =>
+      systemTestTrajectoryPageSchema.parse(
+        await call(systemTestRunnerRpcMethods.readSystemTestTrajectoryPage, [
+          runId,
+          testName,
+          full,
+          offset,
+          limit,
+        ])
+      ),
+    getFailedSystemTestRun: async (runId) =>
+      systemTestFailedRunSchema.parse(
+        await call(systemTestRunnerRpcMethods.getFailedSystemTestRun, [runId])
+      ),
+  };
+}
+
+type SystemTestRunnerCaller = SystemTestRunnerClient;
 
 export function systemTestDoctorRecovery(error: unknown): {
   ok: false;
@@ -228,33 +294,31 @@ function assertRunOwner(scope: SessionScope, stored: StoredSystemTestRun): void 
 
 /** The sealed runner owns the execution; a CLI connection only observes it. */
 export async function readSystemTestDriverState(
-  call: <T>(method: string, args: unknown[]) => Promise<T>,
+  call: SystemTestRunnerCaller,
   runId: string
 ): Promise<EvalStatus> {
-  const snapshot = await call<EvalStatus>("getSystemTestRunSnapshot", [runId]);
+  const snapshot = await call.getSystemTestRunSnapshot(runId);
   if (snapshot.status !== "done" || !snapshot.result?.success) return snapshot;
-  const record = await call<{ summary: unknown }>("getSystemTestRunResult", [runId]);
+  const record = await call.getSystemTestRunResult(runId);
   // Collecting the terminal record precedes releasing its finite eval scope.
   // The record owner remains available for inspection and another observer.
-  await call("releaseSystemTestRunExecution", [runId]);
+  await call.releaseSystemTestRunExecution(runId);
   return { ...snapshot, result: { ...snapshot.result, returnValue: record.summary } };
 }
 
 function readRunState(scope: SessionScope, stored: StoredSystemTestRun): Promise<EvalStatus> {
   assertRunOwner(scope, stored);
   return readSystemTestDriverState(
-    <T>(method: string, args: unknown[]) =>
-      scope.client.callTarget<T>(stored.runnerTargetId, method, args),
+    makeSystemTestRunnerCaller(scope, stored.runnerTargetId),
     stored.runId
   );
 }
 
 async function cancelRun(scope: SessionScope, stored: StoredSystemTestRun): Promise<void> {
   assertRunOwner(scope, stored);
-  await scope.client.callTarget(stored.runnerTargetId, "cancelSystemTestRun", [stored.runId]);
-  await scope.client.callTarget(stored.runnerTargetId, "releaseSystemTestRunExecution", [
-    stored.runId,
-  ]);
+  const call = makeSystemTestRunnerCaller(scope, stored.runnerTargetId);
+  await call.cancelSystemTestRun(stored.runId);
+  await call.releaseSystemTestRunExecution(stored.runId);
 }
 
 async function startRun(
@@ -286,13 +350,11 @@ async function startRun(
   // process signals still have the exact execution owner available.
   saveSystemTestRun(stored);
   onCreated?.(stored);
-  await scope.client.callTarget(runner.targetId, "startSystemTestRun", [
-    {
-      runId,
-      ...config,
-      contextId: scope.contextId,
-    },
-  ]);
+  await makeSystemTestRunnerCaller(scope, runner.targetId).startSystemTestRun({
+    runId,
+    ...config,
+    contextId: scope.contextId,
+  });
   return stored;
 }
 
@@ -340,14 +402,17 @@ async function waitForRun(
 }
 
 function isStaleSystemTestStatusAttestation(error: unknown): boolean {
-  return error instanceof RpcError && STALE_STATUS_ATTESTATION_RE.test(error.message);
+  return (
+    (error instanceof RpcError || isRemoteRpcError(error)) &&
+    STALE_STATUS_ATTESTATION_RE.test(error.message)
+  );
 }
 
 export function isRetryableSystemTestStatusReadFailure(error: unknown): boolean {
   return (
     error instanceof ConnectionError ||
     isStaleSystemTestStatusAttestation(error) ||
-    (error instanceof RpcError &&
+    ((error instanceof RpcError || isRemoteRpcError(error)) &&
       (error.errorKind === "transport" ||
         error.errorKind === "internal" ||
         error.errorKind === "service"))
@@ -499,18 +564,14 @@ async function list(inv: ParsedInvocation): Promise<number> {
   try {
     const scope = await resolveSystemTestScope(inv);
     const tests = await withIsolatedSystemTestRunner(scope, (runner) =>
-      scope.client.callTarget(runner.targetId, "listSystemTests", [
-        typeof inv.flags["category"] === "string" ? inv.flags["category"] : undefined,
-      ])
+      makeSystemTestRunnerCaller(scope, runner.targetId).listSystemTests(
+        typeof inv.flags["category"] === "string" ? inv.flags["category"] : undefined
+      )
     );
     printResult(tests, {
       json,
       human: () => {
-        for (const test of tests as Array<{
-          name: string;
-          category: string;
-          description: string;
-        }>) {
+        for (const test of tests) {
           console.log(`${test.name}\t${test.category}\t${test.description}`);
         }
       },
@@ -708,8 +769,8 @@ async function runs(inv: ParsedInvocation): Promise<number> {
 
 async function readPersisted(
   inv: ParsedInvocation,
-  method: string,
-  args: (runId: string) => unknown[],
+  method: "inspectSystemTestRun" | "getFailedSystemTestRun",
+  testName?: string,
   readLive?: (progress: Record<string, unknown>) => unknown
 ): Promise<{ runId: string; stored: StoredSystemTestRun; value: unknown }> {
   const runId = requireRunId(inv);
@@ -717,11 +778,11 @@ async function readPersisted(
   if (!stored) throw new CliError(`no local metadata for system-test run ${runId}`);
   const scope = await resolveSystemTestScope(inv, stored.sessionName);
   try {
-    const value = await scope.client.callTarget<unknown>(
-      stored.runnerTargetId,
-      method,
-      args(runId)
-    );
+    const call = makeSystemTestRunnerCaller(scope, stored.runnerTargetId);
+    const value =
+      method === "inspectSystemTestRun"
+        ? await call.inspectSystemTestRun(runId, testName)
+        : await call.getFailedSystemTestRun(runId);
     return { runId, stored, value };
   } catch (durableError) {
     if (!readLive) throw durableError;
@@ -746,17 +807,16 @@ async function fetchTrajectory(
   let length: number | null = null;
   let text = "";
   do {
-    const page = await scope.client.callTarget<{
-      length: number;
-      encoding: "plain-string";
-      chunk: string;
-    }>(stored.runnerTargetId, "readSystemTestTrajectoryPage", [
+    const page = await makeSystemTestRunnerCaller(
+      scope,
+      stored.runnerTargetId
+    ).readSystemTestTrajectoryPage(
       stored.runId,
       testName,
       full,
       offset,
-      SYSTEM_TEST_TRAJECTORY_PAGE_CHARS,
-    ]);
+      SYSTEM_TEST_TRAJECTORY_PAGE_CHARS
+    );
     if (
       !Number.isSafeInteger(page.length) ||
       page.length < 0 ||
@@ -856,10 +916,10 @@ export async function retainFailedRunEvidence(
       writeSystemTestArtifact(
         stored.runId,
         inspectionArtifactName(testName),
-        await scope.client.callTarget<unknown>(stored.runnerTargetId, "inspectSystemTestRun", [
+        await makeSystemTestRunnerCaller(scope, stored.runnerTargetId).inspectSystemTestRun(
           stored.runId,
-          testName,
-        ]),
+          testName
+        ),
         dir
       );
       writeSystemTestArtifact(
@@ -875,16 +935,15 @@ export async function retainFailedRunEvidence(
         dir
       );
     }
-    const inspection = await scope.client.callTarget<unknown>(
-      stored.runnerTargetId,
-      "inspectSystemTestRun",
-      [stored.runId]
-    );
+    const inspection = await makeSystemTestRunnerCaller(
+      scope,
+      stored.runnerTargetId
+    ).inspectSystemTestRun(stored.runId);
     writeSystemTestArtifact(stored.runId, inspectionArtifactName(), inspection, dir);
   } catch (error) {
     throw new CliError(
       `system-test run ${stored.runId} failed, and its failure evidence could not be retained ` +
-        `in ${dir}: ${error instanceof Error ? error.message : String(error)}`
+        `in ${dir}: ${formatRpcFailure(error)}`
     );
   }
 }
@@ -909,7 +968,7 @@ function loadRetainedFailureEvidence(
  * inspection is a possible diagnostic route rather than a promised record.
  */
 export function unavailableTrajectory(runId: string, testName: string, cause: unknown): CliError {
-  const detail = cause instanceof Error ? cause.message : String(cause);
+  const detail = formatRpcFailure(cause);
   return new CliError(
     `no trajectory for ${testName} in system-test run ${runId}: ${detail}. A run large ` +
       "enough to overflow the durable progress heartbeat may omit live inspection too. " +
@@ -927,21 +986,16 @@ async function inspect(inv: ParsedInvocation): Promise<number> {
     );
     const { runId, stored, value } =
       retained ??
-      (await readPersisted(
-        inv,
-        "inspectSystemTestRun",
-        (id) => [id, testName],
-        (progress) => {
-          const live = progress["liveInspection"] as Record<string, unknown> | undefined;
-          if (!live) return undefined;
-          if (!testName) return live["inspect"];
-          const byTest = live["inspectByTest"] as Record<string, unknown> | undefined;
-          if (byTest?.[testName] !== undefined) return byTest[testName];
-          const trajectories = live["trajectories"] as Record<string, unknown> | undefined;
-          const row = trajectories?.[testName] as Record<string, unknown> | undefined;
-          return row?.["bounded"];
-        }
-      ));
+      (await readPersisted(inv, "inspectSystemTestRun", testName, (progress) => {
+        const live = progress["liveInspection"] as Record<string, unknown> | undefined;
+        if (!live) return undefined;
+        if (!testName) return live["inspect"];
+        const byTest = live["inspectByTest"] as Record<string, unknown> | undefined;
+        if (byTest?.[testName] !== undefined) return byTest[testName];
+        const trajectories = live["trajectories"] as Record<string, unknown> | undefined;
+        const row = trajectories?.[testName] as Record<string, unknown> | undefined;
+        return row?.["bounded"];
+      }));
     const artifact = writeSystemTestArtifact(
       runId,
       inspectionArtifactName(testName),
@@ -1026,10 +1080,9 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
     const prior =
       localNames.length > 0
         ? { config: storedPrior.config, names: [...new Set(localNames)] }
-        : ((await readPersisted(inv, "getFailedSystemTestRun", (id) => [id])).value as {
-            config?: StoredSystemTestRun["config"];
-            names?: string[];
-          });
+        : systemTestFailedRunSchema.parse(
+            (await readPersisted(inv, "getFailedSystemTestRun")).value
+          );
     const names = prior.names;
     if (!Array.isArray(names) || names.length === 0) {
       throw new CliError(`system-test run ${sourceRunId} has no failed tests to rerun`);
@@ -1111,9 +1164,9 @@ async function doctor(inv: ParsedInvocation): Promise<number> {
     const scope = await resolveSystemTestScope(inv);
     const result = await withIsolatedSystemTestRunner(scope, async (runner) => {
       const readDoctor = (): Promise<SystemTestDoctorResult> =>
-        scope.client.callTarget(runner.targetId, "doctor", [
-          typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined,
-        ]);
+        makeSystemTestRunnerCaller(scope, runner.targetId).doctor(
+          typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined
+        );
       let prepared: Awaited<ReturnType<typeof settleSystemTestStartup>> | null = null;
       if (inv.flags["approve-startup"] === true) {
         const approvals = await startupApprovalPort(scope);
@@ -1336,7 +1389,12 @@ async function startupApprovalPort(scope: SessionScope): Promise<{
 }> {
   const client = typedClient("shellApproval", shellApprovalMethods, scope.client);
   const eventRpc = await scope.client.openSiblingConnection();
-  const events = new EventsClient(eventRpc);
+  const events = new EventsClient(
+    schemaRpcCaller({
+      call: eventRpc.callTarget.bind(eventRpc),
+      stream: eventRpc.stream.bind(eventRpc),
+    })
+  );
   let revision = 0;
   const waiters = new Set<() => void>();
   const changed = () => {

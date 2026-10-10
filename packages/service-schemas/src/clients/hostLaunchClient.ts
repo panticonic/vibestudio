@@ -1,10 +1,12 @@
-import type {
-  PendingApproval,
-  PendingUnitInstallReviewApproval,
-} from "@vibestudio/shared/approvals";
+import { formatRpcFailure } from "@vibestudio/rpc";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
 import type { HostTarget } from "@vibestudio/shared/hostTargets";
-import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import { buildMethods } from "../build.js";
+import { runtimeMethods } from "../runtime.js";
+import { shellApprovalMethods } from "../shellApproval.js";
+import { workspaceMethods } from "../workspace.js";
 import type { BuildUnitCatalogEntry } from "../build.js";
 import type {
   RuntimeSupervisionActivationResult,
@@ -53,19 +55,31 @@ function activationResult(
 }
 
 export class HostLaunchClient {
+  private readonly build: ReturnType<typeof createTypedServiceClient<typeof buildMethods>>;
+  private readonly workspace: ReturnType<typeof createTypedServiceClient<typeof workspaceMethods>>;
+  private readonly runtime: ReturnType<typeof createTypedServiceClient<typeof runtimeMethods>>;
+  private readonly shellApproval: ReturnType<
+    typeof createTypedServiceClient<typeof shellApprovalMethods>
+  >;
+
   constructor(
-    private readonly call: Call,
+    call: Call,
     private readonly onProgress?: (progress: HostLaunchProgress) => void
-  ) {}
+  ) {
+    this.build = createTypedServiceClient("build", buildMethods, call);
+    this.workspace = createTypedServiceClient("workspace", workspaceMethods, call);
+    this.runtime = createTypedServiceClient("runtime", runtimeMethods, call);
+    this.shellApproval = createTypedServiceClient("shellApproval", shellApprovalMethods, call);
+  }
 
   async listCandidates(target: HostTarget): Promise<BuildUnitCatalogEntry[]> {
-    const units = (await this.call("build", "listUnits", [])) as BuildUnitCatalogEntry[];
+    const units = await this.build.listUnits();
     return units.filter((unit) => unit.kind === "app" && unit.target === target);
   }
 
   async configuredCandidate(target: HostTarget): Promise<BuildUnitCatalogEntry | null> {
     const [config, candidates] = await Promise.all([
-      this.call("workspace", "getConfig", []) as Promise<WorkspaceConfig>,
+      this.workspace.getConfig(),
       this.listCandidates(target),
     ]);
     const configured = config.hostTargets?.[target]?.app;
@@ -89,8 +103,8 @@ export class HostLaunchClient {
     try {
       report({ phase: "resolve-target", state: "active" });
       const [config, units] = await Promise.all([
-        this.call("workspace", "getConfig", []) as Promise<WorkspaceConfig>,
-        this.call("build", "listUnits", []) as Promise<BuildUnitCatalogEntry[]>,
+        this.workspace.getConfig(),
+        this.build.listUnits(),
       ]);
       const configured = config.hostTargets?.[target]?.app;
       const candidate = units.find(
@@ -137,9 +151,10 @@ export class HostLaunchClient {
         }
         relevantSources.add(extension.source);
         report({ phase: "start-units", state: "active", detail: extension.displayName });
-        const result = (await this.call("runtime", "supervision.activate", [
-          { kind: "extension", releaseId: extension.name },
-        ])) as RuntimeSupervisionActivationResult;
+        const result = await this.runtime.supervision.activate({
+          kind: "extension",
+          releaseId: extension.name,
+        });
         if (result.status === "preparing" || result.status === "unavailable") {
           report({
             phase: "start-units",
@@ -158,14 +173,15 @@ export class HostLaunchClient {
       relevantSources.add(app.source);
       report({ phase: "prepare-app", state: "active" });
       if (resolved.buildKey) {
-        await this.call("runtime", "supervision.rollback", [
+        await this.runtime.supervision.rollback(
           { kind: "app", releaseId: resolved.releaseId },
-          { buildKey: resolved.buildKey },
-        ]);
+          { buildKey: resolved.buildKey }
+        );
       }
-      const result = (await this.call("runtime", "supervision.activate", [
-        { kind: "app", releaseId: resolved.releaseId },
-      ])) as RuntimeSupervisionActivationResult;
+      const result = await this.runtime.supervision.activate({
+        kind: "app",
+        releaseId: resolved.releaseId,
+      });
       report({
         phase: "prepare-app",
         state:
@@ -187,7 +203,7 @@ export class HostLaunchClient {
       report({
         phase,
         state: "failed",
-        detail: error instanceof Error ? error.message : String(error),
+        detail: formatRpcFailure(error),
       });
       throw error;
     }
@@ -198,20 +214,20 @@ export class HostLaunchClient {
     decision: "once" | "deny"
   ): Promise<void> {
     if (approvals.length === 0) return;
-    await this.call("shellApproval", "resolveBootstrap", [
+    await this.shellApproval.resolveBootstrap(
       approvals.map((approval) => approval.approvalId),
-      decision,
-    ]);
+      decision
+    );
   }
 
   async resolvePendingStartupApprovals(decision: "once" | "deny"): Promise<number> {
-    const pending = (await this.call("shellApproval", "listPending", [])) as PendingApproval[];
+    const pending = await this.shellApproval.listPending();
     const approvals = pending.filter(isBootstrapUnitApproval);
     if (approvals.length > 0) {
-      await this.call("shellApproval", "resolveBootstrap", [
+      await this.shellApproval.resolveBootstrap(
         approvals.map((approval) => approval.approvalId),
-        decision,
-      ]);
+        decision
+      );
     }
     return approvals.length;
   }
@@ -220,7 +236,7 @@ export class HostLaunchClient {
     target: HostTarget,
     relevantSources: ReadonlySet<string>
   ): Promise<HostLaunchResult> {
-    const pending = (await this.call("shellApproval", "listPending", [])) as PendingApproval[];
+    const pending = await this.shellApproval.listPending();
     return {
       status: "approval-required",
       target,

@@ -20,6 +20,7 @@ that scope explicitly. Grants retain the selected task, page, or remembered
 lifetime and do not grant credential administration, private state, or native access.
 
 ```js
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import {
   connectWorkspace,
   workspaceConnection,
@@ -34,7 +35,7 @@ await connectWorkspace();
 const channelId = crypto.randomUUID();
 const agentKey = crypto.randomUUID();
 const messageId = crypto.randomUUID();
-const channel = await rpc.call("main", "runtime.createEntity", [
+const channel = await rpc.call("main", mainRpcMethods["runtime.createEntity"], [
   {
     kind: "do",
     execution: { surface: "code", source: "workers/pubsub-channel" },

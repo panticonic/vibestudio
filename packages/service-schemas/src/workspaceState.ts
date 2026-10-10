@@ -1,3 +1,4 @@
+import { PanelEntityIdSchema, PanelSlotIdSchema } from "@vibestudio/shared/panel/ids";
 import { JsonObjectSchema } from "@vibestudio/shared/wireValues";
 /**
  * workspace-state service method schemas — read/write surface over slot.* and
@@ -56,16 +57,16 @@ const PersistedPanelOptionsSchema = z
 
 export const SlotHistoryEntryInputSchema = z.object({
   entryKey: z.string(),
-  entityId: z.string(),
+  entityId: PanelEntityIdSchema,
   source: z.string(),
   contextId: z.string(),
   stateArgs: z.unknown().optional(),
-  options: PersistedPanelOptionsSchema.optional(),
+  options: z.unknown().pipe(PersistedPanelOptionsSchema).optional(),
 });
 
 export const SlotCommitPreparedNavigationInputSchema = z.object({
-  slotId: z.string(),
-  expectedCurrentEntityId: z.string(),
+  slotId: PanelSlotIdSchema,
+  expectedCurrentEntityId: PanelEntityIdSchema,
   /**
    * Display title the navigator already knows for the destination (manifest
    * title, or the host it is browsing). Presentation only, exactly as on
@@ -82,8 +83,8 @@ export const SlotCommitPreparedNavigationInputSchema = z.object({
 });
 
 export const SlotCommitPreparedNavigationResultSchema = z.object({
-  previousEntityId: z.string(),
-  currentEntityId: z.string(),
+  previousEntityId: PanelEntityIdSchema,
+  currentEntityId: PanelEntityIdSchema,
   currentEntryKey: z.string(),
   cursor: z.number().int().nonnegative(),
 });
@@ -95,8 +96,8 @@ export type SlotCommitPreparedNavigationResult = z.infer<
 >;
 
 export const SlotCreateInputSchema = z.object({
-  slotId: z.string(),
-  parentSlotId: z.string().nullable(),
+  slotId: PanelSlotIdSchema,
+  parentSlotId: PanelSlotIdSchema.nullable(),
   /**
    * Display title known at creation (manifest title, or the one the opener
    * asked for). Presentation only: it is recorded with the binding so the new
@@ -106,8 +107,8 @@ export const SlotCreateInputSchema = z.object({
   title: z.string().optional(),
   placement: z
     .object({
-      beforeSlotId: z.string().nullable().optional(),
-      afterSlotId: z.string().nullable().optional(),
+      beforeSlotId: PanelSlotIdSchema.nullable().optional(),
+      afterSlotId: PanelSlotIdSchema.nullable().optional(),
     })
     .strict()
     .optional(),
@@ -150,9 +151,9 @@ export const PanelSearchResultSchema = z
 
 export const RawSlotRowSchema = z
   .object({
-    slot_id: z.string(),
-    parent_slot_id: z.string().nullable(),
-    current_entity_id: z.string().nullable(),
+    slot_id: PanelSlotIdSchema,
+    parent_slot_id: PanelSlotIdSchema.nullable(),
+    current_entity_id: PanelEntityIdSchema.nullable(),
     current_entry_key: z.string().nullable(),
     current_history_cursor: z.number().int().nonnegative().nullable().optional(),
     history_count: z.number().int().nonnegative().optional(),
@@ -164,9 +165,9 @@ export const RawSlotRowSchema = z
   .strict();
 
 export const SlotRowSchema = RawSlotRowSchema.extend({
-  slot_id: z.string(),
-  parent_slot_id: z.string().nullable(),
-  current_entity_id: z.string().nullable(),
+  slot_id: PanelSlotIdSchema,
+  parent_slot_id: PanelSlotIdSchema.nullable(),
+  current_entity_id: PanelEntityIdSchema.nullable(),
   current_entity_title: z.string().nullable().optional(),
   current_entry_key: z.string().nullable(),
   current_history_cursor: z.number().int().nonnegative().nullable().optional(),
@@ -178,10 +179,10 @@ export const SlotRowSchema = RawSlotRowSchema.extend({
 }).strict();
 
 export const SlotHistoryRowSchema = z.object({
-  slot_id: z.string(),
+  slot_id: PanelSlotIdSchema,
   cursor: z.number(),
   entry_key: z.string(),
-  entity_id: z.string(),
+  entity_id: PanelEntityIdSchema,
   source: z.string(),
   context_id: z.string(),
   state_args: z.string().nullable(),
@@ -239,13 +240,13 @@ export const PanelDetailSchema = z
 
 const PanelTreeGroupSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("roots"), ownerUserId: z.string().nullable() }).strict(),
-  z.object({ kind: z.literal("children"), parentSlotId: z.string() }).strict(),
+  z.object({ kind: z.literal("children"), parentSlotId: PanelSlotIdSchema }).strict(),
 ]);
 
 export const RawPanelTreeNodeSchema = z
   .object({
-    slotId: z.string(),
-    parentSlotId: z.string().nullable(),
+    slotId: PanelSlotIdSchema,
+    parentSlotId: PanelSlotIdSchema.nullable(),
     ownerUserId: z.string().nullable(),
     createdAt: z.number(),
     childCount: z.number().int().nonnegative(),
@@ -376,8 +377,8 @@ export const PanelTreeSearchPageSchema = z
 
 export const PanelTreePlacementSchema = z
   .object({
-    beforeSlotId: z.string().nullable().optional(),
-    afterSlotId: z.string().nullable().optional(),
+    beforeSlotId: PanelSlotIdSchema.nullable().optional(),
+    afterSlotId: PanelSlotIdSchema.nullable().optional(),
   })
   .strict();
 
@@ -859,7 +860,9 @@ export const workspaceStateMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
     returns: z
       .object({
-        items: z.array(z.object({ slotId: z.string(), entityId: z.string().nullable() }).strict()),
+        items: z.array(
+          z.object({ slotId: PanelSlotIdSchema, entityId: PanelEntityIdSchema.nullable() }).strict()
+        ),
         nextCursor: z.string().nullable(),
       })
       .strict(),

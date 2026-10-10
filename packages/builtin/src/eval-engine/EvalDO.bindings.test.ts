@@ -1,3 +1,4 @@
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 /**
  * The eval owner bindings (`chat` + `agent`): present + forwarding for agent-owned
  * eval, ABSENT for non-agent (CLI/panel) eval.
@@ -8,9 +9,9 @@ import { buildOwnerBindings } from "./evalOwnerBindings.js";
 describe("buildOwnerBindings", () => {
   it("injects no owner bindings for a non-agent eval (no channelId/agentRef → CLI/panel)", () => {
     const call = vi.fn();
-    expect(buildOwnerBindings({}, call)).toEqual({});
-    expect(buildOwnerBindings({ channelId: "c" }, call)).toEqual({}); // agentRef missing
-    expect(buildOwnerBindings({ agentRef: "a" }, call)).toEqual({}); // channelId missing
+    expect(buildOwnerBindings({}, call, schemaRpcMock({ call }))).toEqual({});
+    expect(buildOwnerBindings({ channelId: "c" }, call, schemaRpcMock({ call }))).toEqual({}); // agentRef missing
+    expect(buildOwnerBindings({ agentRef: "a" }, call, schemaRpcMock({ call }))).toEqual({}); // channelId missing
     expect(call).not.toHaveBeenCalled();
   });
 
@@ -23,7 +24,8 @@ describe("buildOwnerBindings", () => {
         contextId: "ctx-1",
         agentInvocationId: "invocation-1",
       },
-      call
+      call,
+      schemaRpcMock({ call })
     ) as {
       agent: {
         setModel: (m: string) => Promise<unknown>;

@@ -7,6 +7,11 @@ import {
 import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { LifecycleKey } from "@panticonic/builtin/workspace-state";
+import { workspaceStateEngineMethods } from "@vibestudio/service-schemas/workspaceStateEngine";
+import {
+  createTypedServiceClient,
+  type TypedServiceClient,
+} from "@vibestudio/shared/typedServiceClient";
 import { isPermanentRuntimeReadinessError } from "../runtimeReadinessError.js";
 
 const log = createDevLogger("AlarmDriver");
@@ -15,6 +20,7 @@ const log = createDevLogger("AlarmDriver");
 const MAX_TIMER_MS = 2_000_000_000;
 const FAILURE_RETRY_MIN_MS = 1_000;
 const FAILURE_RETRY_MAX_MS = 30_000;
+type WorkspaceStateEngineClient = TypedServiceClient<typeof workspaceStateEngineMethods>;
 
 type AlarmClaim = LifecycleKey & {
   wakeAt: number;
@@ -50,6 +56,7 @@ export interface AlarmDriverDeps {
 export class AlarmDriver {
   private readonly deps: AlarmDriverDeps;
   private readonly workspaceRef: DORef;
+  private readonly workspaceState: WorkspaceStateEngineClient;
   private readonly concurrency: number;
   private readonly workerId: string;
   private adopted = false;
@@ -80,6 +87,11 @@ export class AlarmDriver {
       className: "WorkspaceDO",
       objectKey: deps.workspaceId,
     };
+    this.workspaceState = createTypedServiceClient(
+      "workspace-state",
+      workspaceStateEngineMethods,
+      (_service, method, args) => this.deps.doDispatch.dispatch(this.workspaceRef, method, ...args)
+    );
     this.concurrency = deps.concurrency ?? 8;
     this.workerId = deps.workerId ?? `alarm-driver:${crypto.randomUUID()}`;
     if (!Number.isSafeInteger(this.concurrency) || this.concurrency < 1) {
@@ -177,7 +189,7 @@ export class AlarmDriver {
     }
     let next: number | null = null;
     try {
-      next = await this.dispatchWorkspace<number | null>("alarmNextWakeAt", Date.now(), [
+      next = await this.workspaceState.alarmNextWakeAt(Date.now(), [
         ...this.activeTargets.values(),
       ]);
     } catch (err) {
@@ -209,7 +221,7 @@ export class AlarmDriver {
     if (available <= 0) return true;
     let due: AlarmClaim[] = [];
     try {
-      due = await this.dispatchWorkspace<AlarmClaim[]>("alarmClaimDue", {
+      due = await this.workspaceState.alarmClaimDue({
         now: Date.now(),
         workerId: this.workerId,
         limit: available,
@@ -257,7 +269,7 @@ export class AlarmDriver {
     try {
       if (this.deps.isAuthorityPaused?.(ref)) {
         const wakeAt = Date.now() + 60_000;
-        await this.dispatchWorkspace("alarmSet", {
+        await this.workspaceState.alarmSet({
           ...ref,
           ...claim,
           wakeAt,
@@ -304,7 +316,7 @@ export class AlarmDriver {
           err
         );
         const wakeAt = Date.now() + 5_000;
-        await this.dispatchWorkspace("alarmSet", {
+        await this.workspaceState.alarmSet({
           ...ref,
           ...claim,
           wakeAt,
@@ -314,9 +326,7 @@ export class AlarmDriver {
       } finally {
         this.activeDispatches.delete(controller);
       }
-      const completed = await this.dispatchWorkspace<
-        { status: "accepted"; wakeAt: number | null } | { status: "stale" }
-      >("alarmComplete", {
+      const completed = await this.workspaceState.alarmComplete({
         ...ref,
         ...claim,
         nextAlarm: result.nextAlarm,
@@ -358,7 +368,7 @@ export class AlarmDriver {
   private async ensureAdopted(): Promise<boolean> {
     if (this.adopted) return true;
     try {
-      await this.dispatchWorkspace("alarmAdoptWorker", this.workerId);
+      await this.workspaceState.alarmAdoptWorker(this.workerId);
       if (this.stopped) return false;
       this.adopted = true;
       return true;
@@ -367,10 +377,6 @@ export class AlarmDriver {
       this.armFailureRetry("refresh");
       return false;
     }
-  }
-
-  private dispatchWorkspace<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
-    return this.deps.doDispatch.dispatch(this.workspaceRef, method, ...args) as Promise<T>;
   }
 
   private targetKey(key: LifecycleKey): string {

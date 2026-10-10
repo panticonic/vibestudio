@@ -1,3 +1,4 @@
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { HeadlessBrowserDownloads } from "./browserDownloads.js";
 import type { BrowserAutomationRequest } from "@vibestudio/shared/panel/browserAutomation";
 /**
@@ -6,15 +7,13 @@ import type { BrowserAutomationRequest } from "@vibestudio/shared/panel/browserA
  *   browser launch → cdp-host bridge connect → snapshot reconcile.
  * (The bridge upgrade is rejected until registerClient exists server-side.)
  */
-import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { createWorkspaceClient } from "@vibestudio/service-schemas/clients/workspaceClient";
 import { randomUUID } from "crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type {
   PanelHost,
   PanelHostRegistration,
   PanelRuntimeLeaseChangedEvent,
-  RuntimeLeaseSnapshot,
 } from "@vibestudio/shared/panel/panelLease";
 import { createPanelHostRegistration } from "@vibestudio/shared/panel/panelLease";
 import type { PanelHostObservation } from "@vibestudio/shared/panel/observation";
@@ -94,11 +93,7 @@ export class HeadlessHost implements PanelHost {
   async start(): Promise<void> {
     const connection = await (this.config.connectionFactory?.() ?? connectToServer(this.config));
     this.connection = connection;
-    const workspace = createTypedServiceClient(
-      "workspace",
-      workspaceMethods,
-      (service, method, args) => connection.rpc.call("main", `${service}.${method}`, args)
-    );
+    const workspace = createWorkspaceClient(connection.rpc);
     const workspaceInfo = await workspace.getInfo();
     this.panelInit = new PanelInitClient(
       connection.rpc,
@@ -165,7 +160,7 @@ export class HeadlessHost implements PanelHost {
     };
     if (this.idleTimer) clearInterval(this.idleTimer);
     try {
-      await this.connection?.rpc.call("main", "panelRuntime.unregisterClient", [
+      await this.connection?.rpc.call("main", mainRpcMethods["panelRuntime.unregisterClient"], [
         this.config.clientSessionId,
       ]);
     } catch {
@@ -197,7 +192,9 @@ export class HeadlessHost implements PanelHost {
   // ── internals ────────────────────────────────────────────────────────────
 
   private async registerClient(registration: PanelHostRegistration): Promise<void> {
-    await this.connection!.rpc.call("main", "panelRuntime.registerClient", [registration]);
+    await this.connection!.rpc.call("main", mainRpcMethods["panelRuntime.registerClient"], [
+      registration,
+    ]);
   }
 
   handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
@@ -263,10 +260,10 @@ export class HeadlessHost implements PanelHost {
           const owner = this.pages!.ownerForPanel(panelId);
           if (!(await this.approveBrowserCapability(panelId, owner.url, "popups", owner.signal)))
             throw new Error("Popup permission denied");
-          const popup = await this.connection!.rpc.call<{ id: string }>(
+          const popup = await this.connection!.rpc.call(
             "main",
-            "panel.createPanel",
-            [panelId, `browser:${url}`, { focus: false, placement: "child" }],
+            mainRpcMethods["panel.createPanel"],
+            [panelId, `browser:${url}`, { focus: false }],
             { signal: owner.signal }
           );
           this.bridge?.sendEvent(panelId, "Vibestudio.popup", {
@@ -307,7 +304,7 @@ export class HeadlessHost implements PanelHost {
       ) {
         return;
       }
-      await this.connection.rpc.call("main", "panelRuntime.reportView", [
+      await this.connection.rpc.call("main", mainRpcMethods["panelRuntime.reportView"], [
         lease.runtimeEntityId,
         lease.connectionId,
         {
@@ -429,9 +426,9 @@ export class HeadlessHost implements PanelHost {
     signal?: AbortSignal
   ): Promise<boolean> {
     const origin = new URL(url).origin;
-    const result = await this.connection!.rpc.call<{ granted: boolean }>(
+    const result = await this.connection!.rpc.call(
       "main",
-      "browserPermissions.request",
+      mainRpcMethods["browserPermissions.request"],
       [
         {
           panelId,
@@ -605,15 +602,15 @@ export class HeadlessHost implements PanelHost {
 
   private async reconcile(opts?: { forceReload?: boolean }): Promise<void> {
     const observedContexts = this.pages?.contextIds() ?? [];
-    const snapshot = await this.connection!.rpc.call<RuntimeLeaseSnapshot>(
+    const snapshot = await this.connection!.rpc.call(
       "main",
-      "panelRuntime.getSnapshot",
+      mainRpcMethods["panelRuntime.getSnapshot"],
       []
     );
     const intents = this.tracker.reconcile(snapshot);
-    const owners = await this.connection!.rpc.call<{ contexts: string[] }>(
+    const owners = await this.connection!.rpc.call(
       "main",
-      "runtime.listContexts",
+      mainRpcMethods["runtime.listContexts"],
       []
     );
     if (opts?.forceReload) {
@@ -751,7 +748,10 @@ export class HeadlessHost implements PanelHost {
     await this.pages?.unloadPanel(slotId);
     if (lease) {
       await this.connection?.rpc
-        .call("main", "panelRuntime.release", [lease.runtimeEntityId, lease.connectionId])
+        .call("main", mainRpcMethods["panelRuntime.release"], [
+          lease.runtimeEntityId,
+          lease.connectionId,
+        ])
         .catch(() => undefined);
     }
   }

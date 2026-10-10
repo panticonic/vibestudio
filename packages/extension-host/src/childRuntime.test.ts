@@ -10,7 +10,7 @@ describe("extension child runtime", () => {
       "utf8"
     );
 
-    expect(source).toContain('createTypedServiceClient("gitInterop", gitInteropMethods');
+    expect(source).toContain('createMainServiceClient("gitInterop", gitInteropMethods)');
     expect(source).not.toContain('serviceProxy("git")');
   });
 
@@ -21,7 +21,9 @@ describe("extension child runtime", () => {
     );
 
     expect(source).toContain("rpc: {");
-    expect(source).toContain("rpcCall<T>(method, args, targetId)");
+    expect(source).toContain("createMainRpcCaller(runtimeSchemaCaller())");
+    expect(source).toContain("call: (...args) => schemaRpcClient(getRuntimeBridge()).call(...args)");
+    expect(source).not.toContain("call: <T>");
     expect(source).toContain('type: "ws:route"');
     expect(source.includes("call" + "DO")).toBe(false);
   });
@@ -33,7 +35,7 @@ describe("extension child runtime", () => {
     );
 
     expect(source).toContain("async ensureMaterialized(scope:");
-    expect(source).toContain('rpcCall<string>("fs.ensureMaterialized", [scope])');
+    expect(source).toContain('mainRpc("fs.ensureMaterialized", [scope])');
   });
 
   it("synthesizes a rejecting response from ws:routed-response-error and logs ws:routed-event-error", () => {
@@ -55,7 +57,7 @@ describe("extension child runtime", () => {
     expect(source.slice(responseErrorIdx, eventErrorIdx)).toContain(
       "for (const listener of listeners) listener(envelope)"
     );
-    expect(source.slice(responseErrorIdx, eventErrorIdx)).toContain("errorData: message.errorData");
+    expect(source.slice(responseErrorIdx, eventErrorIdx)).toContain("error: message.error");
   });
 
   it("preserves structured RPC failures while adding extension context", () => {

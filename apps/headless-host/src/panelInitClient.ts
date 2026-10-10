@@ -1,3 +1,5 @@
+import { dispatchRpcCall } from "@vibestudio/rpc/internal";
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 /**
  * Panel-init resolution for the headless host: the shared PanelManager over
  * plain RPC delegates, with in-memory view state. getPanelInit() returns the bootstrap config
@@ -9,7 +11,7 @@ import {
   createRuntimeClient,
   createWorkspaceStateClient,
   createPanelMetadataClient,
-} from "@vibestudio/shell-core/createShellCore";
+} from "@vibestudio/service-schemas/clients/shellCoreClient";
 import type { CreatePanelResult, NavigatePanelOptions } from "@vibestudio/shell-core/panelManager";
 import {
   asPanelEntityId,
@@ -18,7 +20,6 @@ import {
   type PanelSlotId,
 } from "@vibestudio/shared/panel/ids";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
-import type { PanelRuntimeAcquireResult } from "@vibestudio/shared/panel/panelLease";
 import {
   createPanelRuntimeLeaseRequest,
   formatPanelRuntimeLeaseDeniedMessage,
@@ -43,10 +44,8 @@ export class PanelInitClient {
     private readonly clientSessionId: string,
     workspaceId: string
   ) {
-    const call = <T>(method: string, args: unknown[]) =>
-      rpc.call<T>("main", method, args) as Promise<T>;
     const callService = (service: string, method: string, args: unknown[]) =>
-      call<unknown>(`${service}.${method}`, args);
+      dispatchRpcCall(rpc, "main", `${service}.${method}`, args);
     const workspaceState = createWorkspaceStateClient(callService);
     const runtime = createRuntimeClient(callService);
 
@@ -59,7 +58,8 @@ export class PanelInitClient {
       workspacePath: "",
       allowMissingManifests: true,
       serverInfo: { gatewayConfig: { serverUrl } },
-      grantConnection: (entityId) => call<{ token: string }>("auth.grantConnection", [entityId]),
+      grantConnection: (entityId) =>
+        rpc.call("main", mainRpcMethods["auth.grantConnection"], [entityId]),
     });
   }
 
@@ -154,19 +154,15 @@ export class PanelInitClient {
     connectionId: string
   ): Promise<void> {
     const runtimeEntityId = await this.panelManager.getCurrentEntityId(normalizedSlotId);
-    const acquired = await this.rpc.call<PanelRuntimeAcquireResult>(
-      "main",
-      "panelRuntime.acquire",
-      [
-        runtimeEntityId,
-        createPanelRuntimeLeaseRequest({
-          slotId,
-          clientSessionId: this.clientSessionId,
-          hostConnectionId: this.clientSessionId,
-          connectionId,
-        }),
-      ]
-    );
+    const acquired = await this.rpc.call("main", mainRpcMethods["panelRuntime.acquire"], [
+      runtimeEntityId,
+      createPanelRuntimeLeaseRequest({
+        slotId,
+        clientSessionId: this.clientSessionId,
+        hostConnectionId: this.clientSessionId,
+        connectionId,
+      }),
+    ]);
     if (!acquired.acquired) {
       throw new Error(formatPanelRuntimeLeaseDeniedMessage(slotId, acquired.lease));
     }

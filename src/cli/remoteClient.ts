@@ -18,6 +18,7 @@ import { AuthError, UsageError } from "./output.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { resolveLocalHubControlTransport } from "./localHubTransport.js";
 import { typedClient } from "./typedClients.js";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export type { DeviceCredential } from "./rpcClient.js";
 export { refreshShell, type RefreshShellResponse } from "./rpcClient.js";
@@ -125,14 +126,14 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     if (!paired) throw new AuthError("pairing did not return a device credential");
     // Pairing authenticates the account. Workspace selection begins only after
     // that boundary and defaults to the account's Personal workspace.
-    const pair = await client.call<{
-      personal: { workspaceId: string };
-      system: { workspaceId: string };
-    }>("hubControl.ensureUserWorkspaces", []);
+    const hubControl = createTypedServiceClient(
+      "hubControl",
+      hubControlMethods,
+      (_service, method, args) => client.call(method, args)
+    );
+    const pair = await hubControl.ensureUserWorkspaces();
     const targetWorkspaceId = pair.personal.workspaceId;
-    const route = await client.call<HubWorkspaceRoute>("hubControl.routeWorkspace", [
-      { workspaceId: targetWorkspaceId },
-    ]);
+    const route = await hubControl.routeWorkspace({ workspaceId: targetWorkspaceId });
     if (route.workspaceId !== targetWorkspaceId) {
       throw new AuthError("workspace route changed the pairing target");
     }

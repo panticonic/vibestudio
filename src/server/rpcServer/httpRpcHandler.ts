@@ -1,7 +1,6 @@
-import { decodeRpcJson, encodeRpcJson, rpcDiagnosticIdOf } from "@vibestudio/rpc";
+import { rpcCallerAbortedError, serializeRpcFailure } from "@vibestudio/rpc";
+import { decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc";
 import {
-  rpcErrorDataOf,
-  rpcErrorKindOf,
   responseEnvelopeFor,
   stampEnvelopeCaller,
   type RpcEnvelope,
@@ -76,7 +75,7 @@ export class HttpRpcHandler {
     const key = this.requestKey(caller, message.requestId);
     const active = this.activeRequests.get(key);
     if (!active) return false;
-    active.abort(new Error("RPC call aborted by caller"));
+    active.abort(rpcCallerAbortedError());
     return true;
   }
 
@@ -169,7 +168,7 @@ export class HttpRpcHandler {
         await this.deps.handleEvent(admission.caller, envelope, message);
         writeJson(res, 200, {});
       } catch (error) {
-        writeJson(res, 200, { error: error instanceof Error ? error.message : String(error) });
+        writeJson(res, 200, { error: serializeRpcFailure(error) });
       }
       return;
     }
@@ -233,9 +232,6 @@ export class HttpRpcHandler {
         )
       );
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorCode = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-      const errorStack = error instanceof Error ? error.stack : undefined;
       writeJson(
         res,
         200,
@@ -245,12 +241,7 @@ export class HttpRpcHandler {
           {
             type: "response",
             requestId: message.requestId,
-            error: errorMessage,
-            errorKind: rpcErrorKindOf(error, "internal"),
-            ...(errorCode ? { errorCode } : {}),
-            ...(errorStack ? { errorStack } : {}),
-            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-            ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+            error: serializeRpcFailure(error, "internal"),
           }
         )
       );

@@ -1,3 +1,8 @@
+import { workspaceStateEngineMethods } from "@vibestudio/service-schemas/workspaceStateEngine";
+import {
+  createTypedServiceClient,
+  type TypedServiceClient,
+} from "@vibestudio/shared/typedServiceClient";
 /**
  * WorkspaceEntityStore — the SINGLE owner of WorkspaceDO-backed entity state.
  *
@@ -28,6 +33,7 @@ import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type {
   EntityActivationInput,
+  DurableEntityRecord,
   EntityKind,
   EntityRecord,
   EntityReservationInput,
@@ -64,16 +70,19 @@ export interface WorkspaceEntityStoreDeps {
 export class WorkspaceEntityStore {
   private readonly ref: { source: string; className: string; objectKey: string };
 
+  private readonly receiver: TypedServiceClient<typeof workspaceStateEngineMethods>;
+
   constructor(private readonly deps: WorkspaceEntityStoreDeps) {
     this.ref = {
       source: INTERNAL_DO_SOURCE,
       className: WORKSPACE_DO_CLASS,
       objectKey: deps.workspaceId,
     };
-  }
-
-  private dispatch<T>(method: string, ...args: unknown[]): Promise<T> {
-    return this.deps.doDispatch.dispatch(this.ref, method, ...args) as Promise<T>;
+    this.receiver = createTypedServiceClient(
+      "workspace-state",
+      workspaceStateEngineMethods,
+      (_service, method, args) => deps.doDispatch.dispatch(this.ref, method, ...args)
+    );
   }
 
   // --- mutations: durable write + cache mirror, atomic ---
@@ -86,7 +95,7 @@ export class WorkspaceEntityStore {
     const record = await publishExecutionOwnerAsync(
       this.deps.executionPublicationPort,
       this.publication(input),
-      () => this.dispatch<EntityRecord>("entityActivate", input)
+      () => this.receiver.entityActivate(input)
     );
     this.deps.entityCache._onActivate(record);
     await this.deps.materializeExecution(record);
@@ -99,7 +108,7 @@ export class WorkspaceEntityStore {
    * advanceExecution() commits the sealed runtime image.
    */
   async reserve(input: EntityReservationInput): Promise<EntityRecord> {
-    const record = await this.dispatch<EntityRecord>("entityReserve", input);
+    const record = await this.receiver.entityReserve(input);
     this.deps.entityCache._onActivate(record);
     return record;
   }
@@ -109,7 +118,7 @@ export class WorkspaceEntityStore {
     const record = await publishExecutionOwnerAsync(
       this.deps.executionPublicationPort,
       this.publication(input),
-      () => this.dispatch<EntityRecord>("entityPrepareExecution", input)
+      () => this.receiver.entityPrepareExecution(input)
     );
     this.deps.entityCache._onActivate(record);
     return record;
@@ -120,7 +129,7 @@ export class WorkspaceEntityStore {
     const record = await publishExecutionOwnerAsync(
       this.deps.executionPublicationPort,
       this.publication(input),
-      () => this.dispatch<EntityRecord>("entityAdvanceExecution", input)
+      () => this.receiver.entityAdvanceExecution(input)
     );
     this.deps.entityCache._onActivate(record);
     await this.deps.materializeExecution(record);
@@ -141,7 +150,7 @@ export class WorkspaceEntityStore {
           .join(",")}`,
         artifacts: publications.flatMap(({ artifacts }) => artifacts),
       },
-      () => this.dispatch<EntityRecord[]>("entityAdvanceExecutions", inputs)
+      () => this.receiver.entityAdvanceExecutions(inputs)
     );
     for (const record of records) this.deps.entityCache._onActivate(record);
     await Promise.all(records.map((record) => this.deps.materializeExecution(record)));
@@ -150,37 +159,37 @@ export class WorkspaceEntityStore {
 
   /** Durably move a self-hosted agent to its current channel and refresh auth cache. */
   async rebindAgentChannel(id: string, channelId: string): Promise<EntityRecord> {
-    const record = await this.dispatch<EntityRecord>("entityRebindAgentChannel", id, channelId);
+    const record = await this.receiver.entityRebindAgentChannel(id, channelId);
     this.deps.entityCache._onActivate(record);
     return record;
   }
 
   /** Retire a WorkspaceDO entity and mirror the retirement. Null if already gone. */
   async retire(id: string): Promise<EntityRecord | null> {
-    const record = await this.dispatch<EntityRecord | null>("entityRetire", id);
+    const record = await this.receiver.entityRetire(id);
     if (record) this.deps.entityCache._onRetire(record);
     return record;
   }
 
   /** Mark post-retire cleanup complete (durable only — no cache state changes). */
   async cleanupComplete(id: string, authoritySessionId: string): Promise<void> {
-    await this.dispatch<undefined>("entityCleanupComplete", id, authoritySessionId);
+    await this.receiver.entityCleanupComplete(id, authoritySessionId);
   }
 
   replaceResourceBindings(id: string, bindings: RuntimeResourceBindingInput[]): Promise<void> {
-    return this.dispatch<void>("runtimeResourceBindingsReplace", id, bindings);
+    return this.receiver.runtimeResourceBindingsReplace(id, bindings);
   }
 
   releaseResourceBindings(id: string): Promise<void> {
-    return this.dispatch<void>("runtimeResourceBindingsRelease", id);
+    return this.receiver.runtimeResourceBindingsRelease(id);
   }
 
   entitiesBoundToResources(resourceKind: string, resourceIds: string[]): Promise<string[]> {
-    return this.dispatch<string[]>("runtimeResourceBindingEntities", resourceKind, resourceIds);
+    return this.receiver.runtimeResourceBindingEntities(resourceKind, resourceIds);
   }
 
   resourceBindingsForEntity(id: string): Promise<RuntimeResourceBindingInput[]> {
-    return this.dispatch<RuntimeResourceBindingInput[]>("runtimeResourceBindingsForEntity", id);
+    return this.receiver.runtimeResourceBindingsForEntity(id);
   }
 
   // --- reads: cache-first, WorkspaceDO fallback ---
@@ -188,12 +197,12 @@ export class WorkspaceEntityStore {
   /** Owner context for an entity. Cache-first; falls back to the WorkspaceDO. */
   async resolveContext(id: string): Promise<string | null> {
     const cached = this.deps.entityCache.resolveContext(id);
-    return cached != null ? cached : this.dispatch<string | null>("entityResolveContext", id);
+    return cached != null ? cached : this.receiver.entityResolveContext(id);
   }
 
   /** Resolve a (possibly retired) record by its canonical id from the WorkspaceDO. */
   resolveRecord(canonicalId: string): Promise<EntityRecord | null> {
-    return this.dispatch<EntityRecord | null>("entityResolve", canonicalId);
+    return this.receiver.entityResolve(canonicalId);
   }
 
   /**
@@ -206,14 +215,14 @@ export class WorkspaceEntityStore {
     const cached = this.deps.entityCache.resolve(canonicalId);
     return cached && cached.status !== "retired"
       ? cached
-      : this.dispatch<EntityRecord | null>("entityResolve", canonicalId);
+      : this.receiver.entityResolve(canonicalId);
   }
 
   /** Resolve the active durable identity, repairing a lost hot-cache mirror. */
   async resolveActiveRecord(canonicalId: string): Promise<EntityRecord | null> {
     const cached = this.deps.entityCache.resolveActive(canonicalId);
     if (cached) return cached;
-    const record = await this.dispatch<EntityRecord | null>("entityResolveActive", canonicalId);
+    const record = await this.receiver.entityResolveActive(canonicalId);
     if (record) this.deps.entityCache._onActivate(record);
     return record;
   }
@@ -224,31 +233,29 @@ export class WorkspaceEntityStore {
    * store's `current_entity_id` index) — used to resolve a launch's owning panel slot.
    */
   resolveSlotByEntity(entityId: string): Promise<string | null> {
-    return this.dispatch<string | null>("slotResolveByEntity", entityId);
+    return this.receiver.slotResolveByEntity(entityId);
   }
 
   /** List active entities (optionally by kind) from the WorkspaceDO source of truth. */
-  listActive(kind?: EntityKind | string): Promise<EntityRecord[]> {
-    return kind
-      ? this.dispatch<EntityRecord[]>("entityListActiveByKind", kind)
-      : this.dispatch<EntityRecord[]>("entityListActive");
+  listActive(kind?: EntityKind): Promise<DurableEntityRecord[]> {
+    return kind ? this.receiver.entityListActiveByKind(kind) : this.receiver.entityListActive();
   }
 
   /** Durable reservations whose executable incarnation has not committed yet. */
-  listPreparing(kind?: EntityKind | string): Promise<EntityRecord[]> {
+  listPreparing(kind?: EntityKind): Promise<DurableEntityRecord[]> {
     return kind
-      ? this.dispatch<EntityRecord[]>("entityListPreparingByKind", kind)
-      : this.dispatch<EntityRecord[]>("entityListPreparing");
+      ? this.receiver.entityListPreparingByKind(kind)
+      : this.receiver.entityListPreparing();
   }
 
   /** Active executions plus retired panel-history entries that remain selectable. */
-  listExecutionRoots(): Promise<EntityRecord[]> {
-    return this.dispatch<EntityRecord[]>("entityListExecutionRoots");
+  listExecutionRoots(): Promise<DurableEntityRecord[]> {
+    return this.receiver.entityListExecutionRoots();
   }
 
   /** All active or retired entity records that establish a context's creator lineage. */
-  listByContext(contextId: string): Promise<EntityRecord[]> {
-    return this.dispatch<EntityRecord[]>("entityListByContext", contextId);
+  listByContext(contextId: string): Promise<DurableEntityRecord[]> {
+    return this.receiver.entityListByContext(contextId);
   }
 
   // --- context-relationship registry (durable edges, no cache mirror) ---
@@ -262,7 +269,7 @@ export class WorkspaceEntityStore {
     cloneDefinition?: ContextCloneDefinition;
     cloneCompletion?: ContextCloneCompletion;
   }): Promise<void> {
-    return this.dispatch<undefined>("contextEdgeUpsert", input);
+    return this.receiver.contextEdgeUpsert(input);
   }
 
   /** List edges owned BY a context, optionally scoped to one kind. */
@@ -270,17 +277,17 @@ export class WorkspaceEntityStore {
     ownerContextId: string;
     kind?: ContextEdgeKind;
   }): Promise<ContextEdge[]> {
-    return this.dispatch<ContextEdge[]>("contextEdgeListByOwner", input);
+    return this.receiver.contextEdgeListByOwner(input);
   }
 
   /** List edges INTO a context (child side) — walk up for authz/teardown. */
   listContextEdgesByChild(contextId: string): Promise<ContextEdgeByChild[]> {
-    return this.dispatch<ContextEdgeByChild[]>("contextEdgeListByChild", contextId);
+    return this.receiver.contextEdgeListByChild(contextId);
   }
 
   /** Delete every inbound edge of a context (teardown). */
   deleteContextEdges(contextId: string): Promise<void> {
-    return this.dispatch<undefined>("contextEdgeDeleteByChild", contextId);
+    return this.receiver.contextEdgeDeleteByChild(contextId);
   }
 
   /** The hot cache, for synchronous reads (resolve/resolveActive/resolveContext/…). */

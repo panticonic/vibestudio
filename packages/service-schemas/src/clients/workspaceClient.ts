@@ -1,3 +1,4 @@
+import { dispatchRpcCall } from "@vibestudio/rpc/internal";
 /**
  * Typed workspace client — derives its RPC call surface from the shared
  * `workspaceMethods` schema table (`workspace.ts`), the
@@ -32,7 +33,7 @@ export function createWorkspaceClient(rpc: WorkspaceRpc): WorkspaceClient {
     "workspace",
     WORKSPACE_METHOD_NAMES,
     async () => (await import("../workspace.js")).workspaceMethods,
-    (svc, method, args) => rpc.call("main", `${svc}.${method}`, args)
+    (svc, method, args) => dispatchRpcCall(rpc, "main", `${svc}.${method}`, args)
   );
   const listProjects = async (): Promise<string[]> => {
     const tree = await typed.sourceTree();

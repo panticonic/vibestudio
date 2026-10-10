@@ -251,6 +251,7 @@ describe("HttpRpcHandler", () => {
 
   it("aborts the authenticated caller's matching in-flight unary request", async () => {
     let observedAbort = false;
+    let observedReason: unknown;
     let resolveEntered!: () => void;
     const entered = new Promise<void>((resolve) => {
       resolveEntered = resolve;
@@ -261,6 +262,7 @@ describe("HttpRpcHandler", () => {
         await new Promise<void>((resolve) =>
           signal.addEventListener("abort", () => {
             observedAbort = true;
+            observedReason = signal.reason;
             resolve();
           })
         );
@@ -288,6 +290,7 @@ describe("HttpRpcHandler", () => {
     await pending;
 
     expect(observedAbort).toBe(true);
+    expect(observedReason).toMatchObject({ code: "RPC_ABORTED" });
     expect(cancelResponse.captured.status).toBe(200);
   });
 

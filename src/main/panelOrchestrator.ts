@@ -25,7 +25,7 @@ import {
   createPanelMetadataClient,
   createRuntimeClient,
   createWorkspaceStateClient,
-} from "@vibestudio/shell-core/createShellCore";
+} from "@vibestudio/service-schemas/clients/shellCoreClient";
 import { isPanelRuntimeLeaseConflict, isRpcConnectionLost } from "@vibestudio/rpc";
 import type {
   PanelHost,

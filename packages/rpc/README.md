@@ -3,6 +3,9 @@
 `@vibestudio/rpc` is Vibestudio's unified RPC SDK. It provides one client surface for in-process, WebSocket, HTTP, Electron IPC, worker, app, shell, extension, and server call paths.
 
 ```ts
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
+import { z } from "zod";
 import { createRpcClient } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 
@@ -21,8 +24,16 @@ rpc.expose("notes.create", async (req) => {
   return { title, owner: req.caller.callerId };
 });
 
-const note = await rpc.call("main", "notes.create", ["hello"]);
-const response = await rpc.stream("main", "credentials.proxyFetch", [{ url: "https://example.com" }]);
+const notesMethods = createRpcMethods("notes", {
+  create: {
+    args: z.tuple([z.string()]),
+    returns: z.object({ title: z.string(), owner: z.string() }),
+  },
+});
+const note = await rpc.call("main", notesMethods.create, ["hello"]);
+const response = await rpc.stream("main", mainRpcMethods["credentials.proxyFetch"], [
+  { url: "https://example.com" },
+]);
 const unsubscribe = rpc.on("notes.changed", (event) => {
   console.log(event.caller.callerId, event.payload);
 });
@@ -54,3 +65,9 @@ Transport implementations live under `@vibestudio/rpc/transports/*`:
 - `composeTransports` for routing across multiple transports.
 
 Protocol helpers live under `@vibestudio/rpc/protocol/*`.
+
+Public calls take receiver-owned `RpcMethod` descriptors. Schemas validate arguments and results, and TypeScript derives both types from the same contract. Dynamic selectors validate against the canonical receiver and return `unknown`; there is no caller-selected result generic. Raw wire clients live in the internal entry point for transport infrastructure.
+
+Failures cross unary, streaming, upload, and shutdown boundaries as one structured graph, preserving aggregate members, causes, shared references, codes, data, and diagnostics. Use `formatRpcFailure(error)` at display boundaries to show the underlying failures.
+
+Internal host bridge frames and phone setup stream events use `serializeRpcFailure` and `deserializeRpcFailure` too. Cancellation waits for the host operation to settle; a cleanup failure remains visible alongside the caller's cancellation reason. Standard CDP error messages use `formatRpcFailure` at their text-only protocol boundary.

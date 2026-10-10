@@ -1,3 +1,4 @@
+import { dispatchRpcCall } from "@vibestudio/rpc/internal";
 import { z } from "zod";
 import {
   workspaceCreationMethods,
@@ -84,7 +85,7 @@ export function createWorkspaceCreationClient(rpc: RpcCaller): WorkspaceCreation
     "hubControl",
     ["createWorkspace", "workspaceCreationReceipt"] as const,
     async () => (await import("../workspaceCreation.js")).workspaceCreationMethods,
-    (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+    (service, method, args) => dispatchRpcCall(rpc, "main", `${service}.${method}`, args)
   );
   return { create: client.createWorkspace, receipt: client.workspaceCreationReceipt };
 }

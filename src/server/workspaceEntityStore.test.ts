@@ -6,6 +6,7 @@ import { WorkspaceEntityStore } from "./workspaceEntityStore.js";
 
 const RECORD: EntityRecord = {
   id: "do:vibestudio/internal:EvalDO:abc",
+  authoritySessionId: "authority:entity-test",
   kind: "do",
   source: { repoPath: "vibestudio/internal", effectiveVersion: "internal" },
   contextId: "ctx-1",

@@ -56,6 +56,7 @@ import {
   runtimeEntitySource,
   type CodeExecution,
   type EntityRecord,
+  type EntityKind,
   type EntityCloneProvenance,
   type ExternalDocumentExecution,
   type InertExecution,
@@ -1801,7 +1802,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // empty root is non-destructive (thrown before any side effect).
     const allActive =
       definition?.members.map((member) => member.source) ?? (await store.listActive());
-    const clonableIn = (srcCtx: string, include: Set<string> | null): EntityRecord[] =>
+    const clonableIn = (srcCtx: string, include: Set<string> | null) =>
       allActive.filter(
         (e) =>
           e.contextId === srcCtx &&
@@ -2448,7 +2449,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     createdAt: number;
   }
 
-  async function listEntities(kind?: string): Promise<EntitySummary[]> {
+  async function listEntities(kind?: EntityKind): Promise<EntitySummary[]> {
     const live = await store.listActive(kind);
     return live.map((record) => {
       const stateArgs = record.stateArgs;

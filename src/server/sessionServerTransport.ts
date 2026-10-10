@@ -80,9 +80,7 @@ export function createSessionServerTransport(
       registry.deliver(clientId, {
         type: "response",
         requestId,
-        error: err.message,
-        errorKind: "transport",
-        errorCode: CONNECTION_LOST_CODE,
+        error: { message: err.message, errorKind: "transport", code: CONNECTION_LOST_CODE },
       });
     }
   };

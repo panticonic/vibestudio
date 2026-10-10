@@ -15,7 +15,6 @@ import {
   contextBinding,
   encodeContextBinding,
 } from "@vibestudio/shared/contextBinding";
-import type { MirrorObjectsResult, MirrorTarget } from "@vibestudio/service-schemas/mirror";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
 import { jsonMode, printError, printResult } from "./output.js";
@@ -33,7 +32,7 @@ export async function writeState(
   let cursor: string | undefined;
   let written = 0;
   do {
-    const page = await client.call<MirrorObjectsResult>("mirror.objects", [
+    const page = await client.mainCall("mirror.objects", [
       { stateHash, ...(cursor ? { cursor } : {}) },
     ]);
     for (const file of page.files) {
@@ -55,7 +54,7 @@ export async function writeContextBinding(
   dir: string,
   contextId: string
 ): Promise<void> {
-  const info = await client.call<Record<string, unknown>>("auth.getConnectionInfo", []);
+  const info = await client.mainCall("auth.getConnectionInfo", []);
   const workspaceId = info["workspaceId"];
   if (typeof workspaceId !== "string" || workspaceId.length === 0) {
     throw new Error("workspace connection did not report a durable workspaceId");
@@ -75,7 +74,7 @@ async function mirror(inv: ParsedInvocation): Promise<number> {
     const dir = path.resolve(inv.positionals[1] ?? contextId);
     await fsp.mkdir(dir, { recursive: true });
 
-    const targets = await client.call<MirrorTarget[]>("mirror.targets", [{ contextId }]);
+    const targets = await client.mainCall("mirror.targets", [{ contextId }]);
     let total = 0;
     for (const target of targets) {
       total += await writeState(client, target.stateHash, path.join(dir, target.repoPath));

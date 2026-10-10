@@ -1,6 +1,8 @@
-import { attachRpcDiagnosticId } from "../errors.js";
-import type { RpcErrorData, RpcErrorKind } from "../types.js";
-import { RemoteRpcError } from "../errors.js";
+import { encodeRpcJson, decodeRpcJson } from "../wireJson.js";
+import { RpcBoundaryError, serializeRpcFailure } from "../errors.js";
+
+import { deserializeRpcFailure } from "../errors.js";
+import type { RpcFailure } from "../types.js";
 
 export const FRAME_HEAD = 0x01 as const;
 export const FRAME_DATA = 0x02 as const;
@@ -26,11 +28,7 @@ export interface EndFramePayload {
 
 export interface ErrorFramePayload {
   status: number;
-  message: string;
-  code?: string;
-  errorKind: RpcErrorKind;
-  errorData?: RpcErrorData;
-  diagnosticId?: string;
+  error: RpcFailure;
 }
 
 const textEncoder = new TextEncoder();
@@ -61,7 +59,7 @@ export function encodeEndFrame(payload: EndFramePayload): Uint8Array {
 }
 
 export function encodeErrorFrame(payload: ErrorFramePayload): Uint8Array {
-  return encodeFrame(FRAME_ERROR, textEncoder.encode(JSON.stringify(payload)));
+  return encodeFrame(FRAME_ERROR, textEncoder.encode(encodeRpcJson(payload)));
 }
 
 /**
@@ -151,7 +149,7 @@ export function parseEndFrame(payload: Uint8Array): EndFramePayload {
 }
 
 export function parseErrorFrame(payload: Uint8Array): ErrorFramePayload {
-  return JSON.parse(textDecoder.decode(payload)) as ErrorFramePayload;
+  return decodeRpcJson(textDecoder.decode(payload)) as ErrorFramePayload;
 }
 
 /**
@@ -451,16 +449,15 @@ export async function decodeFramedStream(
       let parsed: ErrorFramePayload;
       try {
         parsed = parseErrorFrame(payload);
-      } catch {
-        parsed = { status: 502, message: "Streaming RPC error", errorKind: "protocol" };
+      } catch (cause) {
+        parsed = {
+          status: 502,
+          error: serializeRpcFailure(
+            new RpcBoundaryError("Malformed streaming RPC error", "protocol", "EPROTOCOL", cause)
+          ),
+        };
       }
-      const error = new RemoteRpcError(
-        parsed.message,
-        parsed.errorKind,
-        parsed.code,
-        parsed.errorData
-      );
-      if (parsed.diagnosticId) attachRpcDiagnosticId(error, parsed.diagnosticId);
+      const error = deserializeRpcFailure(parsed.error);
       if (headSeen) errorBody(error);
       else rejectHead(error);
     }

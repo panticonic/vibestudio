@@ -1,12 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { createWorkspaceCreationService } from "./workspaceCreationService.js";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
+import { createWorkspaceHubControlService } from "./workspaceHubControlService.js";
 import { WORKSPACE_CREATION_AUTHORITY_RESOLVER } from "@vibestudio/service-schemas/workspaceCreation";
+import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 
 const input = { operationId: "creation_operation_1", workspace: "Example" };
 function fixture() {
-  const hub = { createWorkspace: vi.fn(), workspaceCreationReceipt: vi.fn() };
-  return { hub, service: createWorkspaceCreationService({ workspaceId: "ws_source", hub }) };
+  const hub = {
+    createWorkspace: vi.fn(),
+    workspaceCreationReceipt: vi.fn(),
+    observeDevices: vi.fn(),
+  };
+  return { hub, service: createWorkspaceHubControlService({ workspaceId: "ws_source", hub }) };
 }
 function context(kind: "panel" | "worker", id: string): ServiceContext {
   return {
@@ -70,6 +79,7 @@ describe("workspace creation runtime entry", () => {
       expect(Object.keys(f.service.methods!)).toEqual([
         "createWorkspace",
         "workspaceCreationReceipt",
+        "observeDevices",
       ]);
     }
   );
@@ -114,5 +124,67 @@ describe("workspace creation runtime entry", () => {
       "authenticated account"
     );
     expect(f.hub.createWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("binds device observation to the authenticated caller and forwards cancellation", async () => {
+    const f = fixture();
+    const ctx = context("panel", "panel:one");
+    const controller = new AbortController();
+    ctx.signal = controller.signal;
+    const observation = { afterVersion: "opaque-version" };
+    await f.service.handler(ctx, "observeDevices", [observation]);
+    expect(f.hub.observeDevices).toHaveBeenCalledWith(
+      { userId: "alice", input: observation },
+      { signal: controller.signal }
+    );
+    expect(Object.keys(f.service.methods!)).not.toContain("listDevices");
+    controller.abort();
+  });
+
+  it("admits a code caller with a verified account subject through the dispatcher", async () => {
+    const f = fixture();
+    f.hub.observeDevices.mockResolvedValue({ version: "opaque-version" });
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.setAuthorityResolver(({ caller, service, capability, resourceKey }) =>
+      authorizeVerifiedCaller(caller, {
+        workspaceId: "ws_source",
+        workspaceMember: true,
+        sessionId: caller.runtime.id,
+        audience: `service:${service}`,
+        capability,
+        resourceKey,
+      })
+    );
+    dispatcher.registerService(f.service);
+    dispatcher.markInitialized();
+    const caller = createVerifiedCaller(
+      "worker:setup",
+      "worker",
+      {
+        callerId: "worker:setup",
+        callerKind: "worker",
+        repoPath: "workers/setup",
+        effectiveVersion: "version:one",
+      },
+      null,
+      { userId: "alice", handle: "Alice" }
+    );
+    const signal = new AbortController().signal;
+    await expect(
+      dispatcher.dispatch({ caller, signal }, "hubControl", "observeDevices", [{}])
+    ).resolves.toEqual({ version: "opaque-version" });
+    expect(f.hub.observeDevices).toHaveBeenCalledWith({ userId: "alice", input: {} }, { signal });
+  });
+
+  it("rejects guest RPC callers before contacting the hub", async () => {
+    const f = fixture();
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(f.service);
+    dispatcher.markInitialized();
+    const caller = createVerifiedCaller("worker:guest", "worker", null, null, null);
+    await expect(
+      dispatcher.dispatch({ caller }, "hubControl", "observeDevices", [{}])
+    ).rejects.toThrow();
+    expect(f.hub.observeDevices).not.toHaveBeenCalled();
   });
 });

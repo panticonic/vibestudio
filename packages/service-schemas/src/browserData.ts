@@ -1,3 +1,10 @@
+import { FAVICON_MIME_TYPES } from "@vibestudio/browser-contracts/favicon";
+import {
+  ImportJobSnapshotSchema,
+  ImportCategoryProgressSchema,
+  BrowserImportDataTypeSchema,
+  IMPORT_JOB_PHASES,
+} from "@vibestudio/browser-contracts/import";
 import { z } from "zod";
 import {
   defineReceiverServiceMethods,
@@ -299,18 +306,8 @@ const faviconRowSchema = z
     origin: text,
     source_url: nullableText,
     image_data: text,
-    mime_type: text,
+    mime_type: z.enum(FAVICON_MIME_TYPES),
     updated_at: z.number(),
-  })
-  .strict();
-const importProgressSchema = z
-  .object({
-    dataType: text,
-    itemsProcessed: z.number().int().nonnegative(),
-    totalItems: z.number().int().nonnegative().optional(),
-    stored: z.number().int().nonnegative(),
-    skipped: z.number().int().nonnegative(),
-    errors: z.number().int().nonnegative(),
   })
   .strict();
 const importJobInputSchema = z
@@ -320,35 +317,18 @@ const importJobInputSchema = z
     hostLabel: text,
     sourceId: text,
     browser: text,
-    phase: text,
+    phase: z.enum(IMPORT_JOB_PHASES),
     startedAt: z.number(),
     updatedAt: z.number(),
     finishedAt: z.number().optional(),
-    dataTypes: z.array(text),
-    progress: z.array(importProgressSchema),
+    dataTypes: z.array(BrowserImportDataTypeSchema),
+    progress: z.array(ImportCategoryProgressSchema),
     warnings: z.array(text),
     error: text.optional(),
     resumable: z.boolean(),
   })
   .strict();
-const importJobRowSchema = z
-  .object({
-    jobId: text,
-    hostId: text,
-    hostLabel: text,
-    sourceId: text,
-    browser: text,
-    phase: text,
-    startedAt: z.number(),
-    updatedAt: z.number(),
-    finishedAt: z.number().optional(),
-    requestedDataTypes: z.array(text),
-    progress: z.array(importProgressSchema),
-    warnings: z.array(text),
-    error: text.optional(),
-    resumable: z.boolean(),
-  })
-  .strict();
+const importJobRowSchema = ImportJobSnapshotSchema;
 const importSourceMetaSchema = z.object({ sourceId: text }).strict();
 const importedBookmarkSchema = z
   .object({
@@ -673,8 +653,8 @@ export const browserDataMethods = defineReceiverServiceMethods({
         .object({
           url: text,
           title: text,
-        source: z.literal("search-suggestion"),
-        completionQuery: text,
+          source: z.literal("search-suggestion"),
+          completionQuery: text,
           engineId: id,
           engineName: text,
           searchTemplate: text,

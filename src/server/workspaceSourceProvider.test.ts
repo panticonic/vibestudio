@@ -9,6 +9,7 @@ import {
   commandIdForTrajectoryInvocation,
 } from "@vibestudio/trajectory-identity";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
 import { resolveExactCausalInvocation } from "./workspaceSourceProvider.js";
 
 function setup(operation?: NativeInvocationSource["operation"]) {
@@ -57,6 +58,11 @@ function setup(operation?: NativeInvocationSource["operation"]) {
     started_events: 1,
     terminal_events: 0,
     started_event_id: "started:one",
+    completed_event_id: null,
+    transport_call_id: null,
+    kind: "eval",
+    terminal_reason_code: null,
+    updated_at: "2026-10-02T10:00:00Z",
   };
   const event = {
     logId: parent.logId,
@@ -117,9 +123,14 @@ function setup(operation?: NativeInvocationSource["operation"]) {
     },
   };
   Object.assign(event.payload, { originatingInput: origin });
-  const inspectInvocationState = vi.fn(async () => ({ rows: [row] }));
+  const inspectInvocationState = vi.fn(async () => ({
+    summary: { projected: 1, startedEvents: 1, terminalEvents: 0, openProjectedInvocations: 1 },
+    rows: [row],
+  }));
   const getLogEvent = vi.fn(async (input: { envelopeId: string }) =>
-    input.envelopeId === origin.envelopeId ? originalEvent : event
+    gadWireMethods.getLogEvent.returns.parse(
+      input.envelopeId === origin.envelopeId ? originalEvent : event
+    )
   );
   const inspect = vi.fn(
     async (): Promise<unknown> => ({
@@ -426,9 +437,9 @@ describe("native original human authority", () => {
     state.getLogEvent.mockImplementation(async (input) => {
       if (input.envelopeId === state.origin.envelopeId) {
         state.entity.authoritySessionId = "replaced-lifetime";
-        return state.originalEvent;
+        return gadWireMethods.getLogEvent.returns.parse(state.originalEvent);
       }
-      return state.event;
+      return gadWireMethods.getLogEvent.returns.parse(state.event);
     });
     await expect(state.resolve()).rejects.toThrow("retired or different runtime image");
   });

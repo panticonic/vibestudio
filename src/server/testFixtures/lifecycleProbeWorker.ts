@@ -1,3 +1,4 @@
+import { dispatchRpcCall } from "@vibestudio/rpc/internal";
 import {
   DurableObjectBase,
   rpc,
@@ -173,7 +174,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
       this.sql.exec(`INSERT OR REPLACE INTO bg (k, v) VALUES ('ran_at', ?)`, String(Date.now()));
       try {
         const docs = createTypedServiceClient("docs", docsMethods, (service, method, args) =>
-          this.rpc.call("main", `${service}.${method}`, args)
+          dispatchRpcCall(this.rpc, "main", `${service}.${method}`, args)
         );
         await docs.listServices();
         this.sql.exec(`INSERT OR REPLACE INTO bg (k, v) VALUES ('bg_io', 'ok')`);

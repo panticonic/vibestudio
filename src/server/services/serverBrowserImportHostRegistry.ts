@@ -1,3 +1,6 @@
+import { browserVaultMethods } from "@vibestudio/service-schemas/browserData";
+import { browserEnvironmentMethods } from "@vibestudio/service-schemas/browserEnvironment";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
@@ -262,8 +265,11 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
       className: "BrowserVaultDO",
       objectKey: identity.environmentKey,
     } as const;
-    const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
-      this.deps.doDispatch.dispatch(ref, method, ...args) as Promise<T>;
+    const vault = createTypedServiceClient(
+      "browserVault",
+      browserVaultMethods,
+      (_service, method, args) => this.deps.doDispatch.dispatch(ref, method, ...args)
+    );
     const provider = new BrowserImportHostProvider(
       {
         hostId: `server:${this.deps.workspaceId}`,
@@ -277,11 +283,11 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
             jobId: string;
             batchIndex: number;
             cookies: BrowserCookieInput[];
-          }) => call("addCookiesBatch", input),
+          }) => vault.addCookiesBatch(input),
           addPasswordsBatch: (passwords: ImportedPassword[], meta: { sourceId: string }) =>
-            call("addPasswordsBatch", passwords, meta),
+            vault.addPasswordsBatch(passwords, meta),
           addFormFillBatch: (values: FormFillValueInput[], meta: { sourceId: string }) =>
-            call("addFormFillBatch", values, meta),
+            vault.addFormFillBatch(values, meta),
         },
         applyCookies: async (signal, operationId) => {
           signal.throwIfAborted();
@@ -336,28 +342,32 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
         candidate.hostId === hostId && candidate.location === "device" && candidate.connected
     );
     if (!summary) throw unavailableHost(hostId);
-    const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
-      connection.call(`browserEnvironment.${method}`, args) as Promise<T>;
+    const client = (signal?: AbortSignal) =>
+      createTypedServiceClient(
+        "browserEnvironment",
+        browserEnvironmentMethods,
+        (service, method, args) =>
+          connection.call(`${service}.${method}`, args, signal ? { signal } : undefined)
+      );
+    const browser = client();
     return {
       summary,
-      listAcquisitionOptions: () => call("listImportAcquisitionOptions", hostId),
-      beginAcquisition: (acquisitionId) => call("beginImportAcquisition", hostId, acquisitionId),
-      releaseSource: (sourceId) => call("releaseImportSource", hostId, sourceId),
-      listSources: () => call("listImportSources", hostId),
-      preview: (sourceId, dataTypes) => call("previewImportSource", hostId, sourceId, dataTypes),
-      startImport: (sourceId, dataTypes) => call("startImportRead", hostId, sourceId, dataTypes),
-      nextFrame: (operationId) => call("nextImportFrame", operationId),
-      cancel: (operationId) => call("cancelImportRead", operationId),
-      listOpenTabs: (sourceId) => call("listImportOpenTabs", hostId, sourceId),
+      listAcquisitionOptions: () => browser.listImportAcquisitionOptions(hostId),
+      beginAcquisition: (acquisitionId) => browser.beginImportAcquisition(hostId, acquisitionId),
+      releaseSource: (sourceId) => browser.releaseImportSource(hostId, sourceId),
+      listSources: () => browser.listImportSources(hostId),
+      preview: (sourceId, dataTypes) => browser.previewImportSource(hostId, sourceId, dataTypes),
+      startImport: (sourceId, dataTypes) => browser.startImportRead(hostId, sourceId, dataTypes),
+      nextFrame: (operationId) => browser.nextImportFrame(operationId),
+      cancel: (operationId) => browser.cancelImportRead(operationId),
+      listOpenTabs: (sourceId) => browser.listImportOpenTabs(hostId, sourceId),
       startSensitiveImport: (sourceId, dataTypes, operationId) =>
-        call("startSensitiveImport", hostId, sourceId, dataTypes, operationId),
+        browser.startSensitiveImport(hostId, sourceId, dataTypes, operationId),
       observeSensitiveImport: (operationId, { afterVersion, signal }) =>
-        connection.call(
-          "browserEnvironment.observeSensitiveImport",
-          afterVersion === undefined ? [operationId] : [operationId, { afterVersion }],
-          signal ? { signal } : undefined
-        ) as Promise<SensitiveBrowserImportStatus>,
-      cancelSensitiveImport: (operationId) => call("cancelSensitiveImport", operationId),
+        afterVersion === undefined
+          ? client(signal).observeSensitiveImport(operationId)
+          : client(signal).observeSensitiveImport(operationId, { afterVersion }),
+      cancelSensitiveImport: (operationId) => browser.cancelSensitiveImport(operationId),
     };
   }
 

@@ -1,3 +1,4 @@
+import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
 /**
  * IrohServerClient — the desktop shell's {@link ServerClient} over the Iroh
  * pipe. It is the peer-to-peer counterpart of `createServerClient` (which dials a
@@ -22,12 +23,7 @@
 
 import { randomUUID } from "node:crypto";
 import { finishSessionOpening } from "./sessionOpening.js";
-import {
-  createRpcClient,
-  type RpcClient,
-  type RpcCallOptions,
-  type RpcStreamOptions,
-} from "@vibestudio/rpc";
+import { type RpcCallOptions, type RpcStreamOptions } from "@vibestudio/rpc";
 import {
   createIrohClientPipe,
   type IrohClientPipe,
@@ -221,7 +217,7 @@ export async function createIrohServerClient(
   transport.onDiagnosticsChange((diagnostics) =>
     args.onTransportDiagnosticsChanged?.(remoteDiagnosticsOf(diagnostics))
   );
-  const rpc = createRpcClient({
+  const rpc = createInternalRpcClient({
     selfId: args.callerId,
     callerKind: "shell",
     transport: mainSession,
@@ -239,7 +235,7 @@ export async function createIrohServerClient(
 
   type ScopedClient = {
     session: IrohClientSession;
-    rpc: RpcClient;
+    rpc: RpcWireClient;
     closed: boolean;
     close(): Promise<void>;
   };
@@ -274,7 +270,7 @@ export async function createIrohServerClient(
       await session.close().catch(() => undefined);
       throw new Error("Iroh server client is closing");
     }
-    const scopedRpc = createRpcClient({
+    const scopedRpc = createInternalRpcClient({
       selfId: caller.callerId,
       callerKind: caller.callerKind,
       transport: session,

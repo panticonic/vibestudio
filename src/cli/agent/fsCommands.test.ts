@@ -21,24 +21,20 @@ vi.mock("../../node/iroh/irohRpcClient.js", () => ({
   IrohRpcClient: class {
     async ready(): Promise<void> {}
 
-    async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
-      return await this.dispatch<T>({ method, args });
+    async call(method: string, args: unknown[] = []): Promise<unknown> {
+      return await this.dispatch({ method, args });
     }
 
-    async callTarget<T = unknown>(
-      targetId: string,
-      method: string,
-      args: unknown[] = []
-    ): Promise<T> {
-      return await this.dispatch<T>({ type: "call", targetId, method, args });
+    async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
+      return await this.dispatch({ type: "call", targetId, method, args });
     }
 
     async close(): Promise<void> {}
 
-    private async dispatch<T>(body: RpcRequest): Promise<T> {
+    private async dispatch(body: RpcRequest): Promise<unknown> {
       transportMock.rpcBodies.push(body);
       if (!transportMock.handle) throw new Error("Iroh test server is not configured");
-      return (await transportMock.handle(body)) as T;
+      return await transportMock.handle(body);
     }
   },
 }));

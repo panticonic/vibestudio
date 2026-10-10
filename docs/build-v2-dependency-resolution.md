@@ -86,3 +86,12 @@ compared with 4.80–5.18 s through one lane. These measurements are diagnostic,
 not fixed budgets; the enforced guarantees are that canonical startup performs
 no package-manager install, cold preparation occurs before readiness, and the
 next launch becomes verified artifact reuse.
+
+Host-owned template tests use the same semantic package graph and dependency
+projection. Source-only Host SDK imports resolve from their package export maps,
+including imports made by external template checkouts. TypeScript path mappings
+remain exact unless they declare a wildcard; a bare package mapping does not
+capture its subpaths. Adding an SDK export therefore does not require a duplicate
+Vitest alias. Explicit source and npm export aliases also keep this exact-match
+behavior, so a package root cannot accidentally expose an undeclared private
+subpath.

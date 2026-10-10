@@ -13,7 +13,7 @@ const systemReach = { ...reach, endpointId: "bb".repeat(32) };
 const stored = createRoutedMobileConnection(
   createPairedMobileConnection(
     { deviceId: `dev_${"d".repeat(24)}`, refreshToken: "r".repeat(43) },
-    { ...reach, code: "c".repeat(32), exp: 2_000_000_000_000 },
+    { ...reach, code: "c".repeat(21) + "A" },
     "previously-browsed-untrusted-workspace",
     "identity-1"
   ),
@@ -22,10 +22,10 @@ const stored = createRoutedMobileConnection(
 
 function fixture() {
   const events: string[] = [];
-  const call = vi.fn(async (_target: string, method: string): Promise<unknown> => {
-    events.push(method);
-    if (method === "hubControl.ensureUserWorkspaces")
-      return {
+  const call = vi.fn(async (_target: string, method: { name: string; invoke: (args: unknown[], dispatch: (args: unknown[]) => Promise<unknown>) => Promise<unknown> }, args: unknown[]): Promise<unknown> => {
+    events.push(method.name);
+    const result = method.name === "hubControl.ensureUserWorkspaces"
+      ? {
         personal: {
           workspaceId: "personal",
           name: "Personal",
@@ -40,8 +40,8 @@ function fixture() {
           pendingApprovalCount: 0,
           running: true,
         },
-      };
-    return {
+      }
+      : {
       workspace: "System",
       workspaceId: "system",
       running: true,
@@ -50,6 +50,7 @@ function fixture() {
       serverId: `srv_${"s".repeat(24)}`,
       serverBootId: `boot_${"b".repeat(24)}`,
     };
+    return method.invoke(args, async () => result);
   });
   const control = {
     rpc: { call },
@@ -86,9 +87,9 @@ describe("returning mobile app source", () => {
         workspacePairing: systemReach,
       })
     );
-    expect(value.call).toHaveBeenCalledWith("main", "hubControl.routeWorkspace", [
+    expect(value.call).toHaveBeenNthCalledWith(2, "main", expect.objectContaining({ name: "hubControl.routeWorkspace" }), [
       { workspaceId: "system" },
-    ]);
+    ], undefined);
     expect(result.hubControlRpc).toBe(value.control.rpc);
     await result.close();
     expect(value.control.close).toHaveBeenCalledOnce();
@@ -98,9 +99,9 @@ describe("returning mobile app source", () => {
   it("closes account control and refuses to dial if the host routes another workspace", async () => {
     const value = fixture();
     const implementation = value.call.getMockImplementation()!;
-    value.call.mockImplementation(async (target, method) => {
-      const response = (await implementation(target, method)) as Record<string, unknown>;
-      return method === "hubControl.routeWorkspace"
+    value.call.mockImplementation(async (target, method, args) => {
+      const response = (await implementation(target, method, args)) as Record<string, unknown>;
+      return method.name === "hubControl.routeWorkspace"
         ? { ...response, workspaceId: "other" }
         : response;
     });

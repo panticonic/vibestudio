@@ -1,3 +1,5 @@
+import { deserializeRpcFailure } from "@vibestudio/rpc";
+
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
@@ -155,7 +157,7 @@ async function startRpcHarness() {
           const pending = reverseCalls.get(message.requestId);
           if (!pending) return;
           reverseCalls.delete(message.requestId);
-          if ("error" in message) pending.reject(new Error(message.error));
+          if ("error" in message) pending.reject(deserializeRpcFailure(message.error));
           else pending.resolve(message.result);
           return;
         }
@@ -224,8 +226,7 @@ async function startRpcHarness() {
         sendResponse({
           type: "response",
           requestId,
-          error: `unexpected ${callerKind}:${method}`,
-          errorKind: "application",
+          error: { message: `unexpected ${callerKind}:${method}`, errorKind: "application" },
         });
       });
     });

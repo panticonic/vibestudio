@@ -6,6 +6,7 @@
  */
 
 import { createDevLogger } from "@vibestudio/dev-log";
+import { chromiumFetchMethods } from "@vibestudio/service-schemas/chromiumFetch";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import {
   createHostCaller,
@@ -18,6 +19,10 @@ import type { Workspace, WorkspaceConfig } from "@vibestudio/workspace-contracts
 import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
 import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
+import {
+  panelConsoleHistoryResultSchema,
+  panelScreenshotResultSchema,
+} from "@vibestudio/service-schemas/panelCdp";
 import {
   normalizePanelEvaluateResult,
   panelEvaluateTimeoutMs,
@@ -445,15 +450,15 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           },
           consoleHistory: async (panelId, _requesterEntityId, options) => {
             await ensureCdpTargetReady(panelId);
-            return bridge.sendHostCommand(panelId, "consoleHistory", [options ?? {}]) as Promise<
-              import("./services/panelCdpService.js").PanelConsoleHistoryResult
-            >;
+            return panelConsoleHistoryResultSchema.parse(
+              await bridge.sendHostCommand(panelId, "consoleHistory", [options ?? {}])
+            );
           },
           screenshot: async (panelId, _requesterEntityId, options) => {
             await ensureCdpTargetReady(panelId);
-            return bridge.sendHostCommand(panelId, "captureScreenshot", [options ?? {}]) as Promise<
-              import("./services/panelCdpService.js").PanelScreenshotResult
-            >;
+            return panelScreenshotResultSchema.parse(
+              await bridge.sendHostCommand(panelId, "captureScreenshot", [options ?? {}])
+            );
           },
           evaluate: async (panelId, _requesterEntityId, expression, options) => {
             await ensureCdpTargetReady(panelId);
@@ -577,17 +582,19 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         chromiumFetchDefinition = createChromiumFetchService({
           open: async (url, session) => {
             const hostConnectionId = await headlessHost();
-            const response = (await bridge.sendProviderCommand(
-              hostConnectionId,
-              "chromiumFetch.open",
-              [{ url, session }]
-            )) as import("./services/chromiumFetchService.js").ChromiumFetchMetadata;
+            const response = chromiumFetchMethods.openPublic.returns.parse(
+              await bridge.sendProviderCommand(hostConnectionId, "chromiumFetch.open", [
+                { url, session },
+              ])
+            );
             return { hostConnectionId, response };
           },
-          read: (hostConnectionId, responseId, offset, limit) =>
-            bridge.sendProviderCommand(hostConnectionId, "chromiumFetch.read", [
-              { responseId, offset, limit },
-            ]) as Promise<{ bytesBase64: string; done: boolean }>,
+          read: async (hostConnectionId, responseId, offset, limit) =>
+            chromiumFetchMethods.read.returns.parse(
+              await bridge.sendProviderCommand(hostConnectionId, "chromiumFetch.read", [
+                { responseId, offset, limit },
+              ])
+            ),
           close: async (hostConnectionId, responseId) => {
             await bridge.sendProviderCommand(hostConnectionId, "chromiumFetch.close", [
               { responseId },

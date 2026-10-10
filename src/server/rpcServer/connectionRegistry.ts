@@ -1,4 +1,5 @@
-import type { RpcClient } from "@vibestudio/rpc";
+import { type RpcWireClient } from "@vibestudio/rpc/internal";
+
 import type { CallerKind, WsClientInfo } from "@vibestudio/shared/serviceDispatcher";
 import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
 import type { SessionServerTransportInternal } from "../sessionServerTransport.js";
@@ -36,7 +37,7 @@ export class ConnectionRegistry {
   private clients = new Map<RpcSessionChannel, WsClientState>();
   private readonly lifetimes = new WeakMap<WsClientState, AbortController>();
   private callerConnections = new Map<string, Map<string, WsClientState>>();
-  private bridges = new Map<string, Map<string, RpcClient>>();
+  private bridges = new Map<string, Map<string, RpcWireClient>>();
   private transports = new Map<string, Map<string, SessionServerTransportInternal>>();
   /**
    * Routing repeatedly asks for the oldest live connection. Keep that derived
@@ -199,7 +200,7 @@ export class ConnectionRegistry {
   setBridge(
     callerId: string,
     connectionId: string,
-    bridge: RpcClient,
+    bridge: RpcWireClient,
     transport: SessionServerTransportInternal
   ): void {
     let bridges = this.bridges.get(callerId);
@@ -217,11 +218,11 @@ export class ConnectionRegistry {
     transports.set(connectionId, transport);
   }
 
-  getBridge(callerId: string, connectionId: string): RpcClient | undefined {
+  getBridge(callerId: string, connectionId: string): RpcWireClient | undefined {
     return this.bridges.get(callerId)?.get(connectionId);
   }
 
-  getPrimaryBridge(callerId: string): RpcClient | undefined {
+  getPrimaryBridge(callerId: string): RpcWireClient | undefined {
     const primary = this.pickPrimary(callerId);
     return primary ? this.getBridge(callerId, primary.connectionId) : undefined;
   }

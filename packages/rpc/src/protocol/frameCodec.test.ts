@@ -111,9 +111,11 @@ describe("frame codec", () => {
   it("encodes and parses an ERROR frame", async () => {
     const err = {
       status: 502,
-      message: "upstream connection reset",
-      code: "ECONNRESET",
-      errorKind: "transport" as const,
+      error: {
+        message: "upstream connection reset",
+        code: "ECONNRESET",
+        errorKind: "transport" as const,
+      },
     };
     const frame = encodeErrorFrame(err);
     let seen: Uint8Array | null = null;
@@ -133,8 +135,7 @@ describe("frame codec", () => {
     const { decodeFramedResponseToStreaming } = await import("./streamCodec.js");
     const frame = encodeErrorFrame({
       status: 502,
-      message: "upstream connection refused",
-      errorKind: "transport",
+      error: { message: "upstream connection refused", errorKind: "transport" },
     });
     const wireBody = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -151,9 +152,11 @@ describe("frame codec", () => {
     const { decodeFramedResponseToStreaming } = await import("./streamCodec.js");
     const frame = encodeErrorFrame({
       status: 403,
-      message: "client_not_authorized",
-      code: "client_not_authorized",
-      errorKind: "access",
+      error: {
+        message: "client_not_authorized",
+        code: "client_not_authorized",
+        errorKind: "access",
+      },
     });
     const wireBody = new ReadableStream<Uint8Array>({
       start(controller) {

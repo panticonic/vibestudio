@@ -1,3 +1,4 @@
+import { schemaRpcClient } from "./schemaClient.js";
 import { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "./authority.js";
 /**
  * Connectionless RPC client — the one shared assembly for off-socket targets
@@ -245,18 +246,23 @@ export function collectExposableMethods(
 export function createConnectionlessRpcClient(
   config: ConnectionlessRpcConfig
 ): ConnectionlessRpcClient {
-  return createConnectionlessRpcClientCore(config);
+  const client = createConnectionlessRpcClientCore(config);
+  return { ...client, client: schemaRpcClient(client.client) };
 }
 
 export function createInternalConnectionlessRpcClient(
   config: InternalConnectionlessRpcConfig
-): ConnectionlessRpcClient {
+): InternalConnectionlessRpcClient {
   return createConnectionlessRpcClientCore(config);
 }
 
+export type InternalConnectionlessRpcClient = Omit<ConnectionlessRpcClient, "client"> & {
+  client: import("./internal-types.js").RpcWireClient;
+};
+
 function createConnectionlessRpcClientCore(
   config: InternalConnectionlessRpcConfig
-): ConnectionlessRpcClient {
+): InternalConnectionlessRpcClient {
   const transport: ConnectionlessTransport = httpClientTransport(config);
   const base = createInternalRpcClient({
     selfId: config.selfId,

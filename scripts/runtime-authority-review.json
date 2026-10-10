@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:0f5682b9ab45444695910d78c12df671d7da81b2244d55b0d4faad29587b0b11",
+  "censusDigest": "sha256:cd3200ea99a05e4f802c9ad129b427c1db5b5d88a7bd3da92622b156f54c5245",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -1727,7 +1727,7 @@
     },
     "host:hubControl.observeDevices": {
       "review": "caller-visible-device-readiness-observation",
-      "change": "Observe an opaque revision of the paired-device configuration visible to the authenticated caller. Membership and role changes re-evaluate visibility; activity timestamps do not self-invalidate the observation. No device mutation or device-detail inspection authority is granted."
+      "change": "Observe an opaque revision of the paired-device configuration visible to the authenticated caller. Membership and role changes re-evaluate visibility; activity timestamps do not self-invalidate the observation. No device mutation or device-detail inspection authority is granted. Both the workspace route and hub route declare user, host, and code callers consistently; website callers remain excluded. The hub route derives workspace access from the authenticated subject and existing membership before observing devices."
     }
   },
   "version": 1

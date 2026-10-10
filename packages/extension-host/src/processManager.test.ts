@@ -1,3 +1,4 @@
+import { shutdownError } from "./shutdownProtocol.js";
 import * as path from "node:path";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
@@ -155,15 +156,13 @@ describe("ExtensionProcessManager session retirement", () => {
       type: "shutdown-result",
       requestId: sent.requestId,
       ok: false,
-      error: {
-        name: "AggregateError",
-        message: "cleanup failed",
-        cause: { name: "Error", message: "original stop failure" },
-        errors: [
-          { name: "Error", message: "original stop failure" },
-          { name: "Error", message: "second cleanup failure" },
-        ],
-      },
+      error: shutdownError(
+        new AggregateError(
+          [new Error("original stop failure"), new Error("second cleanup failure")],
+          "cleanup failed",
+          { cause: new Error("original stop failure") }
+        )
+      ),
     });
     await expect(closing).rejects.toMatchObject({
       cause: { message: "original stop failure" },
@@ -175,6 +174,27 @@ describe("ExtensionProcessManager session retirement", () => {
     const resent = request(value.proc);
     expect(resent.requestId).not.toBe(sent.requestId);
     value.proc.emit("message", { type: "shutdown-result", requestId: resent.requestId, ok: true });
+    value.proc.emit("exit", 0);
+    await retry;
+  });
+  it("settles shutdown with a protocol failure when the acknowledgement graph is malformed", async () => {
+    const value = fixture();
+    await ready(value);
+    const closing = value.manager.stop(value.name);
+    const failure = expect(closing).rejects.toMatchObject({ errorKind: "protocol" });
+    value.proc.emit("message", {
+      type: "shutdown-result",
+      requestId: request(value.proc).requestId,
+      ok: false,
+      error: { errors: [] },
+    });
+    await failure;
+    const retry = value.manager.stop(value.name);
+    value.proc.emit("message", {
+      type: "shutdown-result",
+      requestId: request(value.proc).requestId,
+      ok: true,
+    });
     value.proc.emit("exit", 0);
     await retry;
   });
@@ -207,7 +227,7 @@ describe("ExtensionProcessManager session retirement", () => {
       type: "shutdown-result",
       requestId: sent.requestId,
       ok: false,
-      error: { name: "Error", message: "original cleanup failure" },
+      error: shutdownError(new Error("original cleanup failure")),
     });
     const failure = await replacement.catch((error) => error);
     expect(failure).toMatchObject({ message: "original cleanup failure" });

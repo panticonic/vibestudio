@@ -39,7 +39,8 @@
     "@vibestudio/browser-contracts": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "@vibestudio/rpc": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

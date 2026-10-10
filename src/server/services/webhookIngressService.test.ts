@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it } from "vitest";
 
 import {
+  DOWebhookIngressStore,
   InMemoryWebhookIngressStore,
   createWebhookIngressService,
   type WebhookIngressServiceDeps,
@@ -178,6 +179,26 @@ describe("resolveWebhookDirectMaxBodyBytes", () => {
 });
 
 describe("webhookIngressService — RPC surface", () => {
+  it.each(["direct DO dispatch", "RPC relay"])(
+    "validates WebhookStoreDO results through the shared contract over %s",
+    async (transport) => {
+      const dispatch = vi.fn(
+        async (_refOrTarget: unknown, _method: string, ..._args: unknown[]) => ({
+          not: "a webhook subscription",
+        })
+      );
+      const store =
+        transport === "direct DO dispatch"
+          ? new DOWebhookIngressStore(undefined, { dispatch })
+          : new DOWebhookIngressStore({ call: dispatch });
+
+      await expect(store.get("subscription-id")).rejects.toThrow(
+        /return value failed schema validation/
+      );
+      expect(dispatch).toHaveBeenCalledOnce();
+    }
+  );
+
   it("uses direct server dispatch for the infrastructure-owned storage DO", async () => {
     const dispatch = vi.fn(async (_ref, method: string) => (method === "list" ? [] : undefined));
     const svc = createWebhookIngressService({

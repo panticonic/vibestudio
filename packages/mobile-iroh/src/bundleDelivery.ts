@@ -1,3 +1,5 @@
+import { gatewayMethods } from "@vibestudio/service-schemas/gateway";
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { NativeModules, Platform } from "react-native";
 import { RN_HOST_ABI } from "@vibestudio/shared/buildProvider";
 import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
@@ -61,17 +63,8 @@ export interface BundleDeliveryTransport {
 }
 
 export interface BundleDeliveryRpc {
-  call(targetId: string, method: string, args: unknown[]): Promise<unknown>;
-  streamReadable(
-    targetId: string,
-    method: string,
-    args: unknown[],
-    options?: { body?: ReadableStream<Uint8Array> }
-  ): Promise<{
-    status: number;
-    headers: Array<[string, string]>;
-    body: ReadableStream<Uint8Array>;
-  }>;
+  call: import("@vibestudio/rpc").RpcCaller["call"];
+  streamReadable: import("@vibestudio/rpc").RpcClient["streamReadable"];
 }
 
 export interface ActivateWorkspaceAppOptions {
@@ -219,9 +212,9 @@ async function waitForMobileBootstrap(
   const deadline = Date.now() + MOBILE_BOOTSTRAP_WAIT_MS;
   for (;;) {
     try {
-      const result = (await rpc.call("main", "auth.getMobileAppBootstrap", [
+      const result = await rpc.call("main", mainRpcMethods["auth.getMobileAppBootstrap"], [
         options.source ?? null,
-      ])) as { bootstrap?: unknown };
+      ]);
       if (!result?.bootstrap || typeof result.bootstrap !== "object") {
         throw new Error("Mobile app bootstrap returned no manifest");
       }
@@ -253,9 +246,11 @@ export async function streamArtifactToNative(
     // exact offset for the next open-ended request.
     Range: `bytes=${transfer.offset}-`,
   };
-  const decoded = await rpc.streamReadable("main", "gateway.fetch", [
-    { ...descriptor, gzip: true, headers },
-  ]);
+  const decoded = await rpc.streamReadable(
+    "main",
+    mainRpcMethods["gateway.fetch"],
+    gatewayMethods.fetch.args.parse([{ ...descriptor, gzip: true, headers }])
+  );
   if (decoded.status !== 206) {
     const bytes = await drainStream(decoded.body);
     throw new Error(

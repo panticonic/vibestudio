@@ -1,16 +1,13 @@
 import type { RpcCallOptions } from "@vibestudio/rpc";
-import { mergeRpcOptions } from "@vibestudio/rpc/internal";
 
-export interface RpcCallerLike {
-  call<T = unknown>(
-    targetId: string,
-    method: string,
-    args: unknown[],
-    options?: RpcCallOptionsLike
-  ): Promise<T>;
-}
+import type { RpcCaller } from "@vibestudio/rpc";
+import type { RpcMethodMap, RpcMethodArgs, RpcMethodResult } from "./rpcMethods.js";
+export type RpcCallerLike = Pick<RpcCaller, "call">;
 
-export type RpcCallOptionsLike = Pick<RpcCallOptions, "signal" | "timeoutMs" | "destination">;
+export type RpcCallOptionsLike = Pick<
+  RpcCallOptions,
+  "signal" | "timeoutMs" | "destination" | "idempotencyKey"
+>;
 
 export interface DORefParam {
   source: string;
@@ -18,7 +15,6 @@ export interface DORefParam {
   objectKey: string;
 }
 
-import type { ResolvedWorkspaceService } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 export type { ResolvedWorkspaceService } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 
 export interface ResolvedDurableObjectTarget {
@@ -29,14 +25,17 @@ export interface ResolvedDurableObjectTarget {
   targetId: string;
 }
 
-export interface DurableObjectServiceClient {
+export interface DurableObjectServiceClient<M extends RpcMethodMap> {
   resolve(options?: RpcCallOptionsLike): Promise<ResolvedDurableObjectTarget>;
-  call<T = unknown>(method: string, ...args: unknown[]): Promise<T>;
-  callWithOptions<T = unknown>(
-    method: string,
-    args: unknown[],
+  call<K extends keyof M & string>(
+    method: K,
+    ...args: RpcMethodArgs<M[K]>
+  ): Promise<RpcMethodResult<M[K]>>;
+  callWithOptions<K extends keyof M & string>(
+    method: K,
+    args: RpcMethodArgs<M[K]>,
     options: RpcCallOptionsLike
-  ): Promise<T>;
+  ): Promise<RpcMethodResult<M[K]>>;
 }
 
 export const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibestudio.gad.workspace.v1";
@@ -73,86 +72,4 @@ export function parseDoTargetId(targetId: string): DORefParam | null {
     className: rest.slice(0, nextColon),
     objectKey: rest.slice(nextColon + 1),
   };
-}
-
-export async function resolveDurableObjectService(
-  rpc: RpcCallerLike,
-  query: string,
-  objectKey?: string | null,
-  options?: RpcCallOptionsLike
-): Promise<ResolvedDurableObjectTarget> {
-  const args = [query, objectKey ?? null];
-  const service = options
-    ? await rpc.call<ResolvedWorkspaceService>("main", "workers.resolveService", args, options)
-    : await rpc.call<ResolvedWorkspaceService>("main", "workers.resolveService", args);
-  if (service.kind !== "durable-object") {
-    throw new Error(`Service '${query}' does not expose a Durable Object RPC target`);
-  }
-  return service;
-}
-
-export function createDurableObjectServiceClient(
-  rpc: RpcCallerLike,
-  query: string,
-  objectKey?: string | null,
-  defaultOptions?: Pick<RpcCallOptionsLike, "destination">
-): DurableObjectServiceClient {
-  const resolvedTargets = new Map<string, ResolvedDurableObjectTarget>();
-  const resolvedPromises = new Map<string, Promise<ResolvedDurableObjectTarget>>();
-  const optionsFor = (options?: RpcCallOptionsLike): RpcCallOptionsLike | undefined => {
-    if (!defaultOptions) return options;
-    if (!options) return defaultOptions;
-    return mergeRpcOptions(defaultOptions, options);
-  };
-  const destinationKey = (options?: RpcCallOptionsLike): string =>
-    JSON.stringify(options?.destination ?? null);
-  const resolve = (options?: RpcCallOptionsLike) => {
-    const combined = optionsFor(options);
-    const key = destinationKey(combined);
-    const resolvedTarget = resolvedTargets.get(key);
-    if (resolvedTarget) return Promise.resolve(resolvedTarget);
-    if (combined?.signal || combined?.timeoutMs !== undefined) {
-      // A caller-owned signal must never own the shared resolution flight: its
-      // cancellation would otherwise reject unrelated concurrent callers.
-      return resolveDurableObjectService(rpc, query, objectKey, combined).then((target) => {
-        resolvedTargets.set(key, target);
-        return target;
-      });
-    }
-    const resolvedPromise = resolvedPromises.get(key);
-    if (resolvedPromise) return resolvedPromise;
-    const pending = resolveDurableObjectService(rpc, query, objectKey, combined)
-      .then((target) => {
-        resolvedTargets.set(key, target);
-        return target;
-      })
-      .finally(() => {
-        if (resolvedPromises.get(key) === pending) resolvedPromises.delete(key);
-      });
-    resolvedPromises.set(key, pending);
-    return pending;
-  };
-  return {
-    resolve,
-    async call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
-      const service = await resolve();
-      const options = optionsFor();
-      return options
-        ? rpc.call<T>(service.targetId, method, omitTrailingUndefined(args), options)
-        : rpc.call<T>(service.targetId, method, omitTrailingUndefined(args));
-    },
-    async callWithOptions<T = unknown>(
-      method: string,
-      args: unknown[],
-      options: RpcCallOptionsLike
-    ): Promise<T> {
-      const combined = optionsFor(options)!;
-      const service = await resolve(combined);
-      return rpc.call<T>(service.targetId, method, omitTrailingUndefined(args), combined);
-    },
-  };
-}
-
-export function createGadServiceClient(rpc: RpcCallerLike): DurableObjectServiceClient {
-  return createDurableObjectServiceClient(rpc, GAD_WORKSPACE_SERVICE_PROTOCOL);
 }

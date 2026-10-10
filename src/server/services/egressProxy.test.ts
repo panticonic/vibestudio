@@ -3008,9 +3008,11 @@ describe("EgressProxy", () => {
       });
       expect(blocked.status).toBe(503);
       expect(JSON.parse(blocked.body)).toMatchObject({
-        error: `Circuit breaker is open; last failure: POST ${origin}/v1/items: upstream HTTP 503`,
-        errorKind: "transport",
-        errorCode: "EGRESS_CIRCUIT_OPEN",
+        error: {
+          message: `Circuit breaker is open; last failure: POST ${origin}/v1/items: upstream HTTP 503`,
+          errorKind: "transport",
+          code: "EGRESS_CIRCUIT_OPEN",
+        },
       });
       expect(upstreamCalls).toBe(5);
     } finally {
@@ -3061,12 +3063,14 @@ describe("EgressProxy", () => {
       });
       expect(blocked.status).toBe(503);
       expect(JSON.parse(blocked.body)).toMatchObject({
-        error: `Circuit breaker is open; last failure: POST ${origin}/v1/items: ${original.message}`,
-        errorKind: "transport",
-        errorCode: "ECONNRESET",
-        errorData: { phase: "response" },
-        diagnosticId: "f976e1f0-4a0f-43ca-beb2-4e9a3414d50b",
-        errorStack: original.stack,
+        error: {
+          message: `Circuit breaker is open; last failure: POST ${origin}/v1/items: ${original.message}`,
+          errorKind: "transport",
+          code: "ECONNRESET",
+          errorData: { phase: "response" },
+          diagnosticId: "f976e1f0-4a0f-43ca-beb2-4e9a3414d50b",
+          stack: original.stack,
+        },
       });
       expect(forward).toHaveBeenCalledTimes(5);
     } finally {

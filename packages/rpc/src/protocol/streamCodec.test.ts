@@ -66,10 +66,12 @@ describe("inbound stream mux → framed Response decode", () => {
       enc.encode(
         JSON.stringify({
           status: 502,
-          message: "upstream boom",
-          code: "EBOOM",
-          errorKind: "transport",
-          errorData: { code: "upstream", retryable: true },
+          error: {
+            message: "upstream boom",
+            code: "EBOOM",
+            errorKind: "transport",
+            errorData: { code: "upstream", retryable: true },
+          },
         })
       )
     );

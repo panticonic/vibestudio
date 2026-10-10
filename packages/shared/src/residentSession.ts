@@ -1,3 +1,4 @@
+import { createReceiverRpcMethods } from "./rpcMethods.js";
 /** Activation-local receivers owned by explicitly resident operations.
  * Durable state must never depend on this registry: a missing receiver means
  * the sender retains and retries its durable mailbox item. */
@@ -13,7 +14,7 @@ export type ResidentSessionReceiver = ((payload: unknown) => void | Promise<void
  * consumers must not fall back to an ambient runtime client after the
  * callback crosses an isolate or request boundary. */
 export interface ResidentSessionTransport {
-  call<R = unknown>(targetId: string, method: string, args: unknown[]): Promise<R>;
+  call: import("@vibestudio/rpc").RpcCaller["call"];
 }
 
 export interface ResidentSessionRegistration {
@@ -149,3 +150,15 @@ export function inspectResidentSessions(ownerEntityId: string): Array<{
       ageMs: Math.max(0, now - resident.openedAt),
     }));
 }
+
+/** Lifecycle protocol implemented by the workspace channel receiver and used by host-owned resident sessions. */
+export interface ResidentChannelLifecycle {
+  detach(input: { participantId: string }): Promise<void>;
+  leave(input: { participantId: string; revision: number }): Promise<void>;
+  relationshipState(participantId: string): Promise<{ revision: number; active: boolean }>;
+}
+export const residentChannelRpcMethods = createReceiverRpcMethods<ResidentChannelLifecycle>([
+  "detach",
+  "leave",
+  "relationshipState",
+]);

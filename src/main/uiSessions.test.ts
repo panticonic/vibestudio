@@ -1,10 +1,6 @@
+import { createInternalRpcClient as createRpcClient } from "@vibestudio/rpc/internal";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createRpcClient,
-  isRpcConnectionLost,
-  RpcBoundaryError,
-  type RpcEnvelope,
-} from "@vibestudio/rpc";
+import { isRpcConnectionLost, RpcBoundaryError, type RpcEnvelope } from "@vibestudio/rpc";
 import { UiSessions, type UiIpcRuntime } from "./uiSessions.js";
 import { FRAME_HEAD } from "@vibestudio/rpc/protocol/streamCodec";
 import type { HostUiSession } from "./serverClient.js";

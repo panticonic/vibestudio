@@ -461,9 +461,11 @@ describe("wsClientTransport", () => {
         targetId: "do:notes:Bucket:key",
         destination: { kind: "workspace", workspaceId: "workspace:notes" },
         requestId: "req-123",
-        error: "Target not reachable: do:notes:Bucket:key",
-        errorKind: "transport",
-        errorCode: "TARGET_NOT_REACHABLE",
+        error: {
+          message: "Target not reachable: do:notes:Bucket:key",
+          errorKind: "transport",
+          code: "TARGET_NOT_REACHABLE",
+        },
       }),
     });
 
@@ -474,9 +476,11 @@ describe("wsClientTransport", () => {
         message: {
           type: "response",
           requestId: "req-123",
-          error: "Target not reachable: do:notes:Bucket:key",
-          errorKind: "transport",
-          errorCode: "TARGET_NOT_REACHABLE",
+          error: {
+            message: "Target not reachable: do:notes:Bucket:key",
+            errorKind: "transport",
+            code: "TARGET_NOT_REACHABLE",
+          },
         },
       },
     ]);
@@ -498,9 +502,11 @@ describe("wsClientTransport", () => {
         type: "ws:routed-event-error",
         targetId: "panel:gone",
         event: "ping",
-        error: "Target not reachable: panel:gone",
-        errorKind: "transport",
-        errorCode: "TARGET_NOT_REACHABLE",
+        error: {
+          message: "Target not reachable: panel:gone",
+          errorKind: "transport",
+          code: "TARGET_NOT_REACHABLE",
+        },
       }),
     });
 

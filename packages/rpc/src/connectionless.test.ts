@@ -168,7 +168,9 @@ describe("createConnectionlessRpcClient", () => {
       const { client: _client, respond } = makeClient(vi.fn() as unknown as typeof fetch);
       const response = await respond(requestEnvelope("nope", [])).completion;
       expect(response!.message).toMatchObject({ type: "response" });
-      expect((response!.message as { error?: string }).error).toMatch(/not exposed/);
+      expect((response!.message as { error: { message: string } }).error.message).toMatch(
+        /not exposed/
+      );
     });
   });
 
@@ -273,7 +275,9 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
     expect((ok!.message as { result?: unknown }).result).toBe(42);
     for (const method of ["appendDurable", "dispatchInboundEnvelope"]) {
       const denied = await respond(requestEnvelope(method, [{ forged: true }])).completion;
-      expect((denied!.message as { error?: string }).error).toMatch(/not exposed/);
+      expect((denied!.message as { error: { message: string } }).error.message).toMatch(
+        /not exposed/
+      );
     }
   });
 });

@@ -1,3 +1,4 @@
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { RpcClient } from "@vibestudio/rpc";
@@ -20,10 +21,10 @@ describe("RemoteCdpHostBridgeSocket", () => {
         },
       })
     );
-    const rpc = {
+    const rpc = schemaRpcMock({
       stream: vi.fn(async () => streamResponse),
       call: vi.fn(async () => undefined),
-    } as unknown as Pick<RpcClient, "call" | "stream"> & {
+    }) as unknown as Pick<RpcClient, "call" | "stream"> & {
       stream: ReturnType<typeof vi.fn>;
       call: ReturnType<typeof vi.fn>;
     };
@@ -36,10 +37,12 @@ describe("RemoteCdpHostBridgeSocket", () => {
 
     await once<unknown>(socket, "open");
     expect(socket.readyState).toBe(WebSocket.OPEN);
-    expect(rpc.stream).toHaveBeenCalledWith("main", "panelCdp.hostProvider.open", [
-      "provider-session",
-      "headless-host",
-    ]);
+    expect(rpc.stream).toHaveBeenCalledWith(
+      "main",
+      "panelCdp.hostProvider.open",
+      ["provider-session", "headless-host"],
+      undefined
+    );
 
     const messagePromise = once<string>(socket, "message");
     controller.enqueue(
@@ -52,17 +55,24 @@ describe("RemoteCdpHostBridgeSocket", () => {
     const outbound = JSON.stringify({ type: "cdp:register", targetId: "panel-1", tabId: 1 });
     socket.send(outbound);
     await vi.waitFor(() => {
-      expect(rpc.call).toHaveBeenCalledWith("main", "panelCdp.hostProvider.send", [
-        "provider-session",
-        outbound,
-      ]);
+      expect(rpc.call).toHaveBeenCalledWith(
+        "main",
+        "panelCdp.hostProvider.send",
+        ["provider-session", outbound],
+        undefined
+      );
     });
 
     socket.close();
     expect(socket.readyState).toBe(WebSocket.CLOSED);
-    expect(rpc.call).toHaveBeenCalledWith("main", "panelCdp.hostProvider.close", [
-      "provider-session",
-    ]);
+    await vi.waitFor(() => {
+      expect(rpc.call).toHaveBeenCalledWith(
+        "main",
+        "panelCdp.hostProvider.close",
+        ["provider-session"],
+        undefined
+      );
+    });
   });
 
   it("fails when the remote CDP stream sends an oversized chunk", async () => {
@@ -74,10 +84,10 @@ describe("RemoteCdpHostBridgeSocket", () => {
         },
       })
     );
-    const rpc = {
+    const rpc = schemaRpcMock({
       stream: vi.fn(async () => streamResponse),
       call: vi.fn(async () => undefined),
-    } as unknown as Pick<RpcClient, "call" | "stream"> & {
+    }) as unknown as Pick<RpcClient, "call" | "stream"> & {
       stream: ReturnType<typeof vi.fn>;
       call: ReturnType<typeof vi.fn>;
     };
@@ -107,10 +117,10 @@ describe("RemoteCdpHostBridgeSocket", () => {
         },
       })
     );
-    const rpc = {
+    const rpc = schemaRpcMock({
       stream: vi.fn(async () => streamResponse),
       call: vi.fn(async () => undefined),
-    } as unknown as Pick<RpcClient, "call" | "stream"> & {
+    }) as unknown as Pick<RpcClient, "call" | "stream"> & {
       stream: ReturnType<typeof vi.fn>;
       call: ReturnType<typeof vi.fn>;
     };

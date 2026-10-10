@@ -1,3 +1,4 @@
+import { isRemoteRpcError } from "@vibestudio/rpc";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import { docsMethods } from "@vibestudio/service-schemas/docs";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
@@ -73,8 +74,8 @@ function assertSessionWorkspace(session: AgentSession, creds: CliCredentials): v
 /** Whether an RPC failure means the entity is already gone on the server. */
 function isEntityNotFoundError(error: unknown): boolean {
   return (
-    error instanceof RpcError &&
-    (error.errorCode === "ENTITY_NOT_FOUND" ||
+    (error instanceof RpcError || isRemoteRpcError(error)) &&
+    ((isRemoteRpcError(error) ? error.code : error.errorCode) === "ENTITY_NOT_FOUND" ||
       /\b(?:not found|unknown entity|no such entity|already retired)\b/i.test(error.message))
   );
 }

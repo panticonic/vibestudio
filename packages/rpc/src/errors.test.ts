@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   isAuthorityDecisionDenied,
+  rpcCallerAbortedError,
+  isRpcAbortedBy,
   isTerminalAuthorityFailure,
   isRpcConnectionLost,
   isPanelRuntimeLeaseConflict,
@@ -177,5 +179,32 @@ describe("diagnostic origin", () => {
     const cyclic = new Error("cycle");
     cyclic.cause = cyclic;
     expect(rpcDiagnosticIdOf(cyclic)).toBeUndefined();
+  });
+});
+
+describe("owner cancellation identity", () => {
+  it("recognizes only this owner's cancellation and retains independent failures", () => {
+    const reason = new Error("owner closed");
+    const aborted = rpcCallerAbortedError(reason);
+    expect(isRpcAbortedBy(aborted, reason)).toBe(true);
+    expect(isRpcAbortedBy(reason, reason)).toBe(true);
+    expect(isRpcAbortedBy(rpcCallerAbortedError(new Error("another owner")), reason)).toBe(false);
+    expect(isRpcAbortedBy(new Error("cleanup failed", { cause: reason }), reason)).toBe(false);
+    expect(isRpcAbortedBy(new AggregateError([aborted, aborted]), reason)).toBe(true);
+    expect(isRpcAbortedBy(new AggregateError([aborted, new Error("cleanup failed")]), reason)).toBe(
+      false
+    );
+    expect(
+      isRpcAbortedBy(
+        new AggregateError([aborted], "cleanup", {
+          cause: new Error("independent cause"),
+        }),
+        reason
+      )
+    ).toBe(false);
+    const cyclic = new AggregateError([], "cyclic");
+    cyclic.errors.push(cyclic);
+    expect(isRpcAbortedBy(cyclic, reason)).toBe(false);
+    expect(isRpcAbortedBy(undefined, undefined)).toBe(false);
   });
 });

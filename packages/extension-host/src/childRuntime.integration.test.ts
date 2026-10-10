@@ -1,3 +1,4 @@
+import { deserializeRpcFailure } from "@vibestudio/rpc";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -119,12 +120,13 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
         "import { DatabaseSync } from 'node:sqlite';",
         "import * as fs from 'node:fs';",
         "import * as path from 'node:path';",
+        "const methodContract = name => ({ name, async parseArgs(args) { return args; }, async invoke(args, dispatch) { return dispatch(args); } });",
         "export async function activate(ctx) {",
         "  ctx.log.info('activated');",
         "  let disposals = 0;",
         "  ctx.subscriptions.push({ async dispose() {",
         "    const attempt = ++disposals;",
-        "    await ctx.rpc.call('main', 'releaseOwnedResource', attempt);",
+        "    await ctx.rpc.call('main', methodContract('releaseOwnedResource'), [attempt]);",
         "    process.send({ type: 'fixture-dispose-started', attempt });",
         "    await new Promise(resolve => {",
         "      const release = message => { if (message?.type === 'fixture-release') { process.off('message', release); resolve(); } };",
@@ -188,7 +190,7 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
         "      return invocation?.chainCaller?.contextId ?? invocation?.caller.contextId ?? null;",
         "    },",
         "    targetEcho(targetId, method, value) {",
-        "      return ctx.rpc.call(targetId, method, value);",
+        "      return ctx.rpc.call(targetId, methodContract(method), [value]);",
         "    },",
         "    structuredFailure() {",
         "      const error = new Error('approval required');",
@@ -299,13 +301,15 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
                     ? {
                         type: "response",
                         requestId: rpc.requestId,
-                        error: "upsertImportJob: authority acquisition required",
-                        errorKind: "access",
-                        errorCode: "EACQUIRE",
-                        errorData: {
-                          acquisition: {
-                            acquisitionId: "acq:browser-import",
-                            ownerRuntimeId: "@workspace-extensions/process-test",
+                        error: {
+                          message: "upsertImportJob: authority acquisition required",
+                          errorKind: "access",
+                          code: "EACQUIRE",
+                          errorData: {
+                            acquisition: {
+                              acquisitionId: "acq:browser-import",
+                              ownerRuntimeId: "@workspace-extensions/process-test",
+                            },
                           },
                         },
                       }
@@ -725,7 +729,7 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
     expect(flatProviderResponse).toMatchObject({
       type: "response",
       requestId: flatProviderRequestId,
-      errorCode: "ENOMETHOD",
+      error: { code: "ENOMETHOD" },
     });
 
     const directRequestId = randomUUID();
@@ -774,8 +778,7 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
     expect(directResponse).toMatchObject({
       type: "response",
       requestId: directRequestId,
-      errorCode: "EACCES",
-      error: expect.stringContaining("trusted host principal"),
+      error: { code: "EACCES", message: expect.stringContaining("trusted host principal") },
     });
 
     const serverTargetRequestId = randomUUID();
@@ -924,9 +927,11 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
     expect(structuredFailureResponse).toMatchObject({
       type: "response",
       requestId: structuredFailureRequestId,
-      errorCode: "EACQUIRE",
-      errorKind: "access",
-      errorData: { acquisition: { id: "acq-child", ownerRuntimeId: "panel-1" } },
+      error: {
+        code: "EACQUIRE",
+        errorKind: "access",
+        errorData: { acquisition: { id: "acq-child", ownerRuntimeId: "panel-1" } },
+      },
     });
 
     const targetRequestId = randomUUID();
@@ -1007,17 +1012,18 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
     expect(acknowledged).toBe(false);
     expect(exited).toBe(false);
     child.postMessage({ type: "fixture-release" });
-    expect(await firstResult).toMatchObject({
-      ok: false,
-      error: {
+    const firstReceipt = await firstResult;
+    expect(firstReceipt).toMatchObject({ ok: false });
+    const firstFailure = deserializeRpcFailure(firstReceipt["error"]);
+    expect(firstFailure).toMatchObject({
         message: "Owned release failed",
         cause: { message: "Original provider release failed" },
         errors: [
           { message: "Original provider release failed" },
           { message: "Independent cleanup failed" },
         ],
-      },
     });
+    expect((firstFailure as AggregateError).errors[0]).toBe(firstFailure.cause);
     expect(exited).toBe(false);
     const secondId = randomUUID();
     const secondResult = control("shutdown-result", secondId);

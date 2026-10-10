@@ -85,7 +85,10 @@ describe("extension activation shutdown ownership", () => {
   });
 
   it("preserves original cause and independent cleanup errors across actual control serialization", () => {
-    const original = new Error("Original provider stop failed");
+    const original = Object.assign(new Error("Original provider stop failed"), {
+      code: "PROVIDER_STOP_REFUSED",
+      errorData: { resource: "owned-provider" },
+    });
     const aggregate = new AggregateError(
       [original, new Error("Lease close failed")],
       "Release failed",
@@ -94,8 +97,13 @@ describe("extension activation shutdown ownership", () => {
     const restored = restoreShutdownError(JSON.parse(JSON.stringify(shutdownError(aggregate))));
     expect(restored).toBeInstanceOf(AggregateError);
     expect(restored).toMatchObject({
-      cause: { message: original.message },
+      cause: {
+        message: original.message,
+        code: "PROVIDER_STOP_REFUSED",
+        errorData: { resource: "owned-provider" },
+      },
       errors: [{ message: original.message }, { message: "Lease close failed" }],
     });
+    expect((restored as AggregateError).errors[0]).toBe(restored.cause);
   });
 });

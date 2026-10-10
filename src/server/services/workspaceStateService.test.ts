@@ -1,7 +1,17 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { workspacePresentationMethods } from "@vibestudio/service-schemas/workspacePresentation";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  EntityRecordSchema,
+  RawPanelDetailSchema,
+  RawPanelTreeNodeSchema,
+  RawPanelTreePageSchema,
+  RawSlotRowSchema,
+  SlotHistoryRowSchema,
+} from "@vibestudio/service-schemas/workspaceState";
 import type { PanelAccessPermissionDeps } from "./panelAccessPermission.js";
 
 import { createWorkspaceStateService, type SlotStateChange } from "./workspaceStateService.js";
@@ -12,6 +22,70 @@ interface MockHandlerCtx {
     hostOriginated?: true;
     subject?: { userId: string };
   };
+}
+
+function panelDetailFixture(input: Record<string, any> = {}) {
+  const slotId = input["slot"]?.slot_id ?? "panel:tree/fixture";
+  const entityId = input["entity"]?.id ?? "panel:nav-fixture";
+  const slot = RawSlotRowSchema.parse({
+    slot_id: slotId,
+    parent_slot_id: null,
+    current_entity_id: entityId,
+    current_entry_key: "entry-fixture",
+    sort_key: 0,
+    created_at: 1,
+    closed_at: null,
+    ...input["slot"],
+  });
+  const history = SlotHistoryRowSchema.parse({
+    slot_id: slotId,
+    cursor: 0,
+    entry_key: "entry-fixture",
+    entity_id: entityId,
+    source: "panels/fixture",
+    context_id: "ctx-fixture",
+    state_args: null,
+    recorded_at: 1,
+    ...input["currentHistory"],
+  });
+  const entity = EntityRecordSchema.parse({
+    id: entityId,
+    authoritySessionId: "session-fixture",
+    kind: "panel",
+    source: { repoPath: "panels/fixture", effectiveVersion: "ev-fixture" },
+    contextId: "ctx-fixture",
+    key: "fixture",
+    createdAt: 1,
+    status: "active",
+    cleanupComplete: false,
+    ...input["entity"],
+  });
+  return RawPanelDetailSchema.parse({
+    revision: input["revision"] ?? 1,
+    slot,
+    currentHistory: history,
+    entity,
+  });
+}
+
+function panelTreePageFixture(input: Record<string, any> = {}) {
+  const nodes = (input["nodes"] ?? []).map((node: Record<string, any>) =>
+    RawPanelTreeNodeSchema.parse({
+      slotId: "panel:tree/fixture",
+      parentSlotId: null,
+      ownerUserId: null,
+      createdAt: 1,
+      childCount: 0,
+      ...node,
+    })
+  );
+  return RawPanelTreePageSchema.parse({
+    revision: 1,
+    group: { kind: "roots", ownerUserId: null },
+    nextCursor: null,
+    ...input,
+    nodes,
+  });
 }
 
 function makeCtx(): MockHandlerCtx {
@@ -50,25 +124,53 @@ function makeService(opts: {
       calls.push({ method, args });
       if (method === "slotClose") return { closeId: String(args[0]), closedCount: 0 };
       if (method === "slotCloseCleanupPage") return { items: [], nextCursor: null };
-      return opts.dispatchReturns?.[method];
+      if (opts.dispatchReturns && Object.hasOwn(opts.dispatchReturns, method)) {
+        const value = opts.dispatchReturns[method];
+        if (method === "panelTreeDetail" && value)
+          return panelDetailFixture(value as Record<string, any>);
+        if (method === "panelTreePage" && value)
+          return panelTreePageFixture(value as Record<string, any>);
+        return value;
+      }
+      if (
+        method === "panelTreeDetail" ||
+        method === "panelTreePath" ||
+        method === "slotGet" ||
+        method === "slotHistoryRelative" ||
+        method === "entityResolve" ||
+        method === "entityResolveActive"
+      )
+        return null;
+      if (method === "panelTreePage") return panelTreePageFixture();
+      if (method === "panelTreeRootGroups") return { revision: 0, groups: [], nextCursor: null };
+      if (method === "alarmSet" || method === "alarmClear") return "accepted";
+      return undefined;
     },
   };
   const svc = createWorkspaceStateService({
     doDispatch: doDispatch as never,
     workspaceId: "test-workspace",
     storageIncarnation: () => ({ incarnation: "incarnation", generation: 1 }),
-    presentationDispatch: async (method, args) => {
-      presentationCalls.push({ method, args });
-      return (
-        opts.presentationDispatch ??
-        (async (requestedMethod) => {
-          if (requestedMethod === "titlesForSlots") return {};
-          if (requestedMethod === "search") return { results: [], nextCursor: null };
-          if (requestedMethod === "isEntityTitleExplicit") return false;
-          return undefined;
-        })
-      )(method, args);
-    },
+    presentation: createTypedServiceClient(
+      "workspace-presentation",
+      workspacePresentationMethods,
+      (_service, method, args) => {
+        presentationCalls.push({ method, args });
+        return (
+          opts.presentationDispatch ??
+          (async (requestedMethod) => {
+            if (requestedMethod === "titlesForSlots") return {};
+            if (requestedMethod === "search") return { results: [], nextCursor: null };
+            if (requestedMethod === "isEntityTitleExplicit") return false;
+            if (requestedMethod === "sourceUsage") return [];
+            if (requestedMethod === "listEntityTitles") return [];
+            if (requestedMethod === "indexPanel") return null;
+            if (requestedMethod === "updatePanelTitle") return args[1];
+            return undefined;
+          })
+        )(method, args);
+      }
+    ),
     panelAccess: {
       contextExists: () => false,
       resolveCallerContext: async () => null,
@@ -90,9 +192,9 @@ describe("workspaceStateService — topology authority", () => {
     const { svc } = makeService({
       dispatchReturns: {
         panelTreeDetail: {
-          slot: { slot_id: "panel:target" },
+          slot: { slot_id: "panel:tree/target" },
           currentHistory: { source: "panels/target", context_id: "ctx-target" },
-          entity: { id: "panel:target" },
+          entity: { id: "panel:nav-target" },
         },
       },
       panelAccess: {
@@ -112,7 +214,7 @@ describe("workspaceStateService — topology authority", () => {
 
     await expect(
       svc.authorityPreparation?.["workspace-state.slot.close.contextBoundary"]?.({ caller }, [
-        "panel:target",
+        "panel:tree/target",
       ])
     ).resolves.toMatchObject({
       selections: [
@@ -178,25 +280,27 @@ describe("workspaceStateService — topology authority", () => {
   it("keeps addressed panel detail independent of cold Base-owned decoration", async () => {
     const detail = {
       revision: 1,
-      slot: { slot_id: "panel:chat" },
+      slot: { slot_id: "panel:tree/chat" },
       currentHistory: {
         source: "panels/chat",
         context_id: "ctx-chat",
         options: JSON.stringify({ ref: "event:chat" }),
       },
-      entity: { id: "panel:chat" },
+      entity: { id: "panel:nav-chat" },
     };
     const { svc } = makeService({
       dispatchReturns: { panelTreeDetail: detail },
       presentationDispatch: async (method) =>
-        method === "titlesForSlots" ? { "panel:chat": "Chat" } : undefined,
+        method === "titlesForSlots" ? { "panel:tree/chat": "Chat" } : undefined,
     });
 
     await expect(
-      svc.handler(makeCtx() as never, "panelTree.detail", ["panel:chat"])
-    ).resolves.toEqual({
-      ...detail,
-      slot: { ...detail.slot, current_entity_title: "panels/chat" },
+      svc.handler(makeCtx() as never, "panelTree.detail", ["panel:tree/chat"])
+    ).resolves.toMatchObject({
+      revision: 1,
+      slot: { slot_id: "panel:tree/chat", current_entity_title: "panels/chat" },
+      currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
+      entity: { id: "panel:nav-chat" },
     });
   });
 
@@ -206,7 +310,7 @@ describe("workspaceStateService — topology authority", () => {
       group: { kind: "roots" as const, ownerUserId: null },
       nodes: [
         {
-          slotId: "panel:chat",
+          slotId: "panel:tree/chat",
           parentSlotId: null,
           ownerUserId: null,
           source: "panels/chat",
@@ -221,7 +325,7 @@ describe("workspaceStateService — topology authority", () => {
       dispatchReturns: { panelTreePage: page },
       onPresentationChanged,
       presentationDispatch: async (method) =>
-        method === "titlesForSlots" ? { "panel:chat": "Chat" } : undefined,
+        method === "titlesForSlots" ? { "panel:tree/chat": "Chat" } : undefined,
     });
 
     await expect(
@@ -232,7 +336,7 @@ describe("workspaceStateService — topology authority", () => {
       ...page,
       nodes: [{ ...page.nodes[0], title: "panels/chat", kind: "workspace" }],
     });
-    await vi.waitFor(() => expect(onPresentationChanged).toHaveBeenCalledWith(["panel:chat"]));
+    await vi.waitFor(() => expect(onPresentationChanged).toHaveBeenCalledWith(["panel:tree/chat"]));
     await expect(
       svc.handler(makeCtx() as never, "panelTree.page", [
         { group: { kind: "roots", ownerUserId: null } },
@@ -249,7 +353,7 @@ describe("workspaceStateService — topology authority", () => {
       group: { kind: "roots" as const, ownerUserId: null },
       nodes: [
         {
-          slotId: "panel:chat",
+          slotId: "panel:tree/chat",
           parentSlotId: null,
           ownerUserId: null,
           source: "panels/chat",
@@ -266,7 +370,7 @@ describe("workspaceStateService — topology authority", () => {
     const { svc } = makeService({
       dispatchReturns: { panelTreePage: page },
       presentationDispatch: async (method) =>
-        method === "titlesForSlots" ? { "panel:chat": "Agentic Chat" } : undefined,
+        method === "titlesForSlots" ? { "panel:tree/chat": "Agentic Chat" } : undefined,
     });
 
     await expect(
@@ -290,7 +394,7 @@ describe("workspaceStateService — topology authority", () => {
       group: { kind: "roots" as const, ownerUserId: null },
       nodes: [
         {
-          slotId: "panel:chat",
+          slotId: "panel:tree/chat",
           parentSlotId: null,
           ownerUserId: null,
           source: "panels/chat",
@@ -311,7 +415,7 @@ describe("workspaceStateService — topology authority", () => {
         { group: { kind: "roots", ownerUserId: null } },
       ])
     ).resolves.toMatchObject({
-      nodes: [{ slotId: "panel:chat", title: "panels/chat" }],
+      nodes: [{ slotId: "panel:tree/chat", title: "panels/chat" }],
     });
   });
 
@@ -323,7 +427,7 @@ describe("workspaceStateService — topology authority", () => {
           group: { kind: "roots" as const, ownerUserId: null },
           nodes: [
             {
-              slotId: "panel:chat",
+              slotId: "panel:tree/chat",
               parentSlotId: null,
               ownerUserId: null,
               source: "panels/chat",
@@ -458,7 +562,7 @@ describe("workspaceStateService — topology authority", () => {
     const onEntityTitleChanged = vi.fn();
     const detail = {
       revision: 1,
-      slot: { slot_id: "panel:chat" },
+      slot: { slot_id: "panel:tree/chat" },
       currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
       entity: { id: "panel:nav-chat" },
     };
@@ -471,12 +575,12 @@ describe("workspaceStateService — topology authority", () => {
 
     await expect(
       svc.handler(makeCtx() as never, "panel.index", [
-        { id: "panel:chat", title: "Agentic Chat", path: "panels/chat" },
+        { id: "panel:tree/chat", title: "Agentic Chat", path: "panels/chat" },
       ])
     ).resolves.toBe("panel:nav-chat");
     await expect(
       svc.handler(makeCtx() as never, "panel.updateTitle", [
-        "panel:chat",
+        "panel:tree/chat",
         "Renamed chat",
         { explicit: true },
       ])
@@ -488,7 +592,7 @@ describe("workspaceStateService — topology authority", () => {
         method: "indexPanel",
         args: [
           {
-            id: "panel:chat",
+            id: "panel:tree/chat",
             title: "Agentic Chat",
             path: "panels/chat",
             source: "panels/chat",
@@ -498,12 +602,12 @@ describe("workspaceStateService — topology authority", () => {
       },
       {
         method: "updatePanelTitle",
-        args: ["panel:chat", "panel:nav-chat", "Renamed chat", { explicit: true }],
+        args: ["panel:tree/chat", "panel:nav-chat", "Renamed chat", { explicit: true }],
       },
     ]);
     expect(onSlotStateChanged).not.toHaveBeenCalled();
-    expect(onPresentationChanged).toHaveBeenNthCalledWith(1, ["panel:chat"]);
-    expect(onPresentationChanged).toHaveBeenNthCalledWith(2, ["panel:chat"]);
+    expect(onPresentationChanged).toHaveBeenNthCalledWith(1, ["panel:tree/chat"]);
+    expect(onPresentationChanged).toHaveBeenNthCalledWith(2, ["panel:tree/chat"]);
     expect(onEntityTitleChanged).toHaveBeenNthCalledWith(1, "panel:nav-chat", "Agentic Chat");
     expect(onEntityTitleChanged).toHaveBeenNthCalledWith(2, "panel:nav-chat", "Renamed chat");
   });
@@ -514,7 +618,7 @@ describe("workspaceStateService — topology authority", () => {
       group: { kind: "roots" as const, ownerUserId: null },
       nodes: [
         {
-          slotId: "panel:chat",
+          slotId: "panel:tree/chat",
           parentSlotId: null,
           ownerUserId: null,
           source: "panels/chat",
@@ -526,7 +630,7 @@ describe("workspaceStateService — topology authority", () => {
     };
     const detail = {
       revision: 1,
-      slot: { slot_id: "panel:chat" },
+      slot: { slot_id: "panel:tree/chat" },
       currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
       entity: { id: "panel:nav-chat" },
     };
@@ -539,7 +643,7 @@ describe("workspaceStateService — topology authority", () => {
     });
 
     await svc.handler(makeCtx() as never, "panel.updateTitle", [
-      "panel:chat",
+      "panel:tree/chat",
       "Conversation title",
       { explicit: false },
     ]);
@@ -548,24 +652,24 @@ describe("workspaceStateService — topology authority", () => {
         { group: { kind: "roots", ownerUserId: null } },
       ])
     ).resolves.toMatchObject({
-      nodes: [{ slotId: "panel:chat", title: "Conversation title" }],
+      nodes: [{ slotId: "panel:tree/chat", title: "Conversation title" }],
     });
 
     expect(presentationCalls).toEqual([
       { method: "isEntityTitleExplicit", args: ["panel:nav-chat"] },
       {
         method: "updatePanelTitle",
-        args: ["panel:chat", "panel:nav-chat", "Conversation title", { explicit: false }],
+        args: ["panel:tree/chat", "panel:nav-chat", "Conversation title", { explicit: false }],
       },
     ]);
     expect(onSlotStateChanged).not.toHaveBeenCalled();
-    expect(onPresentationChanged).toHaveBeenCalledWith(["panel:chat"]);
+    expect(onPresentationChanged).toHaveBeenCalledWith(["panel:tree/chat"]);
   });
 
   it("coalesces repeated runtime page titles without redundant presentation refreshes", async () => {
     const detail = {
       revision: 1,
-      slot: { slot_id: "panel:chat" },
+      slot: { slot_id: "panel:tree/chat" },
       currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
       entity: { id: "panel:nav-chat" },
     };
@@ -576,18 +680,18 @@ describe("workspaceStateService — topology authority", () => {
     });
 
     await svc.handler(makeCtx() as never, "panel.updateTitle", [
-      "panel:chat",
+      "panel:tree/chat",
       "Conversation title",
       { explicit: false },
     ]);
     await svc.handler(makeCtx() as never, "panel.updateTitle", [
-      "panel:chat",
+      "panel:tree/chat",
       "Conversation title",
       { explicit: false },
     ]);
 
     expect(onPresentationChanged).toHaveBeenCalledTimes(1);
-    expect(onPresentationChanged).toHaveBeenCalledWith(["panel:chat"]);
+    expect(onPresentationChanged).toHaveBeenCalledWith(["panel:tree/chat"]);
   });
 
   it("clears a panel title through the same cache and presentation owner", async () => {
@@ -596,7 +700,7 @@ describe("workspaceStateService — topology authority", () => {
       group: { kind: "roots" as const, ownerUserId: null },
       nodes: [
         {
-          slotId: "panel:chat",
+          slotId: "panel:tree/chat",
           parentSlotId: null,
           ownerUserId: null,
           source: "panels/chat",
@@ -608,7 +712,7 @@ describe("workspaceStateService — topology authority", () => {
     };
     const detail = {
       revision: 1,
-      slot: { slot_id: "panel:chat" },
+      slot: { slot_id: "panel:tree/chat" },
       currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
       entity: { id: "panel:nav-chat" },
     };
@@ -619,12 +723,12 @@ describe("workspaceStateService — topology authority", () => {
     });
 
     await svc.handler(makeCtx() as never, "panel.updateTitle", [
-      "panel:chat",
+      "panel:tree/chat",
       "Conversation title",
       { explicit: true },
     ]);
     await svc.handler(makeCtx() as never, "panel.updateTitle", [
-      "panel:chat",
+      "panel:tree/chat",
       null,
       { explicit: true },
     ]);
@@ -636,7 +740,7 @@ describe("workspaceStateService — topology authority", () => {
     ).resolves.toMatchObject({ nodes: [{ title: "panels/chat" }] });
     expect(presentationCalls).toContainEqual({
       method: "updatePanelTitle",
-      args: ["panel:chat", "panel:nav-chat", null, { explicit: true }],
+      args: ["panel:tree/chat", "panel:nav-chat", null, { explicit: true }],
     });
     expect(onPresentationChanged).toHaveBeenCalledTimes(2);
   });
@@ -647,7 +751,7 @@ describe("workspaceStateService — topology authority", () => {
       group: { kind: "roots" as const, ownerUserId: null },
       nodes: [
         {
-          slotId: "panel:chat",
+          slotId: "panel:tree/chat",
           parentSlotId: null,
           ownerUserId: null,
           source: "panels/chat",
@@ -659,7 +763,7 @@ describe("workspaceStateService — topology authority", () => {
     };
     const detail = {
       revision: 1,
-      slot: { slot_id: "panel:chat" },
+      slot: { slot_id: "panel:tree/chat" },
       currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
       entity: { id: "panel:nav-chat" },
     };
@@ -670,12 +774,12 @@ describe("workspaceStateService — topology authority", () => {
     });
 
     await svc.handler(makeCtx() as never, "panel.updateTitle", [
-      "panel:chat",
+      "panel:tree/chat",
       "Conversation title",
       { explicit: false },
     ]);
     await svc.handler(makeCtx() as never, "panel.index", [
-      { id: "panel:chat", title: "Agentic Chat", path: "panels/chat" },
+      { id: "panel:tree/chat", title: "Agentic Chat", path: "panels/chat" },
     ]);
 
     await expect(
@@ -683,10 +787,10 @@ describe("workspaceStateService — topology authority", () => {
         { group: { kind: "roots", ownerUserId: null } },
       ])
     ).resolves.toMatchObject({
-      nodes: [{ slotId: "panel:chat", title: "Conversation title" }],
+      nodes: [{ slotId: "panel:tree/chat", title: "Conversation title" }],
     });
     expect(onPresentationChanged).toHaveBeenCalledTimes(1);
-    expect(onPresentationChanged).toHaveBeenCalledWith(["panel:chat"]);
+    expect(onPresentationChanged).toHaveBeenCalledWith(["panel:tree/chat"]);
   });
 });
 
@@ -700,13 +804,15 @@ describe("workspaceStateService — slot-state change hook", () => {
       },
     };
 
-    await svc.handler(ctx as never, "slot.create", [{ slotId: "s1", parentSlotId: null }]);
+    await svc.handler(ctx as never, "slot.create", [
+      { slotId: "panel:tree/s1", parentSlotId: null },
+    ]);
 
     expect(calls).toContainEqual({
       method: "slotCreate",
       args: [
         {
-          slotId: "s1",
+          slotId: "panel:tree/s1",
           parentSlotId: null,
           ownerUserId: "user-verified",
         },
@@ -723,18 +829,22 @@ describe("workspaceStateService — slot-state change hook", () => {
       },
     };
 
-    await svc.handler(ctx as never, "slot.move", ["s1", null, { afterSlotId: "s0" }]);
+    await svc.handler(ctx as never, "slot.move", [
+      "panel:tree/s1",
+      null,
+      { afterSlotId: "panel:tree/s0" },
+    ]);
 
     expect(calls).toContainEqual({
       method: "slotMove",
-      args: ["s1", null, { afterSlotId: "s0" }, "user-verified"],
+      args: ["panel:tree/s1", null, { afterSlotId: "panel:tree/s0" }, "user-verified"],
     });
   });
 
   const mutating: Array<[method: string, args: unknown[]]> = [
-    ["slot.create", [{ slotId: "s1", parentSlotId: null }]],
-    ["slot.move", ["s1", null, { afterSlotId: "s0" }]],
-    ["slot.close", ["s1"]],
+    ["slot.create", [{ slotId: "panel:tree/s1", parentSlotId: null }]],
+    ["slot.move", ["panel:tree/s1", null, { afterSlotId: "panel:tree/s0" }]],
+    ["slot.close", ["panel:tree/s1"]],
   ];
 
   for (const [method, args] of mutating) {
@@ -759,22 +869,33 @@ describe("workspaceStateService — slot-state change hook", () => {
       },
       dispatchReturns: {
         panelTreeDetail: {
-          slot: { slot_id: "s1", current_entry_key: "entry-1" },
-          currentHistory: { state_args: JSON.stringify({ mode: "a" }) },
-          entity: { id: "panel:s1", activeBuildKey: buildKey },
+          slot: {
+            slot_id: "panel:tree/s1",
+            current_entity_id: "panel:nav-s1",
+            current_entry_key: "entry-1",
+          },
+          currentHistory: { entity_id: "panel:nav-s1", state_args: JSON.stringify({ mode: "a" }) },
+          entity: { id: "panel:nav-s1", activeBuildKey: buildKey },
         },
         slotPatchCurrentStateArgs: { mode: "b" },
       },
     });
 
     await expect(
-      svc.handler(makeCtx() as never, "slot.patchCurrentStateArgs", ["s1", { mode: "b" }])
+      svc.handler(makeCtx() as never, "slot.patchCurrentStateArgs", [
+        "panel:tree/s1",
+        { mode: "b" },
+      ])
     ).resolves.toEqual({ mode: "b" });
 
     expect(schemaLookups).toEqual([buildKey]);
     expect(calls).toContainEqual({
       method: "slotPatchCurrentStateArgs",
-      args: ["s1", { mode: "b" }, { entryKey: "entry-1", activeBuildKey: buildKey, schema }],
+      args: [
+        "panel:tree/s1",
+        { mode: "b" },
+        { entryKey: "entry-1", activeBuildKey: buildKey, schema },
+      ],
     });
     expect(onSlotStateChanged).toHaveBeenCalledTimes(1);
   });
@@ -784,8 +905,11 @@ describe("workspaceStateService — slot-state change hook", () => {
     const { svc, calls } = makeService({ onSlotStateChanged });
 
     await expect(
-      svc.handler(makeCtx() as never, "slot.patchCurrentStateArgs", ["s1", { mode: "b" }])
-    ).rejects.toThrow(/Panel not found: s1/);
+      svc.handler(makeCtx() as never, "slot.patchCurrentStateArgs", [
+        "panel:tree/s1",
+        { mode: "b" },
+      ])
+    ).rejects.toThrow(/Panel not found: panel:tree\/s1/);
     expect(calls.map((call) => call.method)).not.toContain("slotPatchCurrentStateArgs");
     expect(onSlotStateChanged).not.toHaveBeenCalled();
   });
@@ -1093,10 +1217,10 @@ describe("workspaceStateService — slot-state change hook", () => {
     ["panelTree.rootGroups", [{}]],
     ["panelTree.rootsForCaller", [{ limit: 50 }]],
     ["panelTree.page", [{ group: { kind: "roots", ownerUserId: null }, limit: 50 }]],
-    ["panelTree.path", ["s1"]],
-    ["panelTree.detail", ["s1"]],
-    ["slot.get", ["s1"]],
-    ["slot.historyRelative", ["s1", -1]],
+    ["panelTree.path", ["panel:tree/s1"]],
+    ["panelTree.detail", ["panel:tree/s1"]],
+    ["slot.get", ["panel:tree/s1"]],
+    ["slot.historyRelative", ["panel:tree/s1", -1]],
     ["entity.resolveActive", ["e1"]],
     ["entity.resolve", ["e1"]],
   ];

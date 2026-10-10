@@ -1,3 +1,8 @@
+import {
+  deserializeRpcFailure,
+  rpcCallerAbortedError,
+  serializeRpcFailure,
+} from "./errors.js";
 /**
  * First-class streaming hop for PANEL SHELL BRIDGES.
  *
@@ -36,14 +41,8 @@
  * uploads additionally pump their request body through sequenced chunks.
  */
 
-import type { RpcEnvelope, RpcErrorData, RpcErrorKind } from "./types.js";
-import {
-  attachRpcDiagnosticId,
-  rpcDiagnosticIdOf,
-  RemoteRpcError,
-  rpcErrorDataOf,
-  rpcErrorKindOf,
-} from "./errors.js";
+import type { RpcEnvelope, RpcFailure } from "./types.js";
+
 import type { DecodedFramedStream } from "./protocol/streamCodec.js";
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
 import { secureRandomUuid } from "./randomId.js";
@@ -73,7 +72,7 @@ export interface BridgeBodyChunk {
   seq: number;
   chunk?: BridgeChunkPayload;
   done?: boolean;
-  error?: string;
+  error?: RpcFailure;
 }
 
 /** Host → panel: response head / body chunk / terminal. */
@@ -90,11 +89,7 @@ export type BridgeStreamMessage =
   | {
       kind: "error";
       opId: string;
-      message: string;
-      errorKind?: RpcErrorKind;
-      diagnosticId?: string;
-      code?: string;
-      errorData?: RpcErrorData;
+      error: RpcFailure;
     };
 
 export function decodeBridgeChunk(chunk: unknown): Uint8Array {
@@ -349,15 +344,10 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
     } catch (error) {
       // Always tell the panel (fail-loud). After a panel-initiated abort this
       // is a harmless no-op — the panel already unsubscribed its opId.
-      const code = (error as { code?: unknown } | null)?.code;
       deps.sendToPanel({
         kind: "error",
         opId: op.opId,
-        message: error instanceof Error ? error.message : String(error),
-        errorKind: rpcErrorKindOf(error, "transport"),
-        ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
-        ...(typeof code === "string" ? { code } : {}),
-        ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+        error: serializeRpcFailure(error, "transport"),
       });
     } finally {
       cleanup(op);
@@ -430,8 +420,8 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
         abortOp(op, error.message);
         return Promise.reject(error);
       }
-      if (typeof msg.error === "string") {
-        op.body?.fail(new Error(`panel request body failed: ${msg.error}`));
+      if (msg.error !== undefined) {
+        op.body?.fail(deserializeRpcFailure(msg.error));
         return Promise.resolve();
       }
       if (msg.done === true) {
@@ -518,8 +508,8 @@ export async function openBridgeStream(
   signal: AbortSignal | null | undefined,
   body: ReadableStream<Uint8Array> | null
 ): Promise<Response> {
-  const abortReason = (): Error => new Error("bridge upload stream aborted");
-  if (signal?.aborted) throw abortReason();
+  const abortReason = (reason?: unknown): Error => rpcCallerAbortedError(reason);
+  if (signal?.aborted) throw abortReason(signal.reason);
 
   const opId = generateOpId();
   const bodyId = body ? `${opId}#body` : undefined;
@@ -545,6 +535,9 @@ export async function openBridgeStream(
   headPromise.catch(() => {});
 
   let bodyController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let requestBodyReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let requestBodyPump: Promise<void> | null = null;
+  let teardownCompletion: Promise<void> | null = null;
   let bodyClosed = false;
   const pendingAcks: number[] = [];
   const flushAcks = (): void => {
@@ -563,9 +556,9 @@ export async function openBridgeStream(
         // The consumer drained below the watermark — release the host's pump.
         flushAcks();
       },
-      cancel() {
+      cancel(reason) {
         // Response-body cancel = caller abandoned the stream: abort the op.
-        teardown(abortReason(), { notifyHost: true });
+        return teardown(abortReason(reason), { notifyHost: true });
       },
     },
     // Byte-length strategy as a plain object (no strategy-class dependency):
@@ -596,10 +589,16 @@ export async function openBridgeStream(
   };
 
   let pumpAborted = false;
-  function teardown(error: Error, opts: { notifyHost: boolean }): void {
-    if (settled) return;
+  let cancellationError: Error | null = null;
+  function teardown(error: Error, opts: { notifyHost: boolean }): Promise<void> {
+    if (settled) return teardownCompletion ?? Promise.resolve();
     settled = true;
     pumpAborted = true;
+    if ("code" in error && error.code === "RPC_ABORTED")
+      cancellationError = error;
+    const requestBodyCancellation = requestBodyReader
+      ? requestBodyReader.cancel(error)
+      : Promise.resolve();
     if (opts.notifyHost) {
       try {
         surface.streamAbort(opId);
@@ -607,13 +606,29 @@ export async function openBridgeStream(
         /* bridge gone */
       }
     }
-    rejectHead(error);
-    errorBody(error);
     unsubscribe?.();
     unsubscribe = null;
     signal?.removeEventListener("abort", onAbort);
+    teardownCompletion = Promise.all([
+      requestBodyCancellation,
+      ...(requestBodyPump ? [requestBodyPump] : []),
+    ]).then(
+      () => error,
+      (cleanupError: unknown) =>
+        new AggregateError(
+          [error, cleanupError],
+          "Bridge stream failed during upload cleanup",
+          { cause: error }
+        )
+    ).then((failure) => {
+      rejectHead(failure);
+      errorBody(failure);
+    });
+    return teardownCompletion;
   }
-  const onAbort = (): void => teardown(abortReason(), { notifyHost: true });
+  const onAbort = (): void => {
+    void teardown(abortReason(signal?.reason), { notifyHost: true });
+  };
 
   unsubscribe = surface.onStreamMessage((msg) => {
     if (!msg || (msg as { opId?: string }).opId !== opId) return;
@@ -649,43 +664,36 @@ export async function openBridgeStream(
         signal?.removeEventListener("abort", onAbort);
         return;
       case "error": {
-        const error = new RemoteRpcError(
-          msg.message,
-          msg.errorKind ?? "transport",
-          msg.code,
-          msg.errorData
-        );
-        if (msg.diagnosticId) attachRpcDiagnosticId(error, msg.diagnosticId);
-        settled = true;
-        pumpAborted = true;
-        rejectHead(error);
-        errorBody(error);
-        unsubscribe?.();
-        unsubscribe = null;
-        signal?.removeEventListener("abort", onAbort);
+        const error = deserializeRpcFailure(msg.error);
+        void teardown(error, { notifyHost: false });
         return;
       }
     }
   });
   signal?.addEventListener("abort", onAbort);
+  if (signal?.aborted) onAbort();
 
   try {
     await surface.streamOpen({ opId, envelope, ...(bodyId ? { bodyId } : {}) });
   } catch (error) {
-    teardown(error instanceof Error ? error : new Error(String(error)), { notifyHost: false });
+    await teardown(
+      error instanceof Error ? error : new Error(String(error)),
+      { notifyHost: false }
+    );
     throw error;
   }
 
   // Pump the caller's body across the bridge. Every send is awaited: the host
   // resolves it only while its reassembly buffer has room.
   if (body && bodyId)
-    void (async () => {
+    requestBodyPump = (async () => {
       const reader = body.getReader();
+      requestBodyReader = reader;
       let seq = 0;
       try {
         for (;;) {
           if (pumpAborted) {
-            await reader.cancel(abortReason());
+            await reader.cancel(cancellationError ?? abortReason(signal?.reason));
             return;
           }
           const { done, value } = await reader.read();
@@ -718,18 +726,26 @@ export async function openBridgeStream(
             await surface.streamBodyChunk({
               bodyId,
               seq: seq + 1,
-              error: error instanceof Error ? error.message : String(error),
+              error: serializeRpcFailure(error),
             });
           } catch {
             /* op already gone host-side */
           }
         }
       } finally {
+        requestBodyReader = null;
         reader.releaseLock();
       }
     })();
 
-  const head = await headPromise;
+  let head: Extract<BridgeStreamMessage, { kind: "head" }>;
+  try {
+    head = await headPromise;
+  } catch (error) {
+    if (requestBodyPump) await requestBodyPump;
+    if (teardownCompletion) await teardownCompletion;
+    throw error;
+  }
   const status = constructibleResponseStatus(head.status);
   if (NULL_BODY_STATUSES.has(status)) {
     // These statuses forbid a Response body; the wire sends no chunks for them.

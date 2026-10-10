@@ -1,6 +1,9 @@
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import type { DODispatch } from "../doDispatch.js";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { durableWorkOwnerMethods } from "@vibestudio/service-schemas/durableWorkOwner";
+import { workspaceStateEngineMethods } from "@vibestudio/service-schemas/workspaceStateEngine";
 import {
   DURABLE_WORK_QUEUES,
   type ClaimRequest,
@@ -97,11 +100,13 @@ export function createDurableWorkOwnerScanner(
   const reportedPermanentFailures = new Map<string, string>();
   return async (signal) => {
     signal.throwIfAborted();
-    const registered = (await doDispatch.dispatchHeldWithSignal(
-      workspaceOwner,
-      signal,
-      "durableWorkOwnerList"
-    )) as DurableWorkReadyHint[];
+    const workspaceStateForSignal = createTypedServiceClient(
+      "workspace-state-engine",
+      workspaceStateEngineMethods,
+      (_service, method, args) =>
+        doDispatch.dispatchHeldWithSignal(workspaceOwner, signal, method, ...args)
+    );
+    const registered = await workspaceStateForSignal.durableWorkOwnerList();
     const ready: DurableWorkReadyHint[] = [];
     const failures: Array<{ owner: string; error: string }> = [];
     const newlyBlocked: Array<{ owner: string; error: string }> = [];
@@ -111,19 +116,14 @@ export function createDurableWorkOwnerScanner(
         signal.throwIfAborted();
         const { owner, queues } = registered[next++]!;
         try {
-          await doDispatch.dispatchHeldWithSignal(
-            owner,
-            signal,
-            "adoptDurableWorkWorker",
-            workerId
+          const ownerClient = createTypedServiceClient(
+            "durable-work-owner",
+            durableWorkOwnerMethods,
+            (_service, method, args) =>
+              doDispatch.dispatchHeldWithSignal(owner, signal, method, ...args)
           );
-          const local = (await doDispatch.dispatchHeldWithSignal(
-            owner,
-            signal,
-            "durableWorkStatus"
-          )) as {
-            readyQueues?: unknown;
-          };
+          await ownerClient.adoptDurableWorkWorker(workerId);
+          const local = await ownerClient.durableWorkStatus();
           const declared = new Set(queues);
           const readyQueues = Array.isArray(local.readyQueues)
             ? local.readyQueues.filter(
@@ -228,13 +228,13 @@ export function createDurableWorkHandlers(
           request.workerId
         );
       }
-      return doDispatch.dispatchHeldWithSignal(
-        owner,
-        signal,
-        "claimReadyWork",
-        queue,
-        request
-      ) as Promise<WorkClaim[]>;
+      const ownerClient = createTypedServiceClient(
+        "durable-work-owner",
+        durableWorkOwnerMethods,
+        (_service, method, args) =>
+          doDispatch.dispatchHeldWithSignal(owner, signal, method, ...args)
+      );
+      return ownerClient.claimReadyWork(queue, request);
     },
     laneKey: (owner, claim) => {
       const supplied = (claim.payload as DriverClaimPayload | null)?.laneKey;
@@ -242,9 +242,22 @@ export function createDurableWorkHandlers(
         ? supplied
         : `${owner.source}\u0000${owner.className}\u0000${owner.objectKey}\u0000${claim.itemId}`;
     },
-    settle: (owner, request) =>
-      doDispatch.dispatch(owner, "settleReadyWork", queue, request) as Promise<ClaimSettlement>,
-    fail: (owner, request) => doDispatch.dispatch(owner, "failReadyWork", queue, request),
+    settle: (owner, request) => {
+      const ownerClient = createTypedServiceClient(
+        "durable-work-owner",
+        durableWorkOwnerMethods,
+        (_service, method, args) => doDispatch.dispatch(owner, method, ...args)
+      );
+      return ownerClient.settleReadyWork(queue, request);
+    },
+    fail: (owner, request) => {
+      const ownerClient = createTypedServiceClient(
+        "durable-work-owner",
+        durableWorkOwnerMethods,
+        (_service, method, args) => doDispatch.dispatch(owner, method, ...args)
+      );
+      return ownerClient.failReadyWork(queue, request);
+    },
   });
   return {
     "channel-delivery": {

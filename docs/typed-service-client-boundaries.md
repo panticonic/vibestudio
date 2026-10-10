@@ -1,17 +1,31 @@
-# Typed Service Client Boundaries
+# Typed RPC Contracts
 
-Status: current migration policy; last reconciled 2026-07-13 against
-`92e4aefe`. The guard currently permits five documented generic-boundary calls,
-not a broad migration allowlist.
+Public `RpcCaller.call` and `RpcCaller.stream` calls take an `RpcMethod` descriptor.
+For host calls, import the descriptor from
+`@vibestudio/service-schemas/mainRpc`; for receiver-owned methods, import the
+receiver's neutral RPC contract. The canonical method table is the source of truth
+for each public receiver contract.
 
-Shared service schema tables under `packages/service-schemas/src` are the source of truth for main-process RPC contracts. Production host, shell, mobile, shared, and extension-client code should call those services through `createTypedServiceClient` or a domain wrapper built on it.
+```ts
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 
-Allowed generic dispatch boundaries:
+const result = await rpc.call("main", mainRpcMethods["blobstore.getText"], [digest]);
+```
 
-- Typed-client adapter lambdas may call `rpc.call("main", `${service}.${method}`, args)` when they are passed directly to `createTypedServiceClient`.
-- Transport forwarders such as `ServerClient` may dispatch dynamic service and method names after caller policy checks.
-- `extensions.invokeStream` may use `rpc.stream("main", "extensions.invokeStream", ...)` because it returns a live `Response`, not a JSON-compatible service return value.
-- `packages/shared/src/workspaceServiceRpc.ts` may call `workers.resolveService` as its single typed-host resolution hop before dispatching to a dynamically resolved workspace Durable Object target.
-- Workspace-authored packages outside the host/shared migration roots may still contain raw calls until those packages receive typed runtime clients.
+`RpcWireClient` and string-based method dispatch belong to internal transport
+infrastructure. Typed service clients and domain wrappers should sit above that
+transport and keep application code on receiver-owned descriptors. Do not use raw
+wire method names in public examples or add string-dispatch exceptions to the
+migration guard.
 
-The CI guard in `tests/typed-service-client-guard.test.ts` enforces the migrated roots and documents any approved raw literal calls. New raw literal `main` calls in those roots should be replaced with typed clients, not added to the allowlist.
+Wire calls return `unknown`; callers cannot select a result type with a generic
+argument. Schema-backed descriptors decode arguments and results at the receiver
+boundary. TypeScript receiver descriptors share the receiver's declared signature
+without allowing the caller to invent one.
+
+The CLI's `RpcClient.mainCall` binds the workspace main receiver's canonical
+contracts. Account-wide hub operations use the hub contract over the hub
+connection; sharing the address `main` does not make their method sets identical.
+Eval's execution and retained runtime peers use the same `createRpcPeer` contract
+implementation as the ordinary RPC client. `withContract` always binds the supplied
+receiver descriptors.

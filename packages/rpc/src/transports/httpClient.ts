@@ -1,3 +1,4 @@
+import { deserializeRpcFailure } from "../errors.js";
 import type { EnvelopeRpcTransport, RpcEnvelope } from "../types.js";
 import { decodeFramedResponseToStreaming } from "../protocol/streamCodec.js";
 import { decodeRpcJson, encodeRpcJson } from "../wireJson.js";
@@ -183,42 +184,42 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
     // exposed barrier handled when no cancellation races the initial request.
     void admitted.catch(() => {});
     const completion = (async () => {
-    let response: Response;
-    try {
-      response = await fetchImpl(rpcUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${config.authToken}`,
-          [runtimeIdHeader]: config.selfId,
-        },
-        body: encodeRpcJson(envelope),
-        signal: signal as RequestInit["signal"],
-      });
-    } catch (error) {
-      const failure = signal?.aborted ? abortError(signal) : rpcFetchError(rpcUrl, error);
-      rejectAdmission(failure);
-      throw failure;
-    }
-    if (response.status === 401) {
-      const failure = new Error("RPC authentication failed");
-      rejectAdmission(failure);
-      throw failure;
-    }
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      const failure = new Error(
-        `RPC endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`
-      );
-      rejectAdmission(failure);
-      throw failure;
-    }
+      let response: Response;
+      try {
+        response = await fetchImpl(rpcUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${config.authToken}`,
+            [runtimeIdHeader]: config.selfId,
+          },
+          body: encodeRpcJson(envelope),
+          signal: signal as RequestInit["signal"],
+        });
+      } catch (error) {
+        const failure = signal?.aborted ? abortError(signal) : rpcFetchError(rpcUrl, error);
+        rejectAdmission(failure);
+        throw failure;
+      }
+      if (response.status === 401) {
+        const failure = new Error("RPC authentication failed");
+        rejectAdmission(failure);
+        throw failure;
+      }
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        const failure = new Error(
+          `RPC endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`
+        );
+        rejectAdmission(failure);
+        throw failure;
+      }
 
-    // The server flushes headers only after registering its authenticated
-    // request. This barrier orders a later cancellation POST. Completion still
-    // owns and reads the original body so terminal failures propagate normally.
-    resolveAdmission();
-    deliverToListeners(decodeRpcJson(await response.text()) as RpcEnvelope);
+      // The server flushes headers only after registering its authenticated
+      // request. This barrier orders a later cancellation POST. Completion still
+      // owns and reads the original body so terminal failures propagate normally.
+      resolveAdmission();
+      deliverToListeners(decodeRpcJson(await response.text()) as RpcEnvelope);
     })();
     return { admitted, completion };
   }
@@ -272,6 +273,9 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
           throw error;
         }
         return;
+      }
+      if (response && typeof response === "object" && "error" in response) {
+        throw deserializeRpcFailure(response.error);
       }
       const returnedEnvelope = response as RpcEnvelope | undefined;
       if (

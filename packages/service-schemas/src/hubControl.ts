@@ -702,6 +702,7 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   observeDevices: {
+    authority: { principals: ["user", "host", "code"] },
     website: {
       kind: "closed",
       reason: "Account setup observations belong to authenticated workspace clients.",

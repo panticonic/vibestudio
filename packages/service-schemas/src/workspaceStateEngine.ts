@@ -12,9 +12,16 @@ import {
   RawPanelTreePageSchema,
   RawPanelTreePathSchema,
   RawSlotRowSchema,
+  PanelTreePlacementSchema,
   SlotCreateInputSchema,
   workspaceStateMethods,
 } from "./workspaceState.js";
+
+const prefixedSubject = <Prefix extends "website" | "user">(prefix: Prefix) =>
+  z
+    .string()
+    .startsWith(`${prefix}:`)
+    .transform((value) => value as `${Prefix}:${string}`);
 
 const hostOnly: ServiceAuthorityPolicy = { principals: ["host"] };
 const internal = (
@@ -66,13 +73,13 @@ const entityActivationSchema = z
         kind: z.literal("website"),
         website: z
           .object({
-            subject: z.string().startsWith("website:"),
-            userId: z.string().startsWith("user:"),
+            subject: prefixedSubject("website"),
+            userId: prefixedSubject("user"),
             workspaceId: z.string().min(1),
             origin: z.string().url(),
             binding: z
               .object({
-                subject: z.string().startsWith("website:"),
+                subject: prefixedSubject("website"),
                 generation: z.number().int().nonnegative(),
               })
               .strict(),
@@ -200,17 +207,19 @@ const testPolicySchema = z.discriminatedUnion("kind", [
               ]),
             })
             .strict(),
-          authority: z.array(
-            z
-              .object({
-                ruleId: z.string().min(1),
-                capability: testCapabilitySchema,
-                resource: AuthorityResourceScopeSchema,
-                tier: z.enum(["gated", "critical"]),
-                decision: z.enum(["once", "task", "deny"]),
-              })
-              .strict()
-          ),
+          authority: z
+            .array(
+              z
+                .object({
+                  ruleId: z.string().min(1),
+                  capability: testCapabilitySchema,
+                  resource: AuthorityResourceScopeSchema,
+                  tier: z.enum(["gated", "critical"]),
+                  decision: z.enum(["once", "task", "deny"]),
+                })
+                .strict()
+            )
+            .readonly(),
           unexpectedPrompts: z.literal("fail"),
         })
         .strict(),
@@ -840,7 +849,18 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
         .strict(),
     ]),
   },
-  slotMove: { ...workspaceStateMethods["slot.move"] },
+  slotMove: {
+    ...workspaceStateMethods["slot.move"],
+    args: z.union([
+      workspaceStateMethods["slot.move"].args,
+      z.tuple([
+        z.string(),
+        z.string().nullable(),
+        PanelTreePlacementSchema.optional(),
+        z.string().min(1).optional(),
+      ]),
+    ]),
+  },
   slotClose: { ...workspaceStateMethods["slot.close"] },
   slotCloseOwnedRoots: { ...workspaceStateMethods["slot.closeOwnedRoots"] },
   slotCloseCleanupPage: { ...workspaceStateMethods["slot.closeCleanupPage"] },

@@ -439,10 +439,12 @@ export async function dispatchWithDurableObjectSchemaGuard(input: {
             message: {
               type: "response",
               requestId: envelope.message.requestId,
-              error: error.message,
-              errorKind: error.errorKind,
-              errorCode: error.code,
-              errorData: data,
+              error: {
+                message: error.message,
+                errorKind: error.errorKind,
+                code: error.code,
+                errorData: data,
+              },
             },
           });
         }
@@ -452,10 +454,12 @@ export async function dispatchWithDurableObjectSchemaGuard(input: {
     }
     return json(
       {
-        error: error.message,
-        errorKind: error.errorKind,
-        errorCode: error.code,
-        errorData: data,
+        error: {
+          message: error.message,
+          errorKind: error.errorKind,
+          code: error.code,
+          errorData: data,
+        },
       },
       500
     );

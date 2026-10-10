@@ -1,6 +1,4 @@
 import type { RpcCausalParent } from "@vibestudio/rpc";
-import type { VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
-import type { ContextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
 import type {
   InitializeExactWorkspaceSnapshotInput,
   WorkspaceSourceInitializationInspection,
@@ -8,7 +6,9 @@ import type {
 import type { DODispatch } from "./doDispatch.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
+import { GadJsonRecordSchema, gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
+import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   nativeInvocationId,
   nativeInvocationIdentity,
@@ -43,228 +43,183 @@ export interface WorkspaceSourceProviderV1 {
   health(): Promise<{ ok: true; protocol: "vibestudio.workspace-source.v1" }>;
 }
 
-export interface WorkspaceSourceSemanticEffect {
-  effectId: string;
-  scopeKind: "context" | "workspace";
-  scopeId: string;
-  commandId: string;
-  kind: "observe-content" | "materialize-context" | "publish-main";
-  payload: Record<string, unknown>;
-  payloadDigest: string;
-  status: "pending";
-}
-
-export type WorkspaceSourceSemanticDispatchResult =
-  | { kind: "complete"; result: unknown }
-  | {
-      kind: "effects-pending";
-      result: unknown;
-      effects: WorkspaceSourceSemanticEffect[];
-    }
-  | { kind: "host-read"; request: Record<string, unknown> }
-  | { kind: "host-content"; request: Record<string, unknown> };
-
-export interface WorkspaceSemanticRequest {
-  input?: unknown;
-  ingress: {
-    causalParent: RpcCausalParent | null;
-  };
-}
-
 /**
  * The complete host ABI of the cataloged workspace source builtin.
  * Keeping the wire method literals inside this adapter makes adding a new
  * cross-boundary operation an explicit interface change.
  */
-export interface WorkspaceSemanticPort {
-  contentGcRoots(): Promise<{ contentRoots: string[]; contentHashes: string[] }>;
-  referencesReachable(input: {
-    contextIds: readonly string[];
-    references: readonly { kind: string; value: unknown }[];
-  }): Promise<boolean>;
-  listContexts(input: { prefix?: string }): Promise<string[]>;
-  isStateDescendant(input: {
-    ancestor: VcsStateNodeRef;
-    descendant: VcsStateNodeRef;
-    maxEdges: number;
-  }): Promise<boolean>;
-  getChannelEnvelope(input: {
-    channelId: string;
-    envelopeId: string;
-  }): Promise<{ contentClass: "internal" | "external" } | null>;
-  vcsEdit(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsMove(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsCopy(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsMerge(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsRevert(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsCommit(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsDiscard(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsImportSnapshot(
-    input: WorkspaceSemanticRequest
-  ): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsRegisterExternalDelta(
-    input: WorkspaceSemanticRequest
-  ): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsSupersedeExternalDelta(
-    input: WorkspaceSemanticRequest
-  ): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsFinalizeExternalDelta(
-    input: WorkspaceSemanticRequest
-  ): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsPush(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsStatus(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsMainState(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsCompare(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsInspect(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsNeighbors(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsHistory(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsBlame(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsWalk(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsQuery(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsSearch(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsReadMemory(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsResolveRepository(
-    input: WorkspaceSemanticRequest
-  ): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsReadFile(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsListDirectory(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsListFiles(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  semanticEffectAck(input: {
-    acknowledgement: {
-      effectId: string;
-      payloadDigest: string;
-      receipt: Record<string, unknown>;
-    };
-  }): Promise<WorkspaceSourceSemanticDispatchResult>;
-  semanticHostReadAck(input: {
-    acknowledgement: {
-      request: Record<string, unknown>;
-      files: Array<{ contentHash: string; text: string }>;
-    };
-  }): Promise<WorkspaceSourceSemanticDispatchResult>;
-  semanticContentAck(input: {
-    acknowledgement: {
-      request: Record<string, unknown>;
-      contentHashes: string[];
-    };
-  }): Promise<WorkspaceSourceSemanticDispatchResult>;
-  pendingSemanticEffects(): Promise<WorkspaceSourceSemanticEffect[]>;
-  ensureContext(input: {
-    contextId: string;
-    commandId: string;
-    projection?: "deferred";
-    ingress: WorkspaceSemanticRequest["ingress"];
-  }): Promise<WorkspaceSourceSemanticDispatchResult>;
-  contextMaterializationCommand(input: {
-    contextId: string;
-    materializedState: VcsStateNodeRef | null;
-  }): Promise<ContextMaterializationCommand>;
-  forkContext(input: {
-    sourceContextId: string;
-    targetContextId: string;
-    commandId: string;
-    ingress: WorkspaceSemanticRequest["ingress"];
-  }): Promise<WorkspaceSourceSemanticDispatchResult>;
-  dropContext(input: { contextId: string }): Promise<void>;
-  appendLogEvent(input: {
-    logId: string;
-    head: string;
-    logKind: string;
-    events: readonly Record<string, unknown>[];
-  }): Promise<void>;
-  getLogEvent(input: { logId: string; head: string; envelopeId: string }): Promise<unknown>;
-  inspectInvocationState(input: {
-    trajectoryId: string;
-    branchId: string;
-    invocationId: string;
-    limit: number;
-  }): Promise<{
-    rows: Array<{
-      log_id?: unknown;
-      head?: unknown;
-      invocation_id?: unknown;
-      turn_id?: unknown;
-      initiating_user_id?: unknown;
-      status?: unknown;
-      terminal_outcome?: unknown;
-      started_events?: unknown;
-      terminal_events?: unknown;
-      started_event_id?: unknown;
-    }>;
-  }>;
-}
+type WorkspaceSemanticClient = import("@vibestudio/shared/typedServiceClient").TypedServiceClient<
+  typeof gadWireMethods
+>;
+type SemanticWireMethodName =
+  | "vcsEdit"
+  | "vcsMove"
+  | "vcsCopy"
+  | "vcsMerge"
+  | "vcsRevert"
+  | "vcsCommit"
+  | "vcsDiscard"
+  | "vcsImportSnapshot"
+  | "vcsRegisterExternalDelta"
+  | "vcsSupersedeExternalDelta"
+  | "vcsFinalizeExternalDelta"
+  | "vcsPush"
+  | "vcsStatus"
+  | "vcsMainState"
+  | "vcsCompare"
+  | "vcsInspect"
+  | "vcsNeighbors"
+  | "vcsHistory"
+  | "vcsBlame"
+  | "vcsWalk"
+  | "vcsQuery"
+  | "vcsSearch"
+  | "vcsReadMemory"
+  | "vcsResolveRepository"
+  | "vcsReadFile"
+  | "vcsListDirectory"
+  | "vcsListFiles";
+export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMethodName> & {
+  contentGcRoots: WorkspaceSemanticClient["vcsContentGcRoots"];
+  referencesReachable: WorkspaceSemanticClient["vcsReferencesReachable"];
+  listContexts: WorkspaceSemanticClient["vcsListContexts"];
+  isStateDescendant: WorkspaceSemanticClient["vcsIsStateDescendant"];
+  getChannelEnvelope(
+    input: Parameters<WorkspaceSemanticClient["getChannelEnvelope"]>[0]
+  ): Promise<{ contentClass: "internal" | "external" } | null>;
+  semanticEffectAck: WorkspaceSemanticClient["vcsSemanticEffectAck"];
+  semanticHostReadAck: WorkspaceSemanticClient["vcsSemanticHostReadAck"];
+  semanticContentAck: WorkspaceSemanticClient["vcsSemanticContentAck"];
+  pendingSemanticEffects: WorkspaceSemanticClient["vcsPendingSemanticEffects"];
+  ensureContext: WorkspaceSemanticClient["vcsEnsureContext"];
+  contextMaterializationCommand: WorkspaceSemanticClient["vcsContextMaterializationCommand"];
+  forkContext: WorkspaceSemanticClient["vcsForkContext"];
+  dropContext: WorkspaceSemanticClient["vcsDropContext"];
+  appendLogEvent: WorkspaceSemanticClient["appendLogEvent"];
+  getLogEvent: WorkspaceSemanticClient["getLogEvent"];
+  inspectInvocationState: WorkspaceSemanticClient["inspectInvocationState"];
+};
+type RawWorkspaceSourceSemanticDispatchResult = Awaited<
+  ReturnType<WorkspaceSemanticClient[SemanticWireMethodName]>
+>;
+export type WorkspaceSourceSemanticEffect = Awaited<
+  ReturnType<WorkspaceSemanticClient["vcsPendingSemanticEffects"]>
+>[number];
+type PendingSemanticEffect = Extract<
+  RawWorkspaceSourceSemanticDispatchResult,
+  { kind: "effects-pending" }
+>["effects"][number];
+export type WorkspaceSourceHostReadRequest = Extract<
+  RawWorkspaceSourceSemanticDispatchResult,
+  { kind: "host-read" }
+>["request"];
+export type WorkspaceSourceHostContentRequest = Extract<
+  RawWorkspaceSourceSemanticDispatchResult,
+  { kind: "host-content" }
+>["request"];
+export type WorkspaceSourceSemanticDispatchResult =
+  | { kind: "complete"; result: unknown }
+  | {
+      kind: "effects-pending";
+      result: unknown;
+      effects: PendingSemanticEffect[];
+    }
+  | Extract<RawWorkspaceSourceSemanticDispatchResult, { kind: "host-read" | "host-content" }>;
 
 export function createWorkspaceSemanticPort(
   dispatch: Pick<DODispatch, "dispatch">,
   provider: WorkspaceSourceProviderRef
 ): WorkspaceSemanticPort {
-  const invoke = <T>(method: string, input: unknown): Promise<T> =>
-    dispatch.dispatch(provider, method, input) as Promise<T>;
-  const invokeNoArgs = <T>(method: string): Promise<T> =>
-    dispatch.dispatch(provider, method) as Promise<T>;
+  const client = createTypedServiceClient(
+    "workspaceSource",
+    gadWireMethods,
+    (_service, method, args) => dispatch.dispatch(provider, method, ...args)
+  );
   return {
-    contentGcRoots: () => invokeNoArgs("vcsContentGcRoots"),
-    referencesReachable: (input) => invoke("vcsReferencesReachable", input),
-    listContexts: (input) => invoke("vcsListContexts", input),
-    isStateDescendant: (input) => invoke("vcsIsStateDescendant", input),
-    getChannelEnvelope: (input) => invoke("getChannelEnvelope", input),
-    vcsEdit: (input) => invoke("vcsEdit", input),
-    vcsMove: (input) => invoke("vcsMove", input),
-    vcsCopy: (input) => invoke("vcsCopy", input),
-    vcsMerge: (input) => invoke("vcsMerge", input),
-    vcsRevert: (input) => invoke("vcsRevert", input),
-    vcsCommit: (input) => invoke("vcsCommit", input),
-    vcsDiscard: (input) => invoke("vcsDiscard", input),
-    vcsImportSnapshot: (input) => invoke("vcsImportSnapshot", input),
-    vcsRegisterExternalDelta: (input) => invoke("vcsRegisterExternalDelta", input),
-    vcsSupersedeExternalDelta: (input) => invoke("vcsSupersedeExternalDelta", input),
-    vcsFinalizeExternalDelta: (input) => invoke("vcsFinalizeExternalDelta", input),
-    vcsPush: (input) => invoke("vcsPush", input),
-    vcsStatus: (input) => invoke("vcsStatus", input),
-    vcsMainState: (input) => invoke("vcsMainState", input),
-    vcsCompare: (input) => invoke("vcsCompare", input),
-    vcsInspect: (input) => invoke("vcsInspect", input),
-    vcsNeighbors: (input) => invoke("vcsNeighbors", input),
-    vcsHistory: (input) => invoke("vcsHistory", input),
-    vcsBlame: (input) => invoke("vcsBlame", input),
-    vcsWalk: (input) => invoke("vcsWalk", input),
-    vcsQuery: (input) => invoke("vcsQuery", input),
-    vcsSearch: (input) => invoke("vcsSearch", input),
-    vcsReadMemory: (input) => invoke("vcsReadMemory", input),
-    vcsResolveRepository: (input) => invoke("vcsResolveRepository", input),
-    vcsReadFile: (input) => invoke("vcsReadFile", input),
-    vcsListDirectory: (input) => invoke("vcsListDirectory", input),
-    vcsListFiles: (input) => invoke("vcsListFiles", input),
-    semanticEffectAck: (input) => invoke("vcsSemanticEffectAck", input),
-    semanticHostReadAck: (input) => invoke("vcsSemanticHostReadAck", input),
-    semanticContentAck: (input) => invoke("vcsSemanticContentAck", input),
-    pendingSemanticEffects: () => invokeNoArgs("vcsPendingSemanticEffects"),
-    ensureContext: (input) => invoke("vcsEnsureContext", input),
-    contextMaterializationCommand: (input) => invoke("vcsContextMaterializationCommand", input),
-    forkContext: (input) => invoke("vcsForkContext", input),
-    dropContext: (input) => invoke("vcsDropContext", input),
-    appendLogEvent: (input) => invoke("appendLogEvent", input),
-    getLogEvent: (input) => invoke("getLogEvent", input),
-    inspectInvocationState: (input) => invoke("inspectInvocationState", input),
-  };
+    contentGcRoots: () => client.vcsContentGcRoots(),
+    referencesReachable: (input) => client.vcsReferencesReachable(input),
+    listContexts: (input) => client.vcsListContexts(input),
+    isStateDescendant: (input) => client.vcsIsStateDescendant(input),
+    getChannelEnvelope: async (input) => {
+      const envelope = await client.getChannelEnvelope(input);
+      return envelope ? { contentClass: envelope.contentClass } : null;
+    },
+    vcsEdit: (input) => client.vcsEdit(input),
+    vcsMove: (input) => client.vcsMove(input),
+    vcsCopy: (input) => client.vcsCopy(input),
+    vcsMerge: (input) => client.vcsMerge(input),
+    vcsRevert: (input) => client.vcsRevert(input),
+    vcsCommit: (input) => client.vcsCommit(input),
+    vcsDiscard: (input) => client.vcsDiscard(input),
+    vcsImportSnapshot: (input) => client.vcsImportSnapshot(input),
+    vcsRegisterExternalDelta: (input) => client.vcsRegisterExternalDelta(input),
+    vcsSupersedeExternalDelta: (input) => client.vcsSupersedeExternalDelta(input),
+    vcsFinalizeExternalDelta: (input) => client.vcsFinalizeExternalDelta(input),
+    vcsPush: (input) => client.vcsPush(input),
+    vcsStatus: (input) => client.vcsStatus(input),
+    vcsMainState: (input) => client.vcsMainState(input),
+    vcsCompare: (input) => client.vcsCompare(input),
+    vcsInspect: (input) => client.vcsInspect(input),
+    vcsNeighbors: (input) => client.vcsNeighbors(input),
+    vcsHistory: (input) => client.vcsHistory(input),
+    vcsBlame: (input) => client.vcsBlame(input),
+    vcsWalk: (input) => client.vcsWalk(input),
+    vcsQuery: (input) => client.vcsQuery(input),
+    vcsSearch: (input) => client.vcsSearch(input),
+    vcsReadMemory: (input) => client.vcsReadMemory(input),
+    vcsResolveRepository: (input) => client.vcsResolveRepository(input),
+    vcsReadFile: (input) => client.vcsReadFile(input),
+    vcsListDirectory: (input) => client.vcsListDirectory(input),
+    vcsListFiles: (input) => client.vcsListFiles(input),
+    semanticEffectAck: (input) => client.vcsSemanticEffectAck(input),
+    semanticHostReadAck: (input) => client.vcsSemanticHostReadAck(input),
+    semanticContentAck: (input) => client.vcsSemanticContentAck(input),
+    pendingSemanticEffects: () => client.vcsPendingSemanticEffects(),
+    ensureContext: (input) => client.vcsEnsureContext(input),
+    contextMaterializationCommand: (input) => client.vcsContextMaterializationCommand(input),
+    forkContext: (input) => client.vcsForkContext(input),
+    dropContext: (input) => client.vcsDropContext(input),
+    appendLogEvent: (input) => client.appendLogEvent(input),
+    getLogEvent: (input) => client.getLogEvent(input),
+    inspectInvocationState: (input) => client.inspectInvocationState(input),
+  } satisfies WorkspaceSemanticPort;
 }
 
 export function createWorkspaceSourceProviderV1(
   dispatch: Pick<DODispatch, "dispatch">,
   provider: WorkspaceSourceProviderRef
 ): WorkspaceSourceProviderV1 {
-  const invoke = <T>(method: string, input: unknown): Promise<T> =>
-    dispatch.dispatch(provider, method, input) as Promise<T>;
-  const invokeNoArgs = <T>(method: string): Promise<T> =>
-    dispatch.dispatch(provider, method) as Promise<T>;
+  const client = createTypedServiceClient(
+    "workspaceSource",
+    gadWireMethods,
+    (_service, method, args) => dispatch.dispatch(provider, method, ...args)
+  );
   return {
-    readTemplateInstallation: (input) => invoke("workspaceSourceTemplateInstallation", input),
-    initializeExactSnapshot: (input) => invoke("workspaceSourceInitializeExactSnapshot", input),
-    resolveSource: (input) => invoke("workspaceSourceResolve", input),
-    currentSource: () => invokeNoArgs("workspaceSourceCurrent"),
-    inspectInitialization: () => invokeNoArgs("workspaceSourceInspectInitialization"),
-    health: () => invokeNoArgs("workspaceSourceHealth"),
-  };
+    readTemplateInstallation: (input) => client.workspaceSourceTemplateInstallation(input),
+    initializeExactSnapshot: (input) => {
+      const { acknowledgement, ...snapshot } = input;
+      return client.workspaceSourceInitializeExactSnapshot({
+        ...snapshot,
+        installation: WorkspaceTemplateInstallationSchema.parse(input.installation),
+        ...(acknowledgement
+          ? {
+              acknowledgement: {
+                ...acknowledgement,
+                receipt: GadJsonRecordSchema.parse(acknowledgement.receipt),
+              },
+            }
+          : {}),
+        repositories: input.repositories.map((repository) => ({
+          ...repository,
+          files: repository.files.map((file) => ({ ...file })),
+        })),
+      });
+    },
+    resolveSource: (input) => client.workspaceSourceResolve(input),
+    currentSource: () => client.workspaceSourceCurrent(),
+    inspectInitialization: () => client.workspaceSourceInspectInitialization(),
+    health: () => client.workspaceSourceHealth(),
+  } satisfies WorkspaceSourceProviderV1;
 }
 
 export interface ExactCausalInvocationFact {

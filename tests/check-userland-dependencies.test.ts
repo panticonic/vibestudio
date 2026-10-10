@@ -103,13 +103,18 @@ describe("collectStartupHostReuseFindings", () => {
       );
       fs.writeFileSync(
         path.join(base, "panels", "chat", "package.json"),
-        JSON.stringify({ name: "@workspace-panels/chat", dependencies: { zod: "^3.25.76" } })
+        JSON.stringify({
+          name: "@workspace-panels/chat",
+          dependencies: { zod: "^3.25.76" },
+          peerDependencies: { electron: "^45.0.0" },
+          peerDependenciesMeta: { electron: { optional: true } },
+        })
       );
       fs.writeFileSync(
         path.join(base, "workers", "agent-worker", "package.json"),
         JSON.stringify({
           name: "@workspace-workers/agent-worker",
-          dependencies: { "@sinclair/typebox": "^0.27.12" },
+          peerDependencies: { "@sinclair/typebox": "^0.27.12" },
         })
       );
       fs.writeFileSync(
@@ -143,6 +148,26 @@ describe("collectStartupHostReuseFindings", () => {
         })
       );
       await expect(collectStartupHostReuseFindings(host, base)).resolves.toEqual([]);
+
+      fs.writeFileSync(
+        path.join(host, "package.json"),
+        JSON.stringify({
+          dependencies: {
+            react: "^19.0.0",
+            zod: "^3.25.76",
+            "@sinclair/typebox": "^0.27.12",
+            electron: "^44.0.0",
+          },
+        })
+      );
+      await expect(collectStartupHostReuseFindings(host, base)).resolves.toEqual([
+        {
+          unitPath: "panels/chat",
+          missing: [],
+          incompatible: ["electron@^44.0.0 (Base accepts ^45.0.0)"],
+          policies: [],
+        },
+      ]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

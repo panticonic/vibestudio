@@ -494,7 +494,11 @@
       },
       "observeDevices": {
         "authority": {
-          "inherits": true
+          "principals": [
+            "user",
+            "host",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "read"

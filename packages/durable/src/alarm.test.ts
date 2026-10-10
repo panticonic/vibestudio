@@ -1,3 +1,4 @@
+import { dispatchRpcCall } from "@vibestudio/rpc/internal";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeRpcJson, rpcMethodAuthority } from "@vibestudio/rpc";
 import type { ResidentChannelDeliveryInput } from "@vibestudio/shared/residentSession";
@@ -70,7 +71,9 @@ class AlarmProbeDO extends DurableObjectBase {
     const released = new Promise<void>((resolve) => {
       this.releaseDeferred = resolve;
     });
-    this.deferredOutbound = released.then(() => this.rpc.call("main", "probe.deferred", []));
+    this.deferredOutbound = released.then(() =>
+      dispatchRpcCall(this.rpc, "main", "probe.deferred", [])
+    );
     this.ctx.waitUntil?.(this.deferredOutbound);
     return "deferred";
   }
@@ -83,7 +86,7 @@ class AlarmProbeDO extends DurableObjectBase {
     sensitivity: "write",
   })
   startOutbound(throwAfterStart = false): string {
-    void this.rpc.call("main", "probe.immediate", []);
+    void dispatchRpcCall(this.rpc, "main", "probe.immediate", []);
     if (throwAfterStart) throw new Error("parent failed after starting child");
     return "started";
   }
@@ -157,7 +160,7 @@ class AsyncWakeProbeDO extends AlarmProbeDO {
   }
 
   startWakeChild(): void {
-    void this.rpc.call("main", "probe.wake", []);
+    void dispatchRpcCall(this.rpc, "main", "probe.wake", []);
   }
 
   observedCallerId(): string | null {
@@ -169,6 +172,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function assertTestDOCallTypes(
+  fixture: Awaited<ReturnType<typeof createTestDO<typeof AlarmProbeDO>>>
+) {
+  const scheduled: Promise<string> = fixture.call("schedule", 100);
+  const unknownMethod: Promise<unknown> = fixture.call("notAReceiverMethod");
+  void scheduled;
+  void unknownMethod;
+  // @ts-expect-error Result types come from the method table, never the caller.
+  const callerChosenResult: Promise<string> = fixture.call<string>("schedule", 100);
+  void callerChosenResult;
+}
+void assertTestDOCallTypes;
+
 describe("DurableObjectBase alarm dispatch", () => {
   it("reports both handler and persistence failures while preserving the handler's typed cause", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -176,12 +192,18 @@ describe("DurableObjectBase alarm dispatch", () => {
     );
     const { call, db } = await createTestDO(AlarmProbeDO);
     try {
-      await expect(call("failAfterScheduling")).rejects.toMatchObject({
-        message: expect.stringMatching(/Handler failed after scheduling.*Alarm owner unavailable/s),
+      const failure = await call("failAfterScheduling").catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      const combined = failure as AggregateError;
+      expect(combined.errors).toHaveLength(2);
+      expect(combined.cause).toBe(combined.errors[0]);
+      expect(combined.errors[0]).toMatchObject({
+        message: "Handler failed after scheduling",
         code: "HANDLER_FAILED",
         errorKind: "service",
         errorData: { operation: "schedule" },
       });
+      expect(combined.errors[1].message).toContain("Alarm owner unavailable");
     } finally {
       db.close();
     }
@@ -259,7 +281,11 @@ describe("DurableObjectBase alarm dispatch", () => {
       expect(settled).toBe(false);
       release();
       await expect(terminal).resolves.toMatchObject({
-        message: { type: "response", requestId: "cancel-owned", error: expect.any(String) },
+        message: {
+          type: "response",
+          requestId: "cancel-owned",
+          error: { message: expect.any(String) },
+        },
       });
     } finally {
       release();
@@ -496,7 +522,9 @@ describe("DurableObjectBase alarm dispatch", () => {
         })
       );
       expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toMatchObject({ error: original.message });
+      await expect(response.json()).resolves.toMatchObject({
+        error: { message: original.message },
+      });
     } finally {
       db.close();
     }
@@ -634,13 +662,15 @@ describe("DurableObjectBase alarm dispatch", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       message: {
-        errorCode: "EACCES",
-        errorKind: "access",
-        error: expect.stringMatching(/host attestation required/),
-        errorData: {
-          authorityFailure: {
-            reasonCode: "attestation-invalid",
-            remediation: { kind: "retry-through-host" },
+        error: {
+          code: "EACCES",
+          errorKind: "access",
+          message: expect.stringMatching(/host attestation required/),
+          errorData: {
+            authorityFailure: {
+              reasonCode: "attestation-invalid",
+              remediation: { kind: "retry-through-host" },
+            },
           },
         },
       },
@@ -684,13 +714,15 @@ describe("DurableObjectBase alarm dispatch", () => {
     expect(replay.status).toBe(200);
     await expect(replay.json()).resolves.toMatchObject({
       message: {
-        errorCode: "EACCES",
-        errorKind: "access",
-        error: expect.stringMatching(/replayed/),
-        errorData: {
-          authorityFailure: {
-            reasonCode: "attestation-invalid",
-            remediation: { kind: "retry-through-host" },
+        error: {
+          code: "EACCES",
+          errorKind: "access",
+          message: expect.stringMatching(/replayed/),
+          errorData: {
+            authorityFailure: {
+              reasonCode: "attestation-invalid",
+              remediation: { kind: "retry-through-host" },
+            },
           },
         },
       },

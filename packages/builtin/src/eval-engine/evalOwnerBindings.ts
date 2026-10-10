@@ -87,7 +87,7 @@ export interface ChatBinding {
   focusMessage: (messageId: string) => Promise<boolean>;
   contextId: string;
   channelId: string | null;
-  rpc: { call: (target: string, method: string, args: unknown[]) => Promise<unknown> };
+  rpc: import("@vibestudio/rpc").RpcCaller;
 }
 
 type CallFn = (target: string, method: string, callArgs: unknown[]) => Promise<unknown>;
@@ -100,7 +100,11 @@ type CallFn = (target: string, method: string, callArgs: unknown[]) => Promise<u
  * `agent` setters funnel through the server-validated `configureAgent` and apply
  * across all the agent's channels. Pure (given `call`).
  */
-export function buildOwnerBindings(args: OwnerBindingArgs, call: CallFn): Record<string, unknown> {
+export function buildOwnerBindings(
+  args: OwnerBindingArgs,
+  call: CallFn,
+  rpc: import("@vibestudio/rpc").RpcCaller
+): Record<string, unknown> {
   if (!args.channelId || !args.agentRef) return {};
   const { channelId, agentRef } = args;
   const op =
@@ -128,7 +132,7 @@ export function buildOwnerBindings(args: OwnerBindingArgs, call: CallFn): Record
     focusMessage: op("focusMessage") as ChatBinding["focusMessage"],
     contextId: args.contextId ?? "",
     channelId,
-    rpc: { call },
+    rpc,
   };
   const configure = op("configureAgent");
   const agent = {

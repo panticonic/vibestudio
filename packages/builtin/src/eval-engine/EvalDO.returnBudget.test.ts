@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { createTestDO } from "@vibestudio/durable/test-utils";
+import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
 import { EVAL_RESULT_RETURN_PREVIEW_CHARS } from "@vibestudio/service-schemas/eval";
 import { EvalDO } from "./EvalDO.js";
 
@@ -24,10 +24,7 @@ const imageOwner = (runId: string, data: string): string =>
   `eval-result:${runId}:${createHash("sha256").update(data, "base64").digest("hex")}`;
 
 async function artifactFixture() {
-  const fixture = await createTestDO(EvalDO);
-  Object.defineProperty(fixture.instance, "rpc", {
-    value: { call: vi.fn(async () => undefined) },
-  });
+  const fixture = await createTestDO(EvalDO, { RPC_FETCH: successfulTestRpcFetch });
   return fixture;
 }
 

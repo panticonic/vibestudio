@@ -1,3 +1,5 @@
+import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
+import { schemaRpcStream } from "@vibestudio/rpc/internal";
 import { RpcBoundaryError } from "@vibestudio/rpc/errors";
 import { CLOSE_TOKEN_REVOKED } from "@vibestudio/rpc/protocol/closeCodes";
 import { problemReportingConversation } from "@vibestudio/shared/problemReportingConversation";
@@ -2300,9 +2302,11 @@ app.on("ready", async () => {
       const session = assertPresent(serverSession);
       const [workspaceConnection, members] = await Promise.all([
         connection,
-        session.hubControlClient.call("hubControl", "listWorkspaces", []) as Promise<
-          import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[]
-        >,
+        createTypedServiceClient(
+          "hubControl",
+          hubControlMethods,
+          session.hubControlClient.call.bind(session.hubControlClient)
+        ).listWorkspaces(),
       ]);
       const membership = members.find((entry) => entry.workspaceId === id);
       if (!membership)
@@ -2853,9 +2857,11 @@ app.on("ready", async () => {
       resolveWorkspace: async (id) => testOwner(await ensureDesktopWorkspace(id)),
       getServerConnectionStatus: () => conn.serverClient.getConnectionStatus(),
       listWorkspaces: () =>
-        conn.hubControlClient.call("hubControl", "listWorkspaces", []) as Promise<
-          import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[]
-        >,
+        createTypedServiceClient(
+          "hubControl",
+          hubControlMethods,
+          conn.hubControlClient.call.bind(conn.hubControlClient)
+        ).listWorkspaces(),
     });
     setMenuWorkspaceResolver(() => {
       const id = applicationWindow.focusedWorkspace;
@@ -2907,7 +2913,7 @@ app.on("ready", async () => {
     // Native workspace lifetime follows the authenticated catalog, independently
     // of which UI happens to list or select workspaces.
     const catalogEvents = new EventsClient({
-      stream: (_target, method, args, options) => {
+      stream: schemaRpcStream((_target, method, args, options) => {
         const separator = method.indexOf(".");
         return conn.hubControlClient.stream(
           method.slice(0, separator),
@@ -2915,7 +2921,7 @@ app.on("ready", async () => {
           args,
           options
         );
-      },
+      }),
     });
     let catalogClosed = false;
     let catalogTail = Promise.resolve();

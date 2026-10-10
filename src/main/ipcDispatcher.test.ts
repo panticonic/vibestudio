@@ -1,3 +1,4 @@
+import { createInternalRpcClient as createRpcClient } from "@vibestudio/rpc/internal";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -7,7 +8,7 @@ import {
 } from "@vibestudio/shared/serviceDispatcher";
 import { panelMethods } from "@vibestudio/service-schemas/panel";
 import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
-import { base64ToBytes, createRpcClient } from "@vibestudio/rpc";
+import { base64ToBytes } from "@vibestudio/rpc";
 import { FRAME_DATA, FRAME_HEAD } from "@vibestudio/rpc/protocol/streamCodec";
 import { EventService } from "@vibestudio/shared/eventsService";
 import { createEventsServiceDefinition } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
@@ -71,7 +72,10 @@ function expectSentRpcMessage(
     expect.objectContaining({
       from: "main",
       target,
-      message,
+      message: expect.objectContaining({
+        ...message,
+        ...("error" in message ? { error: expect.objectContaining(message.error) } : {}),
+      }),
     })
   );
 }
@@ -184,9 +188,11 @@ describe("IpcDispatcher", () => {
       expectSentRpcMessage(shell, "shell", {
         type: "response",
         requestId: "req-reporting-forwarded",
-        error: "Unexpected host failure",
-        errorKind: "internal",
-        diagnosticId: observed.mock.calls[0]?.[0].diagnosticId,
+        error: {
+          message: "Unexpected host failure",
+          errorKind: "internal",
+          diagnosticId: observed.mock.calls[0]?.[0].diagnosticId,
+        },
       })
     );
   });
@@ -343,7 +349,9 @@ describe("IpcDispatcher", () => {
           delivery: expect.objectContaining({
             caller: expect.objectContaining({ workspaceId: "project" }),
           }),
-          message: expect.objectContaining({ error: "Membership revoked", errorKind: "access" }),
+          message: expect.objectContaining({
+            error: expect.objectContaining({ message: "Membership revoked", errorKind: "access" }),
+          }),
         })
       )
     );
@@ -407,13 +415,11 @@ describe("IpcDispatcher", () => {
       expect(response?.delivery.caller).not.toHaveProperty("workspaceId");
       if (responseType === "response") {
         expect(response?.message).toMatchObject({
-          error: "This renderer is not admitted as hub UI",
-          errorKind: "access",
+          error: { message: "This renderer is not admitted as hub UI", errorKind: "access" },
         });
       } else {
         expect(JSON.parse((response?.message as { payload: string }).payload)).toMatchObject({
-          message: "This renderer is not admitted as hub UI",
-          errorKind: "access",
+          error: { message: "This renderer is not admitted as hub UI", errorKind: "access" },
         });
       }
     });
@@ -586,9 +592,11 @@ describe("IpcDispatcher", () => {
       expectSentRpcMessage(contents, "shell-app", {
         type: "response",
         requestId: "unavailable",
-        error: "Workspace server is temporarily unavailable",
-        errorKind: "transport",
-        errorCode: "CONNECTION_LOST",
+        error: {
+          message: "Workspace server is temporarily unavailable",
+          errorKind: "transport",
+          code: "CONNECTION_LOST",
+        },
       })
     );
     await ipcDispatcher.shutdown();
@@ -633,13 +641,18 @@ describe("IpcDispatcher", () => {
       )
     ).resolves.toBeUndefined();
 
-    expect(contents.send).toHaveBeenCalledWith("vibestudio:rpc:stream-message", {
-      kind: "error",
-      opId: "op-unavailable",
-      message: "Workspace server is temporarily unavailable",
-      errorKind: "transport",
-      code: "CONNECTION_LOST",
-    });
+    expect(contents.send).toHaveBeenCalledWith(
+      "vibestudio:rpc:stream-message",
+      expect.objectContaining({
+        kind: "error",
+        opId: "op-unavailable",
+        error: expect.objectContaining({
+          message: "Workspace server is temporarily unavailable",
+          errorKind: "transport",
+          code: "CONNECTION_LOST",
+        }),
+      })
+    );
     await ipcDispatcher.shutdown();
   });
 
@@ -1045,11 +1058,13 @@ describe("IpcDispatcher", () => {
       expectSentRpcMessage(appWc, "@workspace-apps/shell", {
         type: "response",
         requestId: "req-review-pending",
-        error: "Waiting for you to finish reviewing",
-        errorKind: "internal",
-        errorCode: "EREVIEWPENDING",
-        errorData,
-        diagnosticId: expect.any(String),
+        error: {
+          message: "Waiting for you to finish reviewing",
+          errorKind: "internal",
+          code: "EREVIEWPENDING",
+          errorData,
+          diagnosticId: expect.any(String),
+        },
       });
     });
   });
@@ -1263,8 +1278,7 @@ describe("IpcDispatcher", () => {
       expectSentRpcMessage(appWc, "@workspace-apps/shell", {
         type: "response",
         requestId: "req-fs-denied",
-        error: "fs.readFile requires app capability 'fs-read'",
-        errorKind: "access",
+        error: { message: "fs.readFile requires app capability 'fs-read'", errorKind: "access" },
       });
     });
     expect(authorizeAppServerCall).toHaveBeenCalledWith("@workspace-apps/shell", "fs", "readFile", [
@@ -1609,9 +1623,11 @@ describe("IpcDispatcher", () => {
         expectSentRpcMessage(panelWc, "panel-1", {
           type: "response",
           requestId: "unavailable",
-          error: "Workspace server is temporarily unavailable",
-          errorKind: "transport",
-          errorCode: "CONNECTION_LOST",
+          error: {
+            message: "Workspace server is temporarily unavailable",
+            errorKind: "transport",
+            code: "CONNECTION_LOST",
+          },
         })
       );
       expect(openPanelSession).toHaveBeenCalledOnce();
@@ -1653,9 +1669,11 @@ describe("IpcDispatcher", () => {
         expectSentRpcMessage(panelWc, "panel-1", {
           type: "response",
           requestId: "leased",
-          error: "Panel runtime is leased by Desktop",
-          errorKind: "transport",
-          errorCode: "panel_runtime_leased",
+          error: {
+            message: "Panel runtime is leased by Desktop",
+            errorKind: "transport",
+            code: "panel_runtime_leased",
+          },
         })
       );
       expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("panel relay failed"));
@@ -2102,7 +2120,9 @@ describe("IpcDispatcher", () => {
           expect.objectContaining({
             kind: "error",
             opId: "op-1",
-            message: expect.stringContaining("unavailable on this panel's host session"),
+            error: expect.objectContaining({
+              message: expect.stringContaining("unavailable on this panel's host session"),
+            }),
           })
         );
       });

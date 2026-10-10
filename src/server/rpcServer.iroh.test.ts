@@ -1,3 +1,4 @@
+import { createInternalRpcClient as createRpcClient } from "@vibestudio/rpc/internal";
 import {
   bindNodeEndpoint,
   configureNodeConnection,
@@ -5,7 +6,7 @@ import {
   NodePhysicalConnection,
   VIBESTUDIO_IROH_ALPN,
 } from "@vibestudio/iroh-transport/node";
-import { createRpcClient } from "@vibestudio/rpc";
+
 import { createIrohClientPipe } from "@vibestudio/rpc/transports/irohClient";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
@@ -115,10 +116,13 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
     // old 8 MiB metadata-frame ceiling, and it cannot head-of-line block an
     // independent request on another stream.
     const [receivedLarge, concurrentEcho] = await Promise.all([
-      rpc.call<string>("main", "test.large", []),
-      rpc.call<string>("main", "test.echo", ["concurrent"]),
+      rpc.call("main", "test.large", []),
+      rpc.call("main", "test.echo", ["concurrent"]),
     ]);
     expect(receivedLarge).toHaveLength(largeResult.length);
+    expect(typeof receivedLarge).toBe("string");
+    if (typeof receivedLarge !== "string")
+      throw new Error("Expected the large wire result to be text");
     expect(receivedLarge.startsWith("large:")).toBe(true);
     expect(concurrentEcho).toBe("concurrent");
     expect(redeemPairingCredential).toHaveBeenCalledWith(

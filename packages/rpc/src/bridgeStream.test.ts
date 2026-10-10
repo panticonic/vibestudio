@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { RpcEnvelope } from "./types.js";
 import type { DecodedFramedStream } from "./protocol/streamCodec.js";
 import { bytesToBase64 } from "./base64.js";
-import { isRpcConnectionLost, RemoteRpcError } from "./errors.js";
+import { isRpcAborted, isRpcConnectionLost, RemoteRpcError } from "./errors.js";
 import {
   createBridgeBodyReassembler,
   createBridgeStreamRelay,
@@ -268,7 +268,7 @@ describe("createBridgeStreamRelay", () => {
     await vi.waitFor(() => expect(sent.at(-1)?.kind).toBe("error"));
     expect(sent.at(-1)).toMatchObject({
       kind: "error",
-      message: expect.stringContaining("require a native duplex transport"),
+      error: { message: expect.stringContaining("require a native duplex transport") },
     });
     expect(relay.size()).toBe(0);
   });
@@ -503,8 +503,11 @@ describe("openBridgeUploadStream ↔ relay (in-memory bridge)", () => {
       endlessBody
     );
     await vi.waitFor(() => expect(hostSignal).not.toBeNull());
-    controller.abort();
-    await expect(pending).rejects.toThrow(/aborted/);
+    const reason = new Error("observation owner failed");
+    controller.abort(reason);
+    const failure = await pending.catch((error: unknown) => error);
+    expect(isRpcAborted(failure)).toBe(true);
+    expect((failure as Error & { cause?: unknown }).cause).toBe(reason);
     expect(hostSignal!.aborted).toBe(true);
     await vi.waitFor(() => expect(relay.size()).toBe(0));
   });
@@ -512,10 +515,77 @@ describe("openBridgeUploadStream ↔ relay (in-memory bridge)", () => {
   it("throws immediately on a pre-aborted signal", async () => {
     const { surface } = connect(async () => decodedResponse(bytes()));
     const controller = new AbortController();
-    controller.abort();
-    await expect(
-      openBridgeUploadStream(surface, streamRequestEnvelope(), controller.signal, bodyStreamOf())
-    ).rejects.toThrow(/aborted/);
+    const reason = new Error("observation owner failed before opening");
+    controller.abort(reason);
+    const failure = await openBridgeUploadStream(
+      surface,
+      streamRequestEnvelope(),
+      controller.signal,
+      bodyStreamOf()
+    ).catch((error: unknown) => error);
+    expect(isRpcAborted(failure)).toBe(true);
+    expect((failure as Error & { cause?: unknown }).cause).toBe(reason);
+  });
+
+  it("fails a live response body with its caller abort reason and joins upload cleanup", async () => {
+    let cancelReason: unknown;
+    const body = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    });
+    const { surface, relay } = connect(async () => ({
+      status: 200,
+      statusText: "OK",
+      headers: [],
+      finalUrl: "http://gateway/x",
+      body: new ReadableStream<Uint8Array>({}),
+    }));
+    const controller = new AbortController();
+    const response = await openBridgeUploadStream(
+      surface,
+      streamRequestEnvelope(),
+      controller.signal,
+      body
+    );
+    const read = response.body!.getReader().read();
+    const reason = new Error("observation owner failed after response head");
+    controller.abort(reason);
+    const failure = await read.catch((error: unknown) => error);
+    expect(isRpcAborted(failure)).toBe(true);
+    expect((failure as Error & { cause?: unknown }).cause).toBe(reason);
+    await vi.waitFor(() => expect(cancelReason).toBeDefined());
+    expect(isRpcAborted(cancelReason)).toBe(true);
+    expect((cancelReason as Error & { cause?: unknown }).cause).toBe(reason);
+    await vi.waitFor(() => expect(relay.size()).toBe(0));
+  });
+
+  it("preserves response-body cancel reasons and cancels the owned upload reader", async () => {
+    let cancelReason: unknown;
+    const body = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    });
+    const { surface, relay } = connect(async () => ({
+      status: 200,
+      statusText: "OK",
+      headers: [],
+      finalUrl: "http://gateway/x",
+      body: new ReadableStream<Uint8Array>({}),
+    }));
+    const response = await openBridgeUploadStream(
+      surface,
+      streamRequestEnvelope(),
+      null,
+      body
+    );
+    const reason = new Error("response consumer stopped");
+    await response.body?.cancel(reason);
+    await vi.waitFor(() => expect(cancelReason).toBeDefined());
+    expect(isRpcAborted(cancelReason)).toBe(true);
+    expect((cancelReason as Error & { cause?: unknown }).cause).toBe(reason);
+    await vi.waitFor(() => expect(relay.size()).toBe(0));
   });
 });
 
@@ -540,9 +610,11 @@ describe("openBridgeStream head rejection ownership", () => {
           handler?.({
             kind: "error",
             opId: message.opId,
-            message: "Workspace server is temporarily unavailable",
-            errorKind: "transport",
-            code: "CONNECTION_LOST",
+            error: {
+              message: "Workspace server is temporarily unavailable",
+              errorKind: "transport",
+              code: "CONNECTION_LOST",
+            },
           } as BridgeStreamMessage);
           // The open round-trip completes a turn later, as real IPC does.
           await new Promise((resolve) => setTimeout(resolve, 5));

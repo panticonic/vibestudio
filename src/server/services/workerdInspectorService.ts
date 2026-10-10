@@ -1,3 +1,4 @@
+import { workerdInspectorMethods as methods } from "@vibestudio/service-schemas/workerdInspector";
 /**
  * workerdInspector service — approval-gated userland access to the workerd
  * V8 inspector for profiling workers and Durable Objects.
@@ -8,18 +9,14 @@
  * the panelCdp model. The inspector socket itself binds loopback and is only
  * reachable through the WorkerdInspectorBridge with a single-use grant token.
  */
-import { z } from "zod";
 import {
   fixedPreparedAuthoritySelection,
   type ServiceDefinition,
 } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import { fixedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { WorkerdInspectorTarget } from "../workerdInspectorBridge.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
-import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 
 export const WORKERD_INSPECTOR_CAPABILITY = "runtime.inspect";
@@ -37,72 +34,6 @@ export interface WorkerdInspectorServiceDeps {
 export function createWorkerdInspectorService(
   deps: WorkerdInspectorServiceDeps
 ): ServiceDefinition {
-  const methods = defineServiceMethods({
-    listTargets: {
-      website: {
-        kind: "closed",
-        reason:
-          "The workerdInspectorService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
-      } as const,
-      tier: {
-        tier: "open",
-        session: "family",
-        residency: "observability",
-        family: "workerdInspector.read",
-        rationale: "Read-only discovery of inspectable processes; attaching remains gated",
-      },
-      args: z.tuple([]),
-      access: { sensitivity: "read" as const },
-    },
-    getEndpoint: {
-      website: {
-        kind: "closed",
-        reason:
-          "The workerdInspectorService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
-      } as const,
-      capability: "runtime.inspect",
-      tier: {
-        tier: "open",
-        session: "family",
-        residency: "observability",
-        family: "workerdInspector.read",
-        rationale:
-          "The transport is open; non-chrome code receives one prepared gated runtime.inspect leaf",
-      },
-      presentation: {
-        title: "Inspect workspace runtimes",
-        action: "inspect workspace runtimes",
-        description: "Allows {requesterKind} to inspect workspace runtimes.",
-        group: "runtime",
-        authorityCategory: {
-          domain: "computer",
-          verb: "see",
-        },
-      },
-      args: z.tuple([z.string()]),
-      authority: {
-        requirement: requirementForPrincipals(
-          ["user", "host", "code"],
-          WORKERD_INSPECTOR_CAPABILITY
-        ),
-        resource: { kind: "literal" as const, key: WORKERD_INSPECTOR_CAPABILITY },
-        prepared: {
-          resolver: WORKERD_INSPECTOR_AUTHORITY_RESOLVER,
-          leaves: [
-            {
-              capability: WORKERD_INSPECTOR_CAPABILITY,
-              requirement: fixedPreparedAuthorityRequirement(
-                requirementForPrincipals(["code"], WORKERD_INSPECTOR_CAPABILITY)
-              ),
-              tier: "gated" as const,
-            },
-          ],
-        },
-      },
-      access: { sensitivity: "admin" as const },
-    },
-  });
-
   return {
     name: "workerdInspector",
     description: "Approval-gated workerd V8 inspector access for profiling workers and DOs",

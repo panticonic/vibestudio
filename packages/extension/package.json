@@ -18,6 +18,7 @@
     "build": "tsc --project tsconfig.build.json"
   },
   "dependencies": {
+    "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@vibestudio/unit-host": "workspace:*"

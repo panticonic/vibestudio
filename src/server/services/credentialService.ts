@@ -88,7 +88,7 @@ import { throwIfAborted } from "./credentialMechanisms/async.js";
 import { OAuthConnectionError } from "./credentialMechanisms/errors.js";
 import { basicAuthHeader } from "./credentialMechanisms/oauth2.js";
 import { normalizeAccountIdentity } from "./credentialMechanisms/tokens.js";
-import { isRpcAborted } from "@vibestudio/rpc";
+import { isRpcAbortedBy } from "@vibestudio/rpc";
 import {
   buildCredentialRuntimeIndex,
   findNearestCredentialPanelEntity,
@@ -1595,8 +1595,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         taskFailures.push({
           error,
           aggregateCancellation:
-            controller.signal.aborted &&
-            (isRpcAborted(error) || error === controller.signal.reason),
+            controller.signal.aborted && isRpcAbortedBy(error, controller.signal.reason),
         });
         rejectChange(error);
         throw error;

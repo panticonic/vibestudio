@@ -48,13 +48,7 @@ export function encodeWebSocketStreamFrame(
       break;
     case "error":
       frameType = FRAME_ERROR;
-      payload = JSON.stringify({
-        status: frame.status,
-        message: frame.message,
-        code: frame.code,
-        errorKind: frame.errorKind,
-        ...(frame.errorData === undefined ? {} : { errorData: frame.errorData }),
-      });
+      payload = JSON.stringify({ status: frame.status, error: frame.error });
       break;
   }
   return {

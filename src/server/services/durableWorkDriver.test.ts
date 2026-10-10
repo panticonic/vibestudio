@@ -329,7 +329,7 @@ describe("DurableWorkDriver", () => {
             );
           });
         }
-        return { readyQueues: [] };
+        return { readyQueues: [], nextRecoveryAt: null };
       }
     );
     const scanReadyOwners = createDurableWorkOwnerScanner(
@@ -383,7 +383,8 @@ describe("DurableWorkDriver", () => {
         maxActive = Math.max(maxActive, active);
         await new Promise((resolve) => setTimeout(resolve, 5));
         active--;
-        return { readyQueues: ["workspace-publication"] };
+        if (method === "adoptDurableWorkWorker") return { adopted: true, previousWorkerId: null };
+        return { readyQueues: ["workspace-publication"], nextRecoveryAt: null };
       }
     );
     const scan = createDurableWorkOwnerScanner(

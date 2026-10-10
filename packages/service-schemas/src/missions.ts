@@ -1,3 +1,5 @@
+import type { MissionExecution } from "@vibestudio/automation/mission";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
 import {
   operationIntentSchema,
   agentActionSchema,
@@ -8,7 +10,9 @@ import { defineReceiverServiceMethods } from "@vibestudio/shared/typedServiceCli
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/u);
-const missionSubject = z.string().regex(/^mission:[^@]+@[0-9a-f]{64}$/u);
+const missionSubject = z
+  .string()
+  .regex(/^mission:[^@]+@[0-9a-f]{64}$/u) as z.ZodType<`mission:${string}@${string}`>;
 const stateRef = z.string().regex(/^state:[0-9a-f]{64}$/u) as z.ZodType<`state:${string}`>;
 const authorityPlanRef = z
   .string()
@@ -34,7 +38,7 @@ export const authorityPlanReferenceSchema = z
   })
   .strict();
 
-export const missionExecutionSchema = z.discriminatedUnion("kind", [
+export const missionExecutionSchema: z.ZodType<MissionExecution> = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("method"),
@@ -456,7 +460,11 @@ export const missionsMethods = defineReceiverServiceMethods({
   },
 });
 
-function read(description: string, args: z.ZodTypeAny, returns: z.ZodTypeAny) {
+function read<A extends z.ZodTypeAny, R extends z.ZodTypeAny>(
+  description: string,
+  args: A,
+  returns: R
+) {
   return {
     website: {
       kind: "closed",
@@ -535,3 +543,5 @@ function lifecycle(title: string, action: string) {
     agentFacing: true,
   };
 }
+
+export const missionsRpcMethods = createRpcMethods("missions", missionsMethods, "");

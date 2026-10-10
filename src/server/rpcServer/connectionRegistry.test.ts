@@ -1,5 +1,6 @@
+import { type RpcWireClient as RpcClient } from "@vibestudio/rpc/internal";
 import { describe, expect, it, vi } from "vitest";
-import type { RpcClient } from "@vibestudio/rpc";
+
 import { createVerifiedCaller, type CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { WebSocket } from "ws";
 import type { SessionServerTransportInternal } from "../sessionServerTransport.js";

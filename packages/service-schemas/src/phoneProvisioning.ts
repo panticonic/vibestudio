@@ -1,3 +1,4 @@
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
 /** Desktop-owned phone discovery, installation, and secure pairing launch. */
 
 import { z } from "zod";
@@ -230,3 +231,9 @@ export const phoneProvisioningMethods = defineReceiverServiceMethods({
     },
   },
 });
+
+export const phoneProvisioningRpcMethods = createRpcMethods(
+  "phoneProvisioning",
+  phoneProvisioningMethods,
+  ""
+);

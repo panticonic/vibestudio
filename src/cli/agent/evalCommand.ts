@@ -1,3 +1,4 @@
+import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 /**
  * `vibestudio eval ...` — run TypeScript/JavaScript server-side in the CLI
  * session's EvalDO, via the `eval` service. The paired shell credential is the
@@ -184,7 +185,12 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
       onError: rejectAutoApproval,
     });
     {
-      const events = new EventsClient(client);
+      const events = new EventsClient(
+        schemaRpcCaller({
+          call: client.callTarget.bind(client),
+          stream: client.stream.bind(client),
+        })
+      );
       const removeApprovalListener = events.on("shell-approval:pending-changed", ({ pending }) => {
         autoApprover.observePending(pending);
         for (const approval of pending) {
@@ -275,10 +281,7 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
       }
     }
     const abort = new AbortController();
-    const executeEval = createEvalExecutor(
-      <T>(method: string, args: unknown[]) => client.call<T>(method, args),
-      { signal: abort.signal }
-    );
+    const executeEval = createEvalExecutor(client.mainCall, { signal: abort.signal });
     let result;
     try {
       const execution = executeEval(runArgs);

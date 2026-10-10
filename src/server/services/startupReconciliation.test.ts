@@ -10,7 +10,10 @@ import {
   createEntityRetirementCleanup,
   type EntityRetirementCleanup,
 } from "./entityRetirementCleanup.js";
-import { runStartupReconciliation } from "./startupReconciliation.js";
+import {
+  createStartupReconciliationWorkspaceState,
+  runStartupReconciliation,
+} from "./startupReconciliation.js";
 
 describe("runStartupReconciliation", () => {
   let workspaceDO: WorkspaceDO;
@@ -26,12 +29,16 @@ describe("runStartupReconciliation", () => {
     });
   });
 
-  function dispatchWorkspaceDO<T>(method: string, ...args: unknown[]): Promise<T> {
+  function dispatchWorkspaceDO(method: string, args: unknown[] = []): Promise<unknown> {
     const fn = (workspaceDO as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
     if (typeof fn !== "function") {
       return Promise.reject(new Error(`Unknown WorkspaceDO method: ${method}`));
     }
-    return Promise.resolve(fn.apply(workspaceDO, args)) as Promise<T>;
+    return Promise.resolve(fn.apply(workspaceDO, args));
+  }
+
+  function workspaceState() {
+    return createStartupReconciliationWorkspaceState(dispatchWorkspaceDO);
   }
 
   it("rehydrates a sealed preparation as an image owner without restoring runnable execution", async () => {
@@ -52,7 +59,7 @@ describe("runStartupReconciliation", () => {
     const entityCache = new EntityCache();
     const restoreRuntimes = vi.fn(async () => {});
     await runStartupReconciliation({
-      dispatchWorkspaceDO,
+      workspaceState: workspaceState(),
       entityCache,
       onRetire: cleanup.retire,
       restoreRuntimes,
@@ -114,7 +121,7 @@ describe("runStartupReconciliation", () => {
 
     const result = await runStartupReconciliation({
       onRetire: cleanup.retire,
-      dispatchWorkspaceDO,
+      workspaceState: workspaceState(),
       entityCache,
       logger: { warn: (msg) => warnings.push(msg) },
     });
@@ -163,7 +170,7 @@ describe("runStartupReconciliation", () => {
     });
     const warn = vi.fn();
     await runStartupReconciliation({
-      dispatchWorkspaceDO,
+      workspaceState: workspaceState(),
       entityCache: new EntityCache(),
       onRetire: owner.retire,
       logger: { warn },
@@ -187,14 +194,13 @@ describe("runStartupReconciliation", () => {
     const snapshot = new Promise<EntityRecord[]>((resolve) => {
       resolveSnapshot = resolve;
     });
-    const dispatch = <T>(method: string, ...args: unknown[]): Promise<T> => {
-      if (method === "entityListActive") return snapshot as Promise<T>;
-      return dispatchWorkspaceDO<T>(method, ...args);
-    };
+    const workspaceState = createStartupReconciliationWorkspaceState((method, args) =>
+      method === "entityListActive" ? snapshot : dispatchWorkspaceDO(method, args)
+    );
 
     const reconciliation = runStartupReconciliation({
       onRetire: cleanup.retire,
-      dispatchWorkspaceDO: dispatch,
+      workspaceState,
       entityCache,
     });
     const concurrent = workspaceDO.entityActivate({
@@ -213,11 +219,13 @@ describe("runStartupReconciliation", () => {
   it("returns warnings (does not throw) when WorkspaceDO methods fail", async () => {
     const entityCache = new EntityCache();
     const warnings: Array<{ msg: string; args: unknown[] }> = [];
-    const failingDispatch = (): Promise<never> => Promise.reject(new Error("boom"));
+    const failingWorkspaceState = createStartupReconciliationWorkspaceState(() =>
+      Promise.reject(new Error("boom"))
+    );
 
     const result = await runStartupReconciliation({
       onRetire: cleanup.retire,
-      dispatchWorkspaceDO: failingDispatch,
+      workspaceState: failingWorkspaceState,
       entityCache,
       logger: {
         warn: (msg, ...args) => warnings.push({ msg, args }),
@@ -237,7 +245,7 @@ describe("runStartupReconciliation", () => {
 
     const result = await runStartupReconciliation({
       onRetire: cleanup.retire,
-      dispatchWorkspaceDO,
+      workspaceState: workspaceState(),
       entityCache,
       recoverLifecycle,
     });
@@ -267,7 +275,7 @@ describe("runStartupReconciliation", () => {
 
     await runStartupReconciliation({
       onRetire: cleanup.retire,
-      dispatchWorkspaceDO,
+      workspaceState: workspaceState(),
       entityCache: new EntityCache(),
       restoreRuntimes,
       recoverLifecycle,
@@ -284,7 +292,7 @@ describe("runStartupReconciliation", () => {
     await expect(
       runStartupReconciliation({
         onRetire: cleanup.retire,
-        dispatchWorkspaceDO,
+        workspaceState: workspaceState(),
         entityCache: new EntityCache(),
         restoreRuntimes: () => Promise.reject(new Error("sealed image unavailable")),
         recoverLifecycle,
@@ -299,7 +307,7 @@ describe("runStartupReconciliation", () => {
 
     const result = await runStartupReconciliation({
       onRetire: cleanup.retire,
-      dispatchWorkspaceDO,
+      workspaceState: workspaceState(),
       entityCache,
       recoverLifecycle: () => Promise.reject(new Error("recover failed")),
       logger: {

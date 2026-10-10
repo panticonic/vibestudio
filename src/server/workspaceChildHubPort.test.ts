@@ -9,6 +9,32 @@ function response(payload: unknown, status = 200): Response {
 }
 
 describe("WorkspaceChildHubPort", () => {
+  it("sends the authenticated device observer request and cancellation signal", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal);
+      return response({ version: "opaque-revision" });
+    });
+    const port = createWorkspaceChildHubPort({
+      hubUrl: "http://127.0.0.1:7777",
+      runtimeToken: "child-runtime-token",
+      fetchImpl,
+    });
+    await expect(
+      port.observeDevices(
+        { userId: "user:alice", input: { afterVersion: "previous" } },
+        { signal: controller.signal }
+      )
+    ).resolves.toEqual({ version: "opaque-revision" });
+    expect(String(fetchImpl.mock.calls[0]![0])).toBe(
+      "http://127.0.0.1:7777/_r/s/internal/device/observe"
+    );
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body))).toEqual({
+      userId: "user:alice",
+      input: { afterVersion: "previous" },
+    });
+  });
+
   it("exposes exact typed operations over the process-authenticated child boundary", async () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       response({ agentId: "agt_one", agentToken: "agent:agt_one:secret" })

@@ -22,4 +22,19 @@ describe("eval engine run admission", () => {
       },
     ]);
   });
+  it("allows cancellation before admission without inventing a scope snapshot", () => {
+    const reply = {
+      runId: "cancelled-first",
+      runDigest: "d".repeat(64),
+      status: "cancelled",
+      existing: true,
+    };
+    expect(evalEngineMethods.startRun.returns.parse(reply)).toEqual(reply);
+    expect(() => evalEngineMethods.startRun.returns.parse({ ...reply, status: "pending" })).toThrow(
+      "scope input revision"
+    );
+    expect(() => evalEngineMethods.startRun.returns.parse({ ...reply, existing: false })).toThrow(
+      "scope input revision"
+    );
+  });
 });

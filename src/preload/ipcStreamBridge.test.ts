@@ -73,7 +73,11 @@ describe("preload IPC stream subscriptions", () => {
         });
       } else if (index % 3 === 1) {
         const reading = response.text();
-        emit({ kind: "error", opId, message: `failure-${index}` });
+        emit({
+          kind: "error",
+          opId,
+          error: { message: `failure-${index}`, errorKind: "transport" },
+        });
         await expect(reading).rejects.toThrow(`failure-${index}`);
       } else {
         await response.body!.cancel();

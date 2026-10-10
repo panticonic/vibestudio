@@ -55,7 +55,13 @@ function makeHarness(
         epoch = "epoch-1";
         return epoch;
       }
-      if (method === "lifecycleListLeases") return leases;
+      if (method === "lifecycleListLeases")
+        return leases.map((lease) => ({
+          ...lease,
+          detail: null,
+          createdAt: 0,
+          refreshedAt: 0,
+        }));
       if (method === "lifecycleListResumeTargets") return leases;
       if (method === "lifecycleListOps") {
         return leases.map((lease) => ({
@@ -63,6 +69,8 @@ function makeHarness(
           epochId: epoch,
           opKind: "resume",
           status: "pending",
+          detail: null,
+          updatedAt: 0,
         }));
       }
       return undefined;

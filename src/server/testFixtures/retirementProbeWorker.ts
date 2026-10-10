@@ -1,3 +1,4 @@
+import { dispatchRpcCall } from "@vibestudio/rpc/internal";
 import {
   DurableObjectBase,
   rpc,
@@ -51,7 +52,7 @@ export class RetirementProbeDO extends DurableObjectBase {
     // The host callback returns only after the authoritative receiver receipt.
     // No elapsed-time completion or local manufactured cancellation is used.
     const docs = createTypedServiceClient("docs", docsMethods, (service, method, args) =>
-      this.rpc.call("main", `${service}.${method}`, args)
+      dispatchRpcCall(this.rpc, "main", `${service}.${method}`, args)
     );
     await docs.listServices();
     if (this.domainState() !== "terminal") throw new Error("Domain release is unconfirmed");

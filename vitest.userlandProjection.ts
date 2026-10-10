@@ -32,7 +32,7 @@ export function userlandDependencyAliases(projection: UserlandDependencyProjecti
           const specifier = subpath === "." ? packageName : `${packageName}/${subpath.slice(2)}`;
           if (!specifier.includes("*")) {
             return {
-              find: specifier,
+              find: new RegExp(`^${escapeRegex(specifier)}$`, "u"),
               replacement: path.resolve(packageDir, target),
               customResolver: preserveNestedDependencyResolution(
                 projection.nodeModulesDir,
@@ -63,7 +63,7 @@ export function userlandDependencyAliases(projection: UserlandDependencyProjecti
             ),
           },
           {
-            find: packageName,
+            find: new RegExp(`^${escapeRegex(packageName)}$`, "u"),
             replacement: path.resolve(packageDir, entry),
             customResolver: preserveNestedDependencyResolution(
               projection.nodeModulesDir,
@@ -72,7 +72,12 @@ export function userlandDependencyAliases(projection: UserlandDependencyProjecti
           },
         ];
       })
-      .sort((left, right) => String(right.find).length - String(left.find).length)
+      .sort(
+        (left, right) =>
+          Number(String(left.find).includes("(.+)")) -
+            Number(String(right.find).includes("(.+)")) ||
+          String(right.find).length - String(left.find).length
+      )
   );
 }
 

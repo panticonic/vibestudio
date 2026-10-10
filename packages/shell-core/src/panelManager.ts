@@ -1,3 +1,4 @@
+import { formatRpcFailure } from "@vibestudio/rpc";
 import * as path from "path";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
@@ -726,9 +727,9 @@ export class PanelManager {
           }
           if (strict) throw error;
           log.warn(
-            `Failed to retire panel entity ${entityId ?? "(none)"} for slot ${id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`
+            `Failed to retire panel entity ${entityId ?? "(none)"} for slot ${id}: ${formatRpcFailure(
+              error
+            )}`
           );
         } finally {
           if (this.registry.getPanel(id)) this.registry.removePanel(id);
@@ -1369,9 +1370,9 @@ export class PanelManager {
     this.recordIncarnationRetirement(true);
     const error = transition.retirement.error;
     log.warn(
-      `Failed to retire panel entity ${transition.previousEntityId} on ${operation}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
+      `Failed to retire panel entity ${transition.previousEntityId} on ${operation}: ${formatRpcFailure(
+        error
+      )}`
     );
   }
 
@@ -1467,11 +1468,7 @@ export class PanelManager {
       if (allowMissing) {
         return { title: path.basename(relativePath) };
       }
-      throw new Error(
-        `Failed to load manifest for ${relativePath}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      throw new Error(`Failed to load manifest for ${relativePath}: ${formatRpcFailure(error)}`);
     }
   }
 
@@ -1570,9 +1567,7 @@ export class PanelManager {
       })
       .catch((error: unknown) => {
         log.warn(
-          `Failed to refresh panel metadata for ${source}@${ref}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
+          `Failed to refresh panel metadata for ${source}@${ref}: ${formatRpcFailure(error)}`
         );
       })
       .finally(() => {

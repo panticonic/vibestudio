@@ -1,3 +1,4 @@
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import type {
   AcquisitionInfo,
@@ -45,7 +46,7 @@ import type {
   AuthorityAcquisitionRecord,
 } from "./authorityAcquisitionStore.js";
 import type { JsonValue } from "@vibestudio/shared/wireValues";
-import { RemoteRpcError, rpcErrorDataOf, rpcErrorKindOf } from "@vibestudio/rpc";
+import { RemoteRpcError } from "@vibestudio/rpc";
 import {
   acquisitionJson,
   restoreAcquisitionInputs,
@@ -2478,17 +2479,7 @@ function storeAcquisitionSettlement(outcome: AcquisitionSettlement): JsonValue {
   const error = outcome.error;
   return acquisitionJson({
     state: "failed",
-    error: {
-      message: error instanceof Error ? error.message : String(error),
-      name: error instanceof Error ? error.name : "Error",
-      stack: error instanceof Error ? error.stack : undefined,
-      code:
-        error && typeof error === "object" && "code" in error && typeof error.code === "string"
-          ? error.code
-          : undefined,
-      errorKind: rpcErrorKindOf(error, "internal"),
-      errorData: rpcErrorDataOf(error),
-    },
+    error: serializeRpcFailure(error, "internal"),
   });
 }
 

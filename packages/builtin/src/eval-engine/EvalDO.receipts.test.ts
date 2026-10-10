@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@vibestudio/durable/test-utils";
+import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
 import { evalResultReceiptSchema } from "@vibestudio/service-schemas/eval";
 import { EvalDO } from "./EvalDO.js";
 
 async function completedRun() {
-  const fixture = await createTestDO(EvalDO);
+  const fixture = await createTestDO(EvalDO, { RPC_FETCH: successfulTestRpcFetch });
   const execute = vi.fn(async () => ({ success: true, console: "actual output", returnValue: 42 }));
   Object.defineProperty(fixture.instance, "runLocked", { value: execute });
-  Object.defineProperty(fixture.instance, "rpc", { value: { call: vi.fn(async () => undefined) } });
   await fixture.instance.startRun({
     runId: "receipt-run",
     code: "return 42",
@@ -19,7 +18,7 @@ async function completedRun() {
 
 describe("EvalDO canonical result receipts", () => {
   it("rolls back never-admitted cancellation when its canonical event cannot commit", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
+    const { instance, sql } = await createTestDO(EvalDO, { RPC_FETCH: successfulTestRpcFetch });
     sql.exec(`CREATE TRIGGER reject_cancel_event BEFORE INSERT ON run_events
       WHEN NEW.run_id = 'cancel-rollback'
       BEGIN SELECT RAISE(ABORT, 'original cancellation event failure'); END`);
@@ -37,7 +36,7 @@ describe("EvalDO canonical result receipts", () => {
   });
 
   it("atomically cancels an identity before admission and fences late start/reset across reopen", async () => {
-    const fixture = await createTestDO(EvalDO);
+    const fixture = await createTestDO(EvalDO, { RPC_FETCH: successfulTestRpcFetch });
     await expect(fixture.instance.cancel("never-admitted")).resolves.toEqual({
       ok: true,
       forcedReset: false,
@@ -58,7 +57,11 @@ describe("EvalDO canonical result receipts", () => {
       )
     );
     expect(args).toEqual({ runId: receipt.runId, runDigest: receipt.runDigest });
-    const { instance: reopened } = await createTestDO(EvalDO, {}, { db: fixture.db });
+    const { instance: reopened } = await createTestDO(
+      EvalDO,
+      { RPC_FETCH: successfulTestRpcFetch },
+      { db: fixture.db }
+    );
     const execute = vi.fn(async () => ({ success: true, console: "wrongly executed" }));
     const reset = vi.fn(async () => ({ ok: true }));
     Object.defineProperty(reopened, "runLocked", { value: execute });
@@ -80,7 +83,7 @@ describe("EvalDO canonical result receipts", () => {
   });
 
   it("lets canonical cancellation win while the original resetting admission has yielded", async () => {
-    const { instance } = await createTestDO(EvalDO);
+    const { instance } = await createTestDO(EvalDO, { RPC_FETCH: successfulTestRpcFetch });
     let finishReset!: () => void;
     const reset = new Promise<{ ok: boolean }>((resolve) => {
       finishReset = () => resolve({ ok: true });
@@ -102,7 +105,7 @@ describe("EvalDO canonical result receipts", () => {
   });
 
   it("does not pretend a never-admitted cancellation changed notebook input for the next run", async () => {
-    const { instance } = await createTestDO(EvalDO);
+    const { instance } = await createTestDO(EvalDO, { RPC_FETCH: successfulTestRpcFetch });
     Object.defineProperty(instance, "runLocked", {
       value: async () => ({ success: true, console: "" }),
     });
@@ -132,7 +135,11 @@ describe("EvalDO canonical result receipts", () => {
       acknowledged: true,
       duplicate: false,
     });
-    const { instance: reopened } = await createTestDO(EvalDO, {}, { db });
+    const { instance: reopened } = await createTestDO(
+      EvalDO,
+      { RPC_FETCH: successfulTestRpcFetch },
+      { db }
+    );
     expect(reopened.getRunReceipt(receipt.runId)).toEqual({ ...receipt, acknowledged: true });
     await expect(reopened.acknowledgeRunResult(receipt.runId, receipt)).resolves.toEqual({
       acknowledged: true,
@@ -223,7 +230,11 @@ describe("EvalDO canonical result receipts", () => {
       reason: "entity_retire",
       deadlineMs: 0,
     });
-    const { instance: reopened } = await createTestDO(EvalDO, {}, { db });
+    const { instance: reopened } = await createTestDO(
+      EvalDO,
+      { RPC_FETCH: successfulTestRpcFetch },
+      { db }
+    );
     expect(reopened.getRunReceipt(receipt.runId)).toEqual({ ...receipt, acknowledged: true });
     await expect(
       reopened.startRun({ runId: receipt.runId, code: "return 42", intentDigest: "a".repeat(64) })

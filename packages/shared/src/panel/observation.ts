@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { RpcBoundaryError, rpcErrorDataOf } from "@vibestudio/rpc";
 
 export const PANEL_OPERATION_ERROR_CODE = "PANEL_OPERATION_FAILED";
@@ -297,11 +298,12 @@ export interface PanelObservation {
   updatedAt: number;
 }
 
-export interface PanelCapturedDocument {
-  kind: "synth";
-  text: string;
-  structure: Record<string, unknown>;
-}
+export const panelCapturedDocumentSchema = z.object({
+  kind: z.literal("synth"),
+  text: z.string(),
+  structure: z.record(z.unknown()),
+});
+export type PanelCapturedDocument = z.infer<typeof panelCapturedDocumentSchema>;
 
 export interface PanelSnapshotObservation {
   panelId: string;

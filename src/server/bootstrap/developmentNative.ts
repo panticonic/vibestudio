@@ -6,7 +6,6 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { StateLayout } from "../stateLayout.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
-import type { VcsInspectResult } from "@vibestudio/service-schemas/vcs";
 import type { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 import type { AttachedHostPublisher } from "../services/attachedHostController.js";
 import type { AttachedHostEndpoint } from "../services/attachedHostProtocol.js";
@@ -199,10 +198,10 @@ export async function wireDevelopmentNative(
         },
         resolveAdoptedRepository: async ({ contextId, repositoryId }) => {
           const workingHead = await deps.workspaceVcs.resolveWorkingState(contextId);
-          const inspected = await deps.workspaceVcs.semanticDirectCall<VcsInspectResult>(
-            "vcsInspect",
-            { node: { kind: "repository", state: workingHead, repositoryId }, edgeLimit: 1 }
-          );
+          const inspected = await deps.workspaceVcs.semanticDirectCall("vcsInspect", {
+            node: { kind: "repository", state: workingHead, repositoryId },
+            edgeLimit: 1,
+          });
           if (inspected.node.kind !== "repository" || inspected.node.value.kind !== "present") {
             return null;
           }

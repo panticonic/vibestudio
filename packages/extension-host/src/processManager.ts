@@ -1,3 +1,4 @@
+import { formatRpcFailure } from "@vibestudio/rpc";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { type ProcessAdapter } from "@vibestudio/process-adapter";
@@ -181,7 +182,11 @@ export class ExtensionProcessManager {
         if (!isExtensionShutdownResult(message) || message.requestId !== requestId) return;
         if (!message.ok) {
           cleanup();
-          reject(restoreShutdownError(message.error));
+          try {
+            reject(restoreShutdownError(message.error));
+          } catch (error) {
+            reject(error);
+          }
           return;
         }
         acknowledged = true;
@@ -417,7 +422,7 @@ export class ExtensionProcessManager {
       crashState.nextAttemptAt = null;
       this.spawn(state).catch((err) => {
         if (this.running.has(state.name)) return;
-        this.scheduleCrashRestart(state, err instanceof Error ? err.message : String(err));
+        this.scheduleCrashRestart(state, formatRpcFailure(err));
       });
     }, delay);
   }

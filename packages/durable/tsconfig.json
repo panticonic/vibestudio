@@ -11,7 +11,8 @@
     "noEmit": true,
     "lib": ["ES2022", "DOM"],
     "paths": {
-      "@vibestudio/rpc": ["../rpc/src/index.ts"]
+      "@vibestudio/rpc": ["../rpc/src/index.ts"],
+      "@vibestudio/rpc/*": ["../rpc/src/*"]
     }
   },
   "include": ["src/**/*.ts"]

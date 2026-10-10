@@ -120,7 +120,7 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
     }
     const rpc = new RpcClient(creds);
     try {
-      const info = await rpc.call<Record<string, unknown>>("auth.getConnectionInfo", []);
+      const info = await rpc.mainCall("auth.getConnectionInfo", []);
       const result = {
         url: creds.url,
         workspaceId: typeof info["workspaceId"] === "string" ? info["workspaceId"] : undefined,

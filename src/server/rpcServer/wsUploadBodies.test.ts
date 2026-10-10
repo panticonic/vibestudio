@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bytesToBase64 } from "@vibestudio/rpc";
+import { bytesToBase64, serializeRpcFailure, RemoteRpcAggregateError } from "@vibestudio/rpc";
 import { WsUploadBodies } from "./wsUploadBodies.js";
 
 describe("WsUploadBodies", () => {
@@ -34,4 +34,29 @@ describe("WsUploadBodies", () => {
     );
     uploads.closeAll(new Error("test complete"));
   });
+});
+
+it("preserves upload failure members, cause identity, and metadata", async () => {
+  const uploads = new WsUploadBodies();
+  uploads.open("failed-upload");
+  const reader = uploads.take("failed-upload")!.getReader();
+  const original = Object.assign(new Error("source failed"), { code: "SOURCE_FAILED" });
+  await uploads.push({
+    requestId: "failed-upload",
+    seq: 0,
+    error: serializeRpcFailure(
+      new AggregateError([original, new Error("release failed")], "upload failed", {
+        cause: original,
+      })
+    ),
+  });
+  const failure = await reader.read().catch((error) => error);
+  expect(failure).toBeInstanceOf(RemoteRpcAggregateError);
+  expect(failure.errors.map((error: Error) => error.message)).toEqual([
+    "source failed",
+    "release failed",
+  ]);
+  expect(failure.cause).toBe(failure.errors[0]);
+  expect(failure.errors[0].code).toBe("SOURCE_FAILED");
+  reader.releaseLock();
 });

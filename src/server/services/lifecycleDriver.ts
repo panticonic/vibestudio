@@ -1,10 +1,16 @@
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { DORef, LifecycleDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
-import type { LifecycleKey, LifecycleOp } from "@panticonic/builtin/workspace-state";
+import type { LifecycleKey } from "@panticonic/builtin/workspace-state";
 import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
+import { workspaceStateEngineMethods } from "@vibestudio/service-schemas/workspaceStateEngine";
+import {
+  createTypedServiceClient,
+  type TypedServiceClient,
+} from "@vibestudio/shared/typedServiceClient";
 
 const log = createDevLogger("LifecycleDriver");
+type WorkspaceStateEngineClient = TypedServiceClient<typeof workspaceStateEngineMethods>;
 
 export interface LifecycleDriverDeps {
   workerdManager: WorkerdManager;
@@ -16,6 +22,7 @@ export interface LifecycleDriverDeps {
 export class LifecycleDriver {
   private readonly deps: LifecycleDriverDeps;
   private readonly workspaceRef: DORef;
+  private readonly workspaceState: WorkspaceStateEngineClient;
   private readonly concurrency: number;
   private readonly restartEpochs = new Map<string, string>();
   private unsubscribeBegin: (() => void) | null = null;
@@ -28,6 +35,11 @@ export class LifecycleDriver {
       className: "WorkspaceDO",
       objectKey: deps.workspaceId,
     };
+    this.workspaceState = createTypedServiceClient(
+      "workspace-state",
+      workspaceStateEngineMethods,
+      (_service, method, args) => this.deps.doDispatch.dispatch(this.workspaceRef, method, ...args)
+    );
     this.concurrency = deps.concurrency ?? 8;
   }
 
@@ -48,9 +60,9 @@ export class LifecycleDriver {
   }
 
   async recoverStartup(reason: "crash" | "server_restart" = "server_restart"): Promise<void> {
-    const targets = await this.dispatchWorkspace<LifecycleKey[]>("lifecycleListResumeTargets");
+    const targets = await this.workspaceState.lifecycleListResumeTargets();
     if (targets.length === 0) return;
-    const epoch = await this.dispatchWorkspace<string>("lifecycleOpenEpoch", {
+    const epoch = await this.workspaceState.lifecycleOpenEpoch({
       kind: reason,
       reason,
       generation: this.deps.workerdManager.getBootGeneration(),
@@ -60,16 +72,16 @@ export class LifecycleDriver {
       currentGeneration: this.deps.workerdManager.getBootGeneration(),
       reason,
     });
-    await this.dispatchWorkspace("lifecycleCompleteEpoch", epoch);
+    await this.workspaceState.lifecycleCompleteEpoch(epoch);
   }
 
   async prepareForShutdown(): Promise<void> {
-    const epoch = await this.dispatchWorkspace<string>("lifecycleOpenEpoch", {
+    const epoch = await this.workspaceState.lifecycleOpenEpoch({
       kind: "planned",
       reason: "server_shutdown",
       generation: this.deps.workerdManager.getBootGeneration(),
     });
-    const targets = await this.dispatchWorkspace<LifecycleKey[]>("lifecycleListLeases");
+    const targets = await this.workspaceState.lifecycleListLeases();
     await this.prepareTargets(epoch, targets, "server_shutdown");
   }
 
@@ -77,14 +89,14 @@ export class LifecycleDriver {
     event.signal?.throwIfAborted();
     await this.expireStaleEpochs();
     event.signal?.throwIfAborted();
-    const epoch = await this.dispatchWorkspace<string>("lifecycleOpenEpoch", {
+    const epoch = await this.workspaceState.lifecycleOpenEpoch({
       kind: "planned",
       reason: event.reason,
       generation: event.generation,
     });
     this.restartEpochs.set(event.correlationId, epoch);
     event.signal?.throwIfAborted();
-    const targets = await this.dispatchWorkspace<LifecycleKey[]>("lifecycleListLeases");
+    const targets = await this.workspaceState.lifecycleListLeases();
     event.signal?.throwIfAborted();
     // Planned replacement joins genuine release. Only the manager's actual
     // crash preemption may stop admission into this generation; its process
@@ -106,7 +118,7 @@ export class LifecycleDriver {
       if (event.reason === "crash") await this.recoverStartup("crash");
       return;
     }
-    const ops = await this.dispatchWorkspace<LifecycleOp[]>("lifecycleListOps", epoch);
+    const ops = await this.workspaceState.lifecycleListOps(epoch);
     const targets = this.dedupe(
       ops
         .filter((op) => op.opKind === "resume")
@@ -121,7 +133,7 @@ export class LifecycleDriver {
       currentGeneration: event.generation,
       reason: "planned",
     });
-    await this.dispatchWorkspace("lifecycleCompleteEpoch", epoch);
+    await this.workspaceState.lifecycleCompleteEpoch(epoch);
   }
 
   private async prepareTargets(
@@ -246,7 +258,7 @@ export class LifecycleDriver {
     status: "ready" | "failed" | "resumed",
     detail: unknown
   ): Promise<void> {
-    await this.dispatchWorkspace("lifecycleRecordOp", { epochId, key, opKind, status, detail });
+    await this.workspaceState.lifecycleRecordOp({ epochId, key, opKind, status, detail });
   }
 
   /** Abandon epochs left behind by restarts that failed between begin/ready. */
@@ -260,7 +272,7 @@ export class LifecycleDriver {
 
   private async completeEpochBestEffort(epoch: string): Promise<void> {
     try {
-      await this.dispatchWorkspace("lifecycleCompleteEpoch", epoch);
+      await this.workspaceState.lifecycleCompleteEpoch(epoch);
     } catch (err) {
       log.warn(
         `failed to complete lifecycle epoch ${epoch}: ${
@@ -272,10 +284,6 @@ export class LifecycleDriver {
 
   private toRef(key: LifecycleKey): DORef {
     return { source: key.source, className: key.className, objectKey: key.objectKey };
-  }
-
-  private dispatchWorkspace<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
-    return this.deps.doDispatch.dispatch(this.workspaceRef, method, ...args) as Promise<T>;
   }
 
   private dedupe(targets: LifecycleKey[]): LifecycleKey[] {

@@ -1,18 +1,15 @@
+import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import {
   collectExposableMethods,
   decodeRpcJson,
   encodeRpcJson,
   envelopeFromMessage,
   rpcExposedMethodNames,
-  rpcErrorDataOf,
-  rpcErrorKindOf,
-  rpcDiagnosticIdOf,
   responseEnvelopeFor,
   rpcMethodAuthority,
   rpc,
   type AuthenticatedCaller,
   type AuthorizationContext,
-  type ConnectionlessRpcClient,
   type RpcClient,
   type RpcEnvelope,
   type RpcEvent,
@@ -24,6 +21,8 @@ import {
   DIRECT_AUTHORITY_ACCEPTED_AT_HEADER,
   createCausalRpcOperationTracker,
   createInternalConnectionlessRpcClient,
+  schemaRpcClient,
+  type InternalConnectionlessRpcClient,
   type AttestedCaller,
 } from "@vibestudio/rpc/internal";
 import {
@@ -147,7 +146,7 @@ interface RpcInvocationContext {
   requestId: string | null;
   idempotencyKey: string | null;
   readyQueues: Set<DurableWorkQueue>;
-  alarmRpcs: Set<Promise<void>>;
+  alarmRpcs: Set<Promise<unknown>>;
   requestSignal?: AbortSignal;
 }
 
@@ -182,7 +181,7 @@ export abstract class DurableObjectBase {
 
   private schemaReady = false;
   private schemaInitialization: Promise<void> | null = null;
-  private connectionless: ConnectionlessRpcClient | null = null;
+  private connectionless: InternalConnectionlessRpcClient | null = null;
   private currentObjectKey: string | null = null;
   private readonly invocationContext = new InvocationContext<RpcInvocationContext>();
   private readonly causalRpcOperations = createCausalRpcOperationTracker(() => {
@@ -490,10 +489,10 @@ export abstract class DurableObjectBase {
    * method (`respond`/`deliver` are wired in `fetch`).
    */
   protected get rpc(): RpcClient {
-    return this.connectionlessClient().client;
+    return schemaRpcClient(this.connectionlessClient().client);
   }
 
-  private connectionlessClient(): ConnectionlessRpcClient {
+  private connectionlessClient(): InternalConnectionlessRpcClient {
     if (!this.connectionless) {
       const token = this.env["RPC_AUTH_TOKEN"];
       const source = this.env["WORKER_SOURCE"];
@@ -647,7 +646,7 @@ export abstract class DurableObjectBase {
    */
   protected setAlarmAt(timeMs: number): void {
     this.trackAlarmRpc(
-      this.rpc.call<void>("main", "workspace-state.alarmSet", [
+      this.connectionlessClient().client.call("main", "workspace-state.alarmSet", [
         {
           ...this.lifecycleKey(),
           wakeAt: timeMs,
@@ -659,14 +658,16 @@ export abstract class DurableObjectBase {
   /** Clear an alarm from an ordinary DO request. A completed `alarm()` returns `null`. */
   protected deleteAlarm(): void {
     this.trackAlarmRpc(
-      this.rpc.call<void>("main", "workspace-state.alarmClear", [this.lifecycleKey()])
+      this.connectionlessClient().client.call("main", "workspace-state.alarmClear", [
+        this.lifecycleKey(),
+      ])
     );
   }
 
-  private readonly pendingAlarmRpcs = new Set<Promise<void>>();
+  private readonly pendingAlarmRpcs = new Set<Promise<unknown>>();
   private readonly terminalAlarmDrainResponses = new WeakSet<Response>();
 
-  private trackAlarmRpc(pending: Promise<void>): void {
+  private trackAlarmRpc(pending: Promise<unknown>): void {
     this.pendingAlarmRpcs.add(pending);
     const invocation = this.invocationContext.current();
     if (invocation?.authorityActive) invocation.alarmRpcs.add(pending);
@@ -679,7 +680,7 @@ export abstract class DurableObjectBase {
     await this.drainOwnedAlarmRpcs(this.pendingAlarmRpcs);
   }
 
-  private async drainOwnedAlarmRpcs(owned: Set<Promise<void>>): Promise<void> {
+  private async drainOwnedAlarmRpcs(owned: Set<Promise<unknown>>): Promise<void> {
     const failures: unknown[] = [];
     while (owned.size > 0) {
       const pending = [...owned];
@@ -725,14 +726,16 @@ export abstract class DurableObjectBase {
    * than a best-effort side channel.
    */
   protected async registerLifecycleRelease(detail?: unknown): Promise<void> {
-    await this.rpc.call<void>("main", "workspace-state.lifecycleLeaseUpsert", [
+    await this.connectionlessClient().client.call("main", "workspace-state.lifecycleLeaseUpsert", [
       { ...this.lifecycleKey(), detail },
     ]);
   }
 
   /** Clear this activation's durable lifecycle ownership declaration. */
   protected async clearLifecycleRelease(): Promise<void> {
-    await this.rpc.call<void>("main", "workspace-state.lifecycleLeaseClear", [this.lifecycleKey()]);
+    await this.connectionlessClient().client.call("main", "workspace-state.lifecycleLeaseClear", [
+      this.lifecycleKey(),
+    ]);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -815,10 +818,12 @@ export abstract class DurableObjectBase {
           if (denial) {
             return jsonResponse(
               {
-                error: denial.reason,
-                errorCode: denial.code,
-                errorKind: "access",
-                errorData: { authorityFailure: denial.failure },
+                error: {
+                  message: denial.reason,
+                  code: denial.code,
+                  errorKind: "access",
+                  errorData: { authorityFailure: denial.failure },
+                },
               },
               403
             );
@@ -887,36 +892,23 @@ export abstract class DurableObjectBase {
       const responseEnvelope = dispatched.result;
       const responseMessage = responseEnvelope?.message;
       if (responseMessage?.type === "response" && "error" in responseMessage) {
-        if (responseMessage.error.startsWith('Method "')) {
-          return jsonResponse(
-            {
-              error: `Unknown method: ${method}`,
-              metadata: { durableWorkReady: [...dispatched.readyQueues].sort() },
-            },
-            404
-          );
-        }
         const status =
-          responseMessage.errorKind === "access"
-            ? 403
-            : responseMessage.errorKind === "protocol"
-              ? 400
-              : 500;
+          responseMessage.error.code === "RPC_METHOD_NOT_EXPOSED"
+            ? 404
+            : responseMessage.error.errorKind === "access"
+              ? 403
+              : responseMessage.error.errorKind === "protocol"
+                ? 400
+                : 500;
         return jsonResponse(
           {
             error: responseMessage.error,
-            errorKind: responseMessage.errorKind,
-            ...(responseMessage.diagnosticId ? { diagnosticId: responseMessage.diagnosticId } : {}),
-            ...(responseMessage.errorStack ? { errorStack: responseMessage.errorStack } : {}),
-            ...(responseMessage.errorCode ? { errorCode: responseMessage.errorCode } : {}),
-            ...(responseMessage.errorData !== undefined
-              ? { errorData: responseMessage.errorData }
-              : {}),
             metadata: { durableWorkReady: [...dispatched.readyQueues].sort() },
           },
           status
         );
       }
+
       return jsonResponse(
         {
           value:
@@ -928,17 +920,7 @@ export abstract class DurableObjectBase {
         200
       );
     } catch (err) {
-      const errorData = rpcErrorDataOf(err);
-      const errorCode = err instanceof Error ? (err as Error & { code?: string }).code : undefined;
-      return jsonResponse(
-        {
-          error: err instanceof Error ? err.message : String(err),
-          errorKind: rpcErrorKindOf(err),
-          ...(typeof errorCode === "string" ? { errorCode } : {}),
-          ...(errorData === undefined ? {} : { errorData }),
-        },
-        500
-      );
+      return jsonResponse({ error: serializeRpcFailure(err) }, 500);
     } finally {
       // An alarm mutation is part of the request's durable outcome. If its
       // single scheduling write fails, the request fails too; returning a
@@ -1005,10 +987,12 @@ export abstract class DurableObjectBase {
       if (denial) {
         return jsonResponse(
           {
-            error: denial.reason,
-            errorCode: denial.code,
-            errorKind: "access",
-            errorData: { authorityFailure: denial.failure },
+            error: {
+              message: denial.reason,
+              code: denial.code,
+              errorKind: "access",
+              errorData: { authorityFailure: denial.failure },
+            },
           },
           403
         );
@@ -1023,11 +1007,13 @@ export abstract class DurableObjectBase {
           "the receiver's retention bound";
         return jsonResponse(
           {
-            error: reason,
-            errorCode: "EACCES",
-            errorKind: "access",
-            errorData: {
-              authorityFailure: directRpcInvalidAttestationFailure(reason),
+            error: {
+              message: reason,
+              code: "EACCES",
+              errorKind: "access",
+              errorData: {
+                authorityFailure: directRpcInvalidAttestationFailure(reason),
+              },
             },
           },
           403
@@ -1054,7 +1040,11 @@ export abstract class DurableObjectBase {
       if (responseMessage?.type === "response" && "result" in responseMessage) {
         if (responseMessage.result instanceof Response) return responseMessage.result;
         return jsonResponse(
-          { error: `Streaming method ${message.method} did not return a Response` },
+          {
+            error: serializeRpcFailure(
+              new Error(`Streaming method ${message.method} did not return a Response`)
+            ),
+          },
           500
         );
       }
@@ -1072,7 +1062,7 @@ export abstract class DurableObjectBase {
     const admitted = new Promise<void>((resolve) => {
       markAdmitted = resolve;
     });
-    const alarmRpcs = new Set<Promise<void>>();
+    const alarmRpcs = new Set<Promise<unknown>>();
     const completion = this.dispatchInboundEnvelope(
       envelope,
       authorityAcceptedAt,
@@ -1088,16 +1078,17 @@ export abstract class DurableObjectBase {
           await this.drainOwnedAlarmRpcs(alarmRpcs);
         } catch (alarmFailure) {
           const previous = dispatched.result?.message;
-          const failure =
+          const previousFailure =
             previous?.type === "response" && "error" in previous
-              ? new AggregateError(
-                  [new Error(previous.error), alarmFailure],
-                  `RPC handler and durable alarm persistence failed: ${previous.error}; ${alarmFailure instanceof Error ? alarmFailure.message : String(alarmFailure)}`,
-                  { cause: alarmFailure }
-                )
-              : alarmFailure;
-          const errorCode =
-            failure instanceof Error ? (failure as Error & { code?: string }).code : undefined;
+              ? deserializeRpcFailure(previous.error)
+              : undefined;
+          const failure = previousFailure
+            ? new AggregateError(
+                [previousFailure, alarmFailure],
+                "RPC handler and durable alarm persistence failed",
+                { cause: previousFailure }
+              )
+            : alarmFailure;
           dispatched = {
             ...dispatched,
             result: responseEnvelopeFor(
@@ -1106,24 +1097,7 @@ export abstract class DurableObjectBase {
               {
                 type: "response",
                 requestId: message.requestId,
-                error: failure instanceof Error ? failure.message : String(failure),
-                ...(previous?.type === "response" && "error" in previous
-                  ? {
-                      errorKind: previous.errorKind,
-                      errorCode: previous.errorCode,
-                      errorData: previous.errorData,
-                      diagnosticId: previous.diagnosticId,
-                    }
-                  : {
-                      errorKind: rpcErrorKindOf(failure),
-                      ...(rpcDiagnosticIdOf(failure)
-                        ? { diagnosticId: rpcDiagnosticIdOf(failure) }
-                        : {}),
-                      ...(typeof errorCode === "string" ? { errorCode } : {}),
-                      ...(rpcErrorDataOf(failure) === undefined
-                        ? {}
-                        : { errorData: rpcErrorDataOf(failure) }),
-                    }),
+                error: serializeRpcFailure(failure),
               }
             ),
           };
@@ -1141,23 +1115,12 @@ export abstract class DurableObjectBase {
             { cause: primary }
           );
         }
-        const errorCode =
-          primary instanceof Error ? (primary as Error & { code?: string }).code : undefined;
+
         return {
           result: responseEnvelopeFor(
             envelope,
             { callerId: this.rpcSelfId, callerKind: "do" },
-            {
-              type: "response",
-              requestId: message.requestId,
-              error: failure instanceof Error ? failure.message : String(failure),
-              errorKind: rpcErrorKindOf(primary),
-              ...(typeof errorCode === "string" ? { errorCode } : {}),
-              ...(rpcErrorDataOf(primary) === undefined
-                ? {}
-                : { errorData: rpcErrorDataOf(primary) }),
-              ...(rpcDiagnosticIdOf(primary) ? { diagnosticId: rpcDiagnosticIdOf(primary) } : {}),
-            }
+            { type: "response", requestId: message.requestId, error: serializeRpcFailure(failure) }
           ),
           readyQueues: [],
         };
@@ -1198,7 +1161,7 @@ export abstract class DurableObjectBase {
     envelope: RpcEnvelope,
     authorityAcceptedAt: number,
     onAdmitted?: () => void,
-    alarmRpcs = new Set<Promise<void>>()
+    alarmRpcs = new Set<Promise<unknown>>()
   ): Promise<{ result: RpcEnvelope | null; readyQueues: DurableWorkQueue[] }> {
     const connectionless = this.connectionlessClient();
     // An unattributed method-path call carries a synthetic empty caller; surface
@@ -1269,10 +1232,12 @@ export abstract class DurableObjectBase {
           message: {
             type: "response",
             requestId: message?.requestId ?? "",
-            error: denial.reason,
-            errorCode: denial.code,
-            errorKind: "access",
-            errorData: { authorityFailure: denial.failure },
+            error: {
+              message: denial.reason,
+              code: denial.code,
+              errorKind: "access",
+              errorData: { authorityFailure: denial.failure },
+            },
           },
         } as RpcEnvelope,
         readyQueues: [],
@@ -1299,11 +1264,13 @@ export abstract class DurableObjectBase {
           message: {
             type: "response",
             requestId: message?.requestId ?? "",
-            error: reason,
-            errorCode: "EACCES",
-            errorKind: "access",
-            errorData: {
-              authorityFailure: directRpcInvalidAttestationFailure(reason),
+            error: {
+              message: reason,
+              code: "EACCES",
+              errorKind: "access",
+              errorData: {
+                authorityFailure: directRpcInvalidAttestationFailure(reason),
+              },
             },
           },
         } as RpcEnvelope,
@@ -1368,10 +1335,12 @@ export abstract class DurableObjectBase {
       message: {
         type: "response",
         requestId: message.requestId,
-        error: reason,
-        errorCode: "EINVAL",
-        errorKind: "protocol",
-        ...(errorData ? { errorData } : {}),
+        error: {
+          message: reason,
+          code: "EINVAL",
+          errorKind: "protocol",
+          ...(errorData ? { errorData } : {}),
+        },
       },
     } as RpcEnvelope;
   }
@@ -1610,7 +1579,7 @@ export abstract class DurableObjectBase {
     message: RpcRequest,
     envelope: RpcEnvelope,
     callback: () => Promise<T>,
-    alarmRpcs = new Set<Promise<void>>()
+    alarmRpcs = new Set<Promise<unknown>>()
   ): Promise<{ result: T; readyQueues: DurableWorkQueue[] }> {
     const context: RpcInvocationContext = {
       verifiedCaller: caller,

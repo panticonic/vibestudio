@@ -1,3 +1,4 @@
+import { deserializeRpcFailure } from "@vibestudio/rpc";
 /**
  * DODispatch -- source-scoped HTTP dispatch to Durable Objects.
  *
@@ -16,13 +17,11 @@
 
 import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
 import {
-  attachRpcDiagnosticId,
   decodeRpcJson,
   encodeRpcJson,
   RemoteRpcError,
   type RpcEnvelope,
   type AgentExecutionTestPolicy,
-  type RpcErrorKind,
 } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import type {
@@ -205,39 +204,17 @@ export async function postToDOWithToken(
 
   if (!res.ok) {
     const body = await res.text();
+    let parsed: {
+      error?: import("@vibestudio/rpc").RpcFailure;
+      metadata?: { durableWorkReady?: unknown };
+    };
     try {
-      const parsed = decodeRpcJson(body) as {
-        error?: unknown;
-        errorKind?: unknown;
-        errorCode?: unknown;
-        errorData?: unknown;
-        diagnosticId?: string;
-        metadata?: { durableWorkReady?: unknown };
-      };
-      notifyDurableWorkReady(parsed.metadata?.durableWorkReady, deps.onWorkReady);
-      if (typeof parsed.error === "string") {
-        const kind: RpcErrorKind =
-          parsed.errorKind === "access" ||
-          parsed.errorKind === "service" ||
-          parsed.errorKind === "transport" ||
-          parsed.errorKind === "protocol" ||
-          parsed.errorKind === "application" ||
-          parsed.errorKind === "internal"
-            ? parsed.errorKind
-            : "application";
-        const remoteError = new RemoteRpcError(
-          parsed.error,
-          kind,
-          typeof parsed.errorCode === "string" ? parsed.errorCode : undefined,
-          parsed.errorData
-        );
-        if (typeof parsed.diagnosticId === "string")
-          attachRpcDiagnosticId(remoteError, parsed.diagnosticId);
-        throw remoteError;
-      }
-    } catch (error) {
-      if (error instanceof RemoteRpcError) throw error;
+      parsed = decodeRpcJson(body) as typeof parsed;
+    } catch (cause) {
+      throw new Error(`DO dispatch failed (${res.status}): ${body}`, { cause });
     }
+    notifyDurableWorkReady(parsed.metadata?.durableWorkReady, deps.onWorkReady);
+    if (parsed.error) throw deserializeRpcFailure(parsed.error);
     throw new Error(`DO dispatch failed (${res.status}): ${body}`);
   }
 
@@ -353,30 +330,15 @@ async function postRpcToDOWithToken(
     if (!response.ok) {
       const body = await response.text();
       let parsed: {
-        error?: unknown;
-        errorCode?: unknown;
-        errorKind?: unknown;
-        errorData?: unknown;
+        error?: import("@vibestudio/rpc").RpcFailure;
       };
       try {
         parsed = decodeRpcJson(body) as typeof parsed;
       } catch {
         throw new Error(`DO dispatch failed (${response.status}): ${body}`);
       }
-      if (typeof parsed.error === "string") {
-        throw new RemoteRpcError(
-          parsed.error,
-          parsed.errorKind === "access" ||
-            parsed.errorKind === "service" ||
-            parsed.errorKind === "transport" ||
-            parsed.errorKind === "protocol" ||
-            parsed.errorKind === "application" ||
-            parsed.errorKind === "internal"
-            ? parsed.errorKind
-            : "application",
-          typeof parsed.errorCode === "string" ? parsed.errorCode : undefined,
-          parsed.errorData
-        );
+      if (parsed.error) {
+        throw deserializeRpcFailure(parsed.error);
       }
       throw new Error(`DO dispatch failed (${response.status}): ${body}`);
     }
@@ -388,13 +350,8 @@ async function postRpcToDOWithToken(
       throw new Error("DO RPC returned a mismatched terminal response");
     }
     if ("error" in message) {
-      const error = new RemoteRpcError(
-        message.error,
-        message.errorKind,
-        message.errorCode,
-        message.errorData
-      );
-      if (message.diagnosticId) attachRpcDiagnosticId(error, message.diagnosticId);
+      const error = deserializeRpcFailure(message.error);
+
       terminalReceived = true;
       throw error;
     }
@@ -946,18 +903,20 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     await this.prepareTarget(ref);
     const serverCaller = await this.serverCaller(ref, "__alarm", [], testPolicy);
     const invoke = () =>
-      this.withRelayAdmission(
-        ref,
-        () =>
-          postRpcToDOWithToken(
-            ref,
-            "__alarm",
-            [],
-            this.buildPostDeps(ref),
-            serverCaller,
-            signal
-          ) as Promise<DoAlarmDispatchResult>
-      );
+      this.withRelayAdmission(ref, async () => {
+        const result = await postRpcToDOWithToken(
+          ref,
+          "__alarm",
+          [],
+          this.buildPostDeps(ref),
+          serverCaller,
+          signal
+        );
+        if (!isDoAlarmDispatchResult(result)) {
+          throw new Error(`Invalid __alarm result from ${doRefKey(ref)}`);
+        }
+        return result;
+      });
     if (!serverCaller.authorization || !this.authorityParentRunner) {
       throw new Error("DODispatch requires an authority parent runner");
     }

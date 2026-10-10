@@ -1,9 +1,5 @@
-import {
-  createRpcClient,
-  type EnvelopeRpcTransport,
-  type RpcClient,
-  type RpcEnvelope,
-} from "@vibestudio/rpc";
+import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
+import { type EnvelopeRpcTransport, type RpcEnvelope } from "@vibestudio/rpc";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { AsyncStateConvergenceLoop } from "@vibestudio/shared/asyncStateConvergenceLoop";
 import {
@@ -76,9 +72,9 @@ const bootstrapHeader = document.querySelector(".launch-header");
 const bootstrapEyebrow = document.getElementById("bootstrap-eyebrow");
 const bootstrapTitle = document.getElementById("bootstrap-title");
 
-let rpc: RpcClient | null = null;
+let rpc: RpcWireClient | null = null;
 
-function createBootstrapRpc(): RpcClient {
+function createBootstrapRpc(): RpcWireClient {
   if (!bootstrapTransport) throw new Error("Bootstrap transport unavailable");
   const transport: EnvelopeRpcTransport = {
     send: (envelope) => bootstrapTransport.send(envelope),
@@ -88,12 +84,12 @@ function createBootstrapRpc(): RpcClient {
     onStatusChange: () => () => {},
   };
 
-  const nextRpc = createRpcClient({ selfId: "bootstrap", callerKind: "app", transport });
+  const nextRpc = createInternalRpcClient({ selfId: "bootstrap", callerKind: "app", transport });
   rpc = nextRpc;
   return nextRpc;
 }
 
-function getRpc(): RpcClient {
+function getRpc(): RpcWireClient {
   rpc ??= createBootstrapRpc();
   if (!rpc) throw new Error("Bootstrap RPC unavailable");
   return rpc;

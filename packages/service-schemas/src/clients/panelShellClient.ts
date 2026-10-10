@@ -1,5 +1,5 @@
+import { createTypedRpcServiceClient } from "@vibestudio/shared/typedRpcServiceClient";
 import type { RpcClient } from "@vibestudio/rpc";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { viewMethods } from "../view.js";
 import { workspaceStateMethods } from "../workspaceState.js";
 
@@ -9,10 +9,8 @@ export class PanelShellClient {
   private view: ReturnType<typeof createViewClient>;
 
   constructor(rpc: Pick<RpcClient, "call">) {
-    const callMain = (service: string, method: string, args: unknown[]) =>
-      rpc.call("main", `${service}.${method}`, args);
-    this.workspaceState = createWorkspaceStateClient(callMain);
-    this.view = createViewClient(callMain);
+    this.workspaceState = createWorkspaceStateClient(rpc);
+    this.view = createViewClient(rpc);
   }
 
   getPanelDetail(slotId: string) {
@@ -24,7 +22,12 @@ export class PanelShellClient {
   }
 }
 
-type MainCall = (service: string, method: string, args: unknown[]) => Promise<unknown>;
-const createWorkspaceStateClient = (call: MainCall) =>
-  createTypedServiceClient("workspace-state", workspaceStateMethods, call);
-const createViewClient = (call: MainCall) => createTypedServiceClient("view", viewMethods, call);
+type MainRpc = Pick<RpcClient, "call">;
+const createWorkspaceStateClient = (rpc: MainRpc) =>
+  createTypedRpcServiceClient(
+    rpc,
+    { targetId: "main", namespace: "workspace-state" },
+    workspaceStateMethods
+  );
+const createViewClient = (rpc: MainRpc) =>
+  createTypedRpcServiceClient(rpc, { targetId: "main", namespace: "view" }, viewMethods);

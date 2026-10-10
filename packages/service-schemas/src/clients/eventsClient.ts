@@ -1,3 +1,4 @@
+import { mainRpcMethods } from "../mainRpc.js";
 /**
  * Client-side owner of one destructive `events.watch` response.
  *
@@ -9,7 +10,7 @@
 import {
   isPanelRuntimeLeaseConflict,
   isRpcConnectionLost,
-  type RpcCaller,
+  type RpcStreamOptions,
   type RpcClient,
 } from "@vibestudio/rpc";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
@@ -18,7 +19,8 @@ import { eventsMethods } from "@vibestudio/service-schemas/events";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 
 type Listener<E extends EventName> = (payload: EventPayloads[E]) => void;
-type EventsRpc = Pick<RpcCaller, "stream"> & Partial<Pick<RpcClient, "streamReadable">>;
+type EventsServiceName = "events" | "desktopEvents";
+type EventsRpc = Pick<RpcClient, "stream"> & Partial<Pick<RpcClient, "streamReadable">>;
 
 interface ActiveWatch {
   generation: number;
@@ -44,7 +46,7 @@ function createWatchId(): string {
 
 export class EventsClient {
   private readonly rpc: EventsRpc;
-  private readonly serviceName: string;
+  private readonly serviceName: EventsServiceName;
   private readonly subscriptions = new Set<EventName>();
   private readonly listeners = new Map<EventName, Set<(payload: unknown) => void>>();
   private active: ActiveWatch | null = null;
@@ -64,7 +66,7 @@ export class EventsClient {
       RecoveryCoordinator,
       "registerResubscribeHandler" | "registerColdRecoverHandler"
     >,
-    serviceName = "events"
+    serviceName: EventsServiceName = "events"
   ) {
     this.rpc = rpc;
     this.serviceName = serviceName;
@@ -78,13 +80,13 @@ export class EventsClient {
     rpc: EventsRpc,
     events: readonly EventName[],
     watchId: string,
-    options: Parameters<RpcCaller["stream"]>[3],
-    serviceName = "events"
+    options: RpcStreamOptions | undefined,
+    serviceName: EventsServiceName = "events"
   ) {
     const args = eventsMethods.watch.args.parse([[...events], watchId]);
     return typeof rpc.streamReadable === "function"
-      ? rpc.streamReadable("main", `${serviceName}.watch`, args, options)
-      : rpc.stream("main", `${serviceName}.watch`, args, options);
+      ? rpc.streamReadable("main", mainRpcMethods[`${serviceName}.watch`], args, options)
+      : rpc.stream("main", mainRpcMethods[`${serviceName}.watch`], args, options);
   }
 
   async subscribe(event: EventName): Promise<void> {

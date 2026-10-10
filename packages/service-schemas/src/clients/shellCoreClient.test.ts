@@ -3,7 +3,7 @@ import {
   createPanelMetadataClient,
   createRuntimeClient,
   createWorkspaceStateClient,
-} from "./createShellCore.js";
+} from "./shellCoreClient.js";
 
 describe("shared shell service adapters", () => {
   it("routes bounded panel-tree pages through workspace state", async () => {
@@ -23,7 +23,17 @@ describe("shared shell service adapters", () => {
   });
 
   it("routes entity resolution through the complete workspace-state contract", async () => {
-    const call = vi.fn(async () => ({ id: "panel:nav-a" }));
+    const call = vi.fn(async () => ({
+      id: "panel:nav-a",
+      authoritySessionId: "lease:a",
+      kind: "panel",
+      source: { repoPath: "panels/a", effectiveVersion: "state:a" },
+      contextId: "ctx:a",
+      key: "entry:a",
+      createdAt: 1,
+      status: "active",
+      cleanupComplete: false,
+    }));
     const client = createWorkspaceStateClient(call);
 
     await client.resolveEntity("panel:nav-a");
@@ -32,7 +42,13 @@ describe("shared shell service adapters", () => {
   });
 
   it("routes both phases of panel runtime creation through the shared runtime contract", async () => {
-    const call = vi.fn(async () => ({ id: "panel:nav-a" }));
+    const call = vi.fn(async () => ({
+      id: "panel:nav-a",
+      kind: "panel",
+      source: { repoPath: "panels/a", effectiveVersion: "state:a" },
+      contextId: "ctx:a",
+      targetId: "panel:nav-a",
+    }));
     const client = createRuntimeClient(call);
     const spec = {
       kind: "panel" as const,

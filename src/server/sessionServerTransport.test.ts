@@ -1,5 +1,6 @@
+import { createInternalRpcClient as createRpcClient } from "@vibestudio/rpc/internal";
 import { describe, it, expect } from "vitest";
-import { createRpcClient, envelopeFromMessage, type RpcEnvelope } from "@vibestudio/rpc";
+import { envelopeFromMessage, type RpcEnvelope } from "@vibestudio/rpc";
 import type { RpcSessionChannel } from "./rpcServer/sessionChannel.js";
 import {
   createSessionServerTransport,
@@ -134,7 +135,7 @@ describe("createSessionServerTransport", () => {
     });
     const bridge = makeBridge(transport);
 
-    const call = bridge.call<number>("panel:4", "echo", [7]);
+    const call = bridge.call("panel:4", "echo", [7]);
     // Pull the requestId out of the sent frame and deliver a genuine response.
     const frame = JSON.parse(ws.sent[0] ?? "{}") as {
       envelope: RpcEnvelope;
@@ -159,7 +160,7 @@ describe("createSessionServerTransport", () => {
     });
     const bridge = makeBridge(transport);
 
-    const call = bridge.call<number>("panel:5", "inspect", [], {
+    const call = bridge.call("panel:5", "inspect", [], {
       idempotencyKey: "idem-1",
       readOnly: true,
     });

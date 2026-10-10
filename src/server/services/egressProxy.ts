@@ -1,3 +1,4 @@
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createHash, createHmac, randomBytes } from "node:crypto";
@@ -59,7 +60,6 @@ import {
   RpcBoundaryError,
   rpcErrorDataOf,
   rpcErrorKindOf,
-  rpcDiagnosticIdOf,
   type RpcErrorKind,
 } from "@vibestudio/rpc";
 
@@ -269,25 +269,7 @@ class ForwardRejection extends Error {
  * the client-side decoder reconstructs them and pipes the bytes into a
  * `Response` body's ReadableStream.
  */
-export type StreamFrame =
-  | {
-      kind: "head";
-      status: number;
-      statusText: string;
-      headerPairs: Array<[string, string]>;
-      finalUrl: string;
-    }
-  | { kind: "chunk"; bytes: Uint8Array }
-  | { kind: "end"; bytesIn: number }
-  | {
-      kind: "error";
-      status: number;
-      message: string;
-      code?: string;
-      errorKind: import("@vibestudio/rpc").RpcErrorKind;
-      errorData?: import("@vibestudio/rpc").RpcErrorData;
-      diagnosticId?: string;
-    };
+export type StreamFrame = import("@vibestudio/rpc").StreamingMethodFrame;
 
 interface CircuitState {
   failures: number;
@@ -777,13 +759,10 @@ export class EgressProxy {
           // truncated body, and return 502 to the audit log along
           // with the bytes we did manage to forward.
           try {
-            const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
             await sink({
               kind: "error",
               status: 502,
-              message: err instanceof Error ? err.message : String(err),
-              code: typeof code === "string" ? code : undefined,
-              errorKind: "transport",
+              error: serializeRpcFailure(err, "transport"),
             });
           } catch {
             // Best-effort — connection may already be torn down.
@@ -2797,22 +2776,17 @@ export class EgressProxy {
       return;
     }
     res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+
     res.end(
       JSON.stringify({
-        error: message,
-        errorKind: rpcErrorKindOf(
-          error,
+        error: serializeRpcFailure(
+          error ?? new Error(message),
           statusCode === 401 || statusCode === 403
             ? "access"
             : statusCode < 500
               ? "protocol"
               : "transport"
         ),
-        ...(typeof code === "string" ? { errorCode: code } : {}),
-        ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
-        ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-        ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
       })
     );
   }

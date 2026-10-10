@@ -1,3 +1,4 @@
+import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
 /**
  * ServerClient — WebSocket RPC client that connects Electron to the server.
  */
@@ -6,9 +7,7 @@ import { WebSocket } from "ws";
 import { finishSessionOpening } from "./sessionOpening.js";
 import { randomUUID } from "node:crypto";
 import {
-  createRpcClient,
   type DecodedFramedStream,
-  type RpcClient,
   type RpcCallOptions,
   type RpcConnectionStatus,
   type RpcEnvelope,
@@ -43,7 +42,7 @@ export type HostServiceHandler = (
 ) => unknown | Promise<unknown>;
 
 export function exposeServerOriginatedHostMethod(
-  rpc: RpcClient,
+  rpc: RpcWireClient,
   method: string,
   handler: HostServiceHandler
 ): void {
@@ -68,7 +67,7 @@ export type HostStreamHandler = (
 
 /** Stream the dispatched Response with the same server-only boundary as ordinary host calls. */
 export function exposeServerOriginatedHostStream(
-  rpc: RpcClient,
+  rpc: RpcWireClient,
   method: string,
   handler: HostStreamHandler
 ): void {
@@ -339,7 +338,7 @@ export async function createServerClient(
   });
 
   await transport.connectAndWait();
-  const rpc = createRpcClient({
+  const rpc = createInternalRpcClient({
     selfId: "admin",
     callerKind: "server",
     transport,
@@ -350,7 +349,7 @@ export async function createServerClient(
 
   type ScopedClient = {
     transport: ReturnType<typeof wsClientTransport>;
-    rpc: RpcClient;
+    rpc: RpcWireClient;
     close(): Promise<void>;
   };
   const scopedClients = new Map<string, Promise<ScopedClient>>();
@@ -402,7 +401,7 @@ export async function createServerClient(
         createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
       },
     });
-    const scopedRpc = createRpcClient({
+    const scopedRpc = createInternalRpcClient({
       selfId: caller.callerId,
       callerKind: caller.callerKind,
       transport: scopedTransport,

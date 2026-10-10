@@ -186,7 +186,7 @@ Authority principals: `code`, `host`, `user`, `website`
 | `docs.describe` | Return the full catalog entry for an id (typed args/returns schema, access/restrictedness, examples). Returns null if unknown or not visible to the caller. |
 | `docs.getSchema` | Return just the args/returns JSON Schema for a catalog id. |
 | `docs.listSurfaces` | List catalog surfaces and the number of entries the caller can see in each. |
-| `docs.listServices` | List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Invoke a listed method with rpc.call("main", "<service>.<method>", args). Service names are not necessarily named exports of @workspace/runtime; its services binding provides service clients, and names shared with runtime APIs use the ergonomic runtime client. |
+| `docs.listServices` | List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Invoke a listed method through its canonical mainRpcMethods descriptor with rpc.call("main", mainRpcMethods["<service>.<method>"], args). Service names are not necessarily named exports of @workspace/runtime; its services binding provides service clients, and names shared with runtime APIs use the ergonomic runtime client. |
 | `docs.describeService` | Describe one registered RPC service by name: its policy and every method the caller may invoke (with JSON-Schema args/returns). Returns null for an unknown service. |
 
 ## `durableWork`
@@ -335,7 +335,7 @@ Authority principals: `code`, `user`
 
 ## `hubControl`
 
-Scoped workspace creation through the authenticated owning hub
+Authenticated workspace creation and device observation through the owning hub
 
 Authority principals: `code`, `host`, `user`, `website`
 
@@ -343,6 +343,7 @@ Authority principals: `code`, `host`, `user`, `website`
 |--------|-------------|
 | `hubControl.createWorkspace` | Create and register a workspace from one exact external root template. |
 | `hubControl.workspaceCreationReceipt` | Reconcile one previously submitted workspace creation without creating or opening anything. |
+| `hubControl.observeDevices` | Observe changes to the caller-visible paired device set. Cancellation releases the observation. |
 
 ## `mirror`
 

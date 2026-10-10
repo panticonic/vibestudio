@@ -351,7 +351,7 @@ export interface OAuth1aFlowSpec {
   clientConfigId: string;
   callbackConfirmedParam?: string;
   signatureMethod?: "HMAC-SHA1";
-  accountValidation?: AccountValidationSpec;
+  accountValidation?: "http-probe" | "none";
 }
 
 export interface ApiKeyFlowSpec {

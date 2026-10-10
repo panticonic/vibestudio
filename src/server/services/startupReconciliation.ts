@@ -15,11 +15,29 @@
  */
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { workspaceStateEngineMethods } from "@vibestudio/service-schemas/workspaceStateEngine";
+import {
+  createTypedServiceClient,
+  type TypedServiceClient,
+} from "@vibestudio/shared/typedServiceClient";
 
-export type StartupReconciliationDispatcher = <T>(method: string, ...args: unknown[]) => Promise<T>;
+export type StartupReconciliationWorkspaceState = Pick<
+  TypedServiceClient<typeof workspaceStateEngineMethods>,
+  "entityListActive" | "entityListPreparing" | "entityFindIncompleteCleanups" | "entityGc"
+>;
+
+export function createStartupReconciliationWorkspaceState(
+  dispatch: (method: string, args: unknown[]) => Promise<unknown>
+): StartupReconciliationWorkspaceState {
+  return createTypedServiceClient(
+    "workspace-state",
+    workspaceStateEngineMethods,
+    (_service, method, args) => dispatch(method, args)
+  );
+}
 
 export interface StartupReconciliationDeps {
-  dispatchWorkspaceDO: StartupReconciliationDispatcher;
+  workspaceState: StartupReconciliationWorkspaceState;
   entityCache: EntityCache;
   /** The shared cleanup owner performs teardown and exact lifetime completion. */
   onRetire: (record: EntityRecord) => Promise<void>;
@@ -50,8 +68,8 @@ export async function runStartupReconciliation(
     // Preserve any activation/retirement that commits after this fence instead
     // of letting the older snapshot erase that newer cache mutation.
     const hydrationFence = deps.entityCache.beginHydration();
-    const active = await deps.dispatchWorkspaceDO<EntityRecord[]>("entityListActive");
-    const preparing = await deps.dispatchWorkspaceDO<EntityRecord[]>("entityListPreparing");
+    const active = await deps.workspaceState.entityListActive();
+    const preparing = await deps.workspaceState.entityListPreparing();
     deps.entityCache.hydrate([...active, ...preparing], hydrationFence);
     hydratedCount = active.length;
   } catch (err) {
@@ -61,9 +79,7 @@ export async function runStartupReconciliation(
   // 2. Reconcile partial cleanups from a prior crash.
   const incompleteCleanupIds: string[] = [];
   try {
-    const incomplete = await deps.dispatchWorkspaceDO<EntityRecord[]>(
-      "entityFindIncompleteCleanups"
-    );
+    const incomplete = await deps.workspaceState.entityFindIncompleteCleanups();
     for (const record of incomplete) {
       incompleteCleanupIds.push(record.id);
       try {
@@ -81,13 +97,13 @@ export async function runStartupReconciliation(
   try {
     const gcOpts: { all: true; graceMs?: number } =
       deps.gcGraceMs !== undefined ? { all: true, graceMs: deps.gcGraceMs } : { all: true };
-    gcDeletedIds = await deps.dispatchWorkspaceDO<string[]>("entityGc", gcOpts);
+    gcDeletedIds = await deps.workspaceState.entityGc(gcOpts);
   } catch (err) {
     log.warn("[Bootstrap] entityGc safety sweep failed:", err);
   }
 
   if (deps.restoreRuntimes) {
-    const active = await deps.dispatchWorkspaceDO<EntityRecord[]>("entityListActive");
+    const active = await deps.workspaceState.entityListActive();
     await deps.restoreRuntimes(active);
   }
 

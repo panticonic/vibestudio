@@ -17,10 +17,10 @@ import type { RpcEnvelope } from "@vibestudio/rpc";
 import {
   ApprovalRecordSchema,
   GovernanceRecordSchema,
-} from "@vibestudio/shared/governance/governanceLog";
+} from "@vibestudio/shared/governance/schemas";
 import type { ApprovalResolvedEvent, GovernanceRecord } from "@vibestudio/shared/governance/types";
 import { DEVICE_ID_PATTERN, SERVER_BOOT_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
-import { workspaceCreationMethods } from "@vibestudio/service-schemas/workspaceCreation";
+import { workspaceHubControlMethods } from "@vibestudio/service-schemas/workspaceHubControl";
 import { HubPairingInviteSchema } from "@vibestudio/service-schemas/hubControl";
 import type { IssuedAgentCredential } from "./hostCore/deviceAuthStore.js";
 import { governanceListQuerySchema } from "./hostCore/governanceQuery.js";
@@ -133,23 +133,33 @@ const WorkspaceCreationRequesterSchema = z
 export const WorkspaceChildCreateInputSchema = z
   .object({
     requester: WorkspaceCreationRequesterSchema,
-    input: workspaceCreationMethods.createWorkspace.args.items[0],
+    input: workspaceHubControlMethods.createWorkspace.args.items[0],
   })
   .strict();
 export const WorkspaceChildCreationReceiptInputSchema = z
   .object({
     requester: WorkspaceCreationRequesterSchema,
-    input: workspaceCreationMethods.workspaceCreationReceipt.args.items[0],
+    input: workspaceHubControlMethods.workspaceCreationReceipt.args.items[0],
+  })
+  .strict();
+export const WorkspaceChildObserveDevicesInputSchema = z
+  .object({
+    userId: z.string().min(1),
+    input: workspaceHubControlMethods.observeDevices.args.items[0],
   })
   .strict();
 
 export interface WorkspaceChildHubPort {
   createWorkspace(
     input: z.infer<typeof WorkspaceChildCreateInputSchema>
-  ): Promise<z.infer<typeof workspaceCreationMethods.createWorkspace.returns>>;
+  ): Promise<z.infer<typeof workspaceHubControlMethods.createWorkspace.returns>>;
   workspaceCreationReceipt(
     input: z.infer<typeof WorkspaceChildCreationReceiptInputSchema>
-  ): Promise<z.infer<typeof workspaceCreationMethods.workspaceCreationReceipt.returns>>;
+  ): Promise<z.infer<typeof workspaceHubControlMethods.workspaceCreationReceipt.returns>>;
+  observeDevices(
+    input: z.infer<typeof WorkspaceChildObserveDevicesInputSchema>,
+    options?: { signal?: AbortSignal }
+  ): Promise<z.infer<typeof workspaceHubControlMethods.observeDevices.returns>>;
 
   forwardWorkspaceRpc(
     invocation: WorkspaceRpcInvocation,
@@ -191,6 +201,7 @@ export function createWorkspaceChildHubPort(
       | "agent-credential/revoke-entity"
       | "device/touch"
       | "device/invite"
+      | "device/observe"
       | "presence/report"
       | "workspace/create"
       | "workspace/creation-receipt"
@@ -199,7 +210,8 @@ export function createWorkspaceChildHubPort(
       | "governance/query",
     inputSchema: z.ZodType<TInput>,
     resultSchema: z.ZodType<TResult>,
-    input: TInput
+    input: TInput,
+    requestOptions: { signal?: AbortSignal } = {}
   ): Promise<TResult> => {
     const body = inputSchema.parse(input);
     const response = await fetchImpl(new URL(`/_r/s/internal/${route}`, options.hubUrl), {
@@ -209,6 +221,7 @@ export function createWorkspaceChildHubPort(
         Authorization: `Bearer ${options.runtimeToken}`,
       },
       body: JSON.stringify(body),
+      ...(requestOptions.signal ? { signal: requestOptions.signal } : {}),
     });
     const payload: unknown = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -228,15 +241,23 @@ export function createWorkspaceChildHubPort(
       post(
         "workspace/create",
         WorkspaceChildCreateInputSchema,
-        workspaceCreationMethods.createWorkspace.returns,
+        workspaceHubControlMethods.createWorkspace.returns,
         input
       ),
     workspaceCreationReceipt: (input) =>
       post(
         "workspace/creation-receipt",
         WorkspaceChildCreationReceiptInputSchema,
-        workspaceCreationMethods.workspaceCreationReceipt.returns,
+        workspaceHubControlMethods.workspaceCreationReceipt.returns,
         input
+      ),
+    observeDevices: (input, options) =>
+      post(
+        "device/observe",
+        WorkspaceChildObserveDevicesInputSchema,
+        workspaceHubControlMethods.observeDevices.returns,
+        input,
+        options
       ),
     forwardWorkspaceRpc: (invocation, delivery) =>
       forwardWorkspaceRpcHttp({

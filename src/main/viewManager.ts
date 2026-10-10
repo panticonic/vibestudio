@@ -1,3 +1,4 @@
+import { formatRpcFailure } from "@vibestudio/rpc";
 import { workspaceTransportArgument } from "../preload/workspaceTransportIdentity.js";
 /**
  * ViewManager - Centralized WebContentsView management for panels and browsers.
@@ -2954,7 +2955,7 @@ export class ViewManager {
       return {
         id,
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatRpcFailure(error),
       };
     }
   }

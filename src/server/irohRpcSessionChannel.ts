@@ -5,7 +5,6 @@ import {
   MAX_STREAM_CHUNK_BYTES,
   readToEnd,
   writeChunked,
-  writeFrame,
   writeIrohStreamPreamble,
   type IrohPhysicalBiStream,
   type IrohPhysicalConnection,
@@ -19,7 +18,12 @@ import {
   type RpcRequest,
   type RpcStreamRequest,
 } from "@vibestudio/rpc";
-import { encodeIrohStreamResponseHead } from "@vibestudio/rpc/protocol/irohStreamResponse";
+import {
+  encodeHeadFrame,
+  encodeDataFrame,
+  encodeEndFrame,
+  encodeErrorFrame,
+} from "@vibestudio/rpc/protocol/streamCodec";
 import {
   IROH_SESSION_CLOSED,
   IROH_SESSION_OPEN_RESULT,
@@ -232,37 +236,25 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
         throw new Error(`Iroh response stream ${requestId} already sent its head`);
       }
       route.headSent = true;
-      const written = writeFrame(
-        route.stream.send,
-        encodeIrohStreamResponseHead({
+      const written = route.stream.send.writeAll(
+        encodeHeadFrame({
           status: frame.status,
           statusText: frame.statusText,
           headerPairs: frame.headerPairs,
           finalUrl: frame.finalUrl,
-        }),
-        MAX_ENVELOPE_FRAME_BYTES
+        })
       );
       return written;
     }
     if (frame.kind === "error") {
-      const written = route.headSent
-        ? route.stream.send.reset(STREAM_CANCEL_CODE)
-        : writeFrame(
-            route.stream.send,
-            encodeIrohStreamResponseHead({
-              status: frame.status,
-              statusText: "RPC Error",
-              headerPairs: [],
-              finalUrl: "",
-              error: {
-                message: frame.message,
-                errorKind: frame.errorKind,
-                ...(frame.code ? { code: frame.code } : {}),
-                ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
-              },
-            }),
-            MAX_ENVELOPE_FRAME_BYTES
-          ).then(() => route.stream.send.finish());
+      const written = route.stream.send
+        .writeAll(
+          encodeErrorFrame({
+            status: frame.status,
+            error: frame.error,
+          })
+        )
+        .then(() => route.stream.send.finish());
       route.settled = true;
       this.requests.delete(requestId);
       this.inboundBodies.delete(requestId);
@@ -272,12 +264,14 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       route.settled = true;
       this.requests.delete(requestId);
       this.inboundBodies.delete(requestId);
-      return route.stream.send.finish();
+      return route.stream.send
+        .writeAll(encodeEndFrame({ bytesIn: frame.bytesIn }))
+        .then(() => route.stream.send.finish());
     }
     if (!route.headSent) {
       throw new Error(`Iroh response stream ${requestId} received body data before its head`);
     }
-    return this.writeMetered(route.stream, frame.bytes);
+    return this.writeMetered(route.stream, encodeDataFrame(frame.bytes));
   }
 
   remoteClosed(code?: number, reason?: string): void {
@@ -328,14 +322,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
           target: message.targetId,
           delivery: { caller: { callerId: "main", callerKind: "unknown" } },
           provenance: [],
-          message: {
-            type: "response",
-            requestId: message.requestId,
-            error: message.error,
-            errorKind: message.errorKind,
-            ...(message.errorCode ? { errorCode: message.errorCode } : {}),
-            ...(message.errorData === undefined ? {} : { errorData: message.errorData }),
-          },
+          message: { type: "response", requestId: message.requestId, error: message.error },
         });
         return;
       case "ws:routed-event-error":
@@ -403,17 +390,17 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
                 frameType: 0x04,
                 payload: JSON.stringify({
                   status: 502,
-                  message: errorMessage,
-                  code: "CONNECTION_LOST",
-                  errorKind: "transport",
+                  error: { message: errorMessage, code: "CONNECTION_LOST", errorKind: "transport" },
                 }),
               }
             : {
                 type: "response" as const,
                 requestId,
-                error: errorMessage,
-                errorKind: "transport" as const,
-                errorCode: "CONNECTION_LOST",
+                error: {
+                  message: errorMessage,
+                  errorKind: "transport" as const,
+                  code: "CONNECTION_LOST",
+                },
               };
         const failedEnvelope = responseEnvelopeFor(
           envelope,

@@ -38,6 +38,7 @@ import type { EntityKind, EntityRecord } from "@vibestudio/shared/runtime/entity
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import {
   BRIDGE_STREAM_CHUNK_BYTES,
+  deserializeRpcFailure,
   envelopeFromMessage,
   responseEnvelopeFor,
   type RpcEnvelope,
@@ -827,11 +828,13 @@ describe("RpcServer relay behavior", () => {
             type: "response",
             requestId: "req",
             fromId: "worker",
-            error: "approval required",
-            errorKind: "access",
-            errorCode: "EACQUIRE",
-            errorData: {
-              acquisition: { acquisitionId: "acq-worker", ownerRuntimeId: "panel:nav-a" },
+            error: {
+              message: "approval required",
+              errorKind: "access",
+              code: "EACQUIRE",
+              errorData: {
+                acquisition: { acquisitionId: "acq-worker", ownerRuntimeId: "panel:nav-a" },
+              },
             },
           },
         }),
@@ -1149,7 +1152,13 @@ describe("RpcServer relay behavior", () => {
             delivery: {
               caller: { callerId: "main", callerKind: "unknown", workspaceId: "foreign-workspace" },
             },
-            message: expect.objectContaining({ requestId: "foreign-call", errorCode: "EACCES" }),
+            message: expect.objectContaining({
+              requestId: "foreign-call",
+              error: expect.objectContaining({
+                code: "EACCES",
+                message: expect.stringContaining("not been admitted"),
+              }),
+            }),
           }),
         })
       );
@@ -1440,11 +1449,13 @@ describe("RpcServer relay behavior", () => {
           workspaceId: "destination-workspace",
         });
         if (type === "request") {
-          expect(received[0]?.message).toMatchObject({
-            type: "response",
-            error: failure.message,
-            errorCode: failure.code,
-            errorStack: failure.stack,
+          const message = received[0]?.message as { type: string; error: unknown };
+          expect(message.type).toBe("response");
+          expect(deserializeRpcFailure(message.error)).toMatchObject({
+            name: failure.name,
+            message: failure.message,
+            code: failure.code,
+            stack: expect.stringContaining("DurableObjectRetiredError"),
           });
         } else {
           expect(received[0]?.message).toMatchObject({
@@ -1452,8 +1463,12 @@ describe("RpcServer relay behavior", () => {
             frameType: FRAME_ERROR,
           });
           expect(JSON.parse((received[0]?.message as { payload: string }).payload)).toMatchObject({
-            message: failure.message,
-            code: failure.code,
+            error: {
+              name: failure.name,
+              message: failure.message,
+              code: failure.code,
+              stack: expect.stringContaining("DurableObjectRetiredError"),
+            },
           });
         }
       } finally {
@@ -1742,8 +1757,10 @@ describe("RpcServer relay behavior", () => {
         message: {
           type: "response",
           requestId: "req-host-control",
-          errorCode: "EACCES",
-          error: expect.stringContaining("cannot directly relay host-control method"),
+          error: {
+            code: "EACCES",
+            message: expect.stringContaining("cannot directly relay host-control method"),
+          },
         },
       },
     });
@@ -1806,8 +1823,10 @@ describe("RpcServer relay behavior", () => {
     });
     expect(JSON.parse(rejection.envelope.message.payload)).toMatchObject({
       status: 403,
-      code: "EACCES",
-      message: expect.stringContaining("cannot directly relay host-control method"),
+      error: {
+        code: "EACCES",
+        message: expect.stringContaining("cannot directly relay host-control method"),
+      },
     });
   });
 
@@ -1866,6 +1885,7 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
+    server.setExecutableVersionResolver(() => "test-executable");
 
     const fetchError = Object.assign(new TypeError("fetch failed"), {
       cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }),
@@ -1896,6 +1916,7 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
+    server.setExecutableVersionResolver(() => "test-executable");
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -2032,6 +2053,7 @@ describe("RpcServer relay behavior", () => {
       entityCache._onActivate(makeRecord(targetId, "do", { repoPath: "workers/browser-data" }));
       server.setWorkerdUrl("http://127.0.0.1:1111");
       server.setWorkerdGatewayToken("gateway-token");
+      server.setExecutableVersionResolver(() => "test-executable");
       const client = createClient("@workspace-extensions/browser-data");
       client.caller = createVerifiedCaller(client.caller.runtime.id, "extension", extensionCode);
       registerClient(server, client);
@@ -2088,6 +2110,7 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
+    server.setExecutableVersionResolver(() => "test-executable");
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -2118,6 +2141,7 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
+    server.setExecutableVersionResolver(() => "test-executable");
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -2197,6 +2221,7 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
+    server.setExecutableVersionResolver(() => "test-executable");
     let inheritedAuthorizingCaller: ReturnType<typeof createVerifiedCaller> | null = null;
     const fetchMock = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
       const outbound = JSON.parse(String(init.body));
@@ -2315,6 +2340,7 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
+    server.setExecutableVersionResolver(() => "test-executable");
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -2540,6 +2566,7 @@ describe("RpcServer relay behavior", () => {
 
     await expect(call).rejects.toMatchObject({
       message: expect.stringContaining("was sent via ws:route"),
+      errorKind: "protocol",
       code: "RPC_PROTOCOL_ERROR",
     });
 
@@ -2550,8 +2577,11 @@ describe("RpcServer relay behavior", () => {
       type: "ws:routed-response-error",
       targetId: "server",
       requestId,
-      error: expect.stringContaining("was sent via ws:route"),
-      errorCode: "RPC_PROTOCOL_ERROR",
+      error: expect.objectContaining({
+        message: expect.stringContaining("was sent via ws:route"),
+        errorKind: "protocol",
+        code: "RPC_PROTOCOL_ERROR",
+      }),
     });
   });
 
@@ -2700,8 +2730,11 @@ describe("RpcServer relay behavior", () => {
         type: "ws:routed-response-error",
         targetId: "panel:nav-b",
         requestId: "req-stranded",
-        error: "Target panel:nav-b did not reconnect within grace window",
-        errorCode: "RECONNECT_GRACE_EXPIRED",
+        error: {
+          message: "Target panel:nav-b did not reconnect within grace window",
+          code: "RECONNECT_GRACE_EXPIRED",
+          errorKind: "transport",
+        },
       });
 
       // A late response after teardown must NOT settle the caller a second
@@ -2719,7 +2752,13 @@ describe("RpcServer relay behavior", () => {
       const responderBounce = (target.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls
         .map(([message]) => message as { type: string })
         .find((m) => m.type === "ws:routed-response-error");
-      expect(responderBounce).toMatchObject({ errorCode: "TARGET_NOT_REACHABLE" });
+      expect(responderBounce).toMatchObject({
+        error: {
+          code: "TARGET_NOT_REACHABLE",
+          message: expect.stringContaining("Target not reachable"),
+          errorKind: "transport",
+        },
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -2846,6 +2885,7 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer();
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
+    server.setExecutableVersionResolver(() => "test-executable");
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -3025,6 +3065,7 @@ describe("RpcServer relay behavior", () => {
     );
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
+    server.setExecutableVersionResolver(() => "test-executable");
     const fetchMock = vi.fn().mockResolvedValue(new Response("streamed", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -4889,12 +4930,18 @@ describe("RpcServer relay behavior", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(client.ws.sendMessage).toHaveBeenCalledTimes(1);
-    expect((client.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatchObject({
+    const relayFailure = (client.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      error: unknown;
+    };
+    expect(relayFailure).toMatchObject({
       type: "ws:routed-response-error",
       targetId: "panel:nav-b",
       requestId: "req-123",
-      error: "Target not reachable: panel:nav-b",
-      errorCode: "TARGET_NOT_REACHABLE",
+      error: {
+        message: "Target not reachable: panel:nav-b",
+        code: "TARGET_NOT_REACHABLE",
+        errorKind: "transport",
+      },
     });
   });
 });
@@ -5342,8 +5389,10 @@ describe("RpcServer caller identity", () => {
           envelope: expect.objectContaining({
             message: expect.objectContaining({
               requestId: "unary-missing-cause",
-              error: expect.stringContaining("does not exist"),
-              errorCode: "EACCES",
+              error: expect.objectContaining({
+                message: expect.stringContaining("does not exist"),
+                code: "EACCES",
+              }),
             }),
           }),
         }),
@@ -5352,6 +5401,7 @@ describe("RpcServer caller identity", () => {
             message: expect.objectContaining({
               requestId: "stream-missing-cause",
               frameType: FRAME_ERROR,
+              payload: expect.stringContaining('"code":"EACCES"'),
             }),
           }),
         }),
@@ -5706,9 +5756,10 @@ describe("RpcServer caller identity", () => {
     await handleRpc(server, client, rpcRequest("req-3", "internal.shellOnly"));
 
     expect(testServer(server).dispatcher.dispatch).toHaveBeenCalledTimes(1);
-    expect(sentResponse(client).envelope.message.error).toContain(
-      "not accessible to worker callers"
-    );
+    expect(deserializeRpcFailure(sentResponse(client).envelope.message.error)).toMatchObject({
+      message: expect.stringContaining("not accessible to worker callers"),
+      errorKind: "internal",
+    });
   });
 
   it("dispatches server callers using their own server identity", async () => {
@@ -6008,6 +6059,7 @@ describe("RpcServer caller identity", () => {
       resolveEntered = resolve;
     });
     let observedAbort = false;
+    let observedReason: unknown;
     dispatcher.dispatch.mockImplementation(
       async (ctx: { signal?: AbortSignal }) =>
         new Promise((resolve) => {
@@ -6016,6 +6068,7 @@ describe("RpcServer caller identity", () => {
             "abort",
             () => {
               observedAbort = true;
+              observedReason = ctx.signal?.reason;
               resolve(null);
             },
             { once: true }
@@ -6033,6 +6086,7 @@ describe("RpcServer caller identity", () => {
     await pending;
 
     expect(observedAbort).toBe(true);
+    expect(observedReason).toMatchObject({ code: "RPC_ABORTED" });
   });
 });
 
@@ -6618,7 +6672,10 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
     expect(sends).toHaveLength(1);
     expect(sends[0]).toMatchObject({
       kind: "error",
-      message: expect.stringContaining("exactly one"),
+      error: {
+        message: expect.stringContaining("send exactly one"),
+        errorKind: "protocol",
+      },
     });
   });
 

@@ -2,7 +2,11 @@ import { defineConfig, type UserConfig } from "vitest/config";
 import fs from "node:fs";
 import path from "node:path";
 import { vitestSharedConfig } from "./vitest.sharedConfig";
-import { discoveredUserlandSourceAliases, hostSourceAliases } from "./vitest.sourceAliases";
+import {
+  discoveredUserlandSourceAliases,
+  discoveredUserlandSourceMappings,
+  hostSourceAliases,
+} from "./vitest.sourceAliases";
 import { userlandDependencyAliases } from "./vitest.userlandProjection";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
 import { exactPairTestsFor, excludedIntegrationTestsFor } from "./vitest.exactPairTests";
@@ -206,8 +210,8 @@ export default defineConfig(async (): Promise<UserConfig> => {
         // Nested build probes use the exact same semantic package export graph.
         VIBESTUDIO_USERLAND_SOURCE_ALIASES: JSON.stringify(
           Object.fromEntries(
-            discoveredUserlandSourceAliases(dependencyProjection.units).map(
-              ({ find, replacement }) => [String(find), replacement]
+            discoveredUserlandSourceMappings(dependencyProjection.units).map(
+              ({ find, replacement }) => [find, replacement]
             )
           )
         ),

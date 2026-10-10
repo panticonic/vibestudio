@@ -463,7 +463,7 @@ type MethodResult<D extends MethodSchema> = D["returns"] extends z.ZodType
   : unknown;
 
 export type MethodFn<D extends MethodSchema> = (
-  ...args: ArgsOf<z.infer<D["args"]>>
+  ...args: ArgsOf<z.input<D["args"]>>
 ) => Promise<MethodResult<D>>;
 
 /** The sub-table of methods under a dotted prefix (`"units."` → list, logs, …). */
@@ -531,17 +531,13 @@ function expectedCallShape(service: string, method: string, definition: MethodSc
   return `${service}.${method}(${args.join(", ")})`;
 }
 
-/** Validate and dispatch one dynamically selected method from a schema table.
- * Adapters use this when their public method name differs from the wire name. */
-export async function callTypedServiceMethod<M extends ServiceMethodSchemas>(
+/** The shared argument validator for unary and streaming schema clients. */
+export function parseServiceMethodArgs(
   service: string,
-  methods: M,
-  call: ServiceCallFn,
-  method: keyof M & string,
+  method: string,
+  definition: MethodSchema,
   args: unknown[]
-): Promise<unknown> {
-  const definition = methods[method];
-  if (!definition) throw new Error(`Service "${service}" has no method "${method}"`);
+): unknown[] {
   let parsedArgs: unknown[];
   try {
     const tupleItems = (definition.args as unknown as { _def?: { items?: readonly unknown[] } })
@@ -577,8 +573,26 @@ export async function callTypedServiceMethod<M extends ServiceMethodSchemas>(
     });
     throw failure;
   }
+  return parsedArgs;
+}
+
+/** Validate and dispatch one dynamically selected method from a schema table.
+ * Adapters use this when their public method name differs from the wire name. */
+export async function callTypedServiceMethod<
+  M extends ServiceMethodSchemas,
+  K extends keyof M & string,
+>(
+  service: string,
+  methods: M,
+  call: ServiceCallFn,
+  method: K,
+  args: unknown[]
+): Promise<MethodResult<M[K]>> {
+  const definition = methods[method];
+  if (!definition) throw new Error(`Service "${service}" has no method "${method}"`);
+  const parsedArgs = parseServiceMethodArgs(service, method, definition, args);
   const result = await call(service, method, parsedArgs);
-  if (!definition.returns) return result;
+  if (!definition.returns) return result as MethodResult<M[K]>;
   try {
     // JSON success envelopes represent logical `undefined` as `null`. Convert
     // only when the declared schema accepts undefined and rejects null, so
@@ -605,8 +619,19 @@ export function createTypedServiceClient<M extends ServiceMethodSchemas>(
   methods: M,
   call: ServiceCallFn
 ): TypedServiceClient<M> {
+  return createServiceClientSurface<M>(service, Object.keys(methods), (method, args) =>
+    callTypedServiceMethod(service, methods, call, method, args)
+  );
+}
+
+/** Shared construction of nested method groups; adapters supply the validated invocation. */
+export function createServiceClientSurface<M extends ServiceMethodSchemas>(
+  service: string,
+  names: readonly string[],
+  invoke: (method: string, args: unknown[]) => Promise<unknown>
+): TypedServiceClient<M> {
   const root: Record<string, unknown> = {};
-  for (const fullName of Object.keys(methods)) {
+  for (const fullName of names) {
     const segments = fullName.split(".");
     let node = root;
     for (const segment of segments.slice(0, -1)) {
@@ -622,8 +647,7 @@ export function createTypedServiceClient<M extends ServiceMethodSchemas>(
     if (node[leaf] !== undefined) {
       throw new Error(`Service "${service}" method "${fullName}" collides with group "${leaf}"`);
     }
-    node[leaf] = (...args: unknown[]) =>
-      callTypedServiceMethod(service, methods, call, fullName, args);
+    node[leaf] = (...args: unknown[]) => invoke(fullName, args);
   }
   return root as TypedServiceClient<M>;
 }

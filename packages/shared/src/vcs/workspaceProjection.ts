@@ -4,6 +4,7 @@ import {
   compareUtf16CodeUnits,
   sha256HexSyncText,
 } from "@vibestudio/content-addressing";
+import { z } from "zod";
 
 export type WorkspaceStateRef =
   | { kind: "event"; eventId: string }
@@ -77,6 +78,64 @@ export interface ContextMaterializationCommand {
   blobs: WorkspaceMaterializationBlob[];
   payloadDigest: string;
 }
+
+const workspaceStateRefSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("application"), applicationId: z.string().min(1) }).strict(),
+]);
+const materializationFileSchema = z
+  .object({ path: z.string(), contentHash: z.string().min(1), mode: z.number().int().nonnegative() })
+  .strict();
+const materializationRepositorySchema = z.discriminatedUnion("presence", [
+  z
+    .object({
+      repositoryId: z.string().min(1),
+      repoPath: z.string(),
+      presence: z.literal("present"),
+      fileManifestId: z.string().min(1),
+      source: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("content-root"), contentRoot: z.string().min(1) }).strict(),
+        z
+          .object({
+            kind: z.literal("delta"),
+            basisContentRoot: z.string().min(1),
+            changes: z
+              .array(
+                z
+                  .object({
+                    path: z.string(),
+                    expected: materializationFileSchema.omit({ path: true }).nullable(),
+                    result: materializationFileSchema.omit({ path: true }).nullable(),
+                  })
+                  .strict()
+              ),
+          })
+          .strict(),
+        z
+          .object({ kind: z.literal("snapshot"), files: z.array(materializationFileSchema) })
+          .strict(),
+      ]),
+    })
+    .strict(),
+  z
+    .object({ repositoryId: z.string().min(1), repoPath: z.string(), presence: z.literal("deleted") })
+    .strict(),
+]);
+
+/** Canonical decoder for a journaled materialization payload at the host boundary. */
+export const ContextMaterializationCommandSchema: z.ZodType<ContextMaterializationCommand> = z
+  .object({
+    materializationId: z.string().min(1),
+    contextId: z.string().min(1),
+    commandId: z.string().min(1),
+    mode: z.enum(["initialize", "patch", "replace"]),
+    previousState: workspaceStateRefSchema.nullable(),
+    targetState: workspaceStateRefSchema,
+    repositories: z.array(materializationRepositorySchema),
+    blobs: z.array(z.object({ contentHash: z.string().min(1), base64: z.string() }).strict()),
+    payloadDigest: z.string().min(1),
+  })
+  .strict();
 
 export interface ContextMaterializationReceipt {
   materializationId: string;

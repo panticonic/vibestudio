@@ -28,6 +28,7 @@ import {
   buildWorkspaceChildEnv,
   completeControlPairing,
   executeHubControl,
+  observeWorkspaceChildDevices,
   applyHubWorkspacePresenceReport,
   snapshotInternalDOBundleForHub,
   handleWorkspaceChildExit,
@@ -1736,6 +1737,53 @@ describe("hub RPC pairing surfacing (§5)", () => {
       const read = vi.fn();
       await executeHubControl(state, subject, "listDevices", [], read);
       expect(read).toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      state.identityDb.close();
+    }
+  });
+
+  it("limits child observations to live workspace members and settles on change or abort", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    state.controlTransport!.rpcServer = { retireCaller: vi.fn(async () => undefined) } as never;
+    const input = { userId: rootUserId, input: {} };
+    const controller = new AbortController();
+    try {
+      const initial = await observeWorkspaceChildDevices(state, runtime.workspaceId, input);
+      expect(initial.version).toMatch(/^[0-9a-f]{64}$/u);
+
+      const waitingForChange = observeWorkspaceChildDevices(state, runtime.workspaceId, {
+        ...input,
+        input: { afterVersion: initial.version },
+      });
+      const extraDevice = state.deviceAuthStore.issueDevice({
+        userId: rootUserId,
+        label: "new-device",
+        transport: { kind: "local" },
+      });
+      await revokeHubDevice(
+        state,
+        { userId: rootUserId, handle: "root", role: "root" },
+        extraDevice.deviceId
+      );
+      const updated = await waitingForChange;
+      expect(updated.version).not.toBe(initial.version);
+
+      const changed = await observeWorkspaceChildDevices(state, runtime.workspaceId, input);
+      const waitingForCancel = observeWorkspaceChildDevices(
+        state,
+        runtime.workspaceId,
+        { ...input, input: { afterVersion: changed.version } },
+        controller.signal
+      );
+      const reason = new Error("onboarding view closed");
+      controller.abort(reason);
+      await expect(waitingForCancel).rejects.toBe(reason);
+
+      await expect(
+        observeWorkspaceChildDevices(state, "ws_not_a_member", input)
+      ).rejects.toMatchObject({ code: "EACCES" });
     } finally {
       controller.abort();
       state.identityDb.close();

@@ -22,15 +22,6 @@ import {
 import { jsonMode, printError, printResult, UsageError } from "./output.js";
 import { resolveSessionScope, SCOPE_FLAGS } from "./agent/sessionContext.js";
 
-interface PanelNode {
-  slotId?: string;
-  title?: string;
-  kind?: string;
-  source?: string;
-  contextId?: string;
-  parentSlotId?: string | null;
-}
-
 interface PanelRow {
   id: string;
   title: string | null;
@@ -40,39 +31,18 @@ interface PanelRow {
   depth: number;
 }
 
-interface PanelScreenshotResult {
-  data: string;
-  mimeType: "image/png" | "image/jpeg";
-  width: number;
-  height: number;
-}
-
-interface PanelConsoleHistoryEntry {
-  timestamp: number;
-  level: string;
-  message: string;
-  line: number;
-  sourceId: string;
-  url: string;
-}
-
-interface PanelConsoleHistoryResult {
-  entries: PanelConsoleHistoryEntry[];
-  errors: PanelConsoleHistoryEntry[];
-  dropped: { entries: number; errors: number };
-}
-
 async function list(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const { client, contextId } = resolveSessionScope(inv);
     const rows: PanelRow[] = [];
-    const rootGroups = await client.call<{
-      groups: Array<{ ownerUserId: string }>;
-      nextCursor: string | null;
-    }>("workspace-state.panelTree.rootGroups", [{ limit: 100 }]);
+    const rootGroups = await client.mainCall("workspace-state.panelTree.rootGroups", [
+      { limit: 100 },
+    ]);
     const queue: Array<{
-      group: { kind: "roots"; ownerUserId: string } | { kind: "children"; parentSlotId: string };
+      group:
+        | { kind: "roots"; ownerUserId: string | null }
+        | { kind: "children"; parentSlotId: string };
       depth: number;
     }> = rootGroups.groups.map((group) => ({
       group: { kind: "roots", ownerUserId: group.ownerUserId },
@@ -83,10 +53,9 @@ async function list(inv: ParsedInvocation): Promise<number> {
       if (!next) break;
       let cursor: string | undefined;
       do {
-        const page = await client.call<{ nodes: PanelNode[]; nextCursor: string | null }>(
-          "workspace-state.panelTree.page",
-          [{ group: next.group, limit: 200, ...(cursor ? { cursor } : {}) }]
-        );
+        const page = await client.mainCall("workspace-state.panelTree.page", [
+          { group: next.group, limit: 200, ...(cursor ? { cursor } : {}) },
+        ]);
         for (const node of page.nodes) {
           if (typeof node.slotId !== "string") continue;
           rows.push({
@@ -136,7 +105,7 @@ async function screenshot(inv: ParsedInvocation): Promise<number> {
     const format = inv.flags["format"] === "jpeg" ? "jpeg" : "png";
     const quality = intFlag(inv, "quality");
     const { client } = resolveSessionScope(inv);
-    const result = await client.call<PanelScreenshotResult>("panelCdp.screenshot", [
+    const result = await client.mainCall("panelCdp.screenshot", [
       panelId,
       { format, ...(quality !== undefined ? { quality } : {}) },
     ]);
@@ -168,7 +137,7 @@ async function consoleHistory(inv: ParsedInvocation): Promise<number> {
     const limit = intFlag(inv, "limit");
     const errorsOnly = inv.flags["errors"] === true;
     const { client } = resolveSessionScope(inv);
-    const result = await client.call<PanelConsoleHistoryResult>("panelCdp.consoleHistory", [
+    const result = await client.mainCall("panelCdp.consoleHistory", [
       panelId,
       { ...(limit !== undefined ? { limit, errorLimit: limit } : {}) },
     ]);

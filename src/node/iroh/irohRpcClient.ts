@@ -1,3 +1,4 @@
+import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
 import { randomUUID } from "node:crypto";
 import {
   EndpointGenerationOwner,
@@ -10,7 +11,7 @@ import {
   type NodePhysicalConnection,
   type NodePhysicalEndpoint,
 } from "@vibestudio/iroh-transport/node";
-import { createRpcClient, type RpcClient, type RpcStreamOptions } from "@vibestudio/rpc";
+import { type RpcStreamOptions } from "@vibestudio/rpc";
 import {
   createIrohClientPipe,
   type IrohClientPipe,
@@ -40,7 +41,7 @@ export interface IrohRpcClientOptions {
 interface Connected {
   pipe: IrohClientPipe;
   session: IrohClientSession;
-  rpc: RpcClient;
+  rpc: RpcWireClient;
   callerId: string;
 }
 
@@ -73,12 +74,12 @@ export class IrohRpcClient {
     return (await this.ensureConnected()).callerId;
   }
 
-  async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
-    return (await this.ensureConnected()).rpc.call<T>("main", method, args);
+  async call(method: string, args: unknown[] = []): Promise<unknown> {
+    return (await this.ensureConnected()).rpc.call("main", method, args);
   }
 
-  async callTarget<T = unknown>(target: string, method: string, args: unknown[] = []): Promise<T> {
-    return (await this.ensureConnected()).rpc.call<T>(target, method, args);
+  async callTarget(target: string, method: string, args: unknown[] = []): Promise<unknown> {
+    return (await this.ensureConnected()).rpc.call(target, method, args);
   }
 
   async stream(
@@ -151,7 +152,7 @@ export class IrohRpcClient {
     });
     await session.ready?.();
     const callerId = session.callerId() ?? this.options.callerId;
-    const rpc = createRpcClient({
+    const rpc = createInternalRpcClient({
       selfId: callerId,
       callerKind: this.options.callerKind ?? "shell",
       transport: session,

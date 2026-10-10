@@ -966,7 +966,7 @@ export const runtimeMethods = defineServiceMethods({
     returns: z.array(
       z.object({
         id: z.string().describe("Canonical entity id."),
-        kind: z.string().describe("Entity kind."),
+        kind: z.enum(["panel", "app", "worker", "do", "session"]).describe("Entity kind."),
         source: z.string().describe("Source repo path."),
         key: z.string().describe("Caller-selected instance key encoded in the canonical id."),
         contextId: z.string().describe("Owning context id."),

@@ -53,8 +53,10 @@ envelope's `delivery` block and is extracted server-side into `ctx.readOnly` —
 how `idempotencyKey` flows.
 
 ```ts
-await rpc.call("main", "blobstore.putText", [text], { readOnly: true }); // → blocked
-await rpc.call("main", "blobstore.getText", [digest], { readOnly: true }); // → ok
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+
+await rpc.call("main", mainRpcMethods["blobstore.putText"], [text], { readOnly: true }); // → blocked
+await rpc.call("main", mainRpcMethods["blobstore.getText"], [digest], { readOnly: true }); // → ok
 ```
 
 ### Per eval run (the agent entry point)
@@ -65,7 +67,10 @@ the runtime bindings (`fs`/`vcs`/`workers`/…) — carries the derived read-onl
 flag, so the dispatcher refuses any non-`read` method.
 
 ```ts
-const executeEval = createEvalExecutor((method, args) => rpc.call("main", method, args));
+import { createMainRpcCaller } from "@vibestudio/service-schemas/mainRpc";
+import { createEvalExecutor } from "@vibestudio/service-schemas/eval";
+
+const executeEval = createEvalExecutor(createMainRpcCaller(rpc));
 await executeEval({
   runId: crypto.randomUUID(),
   source: {

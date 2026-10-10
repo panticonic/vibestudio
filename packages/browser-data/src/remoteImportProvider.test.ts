@@ -1,10 +1,12 @@
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { browserEnvironmentMethods } from "@vibestudio/service-schemas/browserEnvironment";
 import { describe, expect, it, vi } from "vitest";
 import { RemoteBrowserImportProvider } from "./remoteImportProvider.js";
 
 describe("RemoteBrowserImportProvider", () => {
   it("acquires the host read before returning background consumption", async () => {
     const calls: string[] = [];
-    const call = vi.fn(async (method: string) => {
+    const call = vi.fn(async (method: string, ..._args: unknown[]) => {
       calls.push(method);
       if (method === "startImportRead") return "operation-1";
       if (method === "nextImportFrame") {
@@ -14,7 +16,11 @@ describe("RemoteBrowserImportProvider", () => {
     });
     const provider = new RemoteBrowserImportProvider(
       "device:test",
-      call as unknown as <T>(method: string, ...args: unknown[]) => Promise<T>
+      createTypedServiceClient(
+        "browserEnvironment",
+        browserEnvironmentMethods,
+        (_service, method, args) => call(method, ...args)
+      )
     );
 
     const read = await provider.openImport(

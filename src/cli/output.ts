@@ -1,3 +1,4 @@
+import { formatRpcFailure } from "@vibestudio/rpc";
 import { redactToken } from "@vibestudio/shared/redact";
 
 /**
@@ -126,7 +127,7 @@ export function redactCliSecrets(message: string): string {
 
 /** Print an error and return the exit code it maps to. */
 export function printError(error: unknown, options: { json: boolean }): number {
-  const message = redactCliSecrets(error instanceof Error ? error.message : String(error));
+  const message = redactCliSecrets(formatRpcFailure(error));
   const exitCode = error instanceof CliError ? error.exitCode : EXIT_ERROR;
   if (options.json) {
     console.error(JSON.stringify({ error: message, exitCode }));

@@ -1,15 +1,5 @@
-export const FAVICON_MIME_TYPES = [
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "image/x-icon",
-  "image/svg+xml",
-  "image/bmp",
-  "image/avif",
-] as const;
-
-export type FaviconMimeType = (typeof FAVICON_MIME_TYPES)[number];
+import { FAVICON_MIME_TYPES, type FaviconMimeType } from "@vibestudio/browser-contracts/favicon";
+export { FAVICON_MIME_TYPES, type FaviconMimeType } from "@vibestudio/browser-contracts/favicon";
 
 export const MAX_PAGE_FAVICON_BYTES = 128 * 1024;
 

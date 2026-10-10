@@ -1,3 +1,4 @@
+import type { RpcWireCaller } from "@vibestudio/rpc/internal";
 import * as crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
@@ -10,8 +11,11 @@ import {
   webhookIngressMethods,
 } from "@vibestudio/service-schemas/webhookIngress";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
-import { doTargetId, type RpcCallerLike } from "@vibestudio/shared/workspaceServiceRpc";
+import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
+import { type MethodFn } from "@vibestudio/shared/typedServiceClient";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import { webhookEngineMethods } from "@vibestudio/service-schemas/webhookEngine";
 import {
   getHeader,
   summarizeWebhookIngressSubscription,
@@ -46,6 +50,8 @@ const RELAY_ENVELOPE_TOLERANCE_MS = 5 * 60 * 1000;
 const DELIVERY_DEDUPE_TTL_MS = 15 * 60 * 1000;
 
 type JwkWithKeyId = crypto.JsonWebKey & { kid?: string };
+
+const webhookStoreRpcMethods = createRpcMethods("webhookEngine", webhookEngineMethods, "");
 
 export interface WebhookIngressStore {
   create(
@@ -100,7 +106,7 @@ export class DOWebhookIngressStore implements WebhookIngressStore {
   };
 
   constructor(
-    private readonly rpc?: RpcCallerLike,
+    private readonly rpc?: Pick<RpcWireCaller, "call">,
     private readonly doDispatch?: DoDispatcher
   ) {
     if (!rpc && !doDispatch) {
@@ -108,30 +114,33 @@ export class DOWebhookIngressStore implements WebhookIngressStore {
     }
   }
 
-  private call(method: string, args: unknown[]): Promise<unknown> {
+  private call<K extends keyof typeof webhookEngineMethods & string>(
+    method: K,
+    args: Parameters<MethodFn<(typeof webhookEngineMethods)[K]>>
+  ): Promise<Awaited<ReturnType<MethodFn<(typeof webhookEngineMethods)[K]>>>> {
     // Server-owned internal DOs are infrastructure, not user-created runtime
     // entities. Direct DODispatch preserves the server caller envelope and
     // lazily ensures workerd without inventing a public runtime entity merely
     // to satisfy the unified userland relay's active-entity assertion.
-    if (this.doDispatch) return this.doDispatch.dispatch(this.ref, method, ...args);
-    if (!this.rpc) throw new Error("DOWebhookIngressStore has no configured RPC relay");
-    return this.rpc.call(doTargetId(this.ref), method, args);
+    return webhookStoreRpcMethods[method].invoke(args, (parsedArgs) => {
+      if (this.doDispatch) return this.doDispatch.dispatch(this.ref, method, ...parsedArgs);
+      if (!this.rpc) throw new Error("DOWebhookIngressStore has no configured RPC relay");
+      return this.rpc.call(doTargetId(this.ref), method, parsedArgs);
+    });
   }
 
   create(
     input: Omit<WebhookIngressSubscription, "subscriptionId" | "createdAt" | "updatedAt">
   ): Promise<WebhookIngressSubscription> {
-    return this.call("create", [input]) as Promise<WebhookIngressSubscription>;
+    return this.call("create", [input]);
   }
 
   get(subscriptionId: string): Promise<WebhookIngressSubscription | null> {
-    return this.call("get", [subscriptionId]) as Promise<WebhookIngressSubscription | null>;
+    return this.call("get", [subscriptionId]);
   }
 
   list(ownerCallerId?: string): Promise<WebhookIngressSubscription[]> {
-    return this.call("list", ownerCallerId === undefined ? [] : [ownerCallerId]) as Promise<
-      WebhookIngressSubscription[]
-    >;
+    return this.call("list", ownerCallerId === undefined ? [] : [ownerCallerId]);
   }
 
   async replace(subscription: WebhookIngressSubscription): Promise<void> {
@@ -155,7 +164,7 @@ export interface WebhookIngressServiceDeps {
   relayOrigin?: string;
   directPublicBaseUrl?: string | null;
   store?: WebhookIngressStore;
-  rpc?: RpcCallerLike;
+  rpc?: Pick<RpcWireCaller, "call">;
   /** Server-internal path for the infrastructure-owned WebhookStoreDO. */
   doDispatch?: DoDispatcher;
   now?: () => number;

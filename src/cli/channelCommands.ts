@@ -13,17 +13,20 @@
  */
 
 import {
+  channelClientRpcMethods,
   readChannelSubscriptionRecords,
   type ChannelHistoryEntry,
+  type ChannelCliRpc,
+  type ChannelProtocolEvent,
   type ChannelRosterEntry,
-  type ChannelSendResult,
   type ChannelSummary,
 } from "@vibestudio/service-schemas/channel";
+import { createRpcMethodCaller } from "@vibestudio/shared/rpcMethods";
+import { schemaRpcCaller, schemaRpcStream, type RpcWireCaller } from "@vibestudio/rpc/internal";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import {
   CHANNEL_PROTOCOL,
   type ChannelDurableObjectEntity,
-  type ChannelServiceProvider,
   listChannelDurableObjectEntities,
   resolveExistingChannelTarget,
 } from "@vibestudio/shared/channelTarget";
@@ -37,16 +40,13 @@ import { CliError, jsonMode, printError, printResult, UsageError } from "./outpu
 import { resolveSessionScope, SCOPE_FLAGS } from "./agent/sessionContext.js";
 import type { RpcClient } from "./rpcClient.js";
 
-interface ResolvedService {
-  kind: string;
-  targetId?: string;
-}
-
 export async function channelEntities(client: RpcClient): Promise<ChannelDurableObjectEntity[]> {
   return listChannelDurableObjectEntities({
-    listServices: () => client.call<ChannelServiceProvider[]>("workers.listServices", []),
-    listDurableObjectEntities: () =>
-      client.call<ChannelDurableObjectEntity[]>("runtime.listEntities", [{ kind: "do" }]),
+    listServices: () => client.mainCall("workers.listServices", []),
+    listDurableObjectEntities: async () =>
+      (await client.mainCall("runtime.listEntities", [{ kind: "do" }])).filter(
+        (entity): entity is typeof entity & { kind: "do" } => entity.kind === "do"
+      ),
   });
 }
 
@@ -56,9 +56,11 @@ export async function channelEntities(client: RpcClient): Promise<ChannelDurable
 export async function existingChannelTarget(client: RpcClient, channelId: string): Promise<string> {
   return resolveExistingChannelTarget(
     {
-      listServices: () => client.call<ChannelServiceProvider[]>("workers.listServices", []),
-      listDurableObjectEntities: () =>
-        client.call<ChannelDurableObjectEntity[]>("runtime.listEntities", [{ kind: "do" }]),
+      listServices: () => client.mainCall("workers.listServices", []),
+      listDurableObjectEntities: async () =>
+        (await client.mainCall("runtime.listEntities", [{ kind: "do" }])).filter(
+          (entity): entity is typeof entity & { kind: "do" } => entity.kind === "do"
+        ),
     },
     channelId
   );
@@ -70,40 +72,32 @@ async function resolveTargetId(
   protocol: string,
   objectKey: string | null
 ): Promise<string> {
-  const service = await client.call<ResolvedService>("workers.resolveService", [
-    protocol,
-    objectKey,
-  ]);
+  const service = await client.mainCall("workers.resolveService", [protocol, objectKey]);
   if (service.kind !== "durable-object" || !service.targetId) {
     throw new CliError(`service ${protocol} is not a durable-object service`);
   }
   return service.targetId;
 }
 
+function channelCaller(client: RpcClient, target: string) {
+  const wire: RpcWireCaller = {
+    call: (targetId, method, args) => client.callTarget(targetId, method, args),
+    stream: (targetId, method, args, options) => client.stream(targetId, method, args, options),
+  };
+  const rpc = schemaRpcCaller(wire);
+  const call = createRpcMethodCaller(rpc, target, channelClientRpcMethods);
+  const stream = schemaRpcStream(wire.stream);
+  return Object.assign(call, {
+    subscribe: (
+      args: Parameters<ChannelCliRpc["subscribe"]>,
+      options?: import("@vibestudio/rpc").RpcCallOptions
+    ) => stream(target, channelClientRpcMethods.subscribe, args, options),
+  });
+}
+
 // ── shared shapes of the raw DO relay ───────────────────────────────────────
 
-interface ServerLogEvent {
-  id: number;
-  messageId: string;
-  type: string;
-  payload: unknown;
-  senderId?: string | null;
-  senderMetadata?: Record<string, unknown> | null;
-  ts: number;
-}
-interface ReplayEnvelope {
-  logEvents: ServerLogEvent[];
-  ready: {
-    replayToId?: number;
-    snapshotLastSeq?: number;
-    hasMoreAfter?: boolean;
-  };
-}
-interface RosterMember {
-  participantId: string;
-  metadata: Record<string, unknown>;
-  transport: string;
-}
+type ServerLogEvent = ChannelProtocolEvent;
 
 /** Flatten an agentic message payload into plain text (best effort). */
 function extractText(payload: unknown): string | null {
@@ -198,7 +192,7 @@ async function history(inv: ParsedInvocation): Promise<number> {
     let cursor = after;
     let throughSeq: number | undefined;
     while (events.length < limit) {
-      const envelope = await client.callTarget<ReplayEnvelope>(target, "getReplayAfter", [
+      const envelope = await channelCaller(client, target)("getReplayAfter", [
         {
           after: cursor,
           limit: Math.min(500, limit - events.length),
@@ -256,7 +250,7 @@ async function send(inv: ParsedInvocation): Promise<number> {
     }
     const { client } = resolveSessionScope(inv);
     const target = await resolveTargetId(client, CHANNEL_PROTOCOL, channelId);
-    const result = await client.callTarget<ChannelSendResult>(target, "sendAsCaller", [text, opts]);
+    const result = await channelCaller(client, target)("sendAsCaller", [text, opts]);
     printResult(result, {
       json,
       human: () => console.log(`sent (#${result.id ?? "?"}) ${result.messageId}`),
@@ -273,7 +267,7 @@ async function roster(inv: ParsedInvocation): Promise<number> {
     const channelId = requireChannelId(inv);
     const { client } = resolveSessionScope(inv);
     const target = await existingChannelTarget(client, channelId);
-    const members = await client.callTarget<RosterMember[]>(target, "getParticipants", []);
+    const members = await channelCaller(client, target)("getParticipants", []);
     const entries: ChannelRosterEntry[] = members.map((m) => ({
       participantId: m.participantId,
       handle: handleOf(m.metadata),
@@ -339,9 +333,7 @@ async function tail(inv: ParsedInvocation): Promise<number> {
       let acknowledged = false;
       const terminal = (async () => {
         try {
-          const response = await client.stream(
-            target,
-            "subscribe",
+          const response = await channelCaller(client, target).subscribe(
             [
               callerId,
               {
@@ -354,7 +346,7 @@ async function tail(inv: ParsedInvocation): Promise<number> {
             { signal: controller.signal }
           );
           for await (const record of readChannelSubscriptionRecords<
-            { envelope?: ReplayEnvelope },
+            { envelope?: import("@vibestudio/service-schemas/channel").ChannelReplayEnvelope },
             {
               channelId?: string;
               message?: { kind?: string; event?: ServerLogEvent };

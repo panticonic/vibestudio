@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 
 vi.mock("react-native", () => ({
   AppState: { currentState: "active", addEventListener: vi.fn() },
@@ -77,7 +78,7 @@ describe("mobile bundle delivery over Iroh", () => {
 
     expect(transfer.offset).toBe(5);
     expect(rpc.streamReadable).toHaveBeenCalledTimes(1);
-    expect(rpc.streamReadable).toHaveBeenCalledWith("main", "gateway.fetch", [
+    expect(rpc.streamReadable).toHaveBeenCalledWith("main", mainRpcMethods["gateway.fetch"], [
       {
         path: "/bundle",
         method: "GET",
@@ -143,7 +144,7 @@ describe("mobile bundle delivery over Iroh", () => {
       streamArtifactToNative(rpc, host, { path: "/bundle" }, "build", "index.bundle", transfer)
     ).resolves.toBe(true);
     expect(transfer.offset).toBe(4);
-    expect(rpc.streamReadable).toHaveBeenLastCalledWith("main", "gateway.fetch", [
+    expect(rpc.streamReadable).toHaveBeenLastCalledWith("main", mainRpcMethods["gateway.fetch"], [
       expect.objectContaining({ headers: expect.objectContaining({ Range: "bytes=2-" }) }),
     ]);
     expect(host.appendBundleChunk).toHaveBeenLastCalledWith("AwQ=", "build", "index.bundle", false);

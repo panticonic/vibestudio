@@ -20,18 +20,16 @@ import {
   workspaceConfigDigest,
 } from "@vibestudio/workspace/preparedConfig";
 import type {
-  VcsCommitResult,
-  VcsInspectResult,
   VcsListFilesResult,
   VcsNeighborsResult,
-  VcsPushResult,
-  VcsReadFileResult,
-  VcsResolveRepositoryResult,
   VcsStateNodeRef,
   VcsStatusResult,
-  VcsWorkingMutationResult,
 } from "@vibestudio/service-schemas/vcs";
-import type { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
+import type {
+  WorkspaceSemanticInput,
+  WorkspaceSemanticMethod,
+  WorkspaceVcs,
+} from "./vcsHost/workspaceVcs.js";
 
 const META_REPO_PATH = "meta";
 const WORKSPACE_CONFIG_FILE = "vibestudio.yml";
@@ -149,9 +147,9 @@ export function createWorkspaceConfigMainWriter(deps: {
     causalParent: RpcCausalParent | null,
     knownStatus?: VcsStatusResult
   ): Promise<WorkspaceConfigAtState> => {
-    const call = <T>(method: string, input: unknown): Promise<T> =>
-      deps.vcs.semanticCausalCall<T>(method, input, causalParent);
-    const status = knownStatus ?? (await call<VcsStatusResult>("vcsStatus", { contextId }));
+    const call = <M extends WorkspaceSemanticMethod>(method: M, input: WorkspaceSemanticInput<M>) =>
+      deps.vcs.semanticCausalCall(method, input, causalParent);
+    const status = knownStatus ?? (await call("vcsStatus", { contextId }));
     const state = status.workingHead;
     const repositoryRefs = new Map<
       string,
@@ -159,7 +157,7 @@ export function createWorkspaceConfigMainWriter(deps: {
     >();
     let cursor: string | undefined;
     do {
-      const page = await call<VcsNeighborsResult>("vcsNeighbors", {
+      const page = await call("vcsNeighbors", {
         root: state,
         limit: PAGE_LIMIT,
         ...(cursor ? { cursor } : {}),
@@ -176,7 +174,7 @@ export function createWorkspaceConfigMainWriter(deps: {
 
     let repositoryId: string | null = null;
     for (const repository of repositoryRefs.values()) {
-      const inspected = await call<VcsInspectResult>("vcsInspect", {
+      const inspected = await call("vcsInspect", {
         node: repository,
         edgeLimit: 1,
       });
@@ -213,7 +211,7 @@ export function createWorkspaceConfigMainWriter(deps: {
       );
     }
 
-    const content = await call<VcsReadFileResult>("vcsReadFile", {
+    const content = await call("vcsReadFile", {
       state,
       repositoryId,
       file: { kind: "id", fileId },
@@ -229,12 +227,12 @@ export function createWorkspaceConfigMainWriter(deps: {
     const readSourceFile = async (filePath: string): Promise<string | null> => {
       if (sourceFiles.has(filePath)) return sourceFiles.get(filePath)!;
       const repoPath = filePath.slice(0, -"/package.json".length);
-      const repo = await call<VcsResolveRepositoryResult>("vcsResolveRepository", {
+      const repo = await call("vcsResolveRepository", {
         state,
         repoPath,
       });
       const file = repo
-        ? await call<VcsReadFileResult>("vcsReadFile", {
+        ? await call("vcsReadFile", {
             state,
             repositoryId: repo.repositoryId,
             file: { kind: "path", path: "package.json" },
@@ -343,7 +341,7 @@ export function createWorkspaceConfigMainWriter(deps: {
     // preserve the established isolated-context behavior instead of either
     // publishing that work or refusing a previously valid config mutation.
     const borrowedStatus = borrowed
-      ? await deps.vcs.semanticCausalCall<VcsStatusResult>("vcsStatus", { contextId }, causalParent)
+      ? await deps.vcs.semanticCausalCall("vcsStatus", { contextId }, causalParent)
       : undefined;
     if (borrowedStatus && (!borrowedStatus.clean || borrowedStatus.mainRelation !== "at")) {
       return withFreshContext((freshContextId) =>
@@ -357,7 +355,7 @@ export function createWorkspaceConfigMainWriter(deps: {
     }
 
     const commandStem = `workspace-config:${input.ctx.requestId ?? randomUUID()}`;
-    const edit = await deps.vcs.semanticCausalCall<VcsWorkingMutationResult>(
+    const edit = await deps.vcs.semanticCausalCall(
       "vcsEdit",
       {
         contextId,
@@ -375,7 +373,7 @@ export function createWorkspaceConfigMainWriter(deps: {
       },
       causalParent
     );
-    const committed = await deps.vcs.semanticCausalCall<VcsCommitResult>(
+    const committed = await deps.vcs.semanticCausalCall(
       "vcsCommit",
       {
         contextId,
@@ -401,14 +399,14 @@ export function createWorkspaceConfigMainWriter(deps: {
     // VCS service does for other provider relays.
     const publishingCaller = verifiedInitiator(input.ctx);
     if (input.ctx.signal) {
-      await deps.vcs.semanticPublishCall<VcsPushResult>(
+      await deps.vcs.semanticPublishCall(
         pushInput,
         causalParent,
         publishingCaller,
         input.ctx.signal
       );
     } else {
-      await deps.vcs.semanticPublishCall<VcsPushResult>(pushInput, causalParent, publishingCaller);
+      await deps.vcs.semanticPublishCall(pushInput, causalParent, publishingCaller);
     }
     return { changed: true, nextConfig: rendered.nextConfig };
   };

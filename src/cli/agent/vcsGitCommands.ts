@@ -1,13 +1,11 @@
 import type {
-  GitDetachUpstreamResult,
-  GitImportedWorkspaceRepo,
   GitOverwritePreview,
-  GitPublishRepoResult,
-  GitPullUpstreamResult,
-  GitPushUpstreamResult,
+  GitInteropProvider,
   GitUpstreamState,
   GitUpstreamStatusRow,
 } from "@vibestudio/service-schemas/gitInterop";
+import { gitInteropProviderMethods } from "@vibestudio/service-schemas/gitInterop";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { formatRelativeTime } from "@vibestudio/git/formatting";
 import {
   JSON_FLAG,
@@ -141,10 +139,17 @@ function resolveGitRpcClient(): CliRpcClient {
   return new CliRpcClient(creds);
 }
 
-async function invokeGitInterop<T>(method: string, args: unknown[]): Promise<T> {
+async function withGitInterop<Result>(
+  operation: (provider: GitInteropProvider) => Promise<Result>
+): Promise<Result> {
   const client = resolveGitRpcClient();
   try {
-    return await client.call<T>("extensions.invokeProvider", ["gitInterop", method, args]);
+    const provider = createTypedServiceClient(
+      "gitInterop",
+      gitInteropProviderMethods,
+      (service, method, args) => client.call("extensions.invokeProvider", [service, method, args])
+    );
+    return await operation(provider);
   } finally {
     await client.close().catch(() => undefined);
   }
@@ -259,7 +264,7 @@ async function gitStatus(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const repos = collectOptionalRepos(inv);
-    const rows = await invokeGitInterop<GitUpstreamStatusRow[]>("upstreamStatus", [repos]);
+    const rows = await withGitInterop((git) => git.upstreamStatus(repos));
     printResult(rows, { json, human: () => renderGitStatusHuman(rows) });
     return rows.some((row) => isActionableGitState(row.state)) ? EXIT_ERROR : 0;
   } catch (error) {
@@ -278,7 +283,7 @@ async function gitEnable(inv: ParsedInvocation): Promise<number> {
       autoPush: inv.flags["auto-push"] === true,
       ...(credential.kind === "credential" ? { credential: credential.value } : {}),
     };
-    const result = await invokeGitInterop("setUpstream", [repo, upstream]);
+    const result = await withGitInterop((git) => git.setUpstream(repo, upstream));
     printResult(result, {
       json,
       human: () => {
@@ -310,20 +315,16 @@ async function gitDisable(inv: ParsedInvocation): Promise<number> {
   try {
     const repo = requireGitRepo(inv);
     const forgetRemote = inv.flags["forget-remote"] === true;
-    const result = await invokeGitInterop<GitDetachUpstreamResult>(
-      "detachUpstream",
-      forgetRemote
-        ? [
-            repo,
-            {
-              forgetRemote: true,
-              ...(optionalFlagString(inv, "remote")
-                ? { remote: optionalFlagString(inv, "remote") }
-                : {}),
-            },
-          ]
-        : [repo]
-    );
+    const result = forgetRemote
+      ? await withGitInterop((git) =>
+          git.detachUpstream(repo, {
+            forgetRemote: true,
+            ...(optionalFlagString(inv, "remote")
+              ? { remote: optionalFlagString(inv, "remote") }
+              : {}),
+          })
+        )
+      : await withGitInterop((git) => git.detachUpstream(repo));
     printResult(result.upstreams, {
       json,
       human: () => {
@@ -342,7 +343,7 @@ async function gitAuto(inv: ParsedInvocation): Promise<number> {
   try {
     const repo = requireGitRepo(inv);
     const enabled = inv.flags["off"] !== true;
-    const result = await invokeGitInterop("setAutoPush", [repo, enabled]);
+    const result = await withGitInterop((git) => git.setAutoPush(repo, enabled));
     printResult(result, {
       json,
       human: () => console.log(`auto-push ${enabled ? "enabled" : "disabled"} for ${repo}`),
@@ -380,10 +381,9 @@ async function gitPush(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const repo = requireGitRepo(inv);
-    const result = await invokeGitInterop<GitPushUpstreamResult>("pushUpstream", [
-      repo,
-      { force: inv.flags["force"] === true },
-    ]);
+    const result = await withGitInterop((git) =>
+      git.pushUpstream(repo, { force: inv.flags["force"] === true })
+    );
     printResult(result, {
       json,
       human: () => {
@@ -417,10 +417,7 @@ async function gitPull(inv: ParsedInvocation): Promise<number> {
   try {
     const repo = requireGitRepo(inv);
     const dryRun = inv.flags["dry-run"] === true;
-    const result = await invokeGitInterop<GitPullUpstreamResult>("pullUpstream", [
-      repo,
-      { dryRun },
-    ]);
+    const result = await withGitInterop((git) => git.pullUpstream(repo, { dryRun }));
     printResult(result, {
       json,
       human: () => {
@@ -463,8 +460,8 @@ async function gitPublish(inv: ParsedInvocation): Promise<number> {
     if (inv.flags["private"] === true && inv.flags["public"] === true) {
       throw new UsageError("choose only one of --private or --public");
     }
-    const result = await invokeGitInterop<GitPublishRepoResult>("publishRepo", [
-      {
+    const result = await withGitInterop((git) =>
+      git.publishRepo({
         repoPath: repo,
         ...(optionalFlagString(inv, "provider")
           ? { provider: optionalFlagString(inv, "provider") }
@@ -474,8 +471,8 @@ async function gitPublish(inv: ParsedInvocation): Promise<number> {
         ...(optionalFlagString(inv, "description")
           ? { description: optionalFlagString(inv, "description") }
           : {}),
-      },
-    ]);
+      })
+    );
     printResult(result, {
       json,
       human: () => {
@@ -499,8 +496,8 @@ async function gitImport(inv: ParsedInvocation): Promise<number> {
     const repoPath = requireFlagString(inv, "path");
     const branch = optionalFlagString(inv, "branch");
     const credential = gitCredentialSelection(inv);
-    const result = await invokeGitInterop<GitImportedWorkspaceRepo>("importProject", [
-      {
+    const result = await withGitInterop((git) =>
+      git.importProject({
         path: repoPath,
         remote: { name: "origin", url, ...(branch ? { branch } : {}) },
         ...(credential.kind === "anonymous"
@@ -508,8 +505,8 @@ async function gitImport(inv: ParsedInvocation): Promise<number> {
           : credential.kind === "credential"
             ? { credentialIdOverride: credential.value }
             : {}),
-      },
-    ]);
+      })
+    );
     printResult(result, {
       json,
       human: () => {
@@ -555,7 +552,7 @@ async function gitRemoteSet(inv: ParsedInvocation): Promise<number> {
       url: requireFlagString(inv, "url"),
       ...(optionalFlagString(inv, "branch") ? { branch: optionalFlagString(inv, "branch") } : {}),
     };
-    const result = await invokeGitInterop("setSharedRemote", [repo, remote]);
+    const result = await withGitInterop((git) => git.setSharedRemote(repo, remote));
     printResult(result, {
       json,
       human: () => console.log(`set ${repo} remote ${remote.name} -> ${remote.url}`),
@@ -571,7 +568,7 @@ async function gitRemoteRemove(inv: ParsedInvocation): Promise<number> {
   try {
     const repo = requireGitRepo(inv);
     const remoteName = optionalFlagString(inv, "name") ?? inv.positionals[0] ?? "origin";
-    const result = await invokeGitInterop("removeSharedRemote", [repo, remoteName]);
+    const result = await withGitInterop((git) => git.removeSharedRemote(repo, remoteName));
     printResult(result, {
       json,
       human: () => console.log(`removed ${repo} remote ${remoteName}`),

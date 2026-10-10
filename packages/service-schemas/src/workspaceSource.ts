@@ -1,3 +1,13 @@
+import type {
+  EnvelopeId,
+  EventId,
+  MessageId,
+  BlockId,
+  InvocationId,
+  TaskId,
+  ApprovalId,
+} from "@vibestudio/shared/logIds";
+import { brandId } from "@vibestudio/shared/logIds";
 /**
  * Public runtime GAD contract.
  *
@@ -30,6 +40,20 @@ const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
 const adminAccess = { sensitivity: "admin" as const };
 
+/** Exact coordinate returned by semantic context initialization and forking. */
+export const SemanticContextResultSchema = z.object({
+  contextId: z.string().min(1),
+  committed: z.object({
+    ref: z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
+    workspaceFactRootId: z.string().min(1),
+  }).strict(),
+  working: z.object({
+    ref: vcsStateNodeRefSchema,
+    workspaceFactRootId: z.string().min(1),
+  }).strict(),
+  workingHeadApplicationId: z.string().min(1).nullable(),
+}).strict();
+
 export type GadJsonValue =
   | null
   | string
@@ -52,9 +76,11 @@ export type GadJsonRecord = z.infer<typeof GadJsonRecordSchema>;
 // Event and envelope payloads are deliberately polymorphic at this narrow
 // host/workspace ABI. They are still recursively validated as JSON here; the
 // workspace-owned agentic protocol performs the event-kind-specific parse.
-const PolymorphicJsonPayloadSchema: z.ZodType<unknown> = GadJsonValueSchema;
+const PolymorphicJsonPayloadSchema: z.ZodType<GadJsonValue, z.ZodTypeDef, unknown> =
+  GadJsonValueSchema;
 const PolymorphicJsonRecordSchema: z.ZodType<Record<string, unknown>> = GadJsonRecordSchema;
-const PolymorphicJsonArraySchema: z.ZodType<unknown[]> = z.array(GadJsonValueSchema);
+const PolymorphicJsonArraySchema: z.ZodType<GadJsonValue[], z.ZodTypeDef, unknown[]> =
+  z.array(GadJsonValueSchema);
 
 const ActorRefWireSchema = z
   .object({
@@ -89,13 +115,37 @@ const ParticipantSelectorWireSchema = z
   .strict();
 const EventCausalityWireSchema = z
   .object({
-    parentEventId: z.string().min(1).optional(),
-    messageId: z.string().min(1).optional(),
-    blockId: z.string().min(1).optional(),
-    invocationId: z.string().min(1).optional(),
-    taskId: z.string().min(1).optional(),
+    parentEventId: z
+      .string()
+      .min(1)
+      .transform(brandId<EventId>)
+      .optional(),
+    messageId: z
+      .string()
+      .min(1)
+      .transform(brandId<MessageId>)
+      .optional(),
+    blockId: z
+      .string()
+      .min(1)
+      .transform(brandId<BlockId>)
+      .optional(),
+    invocationId: z
+      .string()
+      .min(1)
+      .transform(brandId<InvocationId>)
+      .optional(),
+    taskId: z
+      .string()
+      .min(1)
+      .transform(brandId<TaskId>)
+      .optional(),
     transportCallId: z.string().optional(),
-    approvalId: z.string().min(1).optional(),
+    approvalId: z
+      .string()
+      .min(1)
+      .transform(brandId<ApprovalId>)
+      .optional(),
     modelToolCallId: z.string().optional(),
     agentHops: z.number().int().nonnegative().optional(),
     attemptId: z.string().optional(),
@@ -129,7 +179,10 @@ const logEnvelopeSchema = z
     logId: z.string().min(1),
     head: z.string().min(1),
     seq: z.number().int().nonnegative(),
-    envelopeId: z.string().min(1),
+    envelopeId: z
+      .string()
+      .min(1)
+      .transform(brandId<EnvelopeId>),
     actor: ActorRefWireSchema,
     to: z.union([z.array(ParticipantRefWireSchema), ParticipantSelectorWireSchema]).optional(),
     payloadKind: z.string().min(1),
@@ -406,12 +459,32 @@ const TrajectoryEventWireSchema = z
     turnId: z.string().min(1).optional(),
     causality: z
       .object({
-        parentEventId: z.string().min(1).optional(),
-        messageId: z.string().min(1).optional(),
-        blockId: z.string().min(1).optional(),
-        invocationId: z.string().min(1).optional(),
+        parentEventId: z
+          .string()
+          .min(1)
+          .transform(brandId<EventId>)
+          .optional(),
+        messageId: z
+          .string()
+          .min(1)
+          .transform(brandId<MessageId>)
+          .optional(),
+        blockId: z
+          .string()
+          .min(1)
+          .transform(brandId<BlockId>)
+          .optional(),
+        invocationId: z
+          .string()
+          .min(1)
+          .transform(brandId<InvocationId>)
+          .optional(),
         transportCallId: z.string().optional(),
-        approvalId: z.string().min(1).optional(),
+        approvalId: z
+          .string()
+          .min(1)
+          .transform(brandId<ApprovalId>)
+          .optional(),
         modelToolCallId: z.string().min(1).optional(),
         agentHops: z.number().int().nonnegative().optional(),
         attemptId: z.string().optional(),
@@ -1519,10 +1592,10 @@ const semanticContentAcknowledgementSchema = z
   })
   .strict();
 
-function semanticWireMethod(
-  method: (typeof vcsMethods)[keyof typeof vcsMethods],
+function semanticWireMethod<M extends (typeof vcsMethods)[keyof typeof vcsMethods]>(
+  method: M,
   wireName: string
-): MethodSchema {
+){
   const inputSchema = (method.args as z.ZodTuple<[] | [z.ZodTypeAny]>).items[0] ?? z.undefined();
   const resultSchema = method.returns;
   return {
@@ -1794,7 +1867,7 @@ const logAppendEventSchema = z
     actor: ActorRefWireSchema,
     to: GadJsonValueSchema.nullish(),
     payloadKind: nonemptyText,
-    payload: GadJsonValueSchema,
+    payload: PolymorphicJsonPayloadSchema,
     causality: LogEventCausalityWireSchema.nullish(),
     annotations: PolymorphicJsonRecordSchema.nullish(),
     appendedAt: z.string().nullish(),

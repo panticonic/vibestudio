@@ -1,3 +1,4 @@
+import { serializeRpcFailure, RemoteRpcAggregateError } from "../errors.js";
 import { describe, expect, it, vi } from "vitest";
 import { envelopeFromMessage, responseEnvelopeFor } from "../envelope.js";
 import { httpClientTransport } from "./httpClient.js";
@@ -69,7 +70,9 @@ describe("httpClientTransport", () => {
         };
       },
     });
-    const fetchMock = vi.fn(async () => new Response(body, { status: 200 })) as unknown as typeof fetch;
+    const fetchMock = vi.fn(
+      async () => new Response(body, { status: 200 })
+    ) as unknown as typeof fetch;
     const transport = httpClientTransport({
       selfId: "worker:agent",
       serverUrl: "http://127.0.0.1:65530",
@@ -210,4 +213,37 @@ describe("httpClientTransport", () => {
     expect(settled).toBe(true);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+});
+
+it("propagates an HTTP event failure graph to the emitting caller", async () => {
+  const original = new Error("event handler failed");
+  const transport = httpClientTransport({
+    serverUrl: "http://localhost",
+    authToken: "test",
+    selfId: "worker:agent",
+    fetch: async () =>
+      new Response(
+        JSON.stringify({
+          error: serializeRpcFailure(
+            new AggregateError([original, new Error("event cleanup failed")], "event failed", {
+              cause: original,
+            })
+          ),
+        })
+      ),
+  });
+  const envelope = envelopeFromMessage({
+    selfId: "worker:agent",
+    from: "worker:agent",
+    target: "main",
+    callerKind: "worker",
+    message: { type: "event", fromId: "worker:agent", event: "changed", payload: {} },
+  });
+  const failure = await transport.send(envelope).catch((error) => error);
+  expect(failure).toBeInstanceOf(RemoteRpcAggregateError);
+  expect(failure.errors.map((error: Error) => error.message)).toEqual([
+    "event handler failed",
+    "event cleanup failed",
+  ]);
+  expect(failure.cause).toBe(failure.errors[0]);
 });

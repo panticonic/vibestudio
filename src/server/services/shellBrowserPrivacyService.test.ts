@@ -1,5 +1,23 @@
+import { browserVaultMethods } from "@vibestudio/service-schemas/browserData";
 import { describe, expect, it, vi } from "vitest";
 import { createShellBrowserPrivacyService } from "./shellBrowserPrivacyService.js";
+
+function passwordFixture(id: number, password: string) {
+  return browserVaultMethods.getPasswordForSite.returns.parse([
+    {
+      id,
+      password,
+      origin_url: "https://example.com",
+      username: "person",
+      action_url: "https://example.com/login",
+      realm: "https://example.com",
+      date_created: 0,
+      date_last_used: 0,
+      date_password_changed: 0,
+      times_used: 0,
+    },
+  ])[0]!;
+}
 
 const shellContext = {
   caller: {
@@ -71,7 +89,7 @@ describe("paired-shell browser privacy direct service", () => {
   });
 
   it("counts site passwords without returning protected rows", async () => {
-    const dispatch = vi.fn(async () => [{ password: "one" }, { password: "two" }]);
+    const dispatch = vi.fn(async () => [passwordFixture(1, "one"), passwordFixture(2, "two")]);
     const service = createShellBrowserPrivacyService({
       doDispatch: { dispatch } as never,
       workspaceId: "workspace-1",

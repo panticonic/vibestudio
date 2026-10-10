@@ -1,14 +1,17 @@
-import { workspaceCreationMethods } from "@vibestudio/service-schemas/workspaceCreation";
+import { workspaceHubControlMethods } from "@vibestudio/service-schemas/workspaceHubControl";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { WorkspaceChildHubPort } from "../workspaceChildHubPort.js";
 import { workspaceCreationAuthorityPreparation } from "./workspaceCreationAuthority.js";
 
-/** Host-attested entry to the hub's existing lifecycle owner; no local creation state. */
-export function createWorkspaceCreationService(deps: {
+/** Narrow workspace-child entry to existing hub-owned controls. */
+export function createWorkspaceHubControlService(deps: {
   workspaceId: string;
-  hub: Pick<WorkspaceChildHubPort, "createWorkspace" | "workspaceCreationReceipt">;
+  hub: Pick<
+    WorkspaceChildHubPort,
+    "createWorkspace" | "workspaceCreationReceipt" | "observeDevices"
+  >;
 }): ServiceDefinition {
   const requester = (ctx: ServiceContext) => {
     const caller = ctx.caller;
@@ -24,15 +27,23 @@ export function createWorkspaceCreationService(deps: {
   };
   return {
     name: "hubControl",
-    description: "Scoped workspace creation through the authenticated owning hub",
-    methods: workspaceCreationMethods,
+    description: "Authenticated workspace creation and device observation through the owning hub",
+    methods: workspaceHubControlMethods,
     authority: { principals: ["user", "host", "code", "website"] },
     authorityPreparation: workspaceCreationAuthorityPreparation,
-    handler: defineServiceHandler("hubControl", workspaceCreationMethods, {
+    handler: defineServiceHandler("hubControl", workspaceHubControlMethods, {
       createWorkspace: (ctx, [input]) =>
         deps.hub.createWorkspace({ requester: requester(ctx), input }),
       workspaceCreationReceipt: (ctx, [input]) =>
         deps.hub.workspaceCreationReceipt({ requester: requester(ctx), input }),
+      observeDevices: (ctx, [input]) => {
+        if (!ctx.caller.subject)
+          throw new Error("Device observation requires an authenticated account");
+        return deps.hub.observeDevices(
+          { userId: ctx.caller.subject.userId, input },
+          { signal: ctx.signal }
+        );
+      },
     }),
   };
 }

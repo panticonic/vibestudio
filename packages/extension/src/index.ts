@@ -1,11 +1,11 @@
+import type { RpcCaller } from "@vibestudio/rpc";
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import type { UnitRegistryEntryBase } from "@vibestudio/unit-host/types";
 import type { CallerKind } from "@vibestudio/shared/principalKinds";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
-import { EXTENSIONS_METHOD_NAMES } from "@vibestudio/service-schemas/clients/generated/runtimeClientMethods";
 import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
 import type { ExtensionStatus } from "@vibestudio/service-schemas/extensions";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
-import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
 
 export type { ExtensionStatus };
 
@@ -121,10 +121,7 @@ export interface ExtensionsClient {
  * Minimal RPC surface the extensions client needs. Both the workspace runtime
  * (`RpcCaller`) and host-side callers satisfy this shape.
  */
-export interface ExtensionsClientRpc {
-  call(target: string, method: string, args: unknown[]): Promise<unknown>;
-  stream(target: string, method: string, args: unknown[]): Promise<Response>;
-}
+export interface ExtensionsClientRpc extends RpcCaller {}
 
 const IGNORED_PROXY_PROPS = new Set<PropertyKey>([
   "then",
@@ -139,12 +136,16 @@ const PROMISE_MISUSE_PROPS = new Set<PropertyKey>(["catch", "finally"]);
 
 /** Typed `extensions.*` client over a `call(target, method, args)` transport. */
 function createExtensionsServiceClient(rpc: Pick<ExtensionsClientRpc, "call">) {
-  return createLazyTypedServiceClient(
-    "extensions",
-    EXTENSIONS_METHOD_NAMES,
-    async () => (await import("@vibestudio/service-schemas/extensions")).extensionsMethods,
-    (service, method, args) => rpc.call("main", `${service}.${method}`, args)
-  );
+  return {
+    invoke: (name: string, method: string, args: unknown[]) =>
+      rpc.call("main", mainRpcMethods["extensions.invoke"], [name, method, args]),
+    streamingMethods: (name: string) =>
+      rpc.call("main", mainRpcMethods["extensions.streamingMethods"], [name]),
+    invokeProvider: (provider: string, method: string, args: unknown[]) =>
+      rpc.call("main", mainRpcMethods["extensions.invokeProvider"], [provider, method, args]),
+    status: (name: string) => rpc.call("main", mainRpcMethods["extensions.status"], [name]),
+    update: (name: string) => rpc.call("main", mainRpcMethods["extensions.update"], [name]),
+  };
 }
 
 /**
@@ -178,7 +179,7 @@ export function createExtensionProxy<T extends object>(
         return streaming
           ? // invokeStream stays on the raw streaming transport: the typed
             // client only models promise-returning calls, not Response streams.
-            rpc.stream("main", "extensions.invokeStream", [name, prop, args])
+            rpc.stream("main", mainRpcMethods["extensions.invokeStream"], [name, prop, args])
           : extensionsService.invoke(name, prop, args);
       };
     },
@@ -363,16 +364,7 @@ export interface ExtensionWorkersLike {
   listServices(): Promise<unknown[]>;
 }
 
-export interface ExtensionRpcLike {
-  /** Call any unified RPC target, including `main`, `worker:*`, and `do:*`. */
-  call<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
-  /** Open a streaming RPC call to any unified RPC target. */
-  stream(
-    targetId: string,
-    method: string,
-    args: unknown[],
-    options?: { signal?: AbortSignal }
-  ): Promise<Response>;
+export interface ExtensionRpcLike extends RpcCaller {
   /** Subscribe to host-delivered events where supported by the runtime. */
   on(eventName: string, cb: (event: { payload: unknown }) => void): () => void;
 }

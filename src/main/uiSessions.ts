@@ -1,7 +1,6 @@
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import {
   RpcBoundaryError,
-  rpcErrorDataOf,
-  rpcErrorKindOf,
   rpcDestinationKey,
   stampEnvelopeCaller,
   type RpcEnvelope,
@@ -358,11 +357,7 @@ export class UiSessions {
     const request = entry.pending.get(requestId);
     if (!request) return;
     entry.pending.delete(requestId);
-    const message = failure instanceof Error ? failure.message : String(failure);
-    const errorKind = rpcErrorKindOf(failure, "internal");
-    const errorCode = (failure as { code?: unknown } | null)?.code;
-    const code = typeof errorCode === "string" ? errorCode : undefined;
-    const errorData = rpcErrorDataOf(failure);
+    const error = serializeRpcFailure(failure, "internal");
     const { envelope, stream } = request;
     try {
       this.deliverEnvelope(entry.caller, entry.runtime, {
@@ -375,9 +370,9 @@ export class UiSessions {
               requestId,
               fromId: envelope.target,
               frameType: FRAME_ERROR,
-              payload: JSON.stringify({ message, code, errorKind, errorData }),
+              payload: JSON.stringify({ status: 502, error }),
             }
-          : { type: "response", requestId, error: message, errorCode: code, errorKind, errorData },
+          : { type: "response", requestId, error },
       });
     } catch {
       /* A destroyed renderer cannot receive its settled request. */

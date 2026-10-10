@@ -675,7 +675,7 @@ export const evalMethods = defineServiceMethods({
   },
 });
 
-export type EvalCall = <T>(method: string, args: unknown[]) => Promise<T>;
+export type EvalCall = import("./mainRpc.js").MainRpcCaller;
 
 export interface EvalRunRoute {
   target?: EvalStartInput["target"];
@@ -699,8 +699,8 @@ export function createEvalRunObserver(call: EvalCall, route: EvalRunRoute) {
   };
   return {
     route: canonicalRoute,
-    get: () => call<z.infer<typeof evalRunStatusSchema>>("eval.get", [canonicalRoute]),
-    cancel: () => call<z.infer<typeof evalMethods.cancel.returns>>("eval.cancel", [canonicalRoute]),
+    get: () => call("eval.get", [canonicalRoute]),
+    cancel: () => call("eval.cancel", [canonicalRoute]),
   };
 }
 
@@ -713,9 +713,7 @@ export function createEvalRunHandle(call: EvalCall, input: EvalStartInput) {
   return {
     ...observer,
     start: (receiver?: EvalResultReceiverRef) =>
-      call<z.infer<typeof evalStartResultSchema>>("eval.start", [
-        receiver ? { ...input, resultReceiver: receiver } : input,
-      ]),
+      call("eval.start", [receiver ? { ...input, resultReceiver: receiver } : input]),
   };
 }
 

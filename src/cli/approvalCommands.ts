@@ -1,3 +1,4 @@
+import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { randomUUID } from "node:crypto";
 import {
@@ -142,7 +143,7 @@ async function watch(inv: ParsedInvocation): Promise<number> {
     positionals(inv, 0, "watch");
     rpc = requireClient();
     const response = await EventsClient.openWatch(
-      rpc,
+      schemaRpcCaller({ call: rpc.callTarget.bind(rpc), stream: rpc.stream.bind(rpc) }),
       ["shell-approval:pending-changed", "shell-approval:resolved"],
       randomUUID(),
       { signal: controller.signal, bodyIdleTimeoutMs: null }

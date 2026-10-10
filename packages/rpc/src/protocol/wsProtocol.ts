@@ -1,5 +1,5 @@
 import type { RpcDestination } from "../types.js";
-import type { CallerKind, RpcEnvelope, RpcErrorKind } from "../types.js";
+import type { CallerKind, RpcEnvelope, RpcFailure } from "../types.js";
 
 export type ClientPlatform = "desktop" | "headless" | "mobile";
 export type OAuthCallbackMode = "client-loopback" | "app-scheme";
@@ -75,7 +75,7 @@ export interface WsStreamBodyChunkMessage {
   seq: number;
   payload?: string;
   done?: boolean;
-  error?: string;
+  error?: RpcFailure;
 }
 
 export type WsClientMessage =
@@ -136,10 +136,7 @@ export interface WsRoutedEventErrorMessage {
   targetId: string;
   destination?: RpcDestination;
   event: string;
-  error: string;
-  errorKind: RpcErrorKind;
-  diagnosticId?: string;
-  errorCode?: string;
+  error: RpcFailure;
 }
 
 export interface WsRoutedResponseErrorMessage {
@@ -147,18 +144,14 @@ export interface WsRoutedResponseErrorMessage {
   targetId: string;
   destination?: RpcDestination;
   requestId: string;
-  error: string;
-  errorKind: RpcErrorKind;
-  diagnosticId?: string;
-  errorCode?: string;
-  errorData?: unknown;
+  error: RpcFailure;
 }
 
 export interface WsStreamBodyAckMessage {
   type: "ws:stream-body-ack";
   requestId: string;
   seq: number;
-  error?: string;
+  error?: RpcFailure;
 }
 
 export type WsServerMessage =

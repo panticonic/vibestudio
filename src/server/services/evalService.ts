@@ -1,3 +1,8 @@
+import { evalEngineMethods } from "@vibestudio/service-schemas/evalEngine";
+import {
+  createTypedServiceClient,
+  type TypedServiceClient,
+} from "@vibestudio/shared/typedServiceClient";
 import {
   verifyExecutionArtifactRef,
   type ExecutionArtifactRefV1,
@@ -35,11 +40,22 @@ import { taskAuthorityPrincipal, type TaskAuthorityRegistry } from "./taskAuthor
 import { resolveCodeIdentity } from "./principalIdentity.js";
 import { EvalKernelLeaseCoordinator, type EvalKernelLease } from "./evalKernelLease.js";
 
+type EvalEngineClient = TypedServiceClient<typeof evalEngineMethods>;
+function evalEngineClient(
+  dispatch: HeldDoDispatcher,
+  ref: ActiveEvalRun["evalDoRef"]
+): EvalEngineClient {
+  return createTypedServiceClient("eval-engine", evalEngineMethods, (_service, method, args) =>
+    dispatch.dispatch(ref, method, ...args)
+  );
+}
+
 /**
  * A deadline is not evidence that workerd is unhealthy. This is only the
  * irreducible external bound on a side-effect-free liveness probe after the
  * EvalDO has had its own opportunity to abort and settle the run.
  */
+
 const DEFAULT_EVAL_LIVENESS_PROBE_MS = 5_000;
 
 /** One quick retry absorbs a transient transport blip before recovery. */
@@ -106,10 +122,12 @@ async function observeRunLiveness(
   let probeTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     const outcome = await Promise.race([
-      doDispatch.dispatch(evalDoRef, "getRun", runId).then(
-        (snapshot) => ({ kind: "live" as const, snapshot }),
-        (error: unknown) => ({ kind: "rejected" as const, error })
-      ),
+      evalEngineClient(doDispatch, evalDoRef)
+        .getRun(runId)
+        .then(
+          (snapshot) => ({ kind: "live" as const, snapshot }),
+          (error: unknown) => ({ kind: "rejected" as const, error })
+        ),
       new Promise<typeof unresponsive>((resolve) => {
         probeTimer = setTimeout(() => resolve(unresponsive), probeBoundMs);
         probeTimer.unref?.();
@@ -117,7 +135,7 @@ async function observeRunLiveness(
     ]);
     if (outcome === unresponsive) return { kind: "unresponsive" };
     if (outcome.kind === "rejected") return outcome;
-    const status = (outcome.snapshot as { status?: string } | null)?.status;
+    const status = outcome.snapshot.status;
     return {
       kind: "live",
       terminal:
@@ -343,7 +361,7 @@ export function createEvalService(deps: {
       const cancellations = await Promise.allSettled(
         entries.map(async (entry) => {
           try {
-            await deps.doDispatch.dispatch(entry.evalDoRef, "cancel", entry.runId);
+            await evalEngineClient(deps.doDispatch, entry.evalDoRef).cancel(entry.runId);
           } finally {
             // The durable EvalDO owns terminal truth. Once cancellation has
             // either completed or failed, remove the host admission so a
@@ -653,7 +671,7 @@ export function createEvalService(deps: {
     runId: string
   ): Promise<{
     evalDoRef: { source: string; className: string; objectKey: string };
-    assembledArgs: Record<string, unknown>;
+    assembledArgs: Parameters<EvalEngineClient["startRun"]>[0];
     agentRef: string | undefined;
     channelId: string | undefined;
     runDigest: string;
@@ -1065,17 +1083,9 @@ export function createEvalService(deps: {
             "service"
           );
         }
-        let accepted: {
-          status: string;
-          existing?: boolean;
-          runDigest: string;
-        };
+        let accepted: Awaited<ReturnType<EvalEngineClient["startRun"]>>;
         try {
-          accepted = (await deps.doDispatch.dispatch(evalDoRef, "startRun", startArgs)) as {
-            status: string;
-            existing?: boolean;
-            runDigest: string;
-          };
+          accepted = await evalEngineClient(deps.doDispatch, evalDoRef).startRun(startArgs);
         } catch (error) {
           if (!(error instanceof AmbiguousDoDispatchError)) {
             closeAdmission();
@@ -1102,7 +1112,7 @@ export function createEvalService(deps: {
           accepted.status === "cancelled" ||
           accepted.status === "approval-route-lost"
         ) {
-          const snapshot = await deps.doDispatch.dispatch(evalDoRef, "getRun", runId);
+          const snapshot = await evalEngineClient(deps.doDispatch, evalDoRef).getRun(runId);
           closeAdmission();
           return {
             runId,
@@ -1155,46 +1165,38 @@ export function createEvalService(deps: {
         };
       },
       get: async (ctx, [getArgs]) =>
-        deps.doDispatch.dispatch(await evalDoRefFor(ctx, getArgs, "get"), "getRun", getArgs.runId),
+        evalEngineClient(deps.doDispatch, await evalDoRefFor(ctx, getArgs, "get")).getRun(
+          getArgs.runId
+        ),
       receipt: async (ctx, [receiptArgs]) =>
-        deps.doDispatch.dispatch(
-          await evalDoRefFor(ctx, receiptArgs, "receipt"),
-          "getRunReceipt",
-          receiptArgs.runId
-        ),
+        evalEngineClient(
+          deps.doDispatch,
+          await evalDoRefFor(ctx, receiptArgs, "receipt")
+        ).getRunReceipt(receiptArgs.runId),
       acknowledge: async (ctx, [acknowledgeArgs]) =>
-        deps.doDispatch.dispatch(
-          await evalDoRefFor(ctx, acknowledgeArgs, "acknowledge"),
-          "acknowledgeRunResult",
-          acknowledgeArgs.runId,
-          acknowledgeArgs.receipt
-        ),
+        evalEngineClient(
+          deps.doDispatch,
+          await evalDoRefFor(ctx, acknowledgeArgs, "acknowledge")
+        ).acknowledgeRunResult(acknowledgeArgs.runId, acknowledgeArgs.receipt),
       events: async (ctx, [eventArgs]) =>
-        deps.doDispatch.dispatch(
-          await evalDoRefFor(ctx, eventArgs, "events"),
-          "getRunEvents",
-          eventArgs.runId,
-          eventArgs.after ?? 0,
-          eventArgs.limit ?? 100
-        ),
+        evalEngineClient(
+          deps.doDispatch,
+          await evalDoRefFor(ctx, eventArgs, "events")
+        ).getRunEvents(eventArgs.runId, eventArgs.after ?? 0, eventArgs.limit ?? 100),
       readScopeTextPage: async (ctx, [pageArgs]) =>
-        deps.doDispatch.dispatch(
-          await evalDoRefFor(ctx, pageArgs, "readScopeTextPage"),
-          "readScopeTextPage",
-          pageArgs.key,
-          pageArgs.offset,
-          pageArgs.limit
-        ),
+        evalEngineClient(
+          deps.doDispatch,
+          await evalDoRefFor(ctx, pageArgs, "readScopeTextPage")
+        ).readScopeTextPage(pageArgs.key, pageArgs.offset, pageArgs.limit),
       deleteScopeValue: async (ctx, [deleteArgs]) =>
-        deps.doDispatch.dispatch(
-          await evalDoRefFor(ctx, deleteArgs, "deleteScopeValue"),
-          "deleteScopeValue",
-          deleteArgs.key
-        ),
+        evalEngineClient(
+          deps.doDispatch,
+          await evalDoRefFor(ctx, deleteArgs, "deleteScopeValue")
+        ).deleteScopeValue(deleteArgs.key),
       reset: async (ctx, [resetArgs = {}]) => {
         const ref = await findEvalDoRefFor(ctx, resetArgs, "reset");
         // An absent notebook is already empty; clearing it admits no execution.
-        return ref ? deps.doDispatch.dispatch(ref, "reset") : { ok: true };
+        return ref ? evalEngineClient(deps.doDispatch, ref).reset() : { ok: true };
       },
       dispose: async (ctx, [disposeArgs = {}]) => {
         const owner = await resolveOwnerForCaller(ctx, disposeArgs);
@@ -1223,7 +1225,7 @@ export function createEvalService(deps: {
       },
       cancel: async (ctx, [cancelArgs]) => {
         const ref = await evalDoRefFor(ctx, cancelArgs, "cancel");
-        const result = await deps.doDispatch.dispatch(ref, "cancel", cancelArgs.runId);
+        const result = await evalEngineClient(deps.doDispatch, ref).cancel(cancelArgs.runId);
         activeRuns
           .get(activeRunKey(evalDoEntityId(ref.objectKey), cancelArgs.runId))
           ?.closeAdmission();
@@ -1236,11 +1238,11 @@ export function createEvalService(deps: {
 async function reconcileAmbiguousStart(
   dispatch: HeldDoDispatcher,
   ref: { source: string; className: string; objectKey: string },
-  startArgs: Record<string, unknown>
+  startArgs: Parameters<EvalEngineClient["startRun"]>[0]
 ): Promise<void> {
   for (;;) {
     try {
-      await dispatch.dispatch(ref, "startRun", startArgs);
+      await evalEngineClient(dispatch, ref).startRun(startArgs);
       return;
     } catch (error) {
       if (!(error instanceof AmbiguousDoDispatchError)) throw error;

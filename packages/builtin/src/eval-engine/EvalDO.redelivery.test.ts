@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
+import { wireClientFor } from "@vibestudio/rpc/internal";
 import { EvalDO } from "./EvalDO.js";
 
-type Fixture = Awaited<ReturnType<typeof createTestDO<EvalDO>>>;
+class TestEvalDO extends EvalDO {
+  get rpcForTest() {
+    return this.rpc;
+  }
+}
+
+type Fixture = Awaited<ReturnType<typeof createTestDO<typeof TestEvalDO>>>;
 const receiver = "do:workers/test:Agent:owner";
 const result = { success: true, console: "domain truth", returnValue: 42 };
 
@@ -27,27 +34,22 @@ function deadlines(f: Fixture) {
     .toArray();
 }
 function installRpc(f: Fixture, receive: (id: string) => Promise<unknown>) {
-  const call = vi.fn(async (_target: string, method: string, args: unknown[]) => {
-    if (method === "onEvalComplete") return receive((args[0] as { runId: string }).runId);
-    return undefined;
-  });
-  Object.defineProperty(f.instance, "rpc", { value: { call }, configurable: true });
+  const call = vi
+    .spyOn(wireClientFor(f.instance.rpcForTest), "call")
+    .mockImplementation(async (_target: string, method: string, args: unknown[]) => {
+      if (method === "onEvalComplete") return receive((args[0] as { runId: string }).runId);
+      return undefined;
+    });
   return call;
 }
 async function reopen(f: Fixture) {
-  // Production schema admission performs activation reconstruction before RPC.
-  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(successfulTestRpcFetch);
-  try {
-    return await createTestDO(EvalDO, {}, { db: f.db });
-  } finally {
-    fetch.mockRestore();
-  }
+  return createTestDO(TestEvalDO, { RPC_FETCH: successfulTestRpcFetch }, { db: f.db });
 }
 
 afterEach(() => vi.restoreAllMocks());
 describe("EvalDO durable exact-ack redelivery", () => {
   it("rolls domain admission back if its delivery index cannot commit", async () => {
-    const f = await createTestDO(EvalDO);
+    const f = await createTestDO(TestEvalDO, { RPC_FETCH: successfulTestRpcFetch });
     const execute = vi.fn(async () => result);
     Object.defineProperty(f.instance, "runLocked", { value: execute });
     installRpc(f, async () => undefined);
@@ -70,7 +72,7 @@ describe("EvalDO durable exact-ack redelivery", () => {
     expect(deadlines(f)).toHaveLength(1);
   });
   it("repairs a missing delivery index from terminal admissions after activation", async () => {
-    const f = await createTestDO(EvalDO);
+    const f = await createTestDO(TestEvalDO, { RPC_FETCH: successfulTestRpcFetch });
     seed(f, "retained");
     const fresh = await reopen(f);
     expect(deadlines(fresh)).toEqual([
@@ -85,7 +87,7 @@ describe("EvalDO durable exact-ack redelivery", () => {
   });
 
   it("preserves deadlines across repeated activation and ordinary receipt reads", async () => {
-    const f = await createTestDO(EvalDO);
+    const f = await createTestDO(TestEvalDO, { RPC_FETCH: successfulTestRpcFetch });
     seed(f, "deadline");
     f.sql.exec("INSERT INTO eval_result_redeliveries VALUES ('deadline', 3, 1)");
     const fresh = await reopen(f);
@@ -96,7 +98,7 @@ describe("EvalDO durable exact-ack redelivery", () => {
   });
 
   it("never rebuilds an exactly acknowledged delivery, including quoted operation identities", async () => {
-    const f = await createTestDO(EvalDO);
+    const f = await createTestDO(TestEvalDO, { RPC_FETCH: successfulTestRpcFetch });
     const id = 'quoted"\\\n😀';
     seed(f, id);
     const receipt = f.instance.getRunReceipt(id)!;
@@ -107,7 +109,7 @@ describe("EvalDO durable exact-ack redelivery", () => {
   });
 
   it("does not turn a pending or cancelling admission into a result", async () => {
-    const f = await createTestDO(EvalDO);
+    const f = await createTestDO(TestEvalDO, { RPC_FETCH: successfulTestRpcFetch });
     seed(f, "pending", "pending");
     seed(f, "cleanup", "cancelling");
     const fresh = await reopen(f);
@@ -123,7 +125,7 @@ describe("EvalDO durable exact-ack redelivery", () => {
   });
 
   it("redelivers a canonical cancellation whose terminal row has no payload", async () => {
-    const f = await createTestDO(EvalDO);
+    const f = await createTestDO(TestEvalDO, { RPC_FETCH: successfulTestRpcFetch });
     seed(f, "cancelled", "cancelled");
     const fresh = await reopen(f);
     fresh.sql.exec("UPDATE eval_result_redeliveries SET wake_at = 0");
@@ -151,7 +153,7 @@ describe("EvalDO durable exact-ack redelivery", () => {
   });
 
   it("bounds a pass and serves older due receipts before rescheduled receipts", async () => {
-    const f = await createTestDO(EvalDO);
+    const f = await createTestDO(TestEvalDO, { RPC_FETCH: successfulTestRpcFetch });
     for (let i = 0; i < 65; i++) seed(f, `run:${String(i).padStart(3, "0")}`);
     const fresh = await reopen(f);
     fresh.sql.exec("UPDATE eval_result_redeliveries SET wake_at = 0");
@@ -170,7 +172,7 @@ describe("EvalDO durable exact-ack redelivery", () => {
   });
 
   it("an acknowledgement racing a failed delivery cannot reopen its slot", async () => {
-    const f = await createTestDO(EvalDO);
+    const f = await createTestDO(TestEvalDO, { RPC_FETCH: successfulTestRpcFetch });
     seed(f, "race");
     const fresh = await reopen(f);
     fresh.sql.exec("UPDATE eval_result_redeliveries SET wake_at = 0");
@@ -199,7 +201,7 @@ describe("EvalDO durable exact-ack redelivery", () => {
   });
 
   it("commits the delivery obligation before asynchronous execution starts", async () => {
-    const f = await createTestDO(EvalDO);
+    const f = await createTestDO(TestEvalDO, { RPC_FETCH: successfulTestRpcFetch });
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -225,41 +227,53 @@ describe("EvalDO durable exact-ack redelivery", () => {
   });
 
   it("reopens current storage without changing canonical rows or acknowledgements", async () => {
-    const probe = await createTestDO(EvalDO, { WORKER_CLASS_NAME: "EvalDO" });
+    const probe = await createTestDO(TestEvalDO, {
+      RPC_FETCH: successfulTestRpcFetch,
+      WORKER_CLASS_NAME: "EvalDO",
+    });
     const fingerprint = String(
       probe.sql.exec("SELECT shape_json FROM _vibestudio_schema").one()["shape_json"]
     );
-    const f = await createTestDO(EvalDO, { WORKER_CLASS_NAME: "EvalDO" });
+    const f = await createTestDO(TestEvalDO, {
+      RPC_FETCH: successfulTestRpcFetch,
+      WORKER_CLASS_NAME: "EvalDO",
+    });
     seed(f, "unacked");
     seed(f, "acked");
     await f.instance.acknowledgeRunResult("acked", f.instance.getRunReceipt("acked")!);
     const retained = f.sql.exec("SELECT * FROM runs ORDER BY run_id").toArray();
     const descriptor = { className: "EvalDO", version: 5, freshSchemaFingerprint: fingerprint };
-    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(successfulTestRpcFetch);
-    try {
-      const reopened = await createTestDO(
-        EvalDO,
-        { WORKER_CLASS_NAME: "EvalDO", VIBESTUDIO_SCHEMA_DESCRIPTOR: descriptor },
-        { db: f.db }
-      );
-      expect(reopened.sql.exec("SELECT * FROM runs ORDER BY run_id").toArray()).toEqual(retained);
-      expect(deadlines(reopened)).toEqual([
-        { run_id: "unacked", attempt: 1, wake_at: expect.any(Number) },
-      ]);
-      expect(reopened.instance.getRunReceipt("acked")?.acknowledged).toBe(true);
-      expect(reopened.sql.exec("SELECT version FROM _vibestudio_schema").one()["version"]).toBe(5);
-    } finally {
-      fetch.mockRestore();
-    }
+    const reopened = await createTestDO(
+      TestEvalDO,
+      {
+        RPC_FETCH: successfulTestRpcFetch,
+        WORKER_CLASS_NAME: "EvalDO",
+        VIBESTUDIO_SCHEMA_DESCRIPTOR: descriptor,
+      },
+      { db: f.db }
+    );
+    expect(reopened.sql.exec("SELECT * FROM runs ORDER BY run_id").toArray()).toEqual(retained);
+    expect(deadlines(reopened)).toEqual([
+      { run_id: "unacked", attempt: 1, wake_at: expect.any(Number) },
+    ]);
+    expect(reopened.instance.getRunReceipt("acked")?.acknowledged).toBe(true);
+    expect(reopened.sql.exec("SELECT version FROM _vibestudio_schema").one()["version"]).toBe(5);
   });
 
   it("refuses the preceding schema unchanged at the final pre-release cut", async () => {
-    const f = await createTestDO(EvalDO, { WORKER_CLASS_NAME: "EvalDO" });
+    const f = await createTestDO(TestEvalDO, {
+      RPC_FETCH: successfulTestRpcFetch,
+      WORKER_CLASS_NAME: "EvalDO",
+    });
     seed(f, "retained");
     f.sql.exec("UPDATE _vibestudio_schema SET version=4");
     const before = f.sql.exec("SELECT * FROM runs").toArray();
     await expect(
-      createTestDO(EvalDO, { WORKER_CLASS_NAME: "EvalDO" }, { db: f.db })
+      createTestDO(
+        TestEvalDO,
+        { RPC_FETCH: successfulTestRpcFetch, WORKER_CLASS_NAME: "EvalDO" },
+        { db: f.db }
+      )
     ).rejects.toMatchObject({
       code: "DO_SCHEMA_INCOMPATIBLE",
       errorData: { reason: "version-mismatch", persistedVersion: 4, targetVersion: 5 },

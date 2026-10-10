@@ -1,5 +1,5 @@
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
-import { createShellCore } from "@vibestudio/shell-core/createShellCore";
+import { createShellCore } from "@vibestudio/service-schemas/clients/shellCoreClient";
 import type { ServerClient } from "../serverClient.js";
 
 export function createElectronShellCore(deps: {
