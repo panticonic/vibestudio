@@ -117,8 +117,8 @@ type VcsReadFileResult = {
   repoPath: string;
   path: string;
   contentHash: string;
-  authoredChangeId: string;
-  authoredByWorkUnitId: string;
+  authoredChangeId: string | null;
+  authoredByWorkUnitId: string | null;
   contentClass: "internal" | "external";
   externalKeys: string[];
   mode: number;
@@ -140,7 +140,7 @@ type VcsVisibleDirectoryEntry = {
   fileId: string | null;
   lineage: {
     authoredChangeId: string | null;
-    authoredByWorkUnitId: string;
+    authoredByWorkUnitId: string | null;
     contentClass: "internal" | "external";
     externalKeys: string[];
   };
@@ -162,8 +162,8 @@ type VcsFileListEntry = {
   fileId: string;
   path: string;
   contentHash: string;
-  authoredChangeId: string;
-  authoredByWorkUnitId: string;
+  authoredChangeId: string | null;
+  authoredByWorkUnitId: string | null;
   contentClass: "internal" | "external";
   externalKeys: string[];
   mode: number;

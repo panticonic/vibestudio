@@ -879,8 +879,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         repoPath: String(request["repoPath"] ?? ""),
         path: String(request["path"] ?? ""),
         contentHash,
-        authoredChangeId: String(request["authoredChangeId"] ?? ""),
-        authoredByWorkUnitId: String(request["authoredByWorkUnitId"] ?? ""),
+        authoredChangeId: request["authoredChangeId"] as string | null,
+        authoredByWorkUnitId: request["authoredByWorkUnitId"] as string | null,
         contentClass: request["contentClass"] === "internal" ? "internal" : "external",
         externalKeys: Array.isArray(request["externalKeys"])
           ? request["externalKeys"].map(String)

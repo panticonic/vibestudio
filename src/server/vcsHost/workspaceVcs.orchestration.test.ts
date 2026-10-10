@@ -73,7 +73,20 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
-  it("reads the stored coordinate kind even when opaque bytes are valid UTF-8", async () => {
+  it.each([
+    {
+      authoredChangeId: "change:test",
+      authoredByWorkUnitId: "work:test",
+      contentClass: "internal",
+      externalKeys: [],
+    },
+    {
+      authoredChangeId: null,
+      authoredByWorkUnitId: null,
+      contentClass: "external",
+      externalKeys: ["repo:fixture://snapshot@v1"],
+    },
+  ])("preserves $contentClass lineage and the stored coordinate kind", async (lineage) => {
     const { blobsDir, vcs } = await harness();
     const text = "\uFEFFa😀éz";
     const bytes = Buffer.from(text);
@@ -94,12 +107,14 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           repoPath: "meta",
           path: "value",
           mode: 0o644,
+          ...lineage,
         },
       }),
     } as never);
     const read = () => vcs.semanticDirectCall("vcsReadFile", {});
     await expect(read()).resolves.toMatchObject({
       content: { kind: "bytes", base64: bytes.toString("base64") },
+      ...lineage,
     });
     contentKind = "text";
     coordinateExtent = text.length;
