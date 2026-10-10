@@ -2,28 +2,20 @@ import * as fs from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { tsImport } from "tsx/esm/api";
-const { analyzeModuleSource } = await tsImport(
+const { analyzeModuleImports } = await tsImport(
   "../../packages/module-imports/src/index.ts",
   import.meta.url
 );
 
 const importCache = new Map();
-function compilerSource(file) {
+export function compilerImports(file) {
   const source = fs.readFileSync(file, "utf8");
   const hash = createHash("sha256").update(source).digest("hex");
   const cached = importCache.get(file);
-  if (cached?.hash === hash) return cached.analysis;
-  const analysis = analyzeModuleSource(source, file);
-  importCache.set(file, { hash, analysis });
-  return analysis;
-}
-
-export function compilerImports(file) {
-  return compilerSource(file).imports;
-}
-
-export function compilerAmbient(file) {
-  return compilerSource(file).hasAmbientDeclarations;
+  if (cached?.hash === hash) return cached.imports;
+  const imports = analyzeModuleImports(source, file);
+  importCache.set(file, { hash, imports });
+  return imports;
 }
 
 export function relativeCompilerInput(from, specifier) {

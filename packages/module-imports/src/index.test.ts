@@ -1,15 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { analyzeModuleSource, analyzeModuleImports, definitelyTypedCoordinate, moduleCoordinate } from "./index.js";
+import { analyzeModuleImports, definitelyTypedCoordinate, moduleCoordinate } from "./index.js";
 
 describe("analyzeModuleImports", () => {
-  it("recognizes ambient compiler context independently of runtime imports", () => {
-    expect(analyzeModuleSource('export {}; declare global { interface Registry { item: string } }').hasAmbientDeclarations).toBe(true);
-    expect(analyzeModuleSource('import type {} from "api"; declare module "api" { interface Registry { item: string } }').hasAmbientDeclarations).toBe(true);
-    expect(analyzeModuleSource('interface Registry { item: string }').hasAmbientDeclarations).toBe(true);
-    expect(analyzeModuleSource('interface Registry { item: string }', "module.mts").hasAmbientDeclarations).toBe(false);
-    expect(analyzeModuleSource('export const example = `declare global {}`;').hasAmbientDeclarations).toBe(false);
-  });
   it("uses declaration grammar for declaration source files", () => {
     expect(
       analyzeModuleImports(

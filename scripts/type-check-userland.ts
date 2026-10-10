@@ -2,12 +2,9 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { configuredFiles, isValidationTestFile, prepareHostValidation } from "./lib/host-validation.js";
-import {
-  ValidationProjects,
-  type ValidationUnit,
-  type ValidationPaths,
-} from "./lib/validation-projects.js";
+import { configuredFiles } from "./lib/host-validation.js";
+import { ValidationProjects } from "./lib/validation-projects.js";
+import { buildInfrastructurePackages } from "./infrastructure-package-cache.mjs";
 import {
   prepareUserlandDependencyProjection,
   requiresNativeHost,
@@ -93,7 +90,7 @@ try {
   // so a workspace importing one cannot be type-checked until they are compiled.
   // The build is cached and reuses verified output, so a checkout that is already
   // built pays nothing for this.
-  const host = await prepareHostValidation(appRoot, projects);
+  buildInfrastructurePackages({ cwd: appRoot });
   const preparedProjection = await prepareUserlandDependencyProjection({
     appRoot,
     workspaceRoot,
@@ -118,107 +115,17 @@ try {
   if (preparedProjection.units.some((unit) => requiresNativeHost(unit, preparedProjection.graph))) {
     configs.push("tsconfig.integration.mobile.json");
   }
-  const baseConfig = JSON.parse(
-    fs.readFileSync(path.join(temporaryRoot, "workspace", "tsconfig.json"), "utf8")
-  );
-  const baseFiles = configuredFiles(path.join(temporaryRoot, "workspace", "tsconfig.json"));
-  const nativeConfig = JSON.parse(
-    fs.readFileSync(
-      path.join(appRoot, "scripts/config/userland/tsconfig.integration.mobile.json"),
-      "utf8"
-    )
-  );
-  const nativeFiles = configs.includes("tsconfig.integration.mobile.json")
-    ? configuredFiles(path.join(temporaryRoot, "workspace", "tsconfig.integration.mobile.json"))
-    : [];
-  const paths: ValidationPaths = { ...host.paths };
-  for (const unit of preparedProjection.units) {
-    const owner = path.join(temporaryRoot, "workspace", unit.relativePath);
-    const manifest = JSON.parse(fs.readFileSync(path.join(unit.path, "package.json"), "utf8"));
-    const entry = manifest.types ?? manifest.vibestudio?.entry ?? manifest.main;
-    if (entry) paths[unit.name] = [path.resolve(owner, entry)];
-    paths[`@exact-userland/${unit.relativePath}/*`] = [path.join(owner, "*")];
-    for (const [subpath, target] of normalizedExports(manifest.exports)) {
-      paths[subpath === "." ? unit.name : `${unit.name}/${subpath.slice(2)}`] = [
-        path.resolve(owner, target),
-      ];
-    }
-  }
-  const externalTypes = [
+  const typeRoots = [
     path.join(preparedProjection.nodeModulesDir, "@types"),
     path.join(appRoot, "node_modules/@types"),
     preparedProjection.nodeModulesDir,
     path.join(appRoot, "node_modules"),
   ];
-  const options = { ...baseConfig.compilerOptions, paths, typeRoots: externalTypes };
-  const declarations: ValidationUnit[] = preparedProjection.units.map((unit) => {
-    const root = path.join(temporaryRoot!, "workspace", unit.relativePath);
-    const realmFiles = requiresNativeHost(unit, preparedProjection.graph) ? nativeFiles : baseFiles;
-    return {
-      name: unit.name,
-      root,
-      files: realmFiles.filter((file) => file.startsWith(root + path.sep)),
-    };
-  });
-  // Node and React Native ambient globals have distinct compiler contracts.
-  const desktop = declarations.filter(
-    (unit) => !nativeFiles.some((file) => unit.files.includes(file))
-  );
-  const native = declarations.filter((unit) => !desktop.includes(unit));
-  const production = (units: ValidationUnit[]) =>
-    units.map((unit) => ({
-      ...unit,
-      files: unit.files.filter((file) => !isValidationTestFile(file)),
-    }));
-  const desktopAmbient = baseFiles.filter((file) => /\.d\.[cm]?ts$/.test(file));
-  const nativeAmbient = nativeFiles.filter((file) => /\.d\.[cm]?ts$/.test(file));
-  const desktopPaths = await projects.contracts(
-    production(desktop),
-    paths,
-    options,
-    desktopAmbient,
-    preparedProjection.nodeModulesDir
-  );
-  const nativePaths = await projects.contracts(
-    production(native),
-    desktopPaths,
-    {
-      ...options,
-      ...nativeConfig.compilerOptions,
-      paths: desktopPaths,
-    },
-    nativeAmbient,
-    preparedProjection.nodeModulesDir
-  );
-  projects.checkUnits(desktop, paths, desktopPaths, options, desktopAmbient);
-  projects.checkUnits(
-    native,
-    paths,
-    nativePaths,
-    { ...options, ...nativeConfig.compilerOptions },
-    nativeAmbient
-  );
+  const compositionIdentity = preparedProjection.units.map((unit) => unit.name).sort().join(",");
   for (const configName of configs) {
-    const configPath = path.join(temporaryRoot, "workspace", configName);
-    const selectedFiles = configuredFiles(configPath).filter(
-      (file) => !declarations.some((unit) => unit.files.includes(file))
-    );
-    projects.check(
-      configName,
-      [
-        ...new Set([
-          ...selectedFiles,
-          ...(configName.includes("mobile") ? nativeAmbient : desktopAmbient),
-          ...projects.ambientDeclarations(
-            production(configName.includes("mobile") ? native : desktop),
-            configName.includes("mobile") ? nativeAmbient : desktopAmbient
-          ),
-        ]),
-      ],
-      configName.includes("mobile")
-        ? { ...options, ...nativeConfig.compilerOptions, paths: nativePaths }
-        : { ...options, paths: desktopPaths }
-    );
+    const config = path.join(temporaryRoot, "workspace", configName);
+    projects.check(`userland:${compositionIdentity}/${configName}`,
+      configuredFiles(config), { typeRoots }, config);
   }
 } finally {
   try {
@@ -232,7 +139,7 @@ try {
   }
 }
 
-console.log("✓ Userland typecheck passed using package declaration boundaries.");
+console.log("✓ Userland typecheck passed using the semantic dependency projection.");
 
 function projectCheckoutSource(
   targetRoot: string,

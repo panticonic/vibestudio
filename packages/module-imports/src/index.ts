@@ -271,10 +271,7 @@ function visitAst(value: unknown, visit: (node: AstNode) => void, seen: Set<obje
  * import-looking text in strings, comments, templates, and regexes is never
  * interpreted as code.
  */
-export function analyzeModuleSource(source: string, filename?: string): {
-  imports: ModuleImportReference[];
-  hasAmbientDeclarations: boolean;
-} {
+export function analyzeModuleImports(source: string, filename?: string): ModuleImportReference[] {
   const ast = parse(source, {
     sourceType: "unambiguous",
     sourceFilename: filename,
@@ -288,13 +285,9 @@ export function analyzeModuleSource(source: string, filename?: string): {
     createImportExpressions: true,
   });
   const references: ModuleImportReference[] = [];
-  let hasAmbientDeclarations = ast.program.sourceType === "script" &&
-    !(filename && /\.[cm]ts$/.test(filename));
   visitAst(
     ast.program,
     (node) => {
-      if (node.type === "TSModuleDeclaration" && (node["global"] === true || isStringNode(node["id"])))
-        hasAmbientDeclarations = true;
       const found =
         node.type === "ImportDeclaration" ||
         node.type === "ExportNamedDeclaration" ||
@@ -305,11 +298,7 @@ export function analyzeModuleSource(source: string, filename?: string): {
     },
     new Set()
   );
-  return { imports: references.sort((left, right) => left.offset - right.offset), hasAmbientDeclarations };
-}
-
-export function analyzeModuleImports(source: string, filename?: string): ModuleImportReference[] {
-  return analyzeModuleSource(source, filename).imports;
+  return references.sort((left, right) => left.offset - right.offset);
 }
 
 export function moduleCoordinate(specifier: string): string | null {
