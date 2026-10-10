@@ -20,6 +20,12 @@
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 
 export interface BuildSourceProvider {
+  /** A published executable for unchanged installed source. Missing bytes are
+   * a broken installation, rather than permission to compile on startup. */
+  preparedBuildForContent?(
+    stateHash: string,
+    unitPath: string
+  ): { buildKey: string; effectiveVersion: string } | null;
   /**
    * Ensure the sources for the given units (the build target plus its
    * transitive internal deps) exist on disk at the given workspace state.

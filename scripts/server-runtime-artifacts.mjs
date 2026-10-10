@@ -27,6 +27,7 @@ export const SERVER_WORKER_ENTRIES = Object.freeze({
 
 export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/server.mjs",
+  "dist/prepare-workspace-templates.mjs",
   "dist/fs-disk-worker.cjs",
   "dist/browserTransport.js",
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
@@ -35,8 +36,11 @@ export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/host-build-fingerprint.json",
 ]);
 
-/** Complete compiled closure consumed by the TypeScript source-server mode. */
+/** Complete compiled closure consumed by checkout server launches. */
 export const SOURCE_SERVER_PREREQUISITE_ARTIFACTS = Object.freeze([
+  "dist/server.mjs",
+  "dist/prepare-workspace-templates.mjs",
+  ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
   "dist/browserTransport.js",
   "dist/fs-disk-worker.cjs",
   "dist/dependency-content-maintenance.cjs",

@@ -8,6 +8,7 @@ import { parseHubReadyPayload } from "./hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 import { hostArtifactRootForServerEntry } from "../../host-build-generations.mjs";
 import { bindProcessLifetimeToParent } from "../../owned-process-tree.mjs";
+import { prepareWorkspaceRelease } from "../../prepare-workspace-release.mjs";
 import { flagValue } from "./args.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -44,7 +45,8 @@ export function hostBuildHasWorkspaceTemplatePins(appRoot) {
  */
 function developmentWorkspaceTemplateEnv(appRoot, checkpointTarget) {
   if (process.env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]) return {};
-  if (hostBuildHasWorkspaceTemplatePins(appRoot)) return {};
+  if (process.env.VIBESTUDIO_SERVER_ENTRY !== "live" && hostBuildHasWorkspaceTemplatePins(appRoot))
+    return {};
   const resolver = path.join(repoRoot, "scripts", "resolve-development-templates.ts");
   if (!fs.existsSync(resolver)) return {};
   const resolved = spawnSync(
@@ -248,7 +250,7 @@ Options:
       Show this help message.
 
 ${config.additionalHelp ? `${config.additionalHelp}\n\n` : ""}\
-This command starts the server hub (${serverEntryArg()}). Workspaces are chosen
+This command starts the server hub (compiled host generation). Workspaces are chosen
 by clients after pairing.
 `);
 }
@@ -269,7 +271,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   // source generation, and that generation is published by the rebuild. Asking
   // for it first reads a file that does not exist yet.
   let hostArtifactRoot = null;
-  if (serverEntryArg() === "src/server/index.ts") {
+  if (process.env.VIBESTUDIO_SERVER_ENTRY === "live") {
     if (hooks.prepareSourceServer) {
       hooks.prepareSourceServer({ repoRoot });
     } else {
@@ -290,15 +292,28 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
       }
     }
     // The rebuild above published the generation this entry runs from.
-    hostArtifactRoot = hostArtifactRootForServerEntry(repoRoot, serverEntryArg());
+    hostArtifactRoot = hostArtifactRootForServerEntry(repoRoot, serverEntryArg(repoRoot));
   }
 
   let serverArgs = buildServerArgs(options);
   let ownedReadyDir = null;
   let ownedCheckpointRoot = null;
+  const createPreparationRoot = () => {
+    const cacheRoot = path.join(
+      process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache"),
+      "vibestudio",
+      "pair-preparation"
+    );
+    fs.mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
+    return fs.mkdtempSync(path.join(cacheRoot, "launch-"));
+  };
   const ownedCheckpointDir = () => {
-    ownedCheckpointRoot ??= fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-pair-base-"));
+    ownedCheckpointRoot ??= createPreparationRoot();
     return ownedCheckpointRoot;
+  };
+  const cleanupOwnedPaths = () => {
+    if (ownedReadyDir) fs.rmSync(ownedReadyDir, { recursive: true, force: true });
+    if (ownedCheckpointRoot) fs.rmSync(ownedCheckpointRoot, { recursive: true, force: true });
   };
   let readyFile = readyFileFromServerArgs(serverArgs);
   if (!readyFile) {
@@ -320,7 +335,12 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     if (error?.code !== "ENOENT") throw error;
   }
 
-  await hooks.beforeStart?.({ options, serverArgs });
+  try {
+    await hooks.beforeStart?.({ options, serverArgs });
+  } catch (error) {
+    cleanupOwnedPaths();
+    throw error;
+  }
 
   console.log(`[${config.logPrefix}] Loopback host: ${LOOPBACK_HOST}`);
   console.log(`[${config.logPrefix}] Gateway port: ${options.port}`);
@@ -340,17 +360,23 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   let stderrBuffer = "";
   const stderrLines = [];
   let hasSpawned = false;
-  const workspaceTemplateEnv = hooks.developmentWorkspaceTemplateEnv
-    ? hooks.developmentWorkspaceTemplateEnv({ repoRoot, options })
-    : developmentWorkspaceTemplateEnv(
-        options.appRoot ?? repoRoot,
-        path.join(ownedCheckpointDir(), "base")
-      );
+  let workspaceTemplateEnv;
+  try {
+    workspaceTemplateEnv = hooks.developmentWorkspaceTemplateEnv
+      ? hooks.developmentWorkspaceTemplateEnv({ repoRoot, options })
+      : developmentWorkspaceTemplateEnv(
+          options.appRoot ?? repoRoot,
+          path.join(ownedCheckpointDir(), "base")
+        );
+  } catch (error) {
+    cleanupOwnedPaths();
+    throw error;
+  }
   const baseEnv = {
     ...process.env,
     ...workspaceTemplateEnv,
     VIBESTUDIO_HOST_ARTIFACT_ROOT:
-      hostArtifactRoot ?? hostArtifactRootForServerEntry(repoRoot, serverEntryArg()),
+      hostArtifactRoot ?? hostArtifactRootForServerEntry(repoRoot, serverEntryArg(repoRoot)),
     VIBESTUDIO_GATEWAY_PORT: String(options.port),
     ...(options.relayUrls.length > 0
       ? { VIBESTUDIO_IROH_RELAYS: options.relayUrls.join(",") }
@@ -391,20 +417,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
       clearTimeout(readyPoll);
       readyPoll = null;
     }
-    if (ownedReadyDir) {
-      try {
-        fs.rmSync(ownedReadyDir, { recursive: true, force: true });
-      } catch {
-        // Best-effort cleanup only.
-      }
-    }
-    if (ownedCheckpointRoot) {
-      try {
-        fs.rmSync(ownedCheckpointRoot, { recursive: true, force: true });
-      } catch {
-        // Best-effort cleanup only.
-      }
-    }
+    cleanupOwnedPaths();
   };
 
   const spawnChild = () => {
@@ -625,11 +638,29 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     });
   };
 
-  spawnChild();
+  if (process.env.VIBESTUDIO_SERVER_ENTRY === "live") {
+    try {
+      const preparationRoot = ownedCheckpointDir();
+      await (hooks.prepareWorkspaceRelease ?? prepareWorkspaceRelease)({
+        appRoot: options.appRoot ?? repoRoot,
+        output: path.join(preparationRoot, "release"),
+        scratch: path.join(preparationRoot, "scratch"),
+        env,
+      });
+    } catch (error) {
+      cleanupReadyState();
+      throw error;
+    }
+  }
+  try {
+    spawnChild();
+  } catch (error) {
+    cleanupReadyState();
+    throw error;
+  }
 
   for (const sig of ["SIGINT", "SIGTERM"]) {
     const handler = () => {
-      cleanupReadyState();
       const repeated = shutdownSignal !== null;
       shutdownSignal ??= sig;
       console.log(
@@ -647,11 +678,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
 }
 
 function buildServerArgs(options) {
-  const args = [
-    serverEntryArg(),
-    "--gateway-port",
-    String(options.port),
-  ];
+  const args = [serverEntryArg(repoRoot), "--gateway-port", String(options.port)];
 
   if (options.bootstrapWorkspace) {
     args.push("--bootstrap-workspace", options.bootstrapWorkspace);

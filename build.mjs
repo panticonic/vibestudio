@@ -797,86 +797,7 @@ async function build() {
       initialHostBuilds.filter((result) => result && typeof result === "object")
     );
     await buildDependencyWorkers();
-    // Inline the build-compiled internal DO and workerd host programs into both
-    // server artifacts. Source-mode execution reads the same emitted files.
-    const internalDoBundleContent = fs.readFileSync("dist/internal-do.bundle.mjs", "utf8");
-    const internalDoBundleDefine = {
-      "globalThis.__VIBESTUDIO_INTERNAL_DO_BUNDLE__": JSON.stringify(internalDoBundleContent),
-      "globalThis.__VIBESTUDIO_WORKERD_PROGRAMS__": JSON.stringify(workerdPrograms),
-    };
-    const serverElectronWithBundle = {
-      ...serverElectronConfig,
-      define: {
-        ...(serverElectronConfig.define ?? {}),
-        ...internalDoBundleDefine,
-        "globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.electron.authorityAnalysis
-        ),
-        "globalThis.__VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.electron.libraryLowering
-        ),
-        "globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.electron.typecheck
-        ),
-        "globalThis.__VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.electron.workspaceRpcCatalog
-        ),
-        "globalThis.__VIBESTUDIO_IMMUTABLE_TREE_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.electron.immutableTree
-        ),
-        "globalThis.__VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.electron.sqliteIntegrity
-        ),
-      },
-    };
-    const serverWithBundle = {
-      ...serverConfig,
-      define: {
-        ...(serverConfig.define ?? {}),
-        ...internalDoBundleDefine,
-        "globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.standalone.authorityAnalysis
-        ),
-        "globalThis.__VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.standalone.libraryLowering
-        ),
-        "globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.standalone.typecheck
-        ),
-        "globalThis.__VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.standalone.workspaceRpcCatalog
-        ),
-        "globalThis.__VIBESTUDIO_IMMUTABLE_TREE_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.standalone.immutableTree
-        ),
-        "globalThis.__VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__": JSON.stringify(
-          SERVER_WORKER_ENTRIES.standalone.sqliteIntegrity
-        ),
-      },
-    };
-    // Both server bundles consume the internal-DO output captured above.
-    const serverBuilds = await buildArtifactGroups(
-      [
-        serverElectronWithBundle,
-        serverWithBundle,
-        authorityAnalysisWorkerElectronConfig,
-        authorityAnalysisWorkerConfig,
-        libraryLoweringWorkerElectronConfig,
-        libraryLoweringWorkerConfig,
-        typecheckWorkerElectronConfig,
-        typecheckWorkerConfig,
-        workspaceRpcCatalogWorkerElectronConfig,
-        workspaceRpcCatalogWorkerConfig,
-        immutableTreeWorkerElectronConfig,
-        immutableTreeWorkerConfig,
-        sqliteIntegrityWorkerElectronConfig,
-        sqliteIntegrityWorkerConfig,
-        fsDiskWorkerConfig,
-        dependencyContentMaintenanceConfig,
-      ],
-      buildHostArtifact
-    );
-    assertHostBuildMetafiles(serverBuilds);
+    await buildServerArtifacts(["standalone", "electron"], workerdPrograms);
 
     // ========================================================================
     // STEP 3: Copy static assets
@@ -925,6 +846,72 @@ async function buildInternalDoOnly() {
   }
 }
 
+/** Source and packaged launchers execute the same server artifact contract. */
+async function buildServerArtifacts(modes, workerdPrograms) {
+  const embedded = {
+    "globalThis.__VIBESTUDIO_INTERNAL_DO_BUNDLE__": JSON.stringify(
+      fs.readFileSync("dist/internal-do.bundle.mjs", "utf8")
+    ),
+    "globalThis.__VIBESTUDIO_WORKERD_PROGRAMS__": JSON.stringify(workerdPrograms),
+  };
+  const workerGlobals = {
+    authorityAnalysis: "AUTHORITY",
+    libraryLowering: "LIBRARY_LOWERING",
+    typecheck: "TYPECHECK",
+    workspaceRpcCatalog: "RPC_CATALOG",
+    immutableTree: "IMMUTABLE_TREE",
+    sqliteIntegrity: "SQLITE_INTEGRITY",
+  };
+  const workers = {
+    standalone: [
+      authorityAnalysisWorkerConfig,
+      libraryLoweringWorkerConfig,
+      typecheckWorkerConfig,
+      workspaceRpcCatalogWorkerConfig,
+      immutableTreeWorkerConfig,
+      sqliteIntegrityWorkerConfig,
+    ],
+    electron: [
+      authorityAnalysisWorkerElectronConfig,
+      libraryLoweringWorkerElectronConfig,
+      typecheckWorkerElectronConfig,
+      workspaceRpcCatalogWorkerElectronConfig,
+      immutableTreeWorkerElectronConfig,
+      sqliteIntegrityWorkerElectronConfig,
+    ],
+  };
+  const configs = modes.flatMap((mode) => {
+    const base = mode === "electron" ? serverElectronConfig : serverConfig;
+    const config = {
+      ...base,
+      define: {
+        ...base.define,
+        ...embedded,
+        ...Object.fromEntries(
+          Object.entries(workerGlobals).map(([role, name]) => [
+            `globalThis.__VIBESTUDIO_${name}_WORKER_ENTRY__`,
+            JSON.stringify(SERVER_WORKER_ENTRIES[mode][role]),
+          ])
+        ),
+      },
+    };
+    return [
+      config,
+      {
+        ...config,
+        entryPoints: ["scripts/prepare-workspace-templates.ts"],
+        outfile: `dist/prepare-workspace-templates.${mode === "electron" ? "cjs" : "mjs"}`,
+      },
+      ...workers[mode],
+    ];
+  });
+  const results = await buildArtifactGroups(
+    [...configs, fsDiskWorkerConfig, dependencyContentMaintenanceConfig],
+    buildHostArtifact
+  );
+  assertHostBuildMetafiles(results);
+}
+
 async function buildSourceServerPrerequisites() {
   let releaseLock;
   try {
@@ -953,9 +940,9 @@ async function buildSourceServerPrerequisites() {
     // embeds the RPC WebSocket client, so leaving it stale can make panels use
     // an older wire protocol even when packages/rpc/dist is current.
     await esbuild.build(browserTransportConfig);
-    await esbuild.build(fsDiskWorkerConfig);
     await esbuild.build(internalDoBundleConfig);
-    await buildWorkerdPrograms({ minify: !isDev, logOverride });
+    const programs = await buildWorkerdPrograms({ minify: !isDev, logOverride });
+    await buildServerArtifacts(["standalone"], programs);
 
     // Authority startup identifies the installed host by the exact source
     // snapshot that produced its runtime artifacts. Source-server builds are a

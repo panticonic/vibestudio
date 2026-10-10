@@ -14,13 +14,10 @@ describe("AuthorityAnalysisWorkerClient", () => {
     await Promise.all(clients.splice(0).map((client) => client.close()));
   });
 
-  it("resolves the source-owned worker when the application root is a workspace clone", () => {
-    const appRoot = mkdtempSync(join(tmpdir(), "vibestudio-app-root-"));
-    const entry = join(appRoot, "src/server/buildV2/authorityAnalysisWorkerBootstrap.mjs");
-    mkdirSync(join(appRoot, "src/server/buildV2"), { recursive: true });
-    writeFileSync(entry, "");
-
-    expect(resolveAuthorityAnalysisWorkerEntry(appRoot)).toBe(entry);
+  it("resolves the worker from the explicit host generation", () => {
+    expect(resolveAuthorityAnalysisWorkerEntry()).toBe(
+      join(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "authority-analysis-worker.mjs")
+    );
   });
 
   it("executes the compiler snapshot outside the server thread", async () => {
@@ -36,7 +33,7 @@ describe("AuthorityAnalysisWorkerClient", () => {
       `declare const workers: { resolveService(query: string): Promise<unknown> };
        export const service = workers.resolveService("example.notes.v1");`
     );
-    const client = new AuthorityAnalysisWorkerClient(process.cwd());
+    const client = new AuthorityAnalysisWorkerClient();
     clients.push(client);
 
     const snapshot = await client.compilerSnapshot({
@@ -62,7 +59,7 @@ describe("AuthorityAnalysisWorkerClient", () => {
     // A stranded request has no clock to rescue it: the publication review
     // lifecycle is deliberately timeout-free, so an unsettled analysis would
     // leave the review "preparing" forever.
-    const client = new AuthorityAnalysisWorkerClient(process.cwd());
+    const client = new AuthorityAnalysisWorkerClient();
     const inFlight = client.factLookups("workspace-under-test", [
       {
         epoch: { analyzerVersion: "userland-authority-v5" },
@@ -81,7 +78,7 @@ describe("AuthorityAnalysisWorkerClient", () => {
   });
 
   it("recovers after the worker is replaced", async () => {
-    const client = new AuthorityAnalysisWorkerClient(process.cwd());
+    const client = new AuthorityAnalysisWorkerClient();
     clients.push(client);
     const identities = [
       {

@@ -449,15 +449,33 @@ export async function linkReconstructableBlobFile(
     assertRegularFileSize(sourceStat, sourcePath, expectedSize);
     const finalDir = path.dirname(filePath);
     await fsp.mkdir(finalDir, { recursive: true });
+    let trustedStat = sourceStat;
+    let copiedPath: string | undefined;
     try {
-      await fsp.link(sourcePath, filePath);
-    } catch (error) {
-      if (!isErrorCode(error, "EEXIST")) throw error;
+      try {
+        await fsp.link(sourcePath, filePath);
+      } catch (error) {
+        if (isErrorCode(error, "EXDEV")) {
+          // Application resources and user data can live on different volumes.
+          // Copy privately, then publish atomically on the destination volume.
+          copiedPath = path.join(finalDir, `.copy-${randomUUID()}`);
+          await fsp.copyFile(sourcePath, copiedPath, fs.constants.COPYFILE_EXCL);
+          trustedStat = await fsp.lstat(copiedPath);
+          assertRegularFileSize(trustedStat, copiedPath, expectedSize);
+          try {
+            await fsp.link(copiedPath, filePath);
+          } catch (race) {
+            if (!isErrorCode(race, "EEXIST")) throw race;
+          }
+        } else if (!isErrorCode(error, "EEXIST")) throw error;
+      }
+      if (!(await existingBlob(filePath, digest, expectedSize, trustedStat))) {
+        throw new Error(`CAS object disappeared during installation: ${filePath}`);
+      }
+      return filePath;
+    } finally {
+      if (copiedPath) await fsp.rm(copiedPath, { force: true });
     }
-    if (!(await existingBlob(filePath, digest, expectedSize, sourceStat))) {
-      throw new Error(`CAS object disappeared during installation: ${filePath}`);
-    }
-    return filePath;
   });
 }
 

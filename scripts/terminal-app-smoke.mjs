@@ -7,8 +7,13 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { envelopeFromMessage } from "@vibestudio/rpc";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
-import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
-import { hostArtifactRootForServerEntry } from "./host-build-generations.mjs";
+import { createServerInvocation } from "./cli/lib/server-entry.mjs";
+import { readCurrentHostBuildGeneration } from "./host-build-generations.mjs";
+import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
+import {
+  resolveDevelopmentTemplateSet,
+  developmentTemplateSetEnv,
+} from "../src/dev/developmentTemplateSet.ts";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -244,7 +249,13 @@ async function stopServer(child) {
 }
 
 async function main() {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-terminal-smoke-"));
+  const scratchParent = path.join(
+    process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache"),
+    "vibestudio",
+    "terminal-smoke"
+  );
+  fs.mkdirSync(scratchParent, { recursive: true, mode: 0o700 });
+  const tempRoot = fs.mkdtempSync(path.join(scratchParent, "run-"));
   const readyFile = path.join(tempRoot, "hub-ready.json");
   const serverHome = path.join(tempRoot, "server-home");
   const serverConfig = path.join(tempRoot, "server-xdg-config");
@@ -253,8 +264,33 @@ async function main() {
   let events = null;
   let child = null;
   try {
+    const hostArtifactRoot = readCurrentHostBuildGeneration(repoRoot, "desktop");
+    const templates = await resolveDevelopmentTemplateSet({
+      repoRoot,
+      checkpointRoot: path.join(tempRoot, "template-checkpoints"),
+    });
+    if (!templates)
+      throw new Error(
+        "A source smoke test needs the canonical template checkouts. Run `pnpm dev:templates setup`."
+      );
+    const env = {
+      ...process.env,
+      ...developmentTemplateSetEnv(templates),
+      NODE_ENV: process.env.NODE_ENV ?? "development",
+      VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
+      HOME: serverHome,
+      XDG_CONFIG_HOME: serverConfig,
+      APPDATA: path.join(tempRoot, "server-appdata"),
+      npm_config_cache: process.env.npm_config_cache ?? path.join(tempRoot, "npm-cache"),
+    };
+    await prepareWorkspaceRelease({
+      appRoot: repoRoot,
+      output: path.join(tempRoot, "release"),
+      scratch: path.join(tempRoot, "preparation"),
+      env,
+    });
     const serverInvocation = createServerInvocation([
-      serverEntryArg(),
+      path.join(hostArtifactRoot, "server.mjs"),
       "--app-root",
       repoRoot,
       "--ready-file",
@@ -263,20 +299,7 @@ async function main() {
     child = spawn(serverInvocation.command, serverInvocation.args, {
       cwd: repoRoot,
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        NODE_ENV: process.env.NODE_ENV ?? "development",
-        // A host refuses to start without being told which build generation it
-        // runs from, and this smoke launches one. Derived from the entry it is
-        // about to execute, the same way the pair server derives it.
-        VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRootForServerEntry(repoRoot, serverEntryArg()),
-        HOME: serverHome,
-        XDG_CONFIG_HOME: serverConfig,
-        APPDATA: path.join(tempRoot, "server-appdata"),
-        npm_config_cache:
-          process.env.npm_config_cache ??
-          path.join(repoRoot, "node_modules", ".cache", "terminal-smoke-npm"),
-      },
+      env,
     });
     child.stdout.on("data", (chunk) => process.stdout.write(chunk));
     child.stderr.on("data", (chunk) => process.stderr.write(chunk));

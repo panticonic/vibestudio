@@ -19,13 +19,13 @@ export interface IrohIngressOptions<
   /** Runs after the authenticated QUIC handshake and before any stream is accepted. */
   admitPeer(endpointId: string): boolean | Promise<boolean>;
   attach(connection: Connection): Promise<void>;
-  waitUntilOnline?(endpoint: Endpoint): Promise<void>;
   log?(message: string): void;
 }
 
 export interface IrohIngress<Endpoint = IrohPhysicalEndpoint<IrohPhysicalConnection>> {
   readonly endpointId: string;
   readonly endpoint: Endpoint;
+  /** Resolves when the endpoint is bound and accepting; relay connectivity remains live state. */
   readonly ready: Promise<void>;
   stop(): Promise<void>;
 }
@@ -34,8 +34,8 @@ export interface IrohIngress<Endpoint = IrohPhysicalEndpoint<IrohPhysicalConnect
  * Owns one server endpoint and its full-handshake accept loop. Admission is
  * deliberately before `attach`: rejected peers can never open the lifecycle
  * stream or consume application framing/authentication budgets.
- * Relay discovery stays on the bound endpoint: Iroh owns reconnecting it when
- * the network returns. The native readiness wait must reject when it closes.
+ * Binding establishes ingress readiness. Relay discovery and reconnection stay
+ * on the same endpoint and never prevent local startup or direct peer admission.
  */
 export function startIrohIngress<
   Connection extends IrohPhysicalConnection,
@@ -168,8 +168,6 @@ export function startIrohIngress<
         }
         endpointId = owner.endpointId;
         endpoint = owner;
-        await options.waitUntilOnline?.(owner);
-        if (stopped) break;
         rebindAttempt = 0;
         if (!readySettled) {
           readySettled = true;

@@ -168,61 +168,55 @@ describe("Iroh server ingress", () => {
     expect(() => ingress.endpoint).toThrow("not bound");
   });
 
-  it("keeps the same endpoint through a relay outage and becomes ready on recovery", async () => {
-    vi.useFakeTimers();
-    const online = deferred<void>();
+  it("accepts direct peers while relay connectivity is unavailable", async () => {
+    const peer = connection("a".repeat(64));
     const waiting = deferred<IrohPhysicalConnection | null>();
+    const online = vi.fn(() => new Promise<void>(() => undefined));
     const endpoint = {
       endpointId: "d".repeat(64),
-      accept: vi.fn(() => waiting.promise),
+      connect: vi.fn(),
+      accept: vi
+        .fn()
+        .mockResolvedValueOnce(peer)
+        .mockImplementation(() => waiting.promise),
       close: vi.fn(async () => waiting.resolve(null)),
-    } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
-    const binding = {
-      bind: vi.fn(async () => endpoint),
-    } as IrohEndpointBinding<IrohPhysicalConnection, IrohPhysicalEndpoint<IrohPhysicalConnection>>;
+      native: { online },
+    } satisfies IrohPhysicalEndpoint<IrohPhysicalConnection> & {
+      native: { online: typeof online };
+    };
+    const attach = vi.fn(async () => undefined);
     const ingress = startIrohIngress({
-      binding,
+      binding: { bind: async () => endpoint },
       admitPeer: () => true,
-      attach: async () => undefined,
-      waitUntilOnline: () => online.promise,
+      attach,
     });
-
     try {
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(endpoint.accept).not.toHaveBeenCalled();
-      expect(endpoint.close).not.toHaveBeenCalled();
-      expect(binding.bind).toHaveBeenCalledOnce();
-      online.resolve();
       await ingress.ready;
-      expect(endpoint.accept).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledWith(peer));
+      expect(online).not.toHaveBeenCalled();
+      expect(ingress.endpoint).toBe(endpoint);
     } finally {
-      online.resolve();
       await ingress.stop();
-      vi.useRealTimers();
     }
     expect(endpoint.close).toHaveBeenCalledOnce();
   });
 
-  it("cancels pending relay discovery and settles readiness when stopped", async () => {
-    let rejectOnline!: (error: Error) => void;
-    const online = new Promise<void>((_resolve, reject) => {
-      rejectOnline = reject;
-    });
+  it("joins pending binding and rejects startup when stopped before binding completes", async () => {
+    const bound = deferred<IrohPhysicalEndpoint<IrohPhysicalConnection>>();
     const endpoint = {
       endpointId: "d".repeat(64),
       accept: vi.fn(),
-      close: vi.fn(async () => rejectOnline(new Error("endpoint closed"))),
+      close: vi.fn(async () => undefined),
     } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
-    const waitUntilOnline = vi.fn(() => online);
     const ingress = startIrohIngress({
-      binding: { bind: async () => endpoint },
+      binding: { bind: () => bound.promise },
       admitPeer: () => true,
       attach: async () => undefined,
-      waitUntilOnline,
     });
     const rejected = expect(ingress.ready).rejects.toThrow("stopped before becoming ready");
-    await vi.waitFor(() => expect(waitUntilOnline).toHaveBeenCalledOnce());
-    await ingress.stop();
+    const stopping = ingress.stop();
+    bound.resolve(endpoint);
+    await stopping;
     await rejected;
     await ingress.stop();
     expect(endpoint.close).toHaveBeenCalledOnce();

@@ -576,6 +576,10 @@ export const vcsIntegrationDecisionSchema = z
   .strict();
 export type VcsIntegrationDecision = z.infer<typeof vcsIntegrationDecisionSchema>;
 
+const vcsSnapshotSourceSchema = z
+  .object({ sourceUri: externalSourceUri, snapshotRevision: nonEmptyText })
+  .strict();
+
 export const vcsWorkspaceEventSchema = z
   .object({
     eventId: id("Committed workspace event."),
@@ -583,6 +587,7 @@ export const vcsWorkspaceEventSchema = z
     commandId: id("Originating semantic command."),
     kind: z.enum(["genesis", "commit", "integration-commit"]),
     workspaceFactRootId: id("Authenticated workspace-fact root."),
+    snapshotSource: vcsSnapshotSourceSchema.nullable(),
     parentEventIds: z.array(id("Parent event.")).max(201),
     externalDeltaIds: z.array(id("Integrated external delta.")).max(200).optional(),
     applicationIds: z.array(id("Complete local application chain committed here.")).max(10_000),
@@ -1276,9 +1281,7 @@ export const vcsMergeCoordinateSchema = z
 
 export const vcsMergeResolutionStateSchema = z
   .object({
-    complete: z
-      .boolean()
-      .describe("Every coordinate the source touched is satisfied or decided."),
+    complete: z.boolean().describe("Every coordinate the source touched is satisfied or decided."),
     remainingCoordinateCount: z.number().int().nonnegative(),
     concluded: z
       .boolean()
@@ -1609,12 +1612,15 @@ export const vcsProvenanceRelationRegistry = {
   "authored-copy-source": [{ from: "change", to: "file", fact: "change.authored-source" }],
   "preserves-content": [
     { from: "applied-change", to: "applied-change", fact: "content-edge.mapping" },
+    { from: "applied-change", to: "file", fact: "content-edge.mapping" },
   ],
   "copies-content": [
     { from: "applied-change", to: "applied-change", fact: "content-edge.mapping" },
+    { from: "applied-change", to: "file", fact: "content-edge.mapping" },
   ],
   "incorporates-content": [
     { from: "applied-change", to: "applied-change", fact: "content-edge.mapping" },
+    { from: "applied-change", to: "file", fact: "content-edge.mapping" },
   ],
   "places-file": [
     { from: "event", to: "file", fact: "workspace-state.file" },
@@ -1775,7 +1781,7 @@ export const vcsBlameInputSchema = z
   .strict();
 export type VcsBlameInput = z.infer<typeof vcsBlameInputSchema>;
 
-export const vcsBlameSpanSchema = z
+const vcsAuthoredBlameSpanSchema = z
   .object({
     start: z.number().int().nonnegative(),
     end: z.number().int().nonnegative(),
@@ -1789,6 +1795,25 @@ export const vcsBlameSpanSchema = z
     stop: z.enum(["authored", "import-boundary"]),
   })
   .strict();
+const vcsSnapshotOriginSchema = z
+  .object({
+    origin: vcsFileNodeRefSchema.extend({ state: vcsEventNodeRefSchema }),
+    source: vcsSnapshotSourceSchema,
+    command: vcsCommandNodeRefSchema,
+    createdAt: timestamp,
+    stop: z.literal("snapshot-boundary"),
+  })
+  .strict();
+export const vcsBlameSpanSchema = z.union([
+  vcsAuthoredBlameSpanSchema,
+  vcsSnapshotOriginSchema
+    .extend({
+      start: z.number().int().nonnegative(),
+      end: z.number().int().nonnegative(),
+      path: z.array(vcsProvenanceEdgeSchema).max(200),
+    })
+    .strict(),
+]);
 export type VcsBlameSpan = z.infer<typeof vcsBlameSpanSchema>;
 
 export const vcsBlameResultSchema = z
@@ -2043,7 +2068,7 @@ export const vcsReadMemoryCauseSchema = z
   })
   .strict();
 
-export const vcsReadMemoryEpisodeSchema = z
+const vcsAuthoredReadMemoryEpisodeSchema = z
   .object({
     ranges: z.array(vcsReadMemoryRangeSchema).min(1).max(500),
     stop: z.enum(["authored", "import-boundary"]),
@@ -2069,6 +2094,12 @@ export const vcsReadMemoryEpisodeSchema = z
     cause: vcsReadMemoryCauseSchema.nullable(),
   })
   .strict();
+export const vcsReadMemoryEpisodeSchema = z.union([
+  vcsAuthoredReadMemoryEpisodeSchema,
+  vcsSnapshotOriginSchema
+    .extend({ ranges: z.array(vcsReadMemoryRangeSchema).min(1).max(500) })
+    .strict(),
+]);
 export type VcsReadMemoryEpisode = z.infer<typeof vcsReadMemoryEpisodeSchema>;
 
 export const vcsReadMemoryResultSchema = z.discriminatedUnion("status", [
@@ -2148,6 +2179,17 @@ export const vcsReadFileInputSchema = z
   .strict();
 export type VcsReadFileInput = z.infer<typeof vcsReadFileInputSchema>;
 
+export const vcsFileLineageSchema = z
+  .object({
+    authoredChangeId: id("Exact semantic change that authored this file version.").nullable(),
+    authoredByWorkUnitId: id(
+      "Work unit carrying this file version's persisted content class."
+    ).nullable(),
+    contentClass: z.enum(["internal", "external"]),
+    externalKeys: z.array(z.string().min(1)).max(256),
+  })
+  .strict();
+
 export const vcsReadFileResultSchema = z
   .object({
     repositoryId: id("Stable repository identity."),
@@ -2155,10 +2197,7 @@ export const vcsReadFileResultSchema = z
     repoPath: canonicalRepoPath,
     path: canonicalFilePath,
     contentHash: id("Exact content blob."),
-    authoredChangeId: id("Exact semantic change that authored this file version."),
-    authoredByWorkUnitId: id("Work unit carrying this file version's persisted content class."),
-    contentClass: z.enum(["internal", "external"]),
-    externalKeys: z.array(z.string().min(1)).max(256),
+    ...vcsFileLineageSchema.shape,
     mode: z.number().int().nonnegative().max(0o777),
     content: vcsFileReadContentSchema,
   })
@@ -2166,14 +2205,7 @@ export const vcsReadFileResultSchema = z
   .nullable();
 export type VcsReadFileResult = z.infer<typeof vcsReadFileResultSchema>;
 
-const vcsVisibleEntryLineageSchema = z
-  .object({
-    authoredChangeId: id("Exact semantic change witnessing this visible name.").nullable(),
-    authoredByWorkUnitId: id("Work unit witnessing this visible name."),
-    contentClass: z.enum(["internal", "external"]),
-    externalKeys: z.array(z.string().min(1)).max(256),
-  })
-  .strict();
+const vcsVisibleEntryLineageSchema = vcsFileLineageSchema;
 
 export const vcsListDirectoryInputSchema = z
   .object({
@@ -2232,10 +2264,7 @@ export const vcsFileListEntrySchema = z
     fileId: id("Stable file identity."),
     path: canonicalFilePath,
     contentHash: id("Exact content blob."),
-    authoredChangeId: id("Exact semantic change that authored this file version."),
-    authoredByWorkUnitId: id("Work unit carrying this file version's persisted content class."),
-    contentClass: z.enum(["internal", "external"]),
-    externalKeys: z.array(z.string().min(1)).max(256),
+    ...vcsFileLineageSchema.shape,
     mode: z.number().int().nonnegative().max(0o777),
     ...contentDescriptorFields,
   })

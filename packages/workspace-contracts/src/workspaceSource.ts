@@ -51,14 +51,17 @@ export interface WorkspaceSourceSnapshotRepository {
   snapshot: `v1-sha256:${string}`;
   /**
    * Exact content-store state for `files`. The bootstrap host publishes this
-   * reconstructable tree before initialization; the semantic authority
-   * independently re-derives the hash before recording it.
+   * reconstructable tree before initialization. The semantic authority records
+   * the host's already-derived content root alongside the initial snapshot.
    */
   contentRoot: `state:${string}`;
   files: readonly {
     path: string;
     contentHash: string;
     mode: number;
+    contentKind: "text" | "bytes";
+    byteLength: number;
+    coordinateExtent: number;
   }[];
 }
 

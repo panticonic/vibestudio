@@ -17,9 +17,9 @@ afterEach(async () => {
 });
 
 describe("SqliteIntegrityWorkerClient", () => {
-  it("resolves the source-mode worker bootstrap", () => {
-    expect(resolveSqliteIntegrityWorkerEntry(process.cwd())).toBe(
-      path.join(process.cwd(), "src/server/storage/sqliteIntegrityWorkerBootstrap.mjs")
+  it("resolves the compiled generation worker", () => {
+    expect(resolveSqliteIntegrityWorkerEntry()).toBe(
+      path.join(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "sqlite-integrity-worker.mjs")
     );
   });
 
@@ -35,7 +35,7 @@ describe("SqliteIntegrityWorkerClient", () => {
     database.exec("COMMIT");
     database.close();
 
-    const client = new SqliteIntegrityWorkerClient(process.cwd());
+    const client = new SqliteIntegrityWorkerClient();
     clients.push(client);
     let timerAdvanced = false;
     setTimeout(() => {
@@ -59,7 +59,7 @@ describe("SqliteIntegrityWorkerClient", () => {
     const database = new DatabaseSync(path.toNamespacedPath(databasePath));
     database.exec("CREATE TABLE records (id INTEGER PRIMARY KEY)");
     database.close();
-    const client = new SqliteIntegrityWorkerClient(process.cwd());
+    const client = new SqliteIntegrityWorkerClient();
     clients.push(client);
     await client.verify([databasePath], { readOnly: false });
     await client.verify([databasePath]);

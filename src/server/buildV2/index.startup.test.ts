@@ -129,6 +129,31 @@ describe("BuildSystemV2 startup", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it("retains the published runtime artifact selected for unchanged installed source", async () => {
+    const unitPath = "workers/release-worker";
+    fs.mkdirSync(path.join(workspaceRoot, unitPath), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, unitPath, "package.json"),
+      JSON.stringify({
+        name: "@workspace-workers/release-worker",
+        version: "0.1.0",
+        vibestudio: { authority: { requests: [], provides: [] } },
+      })
+    );
+    const key = "b".repeat(64);
+    let effectiveVersion = "";
+    const source = {
+      ...fakeWorkspaceSource(workspaceRoot),
+      preparedBuildForContent: () => ({ buildKey: key, effectiveVersion }),
+    };
+    const { initBuildSystemV2 } = await import("./index.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], buildRoots(workspaceRoot));
+    effectiveVersion = buildSystem.getEffectiveVersion(unitPath)!;
+    expect(buildSystem.getBuildKey(unitPath)).toBe(key);
+    const prepared = await buildSystem.prepareGc({ epoch: 1 });
+    expect(prepared.report.rootBuildKeys).toContain(key);
+  });
+
   it("resolves a declared icon from exact source content without materializing a build", async () => {
     const panelDir = path.join(workspaceRoot, "panels", "icon-only");
     const iconText = '<svg xmlns="http://www.w3.org/2000/svg"/>';

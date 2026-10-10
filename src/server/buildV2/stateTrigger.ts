@@ -24,7 +24,7 @@ import {
   type EffectiveVersionMap,
 } from "./effectiveVersion.js";
 import * as buildStore from "./buildStore.js";
-import { buildUnit, computeBuildUnitKey } from "./builder.js";
+import { buildUnit, resolveBuildUnitKey } from "./builder.js";
 import { diagnosticsFromError, type BuildDiagnostic } from "./diagnostics.js";
 import { recordDiagnostics } from "./diagnosticsStore.js";
 import { assertPresent } from "../../lintHelpers";
@@ -263,6 +263,9 @@ export class StateTransitionTrigger extends EventEmitter {
   }
 
   private async process(event: ProtectedPublicationEvent): Promise<void> {
+    // Semantic provenance can advance without changing executable content.
+    // The current graph and effective versions already describe this exact tree.
+    if (event.workspaceStateHash === this.stateHash) return;
     const { units, unmatched, manifestTouched } = unitsForChangedPaths(
       this.graph,
       event.changedPaths
@@ -416,7 +419,7 @@ export class StateTransitionTrigger extends EventEmitter {
       if ((node.kind === "extension" || node.kind === "app") && name !== sourceUnitName) continue;
 
       const ev = assertPresent(evMap[name]);
-      const buildKey = computeBuildUnitKey(node, ev);
+      const buildKey = resolveBuildUnitKey(node, ev, this.stateHash);
       if (buildStore.has(buildKey)) {
         this.emit("build-complete", { name, buildKey, trigger });
         continue;

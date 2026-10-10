@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { prepareWorkspaceRelease } from "../../scripts/prepare-workspace-release.mjs";
+import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
@@ -48,7 +49,9 @@ async function main(): Promise<void> {
   const forwarded = templateOptions.forwarded;
 
   const repoRoot = fs.realpathSync(process.cwd());
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-start-"));
+  const scratchParent = path.join(getProfileDataPath(), "source-launches");
+  fs.mkdirSync(scratchParent, { recursive: true });
+  const temporaryRoot = fs.mkdtempSync(path.join(scratchParent, "launch-"));
   let desktop: DevInstanceSupervisor | undefined;
   try {
     const needsInitialWorkspace = !profileHasWorkspace();
@@ -76,6 +79,13 @@ async function main(): Promise<void> {
     });
     await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], env);
     await run(process.execPath, ["scripts/ensure-host-build.mjs"], env);
+    env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(repoRoot, "desktop");
+    await prepareWorkspaceRelease({
+      appRoot: repoRoot,
+      output: path.join(temporaryRoot, "workspace-release"),
+      scratch: path.join(temporaryRoot, "template-preparation"),
+      env,
+    });
 
     desktop = new DevInstanceSupervisor({
       sourceRoot: repoRoot,

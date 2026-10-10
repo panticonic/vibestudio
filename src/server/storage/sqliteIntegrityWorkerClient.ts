@@ -1,23 +1,14 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { resolveHostWorkerEntry } from "../hostWorkerEntry.js";
 import { Worker } from "node:worker_threads";
 
 declare global {
   var __VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__: string | undefined;
 }
 
-const SOURCE_ENTRY = "src/server/storage/sqliteIntegrityWorkerBootstrap.mjs";
-
-export function resolveSqliteIntegrityWorkerEntry(appRoot: string): string {
-  const candidate = path.join(appRoot, SOURCE_ENTRY);
-  if (fs.existsSync(candidate)) return candidate;
-  throw new Error(`SQLite integrity worker entry is missing at ${candidate}`);
-}
-
-function workerEntry(appRoot: string): string {
-  const emitted = globalThis.__VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__;
-  if (emitted) return path.resolve(path.dirname(process.argv[1]!), emitted);
-  return resolveSqliteIntegrityWorkerEntry(appRoot);
+export function resolveSqliteIntegrityWorkerEntry(): string {
+  return resolveHostWorkerEntry(
+    globalThis.__VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__ ?? "sqlite-integrity-worker.mjs"
+  );
 }
 
 /** Runs whole-database verification outside the workspace-server thread. */
@@ -25,8 +16,6 @@ export class SqliteIntegrityWorkerClient {
   private worker: Worker | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, { resolve(): void; reject(error: Error): void }>();
-
-  constructor(private readonly appRoot: string) {}
 
   verify(paths: string[], options: { readOnly?: boolean } = {}): Promise<void> {
     if (paths.length === 0) return Promise.resolve();
@@ -40,7 +29,7 @@ export class SqliteIntegrityWorkerClient {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = new Worker(workerEntry(this.appRoot));
+    const worker = new Worker(resolveSqliteIntegrityWorkerEntry());
     worker.unref();
     worker.on(
       "message",

@@ -49,10 +49,11 @@ import * as buildStore from "./buildStore.js";
 import { primaryTextArtifactContent, type BuildResult } from "./buildStore.js";
 import {
   buildUnit,
-  computeBuildUnitKey,
+  resolveBuildUnitKey,
   buildNpmLibrary,
   buildPlatformLibrary,
   closeBuilder,
+  collectWorkspaceRpcMethods,
   initBuilder,
   withBuilderWorkers,
   type BuildUnitOptions,
@@ -106,7 +107,7 @@ import {
   type AuthorityConsumerIdentity,
   type AuthorityIndexIdentity,
 } from "./authorityAnalysisCache.js";
-import { analyzeWorkspaceServiceCalls } from "./userlandAuthorityAnalyzer.js";
+import type { analyzeWorkspaceServiceCalls } from "./userlandAuthorityAnalyzer.js";
 import type {
   AuthorityCompilerSnapshot,
   createAuthorityCompilerSnapshot,
@@ -255,6 +256,8 @@ export interface BuildUnitCatalogEntry extends BuildUnitResolution {
 }
 
 export interface BuildSystemRootOptions {
+  /** Owning operation cancellation, propagated to dependency acquisition. */
+  signal?: AbortSignal;
   runNativeJob: RunNativeWorkspaceJob;
   /** Admit an acquired, immutable dependency tree to the native workspace owner. */
   admitNativeDependencies?: (
@@ -473,6 +476,8 @@ export interface BuildSystemV2 {
 
   /** Get effective version by package name or workspace-relative source path. */
   getEffectiveVersion(unitNameOrPath: string): string | null;
+  /** Current runtime artifact selected by publication, or its compilation recipe. */
+  getBuildKey(unitNameOrPath: string): string | null;
 
   /** Get external npm runtime/build dependencies for a unit. */
   getExternalDeps(unitName: string): Record<string, string>;
@@ -616,12 +621,32 @@ export async function initBuildSystemV2(
     { facts: ReturnType<typeof analyzeWorkspaceServiceCalls>; moduleClosureDigest: string }
   >(256);
   const authorityIndexManager = new AuthorityIndexManager();
-  const authorityAnalysisWorker = new AuthorityAnalysisWorkerClient(rootOptions.appRoot);
+  const authorityAnalysisWorker = new AuthorityAnalysisWorkerClient();
   const authorityEpoch = {
     analyzerVersion: "userland-authority-v6",
     rpcSchemaVersion: workspaceRpcSchemaVersion(),
   } as const;
   const authorityFactEpoch = { analyzerVersion: authorityEpoch.analyzerVersion } as const;
+  const compiledRpcCatalogAt = async (
+    provider: GraphNode,
+    effectiveVersion: string,
+    stateHash: string
+  ) => {
+    const key = resolveBuildUnitKey(provider, effectiveVersion, stateHash);
+    const metadata = buildStore.compilationMetadata(key);
+    if (
+      metadata &&
+      metadata.ev === effectiveVersion &&
+      metadata.sourcePath === provider.relativePath &&
+      metadata.workspaceRpcCatalog
+    ) {
+      return metadata.workspaceRpcCatalog;
+    }
+    if (source.preparedBuildForContent?.(stateHash, provider.relativePath)) {
+      throw new Error(`Prepared provider ${provider.relativePath} has no compiled RPC catalog`);
+    }
+    return null;
+  };
   const authorityEnvironmentAt = (
     stateHash: string,
     graphAtView: PackageGraph,
@@ -670,6 +695,8 @@ export async function initBuildSystemV2(
             graph: graphAtView,
             workspaceRoot,
             source: getBuildSourceProvider(),
+            collectRpcCatalog: collectWorkspaceRpcMethods,
+            compiledRpcCatalog: () => compiledRpcCatalogAt(provider, effectiveVersion, stateHash),
           });
         },
       });
@@ -1273,10 +1300,11 @@ export async function initBuildSystemV2(
     appNodeModuleRoots,
     rootOptions.appRoot,
     rootOptions.runNativeJob,
-    rootOptions.ensureBuildProvider
+    rootOptions.ensureBuildProvider,
+    rootOptions.signal
   );
   buildStore.configureReleaseBuilds(rootOptions.appRoot);
-  const typecheckWorker = new TypecheckWorkerClient(rootOptions.appRoot);
+  const typecheckWorker = new TypecheckWorkerClient();
   const unitValidationStore = new UnitValidationStore();
   setBuildSourceProvider(source);
   buildStore.setBuildExecutionIdentityContext({
@@ -1354,8 +1382,7 @@ export async function initBuildSystemV2(
 
   // Step 3: Start the state trigger (subscribes to vcs state advances).
   // The owning steady-state host may start the bounded panel/worker prewarm
-  // lane after initialization. Keeping that explicit prevents the bootstrap
-  // build system from duplicating speculative work on the startup path.
+  // lane after initialization, once workspace runtime reconciliation completes.
   const trigger = new StateTransitionTrigger({
     graph,
     evMap,
@@ -1654,7 +1681,7 @@ export async function initBuildSystemV2(
           priority,
         }
       : { priority };
-    const buildKey = computeBuildUnitKey(node, ev, options);
+    const buildKey = resolveBuildUnitKey(node, ev, viewStateHash, options);
 
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
@@ -2852,6 +2879,8 @@ export async function initBuildSystemV2(
         graph,
         workspaceRoot,
         source: getBuildSourceProvider(),
+        collectRpcCatalog: collectWorkspaceRpcMethods,
+        compiledRpcCatalog: () => compiledRpcCatalogAt(provider, effectiveVersion, stateHash),
       });
       return {
         source: provider.relativePath,
@@ -3111,7 +3140,7 @@ export async function initBuildSystemV2(
       for (const name of buildableChanged) {
         const n = snapshot.graph.get(name);
         const ev = assertPresent(snapshot.evMap[name]);
-        const bk = computeBuildKey(name, ev, sourcemapForNode(n));
+        const bk = resolveBuildUnitKey(n, ev, snapshot.stateHash);
         if (!buildStore.has(bk)) {
           try {
             await buildUnit(n, ev, snapshot.graph, workspaceRoot, snapshot.stateHash);
@@ -3244,13 +3273,20 @@ export async function initBuildSystemV2(
       return null;
     },
 
+    getBuildKey(unitNameOrPath: string): string | null {
+      const snapshot = currentState();
+      const node = resolveUnit(snapshot.graph, unitNameOrPath, workspaceRoot);
+      const ev = node ? snapshot.evMap[node.name] : null;
+      return node && ev ? resolveBuildUnitKey(node, ev, snapshot.stateHash) : null;
+    },
+
     getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null {
       const node = resolveUnit(currentState().graph, unitName, workspaceRoot);
       return diagnosticsForUnit(node?.name ?? unitName);
     },
 
     async prepareGc({ epoch }): Promise<PreparedBuildGc> {
-      const { graph, evMap } = currentState();
+      const { graph, evMap, stateHash } = currentState();
       const roots = new Set<string>();
       const authoritativeRoots = new Set<string>();
       const authoritativeSourceRoots = new Map<string, ExecutionSourceContentRoot>();
@@ -3259,7 +3295,7 @@ export async function initBuildSystemV2(
       for (const node of graph.allNodes()) {
         const ev = evMap[node.name];
         if (!ev) continue;
-        roots.add(computeBuildKey(node.name, ev, sourcemapForNode(node)));
+        roots.add(resolveBuildUnitKey(node, ev, stateHash));
       }
 
       for (const root of providerSnapshot.roots) {

@@ -1,5 +1,4 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { resolveHostWorkerEntry } from "../hostWorkerEntry.js";
 import type { Worker } from "node:worker_threads";
 import { createMeasuredWorker } from "../workerPerformance.js";
 import type {
@@ -24,27 +23,10 @@ interface Pending {
   reject(error: Error): void;
 }
 
-const WORKER_BOOTSTRAP_RELATIVE_PATH =
-  "src/server/buildV2/authorityAnalysisWorkerBootstrap.mjs" as const;
-
-/**
- * Packaged builds resolve the emitted bundle. Running from source, the entry
- * lives beside this module in the server tree — which is not necessarily
- * `appRoot`: that option points at the build dependency workspace and is a
- * temporary directory in tests and embedded hosts. Packaged processes use the
- * emitted entry injected by build.mjs and never enter this resolver.
- */
-export function resolveAuthorityAnalysisWorkerEntry(appRoot: string): string {
-  const candidate = path.join(appRoot, WORKER_BOOTSTRAP_RELATIVE_PATH);
-  const source = fs.existsSync(candidate) ? candidate : undefined;
-  if (source) return source;
-  throw new Error(`Authority analysis worker entry is missing at ${candidate}`);
-}
-
-function workerEntry(appRoot: string): { filename: string; execArgv?: string[] } {
-  const emitted = globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__;
-  if (emitted) return { filename: path.resolve(path.dirname(process.argv[1]!), emitted) };
-  return { filename: resolveAuthorityAnalysisWorkerEntry(appRoot) };
+export function resolveAuthorityAnalysisWorkerEntry(): string {
+  return resolveHostWorkerEntry(
+    globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__ ?? "authority-analysis-worker.mjs"
+  );
 }
 
 export class AuthorityAnalysisWorkerClient {
@@ -52,14 +34,10 @@ export class AuthorityAnalysisWorkerClient {
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
 
-  constructor(private readonly appRoot: string) {}
-
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const entry = workerEntry(this.appRoot);
-    const worker = createMeasuredWorker("authorityAnalysis", entry.filename, {
-      execArgv: entry.execArgv,
-    });
+    const entry = resolveAuthorityAnalysisWorkerEntry();
+    const worker = createMeasuredWorker("authorityAnalysis", entry);
     worker.unref();
     worker.on(
       "message",

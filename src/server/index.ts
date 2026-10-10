@@ -354,7 +354,6 @@ async function main() {
   const eventService = new EventService();
   const { RpcServer, SYSTEM_SUBJECT } = await import("./rpcServer.js");
   const { ServiceContainer } = await import("@vibestudio/shared/serviceContainer");
-  const { initBuildSystemV2 } = await import("./buildV2/index.js");
   console.log(
     `[Perf] server core imports ready at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
@@ -390,6 +389,8 @@ async function main() {
     await runHubServer({ args, appRoot });
     return;
   }
+
+  const { initBuildSystemV2 } = await import("./buildV2/index.js");
 
   // Consume hub-only capabilities before resolving or loading any
   // workspace-controlled code. Descendants must never inherit these values.
@@ -1539,6 +1540,13 @@ async function main() {
     return { ref: discovered.ref, commit: discovered.commit };
   };
   const designatedTemplateUrls = hostDesignatedTemplateUrls(appRoot);
+  const {
+    workspaceReleaseResourceRoot,
+    preparedWorkspaceTemplatePath,
+    installPreparedWorkspaceTemplate,
+  } = await import("./preparedWorkspaceTemplate.js");
+  const { blobCasPath } = await import("./storage/blobCas.js");
+  const releaseResourceRoot = workspaceReleaseResourceRoot(appRoot);
   const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
     releaseTemplates: Object.values(readDefaultWorkspaceTemplates(appRoot)),
     workspaceId,
@@ -1547,6 +1555,33 @@ async function main() {
     expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
     sink: { put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)) },
     acquire: acquireWorkspaceTemplate,
+    preparedTemplate: async (pin, purpose) => {
+      // Runtime installation of a GitHub template remains ordinary source
+      // acquisition. Default launch roots must have their prepared release;
+      // a missing release is a publication defect, never a rebuild fallback.
+      if (
+        purpose !== "use" ||
+        !Object.values(readDefaultWorkspaceTemplates(appRoot)).some((candidate) =>
+          sameWorkspaceTemplatePin(candidate, pin)
+        )
+      )
+        return null;
+      const directory = preparedWorkspaceTemplatePath(releaseResourceRoot, pin, purpose);
+      const record = await installPreparedWorkspaceTemplate(
+        directory,
+        layout.blobsDir,
+        pin,
+        purpose
+      );
+      const files = new Map(record.files.map((file) => [file.path, file]));
+      return {
+        record,
+        readFile: (filePath) => {
+          const file = files.get(filePath);
+          return file ? fs.readFileSync(blobCasPath(layout.blobsDir, file.contentHash)) : null;
+        },
+      };
+    },
     resolveTrack: resolveTemplateTrack,
     // Only a template this build designates as its own can contribute
     // host-build units. A checkout the host designated is vouched for whole,
@@ -1571,6 +1606,9 @@ async function main() {
   const restoredLaunch = readWorkspaceHostLaunchRecord(statePath);
   const bootstrapStateHash =
     restoredLaunch?.stateHash ?? (await rootTemplateBootstrap.prepareBootstrapState());
+  if (restoredLaunch && !protectedRefStore.readMainSemanticState()) {
+    throw new Error("Workspace launch has no protected semantic main");
+  }
   const { readFileAtTree, getBytes } = await import("./services/blobstoreService.js");
   const materializedWorkspaceConfig = await readWorkspaceConfig(
     {
@@ -1618,6 +1656,7 @@ async function main() {
     buildSourcesRoot: layout.buildSourcesDir,
     refs: protectedRefStore,
     rootTemplateBootstrap,
+    initialContentState: bootstrapStateHash,
     // Public context bindings contain durable identities only. Reachability is
     // resolved from the caller's current hub/session credential.
     workspaceId,
@@ -1652,9 +1691,7 @@ async function main() {
       isBootstrapRepository: async (repoPath) => {
         const stateHash = trustedBootstrapStateHash;
         if (!stateHash) return false;
-        return (
-          (await bootstrapWorkspaceSource.readFile(stateHash, `${repoPath}/package.json`)) !== null
-        );
+        return (await workspaceVcs.readFile(stateHash, `${repoPath}/package.json`)) !== null;
       },
       hostBuildVersion: () => serverVersion,
       admittedOriginKeys: () => unitAdmissionStore.admittedOriginKeys(),
@@ -2386,54 +2423,16 @@ async function main() {
     appRoot,
     buildDependencyWorkspaceRoot
   );
-  const { BootstrapWorkspaceSource } = await import("./buildV2/bootstrapWorkspaceSource.js");
-  const bootstrapSemanticState = restoredLaunch ? protectedRefStore.readMainSemanticState() : null;
-  if (restoredLaunch && !bootstrapSemanticState)
-    throw new Error("Workspace launch has no protected semantic main");
-  const bootstrapWorkspaceSource = new BootstrapWorkspaceSource(
-    workspaceId,
-    workspaceVcs,
-    bootstrapStateHash,
-    bootstrapSemanticState ?? { kind: "bootstrap-snapshot", snapshotHash: bootstrapStateHash }
-  );
   console.log(
     `[Perf] workspace bootstrap publication recovered at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
   trustedBootstrapStateHash = bootstrapStateHash;
-  container.registerManaged({
-    name: "bootstrapBuildSystem",
-    dependencies: ["nativeWorkspace"],
-    async start(resolve) {
-      const nativeWorkspace = assertPresent(
-        resolve<
-          Awaited<
-            ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
-          >
-        >("nativeWorkspace")
-      );
-      return initBuildSystemV2(
-        workspacePath,
-        bootstrapWorkspaceSource,
-        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
-        {
-          appRoot,
-          runNativeJob: (input) => nativeWorkspace.runJob(input),
-          admitNativeDependencies: (input) => nativeWorkspace.admitDependencies(input),
-          dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
-          dependencyFingerprint,
-        }
-      );
-    },
-    async stop(instance: import("./buildV2/index.js").BuildSystemV2 | null) {
-      await instance?.shutdown();
-    },
-  });
 
-  // Steady-state build system, installed only after the workspace source
-  // provider has accepted the exact bootstrap snapshot.
+  // One build owner follows the exact initial content through semantic
+  // publication and every subsequent workspace edit.
   container.registerManaged({
     name: "buildSystem",
-    dependencies: ["semanticWorkspace", "nativeWorkspace"],
+    dependencies: ["nativeWorkspace"],
     async start(resolve) {
       const nativeWorkspace = assertPresent(
         resolve<
@@ -3991,7 +3990,7 @@ async function main() {
           resolveContextSource: async (contextId, sourcePath) => {
             const contentStateHash = await workspaceVcs.resolveContextState(contextId);
             const sourceState = workspaceVcs.executionStateForContent(contentStateHash);
-            if (!sourceState) {
+            if (!sourceState || sourceState.kind === "bootstrap-snapshot") {
               throw new Error(
                 `eval context ${contextId} has no semantic identity for ${contentStateHash}`
               );
@@ -4191,6 +4190,7 @@ async function main() {
             source: presentation.source,
             className: presentation.className,
             objectKey: presentation.objectKey,
+            buildRef: "main",
           });
           await presentationReady;
           return doDispatch.dispatch(
@@ -5512,7 +5512,6 @@ async function main() {
             return !!device && membershipStore.has(device.userId, entryWorkspaceId);
           },
           attach: (connection) => rpc.attachIrohConnection(connection),
-          waitUntilOnline: (endpoint) => endpoint.native.online(),
           log: (message) => console.warn(`[iroh-workspace] ${message}`),
         });
         await ingress.ready;
@@ -6185,7 +6184,7 @@ async function main() {
       objectKey: string;
       contextId?: string;
       contextPolicy?: "exact" | "initial";
-      buildRef?: string;
+      buildRef: string;
     }
   ): Promise<void> => {
     const { source, className, objectKey, buildRef } = ref;
@@ -6295,6 +6294,7 @@ async function main() {
             source: development.source,
             className: development.className,
             objectKey: development.objectKey,
+            buildRef: "main",
           });
           await developmentReady;
           return doDispatch.dispatch(
@@ -6371,7 +6371,7 @@ async function main() {
               objectKey,
               ...(contextId ? { contextId } : {}),
               ...(contextPolicy ? { contextPolicy } : {}),
-              ...(buildRef ? { buildRef } : {}),
+              buildRef,
             });
           },
           resetDurableObjectStorage: (target, intent) =>
@@ -7295,6 +7295,7 @@ async function main() {
 
   // Start the readiness dependency closure; extend the lifecycle in the background.
   await container.startRequired([
+    "semanticWorkspace",
     "runtime",
     "workspace-state",
     "build",

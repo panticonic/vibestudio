@@ -28,7 +28,7 @@ describe("WorkspaceRpcCatalogWorkerClient", () => {
       async getNote(): Promise<void> {}
     }`
     );
-    const client = new WorkspaceRpcCatalogWorkerClient(process.cwd());
+    const client = new WorkspaceRpcCatalogWorkerClient();
     clients.push(client);
     let caught: unknown;
     try {
@@ -53,9 +53,9 @@ describe("WorkspaceRpcCatalogWorkerClient", () => {
       },
     ]);
   });
-  it("resolves the source-mode worker bootstrap", () => {
-    expect(resolveWorkspaceRpcCatalogWorkerEntry(process.cwd())).toBe(
-      path.join(process.cwd(), "src/server/buildV2/workspaceRpcCatalogWorkerBootstrap.mjs")
+  it("resolves the compiled generation worker", () => {
+    expect(resolveWorkspaceRpcCatalogWorkerEntry()).toBe(
+      path.join(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "workspace-rpc-catalog-worker.mjs")
     );
   });
 
@@ -71,7 +71,7 @@ describe("WorkspaceRpcCatalogWorkerClient", () => {
          async getNote(): Promise<void> {}
        }`
     );
-    const client = new WorkspaceRpcCatalogWorkerClient(process.cwd());
+    const client = new WorkspaceRpcCatalogWorkerClient();
     clients.push(client);
 
     let timerAdvanced = false;

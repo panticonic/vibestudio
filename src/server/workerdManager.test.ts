@@ -378,32 +378,42 @@ describe("WorkerdManager", () => {
       await reopened.shutdown();
     });
 
-    it("admits internal executables before static registration and binds their exact descriptor", async () => {
-      const manager = new WorkerdManager(
-        createMockDeps({
-          internalDOBundle: {
-            bundle: "export class EvalDO {}",
-            buildKey: sha256("export class EvalDO {}"),
-          },
-        })
+    it("boots the complete product configuration once without duplicate schema probes", async () => {
+      const manager = new WorkerdManager(createMockDeps());
+      const before = vi.mocked(spawn).mock.calls.length;
+      const schemas = vi.spyOn(manager, "probeDurableObjectSchema");
+      await manager.registerAllDOClasses(
+        ["WorkspaceDO", "BrowserVaultDO", "EvalDO", "WebhookStoreDO"].map((className) => ({
+          source: INTERNAL_DO_SOURCE,
+          className,
+        }))
       );
-      await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "EvalDO" }]);
+      expect(vi.mocked(spawn).mock.calls.length - before).toBe(1);
+      await manager.registerAllDOClasses(
+        ["WorkspaceDO", "BrowserVaultDO", "EvalDO", "WebhookStoreDO"].map((className) => ({
+          source: INTERNAL_DO_SOURCE,
+          className,
+        }))
+      );
+      expect(vi.mocked(spawn).mock.calls.length - before).toBe(1);
+      expect(schemas).not.toHaveBeenCalled();
       const config = await (
         manager as unknown as {
           generateConfig(): Promise<{
-            services: Array<{ worker?: { bindings?: Array<{ name: string; json?: string }> } }>;
+            services: Array<{ worker?: { bindings?: Array<{ name: string; text?: string }> } }>;
           }>;
         }
       ).generateConfig();
-      const descriptors = config.services
-        .flatMap((service) => service.worker?.bindings ?? [])
-        .filter((binding) => binding.name === "VIBESTUDIO_SCHEMA_DESCRIPTOR");
-      expect(descriptors.map((binding) => JSON.parse(binding.json!))).toEqual([
-        { className: "EvalDO", version: 1, freshSchemaFingerprint: "fixture:EvalDO" },
-      ]);
+      const bindings = config.services.flatMap((service) => service.worker?.bindings ?? []);
       expect(
-        (manager as unknown as { schemaProbeBuilds: Map<string, unknown> }).schemaProbeBuilds.size
-      ).toBe(0);
+        bindings
+          .filter((binding) => binding.name === "WORKER_CLASS_NAME")
+          .map((binding) => binding.text!)
+          .sort((left, right) => left.localeCompare(right))
+      ).toEqual(["BrowserVaultDO", "EvalDO", "WebhookStoreDO", "WorkspaceDO"]);
+      expect(bindings.filter((binding) => binding.name === "VIBESTUDIO_SCHEMA_DESCRIPTOR")).toEqual(
+        []
+      );
       await manager.shutdown();
     });
 

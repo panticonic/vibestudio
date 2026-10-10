@@ -1,5 +1,4 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { resolveHostWorkerEntry } from "../hostWorkerEntry.js";
 import type { Worker } from "node:worker_threads";
 import { createMeasuredWorker } from "../workerPerformance.js";
 import type { BuildDiagnostic } from "./diagnostics.js";
@@ -10,19 +9,10 @@ declare global {
   var __VIBESTUDIO_TYPECHECK_WORKER_ENTRY__: string | undefined;
 }
 
-const WORKER_BOOTSTRAP_RELATIVE_PATH = "src/server/buildV2/typecheckWorkerBootstrap.mjs" as const;
-
-export function resolveTypecheckWorkerEntry(appRoot: string): string {
-  const candidate = path.join(appRoot, WORKER_BOOTSTRAP_RELATIVE_PATH);
-  if (fs.existsSync(candidate)) return candidate;
-  throw new Error(`Typecheck worker entry is missing at ${candidate}`);
-}
-
-function workerEntry(appRoot: string): string {
-  const emitted = globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__;
-  return emitted
-    ? path.resolve(path.dirname(process.argv[1]!), emitted)
-    : resolveTypecheckWorkerEntry(appRoot);
+export function resolveTypecheckWorkerEntry(): string {
+  return resolveHostWorkerEntry(
+    globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__ ?? "typecheck-worker.mjs"
+  );
 }
 
 interface Pending {
@@ -39,8 +29,6 @@ export class TypecheckWorkerClient {
   private worker: Worker | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
-
-  constructor(private readonly appRoot: string) {}
 
   async check(input: {
     unitRelativePath: string;
@@ -89,7 +77,7 @@ export class TypecheckWorkerClient {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = createMeasuredWorker("typecheck", workerEntry(this.appRoot));
+    const worker = createMeasuredWorker("typecheck", resolveTypecheckWorkerEntry());
     worker.unref();
     worker.on(
       "message",

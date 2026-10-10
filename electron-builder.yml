@@ -37,6 +37,7 @@ asarUnpack:
   - "dist/cli/**/*"
   # utilityProcess.fork() needs a physical server entry point.
   - "dist/server-electron.cjs"
+  - "dist/prepare-workspace-templates.cjs"
   # Spawned after startup for low-priority dependency content maintenance.
   - "dist/dependency-content-maintenance.cjs"
   # Server auto-spawn uses child_process.fork() for the standalone headless host.
@@ -49,8 +50,8 @@ asarUnpack:
   - "packages/**/*"
 
 extraResources:
-  # Exact external Base release pointer. The Base source itself is never
-  # packaged; first-run acquisition uses only this immutable coordinate.
+  # Release coordinates for the prepared source trees and artifacts published
+  # by afterPack. Fresh default workspaces install those ready-made resources.
   - from: "build-resources/workspace-template-release.json"
     to: "workspace-template-release.json"
   # Optional app dist bake. This directory is intentionally empty unless an

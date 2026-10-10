@@ -66,7 +66,7 @@ type ScopedDeclarations = {
   decls: WorkspaceDeclarations;
   scope: "main" | "context";
   contextId?: string;
-  buildRef?: string;
+  buildRef: string;
 };
 
 type ScopedDurableObject = ScopedDeclarations & {
@@ -132,7 +132,7 @@ export function createWorkerService(deps: {
     objectKey: string;
     contextId?: string;
     contextPolicy?: "exact" | "initial";
-    buildRef?: string;
+    buildRef: string;
   }) => Promise<void>;
   resetDurableObjectStorage?: (
     target: { source: string; className: string; objectKey: string },
@@ -394,7 +394,7 @@ export function createWorkerService(deps: {
         );
         await assertForeignServiceExported(ctx, scoped.service);
         const { service } = scoped;
-        const buildRef = scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined);
+        const buildRef = scoped.buildRef;
         deps.prepareRuntimeImage?.(service.source, buildRef);
         // A declared binding is reviewed wiring, not an authority-bearing
         // operation. Direct receiver admission already applies the exact same
@@ -580,14 +580,14 @@ export function createWorkerService(deps: {
             throw new Error(`Workspace service ${service.name} requires a creator runtime context`);
           }
           const contextId = creatorContextId ?? scoped.contextId;
-          const buildRef = scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined);
+          const buildRef = scoped.buildRef;
           await deps.activateDurableObject?.({
             source: service.source,
             className: service.className,
             objectKey: service.objectKey,
             ...(contextId ? { contextId } : {}),
             ...(service.context === "creator" ? { contextPolicy: "initial" as const } : {}),
-            ...(buildRef ? { buildRef } : {}),
+            buildRef,
           });
         }
         return service;
@@ -597,13 +597,13 @@ export function createWorkerService(deps: {
         const scoped = await resolveDurableObjectForCaller(ctx, source, className);
         const targetId = `do:${source}:${className}:${resolvedObjectKey}`;
         const contextId = scoped.contextId;
-        const buildRef = scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined);
+        const buildRef = scoped.buildRef;
         await deps.activateDurableObject?.({
           source,
           className,
           objectKey: resolvedObjectKey,
           ...(contextId ? { contextId } : {}),
-          ...(buildRef ? { buildRef } : {}),
+          buildRef,
         });
         return {
           kind: "durable-object",
@@ -694,6 +694,7 @@ export function createWorkerService(deps: {
         service: resolveWorkspaceService(workspaceDecls, query, objectKey),
         decls: workspaceDecls,
         scope: "main",
+        buildRef: "main",
       };
     } catch (err) {
       if (!isMissingServiceError(err, query)) throw err;
@@ -711,6 +712,7 @@ export function createWorkerService(deps: {
       return {
         decls: workspaceDecls,
         scope: "main",
+        buildRef: "main",
         service: {
           kind: "durable-object",
           origin: "product",
@@ -790,6 +792,7 @@ export function createWorkerService(deps: {
       return {
         decls: workspaceDecls,
         scope: "main",
+        buildRef: "main",
         authority: durableObjectAuthority(workspaceDecls, source, className),
       };
     } catch (err) {

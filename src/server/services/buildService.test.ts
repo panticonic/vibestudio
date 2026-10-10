@@ -90,6 +90,7 @@ function makeBuildSystem(): BuildSystemV2 {
       builds: [{ target: "runtime", buildKey: "build-key", diagnosticIndexes: [] }],
     })),
     getEffectiveVersion: vi.fn(),
+    getBuildKey: vi.fn(() => "selected-runtime-artifact"),
     getExternalDeps: vi.fn(),
     prepareTypecheck: vi.fn(),
     listRecentBuildEvents: vi.fn(() => []),

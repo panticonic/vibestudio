@@ -3,7 +3,7 @@ import {
   derivedCacheDatabasePath,
   type DerivedCacheLease,
 } from "./derivedCache.js";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -18,7 +18,6 @@ import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources"
 import { nativeWorkspaceCleanup } from "@vibestudio/shared/nativeWorkspaceCleanup";
 import { getNativeExecutionInstallation } from "@vibestudio/shared/runtimePaths";
 
-const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
 let npmInstallTail: Promise<void> = Promise.resolve();
 
 async function withNpmInstallSlot<T>(run: () => Promise<T>): Promise<T> {
@@ -63,11 +62,11 @@ async function runNpmInstallInSlot(
   cwd: string,
   options: {
     appRoot: string;
-    timeout?: number;
+    signal?: AbortSignal;
     ignoreScripts?: boolean;
   }
 ): Promise<void> {
-  const timeout = options.timeout ?? DEFAULT_NPM_INSTALL_TIMEOUT_MS;
+  options.signal?.throwIfAborted();
   const ignoreScripts = options.ignoreScripts ?? true;
 
   const platform = process.platform;
@@ -135,12 +134,12 @@ async function runNpmInstallInSlot(
     require(cli);
   `;
 
-    let installDeadline = 0;
     const invoke = async (
       command: "install" | "ci",
       installCacheDir: string,
       lockOnly = false
     ): Promise<void> => {
+      options.signal?.throwIfAborted();
       const phase = lockOnly ? "resolve" : command === "ci" ? "download" : "install";
       const logsDir = path.join(stateRoot, "logs", randomUUID());
       const args = [
@@ -184,26 +183,72 @@ async function runNpmInstallInSlot(
       await new Promise<void>((resolve, reject) => {
         const startedAt = Date.now();
         console.log(`[npm-install-profile] ${JSON.stringify({ phase, state: "started" })}`);
-        let timedOut = false;
-        let timeoutHandle: NodeJS.Timeout | undefined;
-        const child = execFile(
-          launch.command,
-          launch.args,
-          {
-            cwd: launch.cwd,
-            env: launch.environment,
-          },
-          (error, stdout, stderr) => {
-            if (timeoutHandle) clearTimeout(timeoutHandle);
+        let cancellation: unknown;
+        let termination: Promise<void> | undefined;
+        const terminate = () =>
+          (termination ??= new Promise<void>((done, failed) => {
+            if (!child.pid) return done();
+            if (platform === "win32") {
+              execFile("taskkill", ["/T", "/F", "/PID", String(child.pid)], (error) =>
+                error ? failed(error) : done()
+              );
+            } else {
+              try {
+                process.kill(-child.pid, "SIGKILL");
+                done();
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === "ESRCH") done();
+                else failed(error);
+              }
+            }
+          }));
+        const cancel = () => {
+          cancellation = options.signal?.reason ?? new Error("npm installation cancelled");
+          void terminate().catch(() => {});
+        };
+        const child = spawn(launch.command, launch.args, {
+          cwd: launch.cwd,
+          env: launch.environment,
+          // execFile does not forward detached to spawn. This launcher and its
+          // guest must form a process group the cancellation owner can revoke.
+          detached: platform !== "win32",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let stdout = "",
+          stderr = "";
+        let spawnError: (NodeJS.ErrnoException & { signal?: NodeJS.Signals | null }) | undefined;
+        child.stdout.on("data", (chunk) => {
+          stdout = (stdout + chunk).slice(-16_384);
+        });
+        child.stderr.on("data", (chunk) => {
+          stderr = (stderr + chunk).slice(-16_384);
+        });
+        child.once("error", (error) => {
+          spawnError = error;
+        });
+        child.once("close", (code, signal) => {
+          const error =
+            spawnError ??
+            (code === 0
+              ? null
+              : Object.assign(
+                  new Error(`npm ${phase} exited (${signal ?? code}): ${stderr.trim()}`),
+                  {
+                    code,
+                    signal,
+                  }
+                ));
+          options.signal?.removeEventListener("abort", cancel);
+          void (async () => {
+            await termination;
             const profile = {
               phase,
               elapsedMs: Date.now() - startedAt,
-              state: error || timedOut ? "failed" : "completed",
-              ...(error || timedOut
+              state: error || cancellation !== undefined ? "failed" : "completed",
+              ...(error || cancellation !== undefined
                 ? {
                     code: error?.code,
                     signal: error?.signal,
-                    timedOut,
                     stderr: stderr.slice(-4_000),
                     npmLogTail: readNpmLogTail(logsDir),
                   }
@@ -211,31 +256,17 @@ async function runNpmInstallInSlot(
             };
             console.log(`[npm-install-profile] ${JSON.stringify(profile)}`);
             if (error) Object.assign(error, { stdout, stderr, npmPhase: phase });
-            if (timedOut) {
-              const timeoutError = error ?? new Error(`npm install timed out after ${timeout}ms`);
-              Object.assign(timeoutError, { timedOut: true });
-              reject(timeoutError);
+            if (cancellation !== undefined) {
+              reject(cancellation);
             } else if (error) {
               reject(error);
             } else {
               resolve();
             }
-          }
-        );
-
-        if (timeout > 0) {
-          timeoutHandle = setTimeout(
-            () => {
-              timedOut = true;
-              // npm installs its own SIGTERM handler and can remain alive while
-              // stalled sockets drain. A timed-out unattended build must actually
-              // release the cache key so the retry can make progress.
-              child.kill("SIGKILL");
-            },
-            Math.max(0, installDeadline - Date.now())
-          );
-          timeoutHandle.unref();
-        }
+          })().catch(reject);
+        });
+        options.signal?.addEventListener("abort", cancel, { once: true });
+        if (options.signal?.aborted) cancel();
       });
     };
 
@@ -243,8 +274,6 @@ async function runNpmInstallInSlot(
       privateCache: string,
       downloadCache = registryCache
     ): Promise<void> => {
-      // Preserve the existing attempt budget across resolution and download.
-      installDeadline = Date.now() + timeout;
       if (!ignoreScripts) return invoke("install", privateCache);
 
       // Resolve in the private domain first: even --ignore-scripts does not
@@ -295,6 +324,7 @@ async function runNpmInstallInSlot(
         await installWithCache(cacheDir);
         return;
       } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason;
         if (isRecoverableNpmCacheError(error)) {
           // cacache can retain an index entry whose content file was removed by
           // an interrupted cleanup or another npm client. A clean one-shot cache
@@ -310,6 +340,7 @@ async function runNpmInstallInSlot(
           try {
             await installWithCache(recoveryCacheDir, recoveryCacheDir);
           } catch (recoveryError) {
+            if (options.signal?.aborted) throw options.signal.reason;
             throw classifyNpmInstallError(recoveryError);
           }
           return;
@@ -421,14 +452,6 @@ function classifyNpmInstallError(error: unknown): unknown {
 }
 
 function isTransientNpmInstallError(error: unknown): boolean {
-  const processError = error as { killed?: unknown; signal?: unknown; timedOut?: unknown } | null;
-  if (
-    processError?.timedOut === true ||
-    processError?.killed === true ||
-    processError?.signal === "SIGKILL"
-  ) {
-    return true;
-  }
   return /\b(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH)\b|\b(?:429|502|503|504)\b|npm error network/i.test(
     npmErrorOutput(error)
   );

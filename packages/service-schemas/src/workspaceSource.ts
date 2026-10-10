@@ -24,7 +24,7 @@ import {
   type MethodSchema,
   type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
-import { vcsMethods, vcsStateNodeRefSchema } from "./vcs.js";
+import { vcsFileLineageSchema, vcsMethods, vcsStateNodeRefSchema } from "./vcs.js";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
@@ -1474,10 +1474,7 @@ const semanticFileHostReadSchema = z
     contentKind: z.enum(["text", "bytes"]),
     byteLength: z.number().int().nonnegative(),
     coordinateExtent: z.number().int().nonnegative(),
-    authoredChangeId: z.string().min(1),
-    authoredByWorkUnitId: z.string().min(1),
-    contentClass: z.enum(["internal", "external"]),
-    externalKeys: z.array(z.string().min(1)).max(256),
+    ...vcsFileLineageSchema.shape,
     mode: z.number().int().nonnegative(),
   })
   .strict();
@@ -1622,6 +1619,9 @@ const workspaceSnapshotRepositorySchema = z
           path: z.string(),
           contentHash: nonemptyText,
           mode: z.number().int().nonnegative(),
+          contentKind: z.enum(["text", "bytes"]),
+          byteLength: z.number().int().nonnegative(),
+          coordinateExtent: z.number().int().nonnegative(),
         })
         .strict()
     ),

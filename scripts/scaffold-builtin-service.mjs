@@ -117,7 +117,6 @@ catalog = catalog.replace(
     methods: ${schemaIdentifier},
     durableObject: { keyVersion: 1, objectKey: "workspace", keyMode: "workspace-scoped" },
     workerd: {
-      bootstrapPhase: "normal",
       staticAuthorityProjection: true,
       unsafeEval: false,
     },

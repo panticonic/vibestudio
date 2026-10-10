@@ -8,13 +8,15 @@ import {
 } from "@vibestudio/service-schemas/workspaceSource";
 
 describe("GAD runtime schema", () => {
-  it("requires exact stored content coordinates in semantic file reads", () => {
+  it.each([
+    {authoredChangeId: "change:test", authoredByWorkUnitId: "work:test", contentClass: "internal", externalKeys: []},
+    {authoredChangeId: null, authoredByWorkUnitId: null, contentClass: "external", externalKeys: ["repo:fixture://snapshot@v1"]},
+  ])("accepts exact stored coordinates and the shared lineage $contentClass", (lineage) => {
     const request = {
       kind: "read-semantic-blob", state: { kind: "event", eventId: "event:test" },
       repositoryId: "repository:test", fileId: "file:test", repoPath: "meta", path: "value",
       contentHash: "blob:test", contentKind: "text", byteLength: 7, coordinateExtent: 4,
-      authoredChangeId: "change:test", authoredByWorkUnitId: "work:test",
-      contentClass: "internal", externalKeys: [], mode: 0o644,
+      ...lineage, mode: 0o644,
     };
     const result = { kind: "host-read", request };
     expect(gadWireMethods.vcsReadFile.returns!.parse(result)).toEqual(result);

@@ -4,6 +4,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { buildMethods, type BuildUnitCatalogEntry } from "@vibestudio/service-schemas/build";
 import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import type { BuildSystemV2 } from "../buildV2/index.js";
+import { buildSourcemapForNode } from "../buildV2/builder.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
 import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";
 import { readArtifactBytesAsync, readExecutableModules } from "../buildV2/buildStore.js";
@@ -264,6 +265,11 @@ export function createBuildService(deps: {
               production: computeBuildKey(node.name, effectiveVersion, false),
             }
           : { sourcemap: null, production: null };
+        if (effectiveVersion) {
+          buildKeys[buildSourcemapForNode(node) ? "sourcemap" : "production"] = bs.getBuildKey(
+            node.name
+          );
+        }
         const cachedBuilds = Object.fromEntries(
           Object.entries(buildKeys).map(([kind, key]) => {
             const build = key ? bs.getBuildByKey(key) : null;

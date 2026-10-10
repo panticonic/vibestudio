@@ -1,4 +1,4 @@
-import { createRuntimeLayout } from "@vibestudio/shared/runtimePaths";
+import { workspaceReleaseResourceRoot } from "../preparedWorkspaceTemplate.js";
 import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
 /**
  * Content-Addressed Build Store — immutable artifact storage.
@@ -1024,7 +1024,25 @@ export function get(key: string): BuildResult | null {
 let releaseBuildRoot: string | null = null;
 
 export function configureReleaseBuilds(appRoot: string): void {
-  releaseBuildRoot = path.join(createRuntimeLayout(appRoot).resourcesRoot, "userland-builds");
+  releaseBuildRoot = path.join(workspaceReleaseResourceRoot(appRoot), "userland-builds");
+}
+
+/** Compiler facts belong to immutable artifacts, before workspace execution
+ * provenance is sealed. Reading them must not hydrate a build or recursively
+ * resolve the service contracts needed to seal that same build. */
+export function compilationMetadata(key: string): BuildMetadata | null {
+  const directories = [
+    getBuildDir(key),
+    ...(releaseBuildRoot ? [path.join(releaseBuildRoot, key)] : []),
+    ...(getConfiguredSharedBuildResultCacheDir()
+      ? [path.join(getConfiguredSharedBuildResultCacheDir()!, key)]
+      : []),
+  ];
+  for (const directory of directories) {
+    const build = readBuildDir(directory, key, { verifyExecution: false });
+    if (build) return build.metadata;
+  }
+  return null;
 }
 
 /** Hydrate immutable build artifacts through one provenance-binding boundary. */

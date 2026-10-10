@@ -73,7 +73,42 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
-  it("reads the stored coordinate kind even when opaque bytes are valid UTF-8", async () => {
+  it("uses one source owner before and after semantic publication", async () => {
+    const { deps, refs } = await harness();
+    const initialContentState = `state:${"a".repeat(64)}`;
+    const vcs = new WorkspaceVcs({ ...deps, initialContentState });
+    const view = vi.spyOn(vcs.repositories, "workspaceView");
+    await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: initialContentState });
+    expect(view).not.toHaveBeenCalled();
+    expect(vcs.executionStateForContent(initialContentState)).toEqual({
+      kind: "bootstrap-snapshot",
+      snapshotHash: initialContentState,
+    });
+    const semantic = { kind: "event", eventId: "event:initialized" } as const;
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue(semantic);
+    view.mockResolvedValueOnce({ stateHash: initialContentState });
+    await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: initialContentState });
+    expect(vcs.executionStateForContent(initialContentState)).toEqual(semantic);
+    const changed = `state:${"b".repeat(64)}`;
+    view.mockResolvedValueOnce({ stateHash: changed });
+    await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: changed });
+    expect(vcs.executionStateForContent(changed)).toEqual(semantic);
+  });
+
+  it.each([
+    {
+      authoredChangeId: "change:test",
+      authoredByWorkUnitId: "work:test",
+      contentClass: "internal",
+      externalKeys: [],
+    },
+    {
+      authoredChangeId: null,
+      authoredByWorkUnitId: null,
+      contentClass: "external",
+      externalKeys: ["repo:fixture://snapshot@v1"],
+    },
+  ])("preserves $contentClass lineage and the stored coordinate kind", async (lineage) => {
     const { blobsDir, vcs } = await harness();
     const text = "\uFEFFa😀éz";
     const bytes = Buffer.from(text);
@@ -94,12 +129,14 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           repoPath: "meta",
           path: "value",
           mode: 0o644,
+          ...lineage,
         },
       }),
     } as never);
     const read = () => vcs.semanticDirectCall("vcsReadFile", {});
     await expect(read()).resolves.toMatchObject({
       content: { kind: "bytes", base64: bytes.toString("base64") },
+      ...lineage,
     });
     contentKind = "text";
     coordinateExtent = text.length;
@@ -515,6 +552,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
               path: "index.ts",
               contentHash: templateHash,
               size: templateBytes.byteLength,
+              contentKind: "text" as const,
+              byteLength: templateBytes.byteLength,
+              coordinateExtent: new TextDecoder().decode(templateBytes).length,
               mode: 0o644 as const,
             },
           ],
@@ -522,6 +562,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       ],
     };
     const rootTemplateBootstrap = {
+      preparedBuildForContent: () => null,
       prepareSource: vi.fn(async () => pin),
       prepareInitialization: vi.fn(async () => prepared),
     };
@@ -602,6 +643,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const vcs = new WorkspaceVcs({
       ...deps,
       rootTemplateBootstrap: {
+        preparedBuildForContent: () => null,
         prepareSource: vi.fn(async () => pin),
         prepareInitialization,
       },
