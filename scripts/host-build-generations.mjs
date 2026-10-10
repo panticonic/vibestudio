@@ -1,7 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { SOURCE_SERVER_PREREQUISITE_ARTIFACTS } from "./server-runtime-artifacts.mjs";
+import {
+  NATIVE_WORKSPACE_ENTRIES,
+  SOURCE_SERVER_PREREQUISITE_ARTIFACTS,
+} from "./server-runtime-artifacts.mjs";
 
 const NON_COMPILER_ENTRIES = new Set([
   "node",
@@ -22,6 +25,7 @@ const REQUIRED = {
     "browserPrivacyPreload.cjs",
     "browserTransport.js",
     "fs-disk-worker.cjs",
+    ...Object.values(NATIVE_WORKSPACE_ENTRIES),
     "dependency-content-maintenance.cjs",
     "internal-do.bundle.mjs",
     "host-build-fingerprint.json",

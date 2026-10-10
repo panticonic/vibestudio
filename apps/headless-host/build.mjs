@@ -1,3 +1,5 @@
+import { assertSingleInfrastructureModuleTree } from "../../scripts/lib/bundle-module-identity.mjs";
+import path from "node:path";
 // Bundle the headless host with esbuild: workspace packages (@vibestudio/*)
 // are TS-source exports, so they get bundled; real npm deps stay external.
 import * as esbuild from "esbuild";
@@ -11,6 +13,8 @@ fs.rmSync("dist", { recursive: true, force: true });
 
 const shared = {
   bundle: true,
+  tsconfig: "tsconfig.json",
+  metafile: true,
   platform: "node",
   format: "esm",
   target: "node20",
@@ -22,16 +26,19 @@ const shared = {
   },
 };
 
-await esbuild.build({
+const mainBuild = await esbuild.build({
   ...shared,
   entryPoints: ["src/main.ts"],
   outfile: "dist/main.js",
 });
 
-await esbuild.build({
+const indexBuild = await esbuild.build({
   ...shared,
   entryPoints: ["src/index.ts"],
   outfile: "dist/index.js",
 });
+
+for (const result of [mainBuild, indexBuild])
+  assertSingleInfrastructureModuleTree(result.metafile, path.resolve("../.."), process.cwd());
 
 console.log("headless-host build complete");

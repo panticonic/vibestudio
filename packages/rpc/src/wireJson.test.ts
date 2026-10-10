@@ -5,6 +5,14 @@ import { decodeRpcJson, encodeRpcJson } from "./wireJson.js";
 const roundTrip = (value: unknown) => decodeRpcJson(encodeRpcJson(value));
 
 describe("RPC wire JSON codec", () => {
+  it("parses ordinary JSON and only treats reserved object keys as wire tags", () => {
+    const ordinary = { args: [{ enabled: true }, [1, null, "text"]], count: 2 };
+    expect(decodeRpcJson(JSON.stringify(ordinary))).toEqual(ordinary);
+    const strings = { literalEscape: "\\u0000bytes", nul: "\u0000bytes" };
+    expect(roundTrip(strings)).toEqual(strings);
+    expect(() => decodeRpcJson('{"broken":')).toThrow(SyntaxError);
+    expect(() => decodeRpcJson('{"\\u0000unknown":true}')).toThrow(/reserved key/);
+  });
   it("carries Uint8Array, Buffer, and ArrayBuffer values as Uint8Array at any depth", () => {
     const backing = new Uint8Array([9, 0, 1, 255, 9]);
     const decoded = roundTrip({

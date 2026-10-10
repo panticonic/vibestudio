@@ -102,6 +102,7 @@ export function createEvalNodeCompat(
     os: osFacade,
     path: nodePath,
     util: utilFacade,
+    "util/types": nodeUtil.types,
     "node:buffer": bufferFacade,
     "node:crypto": cryptoFacade,
     "node:fs": fsFacade,
@@ -109,5 +110,6 @@ export function createEvalNodeCompat(
     "node:os": osFacade,
     "node:path": nodePath,
     "node:util": utilFacade,
+    "node:util/types": nodeUtil.types,
   };
 }

@@ -6,11 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
 import type { ContextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
-import {
-  buildWorktreeManifest,
-  EMPTY_STATE_HASH,
-  sha256Hex,
-} from "@vibestudio/content-addressing";
+import { buildWorktreeManifest, EMPTY_STATE_HASH, sha256Hex } from "@vibestudio/content-addressing";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
   blobPath,
@@ -25,39 +21,25 @@ import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
 const roots: string[] = [];
-const TEST_PROVIDER = {
-  source: "test/provider",
-  className: "TestProvider",
-  objectKey: "test",
-};
+const TEST_PROVIDER = { source: "test/provider", className: "TestProvider", objectKey: "test" };
 
-function semanticContextResult(
-  working: import("@vibestudio/service-schemas/vcs").VcsStateNodeRef,
-) {
+function semanticContextResult(working: import("@vibestudio/service-schemas/vcs").VcsStateNodeRef) {
   return {
     contextId: "context:test",
     committed: {
       ref:
-        working.kind === "event"
-          ? working
-          : { kind: "event" as const, eventId: "event:genesis" },
+        working.kind === "event" ? working : { kind: "event" as const, eventId: "event:genesis" },
       workspaceFactRootId: "workspace-fact-root:committed",
     },
-    working: {
-      ref: working,
-      workspaceFactRootId: "workspace-fact-root:working",
-    },
-    workingHeadApplicationId:
-      working.kind === "application" ? working.applicationId : null,
+    working: { ref: working, workspaceFactRootId: "workspace-fact-root:working" },
+    workingHeadApplicationId: working.kind === "application" ? working.applicationId : null,
   };
 }
 const editInput = (contextId = "context:test") => ({
   commandId: "command:test",
   contextId,
   expectedWorkingHead: { kind: "event" as const, eventId: "event:test" },
-  changes: [
-    { kind: "repository-delete" as const, repositoryId: "repository:test" },
-  ],
+  changes: [{ kind: "repository-delete" as const, repositoryId: "repository:test" }],
 });
 const moveInput = (contextId = "context:test") => ({
   commandId: "command:test",
@@ -89,10 +71,7 @@ const importInput = {
   repositories: [{ repoPath: "packages/test", files: [] }],
 };
 
-function materializationEffect(
-  command: ContextMaterializationCommand,
-  effectId: string,
-) {
+function materializationEffect(command: ContextMaterializationCommand, effectId: string) {
   return {
     effectId,
     scopeKind: "context" as const,
@@ -120,11 +99,7 @@ function pushResult(contextId: string, eventId: string, effectId: string) {
 function mutationResult(input: {
   commandId: string;
   contextId: string;
-  expectedWorkingHead: {
-    kind: "event" | "application";
-    eventId?: string;
-    applicationId?: string;
-  };
+  expectedWorkingHead: { kind: "event" | "application"; eventId?: string; applicationId?: string };
 }) {
   return {
     commandId: input.commandId,
@@ -157,23 +132,18 @@ function importedSnapshotResult() {
   };
 }
 
-function providerFromWireCall(
-  call: (method: string, input: unknown) => Promise<unknown>,
-) {
+function providerFromWireCall(call: (method: string, input: unknown) => Promise<unknown>) {
   return createWorkspaceSemanticPort(
     {
-      dispatch: (_provider: unknown, method: string, input: unknown) =>
-        call(method, input),
+      dispatch: (_provider: unknown, method: string, input: unknown) => call(method, input),
     } as never,
-    TEST_PROVIDER,
+    TEST_PROVIDER
   );
 }
 
 function emptyRepairCommand(
   input: { contextId: string; materializedState: null | { kind: string } },
-  targetState:
-    | { kind: "event"; eventId: string }
-    | { kind: "application"; applicationId: string },
+  targetState: { kind: "event"; eventId: string } | { kind: "application"; applicationId: string }
 ) {
   return contextMaterializationCommand({
     contextId: input.contextId,
@@ -187,9 +157,7 @@ function emptyRepairCommand(
 }
 
 async function harness() {
-  const root = await fsp.mkdtemp(
-    path.join(os.tmpdir(), "workspace-vcs-orchestration-"),
-  );
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "workspace-vcs-orchestration-"));
   roots.push(root);
   const blobsDir = path.join(root, "blobs");
   ensureLayout(blobsDir);
@@ -212,24 +180,323 @@ async function harness() {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await Promise.all(
-    roots
-      .splice(0)
-      .map((root) => fsp.rm(root, { recursive: true, force: true })),
-  );
+  await Promise.all(roots.splice(0).map((root) => fsp.rm(root, { recursive: true, force: true })));
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("resolves current semantic content without a checkout and reuses only exact immutable heads", async () => {
+    const { vcs, blobsDir, deps } = await harness();
+    const firstBytes = Buffer.from("first configuration");
+    const secondBytes = Buffer.from("changed configuration");
+    const contents = [
+      (await putBytes(blobsDir, firstBytes)).digest,
+      (await putBytes(blobsDir, secondBytes)).digest,
+    ];
+    let revision = 0;
+    const head = () => ({ kind: "application" as const, applicationId: `application:${revision}` });
+    const commands: ContextMaterializationCommand[] = [];
+    const call = vi.fn(async (method: string, input: unknown) => {
+      if (method === "vcsEnsureContext") {
+        expect(input).toMatchObject({ projection: "deferred" });
+        return { kind: "complete", result: semanticContextResult(head()) };
+      }
+      if (method === "vcsForkContext") {
+        return { kind: "complete", result: semanticContextResult(head()) };
+      }
+      if (method === "vcsEdit") {
+        revision = 1;
+        return {
+          kind: "complete",
+          result: { ...mutationResult(editInput("context:source")), workingHead: head() },
+        };
+      }
+      if (method === "vcsContextMaterializationCommand") {
+        const command = contextMaterializationCommand({
+          contextId: (input as { contextId: string }).contextId,
+          commandId: `content:${revision}`,
+          mode: "replace",
+          previousState: null,
+          targetState: head(),
+          repositories: [
+            {
+              repositoryId: "repository:config",
+              repoPath: "packages/config",
+              presence: "present",
+              fileManifestId: `manifest:${revision}`,
+              source: {
+                kind: "snapshot",
+                files: [{ path: "settings.json", contentHash: contents[revision]!, mode: 0o644 }],
+              },
+            },
+          ],
+          blobs: [],
+        });
+        commands.push(command);
+        return command;
+      }
+      throw new Error(`unexpected projection/status method ${method}`);
+    });
+    await vcs.attachGad(providerFromWireCall(call));
+    const first = await vcs.resolveContextState("context:source");
+    expect(vcs.executionStateForContent(first)).toEqual(head());
+    await vcs.forkContext("context:source", "context:fork");
+    expect(await vcs.resolveContextState("context:fork")).toBe(first);
+    expect(commands).toHaveLength(1);
+    const targets = await vcs.contextRepoTargets("context:source");
+    const retained = structuredClone(targets);
+    targets[0]!.stateHash = EMPTY_STATE_HASH;
+    targets.push({ repoPath: "spoofed", stateHash: EMPTY_STATE_HASH });
+    expect(await vcs.contextRepoTargets("context:source")).toEqual(retained);
+    expect(commands).toHaveLength(1);
+    expect(await vcs.readFile(first, "packages/config/settings.json")).toMatchObject({
+      content: { kind: "text", text: firstBytes.toString() },
+    });
+    await vcs.semanticDirectCall("vcsEdit", editInput("context:source"));
+    const changed = await vcs.resolveContextState("context:source");
+    expect(changed).not.toBe(first);
+    expect(vcs.executionStateForContent(changed)).toEqual(head());
+    expect(commands).toHaveLength(2);
+    await vcs.resolveContextState("context:source");
+    expect(commands).toHaveLength(2);
+    expect(call.mock.calls.some(([method]) => method === "vcsEnsureContext")).toBe(false);
+    expect(await vcs.readFile(changed, "packages/config/settings.json")).toMatchObject({
+      content: { kind: "text", text: secondBytes.toString() },
+    });
+    await expect(fsp.access(deps.contextProjectionsRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(call.mock.calls.some(([method]) => method === "vcsStatus")).toBe(false);
+  });
+
+  it("coalesces one context content snapshot and caches the actual advanced command head", async () => {
+    const { vcs } = await harness();
+    let commands = 0;
+    const captured = { kind: "application" as const, applicationId: "application:after" };
+    let finish!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const call = vi.fn(async (method: string, input: unknown) => {
+      if (method === "vcsEdit")
+        return {
+          kind: "complete",
+          result: {
+            ...mutationResult(editInput("context:advance")),
+            workingHead: { kind: "application", applicationId: "application:before" },
+          },
+        };
+      if (method === "vcsContextMaterializationCommand") {
+        commands++;
+        await blocked;
+        return emptyRepairCommand(input as never, captured);
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    await vcs.attachGad(providerFromWireCall(call));
+    const first = vcs.resolveContextState("context:advance");
+    const second = vcs.resolveContextState("context:advance");
+    await vi.waitFor(() => expect(commands).toBe(1));
+    finish();
+    const [one, two] = await Promise.all([first, second]);
+    expect(one).toBe(two);
+    expect(vcs.executionStateForContent(one)).toEqual(captured);
+    await vcs.resolveContextState("context:advance");
+    expect(commands).toBe(1);
+    // The earlier head was never assigned the advanced command's content.
+    await vcs.semanticDirectCall("vcsEdit", editInput("context:advance"));
+    await vcs.resolveContextState("context:advance");
+    expect(commands).toBe(2);
+  });
+
+  it("joins a held context edit and recovers the exact head after an ambiguous mutation reply", async () => {
+    const { vcs } = await harness();
+    const contextId = "context:fenced";
+    let revision = 0;
+    const head = () => ({ kind: "application" as const, applicationId: `application:${revision}` });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let editStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      editStarted = resolve;
+    });
+    const failure = new Error("context edit committed but its reply disconnected");
+    let commands = 0;
+    let edits = 0;
+    const call = vi.fn(async (method: string, input: unknown) => {
+      if (method === "vcsEnsureContext")
+        return { kind: "complete", result: semanticContextResult(head()) };
+      if (method === "vcsContextMaterializationCommand") {
+        commands++;
+        return emptyRepairCommand(input as never, head());
+      }
+      if (method === "vcsEdit") {
+        edits++;
+        editStarted();
+        if (edits === 1) await held;
+        revision++;
+        if (edits === 2) throw failure;
+        return {
+          kind: "complete",
+          result: { ...mutationResult(editInput(contextId)), workingHead: head() },
+        };
+      }
+      if (method === "vcsDropContext") return { dropped: true };
+      throw new Error(`unexpected ${method}`);
+    });
+    await vcs.attachGad(providerFromWireCall(call));
+    await vcs.ensureSemanticContext(contextId);
+    const coordinate = await vcs.resolveWorkingState(contextId);
+    expect(coordinate).toEqual(head());
+    if (coordinate.kind === "application") coordinate.applicationId = "application:caller-edit";
+    expect(await vcs.resolveWorkingState(contextId)).toEqual(head());
+    await vcs.ensureSemanticContext(contextId);
+    expect(call.mock.calls.map(([method]) => method)).toEqual(["vcsEnsureContext"]);
+    await vcs.resolveContextState(contextId);
+    const edit = vcs.semanticDirectCall("vcsEdit", editInput(contextId));
+    await started;
+    let readSettled = false;
+    const read = vcs.resolveContextState(contextId).then((state) => {
+      readSettled = true;
+      return state;
+    });
+    await Promise.resolve();
+    expect(readSettled).toBe(false);
+    expect(commands).toBe(1);
+    release();
+    await edit;
+    const state = await read;
+    expect(vcs.executionStateForContent(state)).toEqual(head());
+    expect(commands).toBe(2);
+    await expect(vcs.semanticDirectCall("vcsEdit", editInput(contextId))).rejects.toBe(failure);
+    await vcs.resolveContextState(contextId);
+    expect(commands).toBe(3);
+    expect(vcs.executionStateForContent(state)).toEqual(head());
+    await vcs.resolveContextState(contextId);
+    expect(commands).toBe(3);
+    await vcs.dropContext(contextId);
+    await expect(vcs.resolveWorkingState(contextId)).rejects.toThrow("was deleted");
+    await expect(vcs.resolveContextState(contextId)).rejects.toThrow("was deleted");
+    expect(commands).toBe(3);
+    await vcs.ensureSemanticContext(contextId);
+    expect(await vcs.resolveWorkingState(contextId)).toEqual(head());
+    await vcs.resolveContextState(contextId);
+    expect(call.mock.calls.filter(([method]) => method === "vcsEnsureContext")).toHaveLength(2);
+  });
+
+  it("holds a cancelled source dispatch until its committed receipt joins before admitting a later read", async () => {
+    const { vcs } = await harness();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const head = { kind: "application" as const, applicationId: "application:committed" };
+    const call = vi.fn(async (method: string, input: unknown) => {
+      if (method === "vcsEdit") {
+        entered();
+        await held;
+        return {
+          kind: "complete",
+          result: { ...mutationResult(editInput()), workingHead: head },
+        };
+      }
+      if (method === "vcsContextMaterializationCommand")
+        return emptyRepairCommand(input as never, head);
+      throw new Error(`unexpected ${method}`);
+    });
+    await vcs.attachGad(providerFromWireCall(call));
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled while its source reply was held");
+    const caller = createVerifiedCaller("panel:test", "panel", {
+      callerId: "panel:test",
+      callerKind: "panel",
+      repoPath: "panels/test",
+      effectiveVersion: "test",
+    });
+    const edit = vcs.semanticCall(
+      "vcsEdit",
+      {
+        input: editInput(),
+        ingress: { causalParent: null },
+      },
+      { kind: "caller", caller, signal: controller.signal }
+    );
+    const cancelled = expect(edit).rejects.toBe(reason);
+    await started;
+    controller.abort(reason);
+    const read = vcs.resolveContextState("context:test");
+    await Promise.resolve();
+    expect(call.mock.calls.map(([method]) => method)).toEqual(["vcsEdit"]);
+    release();
+    await cancelled;
+    const state = await read;
+    expect(vcs.executionStateForContent(state)).toEqual(head);
+    await vcs.resolveContextState("context:test");
+    expect(call.mock.calls.map(([method]) => method)).toEqual([
+      "vcsEdit",
+      "vcsContextMaterializationCommand",
+    ]);
+  });
+
+  it("invalidates a context head when owned effect recovery completes its pending transition", async () => {
+    const { vcs } = await harness();
+    const contextId = "context:recovering";
+    let revision = 0;
+    const head = () => ({ kind: "event" as const, eventId: `event:${revision}` });
+    const effect = materializationEffect(
+      emptyRepairCommand({ contextId, materializedState: null }, head()),
+      "effect:recovering"
+    );
+    let pending = true;
+    const call = vi.fn(async (method: string, input: unknown) => {
+      if (method === "vcsContextMaterializationCommand")
+        return emptyRepairCommand(input as never, head());
+      if (method === "vcsPendingSemanticEffects") return pending ? [effect] : [];
+      if (method === "vcsSemanticEffectAck") {
+        pending = false;
+        revision = 1;
+        return { kind: "complete", result: {} };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    await vcs.attachGad(providerFromWireCall(call));
+    const state = await vcs.resolveContextState(contextId);
+    expect(await vcs.recoverPendingSemanticEffects()).toBe(1);
+    await vcs.resolveContextState(contextId);
+    expect(vcs.executionStateForContent(state)).toEqual(head());
+    expect(
+      call.mock.calls.filter(([method]) => method === "vcsContextMaterializationCommand")
+    ).toHaveLength(2);
+  });
+
+  it("does not provision a missing context while reading its content", async () => {
+    const { vcs } = await harness();
+    const failure = new Error("semantic context is absent");
+    const call = vi.fn(async (method: string) => {
+      if (method === "vcsContextMaterializationCommand") throw failure;
+      throw new Error(`unexpected context provisioning ${method}`);
+    });
+    await vcs.attachGad(providerFromWireCall(call));
+    await expect(vcs.resolveWorkingState("context:absent")).rejects.toBe(failure);
+    await expect(vcs.resolveContextState("context:absent")).rejects.toBe(failure);
+    await expect(vcs.resolveContextState("context:absent")).rejects.toBe(failure);
+    expect(call.mock.calls.map(([method]) => method)).toEqual([
+      "vcsContextMaterializationCommand",
+      "vcsContextMaterializationCommand",
+      "vcsContextMaterializationCommand",
+    ]);
+  });
+
   it("serves prepared content while context requests await one semantic initialization", async () => {
     const { deps } = await harness();
     const initialContentState = `state:${"a".repeat(64)}`;
     const vcs = new WorkspaceVcs({ ...deps, initialContentState });
     const ensureContext = vi.fn(async () => ({
       kind: "complete",
-      result: semanticContextResult({
-        kind: "event",
-        eventId: "event:initialized",
-      }),
+      result: semanticContextResult({ kind: "event", eventId: "event:initialized" }),
     }));
     await vcs.attachGad({ ensureContext } as never);
     let finish!: () => void;
@@ -241,20 +508,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(vcs.startSemanticInitialization(initialize)).toBe(flight);
     const first = vcs.ensureSemanticContext("context:editing");
     const second = vcs.ensureSemanticContext("context:editing");
-    await expect(vcs.ensureFresh()).resolves.toEqual({
-      stateHash: initialContentState,
-    });
+    await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: initialContentState });
     expect(initialize).toHaveBeenCalledOnce();
     expect(ensureContext).not.toHaveBeenCalled();
     finish();
-    await expect(first).resolves.toEqual({
-      kind: "event",
-      eventId: "event:initialized",
-    });
-    await expect(second).resolves.toEqual({
-      kind: "event",
-      eventId: "event:initialized",
-    });
+    await expect(first).resolves.toEqual({ kind: "event", eventId: "event:initialized" });
+    await expect(second).resolves.toEqual({ kind: "event", eventId: "event:initialized" });
     expect(ensureContext).toHaveBeenCalledOnce();
   });
 
@@ -267,10 +526,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const flight = vcs.startSemanticInitialization(() => pending);
     const controller = new AbortController();
     const operation = vi.fn(async () => undefined);
-    const mutation = vcs.withProtectedMainMutation(
-      operation,
-      controller.signal,
-    );
+    const mutation = vcs.withProtectedMainMutation(operation, controller.signal);
     const reason = new Error("Caller cancelled editing");
     const cancelled = expect(mutation).rejects.toBe(reason);
     controller.abort(reason);
@@ -298,12 +554,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     fail(failure);
     await Promise.all([flightFailure, requestFailure]);
     await expect(vcs.ensureContext("context:later")).rejects.toBe(failure);
-    await expect(
-      vcs.semanticDirectCall("vcsStatus", { contextId: "context:later" }),
-    ).rejects.toBe(failure);
-    await expect(
-      vcs.withProtectedMainMutation(async () => undefined),
-    ).rejects.toBe(failure);
+    await expect(vcs.semanticDirectCall("vcsStatus", { contextId: "context:later" })).rejects.toBe(
+      failure
+    );
+    await expect(vcs.withProtectedMainMutation(async () => undefined)).rejects.toBe(failure);
     expect(ensureContext).not.toHaveBeenCalled();
   });
 
@@ -312,9 +566,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const initialContentState = `state:${"a".repeat(64)}`;
     const vcs = new WorkspaceVcs({ ...deps, initialContentState });
     const view = vi.spyOn(vcs.repositories, "workspaceView");
-    await expect(vcs.ensureFresh()).resolves.toEqual({
-      stateHash: initialContentState,
-    });
+    await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: initialContentState });
     expect(view).not.toHaveBeenCalled();
     expect(vcs.executionStateForContent(initialContentState)).toEqual({
       kind: "bootstrap-snapshot",
@@ -323,14 +575,54 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const semantic = { kind: "event", eventId: "event:initialized" } as const;
     vi.spyOn(refs, "readMainSemanticState").mockReturnValue(semantic);
     view.mockResolvedValueOnce({ stateHash: initialContentState });
-    await expect(vcs.ensureFresh()).resolves.toEqual({
-      stateHash: initialContentState,
-    });
+    await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: initialContentState });
     expect(vcs.executionStateForContent(initialContentState)).toEqual(semantic);
     const changed = `state:${"b".repeat(64)}`;
     view.mockResolvedValueOnce({ stateHash: changed });
     await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: changed });
     expect(vcs.executionStateForContent(changed)).toEqual(semantic);
+  });
+
+  it("resolves batched blobs in selector order and rejects missing content without returning partial results", async () => {
+    const { blobsDir, vcs } = await harness();
+    const text = "one";
+    const stored = await putBytes(blobsDir, Buffer.from(text));
+    const request = {
+      kind: "read-semantic-blob",
+      state: { kind: "event", eventId: "event:test" },
+      contentHash: stored.digest,
+      contentKind: "text",
+      byteLength: 3,
+      coordinateExtent: 3,
+      externalKeys: [],
+      authoredChangeId: "change:test",
+      authoredByWorkUnitId: "work-unit:test",
+      contentClass: "internal",
+      repositoryId: "repository:test",
+      fileId: "file:test",
+      repoPath: "meta",
+      path: "value",
+      mode: 0o644,
+    };
+    let files: Array<typeof request | null> = [request, null, request];
+    await vcs.attachGad({
+      vcsReadFiles: async () => ({
+        kind: "host-read",
+        request: { kind: "read-semantic-blobs", files },
+      }),
+    } as never);
+    const read = () =>
+      vcs.semanticDirectCall("vcsReadFiles", {
+        state: { kind: "event", eventId: "event:test" },
+        files: [{ repositoryId: "repository:test", file: { kind: "id", fileId: "file:test" } }],
+      });
+    await expect(read()).resolves.toMatchObject([
+      { content: { kind: "text", text } },
+      null,
+      { content: { kind: "text", text } },
+    ]);
+    files = [request, { ...request, contentHash: "0".repeat(64) }];
+    await expect(read()).rejects.toThrow("missing");
   });
 
   it.each([
@@ -346,61 +638,54 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       contentClass: "external",
       externalKeys: ["repo:fixture://snapshot@v1"],
     },
-  ])(
-    "preserves $contentClass lineage and the stored coordinate kind",
-    async (lineage) => {
-      const { blobsDir, vcs } = await harness();
-      const text = "\uFEFFa😀éz";
-      const bytes = Buffer.from(text);
-      const stored = await putBytes(blobsDir, bytes);
-      let contentKind = "bytes";
-      let coordinateExtent = bytes.length;
-      await vcs.attachGad({
-        vcsReadFile: async () => ({
-          kind: "host-read",
-          request: {
-            kind: "read-semantic-blob",
-            state: { kind: "event", eventId: "event:test" },
-            contentHash: stored.digest,
-            contentKind,
-            byteLength: bytes.length,
-            coordinateExtent,
-            repositoryId: "repository:test",
-            fileId: "file:test",
-            repoPath: "meta",
-            path: "value",
-            mode: 0o644,
-            ...lineage,
-          },
-        }),
-      } as never);
-      const read = () =>
-        vcs.semanticDirectCall("vcsReadFile", {
+  ])("preserves $contentClass lineage and the stored coordinate kind", async (lineage) => {
+    const { blobsDir, vcs } = await harness();
+    const text = "\uFEFFa😀éz";
+    const bytes = Buffer.from(text);
+    const stored = await putBytes(blobsDir, bytes);
+    let contentKind = "bytes";
+    let coordinateExtent = bytes.length;
+    await vcs.attachGad({
+      vcsReadFile: async () => ({
+        kind: "host-read",
+        request: {
+          kind: "read-semantic-blob",
           state: { kind: "event", eventId: "event:test" },
+          contentHash: stored.digest,
+          contentKind,
+          byteLength: bytes.length,
+          coordinateExtent,
           repositoryId: "repository:test",
-          file: { kind: "id", fileId: "file:test" },
-        });
-      await expect(read()).resolves.toMatchObject({
-        content: { kind: "bytes", base64: bytes.toString("base64") },
-        ...lineage,
+          fileId: "file:test",
+          repoPath: "meta",
+          path: "value",
+          mode: 0o644,
+          ...lineage,
+        },
+      }),
+    } as never);
+    const read = () =>
+      vcs.semanticDirectCall("vcsReadFile", {
+        state: { kind: "event", eventId: "event:test" },
+        repositoryId: "repository:test",
+        file: { kind: "id", fileId: "file:test" },
       });
-      contentKind = "text";
-      coordinateExtent = text.length;
-      await expect(read()).resolves.toMatchObject({
-        content: { kind: "text", text },
-      });
-      coordinateExtent++;
-      await expect(read()).rejects.toThrow("coordinate extent");
-    },
-  );
+    await expect(read()).resolves.toMatchObject({
+      content: { kind: "bytes", base64: bytes.toString("base64") },
+      ...lineage,
+    });
+    contentKind = "text";
+    coordinateExtent = text.length;
+    await expect(read()).resolves.toMatchObject({ content: { kind: "text", text } });
+    coordinateExtent++;
+    await expect(read()).rejects.toThrow("coordinate extent");
+  });
   it("includes workspace compiler config in partial build projections", async () => {
     const { blobsDir, vcs, deps } = await harness();
     const rootConfig = Buffer.from(
-      JSON.stringify({ compilerOptions: { strict: true, target: "ES2022" } }),
+      JSON.stringify({ compilerOptions: { strict: true, target: "ES2022" } })
     );
-    const packageConfig = Buffer.from(
-      JSON.stringify({ extends: "../../tsconfig.json" }),
-    );
+    const packageConfig = Buffer.from(JSON.stringify({ extends: "../../tsconfig.json" }));
     const source = Buffer.from("export const value: string = 'ok';\n");
     const [rootWrite, packageWrite, sourceWrite] = await Promise.all([
       putBytes(blobsDir, rootConfig),
@@ -414,26 +699,20 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         contentHash: packageWrite.digest,
         mode: 0o100644,
       },
-      {
-        path: "packages/lib/src/index.ts",
-        contentHash: sourceWrite.digest,
-        mode: 0o100644,
-      },
+      { path: "packages/lib/src/index.ts", contentHash: sourceWrite.digest, mode: 0o100644 },
     ]);
 
     const projection = await vcs.materializeForBuild(
       [{ relativePath: "packages/lib" } as never],
       state.stateHash,
-      deps.workspaceRoot,
+      deps.workspaceRoot
     );
 
+    await expect(fsp.readFile(path.join(projection.sourceRoot, "tsconfig.json"))).resolves.toEqual(
+      rootConfig
+    );
     await expect(
-      fsp.readFile(path.join(projection.sourceRoot, "tsconfig.json")),
-    ).resolves.toEqual(rootConfig);
-    await expect(
-      fsp.readFile(
-        path.join(projection.sourceRoot, "packages/lib/tsconfig.json"),
-      ),
+      fsp.readFile(path.join(projection.sourceRoot, "packages/lib/tsconfig.json"))
     ).resolves.toEqual(packageConfig);
   });
 
@@ -460,7 +739,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         stateHash: string,
         relativePath: string,
         treeHash: string,
-        destination: string,
+        destination: string
       ): Promise<void>;
     };
     const materialize = instrumented.ensureBuildTreeMaterialized.bind(vcs);
@@ -481,12 +760,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       vcs.materializeForBuild(
         [{ relativePath: "packages/left" } as never],
         state.stateHash,
-        deps.workspaceRoot,
+        deps.workspaceRoot
       ),
       vcs.materializeForBuild(
         [{ relativePath: "packages/right" } as never],
         state.stateHash,
-        deps.workspaceRoot,
+        deps.workspaceRoot
       ),
     ]);
 
@@ -508,31 +787,20 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       },
     ]);
     const unit = [{ relativePath: "packages/lib" } as never];
-    const first = await vcs.materializeForBuild(
-      unit,
-      state.stateHash,
-      deps.workspaceRoot,
-    );
+    const first = await vcs.materializeForBuild(unit, state.stateHash, deps.workspaceRoot);
     await Promise.all([
-      fsp.rm(path.join(first.sourceRoot, "packages/lib"), {
-        recursive: true,
-        force: true,
-      }),
+      fsp.rm(path.join(first.sourceRoot, "packages/lib"), { recursive: true, force: true }),
       fsp.rm(path.join(first.sourceRoot, "tsconfig.json"), { force: true }),
     ]);
 
-    const repaired = await vcs.materializeForBuild(
-      unit,
-      state.stateHash,
-      deps.workspaceRoot,
-    );
+    const repaired = await vcs.materializeForBuild(unit, state.stateHash, deps.workspaceRoot);
 
     await expect(
-      fsp.readFile(path.join(repaired.sourceRoot, "packages/lib/index.ts")),
+      fsp.readFile(path.join(repaired.sourceRoot, "packages/lib/index.ts"))
     ).resolves.toEqual(Buffer.from("export const value = true;\n"));
-    await expect(
-      fsp.readFile(path.join(repaired.sourceRoot, "tsconfig.json")),
-    ).resolves.toEqual(Buffer.from('{"compilerOptions":{"strict":true}}'));
+    await expect(fsp.readFile(path.join(repaired.sourceRoot, "tsconfig.json"))).resolves.toEqual(
+      Buffer.from('{"compilerOptions":{"strict":true}}')
+    );
   });
 
   it("reads channel provenance through the GAD log API, outside semantic VCS dispatch", async () => {
@@ -550,10 +818,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await vcs.attachGad(providerFromWireCall(call));
 
     await expect(
-      vcs.getChannelEnvelopeIntegrity({
-        channelId: "channel:one",
-        envelopeId: "message:one",
-      }),
+      vcs.getChannelEnvelopeIntegrity({ channelId: "channel:one", envelopeId: "message:one" })
     ).resolves.toEqual({ contentClass: "external" });
     expect(call).toHaveBeenCalledWith("getChannelEnvelope", {
       channelId: "channel:one",
@@ -563,114 +828,73 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
   it("keeps cached composed workspace views rooted during content GC", async () => {
     const { blobsDir, vcs } = await harness();
-    const cached = await putBytes(
-      blobsDir,
-      Buffer.from("cached-composed-view"),
-    );
+    const cached = await putBytes(blobsDir, Buffer.from("cached-composed-view"));
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({
-        contentRoots: [],
-        contentHashes: [],
-      })),
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
     } as never);
-    vi.spyOn(
-      vcs.repositories,
-      "collectCachedReachableDigests",
-    ).mockResolvedValue({
+    vi.spyOn(vcs.repositories, "collectCachedReachableDigests").mockResolvedValue({
       treeDigests: [],
       contentDigests: [cached.digest],
     });
 
     await expect(
-      vcs.runGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] }),
+      vcs.runGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] })
     ).resolves.toMatchObject({ swept: 1 });
     await expect(getBytes(blobsDir, cached.digest)).resolves.toEqual(
-      Buffer.from("cached-composed-view"),
+      Buffer.from("cached-composed-view")
     );
     await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
   });
 
   it("rechecks semantic roots before committing a GC epoch", async () => {
     const { blobsDir, vcs } = await harness();
-    const retained = await putBytes(
-      blobsDir,
-      Buffer.from("materialized during preflight"),
-    );
+    const retained = await putBytes(blobsDir, Buffer.from("materialized during preflight"));
     const source = await putTree(
       blobsDir,
-      [
-        {
-          name: "index.ts",
-          kind: "file",
-          contentHash: retained.digest,
-          mode: 0o100644,
-        },
-      ],
-      { root: true },
+      [{ name: "index.ts", kind: "file", contentHash: retained.digest, mode: 0o100644 }],
+      { root: true }
     );
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     let roots: string[] = [];
     await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({
-        contentRoots: roots,
-        contentHashes: [],
-      })),
+      contentGcRoots: vi.fn(async () => ({ contentRoots: roots, contentHashes: [] })),
     } as never);
 
-    const prepared = await vcs.prepareGc({
-      minAgeMs: 0,
-      epoch: 1,
-      executionSourceRoots: [],
-    });
+    const prepared = await vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
     // This simulates a context materialization completing after the read-only
     // preflight but before the destructive commit.
     roots = [source.stateHash!];
     await prepared.commit();
 
     await expect(getBytes(blobsDir, retained.digest)).resolves.toEqual(
-      Buffer.from("materialized during preflight"),
+      Buffer.from("materialized during preflight")
     );
     await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
   });
 
   it("keeps a retained execution source composition rooted during content GC", async () => {
     const { blobsDir, vcs } = await harness();
-    const retained = await putBytes(
-      blobsDir,
-      Buffer.from("retained build source"),
-    );
+    const retained = await putBytes(blobsDir, Buffer.from("retained build source"));
     const source = await putTree(
       blobsDir,
-      [
-        {
-          name: "index.ts",
-          kind: "file",
-          contentHash: retained.digest,
-          mode: 0o100644,
-        },
-      ],
-      { root: true },
+      [{ name: "index.ts", kind: "file", contentHash: retained.digest, mode: 0o100644 }],
+      { root: true }
     );
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({
-        contentRoots: [],
-        contentHashes: [],
-      })),
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
     } as never);
 
     await expect(
       vcs.runGc({
         minAgeMs: 0,
         epoch: 1,
-        executionSourceRoots: [
-          { repoPath: "panels/retained", stateHash: source.stateHash! },
-        ],
-      }),
+        executionSourceRoots: [{ repoPath: "panels/retained", stateHash: source.stateHash! }],
+      })
     ).resolves.toMatchObject({ swept: 1 });
     await expect(getBytes(blobsDir, retained.digest)).resolves.toEqual(
-      Buffer.from("retained build source"),
+      Buffer.from("retained build source")
     );
     await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
   });
@@ -679,10 +903,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const { blobsDir, vcs } = await harness();
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({
-        contentRoots: [],
-        contentHashes: [],
-      })),
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
     } as never);
 
     await expect(
@@ -692,51 +913,36 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         executionSourceRoots: [
           { repoPath: "panels/retained", stateHash: `state:${"0".repeat(64)}` },
         ],
-      }),
+      })
     ).rejects.toThrow("is missing from the content store");
     await expect(getBytes(blobsDir, unreachable.digest)).resolves.toEqual(
-      Buffer.from("unreachable"),
+      Buffer.from("unreachable")
     );
   });
 
   it("fails closed before sweeping when an execution source closure is corrupt", async () => {
     const { blobsDir, vcs } = await harness();
-    const retained = await putBytes(
-      blobsDir,
-      Buffer.from("retained build source"),
-    );
+    const retained = await putBytes(blobsDir, Buffer.from("retained build source"));
     const source = await putTree(
       blobsDir,
-      [
-        {
-          name: "index.ts",
-          kind: "file",
-          contentHash: retained.digest,
-          mode: 0o100644,
-        },
-      ],
-      { root: true },
+      [{ name: "index.ts", kind: "file", contentHash: retained.digest, mode: 0o100644 }],
+      { root: true }
     );
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     await fsp.unlink(blobPath(blobsDir, retained.digest));
     await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({
-        contentRoots: [],
-        contentHashes: [],
-      })),
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
     } as never);
 
     await expect(
       vcs.prepareGc({
         minAgeMs: 0,
         epoch: 1,
-        executionSourceRoots: [
-          { repoPath: "panels/retained", stateHash: source.stateHash! },
-        ],
-      }),
+        executionSourceRoots: [{ repoPath: "panels/retained", stateHash: source.stateHash! }],
+      })
     ).rejects.toThrow(`Content object missing from store: ${retained.digest}`);
     await expect(getBytes(blobsDir, unreachable.digest)).resolves.toEqual(
-      Buffer.from("unreachable"),
+      Buffer.from("unreachable")
     );
   });
 
@@ -749,30 +955,24 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         emptyRepairCommand(input as never, {
           kind: "event",
           eventId: "event:main",
-        }),
+        })
       ),
       ensureContext: vi.fn(async (input: unknown) => {
         calls.push(input);
         return {
           kind: "complete" as const,
-          result: semanticContextResult({
-            kind: "event" as const,
-            eventId: "event:main",
-          }),
+          result: semanticContextResult({ kind: "event" as const, eventId: "event:main" }),
         };
       }),
     };
-    await Promise.all([
-      vcs.attachGad(gad as never),
-      restarted.attachGad(gad as never),
-    ]);
+    await Promise.all([vcs.attachGad(gad as never), restarted.attachGad(gad as never)]);
 
     await vcs.ensureContext("context:stable");
     await restarted.ensureContext("context:stable");
 
     expect(calls).toHaveLength(2);
     expect((calls[0] as { commandId: string }).commandId).toBe(
-      (calls[1] as { commandId: string }).commandId,
+      (calls[1] as { commandId: string }).commandId
     );
   });
 
@@ -783,22 +983,17 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const invalidUtf8 = Buffer.from([0x66, 0x80, 0x6f]);
     await Promise.all([
       fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true }),
-      fsp.mkdir(path.join(workspaceRoot, "projects", "coordinates"), {
-        recursive: true,
-      }),
+      fsp.mkdir(path.join(workspaceRoot, "projects", "coordinates"), { recursive: true }),
     ]);
     await Promise.all([
-      fsp.writeFile(
-        path.join(workspaceRoot, "meta", "vibestudio.yml"),
-        "systemEpoch: 59\n",
-      ),
+      fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 59\n"),
       fsp.writeFile(
         path.join(workspaceRoot, "projects", "coordinates", "unicode.txt"),
-        unicodeText,
+        unicodeText
       ),
       fsp.writeFile(
         path.join(workspaceRoot, "projects", "coordinates", "invalid.bin"),
-        invalidUtf8,
+        invalidUtf8
       ),
     ]);
 
@@ -823,10 +1018,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       if (method === "vcsEnsureContext") {
         return {
           kind: "complete",
-          result: semanticContextResult({
-            kind: "event",
-            eventId: "event:genesis",
-          }),
+          result: semanticContextResult({ kind: "event", eventId: "event:genesis" }),
         };
       }
       const dispatch = { method, request: input as { input: unknown } };
@@ -834,8 +1026,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         const requestedEventId = (
           dispatch.request.input as { node?: { eventId?: string } } | undefined
         )?.node?.eventId;
-        const imported =
-          requestedEventId === "event:import" && importedSnapshots.length > 0;
+        const imported = requestedEventId === "event:import" && importedSnapshots.length > 0;
         const eventId = imported ? "event:import" : "event:genesis";
         return {
           kind: "complete",
@@ -905,7 +1096,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           result: pushResult(
             "context:workspace-initialization",
             "event:import",
-            "effect:initial-push",
+            "effect:initial-push"
           ),
         };
       }
@@ -914,14 +1105,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await vcs.attachGad(providerFromWireCall(call));
 
     await vcs.startSemanticInitialization(async () => {
-      await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({
-        initialized: true,
-      });
+      await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({ initialized: true });
     });
 
     expect(importedSnapshots).toHaveLength(1);
     const coordinateRepository = importedSnapshots[0]?.repositories.find(
-      (repository) => repository.repoPath === "projects/coordinates",
+      (repository) => repository.repoPath === "projects/coordinates"
     );
     expect(coordinateRepository?.files.map(({ path }) => path)).toEqual([
       "invalid.bin",
@@ -940,10 +1129,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const { root, deps } = await harness();
     const workspaceRoot = path.join(root, "source");
     await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(
-      path.join(workspaceRoot, "meta", "vibestudio.yml"),
-      "systemEpoch: 59\n",
-    );
+    await fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 59\n");
     const encoder = new TextEncoder();
     const subtreeDigest = `v1-sha256:${"b".repeat(64)}` as const;
     const pin = {
@@ -996,9 +1182,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       kind: "event",
       eventId: "event:genesis",
     }));
-    vi.spyOn(templateVcs, "ensureFresh").mockResolvedValue({
-      stateHash: EMPTY_STATE_HASH,
-    });
+    vi.spyOn(templateVcs, "ensureFresh").mockResolvedValue({ stateHash: EMPTY_STATE_HASH });
     await templateVcs.attachGad(
       providerFromWireCall(async (method) => {
         if (method !== "vcsInspect") throw new Error(`unexpected ${method}`);
@@ -1011,7 +1195,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
             },
           },
         };
-      }),
+      })
     );
     const initializeExactSnapshot = vi.fn(async () => ({
       state: "ready" as const,
@@ -1032,9 +1216,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       health: vi.fn(),
     } as never);
 
-    await expect(
-      templateVcs.activateWorkspaceFromSource(),
-    ).resolves.toMatchObject({
+    await expect(templateVcs.activateWorkspaceFromSource()).resolves.toMatchObject({
       initialized: true,
     });
 
@@ -1069,14 +1251,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         new AggregateError(
           [child, new Error("Rollback failed", { cause: child })],
           "Initialization failed",
-          { cause: child },
-        ),
+          { cause: child }
+        )
       );
-      const failed = {
-        state: "failed" as const,
-        commandId: "workspace-source:root",
-        failure,
-      };
+      const failed = { state: "failed" as const, commandId: "workspace-source:root", failure };
       const vcs = new WorkspaceVcs({
         ...deps,
         rootTemplateBootstrap: {
@@ -1096,21 +1274,16 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         currentSource: vi.fn(),
         health: vi.fn(),
         inspectInitialization: vi.fn(async () =>
-          boundary === "inspection" ? failed : { state: "empty" as const },
+          boundary === "inspection" ? failed : { state: "empty" as const }
         ),
       });
-      const error = await vcs
-        .activateWorkspaceFromSource()
-        .catch((error: unknown) => error);
+      const error = await vcs.activateWorkspaceFromSource().catch((error: unknown) => error);
       expect(error).toBeInstanceOf(RemoteRpcAggregateError);
       const graph = error as RemoteRpcAggregateError;
-      expect(graph.errors[0]).toMatchObject({
-        code: "EACCES",
-        errorData: { repository: "meta" },
-      });
+      expect(graph.errors[0]).toMatchObject({ code: "EACCES", errorData: { repository: "meta" } });
       expect(graph.cause).toBe(graph.errors[0]);
       expect((graph.errors[1] as Error).cause).toBe(graph.errors[0]);
-    },
+    }
   );
 
   it("does not replay root initialization after semantic main has advanced", async () => {
@@ -1152,9 +1325,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       })),
       health: vi.fn(),
     });
-    vi.spyOn(vcs, "ensureFresh").mockResolvedValue({
-      stateHash: `state:${"4".repeat(64)}`,
-    });
+    vi.spyOn(vcs, "ensureFresh").mockResolvedValue({ stateHash: `state:${"4".repeat(64)}` });
 
     await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({
       stateHash: `state:${"4".repeat(64)}`,
@@ -1196,7 +1367,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
               contentRoot: EMPTY_STATE_HASH,
             },
           ] as never)
-        : [],
+        : []
     );
     vi.spyOn(refs, "updateMains").mockImplementation(async () => {
       refsInstalled = true;
@@ -1215,8 +1386,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
 
     const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsPendingSemanticEffects")
-        return pending ? [publishEffect] : [];
+      if (method === "vcsPendingSemanticEffects") return pending ? [publishEffect] : [];
       if (method === "vcsSemanticEffectAck") {
         pending = false;
         return { kind: "complete", result: { eventId: importedEventId } };
@@ -1224,10 +1394,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       if (method === "vcsEnsureContext") {
         return {
           kind: "complete",
-          result: semanticContextResult({
-            kind: "event",
-            eventId: importedEventId,
-          }),
+          result: semanticContextResult({ kind: "event", eventId: importedEventId }),
         };
       }
       if (method === "vcsContextMaterializationCommand") {
@@ -1272,9 +1439,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.recoverPendingSemanticEffects()).resolves.toBe(1);
-    await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({
-      initialized: false,
-    });
+    await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({ initialized: false });
     expect(refs.updateMains).not.toHaveBeenCalled();
     expect(pending).toBe(false);
   });
@@ -1308,10 +1473,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
     await expect(vcs.recoverPendingSemanticEffects()).resolves.toBe(0);
     expect(refs.updateMains).not.toHaveBeenCalled();
-    expect(call).not.toHaveBeenCalledWith(
-      "vcsSemanticEffectAck",
-      expect.anything(),
-    );
+    expect(call).not.toHaveBeenCalledWith("vcsSemanticEffectAck", expect.anything());
   });
 
   it("recovers later safe effects without granting authority to an earlier publication", async () => {
@@ -1352,10 +1514,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       payloadDigest: "effect-digest:applied-publication",
     };
     const pending = [unauthorizedPublication, observation, appliedPublication];
-    const acknowledgements: Array<{
-      effectId: string;
-      receipt: Record<string, unknown>;
-    }> = [];
+    const acknowledgements: Array<{ effectId: string; receipt: Record<string, unknown> }> = [];
     vi.spyOn(refs, "readAppliedPublication").mockImplementation((effectId) =>
       effectId === appliedPublication.effectId
         ? {
@@ -1369,20 +1528,17 @@ describe("WorkspaceVcs semantic host orchestration", () => {
             observersAppliedAt: Date.parse("2026-07-16T12:00:00.000Z"),
             semanticAcknowledgedAt: null,
           }
-        : null,
+        : null
     );
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsPendingSemanticEffects") return pending;
       if (method === "vcsSemanticEffectAck") {
-        const acknowledgement = (
-          input as { acknowledgement: (typeof acknowledgements)[number] }
-        ).acknowledgement;
+        const acknowledgement = (input as { acknowledgement: (typeof acknowledgements)[number] })
+          .acknowledgement;
         acknowledgements.push(acknowledgement);
         pending.splice(
-          pending.findIndex(
-            (effect) => effect.effectId === acknowledgement.effectId,
-          ),
-          1,
+          pending.findIndex((effect) => effect.effectId === acknowledgement.effectId),
+          1
         );
         return { kind: "complete", result: null };
       }
@@ -1436,18 +1592,31 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
     await vcs.attachGad(providerFromWireCall(call));
 
-    await expect(
-      vcs.semanticDirectCall("vcsPush", pushInput()),
-    ).rejects.toThrow("protected publication has no verified gate context");
+    await expect(vcs.semanticDirectCall("vcsPush", pushInput())).rejects.toThrow(
+      "protected publication has no verified gate context"
+    );
     expect(updateMains).not.toHaveBeenCalled();
   });
 
-  it("releases the context lifecycle lock when caller publication is aborted", async () => {
+  it("joins cancellation of the actual publication gate before releasing its context fence", async () => {
     const { refs, vcs } = await harness();
-    const heldPublication = new Promise<never>(() => {});
-    const updateMains = vi
-      .spyOn(refs, "updateMains")
-      .mockImplementation(async () => heldPublication);
+    const updateMains = vi.spyOn(refs, "updateMains").mockImplementation(async (request) => {
+      const gateContext = request.gateContext;
+      if (
+        !gateContext ||
+        typeof gateContext !== "object" ||
+        !("kind" in gateContext) ||
+        gateContext.kind !== "caller" ||
+        !("signal" in gateContext) ||
+        !(gateContext.signal instanceof AbortSignal)
+      )
+        throw new Error("publication fixture requires its owned signal");
+      const signal = gateContext.signal;
+      await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      throw new Error("aborted publication cannot commit");
+    });
     const call = vi.fn(async (method: string, _request: unknown) => {
       const semanticMethod = method;
       if (semanticMethod === "vcsStatus") {
@@ -1465,8 +1634,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           },
         };
       }
-      if (semanticMethod !== "vcsPush")
-        throw new Error(`unexpected ${semanticMethod}`);
+      if (semanticMethod !== "vcsPush") throw new Error(`unexpected ${semanticMethod}`);
       return {
         kind: "effects-pending",
         result: null,
@@ -1503,7 +1671,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       pushInput("context:aborted-publication"),
       null,
       caller,
-      controller.signal,
+      controller.signal
     );
     await vi.waitFor(() => expect(updateMains).toHaveBeenCalledOnce());
     controller.abort(new DOMException("Publication cancelled", "AbortError"));
@@ -1518,16 +1686,13 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         ingress: {
           causalParent: null,
         },
-      }),
+      })
     ).resolves.toMatchObject({ contextId: "context:aborted-publication" });
   });
 
   it("refuses to reconstruct an initial publication without its source plan", async () => {
     const { refs, vcs } = await harness();
-    const imported = {
-      kind: "event",
-      eventId: "event:initial-import",
-    } as const;
+    const imported = { kind: "event", eventId: "event:initial-import" } as const;
     vi.spyOn(refs, "listMains").mockReturnValue([]);
     const updateMains = vi.spyOn(refs, "updateMains");
     const inspect = vi.fn(async (method: string, input: unknown) => {
@@ -1624,7 +1789,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.activateWorkspaceFromSource()).rejects.toThrow(
-      "workspace source is missing meta/vibestudio.yml",
+      "workspace source is missing meta/vibestudio.yml"
     );
     expect(inspect).toHaveBeenCalledTimes(4);
     expect(updateMains).not.toHaveBeenCalled();
@@ -1643,8 +1808,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           eventId: "event:main",
         });
       }
-      if (method !== "vcsEnsureContext")
-        throw new Error(`unexpected ${method}`);
+      if (method !== "vcsEnsureContext") throw new Error(`unexpected ${method}`);
       return await pending;
     });
     await vcs.attachGad(providerFromWireCall(call));
@@ -1668,8 +1832,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const { root, vcs } = await harness();
     const contextId = "context:runtime";
     const call = vi.fn(async (method: string, input: unknown) => {
-      if (method !== "vcsEnsureContext")
-        throw new Error(`unexpected ${method}`);
+      if (method !== "vcsEnsureContext") throw new Error(`unexpected ${method}`);
       expect(input).toMatchObject({ projection: "deferred" });
       return {
         kind: "complete",
@@ -1685,15 +1848,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
     expect(call).toHaveBeenCalledOnce();
     await expect(
-      fsp.stat(
-        path.join(
-          root,
-          "contexts",
-          contextId,
-          ".gad",
-          "context-materialization.json",
-        ),
-      ),
+      fsp.stat(path.join(root, "contexts", contextId, ".gad", "context-materialization.json"))
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -1714,9 +1869,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         });
       }
       if (method === "vcsDropContext") {
-        await expect(fsp.stat(contextDir)).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+        await expect(fsp.stat(contextDir)).rejects.toMatchObject({ code: "ENOENT" });
         return { dropped: true };
       }
       throw new Error(`unexpected ${method}`);
@@ -1727,10 +1880,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const deletion = vcs.dropContext(contextId);
     await Promise.resolve();
     expect(call).toHaveBeenCalledTimes(1);
-    expect(call).toHaveBeenLastCalledWith(
-      "vcsEnsureContext",
-      expect.anything(),
-    );
+    expect(call).toHaveBeenLastCalledWith("vcsEnsureContext", expect.anything());
 
     completeEnsure({
       kind: "complete",
@@ -1779,16 +1929,11 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     let receipt: Record<string, unknown> | null = null;
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsEdit") {
-        return {
-          kind: "effects-pending",
-          result: { pending: true },
-          effects: [effect],
-        };
+        return { kind: "effects-pending", result: { pending: true }, effects: [effect] };
       }
       if (method === "vcsSemanticEffectAck") {
-        receipt = (
-          input as { acknowledgement: { receipt: Record<string, unknown> } }
-        ).acknowledgement.receipt;
+        receipt = (input as { acknowledgement: { receipt: Record<string, unknown> } })
+          .acknowledgement.receipt;
         return { kind: "complete", result: mutationResult(editInput()) };
       }
       throw new Error(`unexpected ${method}`);
@@ -1799,20 +1944,13 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       vcs.semanticCall("vcsEdit", {
         input: editInput(),
         ingress: { causalParent: null },
-      }),
+      })
     ).resolves.toEqual(mutationResult(editInput()));
     await expect(
       fsp.readFile(
-        path.join(
-          root,
-          "contexts",
-          "context:one",
-          "packages",
-          "app",
-          "index.ts",
-        ),
-        "utf8",
-      ),
+        path.join(root, "contexts", "context:one", "packages", "app", "index.ts"),
+        "utf8"
+      )
     ).resolves.toBe("hello from semantics\n");
     expect(receipt).toMatchObject({
       materializationId: command.materializationId,
@@ -1850,20 +1988,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       if (method === "vcsEdit") return { kind: "host-content", request };
       if (method === "vcsSemanticContentAck") {
         expect(input).toEqual({
-          acknowledgement: {
-            request,
-            contentHashes: blobs.map((blob) => blob.contentHash).sort(),
-          },
+          acknowledgement: { request, contentHashes: blobs.map((blob) => blob.contentHash).sort() },
         });
         for (const [index, blob] of blobs.entries()) {
-          expect(await getBytes(blobsDir, blob.contentHash)).toEqual(
-            contents[index],
-          );
+          expect(await getBytes(blobsDir, blob.contentHash)).toEqual(contents[index]);
         }
-        return {
-          kind: "complete",
-          result: mutationResult(editInput("context:semantic-only")),
-        };
+        return { kind: "complete", result: mutationResult(editInput("context:semantic-only")) };
       }
       throw new Error(`unexpected ${method}`);
     });
@@ -1872,15 +2002,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       vcs.semanticCall("vcsEdit", {
         input: editInput("context:semantic-only"),
         ingress: request.ingress,
-      }),
+      })
     ).resolves.toEqual(mutationResult(editInput("context:semantic-only")));
     await expect(
-      fsp.stat(path.join(root, "contexts", "context:semantic-only")),
+      fsp.stat(path.join(root, "contexts", "context:semantic-only"))
     ).rejects.toMatchObject({ code: "ENOENT" });
-    expect(call.mock.calls.map(([method]) => method)).toEqual([
-      "vcsEdit",
-      "vcsSemanticContentAck",
-    ]);
+    expect(call.mock.calls.map(([method]) => method)).toEqual(["vcsEdit", "vcsSemanticContentAck"]);
   });
 
   it("rejects a mismatched prepared content identity without resuming the source", async () => {
@@ -1895,17 +2022,14 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         ingress: { causalParent: null },
         blobs: [
           { contentHash: sha256Hex(valid), base64: valid.toString("base64") },
-          {
-            contentHash: "a".repeat(64),
-            base64: Buffer.from("wrong digest").toString("base64"),
-          },
+          { contentHash: "a".repeat(64), base64: Buffer.from("wrong digest").toString("base64") },
         ],
       },
     }));
     await vcs.attachGad(providerFromWireCall(call));
-    await expect(
-      vcs.semanticDirectCall("vcsEdit", editInput()),
-    ).rejects.toThrow("bytes do not match");
+    await expect(vcs.semanticDirectCall("vcsEdit", editInput())).rejects.toThrow(
+      "bytes do not match"
+    );
     expect(call).toHaveBeenCalledOnce();
     expect(await getBytes(blobsDir, sha256Hex(valid))).toBeNull();
   });
@@ -1925,10 +2049,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
     const call = vi.fn(async (method: string) => {
       if (method === "vcsContentGcRoots")
-        return {
-          contentRoots: [],
-          contentHashes: committed ? [contentHash] : [],
-        };
+        return { contentRoots: [], contentHashes: committed ? [contentHash] : [] };
       if (method === "vcsEdit")
         return {
           kind: "host-content",
@@ -1951,11 +2072,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       throw new Error(`unexpected ${method}`);
     });
     await vcs.attachGad(providerFromWireCall(call));
-    const gc = await vcs.prepareGc({
-      minAgeMs: 0,
-      epoch: 1,
-      executionSourceRoots: [],
-    });
+    const gc = await vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
     const edit = vcs.semanticDirectCall("vcsEdit", editInput());
     await started;
     const sweep = gc.commit();
@@ -1977,25 +2094,17 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsEnsureContext") {
-        return {
-          kind: "complete",
-          result: semanticContextResult(command.targetState),
-        };
+        return { kind: "complete", result: semanticContextResult(command.targetState) };
       }
       if (method === "vcsContextMaterializationCommand") {
-        expect(input).toEqual({
-          contextId: command.contextId,
-          materializedState: null,
-        });
+        expect(input).toEqual({ contextId: command.contextId, materializedState: null });
         return command;
       }
       throw new Error(`unexpected ${method}`);
     });
     await vcs.attachGad(providerFromWireCall(call));
 
-    await expect(vcs.ensureContext(command.contextId)).resolves.toEqual(
-      command.targetState,
-    );
+    await expect(vcs.ensureContext(command.contextId)).resolves.toEqual(command.targetState);
     expect(call.mock.calls.map(([method]) => method)).toEqual([
       "vcsEnsureContext",
       "vcsContextMaterializationCommand",
@@ -2019,12 +2128,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const firstGenerationMatches = vi.spyOn(
       (
         vcs as unknown as {
-          materializer: {
-            projectionMatches: (state: unknown) => Promise<boolean>;
-          };
+          materializer: { projectionMatches: (state: unknown) => Promise<boolean> };
         }
       ).materializer,
-      "projectionMatches",
+      "projectionMatches"
     );
 
     await vcs.ensureContext(contextId);
@@ -2036,12 +2143,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const recoveredMatches = vi.spyOn(
       (
         restarted as unknown as {
-          materializer: {
-            projectionMatches: (state: unknown) => Promise<boolean>;
-          };
+          materializer: { projectionMatches: (state: unknown) => Promise<boolean> };
         }
       ).materializer,
-      "projectionMatches",
+      "projectionMatches"
     );
 
     await restarted.ensureContext(contextId);
@@ -2071,15 +2176,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     };
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsImportSnapshot") {
-        return {
-          kind: "effects-pending",
-          result: null,
-          effects: [observation],
-        };
+        return { kind: "effects-pending", result: null, effects: [observation] };
       }
-      const receipt = (
-        input as { acknowledgement: { receipt: Record<string, unknown> } }
-      ).acknowledgement.receipt;
+      const receipt = (input as { acknowledgement: { receipt: Record<string, unknown> } })
+        .acknowledgement.receipt;
       expect(receipt).toEqual({
         files: [
           {
@@ -2098,7 +2198,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       vcs.semanticCall("vcsImportSnapshot", {
         input: importInput,
         ingress: { causalParent: null },
-      }),
+      })
     ).resolves.toEqual(importedSnapshotResult());
   });
 
@@ -2131,44 +2231,29 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       receipt: null,
       createdAt: "2026-07-16T12:00:00.000Z",
     };
-    const materializeEffect = materializationEffect(
-      materialization,
-      "effect:materialize",
-    );
+    const materializeEffect = materializationEffect(materialization, "effect:materialize");
     let acknowledgements = 0;
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsEdit") {
-        return {
-          kind: "effects-pending",
-          result: null,
-          effects: [observation],
-        };
+        return { kind: "effects-pending", result: null, effects: [observation] };
       }
-      const acknowledgement = (
-        input as { acknowledgement: { receipt: Record<string, unknown> } }
-      ).acknowledgement;
+      const acknowledgement = (input as { acknowledgement: { receipt: Record<string, unknown> } })
+        .acknowledgement;
       acknowledgements += 1;
       if (acknowledgements === 1) {
         expect(acknowledgement.receipt).toEqual({
           files: [{ contentHash, base64: original.toString("base64") }],
         });
-        return {
-          kind: "effects-pending",
-          result: null,
-          effects: [materializeEffect],
-        };
+        return { kind: "effects-pending", result: null, effects: [materializeEffect] };
       }
-      return {
-        kind: "complete",
-        result: mutationResult(editInput("context:one")),
-      };
+      return { kind: "complete", result: mutationResult(editInput("context:one")) };
     });
     await vcs.attachGad(providerFromWireCall(call));
     await expect(
       vcs.semanticCall("vcsEdit", {
         input: editInput("context:one"),
         ingress: { causalParent: null },
-      }),
+      })
     ).resolves.toEqual(mutationResult(editInput("context:one")));
     expect(acknowledgements).toBe(2);
   });
@@ -2215,13 +2300,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       if (method === "vcsMove") {
         return { kind: "effects-pending", result: null, effects: [effect] };
       }
-      receipt = (
-        input as { acknowledgement: { receipt: Record<string, unknown> } }
-      ).acknowledgement.receipt;
-      return {
-        kind: "complete",
-        result: mutationResult(moveInput("context:delta")),
-      };
+      receipt = (input as { acknowledgement: { receipt: Record<string, unknown> } }).acknowledgement
+        .receipt;
+      return { kind: "complete", result: mutationResult(moveInput("context:delta")) };
     });
     await vcs.attachGad(providerFromWireCall(call));
 
@@ -2232,16 +2313,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
     await expect(
       fsp.readFile(
-        path.join(
-          root,
-          "contexts",
-          "context:delta",
-          "packages",
-          "app",
-          "index.ts",
-        ),
-        "utf8",
-      ),
+        path.join(root, "contexts", "context:delta", "packages", "app", "index.ts"),
+        "utf8"
+      )
     ).resolves.toBe("after\n");
     expect(receipt).toMatchObject({
       repositories: [
@@ -2257,8 +2331,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const { blobsDir, refs, vcs } = await harness();
     const bytes = Buffer.from("published\n");
     const contentHash = (await putBytes(blobsDir, bytes)).digest;
-    const otherContentHash = (await putBytes(blobsDir, Buffer.from("other\n")))
-      .digest;
+    const otherContentHash = (await putBytes(blobsDir, Buffer.from("other\n"))).digest;
     const firstEffect = {
       effectId: "effect:publish",
       scopeKind: "context" as const,
@@ -2311,13 +2384,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
             fileManifestId: "manifest:other",
             source: {
               kind: "snapshot" as const,
-              files: [
-                {
-                  path: "index.ts",
-                  contentHash: otherContentHash,
-                  mode: 0o644,
-                },
-              ],
+              files: [{ path: "index.ts", contentHash: otherContentHash, mode: 0o644 }],
             },
           },
         ],
@@ -2328,15 +2395,11 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const call = vi.fn(async (method: string, input: unknown) => {
       if (method === "vcsPush") {
         const effect = pendingEffects.shift();
-        if (!effect)
-          throw new Error(
-            "unexpected semantic dispatch after queued publications",
-          );
+        if (!effect) throw new Error("unexpected semantic dispatch after queued publications");
         return { kind: "effects-pending", result: null, effects: [effect] };
       }
-      const receipt = (
-        input as { acknowledgement: { receipt: Record<string, unknown> } }
-      ).acknowledgement.receipt;
+      const receipt = (input as { acknowledgement: { receipt: Record<string, unknown> } })
+        .acknowledgement.receipt;
       expect(Object.keys(receipt).sort()).toEqual(["applied", "appliedAt"]);
       expect(receipt).toEqual({ applied: true, appliedAt: expect.any(String) });
       return {
@@ -2359,7 +2422,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           repoPath: "panels/test",
           effectiveVersion: "test-version",
         }),
-      },
+      }
     );
     expect(refs.listMains()).toEqual([
       expect.objectContaining({
@@ -2378,17 +2441,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       kind: "caller",
       candidateWorkspaceState: expect.stringMatching(/^state:[0-9a-f]{64}$/),
     });
-    if (
-      firstGateContext?.kind !== "caller" ||
-      !firstGateContext.candidateWorkspaceState
-    ) {
-      throw new Error(
-        "publication did not carry its exact candidate workspace state",
-      );
+    if (firstGateContext?.kind !== "caller" || !firstGateContext.candidateWorkspaceState) {
+      throw new Error("publication did not carry its exact candidate workspace state");
     }
-    expect(
-      vcs.executionStateForContent(firstGateContext.candidateWorkspaceState),
-    ).toEqual({
+    expect(vcs.executionStateForContent(firstGateContext.candidateWorkspaceState)).toEqual({
       kind: "event",
       eventId: "event:one",
     });
@@ -2407,13 +2463,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           repoPath: "panels/test",
           effectiveVersion: "test-version",
         }),
-      },
+      }
     );
     expect(updateMains.mock.calls.at(-1)?.[0].entries).toEqual([
-      expect.objectContaining({
-        repoPath: "packages/other",
-        expectedOld: null,
-      }),
+      expect.objectContaining({ repoPath: "packages/other", expectedOld: null }),
     ]);
   });
 });

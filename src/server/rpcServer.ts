@@ -117,6 +117,7 @@ import {
   type WorkspaceServiceBinding,
 } from "@vibestudio/workspace-contracts/types";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
+import type { DoExecutableVersionResolver } from "./doExecutableDispatch.js";
 import type { DurableWorkReadyHint } from "@vibestudio/shared/durableWork";
 import {
   AUTHENTICATION_FRAME_MAX_BYTES,
@@ -505,6 +506,7 @@ export class RpcServer {
   private workerdUrl: string | null = null;
   private workerdGatewayToken: string | null = null;
   private workerdDispatchSecret: string | null = null;
+  private resolveExecutableVersion: DoExecutableVersionResolver | undefined;
   private resolveWorkerInstanceNameFn: ((targetId: string) => string | null) | null = null;
 
   private connections = new ConnectionRegistry({
@@ -1527,6 +1529,9 @@ export class RpcServer {
         logId: causal.parent.logId,
         head: causal.parent.head,
         invocationId: causal.parent.invocationId,
+        ...(causal.parent.nativeInvocation
+          ? { nativeInvocation: causal.parent.nativeInvocation }
+          : {}),
       },
       ...(causal.nativeInvocation ? { nativeInvocation: causal.nativeInvocation } : {}),
       ...(executionAuthority ? { executionAuthority } : {}),
@@ -1677,6 +1682,10 @@ export class RpcServer {
 
   setWorkerdDispatchSecret(secret: string): void {
     this.workerdDispatchSecret = secret;
+  }
+
+  setExecutableVersionResolver(fn: DoExecutableVersionResolver): void {
+    this.resolveExecutableVersion = fn;
   }
 
   setWorkerInstanceResolver(fn: (targetId: string) => string | null): void {
@@ -3929,6 +3938,27 @@ export class RpcServer {
     );
   }
 
+  /** Route host-owned deputy work through the creator's exact verified authority. */
+  callTargetAs(
+    caller: VerifiedCaller,
+    targetId: string,
+    method: string,
+    args: unknown[] = [],
+    options?: RpcCallOptions
+  ): Promise<unknown> {
+    options?.signal?.throwIfAborted();
+    return this.relayCall(
+      caller.runtime.id,
+      caller.runtime.kind,
+      targetId,
+      method,
+      args,
+      undefined,
+      options,
+      { authenticatedCaller: caller, authorizingCaller: caller }
+    );
+  }
+
   async streamCallTarget(targetId: string, method: string, ...args: unknown[]): Promise<Response> {
     const wsClient = this.pickRoutableTarget(targetId);
     if (!wsClient || wsClient.ws.readyState !== wsClient.ws.OPEN) {
@@ -4808,6 +4838,7 @@ export class RpcServer {
           {
             workerdUrl,
             workerdGatewayToken,
+            resolveExecutableVersion: this.resolveExecutableVersion,
             ...(workerdDispatchSecret ? { workerdDispatchSecret } : {}),
             callerId,
             callerKind,
@@ -4954,6 +4985,7 @@ export class RpcServer {
         {
           workerdUrl: this.workerdUrl,
           workerdGatewayToken: this.workerdGatewayToken,
+          resolveExecutableVersion: this.resolveExecutableVersion,
           ...(this.workerdDispatchSecret
             ? { workerdDispatchSecret: this.workerdDispatchSecret }
             : {}),
@@ -5138,6 +5170,7 @@ export class RpcServer {
       await postEventToDurableObject(ref, event, payload, {
         workerdUrl: this.workerdUrl,
         workerdGatewayToken: this.workerdGatewayToken,
+        resolveExecutableVersion: this.resolveExecutableVersion,
         ...(this.workerdDispatchSecret
           ? { workerdDispatchSecret: this.workerdDispatchSecret }
           : {}),

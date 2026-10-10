@@ -4,6 +4,7 @@ import {
   type ContentOverlayShowOptions,
   type ContentOverlayUpdateOptions,
 } from "./shellContentOverlayView.js";
+import type { TypingActivity } from "./typingActivity.js";
 
 /**
  * Fixed stacking order for the content overlays, lowest first.
@@ -39,7 +40,8 @@ export class ContentOverlayManager {
   constructor(
     private readonly preloadPath: string,
     private readonly getBaseUrl: () => string | null,
-    private readonly forwardIntent: (payload: unknown) => void
+    private readonly forwardIntent: (payload: unknown) => void,
+    private readonly typing: TypingActivity
   ) {}
 
   setWindow(window: BaseWindow): void {
@@ -139,7 +141,8 @@ export class ContentOverlayManager {
     const instance = new ShellContentOverlayView(
       this.preloadPath,
       this.getBaseUrl,
-      this.forwardIntent
+      this.forwardIntent,
+      this.typing
     );
     if (this.window) instance.setWindow(this.window);
     this.instances.set(surface, instance);

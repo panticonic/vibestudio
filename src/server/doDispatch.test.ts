@@ -149,6 +149,7 @@ describe("DODispatch", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     dispatch = new DODispatch(async () => undefined);
+    dispatch.setExecutableVersionResolver(() => "test-executable");
     dispatch.setAuthorityAttester(() => testAttestation());
     dispatch.setAuthorityParentRunner(async (_receiverRuntimeId, _authorization, invoke) =>
       invoke()
@@ -169,6 +170,7 @@ describe("DODispatch", () => {
       await expect(
         dispatch.dispatchLifecycle(ref, "prepare", {
           epoch: "test",
+          phase: "release",
           mode: "suspend",
           reason: "test",
           deadlineMs: 1,
@@ -189,6 +191,7 @@ describe("DODispatch", () => {
       const attest = vi.fn(() => testAttestation({ method: "__lifecycle/initializeClone" }));
       guarded.setAuthorityAttester(attest);
       guarded.setAuthorityParentRunner(async (_id, _authorization, invoke) => invoke());
+      guarded.setExecutableVersionResolver(() => "test-executable");
       guarded.setTokenManager(new TokenManager());
       guarded.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       guarded.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
@@ -254,6 +257,7 @@ describe("DODispatch", () => {
       dispatch.setTokenManager(new TokenManager());
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       await expect(dispatch.dispatch(makeRef(), "ping")).rejects.toThrow(
         "sealed image unavailable"
@@ -271,6 +275,7 @@ describe("DODispatch", () => {
       const guarded = new DODispatch(ensureReady);
       guarded.setAuthorityAttester(() => testAttestation());
       guarded.setAuthorityParentRunner(async (_id, _authorization, invoke) => invoke());
+      guarded.setExecutableVersionResolver(() => "test-executable");
       guarded.setTokenManager(new TokenManager());
       guarded.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       guarded.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
@@ -298,6 +303,7 @@ describe("DODispatch", () => {
       await guarded.dispatchHeldWithSignal(ref, new AbortController().signal, "heldSignal");
       await guarded.dispatchLifecycle(ref, "prepare", {
         epoch: "test",
+        phase: "release",
         mode: "suspend",
         reason: "test",
         deadlineMs: 1,
@@ -312,6 +318,7 @@ describe("DODispatch", () => {
       dispatch.setTokenManager(new TokenManager());
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
       const ref = makeRef();
       const targetId = `do:${ref.source}:${ref.className}:${ref.objectKey}`;
       await sealAndDrainDurableObjectRelays(targetId, "maintenance-test", {
@@ -352,6 +359,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
       dispatch.setWorkReadyObserver(observer);
 
       await expect(dispatch.dispatch(ref, "enqueue")).resolves.toEqual({ committed: true });
@@ -422,6 +430,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       let settled = false;
       const operation = dispatch
@@ -513,6 +522,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       let settled = false;
       const operation = dispatch
@@ -564,6 +574,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       await expect(dispatch.dispatchAlarm(makeRef())).rejects.toThrow("Invalid __alarm result");
     });
@@ -579,6 +590,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       await expect(dispatch.dispatchAlarm(makeRef())).resolves.toEqual({ nextAlarm: null });
 
@@ -606,6 +618,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       const pending = dispatch.dispatchAlarm(makeRef());
       await vi.advanceTimersByTimeAsync(30_000);
@@ -678,6 +691,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       const pending = dispatch.dispatchAlarm(makeRef(), controller.signal);
       await started;
@@ -713,6 +727,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
       dispatch.setAuthorityAttester(() => authorization);
       dispatch.setAuthorityParentRunner(async (receiverRuntimeId, scopedAuthorization, invoke) => {
         scopeCalls.push({ receiverRuntimeId, authorization: scopedAuthorization });
@@ -758,6 +773,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(getWorkerdUrl);
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       const ref = makeRef();
       const failure = dispatch.dispatch(ref, "ping", "arg");
@@ -786,6 +802,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       const ref = makeRef();
       const failure = dispatch.dispatch(ref, "getRun");
@@ -810,6 +827,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       const ref = makeRef();
       await expect(
@@ -869,6 +887,7 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setExecutableVersionResolver(() => "test-executable");
 
       await expect(dispatch.dispatch(makeRef(), "resolve")).rejects.toMatchObject({
         name: "RemoteRpcError",

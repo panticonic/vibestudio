@@ -24,6 +24,8 @@ export interface RpcCausalParent {
   logId: string;
   head: string;
   invocationId: string;
+  /** Locator only: authority comes from exact active native task inspection. */
+  nativeInvocation?: import("./authority.js").NativeInvocationIdentity;
 }
 
 /**

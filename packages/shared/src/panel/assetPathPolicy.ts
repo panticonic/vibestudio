@@ -15,7 +15,7 @@ import { isUnitIconAssetPath } from "./icon.js";
  *    routing, webhook ingress, credential OAuth callbacks, …)
  *  - `/rpc`, `/rpc/stream` — the in-process RPC plane
  *  - `/_w/`, `/_u/`, `/_workercode/`, `/_workerversion/`, `/_docode/`,
- *    `/_doversion/` — workerd/DO loader + dispatch internals (secret-gated)
+ *    `/_docode/` — workerd/DO loader + dispatch internals (secret-gated)
  *  - `/_r/ext/…` — extension fetch surface (bearer-gated, server-side callers)
  *
  * Panels hold no privileged bearer (grant tokens ride the shell bridge, not

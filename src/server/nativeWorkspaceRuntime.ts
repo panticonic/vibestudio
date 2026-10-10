@@ -72,19 +72,15 @@ export async function startNativeWorkspaceRuntime(input: {
       throw new Error("Native resource anchors must be canonical directories owned by the host");
   }
   const installedRequire = createRequire(path.join(input.appRoot, "package.json"));
-  const processRuntime = path.dirname(
-    installedRequire.resolve("@vibestudio/process-adapter/workspace-runtime")
-  );
+  const artifacts = resolveRequiredHostArtifactRoot();
   const workerEntry = path.join(runtimeRoot, "fs-disk-worker.cjs");
   const workspaceEntry = path.join(runtimeRoot, "workspaceChild.js");
   const extensionEntry = path.join(runtimeRoot, "extensionChild.js");
-  await copyFile(
-    installedRequire.resolve("@vibestudio/extension-host/child-runtime"),
-    extensionEntry
-  );
-  await copyFile(path.join(resolveRequiredHostArtifactRoot(), "fs-disk-worker.cjs"), workerEntry);
-  for (const name of ["workspaceChild.js", "control.js"])
-    await copyFile(path.join(processRuntime, name), path.join(runtimeRoot, name));
+  await Promise.all([
+    copyFile(path.join(artifacts, "extension-child.mjs"), extensionEntry),
+    copyFile(path.join(artifacts, "workspace-child.mjs"), workspaceEntry),
+    copyFile(path.join(artifacts, "fs-disk-worker.cjs"), workerEntry),
+  ]);
   await writeFile(path.join(runtimeRoot, "package.json"), '{"type":"module"}\n');
   const { rgPath } = installedRequire("@vscode/ripgrep") as { rgPath: string };
   const ripgrep = path.join(runtimeRoot, platform === "win32" ? "rg.exe" : "rg");
@@ -99,13 +95,7 @@ export async function startNativeWorkspaceRuntime(input: {
   const runtime = prepareNativeRuntime({ appRoot: input.appRoot, runtimeRoot, platform });
   const { executable } = runtime;
   const identity = createHash("sha256");
-  for (const resource of [
-    workspaceEntry,
-    path.join(runtimeRoot, "control.js"),
-    workerEntry,
-    extensionEntry,
-    compiler,
-  ])
+  for (const resource of [workspaceEntry, workerEntry, extensionEntry, compiler])
     identity.update(await readFile(resource));
   const sandbox = await WorkspaceRuntime.start(
     {

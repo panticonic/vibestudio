@@ -20,6 +20,7 @@
  */
 
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
+import { isArrayBuffer } from "@vibestudio/binary-brand";
 
 const TAG = "\u0000";
 const BYTES_TAG = `${TAG}bytes`;
@@ -28,24 +29,16 @@ function tagOf(value: unknown): string {
   return Object.prototype.toString.call(value);
 }
 
+const typedArrayTag = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  Symbol.toStringTag
+)!.get!;
+
 function typedArrayName(value: ArrayBufferView): string | null {
-  const getter = Object.getOwnPropertyDescriptor(
-    Object.getPrototypeOf(Uint8Array.prototype),
-    Symbol.toStringTag
-  )?.get;
   try {
-    return getter?.call(value) ?? null;
+    return typedArrayTag.call(value) ?? null;
   } catch {
     return null;
-  }
-}
-
-function isArrayBuffer(value: object): value is ArrayBuffer {
-  const getter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
-  try {
-    return typeof getter?.call(value) === "number";
-  } catch {
-    return false;
   }
 }
 
@@ -148,6 +141,11 @@ function decodeObject(value: Record<string, unknown>): unknown {
 
 /** Parse JSON text produced by {@link encodeRpcJson}, restoring byte values. */
 export function decodeRpcJson(text: string): unknown {
+  // Every reserved wire key contains NUL, whose only valid JSON spelling is
+  // \u0000. Ordinary envelopes can use the native parser without a reviver
+  // visiting every property. A match in a string value is harmless: the
+  // existing decoder still decides whether an object carries a reserved key.
+  if (!text.includes("\\u0000")) return JSON.parse(text);
   return JSON.parse(text, (_key, value: unknown) =>
     value !== null && typeof value === "object" && !Array.isArray(value)
       ? decodeObject(value as Record<string, unknown>)

@@ -18703,6 +18703,133 @@
         "capability": null,
         "presentation": null
       },
+      "readFiles": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "$method"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "$method"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "vcs.files.readFiles"
+          },
+          "prepared": {
+            "resolver": "vcs.files.readFiles",
+            "leaves": [
+              {
+                "capability": "filesystem.list",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "transport",
+          "family": "vcs.read",
+          "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "readMemory": {
         "authority": {
           "requirement": {

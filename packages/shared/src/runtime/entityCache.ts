@@ -17,7 +17,7 @@
 
 import type { EntityKind, EntityRecord, EntitySource } from "./entitySpec.js";
 
-export type EntityChangeKind = "activate" | "retire" | "delete";
+export type EntityChangeKind = "activate" | "retire" | "delete" | "invalidate";
 
 export interface EntityCacheHydrationFence {
   readonly revision: number;
@@ -75,10 +75,18 @@ export class EntityCache {
 
   /** Internal: called after entityGc hard-deletes a row. */
   _onDelete(id: string): void {
-    if (this.records.delete(id)) {
-      this.recordRevisions.set(id, ++this.revision);
-      this.emit(id, "delete");
-    }
+    this.bootstrapRecords.delete(id);
+    this.records.delete(id);
+    this.recordRevisions.set(id, ++this.revision);
+    this.emit(id, "delete");
+  }
+
+  /** An ambiguous owner write revokes the mirror, without asserting durable deletion. */
+  _invalidate(id: string): void {
+    this.bootstrapRecords.delete(id);
+    this.records.delete(id);
+    this.recordRevisions.set(id, ++this.revision);
+    this.emit(id, "invalidate");
   }
 
   resolve(id: string): EntityRecord | null {

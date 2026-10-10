@@ -1715,11 +1715,34 @@ describe("WorkspaceDO lifecycle registry", () => {
     instance.alarmAdoptWorker("driver-1");
   });
 
+  it("admits its exact execution and wake identity together without mutating a refused image", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    const entity = instance.entityActivate(doInput({
+      activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY,
+    }));
+    const input = { ...key, incarnation: crypto.randomUUID(), generation: 1 };
+    expect(() => instance.alarmSourceRegister({ ...input, executionDigest: "c".repeat(64) }))
+      .toThrow("does not match its active execution image");
+    expect(instance.alarmSourceList()).toEqual([]);
+    expect(instance.lifecycleListLeases()).toEqual([]);
+    const admission = instance.alarmSourceRegister({ ...input, executionDigest: "a".repeat(64) });
+    expect(admission).toEqual({ incarnation: input.incarnation, entity });
+    expect(instance.lifecycleListLeases()).toEqual([
+      { ...key, detail: { owner: "pi" }, createdAt: expect.any(Number), refreshedAt: expect.any(Number) },
+    ]);
+    expect(() => instance.alarmSourceRegister({
+      ...input, generation: 2, incarnation: crypto.randomUUID(), executionDigest: "c".repeat(64),
+    })).toThrow("does not match its active execution image");
+    expect(instance.alarmSourcePublish({ ...key, incarnation: admission.incarnation, revision: 0, wakeAt: null }))
+      .toBe("accepted");
+  });
+
   it("acknowledges only captured host wakes while later events survive source null publication", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    instance.entityActivate(doInput());
-    const incarnation = instance.alarmSourceRegister({
+    instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    const { incarnation } = instance.alarmSourceRegister({
       ...key,
+      executionDigest: "a".repeat(64),
       incarnation: crypto.randomUUID(),
       generation: 1,
     });
@@ -1760,9 +1783,10 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("failed dispatch rearming retains host debt and invalid acknowledgement rolls back the claim", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    instance.entityActivate(doInput());
-    const incarnation = instance.alarmSourceRegister({
+    instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    const { incarnation } = instance.alarmSourceRegister({
       ...key,
+      executionDigest: "a".repeat(64),
       incarnation: crypto.randomUUID(),
       generation: 1,
     });
@@ -1802,10 +1826,11 @@ describe("WorkspaceDO lifecycle registry", () => {
   it("a SQL failure after receipt-wake acknowledgement rolls back both debt and scheduling for exact retry", async () => {
     const { instance: owner, sql } = await createTestDO(WorkspaceDOTestable);
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    owner.entityActivate(doInput());
+    owner.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
     owner.alarmAdoptWorker("driver-1");
-    const incarnation = owner.alarmSourceRegister({
+    const { incarnation } = owner.alarmSourceRegister({
       ...key,
+      executionDigest: "a".repeat(64),
       incarnation: crypto.randomUUID(),
       generation: 1,
     });
@@ -1831,9 +1856,10 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("ordinary clears preserve host wakes, but entity retirement releases them", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    const entity = instance.entityActivate(doInput());
-    const incarnation = instance.alarmSourceRegister({
+    const entity = instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    const { incarnation } = instance.alarmSourceRegister({
       ...key,
+      executionDigest: "a".repeat(64),
       incarnation: crypto.randomUUID(),
       generation: 1,
     });
@@ -1847,9 +1873,10 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("an event first arriving during a pass survives its distant next schedule and host adoption", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    instance.entityActivate(doInput());
-    const incarnation = instance.alarmSourceRegister({
+    instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    const { incarnation } = instance.alarmSourceRegister({
       ...key,
+      executionDigest: "a".repeat(64),
       incarnation: crypto.randomUUID(),
       generation: 1,
     });
@@ -1890,9 +1917,10 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("recovers registered sources with no delivered schedule once per host generation and excludes retired owners", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    const entity = instance.entityActivate(doInput());
-    const incarnation = instance.alarmSourceRegister({
+    const entity = instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    const { incarnation } = instance.alarmSourceRegister({
       ...key,
+      executionDigest: "a".repeat(64),
       incarnation: crypto.randomUUID(),
       generation: 1,
     });
@@ -1938,7 +1966,7 @@ describe("WorkspaceDO lifecycle registry", () => {
       /is not active/u
     );
 
-    const entity = instance.entityActivate(doInput());
+    const entity = instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
     instance.durableWorkOwnerRegister({
       ...key,
       queues: ["workspace-publication", "channel-delivery", "channel-delivery"],
@@ -2138,7 +2166,7 @@ describe("WorkspaceDO lifecycle registry", () => {
   });
 
   it("clears a DO lease when the matching entity is retired", () => {
-    const rec = instance.entityActivate(doInput());
+    const rec = instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
     instance.lifecycleLeaseUpsert(key);
 
@@ -2148,7 +2176,7 @@ describe("WorkspaceDO lifecycle registry", () => {
   });
 
   it("clears a DO alarm on retirement and rejects late scheduling", () => {
-    const rec = instance.entityActivate(doInput());
+    const rec = instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
     instance.alarmSet({ ...key, wakeAt: 1_000 });
 
@@ -2186,7 +2214,7 @@ describe("WorkspaceDO lifecycle registry", () => {
     const first = await createTestDO(WorkspaceDOTestable);
     first.instance.alarmAdoptWorker("driver-1");
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    const rec = first.instance.entityActivate(doInput());
+    const rec = first.instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
     first.instance.entityRetire(rec.id);
 
     // Model a crash-era stale row without passing through the guarded ingress.

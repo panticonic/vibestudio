@@ -1,3 +1,4 @@
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
@@ -37,6 +38,8 @@ export interface DurableWorkFailure {
 export interface DurableWorkHandler {
   claim(owner: DORef, request: ClaimRequest, signal: AbortSignal): Promise<WorkClaim[]>;
   laneKey(owner: DORef, claim: WorkClaim): string;
+  /** Resolve causal prerequisites before acquiring a bounded execution slot. */
+  prepare?(owner: DORef, claim: WorkClaim, signal: AbortSignal): Promise<void>;
   execute(owner: DORef, claim: WorkClaim, signal: AbortSignal): Promise<unknown>;
   settle(owner: DORef, request: SettleRequest): Promise<ClaimSettlement>;
   fail(owner: DORef, request: DurableWorkFailure): Promise<unknown>;
@@ -178,7 +181,7 @@ interface DriverClaimPayload {
   target?: unknown;
   delivery?: unknown;
   endpointKind?: unknown;
-  envelopeIds?: unknown;
+  intents?: unknown;
 }
 
 function requireTarget(value: unknown): DORef {
@@ -257,7 +260,10 @@ export function createDurableWorkHandlers(
         durableWorkOwnerMethods,
         (_service, method, args) => doDispatch.dispatch(owner, method, ...args)
       );
-      return ownerClient.failReadyWork(queue, request);
+      return ownerClient.failReadyWork(queue, {
+        ...request,
+        error: serializeRpcFailure(request.error),
+      });
     },
   });
   return {
@@ -318,36 +324,81 @@ export function createDurableWorkHandlers(
         }
       },
     },
+    "channel-observation": {
+      ...common("channel-observation"),
+      prepare: async (owner, claim, signal) => {
+        const payload = claim.payload;
+        const observation =
+          payload && typeof payload === "object" && !Array.isArray(payload)
+            ? (payload as Record<string, unknown>)["observation"]
+            : null;
+        const kind =
+          observation && typeof observation === "object" && !Array.isArray(observation)
+            ? (observation as Record<string, unknown>)["kind"]
+            : null;
+        switch (kind) {
+          case "root":
+          case "append":
+            return;
+          case "fork":
+            break;
+          default:
+            throw new Error("Channel observation claim has no canonical causal variant");
+        }
+        await doDispatch.dispatchHeldWithSignal(owner, signal, "prepareChannelObservationClaim", {
+          itemId: claim.itemId,
+          generation: claim.generation,
+        });
+      },
+      execute: (owner, claim, signal) =>
+        doDispatch.dispatchHeldWithSignal(owner, signal, "executeChannelObservationClaim", {
+          itemId: claim.itemId,
+          generation: claim.generation,
+        }),
+    },
     "workspace-publication": {
       ...common("workspace-publication"),
       execute: async (_owner, claim, signal) => {
         const payload = claim.payload as DriverClaimPayload;
         const target = requireTarget(payload.target);
-        const envelopeIds = Array.isArray(payload.envelopeIds)
-          ? payload.envelopeIds.filter((value): value is string => typeof value === "string")
-          : [];
-        if (envelopeIds.length === 0) {
-          throw new Error("workspace-publication claim has no envelope ids");
+        const intents = payload.intents;
+        if (
+          !Array.isArray(intents) ||
+          intents.length === 0 ||
+          intents.some(
+            (intent) =>
+              !intent ||
+              typeof intent !== "object" ||
+              typeof intent.envelopeId !== "string" ||
+              !intent.envelopeId ||
+              typeof intent.payloadKind !== "string" ||
+              !intent.actor
+          )
+        ) {
+          throw new Error("workspace-publication claim has no valid immutable intents");
         }
-        let outcome: { broadcasted?: unknown };
+        let outcome: { admitted?: unknown; discarded?: unknown };
         try {
           outcome = (await doDispatch.dispatchHeldWithSignal(
             target,
             signal,
-            "broadcastStoredEnvelopes",
-            envelopeIds
-          )) as { broadcasted?: unknown };
+            "admitPublishedEnvelopes",
+            intents
+          )) as { admitted?: unknown; discarded?: unknown };
         } catch (error) {
           if ((error as { code?: unknown })?.code !== "DURABLE_OBJECT_RETIRED") throw error;
-          // The workspace log is canonical; this outbox owns only live
-          // broadcast. Once the exact channel is retired there is no receiver
-          // to recover, so retaining the row would manufacture permanent retry
-          // work for an effect that can never become observable.
-          outcome = { broadcasted: envelopeIds.length };
+          // Retirement is an authoritative terminal destination, not successful
+          // admission. Preserve that outcome explicitly when settling the intent.
+          outcome = { discarded: intents.length };
         }
-        if (outcome?.broadcasted !== envelopeIds.length) {
+        if (
+          !(
+            (outcome?.admitted === intents.length && outcome.discarded === undefined) ||
+            (outcome?.discarded === intents.length && outcome.admitted === undefined)
+          )
+        ) {
           throw new Error(
-            `workspace-publication broadcast acknowledged ${String(outcome?.broadcasted)} of ${envelopeIds.length} envelopes`
+            `workspace-publication admission acknowledged ${String(outcome?.admitted)} of ${intents.length} envelopes`
           );
         }
         return outcome;
@@ -372,6 +423,15 @@ export class DurableWorkDriver {
   private readonly queueMutationChains = new Map<string, Promise<unknown>>();
   private readonly controllers = new Set<AbortController>();
   private readonly runners = new Set<Promise<void>>();
+  private readonly prerequisites = new Set<Promise<void>>();
+  private readonly runnable: Array<{
+    owner: DORef;
+    queue: DurableWorkQueue;
+    claim: WorkClaim;
+    lane: string;
+    laneToken: symbol;
+    trigger: DurableWorkTrigger;
+  }> = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private accepting = false;
   private pumping: Promise<void> | null = null;
@@ -469,7 +529,8 @@ export class DurableWorkDriver {
     this.recoveryController?.abort(reason);
     for (const controller of this.controllers) controller.abort(reason);
     await this.pumping;
-    await Promise.allSettled([...this.runners]);
+    await Promise.allSettled([...this.prerequisites, ...this.runners]);
+    for (const ready of this.runnable.splice(0)) this.releaseLane(ready.lane, ready.laneToken);
     await this.recovering;
   }
 
@@ -508,13 +569,29 @@ export class DurableWorkDriver {
 
   private finishPump(pumping: Promise<void>): void {
     if (this.pumping === pumping) this.pumping = null;
-    if (this.accepting && this.pending.size > 0 && this.runners.size < this.concurrency) {
+    if (
+      this.accepting &&
+      (this.pending.size > 0 || this.runnable.length > 0) &&
+      this.runners.size < this.concurrency
+    ) {
       this.kick();
     }
   }
 
   private async pump(): Promise<void> {
-    while (this.accepting && this.pending.size > 0 && this.runners.size < this.concurrency) {
+    while (this.accepting && this.runners.size < this.concurrency) {
+      const ready = this.runnable.shift();
+      if (ready) {
+        this.startRunner(
+          ready.owner,
+          ready.queue,
+          ready.claim,
+          ready.lane,
+          ready.laneToken,
+          ready.trigger
+        );
+        continue;
+      }
       const entry = this.pending.entries().next().value as [string, PendingHint] | undefined;
       if (!entry) return;
       const [key, pending] = entry;
@@ -592,9 +669,74 @@ export class DurableWorkDriver {
           continue;
         }
         const laneToken = Symbol(`${lane}:${claim.itemId}@${claim.generation}`);
-        this.startRunner(hint.owner, queue, claim, lane, laneToken, trigger);
+        if (handler.prepare)
+          this.startPrerequisite(hint.owner, queue, claim, lane, laneToken, trigger);
+        else this.startRunner(hint.owner, queue, claim, lane, laneToken, trigger);
       }
     }
+  }
+
+  private startPrerequisite(
+    owner: DORef,
+    queue: DurableWorkQueue,
+    claim: WorkClaim,
+    lane: string,
+    laneToken: symbol,
+    trigger: DurableWorkTrigger
+  ): void {
+    const handler = this.handlers[queue];
+    const controller = new AbortController();
+    this.activeLanes.set(lane, laneToken);
+    this.controllers.add(controller);
+    let handedOff = false;
+    const preparation = (async () => {
+      try {
+        await handler.prepare!(owner, claim, controller.signal);
+        if (this.accepting && !controller.signal.aborted) {
+          handedOff = true;
+          this.runnable.push({ owner, queue, claim, lane, laneToken, trigger });
+        } else this.releaseLane(lane, laneToken);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          try {
+            const disposition = await this.serializeQueueMutation(owner, queue, async () => {
+              try {
+                return await handler.fail(owner, {
+                  workerId: this.workerId,
+                  itemId: claim.itemId,
+                  generation: claim.generation,
+                  error,
+                });
+              } finally {
+                this.releaseLane(lane, laneToken);
+              }
+            });
+            if (
+              disposition !== "stale" &&
+              !(
+                disposition &&
+                typeof disposition === "object" &&
+                "failed" in disposition &&
+                disposition.failed === true
+              )
+            )
+              this.notify({ owner, queues: [queue] }, "continuation");
+          } catch (failureError) {
+            log.warn(
+              `prerequisite failure settlement failed for ${queue}:${this.ownerKey(owner)}:${claim.itemId}`,
+              failureError
+            );
+          }
+        } else this.releaseLane(lane, laneToken);
+      }
+    })();
+    this.prerequisites.add(preparation);
+    void preparation.finally(() => {
+      this.prerequisites.delete(preparation);
+      this.controllers.delete(controller);
+      if (!handedOff) this.releaseLane(lane, laneToken);
+      this.kick();
+    });
   }
 
   private startRunner(
@@ -679,7 +821,7 @@ export class DurableWorkDriver {
             error
           );
           try {
-            await this.serializeQueueMutation(owner, queue, async () => {
+            const failed = await this.serializeQueueMutation(owner, queue, async () => {
               try {
                 return await handler.fail(owner, {
                   workerId: this.workerId,
@@ -691,6 +833,11 @@ export class DurableWorkDriver {
                 this.releaseLane(lane, laneToken);
               }
             });
+            if (
+              failed === "stale" ||
+              (failed && typeof failed === "object" && "failed" in failed && failed.failed === true)
+            )
+              ownsContinuation = false;
           } catch (failureError) {
             log.warn(
               `failure settlement failed for ${queue}:${owner.source}:${owner.className}/${owner.objectKey}:${claim.itemId}`,
@@ -707,8 +854,8 @@ export class DurableWorkDriver {
       this.releaseLane(lane, laneToken);
       if (this.accepting && ownsContinuation) {
         this.notify({ owner, queues: [queue] }, "continuation");
-        this.kick();
       }
+      this.kick();
     });
   }
 

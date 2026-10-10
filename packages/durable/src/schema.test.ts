@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createInMemorySql } from "./test-utils.js";
 import {
   DurableObjectSchemaError,
@@ -53,6 +53,20 @@ function definition(
 }
 
 describe("current-only durable-object schema identity", () => {
+  it("uses one fresh shape snapshot for trusted admission and metadata, rejecting a different build shape", async () => {
+    const probe=await createInMemorySql();
+    await installDurableObjectSchema(definition(probe));
+    const expectedFingerprint=durableObjectSchemaFingerprint(probe,["items"]);
+    const sql=await createInMemorySql();
+    const reads=vi.spyOn(sql,"exec");
+    await installDurableObjectSchema({...definition(sql),expectedFingerprint});
+    expect(reads.mock.calls.filter(([query])=>query.includes("SELECT type, name, tbl_name, sql"))).toHaveLength(1);
+    expect(sql.exec("SELECT shape_json FROM _vibestudio_schema").one()).toEqual({shape_json:expectedFingerprint});
+    reads.mockRestore();
+    const wrong=await createInMemorySql();
+    await expect(installDurableObjectSchema({...definition(wrong,{columns:"id TEXT PRIMARY KEY, changed TEXT"}),expectedFingerprint})).rejects.toBeInstanceOf(DurableObjectSchemaError);
+    expect(wrong.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray()).toEqual([]);
+  });
   it("probes an upgrade-bearing fresh build but refuses a persisted upgrade without a trusted target", async () => {
     const source = await createInMemorySql();
     await installDurableObjectSchema(definition(source));

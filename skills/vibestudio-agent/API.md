@@ -612,6 +612,7 @@ Authority principals: `code`, `host`, `user`, `website`
 | `vcs.readMemory` | Project bounded blame-backed workspace memory for the exact text range and content hash returned by a managed file read. |
 | `vcs.resolveRepository` | Resolve one canonical repository path at one exact semantic state. |
 | `vcs.readFile` | Read one file from an exact semantic state. |
+| `vcs.readFiles` | Read a bounded set of files from one exact semantic state, preserving selector order and null for absent files. |
 | `vcs.listDirectory` | Page immediate visible children of one workspace directory with stable identities and attached name provenance. |
 | `vcs.listFiles` | Page the exact path-to-file manifest of one repository at one semantic state. |
 

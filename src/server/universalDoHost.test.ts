@@ -78,7 +78,7 @@ export class CounterDO extends DurableObject {
   async fetch(request) {
     if (this.env.VIBESTUDIO_SCHEMA_PROBE === true) {
       return Response.json({
-        className: "CounterDO", version: 1,
+        className: "CounterDO", version: 1, durableWorkQueues: [],
         freshSchemaFingerprint: JSON.stringify([...this.ctx.storage.sql.exec(
           "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name = 'c' ORDER BY type, name"
         )]),
@@ -88,6 +88,15 @@ export class CounterDO extends DurableObject {
     const parts = url.pathname.split("/").filter(Boolean);
     const userKey = parts[0] ? decodeURIComponent(parts[0]) : "";
     const method = parts.slice(1).join("/") || "get";
+    if (method === "generation") return Response.json({result:"v1"});
+    if (method === "instance") {
+      this.localCalls = (this.localCalls || 0) + 1;
+      return Response.json({result:{localCalls:this.localCalls,held:this.held === true,stateArgs:this.env.STATE_ARGS ?? null,key:userKey}});
+    }
+    if (method === "hold") {
+      this.held = true;
+      await new Promise(() => {});
+    }
     if (request.headers.get("upgrade") === "websocket") {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
@@ -124,9 +133,14 @@ export class SchemaProbeDO extends DurableObject {
       "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name IN ('cards', 'cards_title') ORDER BY type, name"
     )]);
     const descriptor = {
-      className: "SchemaProbeDO", version: 1, freshSchemaFingerprint: shape,
+      className: "SchemaProbeDO", version: 1, freshSchemaFingerprint: shape, durableWorkQueues: [],
     };
-    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true) return Response.json(descriptor);
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true) {
+      let outboundSucceeded = false;
+      try { await fetch("http://schema-probe.invalid/forbidden"); outboundSucceeded = true; } catch {}
+      if (outboundSucceeded) throw new Error("schema probe acquired outbound access");
+      return Response.json(descriptor);
+    }
     const trusted = this.env.VIBESTUDIO_SCHEMA_DESCRIPTOR;
     if (!trusted || trusted.className !== descriptor.className || trusted.version !== descriptor.version ||
       trusted.freshSchemaFingerprint !== descriptor.freshSchemaFingerprint) {
@@ -264,30 +278,17 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
   const gateway = createServer((req, res) => {
     const url = req.url ?? "";
     const secret = req.headers["x-vibestudio-loader-secret"];
-    if (url.startsWith("/_doversion/") || url.startsWith("/_docode/")) {
+    if (url.startsWith("/_docode/")) {
       if (secret !== manager.getLoaderSecret()) {
         res.writeHead(403);
         res.end("forbidden");
         return;
       }
-      const isVersion = url.startsWith("/_doversion/");
-      const segs = (
-        url.slice((isVersion ? "/_doversion/" : "/_docode/").length).split("?")[0] ?? ""
-      ).split("/");
+      const segs = (url.slice("/_docode/".length).split("?")[0] ?? "").split("/");
       const source = decodeURIComponent(segs[0] ?? "");
       const className = decodeURIComponent(segs[1] ?? "");
       const objectKey = new URL(url, "http://gateway").searchParams.get("objectKey") ?? "";
-      if (isVersion) {
-        const v = manager.getDoVersion(source, className, objectKey);
-        if (v === null) {
-          res.writeHead(404);
-          res.end("nf");
-          return;
-        }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ version: v }));
-        return;
-      }
+
       codeFetches.set(objectKey, (codeFetches.get(objectKey) ?? 0) + 1);
       void Promise.resolve()
         .then(() => manager.getDoCode(source, className, objectKey))
@@ -323,6 +324,11 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
       headers: {
         Authorization: "Bearer udo-gateway-token",
         "X-Vibestudio-Dispatch-Secret": manager.getDispatchSecret(),
+        "X-Vibestudio-Executable-Version": manager.getDoVersion(
+          ref.source,
+          ref.className,
+          ref.objectKey
+        )!,
         "Content-Type": "application/json",
       },
       body: "[]",
@@ -404,6 +410,137 @@ function sourceOwner(reservation: EntityRecord): EntityRecord {
 }
 
 describe("UniversalDO facet host (real workerd)", () => {
+  it("shares executable code while isolating SQLite, fields and retirement cancellation", async () => {
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, dispatch, codeFetches } = active;
+    await manager.ensureDOClass("workers/counter", "CounterDO");
+    const first = { source: "workers/counter", className: "CounterDO", objectKey: "shared-first" };
+    const second = { ...first, objectKey: "shared-second" };
+    expect(await dispatch(first, "incr")).toMatchObject({ count: 1 });
+    expect(await dispatch(second, "get")).toMatchObject({ count: 0 });
+    expect(await dispatch(first, "instance")).toMatchObject({
+      localCalls: 1,
+      key: first.objectKey,
+    });
+    expect(await dispatch(second, "instance")).toMatchObject({
+      localCalls: 1,
+      key: second.objectKey,
+    });
+    expect([...codeFetches.values()].reduce((sum, value) => sum + value, 0)).toBe(1);
+    const boot = manager.getBootGeneration();
+    const held = dispatch(first, "hold").then(
+      () => ({ ok: true }),
+      (error) => ({ error })
+    );
+    // A second request to this exact facet proves the first request entered its
+    // owning instance before retirement; no time-based readiness surrogate.
+    expect(await dispatch(first, "instance")).toMatchObject({ localCalls: 2, held: true });
+    await manager.retireDOEntity(first);
+    expect(await held).toHaveProperty("error");
+    expect(manager.getBootGeneration()).toBe(boot);
+    expect(await dispatch(second, "instance")).toMatchObject({ localCalls: 2, held: false });
+    expect(await dispatch(first, "instance")).toMatchObject({ localCalls: 1, held: false });
+    expect(await dispatch(first, "get")).toMatchObject({ count: 1 });
+    expect([...codeFetches.values()].reduce((sum, value) => sum + value, 0)).toBe(1);
+  }, 30_000);
+
+  it("separates changed executable and exact state argument units without changing another facet", async () => {
+    const builds = { "workers/counter": doBuild("workers/counter", "ev-1") };
+    active = await createHarness(builds);
+    const { manager, dispatch, codeFetches } = active;
+    const base = { source: "workers/counter", className: "CounterDO" };
+    const activate = async (objectKey: string, ref: string, stateArgs: Record<string, unknown>) => {
+      const prepared = await manager.ensureDurableObjectEntity({
+        ...base,
+        key: objectKey,
+        ref,
+        contextId: "unit-context",
+        stateArgs,
+      });
+      await manager.restoreDurableObjectEntity({
+        id: prepared.targetId,
+        kind: "do",
+        className: base.className,
+        key: objectKey,
+        source: { repoPath: base.source, effectiveVersion: prepared.effectiveVersion },
+        activeBuildKey: prepared.buildKey,
+        activeExecutionDigest: prepared.executionDigest,
+        activeAuthority: prepared.authority,
+        stateArgs,
+        contextId: "unit-context",
+        createdAt: 1,
+        status: "active",
+        cleanupComplete: false,
+      });
+    };
+    const old = { ...base, objectKey: "old-code" };
+    await activate(old.objectKey, "ctx:old", { configuration: "old" });
+    const oldVersion = manager.getDoVersion(base.source, base.className, old.objectKey);
+    expect(await dispatch(old, "instance")).toMatchObject({
+      localCalls: 1,
+      stateArgs: { configuration: "old" },
+    });
+    expect(await dispatch(old, "generation")).toBe("v1");
+    const changed = { ...base, objectKey: "new-code" };
+    builds[base.source as keyof typeof builds] = doBuild(
+      base.source,
+      "ev-2",
+      COUNTER_DO.replace('result:"v1"', 'result:"v2"')
+    );
+    await activate(changed.objectKey, "ctx:new", { configuration: "new" });
+    expect(manager.getDoVersion(base.source, base.className, changed.objectKey)).not.toBe(
+      oldVersion
+    );
+    expect(await dispatch(changed, "instance")).toMatchObject({
+      localCalls: 1,
+      stateArgs: { configuration: "new" },
+    });
+    expect(await dispatch(changed, "generation")).toBe("v2");
+    const argsOnly = { ...base, objectKey: "new-args" };
+    await activate(argsOnly.objectKey, "ctx:new", { configuration: "different" });
+    expect(manager.getDoVersion(base.source, base.className, argsOnly.objectKey)).not.toBe(
+      manager.getDoVersion(base.source, base.className, changed.objectKey)
+    );
+    expect(await dispatch(argsOnly, "instance")).toMatchObject({
+      stateArgs: { configuration: "different" },
+    });
+    expect(await dispatch(old, "instance")).toMatchObject({
+      localCalls: 2,
+      stateArgs: { configuration: "old" },
+    });
+    expect(await dispatch(old, "generation")).toBe("v1");
+    expect(
+      [...codeFetches]
+        .filter(([key]) => !key.startsWith("__vibestudio_schema_probe:"))
+        .reduce((sum, [, value]) => sum + value, 0)
+    ).toBe(3);
+  }, 30_000);
+
+  it("requires the admitted executable identity before loading code and rejects a different code identity", async () => {
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, codeFetches, dispatch } = active;
+    await manager.ensureDOClass("workers/counter", "CounterDO");
+    const ref = { source: "workers/counter", className: "CounterDO", objectKey: "identity-test" };
+    const url = `http://127.0.0.1:${manager.getPort()}/_u/${encodeURIComponent(encodeUniversalKey(ref))}/incr`;
+    const headers = {
+      Authorization: "Bearer udo-gateway-token",
+      "X-Vibestudio-Dispatch-Secret": manager.getDispatchSecret(),
+      "Content-Type": "application/json",
+    };
+    const before = [...codeFetches];
+    const missing = await fetch(url, { method: "POST", headers, body: "[]" });
+    expect(missing.status).toBe(400);
+    expect(await missing.text()).toContain("missing executable identity");
+    expect([...codeFetches]).toEqual(before);
+    const stale = await fetch(url, {
+      method: "POST",
+      headers: { ...headers, "X-Vibestudio-Executable-Version": "another-incarnation" },
+      body: "[]",
+    });
+    expect(stale.status).toBe(500);
+    await stale.text();
+    expect(await dispatch(ref, "incr")).toMatchObject({ count: 1 });
+  });
   it("admits a fresh entity's exact schema before activation without a publication", async () => {
     const source = "workers/schema-admission";
     active = await createHarness({ [source]: doBuild(source, "fresh", SCHEMA_PROBE_DO) });
@@ -501,20 +638,20 @@ describe("UniversalDO facet host (real workerd)", () => {
       expect(internals.dynamicIsolateCompactionFlight).toBeNull();
       expect(manager.getBootGeneration()).toBe(boot);
 
-      // Compaction is deferred while another userland runtime image is live;
-      // retiring the final live image opens a disruption-free process boundary.
+      // Object retirement does not retire the executable still owned by the
+      // class binding, so it cannot manufacture isolate pressure or restart.
       await manager.retireDOEntity(ref2);
       internals.doObjectBuilds.delete("workers/counter:CounterDO/k2");
       internals.maybeCompactRetiredDynamicIsolates(768 * 1024 * 1024);
       await internals.dynamicIsolateCompactionFlight;
-      expect(manager.getBootGeneration()).toBeGreaterThan(boot);
+      expect(manager.getBootGeneration()).toBe(boot);
       expect(await dispatch(ref1, "get")).toMatchObject({ count: 2, key: "k1" });
-      expect(codeFetches.get("k1")).toBe(2);
+      expect(codeFetches.get("k1")).toBe(1);
     },
     30_000
   );
 
-  it("bounds retired loader isolates without restarting ordinary retirement", async () => {
+  it("keeps one shared executable warm across many independent object retirements", async () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager, dispatch } = active;
     await manager.ensureDOClass("workers/counter", "CounterDO");
@@ -538,7 +675,7 @@ describe("UniversalDO facet host (real workerd)", () => {
     };
     await internals.dynamicIsolateCompactionFlight;
 
-    expect(manager.getBootGeneration()).toBeGreaterThan(boot);
+    expect(manager.getBootGeneration()).toBe(boot);
     expect(await dispatch(refs[0]!, "get")).toMatchObject({ count: 1, key: "bounded-0" });
   });
 
@@ -714,6 +851,11 @@ describe("UniversalDO facet host (real workerd)", () => {
         headers: {
           Authorization: "Bearer udo-gateway-token",
           "X-Vibestudio-Dispatch-Secret": manager.getDispatchSecret(),
+          "X-Vibestudio-Executable-Version": manager.getDoVersion(
+            ref.source,
+            ref.className,
+            ref.objectKey
+          )!,
         },
       });
       let received: string | null = null;

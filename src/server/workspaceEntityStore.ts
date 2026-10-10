@@ -71,6 +71,9 @@ export class WorkspaceEntityStore {
   private readonly ref: { source: string; className: string; objectKey: string };
 
   private readonly receiver: TypedServiceClient<typeof workspaceStateEngineMethods>;
+  /** Only rows read or committed by this durable owner admit invocation. */
+  private readonly publishedRecords = new Map<string, EntityRecord>();
+  private readonly entityOperations = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: WorkspaceEntityStoreDeps) {
     this.ref = {
@@ -78,6 +81,7 @@ export class WorkspaceEntityStore {
       className: WORKSPACE_DO_CLASS,
       objectKey: deps.workspaceId,
     };
+    deps.entityCache.onChange((id) => this.publishedRecords.delete(id));
     this.receiver = createTypedServiceClient(
       "workspace-state",
       workspaceStateEngineMethods,
@@ -85,58 +89,95 @@ export class WorkspaceEntityStore {
     );
   }
 
-  // --- mutations: durable write + cache mirror, atomic ---
+  private entityId(input: EntityReservationInput | EntityActivateInput): string {
+    return canonicalEntityId({
+      kind: input.kind,
+      source: input.source.repoPath,
+      className: input.className,
+      key: input.key,
+    });
+  }
 
-  /**
-   * Activate (or refresh) a WorkspaceDO entity and mirror it into the hot cache.
-   * The ONLY sanctioned way to activate a WorkspaceDO-backed entity.
-   */
+  /** Serialize overlapping writes; disjoint entities remain independent. */
+  private mutate<T>(ids: readonly string[], commit: () => Promise<T>): Promise<T> {
+    const owners = [...new Set(ids)];
+    const previous = [
+      ...new Set(owners.map((id) => this.entityOperations.get(id)).filter(Boolean)),
+    ];
+    const operation = Promise.allSettled(previous).then(async () => {
+      for (const id of owners) this.publishedRecords.delete(id);
+      try {
+        return await commit();
+      } catch (error) {
+        // A failed transport may have committed. Only an explicit durable read
+        // can re-establish admission; never resurrect the previous snapshot.
+        for (const id of owners) {
+          this.publishedRecords.delete(id);
+          this.deps.entityCache._invalidate(id);
+        }
+        throw error;
+      }
+    });
+    for (const id of owners) this.entityOperations.set(id, operation);
+    const release = () => {
+      for (const id of owners) {
+        if (this.entityOperations.get(id) === operation) this.entityOperations.delete(id);
+      }
+    };
+    void operation.then(release, release);
+    return operation;
+  }
+
+  private publishRecord(record: EntityRecord, expectedId = record.id): EntityRecord {
+    if (record.id !== expectedId)
+      throw new Error(`Entity owner resolved ${record.id} for ${expectedId}`);
+    // Callers can retain and edit returned values; authority publication owns
+    // a separate immutable snapshot, including its nested authority manifest.
+    const snapshot = structuredClone(record);
+    const freeze = (value: unknown): void => {
+      if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
+      for (const child of Object.values(value)) freeze(child);
+      Object.freeze(value);
+    };
+    freeze(snapshot);
+    if (snapshot.status === "retired") this.deps.entityCache._onRetire(snapshot);
+    else this.deps.entityCache._onActivate(snapshot);
+    this.publishedRecords.set(snapshot.id, snapshot);
+    return snapshot;
+  }
+
   async activate(input: EntityActivateInput): Promise<EntityRecord> {
     const record = await publishExecutionOwnerAsync(
       this.deps.executionPublicationPort,
       this.publication(input),
-      () => this.receiver.entityActivate(input)
+      () => this.mutate([this.entityId(input)], () => this.activateCommitted(input))
     );
-    this.deps.entityCache._onActivate(record);
     await this.deps.materializeExecution(record);
     return record;
   }
 
-  /**
-   * Reserve stable coordinates for a panel without making it executable.
-   * Connection grants and code-principal resolution remain fail-closed until
-   * advanceExecution() commits the sealed runtime image.
-   */
-  async reserve(input: EntityReservationInput): Promise<EntityRecord> {
-    const record = await this.receiver.entityReserve(input);
-    this.deps.entityCache._onActivate(record);
-    return record;
+  reserve(input: EntityReservationInput): Promise<EntityRecord> {
+    return this.mutate([this.entityId(input)], () => this.reserveCommitted(input));
   }
 
-  /** Pin the image while preparation owns the non-executable reservation. */
-  async prepareExecution(input: EntityActivateInput): Promise<EntityRecord> {
-    const record = await publishExecutionOwnerAsync(
+  prepareExecution(input: EntityActivateInput): Promise<EntityRecord> {
+    return publishExecutionOwnerAsync(
       this.deps.executionPublicationPort,
       this.publication(input),
-      () => this.receiver.entityPrepareExecution(input)
+      () => this.mutate([this.entityId(input)], () => this.prepareExecutionCommitted(input))
     );
-    this.deps.entityCache._onActivate(record);
-    return record;
   }
 
-  /** Complete a reserved executable entity, or atomically advance an active one. */
   async advanceExecution(input: EntityActivateInput): Promise<EntityRecord> {
     const record = await publishExecutionOwnerAsync(
       this.deps.executionPublicationPort,
       this.publication(input),
-      () => this.receiver.entityAdvanceExecution(input)
+      () => this.mutate([this.entityId(input)], () => this.advanceExecutionCommitted(input))
     );
-    this.deps.entityCache._onActivate(record);
     await this.deps.materializeExecution(record);
     return record;
   }
 
-  /** Atomically publish one execution incarnation to a set of durable identities. */
   async advanceExecutions(inputs: EntityActivateInput[]): Promise<EntityRecord[]> {
     if (inputs.length === 0) return [];
     const publications = inputs.map((input) => this.publication(input));
@@ -150,24 +191,132 @@ export class WorkspaceEntityStore {
           .join(",")}`,
         artifacts: publications.flatMap(({ artifacts }) => artifacts),
       },
-      () => this.receiver.entityAdvanceExecutions(inputs)
+      () =>
+        this.mutate(
+          inputs.map((input) => this.entityId(input)),
+          () => this.advanceExecutionsCommitted(inputs)
+        )
     );
-    for (const record of records) this.deps.entityCache._onActivate(record);
     await Promise.all(records.map((record) => this.deps.materializeExecution(record)));
     return records;
   }
 
+  rebindAgentChannel(id: string, channelId: string): Promise<EntityRecord> {
+    return this.mutate([id], () => this.rebindAgentChannelCommitted(id, channelId));
+  }
+
+  retire(id: string): Promise<EntityRecord | null> {
+    return this.mutate([id], async () => {
+      const record = await this.retireCommitted(id);
+      // An absent durable row cannot retain an incidental cached identity.
+      if (!record) this.deps.entityCache._onDelete(id);
+      return record;
+    });
+  }
+
+  /**
+   * Linearized live admission from the single durable publication owner.
+   * Bootstrap/cache-only rows never establish durable authority. Recovery reads
+   * occur once per missing publication, rather than before every invocation.
+   */
+  private currentPublication(id: string): EntityRecord | null {
+    const publication = this.publishedRecords.get(id);
+    // Hydration can replace rows without a mutation notification. Admission
+    // belongs to the exact owner-published snapshot, never merely its ID.
+    if (publication && this.deps.entityCache.resolve(id) === publication) return publication;
+    this.publishedRecords.delete(id);
+    return null;
+  }
+
+  resolveInvocationRecord(id: string): Promise<EntityRecord | null> {
+    const previous = this.entityOperations.get(id);
+    const publication = this.currentPublication(id);
+    if (!previous && publication) return Promise.resolve(publication);
+    const operation = (previous ?? Promise.resolve()).then(async () => {
+      const publication = this.currentPublication(id);
+      if (publication) return publication;
+      const record = await this.receiver.entityResolve(id);
+      if (record && record.id !== id)
+        throw new Error(`Entity owner resolved ${record.id} for ${id}`);
+      if (record) return this.publishRecord(record);
+      else {
+        this.publishedRecords.delete(id);
+        this.deps.entityCache._onDelete(id);
+      }
+      return null;
+    });
+    this.entityOperations.set(id, operation);
+    const release = () => {
+      if (this.entityOperations.get(id) === operation) this.entityOperations.delete(id);
+    };
+    void operation.then(release, release);
+    return operation;
+  }
+
+  // --- mutations: durable write + cache mirror, atomic ---
+
+  /**
+   * Activate (or refresh) a WorkspaceDO entity and mirror it into the hot cache.
+   * The ONLY sanctioned way to activate a WorkspaceDO-backed entity.
+   */
+  private async activateCommitted(input: EntityActivateInput): Promise<EntityRecord> {
+    const record = await this.receiver.entityActivate(input);
+    this.publishRecord(record, this.entityId(input));
+    return record;
+  }
+
+  /**
+   * Reserve stable coordinates for a panel without making it executable.
+   * Connection grants and code-principal resolution remain fail-closed until
+   * advanceExecution() commits the sealed runtime image.
+   */
+  private async reserveCommitted(input: EntityReservationInput): Promise<EntityRecord> {
+    const record = await this.receiver.entityReserve(input);
+    this.publishRecord(record, this.entityId(input));
+    return record;
+  }
+
+  /** Pin the image while preparation owns the non-executable reservation. */
+  private async prepareExecutionCommitted(input: EntityActivateInput): Promise<EntityRecord> {
+    const record = await this.receiver.entityPrepareExecution(input);
+    this.publishRecord(record, this.entityId(input));
+    return record;
+  }
+
+  /** Complete a reserved executable entity, or atomically advance an active one. */
+  private async advanceExecutionCommitted(input: EntityActivateInput): Promise<EntityRecord> {
+    const record = await this.receiver.entityAdvanceExecution(input);
+    this.publishRecord(record, this.entityId(input));
+    return record;
+  }
+
+  /** Atomically publish one execution incarnation to a set of durable identities. */
+  private async advanceExecutionsCommitted(inputs: EntityActivateInput[]): Promise<EntityRecord[]> {
+    if (inputs.length === 0) return [];
+    const records = await this.receiver.entityAdvanceExecutions(inputs);
+    const expected = new Set(inputs.map((input) => this.entityId(input)));
+    if (
+      records.length !== expected.size ||
+      new Set(records.map((record) => record.id)).size !== expected.size ||
+      records.some((record) => !expected.has(record.id))
+    ) {
+      throw new Error("Entity execution batch returned different owner identities");
+    }
+    for (const record of records) this.publishRecord(record);
+    return records;
+  }
+
   /** Durably move a self-hosted agent to its current channel and refresh auth cache. */
-  async rebindAgentChannel(id: string, channelId: string): Promise<EntityRecord> {
+  private async rebindAgentChannelCommitted(id: string, channelId: string): Promise<EntityRecord> {
     const record = await this.receiver.entityRebindAgentChannel(id, channelId);
-    this.deps.entityCache._onActivate(record);
+    this.publishRecord(record, id);
     return record;
   }
 
   /** Retire a WorkspaceDO entity and mirror the retirement. Null if already gone. */
-  async retire(id: string): Promise<EntityRecord | null> {
+  private async retireCommitted(id: string): Promise<EntityRecord | null> {
     const record = await this.receiver.entityRetire(id);
-    if (record) this.deps.entityCache._onRetire(record);
+    if (record) this.publishRecord(record, id);
     return record;
   }
 

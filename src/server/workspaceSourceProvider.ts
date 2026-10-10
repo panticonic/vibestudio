@@ -14,9 +14,7 @@ import {
   nativeInvocationIdentity,
   type NativeInvocationIdentity,
   nativeInvocationInspectionSchema,
-  nativeInvocationSourceSchema,
-  nativeOriginatingInputSchema,
-  type NativeInvocationSource,
+  nativeInvocationIdentitySchema,
 } from "@vibestudio/service-schemas/nativeInvocation";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 
@@ -77,6 +75,7 @@ type SemanticWireMethodName =
   | "vcsReadMemory"
   | "vcsResolveRepository"
   | "vcsReadFile"
+  | "vcsReadFiles"
   | "vcsListDirectory"
   | "vcsListFiles";
 export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMethodName> & {
@@ -169,6 +168,7 @@ export function createWorkspaceSemanticPort(
     vcsReadMemory: (input) => client.vcsReadMemory(input),
     vcsResolveRepository: (input) => client.vcsResolveRepository(input),
     vcsReadFile: (input) => client.vcsReadFile(input),
+    vcsReadFiles: (input) => client.vcsReadFiles(input),
     vcsListDirectory: (input) => client.vcsListDirectory(input),
     vcsListFiles: (input) => client.vcsListFiles(input),
     semanticEffectAck: (input) => client.vcsSemanticEffectAck(input),
@@ -231,94 +231,85 @@ export interface ExactCausalInvocationFact {
 }
 
 export async function resolveExactCausalInvocation(
-  caller: Pick<WorkspaceSemanticPort, "inspectInvocationState" | "getLogEvent">,
   parent: RpcCausalParent,
   native: {
     binding: { entityId: string; contextId: string; channelId: string } | null;
     entities: Pick<EntityCache, "resolveActive">;
-    inspect: (source: NativeInvocationSource, invocationId: string) => Promise<unknown>;
+    inspect: (locator: NativeInvocationIdentity, invocationId: string) => Promise<unknown>;
+    getEnvelope: (
+      ref: { source: string; className: string; objectKey: string },
+      envelopeId: string
+    ) => Promise<unknown>;
   }
 ): Promise<ExactCausalInvocationFact | null> {
-  const inspection = await caller.inspectInvocationState({
-    trajectoryId: parent.logId,
-    branchId: parent.head,
-    invocationId: parent.invocationId,
-    limit: 1,
-  });
-  const row = inspection.rows.find(
-    (row) =>
-      row.log_id === parent.logId &&
-      row.head === parent.head &&
-      row.invocation_id === parent.invocationId
-  );
-  if (!row) return null;
-  if (typeof row.started_event_id !== "string" || !row.started_event_id) return null;
-  const event = gadWireMethods.getLogEvent.returns.parse(
-    await caller.getLogEvent({
-      logId: parent.logId,
-      head: parent.head,
-      envelopeId: row.started_event_id,
-    })
-  );
-  if (
-    !event ||
-    event.logId !== parent.logId ||
-    event.head !== parent.head ||
-    event.envelopeId !== row.started_event_id ||
-    event.payloadKind !== "invocation.started" ||
-    event.causality?.invocationId !== parent.invocationId
-  )
-    return null;
-  const payload = event.payload;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const source = nativeInvocationSourceSchema.parse(
-    (payload as Record<string, unknown>)["nativeSource"]
-  );
-  if (nativeInvocationId(source) !== parent.invocationId)
-    throw new Error("Published native source has a different invocation identity");
-  // Nested extension calls may carry a host-retained task closure instead of
-  // a direct presenter binding. Both cases prove the same actual source owner.
-  const binding = native.entities.resolveActive(source.owner.runtimeId)?.agentBinding;
+  if (!parent.nativeInvocation)
+    throw new Error("Native causal invocation requires its exact native task locator");
+  const locator = nativeInvocationIdentitySchema.parse(parent.nativeInvocation);
+  if (nativeInvocationId(locator) !== parent.invocationId)
+    throw new Error("Native task locator has a different invocation identity");
+  const entity = native.entities.resolveActive(locator.owner.runtimeId);
+  const binding = entity?.agentBinding;
   if (
     !binding ||
-    source.owner.runtimeId !== binding.entityId ||
-    source.owner.contextId !== binding.contextId ||
-    source.owner.channelId !== binding.channelId
+    entity?.kind !== "do" ||
+    entity.authoritySessionId !== locator.owner.authoritySessionId
   )
-    throw new Error("Published native source does not belong to the bound agent");
+    throw new Error("Native task locator belongs to a retired or different runtime owner");
   if (native.binding && canonicalJson(native.binding) !== canonicalJson(binding))
-    throw new Error("Published native source does not belong to the presenting agent");
-  const trajectory = channelTrajectoryFor(binding.channelId);
-  if (parent.logId !== trajectory.logId || parent.head !== trajectory.head)
-    throw new Error("Published native source does not belong to the bound trajectory");
-  const assertOwner = () => {
-    const entity = native.entities.resolveActive(binding.entityId);
-    if (
-      !entity ||
-      entity.kind !== "do" ||
-      entity.contextId !== source.owner.contextId ||
-      entity.authoritySessionId !== source.owner.authoritySessionId ||
-      entity.source.repoPath !== source.owner.source ||
-      entity.source.effectiveVersion !== source.owner.effectiveVersion ||
-      entity.className !== source.owner.className ||
-      entity.key !== source.owner.objectKey ||
-      entity.activeExecutionDigest !== source.owner.executionDigest ||
-      canonicalJson(entity.agentBinding) !== canonicalJson(binding)
-    )
-      throw new Error("Published native source belongs to a retired or different runtime image");
-  };
-  assertOwner();
-  const observed = await native.inspect(source, parent.invocationId);
-  assertOwner();
+    throw new Error("Native task locator does not belong to the presenting agent");
+  const ownerImage = (value: ReturnType<EntityCache["resolveActive"]>) =>
+    value
+      ? canonicalJson({
+          id: value.id,
+          kind: value.kind,
+          contextId: value.contextId,
+          authoritySessionId: value.authoritySessionId,
+          source: value.source,
+          className: value.className,
+          key: value.key,
+          executionDigest: value.activeExecutionDigest,
+          agentBinding: value.agentBinding,
+        })
+      : null;
+  const admittedImage = ownerImage(entity);
+  const observed = await native.inspect(locator, parent.invocationId);
+  if (ownerImage(native.entities.resolveActive(locator.owner.runtimeId)) !== admittedImage)
+    throw new Error("Native task locator belongs to a retired or different runtime image");
   if (observed === null) return null;
   const current = nativeInvocationInspectionSchema.parse(observed);
-  if (canonicalJson(current.source) !== canonicalJson(source))
-    throw new Error("Published native source conflicts with its owning task");
-  const publishedInput = nativeOriginatingInputSchema
-    .nullable()
-    .parse((payload as Record<string, unknown>)["originatingInput"]);
-  if (canonicalJson(publishedInput) !== canonicalJson(current.originatingInput))
-    throw new Error("Published native input conflicts with its owning task");
+  const source = current.source;
+  const executor = current.executor;
+  const trajectory = channelTrajectoryFor(source.owner.channelId);
+  if (parent.logId !== trajectory.logId || parent.head !== trajectory.head)
+    throw new Error("Native task locator does not belong to the bound trajectory");
+
+  if (canonicalJson(nativeInvocationIdentity(source)) !== canonicalJson(locator))
+    throw new Error("Native task locator conflicts with its owning task");
+  const assertOwner = () => {
+    const active = native.entities.resolveActive(binding.entityId);
+    if (
+      !active ||
+      active.kind !== "do" ||
+      active.contextId !== source.owner.contextId ||
+      active.authoritySessionId !== source.owner.authoritySessionId ||
+      active.source.repoPath !== source.owner.source ||
+      active.source.effectiveVersion !== executor.effectiveVersion ||
+      active.className !== source.owner.className ||
+      active.key !== source.owner.objectKey ||
+      active.activeExecutionDigest !== executor.executionDigest ||
+      canonicalJson(active.agentBinding) !== canonicalJson(binding) ||
+      source.owner.runtimeId !== binding.entityId ||
+      executor.runtimeId !== source.owner.runtimeId ||
+      executor.authoritySessionId !== source.owner.authoritySessionId ||
+      executor.contextId !== source.owner.contextId ||
+      executor.channelId !== source.owner.channelId ||
+      executor.source !== source.owner.source ||
+      executor.className !== source.owner.className ||
+      executor.objectKey !== source.owner.objectKey
+    )
+      throw new Error("Native task locator belongs to a retired or different runtime image");
+  };
+  assertOwner();
   let initiatingUserId: string | null = null;
   const origin = current.originatingInput;
   if (origin) {
@@ -329,47 +320,36 @@ export async function resolveExactCausalInvocation(
         origin.entryId > source.operation.cutoff)
     )
       throw new Error("Native originating input does not belong to the invoking task");
-    const original = gadWireMethods.getLogEvent.returns.parse(
-      await caller.getLogEvent({
-        logId: origin.channelRef.objectKey,
-        head: channelTrajectoryFor(origin.channelRef.objectKey).head,
-        envelopeId: origin.envelopeId,
-      })
-    );
+    const original = await native.getEnvelope(origin.channelRef, origin.envelopeId);
     assertOwner();
+    if (!original || typeof original !== "object")
+      throw new Error("Native originating input has no exact canonical channel event");
+    const event = original as Record<string, unknown>;
+    const payload = event["payload"] as {
+      kind?: unknown;
+      causality?: { messageId?: unknown };
+    } | null;
     if (
-      !original ||
-      original.logId !== origin.channelRef.objectKey ||
-      original.head !== channelTrajectoryFor(origin.channelRef.objectKey).head ||
-      original.envelopeId !== origin.envelopeId ||
-      original.seq !== origin.eventSequence ||
-      original.payloadKind !== "message.completed" ||
-      original.causality?.messageId !== origin.messageId
+      event["messageId"] !== origin.envelopeId ||
+      event["type"] !== "agentic.trajectory.v1/event" ||
+      payload?.kind !== "message.completed" ||
+      payload.causality?.messageId !== origin.messageId ||
+      typeof event["senderId"] !== "string"
     )
       throw new Error("Native originating input has no exact canonical channel event");
-    // Native inspection proves the original placed input. Only the journal's
-    // authenticated outer sender identifies its human author; transcript text,
-    // nested message actors and old turn projections do not establish authority.
-    const actor = original.actor;
-    if (actor.kind === "user") {
-      if (
-        !actor.id.startsWith("user:") ||
-        actor.id.length === "user:".length ||
-        (actor.participantId !== undefined && actor.participantId !== actor.id)
-      )
+    // Only the canonical channel owner's authenticated outer sender proves a
+    // human author. Cursor retention and nested actor claims are projections.
+    const sender = event["senderId"];
+    if (sender.startsWith("user:")) {
+      if (sender.length === "user:".length)
         throw new Error("Native originating input has no canonical human sender");
-      initiatingUserId = actor.id.slice("user:".length);
+      initiatingUserId = sender.slice("user:".length);
     }
   }
   return {
     owningUserId: native.entities.resolveActive(binding.entityId)?.ownerUserId ?? null,
     nativeInvocation: nativeInvocationIdentity(source),
-    active:
-      current.status !== "terminal" &&
-      current.status !== "completing" &&
-      row.terminal_outcome == null &&
-      row.started_events === 1 &&
-      row.terminal_events === 0,
+    active: current.status !== "terminal" && current.status !== "completing",
     initiatingUserId,
   };
 }

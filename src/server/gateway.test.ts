@@ -17,7 +17,7 @@ describe("Gateway lifecycle", () => {
       getWorkerHost: () =>
         ({
           getLoaderSecret: () => "fixture-loader",
-          getDoVersion: () => "fixture-version",
+          getDoCode: async () => ({ version: "fixture-version" }),
         }) as never,
     });
     const port = await gateway.start(0);
@@ -26,7 +26,7 @@ describe("Gateway lifecycle", () => {
     const request = async () => {
       const received = once(socket, "data");
       socket.write(
-        "GET /_doversion/source/Class HTTP/1.1\r\nHost: localhost\r\nX-Vibestudio-Loader-Secret: fixture-loader\r\n\r\n"
+        "GET /_docode/source/Class HTTP/1.1\r\nHost: localhost\r\nX-Vibestudio-Loader-Secret: fixture-loader\r\n\r\n"
       );
       const [data] = await received;
       expect(data.toString()).toContain("200 OK");

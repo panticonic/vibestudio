@@ -1,3 +1,4 @@
+import { encodeRpcJson, decodeRpcJson, deserializeRpcFailure } from "@vibestudio/rpc";
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -62,6 +63,104 @@ describe("DurableWorkDriver", () => {
     vi.useRealTimers();
   });
 
+  it("does not reclaim a terminally failed owned item", async () => {
+    const original = new Error("canonical observation failed");
+    const suite = handlers({
+      claim: vi.fn(async () => [claim("failed")]),
+      execute: vi.fn(async () => {
+        throw original;
+      }),
+      fail: vi.fn(async () => ({ failed: true })),
+    });
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      workerId: "driver-1",
+    });
+    driver.start();
+    driver.notify({ owner: owner("a"), queues: ["channel-observation"] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(suite.handler.claim).toHaveBeenCalledTimes(1);
+    expect(suite.handler.fail).toHaveBeenCalledWith(
+      owner("a"),
+      expect.objectContaining({ error: original, itemId: "failed", generation: 1 })
+    );
+    expect(suite.handler.settle).not.toHaveBeenCalled();
+    await driver.quiesce();
+  });
+
+  it("lets the parent run while fork prerequisites wait outside the only execution slot", async () => {
+    let releaseParent!: () => void;
+    const observed = new Promise<void>((resolve) => {
+      releaseParent = resolve;
+    });
+    const issued = new Set<string>();
+    const execution: string[] = [];
+    const suite = handlers({
+      claim: vi.fn(async (target) => {
+        if (issued.has(target.objectKey)) return [];
+        issued.add(target.objectKey);
+        return [claim(target.objectKey)];
+      }),
+      prepare: async (target) => {
+        if (target.objectKey === "child") await observed;
+      },
+      execute: async (target) => {
+        execution.push(target.objectKey);
+        if (target.objectKey === "parent") releaseParent();
+        return {};
+      },
+    });
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      concurrency: 1,
+    });
+    driver.start();
+    driver.notify({ owner: owner("child"), queues: ["channel-observation"] });
+    driver.notify({ owner: owner("parent"), queues: ["channel-observation"] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(execution).toEqual(["parent", "child"]);
+    expect(suite.handler.settle).toHaveBeenCalledTimes(2);
+    await driver.quiesce();
+  });
+
+  it("cancels and joins a waiting prerequisite on driver quiescence", async () => {
+    let started = false;
+    let joined = false;
+    const suite = handlers({
+      claim: vi.fn(async () => [claim("waiting")]),
+      prepare: async (_owner, _claim, signal) => {
+        started = true;
+        await new Promise<void>((_resolve, reject) =>
+          signal.addEventListener(
+            "abort",
+            () => {
+              joined = true;
+              reject(signal.reason);
+            },
+            { once: true }
+          )
+        );
+      },
+    });
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      concurrency: 1,
+    });
+    driver.start();
+    driver.notify({ owner: owner("child"), queues: ["channel-observation"] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(started).toBe(true);
+    expect(driver.inspect().active).toBe(0);
+    await driver.quiesce();
+    expect(joined).toBe(true);
+    expect(driver.inspect().activeLanes).toEqual([]);
+    expect(suite.handler.execute).not.toHaveBeenCalled();
+    expect(suite.handler.fail).not.toHaveBeenCalled();
+  });
+
   it("retains transition traces without serializing or emitting them at info level", async () => {
     vi.stubEnv("VIBESTUDIO_LOG_LEVEL", "info");
     const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -107,6 +206,105 @@ describe("DurableWorkDriver", () => {
       outcome: { ok: true },
     });
     expect(driver.inspect().duplicateHints).toBeGreaterThan(0);
+    await driver.quiesce();
+  });
+
+  it("claims a same-lane successor only after the prior settlement releases its lane", async () => {
+    const target = owner("same-lane-owner");
+    const lane = "channel-observation\u0000observation-lane";
+    const first = { ...claim("first", 1), payload: { laneKey: "observation-lane" } };
+    const second = { ...claim("second", 2), payload: { laneKey: "observation-lane" } };
+    let claimCount = 0;
+    let driver!: DurableWorkDriver;
+    let successorSawReleasedLane = false;
+    let releaseSettlement!: () => void;
+    const settlementReceipt = new Promise<void>((resolve) => {
+      releaseSettlement = resolve;
+    });
+    const suite = handlers({
+      claim: vi.fn(async () => {
+        claimCount += 1;
+        if (claimCount === 1) return [first];
+        if (claimCount === 2) {
+          successorSawReleasedLane = !driver.inspect().activeLanes.includes(lane);
+          return [second];
+        }
+        return [];
+      }),
+      laneKey: (_owner, work) => String((work.payload as { laneKey: string }).laneKey),
+      settle: vi.fn(async (_owner, request) => {
+        if (request.itemId === "first") {
+          driver.notify({ owner: target, queues: ["channel-observation"] });
+          await settlementReceipt;
+        }
+        return "accepted" as const;
+      }),
+    });
+    driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      concurrency: 2,
+      workerId: "driver-same-lane",
+    });
+
+    driver.start();
+    driver.notify({ owner: target, queues: ["channel-observation"] });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(claimCount).toBe(1);
+    expect(driver.inspect().activeLanes).toContain(lane);
+    releaseSettlement();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(claimCount).toBeGreaterThanOrEqual(2);
+    expect(successorSawReleasedLane).toBe(true);
+    expect(suite.handler.fail).not.toHaveBeenCalled();
+    expect(suite.handler.settle).toHaveBeenCalledWith(
+      target,
+      expect.objectContaining({ itemId: "first" })
+    );
+    await driver.quiesce();
+  });
+
+  it("keeps distinct lanes of one owner queue executable in parallel", async () => {
+    const target = owner("parallel-lanes");
+    const claims = [
+      { ...claim("first", 1), payload: { laneKey: "lane-a" } },
+      { ...claim("second", 1), payload: { laneKey: "lane-b" } },
+    ];
+    const started = new Set<string>();
+    let release!: () => void;
+    const bothStarted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let finish!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const suite = handlers({
+      claim: vi.fn(async () => claims.splice(0)),
+      laneKey: (_owner, work) => String((work.payload as { laneKey: string }).laneKey),
+      execute: vi.fn(async (_owner, work) => {
+        started.add(work.itemId);
+        if (started.size === 2) release();
+        await hold;
+        return { ok: true };
+      }),
+    });
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      concurrency: 2,
+      workerId: "driver-parallel-lanes",
+    });
+
+    driver.start();
+    driver.notify({ owner: target, queues: ["channel-observation"] });
+    await vi.advanceTimersByTimeAsync(0);
+    await bothStarted;
+    expect(started).toEqual(new Set(["first", "second"]));
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
     await driver.quiesce();
   });
 
@@ -227,105 +425,6 @@ describe("DurableWorkDriver", () => {
     expect(driver.inspect()).toMatchObject({ accepting: true, active: 1 });
 
     release();
-    await vi.advanceTimersByTimeAsync(0);
-    await driver.quiesce();
-  });
-
-  it("claims a same-lane successor only after the prior settlement releases its lane", async () => {
-    const target = owner("same-lane-owner");
-    const lane = "channel-observation\u0000observation-lane";
-    const first = { ...claim("first", 1), payload: { laneKey: "observation-lane" } };
-    const second = { ...claim("second", 2), payload: { laneKey: "observation-lane" } };
-    let claimCount = 0;
-    let driver!: DurableWorkDriver;
-    let successorSawReleasedLane = false;
-    let releaseSettlement!: () => void;
-    const settlementReceipt = new Promise<void>((resolve) => {
-      releaseSettlement = resolve;
-    });
-    const suite = handlers({
-      claim: vi.fn(async () => {
-        claimCount += 1;
-        if (claimCount === 1) return [first];
-        if (claimCount === 2) {
-          successorSawReleasedLane = !driver.inspect().activeLanes.includes(lane);
-          return [second];
-        }
-        return [];
-      }),
-      laneKey: (_owner, work) => String((work.payload as { laneKey: string }).laneKey),
-      settle: vi.fn(async (_owner, request) => {
-        if (request.itemId === "first") {
-          driver.notify({ owner: target, queues: ["channel-observation"] });
-          await settlementReceipt;
-        }
-        return "accepted" as const;
-      }),
-    });
-    driver = new DurableWorkDriver({
-      handlers: suite.record,
-      scanReadyOwners: async () => [],
-      concurrency: 2,
-      workerId: "driver-same-lane",
-    });
-
-    driver.start();
-    driver.notify({ owner: target, queues: ["channel-observation"] });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(claimCount).toBe(1);
-    expect(driver.inspect().activeLanes).toContain(lane);
-    releaseSettlement();
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(claimCount).toBeGreaterThanOrEqual(2);
-    expect(successorSawReleasedLane).toBe(true);
-    expect(suite.handler.fail).not.toHaveBeenCalled();
-    expect(suite.handler.settle).toHaveBeenCalledWith(
-      target,
-      expect.objectContaining({ itemId: "first" })
-    );
-    await driver.quiesce();
-  });
-
-  it("keeps distinct lanes of one owner queue executable in parallel", async () => {
-    const target = owner("parallel-lanes");
-    const claims = [
-      { ...claim("first", 1), payload: { laneKey: "lane-a" } },
-      { ...claim("second", 1), payload: { laneKey: "lane-b" } },
-    ];
-    const started = new Set<string>();
-    let release!: () => void;
-    const bothStarted = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let finish!: () => void;
-    const hold = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
-    const suite = handlers({
-      claim: vi.fn(async () => claims.splice(0)),
-      laneKey: (_owner, work) => String((work.payload as { laneKey: string }).laneKey),
-      execute: vi.fn(async (_owner, work) => {
-        started.add(work.itemId);
-        if (started.size === 2) release();
-        await hold;
-        return { ok: true };
-      }),
-    });
-    const driver = new DurableWorkDriver({
-      handlers: suite.record,
-      scanReadyOwners: async () => [],
-      concurrency: 2,
-      workerId: "driver-parallel-lanes",
-    });
-
-    driver.start();
-    driver.notify({ owner: target, queues: ["channel-observation"] });
-    await vi.advanceTimersByTimeAsync(0);
-    await bothStarted;
-    expect(started).toEqual(new Set(["first", "second"]));
-    finish();
     await vi.advanceTimersByTimeAsync(0);
     await driver.quiesce();
   });
@@ -534,6 +633,65 @@ describe("DurableWorkDriver", () => {
     ).toHaveLength(1);
   });
 
+  it.each(["root", "append", "fork"] as const)(
+    "prepares only the external causal prerequisite for a %s observation",
+    async (kind) => {
+      const dispatch = vi.fn();
+      const dispatchHeldWithSignal = vi.fn(async () => undefined);
+      const record = createDurableWorkHandlers({ dispatch, dispatchHeldWithSignal } as never);
+      const work = claim(`observation:${kind}`, 7);
+      work.payload = { laneKey: "channel-observation:channel-1", observation: { kind } };
+      const signal = new AbortController().signal;
+      await record["channel-observation"].prepare!(owner("channel-1"), work, signal);
+      if (kind === "fork") {
+        expect(dispatchHeldWithSignal).toHaveBeenCalledExactlyOnceWith(
+          owner("channel-1"),
+          signal,
+          "prepareChannelObservationClaim",
+          { itemId: "observation:fork", generation: 7 }
+        );
+      } else expect(dispatchHeldWithSignal).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refuses an observation without its canonical variant rather than assuming no prerequisite", async () => {
+    const dispatchHeldWithSignal = vi.fn(async () => undefined);
+    const record = createDurableWorkHandlers({
+      dispatch: vi.fn(),
+      dispatchHeldWithSignal,
+    } as never);
+    await expect(
+      record["channel-observation"].prepare!(
+        owner("channel-1"),
+        claim("observation:unknown", 7),
+        new AbortController().signal
+      )
+    ).rejects.toThrow("canonical causal variant");
+    expect(dispatchHeldWithSignal).not.toHaveBeenCalled();
+  });
+
+  it("executes channel observation on its exact owner and claim generation", async () => {
+    const dispatch = vi.fn();
+    const dispatchHeldWithSignal = vi.fn(async () => ({ observed: true }));
+    const record = createDurableWorkHandlers({ dispatch, dispatchHeldWithSignal } as never);
+    const work = claim("observation:event-1", 7);
+    const signal = new AbortController().signal;
+    await expect(
+      record["channel-observation"].execute(owner("channel-1"), work, signal)
+    ).resolves.toEqual({ observed: true });
+    expect(dispatchHeldWithSignal).toHaveBeenCalledExactlyOnceWith(
+      owner("channel-1"),
+      signal,
+      "executeChannelObservationClaim",
+      {
+        itemId: "observation:event-1",
+        generation: 7,
+      }
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("executes channel maintenance on its owner instead of requiring a participant target", async () => {
     const dispatch = vi.fn(async () => []);
     const dispatchHeldWithSignal = vi.fn(async () => ({ processed: true }));
@@ -641,8 +799,43 @@ describe("DurableWorkDriver", () => {
     expect(dispatchHeldWithSignal).toHaveBeenCalledOnce();
   });
 
+  it("preserves the original structured failure through the owner settlement wire", async () => {
+    const original = Object.assign(
+      new Error("publication refused", { cause: new Error("original storage cause") }),
+      { code: "STORAGE_REFUSED" }
+    );
+    const dispatch = vi.fn(async (_owner, method, ...args) => {
+      expect(method).toBe("failReadyWork");
+      const wire = decodeRpcJson(encodeRpcJson(args)) as [
+        string,
+        { error: Parameters<typeof deserializeRpcFailure>[0] },
+      ];
+      const restored = deserializeRpcFailure(wire[1].error);
+      expect(restored).toMatchObject({
+        message: original.message,
+        code: "STORAGE_REFUSED",
+        stack: original.stack,
+        cause: expect.objectContaining({ message: "original storage cause" }),
+      });
+      return { failed: true };
+    });
+    const handlers = createDurableWorkHandlers({
+      dispatch,
+      dispatchHeldWithSignal: vi.fn(),
+    } as never);
+    await expect(
+      handlers["workspace-publication"].fail(owner("gad"), {
+        workerId: "driver-test",
+        itemId: "intent",
+        generation: 1,
+        error: original,
+      })
+    ).resolves.toEqual({ failed: true });
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
   it("delivers committed workspace publications to their exact channel target", async () => {
-    const dispatchHeldWithSignal = vi.fn(async () => ({ broadcasted: 2 }));
+    const dispatchHeldWithSignal = vi.fn(async () => ({ admitted: 2 }));
     const record = createDurableWorkHandlers({
       dispatch: vi.fn(),
       dispatchHeldWithSignal,
@@ -656,17 +849,30 @@ describe("DurableWorkDriver", () => {
     work.payload = {
       laneKey: "channel-7",
       target,
-      envelopeIds: ["event-1", "event-2"],
+      intents: [
+        {
+          envelopeId: "event-1",
+          actor: { participantId: "agent" },
+          payloadKind: "agentic",
+          payload: {},
+        },
+        {
+          envelopeId: "event-2",
+          actor: { participantId: "agent" },
+          payloadKind: "agentic",
+          payload: {},
+        },
+      ],
     };
 
     await expect(
       record["workspace-publication"].execute(owner("gad"), work, new AbortController().signal)
-    ).resolves.toEqual({ broadcasted: 2 });
+    ).resolves.toEqual({ admitted: 2 });
     expect(dispatchHeldWithSignal).toHaveBeenCalledWith(
       target,
       expect.any(AbortSignal),
-      "broadcastStoredEnvelopes",
-      ["event-1", "event-2"]
+      "admitPublishedEnvelopes",
+      (work.payload as { intents: unknown }).intents
     );
   });
 
@@ -687,19 +893,32 @@ describe("DurableWorkDriver", () => {
         className: "PubSubChannel",
         objectKey: "retired-channel",
       },
-      envelopeIds: ["event-1", "event-2"],
+      intents: [
+        {
+          envelopeId: "event-1",
+          actor: { participantId: "agent" },
+          payloadKind: "agentic",
+          payload: {},
+        },
+        {
+          envelopeId: "event-2",
+          actor: { participantId: "agent" },
+          payloadKind: "agentic",
+          payload: {},
+        },
+      ],
     };
 
     await expect(
       record["workspace-publication"].execute(owner("gad"), work, new AbortController().signal)
-    ).resolves.toEqual({ broadcasted: 2 });
+    ).resolves.toEqual({ discarded: 2 });
     expect(dispatchHeldWithSignal).toHaveBeenCalledOnce();
   });
 
   it("fails a publication claim unless the channel acknowledges the complete batch", async () => {
     const record = createDurableWorkHandlers({
       dispatch: vi.fn(),
-      dispatchHeldWithSignal: vi.fn(async () => ({ broadcasted: 0 })),
+      dispatchHeldWithSignal: vi.fn(async () => ({ admitted: 0 })),
     } as never);
     const work = claim("publication-1");
     work.payload = {
@@ -708,7 +927,14 @@ describe("DurableWorkDriver", () => {
         className: "PubSubChannel",
         objectKey: "channel-7",
       },
-      envelopeIds: ["event-1"],
+      intents: [
+        {
+          envelopeId: "event-1",
+          actor: { participantId: "agent" },
+          payloadKind: "agentic",
+          payload: {},
+        },
+      ],
     };
 
     await expect(

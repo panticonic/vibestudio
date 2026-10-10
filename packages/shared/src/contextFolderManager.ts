@@ -86,9 +86,21 @@ export class ContextFolderManager {
     this.materialize = opts.materialize;
   }
 
+  /** Validated source address. Resolving scope does not materialize source bytes. */
+  contextSourcePath(contextId: string): string {
+    validateContextId(contextId);
+    return path.join(this.contextProjectionsRoot, contextId);
+  }
+
+  /** Validated scratch address; native operations establish the directory. */
+  contextScratchPath(contextId: string): string {
+    validateContextId(contextId);
+    return path.join(this.contextScratchRoot, contextId);
+  }
+
   async ensureContextScratch(contextId: string): Promise<string> {
     validateContextId(contextId);
-    const scratch = path.join(this.contextScratchRoot, contextId);
+    const scratch = this.contextScratchPath(contextId);
     try {
       await this.scratch.ensure(contextId);
     } catch (cause) {
@@ -109,7 +121,7 @@ export class ContextFolderManager {
     const existing = this.inflight.get(contextId);
     if (existing) return existing;
 
-    const contextPath = path.join(this.contextProjectionsRoot, contextId);
+    const contextPath = this.contextSourcePath(contextId);
 
     const promise = (async () => {
       try {
@@ -142,7 +154,7 @@ export class ContextFolderManager {
    */
   getContextRoot(contextId: string): string | null {
     validateContextId(contextId);
-    const contextPath = path.join(this.contextProjectionsRoot, contextId);
+    const contextPath = this.contextSourcePath(contextId);
     try {
       accessSync(contextPath);
       return contextPath;
@@ -156,7 +168,7 @@ export class ContextFolderManager {
    */
   getContextFolderState(contextId: string): ContextFolderState {
     validateContextId(contextId);
-    const contextPath = path.join(this.contextProjectionsRoot, contextId);
+    const contextPath = this.contextSourcePath(contextId);
     if (this.materializing.has(contextId)) {
       return { status: "materializing", path: contextPath };
     }
@@ -174,7 +186,7 @@ export class ContextFolderManager {
    */
   async removeContext(contextId: string): Promise<void> {
     validateContextId(contextId);
-    const contextPath = path.join(this.contextProjectionsRoot, contextId);
+    const contextPath = this.contextSourcePath(contextId);
     await Promise.all([
       fs.rm(contextPath, { recursive: true, force: true }),
       this.scratch.remove(contextId).catch(() => {

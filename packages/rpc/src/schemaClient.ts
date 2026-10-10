@@ -10,11 +10,29 @@ type WireDispatcher = {
   ): Promise<unknown>;
   stream: RpcWireCaller["stream"];
 };
+type RpcOperationOwner = <T>(operation: () => Promise<T>) => Promise<T>;
+const operationOwners = new WeakMap<object, RpcOperationOwner>();
+
+/** Admit schema preparation and dispatch as one synchronous lifecycle operation. */
+export function ownRpcOperation<T>(owner: object, operation: () => Promise<T>): Promise<T> {
+  const own = operationOwners.get(owner);
+  return own ? own(operation) : operation();
+}
+
+export function registerRpcOperationOwner<T extends object>(owner: T, own: RpcOperationOwner): T {
+  operationOwners.set(owner, own);
+  return owner;
+}
+
 const wireClients = new WeakMap<object, RpcWireClient>();
 const wireCallers = new WeakMap<object, WireDispatcher>();
 
 /** Register an owned infrastructure client when its transport is constructed. */
-export function registerRpcWireClient<Wire extends RpcWireClient>(wire: Wire): Wire {
+export function registerRpcWireClient<Wire extends RpcWireClient>(wire: Wire, own?: RpcOperationOwner): Wire {
+  if (own) {
+    registerRpcOperationOwner(wire, own);
+    registerRpcOperationOwner(wire.stream, own);
+  }
   wireClients.set(wire, wire);
   wireCallers.set(wire, wire);
   wireCallers.set(wire.stream, wire);
@@ -45,14 +63,14 @@ export function wireStreamFor(caller: Pick<RpcCaller, "stream">): Pick<WireDispa
 /** Attach the receiver contract at the boundary of a wire caller. */
 export function schemaRpcCaller(wire: WireDispatcher): RpcCaller {
   const caller: RpcCaller = {
-    call: async (target, method, args, options) => {
+    call: (target, method, args, options) => ownRpcOperation(wire, async () => {
       options?.signal?.throwIfAborted();
       return method.invoke(args, (parsedArgs) => {
         options?.signal?.throwIfAborted();
         return wire.call(target, method.name, parsedArgs, options);
       });
-    },
-    stream: schemaRpcStream(wire.stream.bind(wire)),
+    }),
+    stream: schemaRpcStream((target, method, args, options) => wire.stream(target, method, args, options), wire),
   };
   wireCallers.set(caller, wire);
   wireCallers.set(caller.call, wire);
@@ -65,12 +83,12 @@ export function schemaRpcClient(wire: RpcWireClient): RpcClient {
   const client: RpcClient = {
     ...wire,
     ...schemaRpcCaller(wire),
-    streamReadable: async (target, method, args, options) => {
+    streamReadable: (target, method, args, options) => ownRpcOperation(wire, async () => {
       options?.signal?.throwIfAborted();
       const parsedArgs = await method.parseArgs(args);
       options?.signal?.throwIfAborted();
       return wire.streamReadable(target, method.name, parsedArgs, options);
-    },
+    }),
   };
   registerRpcWireClient(wire);
   wireClients.set(client, wire);
@@ -80,11 +98,11 @@ export function schemaRpcClient(wire: RpcWireClient): RpcClient {
 }
 
 /** Streaming schema boundary for transports that only provide response streams. */
-export function schemaRpcStream(stream: RpcWireCaller["stream"]): RpcCaller["stream"] {
-  return async (target, method, args, options) => {
+export function schemaRpcStream(stream: RpcWireCaller["stream"], owner: object = stream): RpcCaller["stream"] {
+  return (target, method, args, options) => ownRpcOperation(owner, async () => {
     options?.signal?.throwIfAborted();
     const parsedArgs = await method.parseArgs(args);
     options?.signal?.throwIfAborted();
     return stream(target, method.name, parsedArgs, options);
-  };
+  });
 }

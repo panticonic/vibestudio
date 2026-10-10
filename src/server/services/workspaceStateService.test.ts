@@ -471,18 +471,35 @@ describe("workspaceStateService — topology authority", () => {
   it("binds wake registration and publication to the authenticated Durable Object identity", async () => {
     const own = { source: "workers/agent", className: "Agent", objectKey: "own" };
     const foreign = { ...own, objectKey: "foreign" };
+    const registration = { ...own, executionDigest: "a".repeat(64) };
+    const admission = {
+      incarnation: "incarnation",
+      entity: EntityRecordSchema.parse({
+        id: "do:workers/agent:Agent:own",
+        authoritySessionId: "authority",
+        kind: "do",
+        source: { repoPath: own.source, effectiveVersion: "version" },
+        contextId: "context",
+        className: own.className,
+        key: own.objectKey,
+        activeExecutionDigest: registration.executionDigest,
+        createdAt: 1,
+        status: "active",
+        cleanupComplete: false,
+      }),
+    };
     const { svc, calls } = makeService({
-      dispatchReturns: { alarmSourceRegister: "incarnation", alarmSourcePublish: "accepted" },
+      dispatchReturns: { alarmSourceRegister: admission, alarmSourcePublish: "accepted" },
     });
-    await expect(svc.handler(makeDoCtx(own) as never, "alarmSourceRegister", [own])).resolves.toBe(
-      "incarnation"
-    );
+    await expect(
+      svc.handler(makeDoCtx(own) as never, "alarmSourceRegister", [registration])
+    ).resolves.toEqual(admission);
     const publication = { ...own, incarnation: "incarnation", revision: 1, wakeAt: null };
     await expect(
       svc.handler(makeDoCtx(own) as never, "alarmSourcePublish", [publication])
     ).resolves.toBe("accepted");
     await expect(
-      svc.handler(makeDoCtx(own) as never, "alarmSourceRegister", [foreign])
+      svc.handler(makeDoCtx(own) as never, "alarmSourceRegister", [{ ...registration, ...foreign }])
     ).rejects.toThrow(/cannot register/);
     await expect(
       svc.handler(makeDoCtx(own) as never, "alarmSourcePublish", [{ ...publication, ...foreign }])
@@ -490,7 +507,7 @@ describe("workspaceStateService — topology authority", () => {
     expect(calls).toEqual([
       {
         method: "alarmSourceRegister",
-        args: [{ ...own, incarnation: "incarnation", generation: 1 }],
+        args: [{ ...registration, incarnation: "incarnation", generation: 1 }],
       },
       { method: "alarmSourcePublish", args: [publication] },
     ]);

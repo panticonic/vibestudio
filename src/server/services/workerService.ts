@@ -659,8 +659,8 @@ function listServiceRows(decls: WorkspaceDeclarations): ServiceListRow[] {
       title: service.title,
       action: service.action,
       description: service.description,
-      presentation: service.presentation,
-      protocols: service.protocols ?? [],
+      presentation: { ...service.presentation },
+      protocols: [...(service.protocols ?? [])],
       source: service.source,
       docsId: `workspace:${service.name}`,
     };

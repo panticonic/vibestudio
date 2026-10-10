@@ -461,6 +461,9 @@ export interface FsVcsBridge {
   status(input: VcsStatusInput): Promise<VcsStatusResult>;
   resolveRepository(input: VcsResolveRepositoryInput): Promise<VcsResolveRepositoryResult>;
   readFile(input: VcsReadFileInput): Promise<VcsReadFileResult>;
+  readFiles(
+    input: import("@vibestudio/service-schemas/vcs").VcsReadFilesInput
+  ): Promise<VcsReadFileResult[]>;
   listDirectory(input: VcsListDirectoryInput): Promise<VcsListDirectoryResult>;
   listFiles(input: VcsListFilesInput): Promise<VcsListFilesResult>;
   /**
@@ -484,7 +487,16 @@ interface ManagedWorkspaceSnapshot {
   repositories: ManagedWorkspaceRepository[];
 }
 
+interface ManagedCorpus {
+  files: ReadonlyArray<Readonly<{ path: string; content: string }>>;
+  ingestion: readonly ContextIngestionDescriptor[];
+}
+
 const SEMANTIC_READ_CONCURRENCY = 8;
+// Capacity governs memory retention, never semantic freshness. Every read first
+// resolves the caller's current exact state, including reads of cached corpora.
+const MANAGED_CORPUS_CACHE_BYTES = 16 * 1024 * 1024;
+const MANAGED_CORPUS_CACHE_ENTRIES = 32;
 
 async function mapWithBoundedConcurrency<Input, Output>(
   inputs: readonly Input[],
@@ -527,9 +539,10 @@ async function listAllDirectoryEntries(
 /** Resolve the bounded repository catalog from canonical visible entries. */
 async function managedWorkspaceSnapshot(
   bridge: FsVcsBridge,
-  contextId: string
+  contextId: string,
+  selectedState?: VcsStateNodeRef
 ): Promise<ManagedWorkspaceSnapshot> {
-  const { workingHead: state } = await bridge.status({ contextId });
+  const state = selectedState ?? (await bridge.status({ contextId })).workingHead;
   const roots = await listAllDirectoryEntries(bridge, state, "");
   const repositories: ManagedWorkspaceRepository[] = [];
   const containers: string[] = [];
@@ -865,6 +878,9 @@ export class FsService {
   /** handleId → TrackedHandle */
   private readonly openHandles = new Map<number, TrackedHandle>();
   private nextHandleId = 1;
+  private readonly managedCorpora = new Map<string, { corpus: ManagedCorpus; bytes: number }>();
+  private readonly loadingManagedCorpora = new Map<string, Promise<ManagedCorpus>>();
+  private managedCorpusBytes = 0;
 
   constructor(
     contextFolderManager: ContextFolderManager,
@@ -922,20 +938,75 @@ export class FsService {
         "Managed file reads require an exact semantic workspace context"
       );
     }
-    const snapshot = await managedWorkspaceSnapshot(bridge, scope.contextId);
+    const state = (await bridge.status({ contextId: scope.contextId })).workingHead;
+    const key = JSON.stringify([state, [...new Set(patterns)].sort(compareUtf16CodeUnits)]);
+    let corpus = this.managedCorpora.get(key)?.corpus;
+    if (corpus) {
+      const cached = this.managedCorpora.get(key)!;
+      this.managedCorpora.delete(key);
+      this.managedCorpora.set(key, cached);
+    } else {
+      let loading = this.loadingManagedCorpora.get(key);
+      if (!loading) {
+        loading = this.loadManagedCorpus(bridge, scope.contextId, state, patterns);
+        this.loadingManagedCorpora.set(key, loading);
+        void loading.then(
+          (loaded) => {
+            this.loadingManagedCorpora.delete(key);
+            const bytes = Buffer.byteLength(JSON.stringify(loaded));
+            if (bytes > MANAGED_CORPUS_CACHE_BYTES) return;
+            this.managedCorpora.set(key, { corpus: loaded, bytes });
+            this.managedCorpusBytes += bytes;
+            while (
+              this.managedCorpusBytes > MANAGED_CORPUS_CACHE_BYTES ||
+              this.managedCorpora.size > MANAGED_CORPUS_CACHE_ENTRIES
+            ) {
+              const oldest = this.managedCorpora.entries().next().value!;
+              this.managedCorpora.delete(oldest[0]);
+              this.managedCorpusBytes -= oldest[1].bytes;
+            }
+          },
+          () => {
+            this.loadingManagedCorpora.delete(key);
+          }
+        );
+      }
+      corpus = await loading;
+    }
+    // Resource data can be shared; authority acquisition and durable lineage
+    // cannot. Each caller records the exact descriptors before receiving bytes.
+    await this.recordProjectedIngestion(ctx, "fs-managed-corpus-read", corpus.ingestion);
+    return corpus.files.map(({ path, content }) => ({ path, content }));
+  }
+
+  private async loadManagedCorpus(
+    bridge: FsVcsBridge,
+    contextId: string,
+    state: VcsStateNodeRef,
+    patterns: readonly string[]
+  ): Promise<ManagedCorpus> {
+    const snapshot = await managedWorkspaceSnapshot(bridge, contextId, state);
     const pointCandidates = managedRepoRootFileCandidates(snapshot, patterns);
     if (pointCandidates) {
+      const batches = [];
+      for (let offset = 0; offset < pointCandidates.length; offset += 500)
+        batches.push(pointCandidates.slice(offset, offset + 500));
       const resolved = (
-        await mapWithBoundedConcurrency(
-          pointCandidates,
-          SEMANTIC_READ_CONCURRENCY,
-          async (candidate) => {
-            const result = await bridge.readFile({
-              state: snapshot.state,
-              repositoryId: candidate.repositoryId,
-              file: { kind: "path", path: candidate.path },
-            });
+        await mapWithBoundedConcurrency(batches, SEMANTIC_READ_CONCURRENCY, async (candidates) => {
+          const results = await bridge.readFiles({
+            state: snapshot.state,
+            files: candidates.map(({ repositoryId, path }) => ({
+              repositoryId,
+              file: { kind: "path" as const, path },
+            })),
+          });
+          if (results.length !== candidates.length)
+            throw codedError("EINTEGRITY", "Semantic file batch changed its selector count");
+          return results.map((result, index) => {
             if (!result) return null;
+            const candidate = candidates[index]!;
+            if (result.repositoryId !== candidate.repositoryId || result.path !== candidate.path)
+              throw codedError("EINTEGRITY", "Semantic file batch changed its selector identity");
             return {
               path: `/${candidate.repoPath}/${candidate.path}`,
               content:
@@ -944,9 +1015,10 @@ export class FsService {
                   : Buffer.from(result.content.base64, "base64").toString("utf8"),
               ingestion: ingestionDescriptorsForVcsRead(result),
             };
-          }
-        )
+          });
+        })
       )
+        .flat()
         .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
         .sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
       const ingestion = new Map<string, ContextIngestionDescriptor>();
@@ -955,8 +1027,7 @@ export class FsService {
           retainStrongestIngestionDescriptor(ingestion, descriptor);
         }
       }
-      await this.recordProjectedIngestion(ctx, "fs-managed-corpus-read", [...ingestion.values()]);
-      return resolved.map(({ path, content }) => ({ path, content }));
+      return this.freezeManagedCorpus(resolved, [...ingestion.values()]);
     }
     const files = (await managedWorkspaceFilesMatching(bridge, snapshot, patterns)).sort(
       (left, right) =>
@@ -995,9 +1066,17 @@ export class FsService {
         retainStrongestIngestionDescriptor(ingestion, descriptor);
       }
     }
-    await this.recordProjectedIngestion(ctx, "fs-managed-corpus-read", [...ingestion.values()]);
+    return this.freezeManagedCorpus(resolved, [...ingestion.values()]);
+  }
 
-    return resolved.map(({ path, content }) => ({ path, content }));
+  private freezeManagedCorpus(
+    files: Array<{ path: string; content: string }>,
+    ingestion: ContextIngestionDescriptor[]
+  ): ManagedCorpus {
+    return Object.freeze({
+      files: Object.freeze(files.map(({ path, content }) => Object.freeze({ path, content }))),
+      ingestion: Object.freeze(ingestion.map((descriptor) => Object.freeze(descriptor))),
+    });
   }
 
   private assertScratchOnlyCall(scope: FsCallScope, method: string, args: unknown[]): void {
@@ -1136,10 +1215,12 @@ export class FsService {
       }
     }
 
-    const root = await this.contextFolderManager.ensureContextFolder(contextId);
+    // Semantic reads and scratch operations need addresses, not a workspace
+    // projection. Native source consumers demand materialization explicitly.
+    const root = this.contextFolderManager.contextSourcePath(contextId);
     return {
       sourceRoot: root,
-      root: await this.contextFolderManager.ensureContextScratch(contextId),
+      root: this.contextFolderManager.contextScratchPath(contextId),
       panelId,
       ownerCallerIds: this.callerOwners(ctx),
       contextId,
@@ -1181,12 +1262,21 @@ export class FsService {
    */
 
   /** Native diagnostics and acknowledgements are data too, including failures. */
+  private async prepareDiskScope(scope: FsCallScope): Promise<void> {
+    if (
+      scope.contextId &&
+      scope.root === this.contextFolderManager.contextScratchPath(scope.contextId)
+    )
+      await this.contextFolderManager.ensureContextScratch(scope.contextId);
+  }
+
   private async callDisk(
     ctx: ServiceContext,
     scope: FsCallScope,
     method: string,
     args: unknown[]
   ): Promise<unknown> {
+    await this.prepareDiskScope(scope);
     await this.recordProjectedIngestion(ctx, "fs-native-read", [
       { key: `session:native-fs:${scope.contextId ?? "scratch"}`, derivedClass: "external" },
     ]);
@@ -1907,6 +1997,7 @@ export class FsService {
       return preparedAuthorityState([], { args: rawArgs, accesses: [] });
     const args = [...rawArgs];
     const scope = await this.resolveContextRoot(ctx, args);
+    await this.prepareDiskScope(scope);
     const accesses: WorkspaceFileAccess[] = [];
     const add = async (
       index: number,

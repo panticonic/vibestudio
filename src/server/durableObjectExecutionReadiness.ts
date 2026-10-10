@@ -25,7 +25,7 @@ export interface DurableObjectExecutionReadinessMetrics {
 }
 
 export interface DurableObjectExecutionReadinessDeps {
-  /** Resolve the durable identity including retired records. */
+  /** Resolve deeply frozen live identity from the fenced publication owner, including retired records. */
   resolveEntity(id: string): Promise<EntityRecord | null>;
   /** Rebuild only disposable runtime state from an exact durable identity. */
   restoreExactExecution(record: EntityRecord): Promise<void>;
@@ -49,14 +49,16 @@ export class DurableObjectRetiredError extends Error {
  * The one boundary between durable DO identity and disposable workerd state.
  *
  * Entity publication calls `materialize()` before exposing post-activation
- * hooks. Every userland invocation independently re-resolves and validates the
- * authoritative WorkspaceDO row. Restoring disposable runtime state is cached
+ * hooks. Every userland invocation independently resolves and validates the
+ * current publication of the authoritative WorkspaceDO entity owner. Restoring
+ * disposable runtime state is cached
  * only for the exact sealed execution identity in the current workerd boot;
  * execution advancement and process replacement therefore miss naturally.
  */
 export class DurableObjectExecutionReadiness {
   private readonly blockedIncarnations = new Set<string>();
   private readonly ready = new Map<string, string>();
+  private readonly publicationKeys = new WeakMap<EntityRecord, string>();
   private readonly restoreFlights = new Map<string, Promise<void>>();
   private readonly metrics: DurableObjectExecutionReadinessMetrics = {
     cachedExecutions: 0,
@@ -112,7 +114,7 @@ export class DurableObjectExecutionReadiness {
       throw new Error(`Durable Object readiness resolved ${record.id} for ${id}`);
     }
     this.requireExecutable(record);
-    const readinessKey = this.readinessKey(record);
+    const readinessKey = this.publishedReadinessKey(record);
     if (this.ready.get(record.id) === readinessKey) {
       this.metrics.cacheHits += 1;
       return record;
@@ -164,6 +166,28 @@ export class DurableObjectExecutionReadiness {
       throw new Error(`Clone storage receipt verifier is unavailable for ${id}`);
     await this.deps.verifyPreparedStorage(record);
     await this.restore(record, this.readinessKey(record), false);
+  }
+
+  /** The fenced publication owner supplies a deeply immutable snapshot. Its
+   * manifest is sealed once; each call still observes the current publication
+   * and current workerd generation. Caller-owned materialization DTOs never
+   * enter this memo. */
+  private publishedReadinessKey(record: EntityRecord): string {
+    let identity = this.publicationKeys.get(record);
+    if (identity === undefined) {
+      const requireFrozen = (value: unknown): void => {
+        if (!value || typeof value !== "object") return;
+        if (!Object.isFrozen(value))
+          throw new Error(`Durable Object ${record.id} publication is not immutable`);
+        for (const child of Object.values(value)) requireFrozen(child);
+      };
+      requireFrozen(record);
+      identity = [record.activeExecutionDigest, canonicalJson(record.activeAuthority)].join(
+        "\u0000"
+      );
+      this.publicationKeys.set(record, identity);
+    }
+    return `${identity}\u0000${this.deps.getBootGeneration?.() ?? 0}`;
   }
 
   private readinessKey(record: EntityRecord): string {

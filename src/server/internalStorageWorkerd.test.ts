@@ -19,6 +19,7 @@ import {
   type WorkerdWorkspaceProvider,
 } from "./workerdManager.js";
 import { LifecycleDriver } from "./services/lifecycleDriver.js";
+import { prepareDurableWorkOwnerRelease } from "./services/durableWorkRelease.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
 import { createRuntimeService, type RuntimeEntityHooks } from "./services/runtimeService.js";
 import { TaskAuthorityRegistry } from "./services/taskAuthorityRegistry.js";
@@ -224,30 +225,17 @@ async function createWorkerdHarness(
       );
       return;
     }
-    if (u.startsWith("/_doversion/") || u.startsWith("/_docode/")) {
+    if (u.startsWith("/_docode/")) {
       if (req.headers["x-vibestudio-loader-secret"] !== manager.getLoaderSecret()) {
         res.writeHead(403);
         res.end("forbidden");
         return;
       }
-      const isV = u.startsWith("/_doversion/");
-      const segs = (u.slice((isV ? "/_doversion/" : "/_docode/").length).split("?")[0] ?? "").split(
-        "/"
-      );
+      const segs = (u.slice("/_docode/".length).split("?")[0] ?? "").split("/");
       const source = decodeURIComponent(segs[0] ?? "");
       const className = decodeURIComponent(segs[1] ?? "");
       const objectKey = new URL(u, "http://fixture").searchParams.get("objectKey") ?? undefined;
-      if (isV) {
-        const v = manager.getDoVersion(source, className, objectKey);
-        if (v === null) {
-          res.writeHead(404);
-          res.end("nf");
-          return;
-        }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ version: v }));
-        return;
-      }
+
       void manager.getDoCode(source, className, objectKey).then((code) => {
         if (!code) {
           res.writeHead(404);
@@ -318,6 +306,8 @@ async function createWorkerdHarness(
       workerdUrl: `http://127.0.0.1:${port}`,
       workerdGatewayToken: manager.getWorkerdGatewayToken(),
       workerdDispatchSecret: manager.getDispatchSecret(),
+      resolveExecutableVersion: (ref) =>
+        manager.getDoVersion(ref.source, ref.className, ref.objectKey),
       callerId: "internal-workerd-test",
       callerKind: "server",
       userId: "internal-workerd-test-user",
@@ -337,6 +327,9 @@ function createDODispatch(
   dispatch.setTokenManager(tokenManager);
   dispatch.setGetWorkerdGatewayToken(() => manager.getWorkerdGatewayToken());
   dispatch.setGetDispatchSecret(() => manager.getDispatchSecret());
+  dispatch.setExecutableVersionResolver((ref) =>
+    manager.getDoVersion(ref.source, ref.className, ref.objectKey)
+  );
   dispatch.setGetWorkerdUrl(() => {
     const port = manager.getPort();
     if (!port) throw new Error("workerd port is not available");
@@ -696,6 +689,7 @@ describe("internal storage DOs under workerd", () => {
       doDispatch.dispatchAlarm(ref),
       doDispatch.dispatchLifecycle(ref, "prepare", {
         epoch: "held-admission",
+        phase: "release",
         mode: "suspend",
         reason: "probe",
         deadlineMs: 1_000,
@@ -1065,6 +1059,8 @@ describe("internal storage DOs under workerd", () => {
           }
           return released;
         },
+        drainDurableWorkDeliveries: async () => {},
+        prepareDurableWorkRelease: async () => {},
         sealAndDrainEntityRelays: async (id) => {
           order.push("relay-sealed");
           await sealAndDrainDurableObjectRelays(id, "retirement-proof");
@@ -1160,6 +1156,18 @@ describe("internal storage DOs under workerd", () => {
       doDispatch,
       workspaceId: "workspace-lifecycle",
       concurrency: 2,
+      drainDurableWorkDeliveries: async () => {},
+      prepareDurableWorkRelease: async (owner, stage, signal) => {
+        await prepareDurableWorkOwnerRelease(
+          owner,
+          doDispatch,
+          (hint) => {
+            expect(hint.queues).toEqual([]);
+          },
+          stage,
+          signal
+        );
+      },
     });
     const workspaceRef = {
       source: INTERNAL_DO_SOURCE,
@@ -1186,6 +1194,7 @@ describe("internal storage DOs under workerd", () => {
       await expect(
         harness.callDurableObject(probeRef, "__lifecycle/prepare", {
           epoch: "raw",
+          phase: "release",
           mode: "suspend",
           reason: "raw",
           deadlineMs: 1_000,

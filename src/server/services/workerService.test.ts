@@ -707,7 +707,7 @@ describe("workerService workspace service resolution", () => {
       dispatcher.dispatch(panelCtx, "workers", "resolveService", ["poem.store.v1"])
     ).rejects.toThrow("No workspace service registered");
 
-    deps.workspaceDecls.singletons.replaceAll([
+    deps.workspaceDecls.singletons = new SingletonRegistry([
       ...deps.workspaceDecls.singletons.all(),
       { source: "workers/poem-store", className: "PoemStoreDO", key: "workspace-poem-store" },
     ]);
@@ -1202,7 +1202,7 @@ describe("workerService workspace service resolution", () => {
 
   it("resolves the system-owned model-settings singleton without reattributing ownership", async () => {
     const deps = createDeps();
-    deps.workspaceDecls.singletons.replaceAll([
+    deps.workspaceDecls.singletons = new SingletonRegistry([
       ...deps.workspaceDecls.singletons.all(),
       {
         source: "workers/model-settings",

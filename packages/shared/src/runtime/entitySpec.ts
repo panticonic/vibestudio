@@ -409,6 +409,13 @@ interface RuntimeEntityCreateCommon {
   resourceBindings?: RuntimeResourceBindingInput[];
 }
 
+/** Complete initial channel relationship established before agent creation returns. */
+export interface RuntimeAgentInitialization {
+  channelId: string;
+  config?: Record<string, unknown>;
+  replay?: boolean;
+}
+
 export type RuntimeEntityCreateSpec =
   | (RuntimeEntityCreateCommon & {
       kind: "panel";
@@ -433,6 +440,7 @@ export type RuntimeEntityCreateSpec =
       execution: CodeExecution;
       className: string;
       stateArgs?: unknown;
+      agentInitialization?: RuntimeAgentInitialization;
       agentBinding?: RuntimeAgentBindingInput;
       agentChannelId?: string;
     })
@@ -485,6 +493,7 @@ export interface RuntimeEntityHandle {
    * retire an entity they did not create in the current attempt.
    */
   created?: boolean;
+  agentInitialization?: { ok: boolean; participantId: string };
 }
 
 /**

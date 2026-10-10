@@ -470,6 +470,8 @@ export async function createTestDO<DOClass extends new (ctx: any, env: any) => o
     const text = await response.text();
     if (!response.ok) {
       const parsed = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+      if (parsed["error"] && typeof parsed["error"] === "object")
+        throw deserializeRpcFailure(parsed["error"]);
       throw new Error(
         typeof parsed["error"] === "string"
           ? parsed["error"]

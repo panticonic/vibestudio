@@ -1,9 +1,20 @@
 {
   "version": 2,
   "classes": {
-    "WorkspaceDO": { "provides": [], "requests": [], "methodScopedRequests": [] },
-    "BrowserVaultDO": { "provides": [], "requests": [], "methodScopedRequests": [] },
+    "WorkspaceDO": {
+      "durableWorkQueues": [],
+      "provides": [],
+      "requests": [],
+      "methodScopedRequests": []
+    },
+    "BrowserVaultDO": {
+      "durableWorkQueues": [],
+      "provides": [],
+      "requests": [],
+      "methodScopedRequests": []
+    },
     "EvalDO": {
+      "durableWorkQueues": [],
       "provides": [],
       "requests": [],
       "methodScopedRequests": [
@@ -16,6 +27,11 @@
         }
       ]
     },
-    "WebhookStoreDO": { "provides": [], "requests": [], "methodScopedRequests": [] }
+    "WebhookStoreDO": {
+      "durableWorkQueues": [],
+      "provides": [],
+      "requests": [],
+      "methodScopedRequests": []
+    }
   }
 }

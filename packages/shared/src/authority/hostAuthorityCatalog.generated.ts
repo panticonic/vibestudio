@@ -7541,6 +7541,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "vcs.readFiles": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "vcs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
   "vcs.readMemory": {
     tier: {
       tier: "open",

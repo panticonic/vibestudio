@@ -25,10 +25,17 @@ export const SERVER_WORKER_ENTRIES = Object.freeze({
   electron: workerEntries("cjs"),
 });
 
+/** Native children belong to the same immutable generation as their server. */
+export const NATIVE_WORKSPACE_ENTRIES = Object.freeze({
+  workspaceSupervisor: "workspace-child.mjs",
+  extensionChild: "extension-child.mjs",
+});
+
 export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/server.mjs",
   "dist/prepare-workspace-templates.mjs",
   "dist/fs-disk-worker.cjs",
+  ...Object.values(NATIVE_WORKSPACE_ENTRIES).map((filename) => `dist/${filename}`),
   "dist/browserTransport.js",
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
   "dist/internal-do.bundle.mjs",
@@ -43,6 +50,7 @@ export const SOURCE_SERVER_PREREQUISITE_ARTIFACTS = Object.freeze([
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
   "dist/browserTransport.js",
   "dist/fs-disk-worker.cjs",
+  ...Object.values(NATIVE_WORKSPACE_ENTRIES).map((filename) => `dist/${filename}`),
   "dist/dependency-content-maintenance.cjs",
   "dist/internal-do.bundle.mjs",
   "dist/host-build-fingerprint.json",

@@ -1,3 +1,4 @@
+import { assertSingleInfrastructureModuleTree } from "../../scripts/lib/bundle-module-identity.mjs";
 import * as esbuild from "esbuild";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -26,6 +27,8 @@ fs.mkdirSync(outdir, { recursive: true });
 // whose exports point at .ts files with NodeNext-style .js specifiers.
 const runtimeBuild = {
   bundle: true,
+  tsconfig: "tsconfig.build.json",
+  metafile: true,
   platform: "node",
   target: "node20",
   format: "esm",
@@ -38,7 +41,7 @@ const require = __createRequire(import.meta.url);
 `.trim(),
   },
 };
-await esbuild.build({
+const hostBuild = await esbuild.build({
   ...runtimeBuild,
   entryPoints: ["src/index.ts"],
   external: PUBLISH ? ["electron"] : ["@vibestudio/extension", "@vibestudio/process-adapter"],
@@ -46,11 +49,14 @@ await esbuild.build({
 // The child is an installed executable closure on every launch path. It must
 // run with no ambient workspace node_modules or TypeScript loader. Inlining its
 // client libraries cannot cause a dual-package hazard across a process boundary.
-await esbuild.build({
+const childBuild = await esbuild.build({
   ...runtimeBuild,
   entryPoints: ["src/childRuntime.ts"],
   external: ["electron"],
 });
+
+for (const result of [hostBuild, childBuild])
+  assertSingleInfrastructureModuleTree(result.metafile, path.resolve("../.."), process.cwd());
 
 if (PUBLISH) {
   console.log("extension-host publish build complete (self-contained → dist-publish/)");

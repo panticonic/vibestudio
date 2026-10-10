@@ -266,6 +266,7 @@ beforeEach(() => {
           className,
           version: 1,
           freshSchemaFingerprint: `fixture:${className}`,
+          durableWorkQueues: [],
         });
       }
       return new Response(null, { status: 204 });
@@ -336,6 +337,7 @@ describe("WorkerdManager", () => {
       className: "BoardDO",
       version,
       freshSchemaFingerprint: fingerprint,
+      durableWorkQueues: [],
     });
 
     it("rebuilds obsolete probe evidence and retains exact evidence across reopen", async () => {
@@ -378,6 +380,48 @@ describe("WorkerdManager", () => {
       await reopened.shutdown();
     });
 
+    it("uses exact executable queue evidence without probing each activated entity", async () => {
+      const deps = createMockDeps();
+      const manager = new WorkerdManager(deps);
+      const probe = vi.spyOn(manager, "probeDurableObjectSchema").mockResolvedValue({
+        ...descriptor(1, "fresh-shape"),
+        durableWorkQueues: ["channel-delivery"],
+      });
+      try {
+        const first = await manager.ensureDurableObjectEntity({
+          source: "workers/board",
+          className: "BoardDO",
+          key: "first",
+          contextId: "fresh",
+        });
+        const second = await manager.ensureDurableObjectEntity({
+          source: "workers/board",
+          className: "BoardDO",
+          key: "second",
+          contextId: "fresh",
+        });
+        expect(probe).toHaveBeenCalledTimes(1);
+        const queues = manager.getDurableWorkQueues(
+          "workers/board",
+          "BoardDO",
+          first.executionDigest
+        );
+        expect(queues).toEqual(["channel-delivery"]);
+        queues.length = 0;
+        expect(
+          manager.getDurableWorkQueues("workers/board", "BoardDO", second.executionDigest)
+        ).toEqual(["channel-delivery"]);
+        expect(() =>
+          manager.getDurableWorkQueues("workers/board", "BoardDO", "e".repeat(64))
+        ).toThrow("no admitted");
+        expect(() =>
+          manager.getDurableWorkQueues("workers/board", "OtherDO", first.executionDigest)
+        ).toThrow("no admitted");
+      } finally {
+        await manager.shutdown();
+      }
+    });
+
     it("boots the complete product configuration once without duplicate schema probes", async () => {
       const manager = new WorkerdManager(createMockDeps());
       const before = vi.mocked(spawn).mock.calls.length;
@@ -397,6 +441,19 @@ describe("WorkerdManager", () => {
       );
       expect(vi.mocked(spawn).mock.calls.length - before).toBe(1);
       expect(schemas).not.toHaveBeenCalled();
+      const internal = await import("./internalDOs/internalDoLoader.js");
+      for (const className of internal.INTERNAL_DO_CLASSES) {
+        const identity = internal.internalDOExecutionIdentity(
+          internal.getInternalDOBundle(),
+          className
+        );
+        expect(
+          manager.getDurableWorkQueues(INTERNAL_DO_SOURCE, className, identity.executionDigest)
+        ).toEqual(identity.durableWorkQueues);
+        expect(() =>
+          manager.getDurableWorkQueues(INTERNAL_DO_SOURCE, className, "f".repeat(64))
+        ).toThrow("does not match");
+      }
       const config = await (
         manager as unknown as {
           generateConfig(): Promise<{
@@ -415,6 +472,35 @@ describe("WorkerdManager", () => {
         []
       );
       await manager.shutdown();
+    });
+
+    it("prepares schema evidence without an object and reuses it on activation", async () => {
+      const deps = createMockDeps();
+      const mgr = new WorkerdManager(deps);
+      const binding = await deps.bindRuntimeImage("workers/board", "state:original");
+      const build = deps.getBuildByExecution(
+        binding.artifact.buildKey,
+        binding.artifact.executionDigest
+      )!;
+      const probe = vi
+        .spyOn(mgr, "probeDurableObjectSchema")
+        .mockResolvedValue(descriptor(1, "fresh-shape"));
+      await mgr.prepareWorkerExecutable(build, ["BoardDO"]);
+      await mgr.prepareWorkerExecutable(build, ["BoardDO"]);
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(mgr.getDoVersion("workers/board", "BoardDO")).toBeNull();
+      vi.mocked(deps.bindRuntimeImage).mockClear();
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/board",
+        className: "BoardDO",
+        key: "first",
+        contextId: "fresh",
+        ref: "state:original",
+      });
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(deps.bindRuntimeImage).toHaveBeenCalledTimes(1);
+      expect(mgr.getDoVersion("workers/board", "BoardDO", "first")).not.toBeNull();
+      await mgr.shutdown();
     });
 
     it("shares exact schema admission and retains its evidence without a publication", async () => {
@@ -612,6 +698,7 @@ describe("WorkerdManager", () => {
       expect(secondCode?.env["WORKER_EXECUTION_DIGEST"]).toBe(second.executionDigest);
       expect(firstCode?.env["WORKER_BUILD_KEY"]).toBe(first.buildKey);
       expect(secondCode?.env["WORKER_BUILD_KEY"]).toBe(second.buildKey);
+      expect(firstCode?.egressIdentity).not.toBe(secondCode?.egressIdentity);
       expect(() =>
         mgr.validateAndStageDurableObjectSchemas("conflicting-probe", [
           {
@@ -1198,10 +1285,16 @@ describe("WorkerdManager", () => {
         createdAt: 1,
         status: "active" as const,
         cleanupComplete: false,
+        stateArgs: { agentConfig: { instructions: "admitted instructions" } },
       };
 
       await expect(restored.restoreDurableObjectEntity(record)).resolves.toBeUndefined();
       const version = restored.getDoVersion("workers/new-do", "NewDO", "k1");
+      const admittedCode = await restored.getDoCode("workers/new-do", "NewDO", "k1");
+      record.stateArgs.agentConfig.instructions = "caller mutated instructions";
+      expect(restored.getDoVersion("workers/new-do", "NewDO", "k1")).toBe(version);
+      expect(await restored.getDoCode("workers/new-do", "NewDO", "k1")).toEqual(admittedCode);
+      record.stateArgs.agentConfig.instructions = "admitted instructions";
       await expect(restored.restoreDurableObjectEntity(record)).resolves.toBeUndefined();
       expect(restored.getDoVersion("workers/new-do", "NewDO", "k1")).toBe(version);
       expect(restored.listRuntimeImages().some(({ id }) => id === record.id)).toBe(false);
@@ -1296,7 +1389,9 @@ describe("WorkerdManager", () => {
           objectKey: "k1",
         })
       ).resolves.toBeUndefined();
-      expect(unregisterEgressCaller).toHaveBeenCalledWith("do:workers/new-do:NewDO:k1");
+      expect(unregisterEgressCaller).toHaveBeenCalledWith(
+        expect.stringMatching(/^do-code:workers\/new-do:NewDO:[a-f0-9]{64}$/)
+      );
       expect(recordLifecycleEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           entityId: "do:workers/new-do:NewDO:k1",
@@ -1327,8 +1422,9 @@ describe("WorkerdManager", () => {
       ]);
 
       expect(registerEgressCaller).toHaveBeenCalledWith(
-        "workers/agent-worker:AiChatWorker",
+        expect.stringMatching(/^do-code:workers\/agent-worker:AiChatWorker:[a-f0-9]{64}$/),
         expect.objectContaining({
+          runtime: expect.objectContaining({ kind: "worker" }),
           code: expect.objectContaining({
             repoPath: "workers/agent-worker",
             executionDigest: runtimeArtifact("workers/agent-worker", "main").executionDigest,
@@ -1336,6 +1432,83 @@ describe("WorkerdManager", () => {
           }),
         })
       );
+    });
+
+    it("attributes equal DO code images to the same sealed network principal", async () => {
+      const registerEgressCaller = vi.fn();
+      const manager = new WorkerdManager(createMockDeps({ registerEgressCaller }));
+      await manager.registerAllDOClasses([
+        { source: "workers/agent-worker", className: "AiChatWorker" },
+      ]);
+      const first = await manager.getDoCode("workers/agent-worker", "AiChatWorker", "first");
+      const second = await manager.getDoCode("workers/agent-worker", "AiChatWorker", "second");
+      expect(first?.egressIdentity).toMatch(/^do-code:/);
+      expect(first?.egressIdentity).toBe(second?.egressIdentity);
+      expect(first?.version).toBe(second?.version);
+      const units = manager as unknown as {
+        loadedDoCodeUnits: Map<string, unknown>;
+        retiredDynamicIsolateIds: Set<string>;
+      };
+      expect(units.loadedDoCodeUnits.size).toBe(1);
+      expect(units.retiredDynamicIsolateIds.size).toBe(0);
+      const caller = registerEgressCaller.mock.calls.at(-1)![1];
+      expect(caller.runtime).toEqual({ id: first!.egressIdentity, kind: "worker" });
+      expect(caller.code.executionDigest).toBe(first!.env["WORKER_EXECUTION_DIGEST"]);
+      expect(caller.agentBinding).toBeUndefined();
+      expect(caller.taskAuthority).toBeUndefined();
+      expect(caller.executionSession).toBeUndefined();
+      expect(registerEgressCaller.mock.calls.every(([id]) => !id.startsWith("do:"))).toBe(true);
+    });
+
+    it("retires a shared executable only after its final object binding leaves", async () => {
+      const unregisterEgressCaller = vi.fn();
+      const manager = new WorkerdManager(createMockDeps({ unregisterEgressCaller }));
+      const source = "workers/new-do";
+      const className = "NewDO";
+      for (const key of ["first", "second"]) {
+        const prepared = await manager.ensureDurableObjectEntity({
+          source,
+          className,
+          key,
+          contextId: "ctx-shared",
+          stateArgs: { instructions: "same" },
+        });
+        await manager.restoreDurableObjectEntity({
+          id: prepared.targetId,
+          kind: "do",
+          key,
+          className,
+          source: { repoPath: source, effectiveVersion: prepared.effectiveVersion },
+          activeBuildKey: prepared.buildKey,
+          activeExecutionDigest: prepared.executionDigest,
+          activeAuthority: prepared.authority,
+          contextId: "ctx-shared",
+          stateArgs: { instructions: "same" },
+          createdAt: 1,
+          status: "active",
+          cleanupComplete: false,
+        });
+      }
+      const first = await manager.getDoCode(source, className, "first");
+      const second = await manager.getDoCode(source, className, "second");
+      expect(first?.version).toBe(second?.version);
+      expect(first?.egressIdentity).toBe(second?.egressIdentity);
+      const units = manager as unknown as {
+        loadedDoCodeUnits: Map<string, unknown>;
+        retiredDynamicIsolateIds: Set<string>;
+      };
+      expect(units.loadedDoCodeUnits.size).toBe(1);
+      unregisterEgressCaller.mockClear();
+      await manager.retireDOEntity({ source, className, objectKey: "first" });
+      expect(units.retiredDynamicIsolateIds.size).toBe(0);
+      expect(unregisterEgressCaller).not.toHaveBeenCalledWith(first!.egressIdentity);
+      await manager.retireDOEntity({ source, className, objectKey: "second" });
+      expect(units.retiredDynamicIsolateIds.size).toBe(1);
+      // The class default remains a legitimate code-principal owner when it
+      // shares the image; only the state-argument executable unit is obsolete.
+      const serviceCode = await manager.getDoCode(source, className);
+      expect(serviceCode?.egressIdentity).toBe(first!.egressIdentity);
+      expect(unregisterEgressCaller).not.toHaveBeenCalledWith(first!.egressIdentity);
     });
 
     it("serves object-specific stateArgs in userland DO env", async () => {
@@ -2019,26 +2192,6 @@ describe("WorkerdManager", () => {
 
       expect(fetchMock).not.toHaveBeenCalled();
       expect(restartBegin).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("universal DO host", () => {
-    it("makes object-specific module graphs facet-owned instead of process-cache-owned", () => {
-      expect(compiledWorkerdPrograms.universalDo).toContain(
-        "const worker = this.env.LOADER.load({"
-      );
-      expect(compiledWorkerdPrograms.universalDo).not.toContain("this.env.LOADER.get(");
-      expect(compiledWorkerdPrograms.universalDo).toContain(
-        "if (this.loadedFacet?.version === args.version) return this.loadedFacet"
-      );
-      expect(compiledWorkerdPrograms.universalDo).toContain("Runtime entity retired");
-      expect(compiledWorkerdPrograms.universalDo).toContain('this.ctx.facets.abort("do"');
-      expect(compiledWorkerdPrograms.universalDo).toContain(
-        'this.ctx.facets.abort("do", new Error("System-test injected vessel crash"))'
-      );
-      expect(compiledWorkerdPrograms.universalDo).toContain(
-        "const egressIdentity = `do:${identity}:${userKey}`"
-      );
     });
   });
 

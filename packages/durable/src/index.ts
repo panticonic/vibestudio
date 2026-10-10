@@ -1,15 +1,6 @@
 import { LifecyclePreparation } from "@vibestudio/shared/lifecyclePreparation";
 import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import {
-  parseLifecyclePrepareInput,
-  type LifecyclePrepareInput,
-  type LifecyclePrepareResult,
-} from "@vibestudio/shared/doDispatcher";
-export type {
-  LifecyclePrepareInput,
-  LifecyclePrepareResult,
-} from "@vibestudio/shared/doDispatcher";
-import {
   collectExposableMethods,
   decodeRpcJson,
   encodeRpcJson,
@@ -45,13 +36,23 @@ import {
   type EventIntakeRule,
   type HostControlDenial,
 } from "@vibestudio/shared/directRpcEnforcement";
-import { type DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import {
-  acceptResidentChannelDelivery,
-  acceptResidentChannelInvocation,
-  cancelResidentChannelInvocation,
-  inspectResidentSessions,
-  registerResidentSession,
+  type DurableWorkQueue,
+  type DurableWorkReleaseReceipt,
+  type DurableWorkReleaseStage,
+} from "@vibestudio/shared/durableWork";
+import {
+  parseLifecyclePrepareInput,
+  type LifecyclePrepareInput,
+  type LifecyclePrepareResult,
+} from "@vibestudio/shared/doDispatcher";
+export type {
+  LifecyclePrepareInput,
+  LifecyclePrepareResult,
+} from "@vibestudio/shared/doDispatcher";
+import {
+  ResidentSessionRegistry,
+  assertChannelDeliverySource,
   type ResidentChannelDeliveryInput,
   type ResidentChannelInvocationInput,
   type ResidentChannelCancellationInput,
@@ -66,9 +67,10 @@ import {
 } from "@vibestudio/shared/typedServiceClient";
 import {
   dispatchWithDurableObjectSchemaGuard,
-  durableObjectSchemaDescriptor,
+  durableObjectExecutableDescriptor,
+  validateDurableObjectExecutableCapabilities,
   installDurableObjectSchema,
-  type DurableObjectSchemaDescriptor,
+  type DurableObjectExecutableDescriptor,
   type DurableObjectSchemaUpgrade,
   validateDurableObjectSchemaIndexes,
 } from "./schema.js";
@@ -168,6 +170,7 @@ export interface AlarmSchedule {
 export abstract class DurableObjectBase {
   private readonly lifecyclePreparation = new LifecyclePreparation();
   static schemaVersion = 1;
+  static readonly durableWorkQueues: readonly DurableWorkQueue[] = [];
   static eventIntake: readonly EventIntakeRule[] = [];
   static rpcMethods?: ServiceMethodSchemas;
 
@@ -207,8 +210,9 @@ export abstract class DurableObjectBase {
 
   protected abstract createTables(): void | Promise<void>;
 
-  /** Activation-local initialization that requires the committed schema. */
-  protected afterSchemaReady(): void | Promise<void> {}
+  /** Restore activation-local state synchronously after schema admission.
+   * Network setup and resource acquisition belong to their owning operation. */
+  protected restoreActivationState(): undefined {}
 
   /**
    * Optional receiver binding for schema-declared code principals. Product
@@ -317,19 +321,23 @@ export abstract class DurableObjectBase {
   }
 
   protected validateSchema(): void {
-    const missing = this.requiredTables().filter((table) => {
-      const rows = this.sql
-        .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table)
-        .toArray();
-      return rows.length === 0;
-    });
+    const requiredTables = this.requiredTables();
+    const existingTables = new Set(
+      requiredTables.length
+        ? this.sql
+            .exec(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+            .toArray()
+            .map((row) => String(row["name"]))
+        : []
+    );
+    const missing = requiredTables.filter((table) => !existingTables.has(table));
     if (missing.length > 0) {
       throw new Error(
         `${this.constructor.name} schema validation failed: missing table(s): ${missing.join(", ")}`
       );
     }
     const indexes = this.schemaIndexDefinitions();
-    if (indexes) validateDurableObjectSchemaIndexes(this.sql, this.requiredTables(), indexes);
+    if (indexes) validateDurableObjectSchemaIndexes(this.sql, requiredTables, indexes);
   }
 
   /** Synchronous helpers require admission through the asynchronous ready gate. */
@@ -344,7 +352,7 @@ export abstract class DurableObjectBase {
     if (this.schemaInitialization) return this.schemaInitialization;
     const initialization = (async () => {
       await this.ensureSchema();
-      if (this.env["VIBESTUDIO_SCHEMA_PROBE"] !== true) await this.afterSchemaReady();
+      if (this.env["VIBESTUDIO_SCHEMA_PROBE"] !== true) this.restoreActivationState();
       this.schemaReady = true;
     })();
     this.schemaInitialization = initialization;
@@ -371,7 +379,7 @@ export abstract class DurableObjectBase {
 
   private async ensureSchema(): Promise<void> {
     const descriptor = this.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"] as
-      | DurableObjectSchemaDescriptor
+      | DurableObjectExecutableDescriptor
       | undefined;
     const version = (this.constructor as typeof DurableObjectBase).schemaVersion;
     if (
@@ -382,6 +390,11 @@ export abstract class DurableObjectBase {
     ) {
       throw new Error("Schema descriptor does not match the admitted runtime image");
     }
+    if (descriptor)
+      validateDurableObjectExecutableCapabilities(
+        descriptor,
+        (this.constructor as typeof DurableObjectBase).durableWorkQueues
+      );
     await installDurableObjectSchema({
       className: this.runtimeClassName,
       version,
@@ -403,7 +416,12 @@ export abstract class DurableObjectBase {
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     };
-    return Response.json(durableObjectSchemaDescriptor(definition));
+    return Response.json(
+      durableObjectExecutableDescriptor(
+        definition,
+        (this.constructor as typeof DurableObjectBase).durableWorkQueues
+      )
+    );
   }
 
   protected getStateValue(key: string): string | null {
@@ -708,11 +726,11 @@ export abstract class DurableObjectBase {
     return null;
   }
 
-  protected beginLifecycleRelease(_input: LifecyclePrepareInput): void {}
-
   async releaseForLifecycle(_input: LifecyclePrepareInput): Promise<LifecyclePrepareResult> {
     return { status: "ready" };
   }
+
+  protected beginLifecycleRelease(_input: LifecyclePrepareInput): void {}
 
   protected async cancelLifecyclePreparation(_input: LifecyclePrepareInput): Promise<void> {}
 
@@ -1377,7 +1395,9 @@ export abstract class DurableObjectBase {
   }
 
   private pendingDurableWorkReadyQueues(): DurableWorkQueue[] {
-    return this.durableWorkReadiness.pendingQueues(this.durableWorkQueues());
+    return this.durableWorkReadiness.pendingQueues(
+      (this.constructor as typeof DurableObjectBase).durableWorkQueues
+    );
   }
 
   protected acknowledgeDurableWorkReady(queue: DurableWorkQueue): void {
@@ -1385,12 +1405,9 @@ export abstract class DurableObjectBase {
   }
 
   protected durableWorkReadinessDiagnostics() {
-    return this.durableWorkReadiness.diagnostics(this.durableWorkQueues());
-  }
-
-  /** Framework queue capabilities are probed by the host during activation. */
-  protected durableWorkQueues(): readonly DurableWorkQueue[] {
-    return [];
+    return this.durableWorkReadiness.diagnostics(
+      (this.constructor as typeof DurableObjectBase).durableWorkQueues
+    );
   }
 
   @rpc({
@@ -1405,7 +1422,35 @@ export abstract class DurableObjectBase {
     sensitivity: "read",
   })
   durableWorkCapabilities(): DurableWorkQueue[] {
-    return [...this.durableWorkQueues()];
+    return [...(this.constructor as typeof DurableObjectBase).durableWorkQueues];
+  }
+
+  /** Capture owned work after quiescence, while the host scheduler remains admitted. */
+  @rpc({
+    principals: ["host"],
+    website: { kind: "closed", reason: "The host joins owner work before lifecycle release." },
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async prepareDurableWorkRelease(
+    _stage: DurableWorkReleaseStage
+  ): Promise<DurableWorkReleaseReceipt> {
+    return { queues: [], barrier: null };
+  }
+
+  @rpc({
+    principals: ["host"],
+    website: { kind: "closed", reason: "The host joins owner work before lifecycle release." },
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  async waitDurableWorkRelease(
+    _stage: DurableWorkReleaseStage,
+    barrier: DurableWorkReleaseReceipt["barrier"]
+  ): Promise<void> {
+    if (barrier !== null) throw new Error("This owner has no durable-work release frontier");
   }
 
   /** Finite delivery into an explicitly resident in-memory operation. The
@@ -1417,13 +1462,18 @@ export abstract class DurableObjectBase {
       reason:
         "This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation.",
     },
-    principals: ["host"],
+    principals: ["host", "code"],
     effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
   async acceptChannelDelivery(input: ResidentChannelDeliveryInput): Promise<unknown> {
-    return acceptResidentChannelDelivery(this.rpcSelfId, input);
+    assertChannelDeliverySource(
+      { id: this.rpcCallerId, kind: this.rpcCallerKind },
+      input,
+      this.residentSessions.target(input.channelId)
+    );
+    return this.residentSessions.acceptDelivery(input);
   }
 
   @rpc({
@@ -1438,7 +1488,7 @@ export abstract class DurableObjectBase {
     sensitivity: "write",
   })
   async acceptChannelInvocation(input: ResidentChannelInvocationInput): Promise<unknown> {
-    return acceptResidentChannelInvocation(this.rpcSelfId, input);
+    return this.residentSessions.acceptInvocation(input);
   }
 
   @rpc({
@@ -1453,24 +1503,27 @@ export abstract class DurableObjectBase {
     sensitivity: "write",
   })
   async cancelChannelInvocation(input: ResidentChannelCancellationInput): Promise<unknown> {
-    return cancelResidentChannelInvocation(this.rpcSelfId, input);
+    return this.residentSessions.cancelInvocation(input);
   }
 
   /** Register the finite receiver in this exact Durable Object activation.
    * Guest/userland bundles must receive this capability from their owner; a
    * separately imported module registry lives in a different module graph. */
+  private readonly residentSessions = new ResidentSessionRegistry();
+
   protected registerResidentChannelSession(
     channelId: string,
-    receiver: ResidentSessionReceiver
+    receiver: ResidentSessionReceiver,
+    relationship: { targetId: string }
   ): () => void {
-    return registerResidentSession(this.rpcSelfId, channelId, receiver);
+    return this.residentSessions.register(channelId, receiver, relationship);
   }
 
   protected residentSessionDiagnostics(): {
     active: number;
     receivers: Array<{ channelId: string; openedAt: number; ageMs: number }>;
   } {
-    const receivers = inspectResidentSessions(this.rpcSelfId);
+    const receivers = this.residentSessions.inspect();
     return { active: receivers.length, receivers };
   }
 

@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
-import { deserializeRpcFailure } from "@vibestudio/rpc";
+import { deserializeRpcFailure, RemoteRpcAggregateError } from "@vibestudio/rpc";
 import { LifecycleDriver } from "./lifecycleDriver.js";
 import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
 import type { DODispatch } from "../doDispatch.js";
@@ -15,6 +15,11 @@ function makeHarness(
   opts: {
     prepare?: (ref: DORef, input: LifecyclePrepareInput) => Promise<LifecyclePrepareResult>;
     workspace?: (method: string, args: unknown[]) => Promise<void>;
+    drain?: (
+      ref: DORef,
+      signal?: AbortSignal,
+      stage?: import("@vibestudio/shared/durableWork").DurableWorkReleaseStage
+    ) => Promise<void>;
     leases?: Array<{ source: string; className: string; objectKey: string }>;
     concurrency?: number;
   } = {}
@@ -76,19 +81,35 @@ function makeHarness(
       }
       return undefined;
     },
+    dispatchHeld: async (ref: DORef, method: string) => {
+      calls.push({ kind: "lifecycle", method, ref });
+      await opts.drain?.(ref);
+    },
+    dispatchHeldWithSignal: async (ref: DORef, signal: AbortSignal, method: string) => {
+      calls.push({ kind: "lifecycle", method, ref });
+      await opts.drain?.(ref, signal);
+    },
     dispatchLifecycle: async (ref: DORef, method: "prepare" | "resume", arg: unknown) => {
       calls.push({ kind: "lifecycle", method, ref, arg });
       if (opts.prepare && method === "prepare")
         return opts.prepare(ref, arg as LifecyclePrepareInput);
       return method === "prepare" ? { status: "ready" } : undefined;
     },
-  } as Pick<DODispatch, "dispatch" | "dispatchLifecycle">;
+  } as Pick<
+    DODispatch,
+    "dispatch" | "dispatchLifecycle" | "dispatchHeld" | "dispatchHeldWithSignal"
+  >;
 
   const driver = new LifecycleDriver({
     workerdManager: workerdManager as WorkerdManager,
     doDispatch: doDispatch as DODispatch,
     workspaceId: "workspace-main",
     concurrency: opts.concurrency ?? 2,
+    drainDurableWorkDeliveries: async () => {},
+    prepareDurableWorkRelease: async (ref, stage, signal) => {
+      calls.push({ kind: "lifecycle", method: "prepareDurableWorkRelease", ref, arg: stage });
+      await opts.drain?.(ref, signal, stage);
+    },
   });
   driver.start();
   return {
@@ -100,7 +121,134 @@ function makeHarness(
 }
 
 describe("LifecycleDriver", () => {
-  it("prepares once on restart begin and resumes only on restart ready", async () => {
+  it("preserves nested aggregate failure identity and codes in the lifecycle journal", async () => {
+    const shared = Object.assign(new Error("original cause"), { code: "CAUSE_CODE" });
+    const original = Object.assign(
+      new AggregateError([shared, shared], "original aggregate", { cause: shared }),
+      { code: "AGGREGATE_CODE" }
+    );
+    const harness = makeHarness({
+      prepare: async (_ref, input) => {
+        if (input.phase === "quiesce") throw original;
+        return { status: "ready" };
+      },
+    });
+    const failure = await harness.driver.prepareForShutdown().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors[0]).toBe(original);
+    expect((failure as AggregateError).cause).toBe(original);
+    const journal = harness.calls.find((call) => call.method === "lifecycleRecordOp")?.arg as {
+      status: string;
+      detail: { phase: string; result: unknown };
+    };
+    expect(journal).toMatchObject({
+      status: "failed",
+      detail: {
+        phase: "quiesce",
+        result: { message: "original aggregate", code: "AGGREGATE_CODE" },
+      },
+    });
+    const restored = deserializeRpcFailure(journal.detail.result);
+    expect(restored).toBeInstanceOf(AggregateError);
+    if (!(restored instanceof RemoteRpcAggregateError))
+      throw new Error("Expected an aggregate RPC failure");
+    expect(restored.code).toBe("AGGREGATE_CODE");
+    expect(restored.errors).toHaveLength(2);
+    expect(restored.errors[0]).toBe(restored.errors[1]);
+    expect(restored.errors[0]).toBe(restored.cause);
+    expect(restored.errors[0]).toMatchObject({ message: "original cause", code: "CAUSE_CODE" });
+  });
+
+  it("joins all peer-forwarding debt before any owner captures its observation frontier", async () => {
+    const forwarding = deferred<void>();
+    const entered = deferred<void>();
+    const captures: string[] = [];
+    const harness = makeHarness({
+      leases: [
+        { source: "workers/channel", className: "ChannelDO", objectKey: "receiver" },
+        { source: "workers/source", className: "SourceDO", objectKey: "publisher" },
+      ],
+      drain: async (ref, _signal, stage) => {
+        if (stage === "peer-obligations" && ref.objectKey === "publisher") {
+          entered.resolve();
+          await forwarding.promise;
+        }
+        if (stage === "owner") captures.push(ref.objectKey);
+      },
+    });
+    const release = harness.driver.prepareForShutdown();
+    await entered.promise;
+    expect(captures).toEqual([]);
+    expect(
+      harness.calls.some((call) => (call.arg as LifecyclePrepareInput)?.phase === "release")
+    ).toBe(false);
+    forwarding.resolve();
+    await release;
+    expect(captures.sort()).toEqual(["publisher", "receiver"]);
+  });
+
+  it("joins owner observation receipts before releasing its available executor", async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const observed = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const receipt = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const harness = makeHarness({
+      drain: async () => {
+        entered();
+        await receipt;
+      },
+    });
+    const preparing = harness.fireBegin({
+      correlationId: "held-observation",
+      generation: 8,
+      reason: "planned",
+    });
+    await observed;
+    expect(
+      harness.calls
+        .filter((call) => call.method === "prepare")
+        .map((call) => (call.arg as LifecyclePrepareInput).phase)
+    ).toEqual(["quiesce", "peer-obligations"]);
+    release();
+    await preparing;
+    expect(
+      harness.calls
+        .filter((call) => call.kind === "lifecycle")
+        .map((call) =>
+          call.method === "prepare" ? (call.arg as LifecyclePrepareInput).phase : call.method
+        )
+    ).toEqual([
+      "quiesce",
+      "peer-obligations",
+      "prepareDurableWorkRelease",
+      "prepareDurableWorkRelease",
+      "release",
+    ]);
+  });
+
+  it("propagates the original observation failure without releasing or sealing the owner", async () => {
+    const original = new Error("original durable graph observation failed");
+    const harness = makeHarness({
+      drain: async () => {
+        throw original;
+      },
+    });
+    await expect(
+      harness.fireBegin({ correlationId: "failed-observation", generation: 8, reason: "planned" })
+    ).rejects.toMatchObject({ cause: original, errors: [original] });
+    expect(
+      harness.calls.some(
+        (call) =>
+          call.method === "prepare" && (call.arg as LifecyclePrepareInput).phase === "release"
+      )
+    ).toBe(false);
+  });
+
+  it("quiesces, settles peer obligations, releases, then resumes on restart ready", async () => {
     const harness = makeHarness();
     await harness.fireBegin({ correlationId: "r1", generation: 8, reason: "planned" });
 
@@ -115,13 +263,13 @@ describe("LifecycleDriver", () => {
       harness.calls.some((call) => call.kind === "lifecycle" && call.method === "resume")
     ).toBe(false);
     expect(
+      harness.calls.find((call) => call.kind === "lifecycle" && call.method === "prepare")?.arg
+    ).toMatchObject({ mode: "suspend" });
+    expect(
       harness.calls
         .filter((call) => call.kind === "lifecycle" && call.method === "prepare")
-        .map((call) => (call.arg as LifecyclePrepareInput).phase)
+        .map((call) => (call.arg as { phase: string }).phase)
     ).toEqual(["quiesce", "peer-obligations", "release"]);
-    expect(
-      harness.calls.find((call) => call.kind === "lifecycle" && call.method === "prepare")?.arg
-    ).toMatchObject({ mode: "suspend", phase: "quiesce" });
 
     await harness.fireReady({
       correlationId: "r1",
@@ -189,6 +337,7 @@ describe("LifecycleDriver", () => {
       await vi.advanceTimersByTimeAsync(120_000);
       expect(settled).toBe(false);
       expect(harness.calls.find((call) => call.kind === "lifecycle")?.arg).toMatchObject({
+        phase: "quiesce",
         mode: "suspend",
         deadlineMs: 0,
         reason: "server_shutdown",
@@ -256,8 +405,8 @@ describe("LifecycleDriver", () => {
         { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" },
         { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-2" },
       ],
-      prepare: async (ref) => {
-        if (ref.objectKey === "ch-1") throw original;
+      prepare: async (ref, input) => {
+        if (input.phase !== "cancel" && ref.objectKey === "ch-1") throw original;
         return { status: "ready" };
       },
     });
@@ -266,7 +415,18 @@ describe("LifecycleDriver", () => {
     expect((failure as AggregateError).errors).toHaveLength(1);
     expect((failure as AggregateError).errors[0]).toBe(original);
     expect((failure as AggregateError).cause).toBe(original);
-    expect(harness.calls.filter((call) => call.kind === "lifecycle")).toHaveLength(2);
+    expect(
+      harness.calls.filter(
+        (call) =>
+          call.kind === "lifecycle" && (call.arg as LifecyclePrepareInput).phase === "quiesce"
+      )
+    ).toHaveLength(2);
+    expect(
+      harness.calls.filter(
+        (call) =>
+          call.kind === "lifecycle" && (call.arg as LifecyclePrepareInput).phase === "cancel"
+      )
+    ).toHaveLength(2);
     expect(
       harness.calls
         .filter((call) => call.method === "lifecycleRecordOp")
@@ -288,43 +448,6 @@ describe("LifecycleDriver", () => {
     expect(harness.calls.filter((call) => call.method === "lifecycleRecordOp")).toHaveLength(1);
   });
 
-  it("preserves nested aggregate failure identity and codes in the lifecycle journal", async () => {
-    const shared = Object.assign(new Error("original cause"), { code: "CAUSE_CODE" });
-    const original = Object.assign(
-      new AggregateError([shared, shared], "original aggregate", { cause: shared }),
-      { code: "AGGREGATE_CODE" }
-    );
-    const harness = makeHarness({
-      prepare: async (_ref, input) => {
-        if (input.phase === "quiesce") throw original;
-        return { status: "ready" };
-      },
-    });
-    const failure = await harness.driver.prepareForShutdown().catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    expect((failure as AggregateError).errors[0]).toBe(original);
-    expect((failure as AggregateError).cause).toBe(original);
-    const journal = harness.calls.find((call) => call.method === "lifecycleRecordOp")?.arg as {
-      status: string;
-      detail: { phase: string; result: unknown };
-    };
-    expect(journal).toMatchObject({
-      status: "failed",
-      detail: {
-        phase: "quiesce",
-        result: { message: "original aggregate", code: "AGGREGATE_CODE" },
-      },
-    });
-    const restored = deserializeRpcFailure(journal.detail.result);
-    expect(restored).toBeInstanceOf(AggregateError);
-    if (!(restored instanceof AggregateError)) throw new Error("Expected an aggregate RPC failure");
-    expect(restored.code).toBe("AGGREGATE_CODE");
-    expect(restored.errors).toHaveLength(2);
-    expect(restored.errors[0]).toBe(restored.errors[1]);
-    expect(restored.errors[0]).toBe(restored.cause);
-    expect(restored.errors[0]).toMatchObject({ message: "original cause", code: "CAUSE_CODE" });
-  });
-
   it("does not acknowledge an invalid prepare result as released ownership", async () => {
     const harness = makeHarness({
       prepare: async () => undefined as unknown as LifecyclePrepareResult,
@@ -334,7 +457,7 @@ describe("LifecycleDriver", () => {
       status: "failed",
       detail: {
         phase: "quiesce",
-        result: { message: "Lifecycle prepare returned no valid phase receipt" },
+        result: { message: "Lifecycle prepare returned no valid release receipt" },
       },
     });
   });

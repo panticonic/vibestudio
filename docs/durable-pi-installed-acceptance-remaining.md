@@ -48,6 +48,106 @@ The suite expansion is committed and pushed as System-testing `be29725`.
 The nine explicitly lower-priority self-development/local-model cases remain
 unverified and are not counted as passing acceptance.
 
+## Quickfire native consumer regression checkpoint — 10 October 2026
+
+Quickfire now projects native tool invocations independently of turn IDs and
+receives live model signals. Running native invocations keep Stop available;
+model work is distinct from tool work and model failures remain visible. Channel
+turn status follows explicit lifecycle events rather than being reactivated by
+unrelated invocation/message traffic. Failed closed turns remain visible even
+when no invocation was admitted. Native run turn IDs themselves are intentional
+product lifecycle identities, not a remaining legacy execution engine.
+
+Stop uses actual channel agent presence and awaits native cancellation. Dismissal
+retains the shell-owned subscription/transcript, so reopening the same live panel
+does not require another join. Panel destruction releases that binding. Reasoning
+starts compact and collapsed; duplicate model/timestamp details are removed.
+Session discovery no longer reads replay history for the resume chip or rewrites
+launch-installed resource grants to retrofit older conversations.
+
+Focused verification passes 306 tests across native lifecycle/publication,
+protocol, chat merge, Quickfire session/projection/cards, owner and DOM behavior.
+This is source verification, not fresh installed acceptance.
+
+Native host profiling records warm finite resident lookup at 88–110 ms and join
+at 309–337 ms, with first-use setup at 7,721 ms. A real chat renderer records warm
+lookup at 411–784 ms and streaming subscription/replay at 833–1,353 ms with only
+2–6 durable events. These are separate boundaries and must not be combined.
+After the native consumer repairs, the same rendered boundary records lookup at
+102–310 ms and streaming subscription/replay at 352–643 ms. These measurements
+do not establish fresh-agent execution readiness or a completed cutover.
+
+Shared agent initialization now returns a launch receipt only after history,
+instructions, model policy and executable tools are committed. The native task
+retains the original intent and owns bootstrap effects independently of the
+opening RPC. Configuration preparation runs independent instruction/tool work
+concurrently. Workspace instructions and skills are read together from one exact
+semantic snapshot, with cancellation propagated to the owned RPC and invalidated
+resource flights prevented from overwriting newer cache state.
+
+Shared startup resolves one immutable executable for service and object binding.
+Background worker preparation now admits schema evidence through the ordinary
+activation gate rather than stopping after artifact construction. Durable Object
+activation restores local state synchronously; network setup belongs to the
+operation that uses it. Single and bulk semantic file reads share one state and
+batched provenance resolution, preserving order, absence and repository ownership.
+These changes apply to agent, worker and filesystem infrastructure generally.
+
+Real provisioning exposed duplicate RPC ownership registries caused by mixed
+source/compiled package resolution. Bundle owners now select one resolution
+policy, and a build gate rejects mixed infrastructure module trees. Headless
+panel-host calls and generated system-test checkpoint publication now use their
+canonical receiver contracts.
+
+With prepared worker executables, three fresh runtime entities record complete
+initialization at 4,730–5,239 ms and retained lookup at 76–98 ms. Before batched
+native provenance resolution, the same boundary measured 5,475–5,859 ms; prompt
+resources fell from 1,711–1,756 ms to 1,033–1,081 ms. These are complete-readiness
+measurements, replacing the earlier admission-only boundary that concealed a
+further 2,100–2,197 ms configuration wait. Fresh startup still has substantial
+remaining cost; these samples do not establish unprepared-artifact or rendered
+first-response latency.
+
+A subsequent CPU attribution found exception-based ArrayBuffer detection in the
+shared RPC JSON encoder. Node and Node-compatible workerd now use a nonthrowing
+internal-slot predicate; browser and control-worker detection retains its exact
+cross-realm behavior. Tag-free envelopes also use native JSON parsing without a
+property-by-property reviver. Focused comparisons record 77–92 ms versus under
+1 ms per 10,000 ordinary brand checks, and 23–32 ms versus about 3 ms for a
+519 KB tag-free JSON envelope. These are codec measurements, not per-agent
+startup savings. The full RPC and related lifecycle set passes 349 tests.
+
+Default workspace automation provisioning now admits independent member jobs
+concurrently and joins admitted jobs before shared runtime teardown. Executable
+transfer, decoding, registration, first activation, and host initialization
+phases are logged separately. Native build profiles validate the agent and
+channel with matching cache-repeat keys; a missing declared channel dependency
+on its imported agent RPC contract is repaired without changing executable
+artifact or source byte counts. Sealed source attribution and emitted artifacts
+include lazy modules and are not initial-evaluation byte measurements.
+
+Later fresh-entity samples with both codec changes record 5,882–11,957 ms and
+retained lookup at 83–537 ms while other host investigations build and typecheck.
+Prompt-resource preparation alone remains 1,536–2,831 ms. These busy-host samples
+are retained for diagnosis and do not establish an end-to-end improvement over
+the earlier isolated baseline. Fresh startup remains an open performance item;
+artifact preparation does not guarantee that a new object's isolate is warm.
+The later exact `turn-no-silent-stall-after-tool` canary passes with zero tool
+failures (`st_f52d4752499b4a4aa19a97f3b55d9c19`, 28,924 ms) against the captured
+source snapshot with the shared codec and provisioning changes.
+
+Focused host/native/semantic/headless/checkpoint regressions pass. The isolated
+full build, host and headless typechecks, Base composition and template hygiene
+checks pass. The exact `turn-no-silent-stall-after-tool` run completes with one
+pass and zero tool failures (`st_e0dbf88981244a1b92355c262ca3e0cc`, 30,586 ms),
+including retained terminal checkpoint. This verifies the combined source
+snapshot; it does not establish the remaining installed Pi acceptance matrix.
+
+Owned profiling instances and their temporary roots are retired. Private bounded
+logs, measurements and validation receipts are retained under the disk-backed
+performance evidence directory; owned review worktrees and scratch caches are
+removed after their workloads are joined.
+
 ## Android checkpoints 102–103 — acceptance complete
 
 Fresh run `st_cc400c6f339b4d6caddb9364d34ec867` completes with one pass, one failure, zero errors and zero unexpected tool faults. `mobile-extension-install-android` passes, including the native source install. Onboarding installs and pairs the phone, but its public readiness remains `opening`; it is not accepted. The eval binding error from checkpoint 101 is absent after the cell-local binding contract was clarified.

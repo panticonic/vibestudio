@@ -41,6 +41,17 @@ describe("ContextFolderManager", () => {
     });
   }
 
+  it("resolves validated source addresses without creating a projection or scratch", async () => {
+    const materialize = vi.fn(async () => {
+      throw new Error("Unexpected materialization");
+    });
+    const cfm = manager(materialize);
+    expect(cfm.contextSourcePath("ctx-empty")).toBe(path.join(contextProjectionsRoot, "ctx-empty"));
+    expect(cfm.getContextRoot("ctx-empty")).toBeNull();
+    expect(materialize).not.toHaveBeenCalled();
+    expect(() => cfm.contextSourcePath("../escape")).toThrow(/Invalid context ID/);
+  });
+
   it("materializes a missing context folder and returns its path", async () => {
     const cfm = manager();
     const dir = await cfm.ensureContextFolder("ctx-1");

@@ -9,7 +9,7 @@ import {
   readCurrentHostBuildGeneration,
   releaseHostBuildGeneration,
 } from "./host-build-generations.mjs";
-import { SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
+import { NATIVE_WORKSPACE_ENTRIES, SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
 import { cleanHostBuildOutput } from "./clean-host-build-output.mjs";
 
 test("publishes immutable complete generations and leaves the prior one readable", () => {
@@ -35,6 +35,7 @@ test("publishes immutable complete generations and leaves the prior one readable
       "browserPrivacyPreload.cjs",
       "browserTransport.js",
       "fs-disk-worker.cjs",
+      ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
       "internal-do.bundle.mjs",
       "host-build-fingerprint.json",
@@ -78,6 +79,7 @@ test("publishes immutable complete generations and leaves the prior one readable
       "browserPrivacyPreload.cjs",
       "browserTransport.js",
       "fs-disk-worker.cjs",
+      ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
       "internal-do.bundle.mjs",
       "host-build-fingerprint.json",
@@ -96,6 +98,10 @@ test("publishes immutable complete generations and leaves the prior one readable
 
     assert.notEqual(first, second);
     assert.equal(fs.readFileSync(path.join(first, "panelPreload.cjs"), "utf8"), "preload-a");
+    for (const entry of Object.values(NATIVE_WORKSPACE_ENTRIES)) {
+      assert.equal(fs.readFileSync(path.join(first, entry), "utf8"), entry);
+      assert.equal(fs.readFileSync(path.join(source, entry), "utf8"), entry);
+    }
     assert.equal(
       fs.readFileSync(path.join(first, "workerd-programs/router.mjs"), "utf8"),
       "router-a"
@@ -154,6 +160,7 @@ test("refuses an incomplete generation without replacing current", () => {
       ...Object.values(SERVER_WORKER_ENTRIES.standalone),
       "browserTransport.js",
       "fs-disk-worker.cjs",
+      ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
       "internal-do.bundle.mjs",
       "host-build-fingerprint.json",
@@ -178,6 +185,14 @@ test("refuses an incomplete generation without replacing current", () => {
       /missing browserTransport\.js/
     );
     assert.equal(readCurrentHostBuildGeneration(root, "source"), first);
+    fs.writeFileSync(path.join(root, "dist/browserTransport.js"), "browserTransport.js");
+    fs.rmSync(path.join(root, "dist", NATIVE_WORKSPACE_ENTRIES.extensionChild));
+    assert.throws(
+      () => publishHostBuildGeneration(root, { kind: "source", mode: "development", fingerprint: "b".repeat(64), inputCount: 1 }),
+      /missing extension-child\.mjs/
+    );
+    assert.equal(readCurrentHostBuildGeneration(root, "source"), first);
+
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

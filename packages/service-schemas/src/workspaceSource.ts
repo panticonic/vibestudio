@@ -1,4 +1,5 @@
 import { rpcFailureSchema } from "./rpcFailure.js";
+import { rpcCausalParentSchema } from "./rpcCausality.js";
 import type {
   EnvelopeId,
   EventId,
@@ -35,11 +36,7 @@ import {
   type MethodSchema,
   type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
-import {
-  vcsFileLineageSchema,
-  vcsMethods,
-  vcsStateNodeRefSchema,
-} from "./vcs.js";
+import { vcsFileLineageSchema, vcsMethods, vcsStateNodeRefSchema } from "./vcs.js";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
@@ -51,9 +48,7 @@ export const SemanticContextResultSchema = z
     contextId: z.string().min(1),
     committed: z
       .object({
-        ref: z
-          .object({ kind: z.literal("event"), eventId: z.string().min(1) })
-          .strict(),
+        ref: z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
         workspaceFactRootId: z.string().min(1),
       })
       .strict(),
@@ -67,40 +62,18 @@ export const SemanticContextResultSchema = z
   })
   .strict();
 
-export type GadJsonValue =
-  | null
-  | string
-  | number
-  | boolean
-  | GadJsonValue[]
-  | { [key: string]: GadJsonValue };
-export const GadJsonValueSchema: z.ZodType<GadJsonValue> = z.lazy(() =>
-  z.union([
-    z.null(),
-    z.string(),
-    z.number(),
-    z.boolean(),
-    z.array(GadJsonValueSchema),
-    z.record(GadJsonValueSchema),
-  ]),
-);
-export const GadJsonRecordSchema = z.record(GadJsonValueSchema);
-export type GadJsonRecord = z.infer<typeof GadJsonRecordSchema>;
+export { JsonValueSchema as GadJsonValueSchema, JsonObjectSchema as GadJsonRecordSchema } from "@vibestudio/shared/wireValues";
+export type { JsonValue as GadJsonValue } from "@vibestudio/shared/wireValues";
+export type GadJsonRecord = Record<string, import("@vibestudio/shared/wireValues").JsonValue>;
+import { JsonValueSchema as GadJsonValueSchema, JsonObjectSchema as GadJsonRecordSchema, type JsonValue as GadJsonValue } from "@vibestudio/shared/wireValues";
 // Event and envelope payloads are deliberately polymorphic at this narrow
 // host/workspace ABI. They are still recursively validated as JSON here; the
 // workspace-owned agentic protocol performs the event-kind-specific parse.
-const PolymorphicJsonPayloadSchema: z.ZodType<
-  GadJsonValue,
-  z.ZodTypeDef,
-  unknown
-> = GadJsonValueSchema;
-const PolymorphicJsonRecordSchema: z.ZodType<Record<string, unknown>> =
-  GadJsonRecordSchema;
-const PolymorphicJsonArraySchema: z.ZodType<
-  GadJsonValue[],
-  z.ZodTypeDef,
-  unknown[]
-> = z.array(GadJsonValueSchema);
+const PolymorphicJsonPayloadSchema: z.ZodType<GadJsonValue, z.ZodTypeDef, unknown> =
+  GadJsonValueSchema;
+const PolymorphicJsonRecordSchema: z.ZodType<Record<string, unknown>> = GadJsonRecordSchema;
+const PolymorphicJsonArraySchema: z.ZodType<GadJsonValue[], z.ZodTypeDef, unknown[]> =
+  z.array(GadJsonValueSchema);
 
 const ActorRefWireSchema = z
   .object({
@@ -177,9 +150,7 @@ const channelEnvelopeSchema = z
     channelId: z.string().min(1),
     seq: z.number().int().nonnegative(),
     from: ActorRefWireSchema,
-    to: z
-      .union([z.array(ParticipantRefWireSchema), ParticipantSelectorWireSchema])
-      .optional(),
+    to: z.union([z.array(ParticipantRefWireSchema), ParticipantSelectorWireSchema]).optional(),
     payload: PolymorphicJsonPayloadSchema,
     payloadKind: z.string().optional(),
     metadata: PolymorphicJsonRecordSchema.optional(),
@@ -206,9 +177,7 @@ const logEnvelopeSchema = z
       .min(1)
       .transform(brandId<EnvelopeId>),
     actor: ActorRefWireSchema,
-    to: z
-      .union([z.array(ParticipantRefWireSchema), ParticipantSelectorWireSchema])
-      .optional(),
+    to: z.union([z.array(ParticipantRefWireSchema), ParticipantSelectorWireSchema]).optional(),
     payloadKind: z.string().min(1),
     payload: PolymorphicJsonPayloadSchema,
     annotations: PolymorphicJsonRecordSchema.optional(),
@@ -219,9 +188,7 @@ const logEnvelopeSchema = z
   })
   .strict();
 
-export const GadStatusMetricSchema = z
-  .object({ metric: z.string(), value: z.number() })
-  .strict();
+export const GadStatusMetricSchema = z.object({ metric: z.string(), value: z.number() }).strict();
 export type GadStatusMetric = z.infer<typeof GadStatusMetricSchema>;
 
 const SqlTextSchema = z.string();
@@ -241,9 +208,7 @@ const TrajectoryBranchSchema = z
     updated_at: SqlTextSchema,
   })
   .strict();
-const TrajectoryBranchHeadSchema = TrajectoryBranchSchema.omit({
-  seq: true,
-}).extend({
+const TrajectoryBranchHeadSchema = TrajectoryBranchSchema.omit({ seq: true }).extend({
   head_event_hash: SqlNullableTextSchema,
   fork_event_id: SqlNullableTextSchema,
 });
@@ -306,11 +271,7 @@ const StoredValueRefSchema = z
   .strict();
 const StorageDiagnosticSchema = z
   .object({
-    scope: z.enum([
-      "log_events",
-      "trajectory_invocations",
-      "missing_gad_blob_index",
-    ]),
+    scope: z.enum(["log_events", "trajectory_invocations", "missing_gad_blob_index"]),
     id: SqlTextSchema,
     bytes: SqlCountSchema,
   })
@@ -350,12 +311,7 @@ const gadIntegrityErrorSchema = z.discriminatedUnion("type", [
       type: z.literal("log-event-shape"),
       message: z.string(),
       envelopeId: SqlTextSchema,
-      field: z.enum([
-        "actor_json",
-        "to_json",
-        "payload_ref_json",
-        "annotations_json",
-      ]),
+      field: z.enum(["actor_json", "to_json", "payload_ref_json", "annotations_json"]),
       path: z.string(),
     })
     .strict(),
@@ -551,9 +507,7 @@ export const EnvelopeLineageSchema = z
   .strict();
 export type EnvelopeLineage = z.infer<typeof EnvelopeLineageSchema>;
 
-export const PublishedArtifactSchema = z
-  .object({ lineage: EnvelopeLineageSchema })
-  .strict();
+export const PublishedArtifactSchema = z.object({ lineage: EnvelopeLineageSchema }).strict();
 export type PublishedArtifact = z.infer<typeof PublishedArtifactSchema>;
 
 export const PrivateLineageForPublishedEnvelopeSchema = z
@@ -593,14 +547,12 @@ export const ChannelEnvelopeInspectionSchema = z
           size: SqlCountSchema,
           created_at: SqlTextSchema,
         })
-        .strict(),
+        .strict()
     ),
     publishedAt: z.string(),
   })
   .strict();
-export type ChannelEnvelopeInspection = z.infer<
-  typeof ChannelEnvelopeInspectionSchema
->;
+export type ChannelEnvelopeInspection = z.infer<typeof ChannelEnvelopeInspectionSchema>;
 
 export const PublicationIntegrityInspectionSchema = z
   .object({
@@ -618,9 +570,7 @@ export const PublicationIntegrityInspectionSchema = z
     rows: z.array(PublicationIntegrityIssueSchema),
   })
   .strict();
-export type PublicationIntegrityInspection = z.infer<
-  typeof PublicationIntegrityInspectionSchema
->;
+export type PublicationIntegrityInspection = z.infer<typeof PublicationIntegrityInspectionSchema>;
 
 export const TurnStateInspectionSchema = z
   .object({
@@ -651,9 +601,7 @@ export const InvocationStateInspectionSchema = z
     rows: z.array(InvocationStateRowSchema),
   })
   .strict();
-export type InvocationStateInspection = z.infer<
-  typeof InvocationStateInspectionSchema
->;
+export type InvocationStateInspection = z.infer<typeof InvocationStateInspectionSchema>;
 
 export const InvocationDiagnosticPacketSchema = z
   .object({
@@ -676,7 +624,7 @@ export const InvocationDiagnosticPacketSchema = z
           command: DiagnosticCommandSchema,
           effects: z.array(DiagnosticEffectSchema),
         })
-        .strict(),
+        .strict()
     ),
     summary: z
       .object({
@@ -696,9 +644,7 @@ export const InvocationDiagnosticPacketSchema = z
       .strict(),
   })
   .strict();
-export type InvocationDiagnosticPacket = z.infer<
-  typeof InvocationDiagnosticPacketSchema
->;
+export type InvocationDiagnosticPacket = z.infer<typeof InvocationDiagnosticPacketSchema>;
 
 export const ChannelRosterInspectionSchema = z
   .object({
@@ -712,9 +658,7 @@ export const ChannelRosterInspectionSchema = z
     rows: z.array(ChannelRosterRowSchema),
   })
   .strict();
-export type ChannelRosterInspection = z.infer<
-  typeof ChannelRosterInspectionSchema
->;
+export type ChannelRosterInspection = z.infer<typeof ChannelRosterInspectionSchema>;
 
 export const AgentHealthInspectionSchema = z
   .object({
@@ -756,58 +700,9 @@ export const AgentHealthInspectionSchema = z
   .strict();
 export type AgentHealthInspection = z.infer<typeof AgentHealthInspectionSchema>;
 
-const AgenticStoredValueRefSchema = z
-  .object({
-    protocol: z.literal("vibestudio.blob-ref.v1"),
-    digest: z.string().min(1),
-    size: z.number().int().nonnegative(),
-    encoding: z.enum(["json", "text"]),
-    originalBytes: z.number().int().nonnegative(),
-  })
-  .strict();
-
-/**
- * GAD's durable message-type projection is storage-form data. Reference-class
- * event fields stay as blob refs inside the append transaction; PubSub owns
- * hydration and semantic validation before callers can observe a definition.
- */
-export const StoredChannelMessageTypeDefinitionSchema = z
-  .object({
-    typeId: z.string(),
-    displayMode: z.enum(["inline", "row"]),
-    source: AgenticStoredValueRefSchema,
-    imports: AgenticStoredValueRefSchema.optional(),
-    stateSchema: GadJsonRecordSchema.optional(),
-    updateSchema: GadJsonRecordSchema.optional(),
-    registeredBy: GadJsonRecordSchema.optional(),
-    updatedAtSeq: z.number().int().nonnegative(),
-    clearedAtSeq: z.number().int().nonnegative().optional(),
-  })
-  .strict();
-export type StoredChannelMessageTypeDefinition = z.infer<
-  typeof StoredChannelMessageTypeDefinitionSchema
->;
-
-export const StoredRegistryMutationInputSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("upsertMessageType"),
-      typeId: z.string(),
-      row: StoredChannelMessageTypeDefinitionSchema.omit({
-        typeId: true,
-        updatedAtSeq: true,
-        clearedAtSeq: true,
-      }),
-    })
-    .strict(),
-  z
-    .object({ kind: z.literal("clearMessageType"), typeId: z.string() })
-    .strict(),
-]);
-export type StoredRegistryMutationInput = z.infer<
-  typeof StoredRegistryMutationInputSchema
->;
-
+export { StoredChannelMessageTypeDefinitionSchema, StoredRegistryMutationInputSchema } from "./agenticMessageTypes.js";
+export type { StoredChannelMessageTypeDefinition, StoredRegistryMutationInput } from "./agenticMessageTypes.js";
+import { StoredChannelMessageTypeDefinitionSchema } from "./agenticMessageTypes.js";
 const ChannelEnvelopeAppendInputSchema = channelEnvelopeSchema
   .omit({
     seq: true,
@@ -855,9 +750,7 @@ export const InspectStoredValueRefsInputSchema = z
     limit: optionalLimit,
   })
   .strict();
-export type InspectStoredValueRefsInput = z.infer<
-  typeof InspectStoredValueRefsInputSchema
->;
+export type InspectStoredValueRefsInput = z.infer<typeof InspectStoredValueRefsInputSchema>;
 
 export const InspectStorageDiagnosticsInputSchema = z
   .object({
@@ -867,16 +760,10 @@ export const InspectStorageDiagnosticsInputSchema = z
     channelId: optionalString,
   })
   .strict();
-export type InspectStorageDiagnosticsInput = z.infer<
-  typeof InspectStorageDiagnosticsInputSchema
->;
+export type InspectStorageDiagnosticsInput = z.infer<typeof InspectStorageDiagnosticsInputSchema>;
 
 export const InspectPublicationIntegrityInputSchema = z
-  .object({
-    channelId: optionalString,
-    branchId: optionalString,
-    limit: optionalLimit,
-  })
+  .object({ channelId: optionalString, branchId: optionalString, limit: optionalLimit })
   .strict();
 export type InspectPublicationIntegrityInput = z.infer<
   typeof InspectPublicationIntegrityInputSchema
@@ -901,9 +788,7 @@ export const InspectInvocationStateInputSchema = z
     limit: optionalLimit,
   })
   .strict();
-export type InspectInvocationStateInput = z.infer<
-  typeof InspectInvocationStateInputSchema
->;
+export type InspectInvocationStateInput = z.infer<typeof InspectInvocationStateInputSchema>;
 
 export const DiagnoseInvocationInputSchema = z
   .object({
@@ -915,16 +800,12 @@ export const DiagnoseInvocationInputSchema = z
     effectLimit: z.number().int().min(1).max(100).optional(),
   })
   .strict();
-export type DiagnoseInvocationInput = z.infer<
-  typeof DiagnoseInvocationInputSchema
->;
+export type DiagnoseInvocationInput = z.infer<typeof DiagnoseInvocationInputSchema>;
 
 export const InspectChannelRosterInputSchema = z
   .object({ channelId: z.string(), limit: optionalLimit })
   .strict();
-export type InspectChannelRosterInput = z.infer<
-  typeof InspectChannelRosterInputSchema
->;
+export type InspectChannelRosterInput = z.infer<typeof InspectChannelRosterInputSchema>;
 
 /**
  * Agent directory (messaging plan §4.4). `ref` is the whole point: it is the
@@ -938,11 +819,7 @@ export type InspectChannelRosterInput = z.infer<
  * `idle` covers a Durable Object that may have been evicted — either wakes on
  * the next envelope.
  */
-export const AgentDirectoryStatusSchema = z.enum([
-  "running",
-  "idle",
-  "terminal",
-]);
+export const AgentDirectoryStatusSchema = z.enum(["running", "idle", "terminal"]);
 export type AgentDirectoryStatus = z.infer<typeof AgentDirectoryStatusSchema>;
 
 export const AgentDirectoryEntrySchema = z
@@ -997,9 +874,7 @@ export const ListAgentDirectoryInputSchema = z
     limit: optionalLimit,
   })
   .strict();
-export type ListAgentDirectoryInput = z.infer<
-  typeof ListAgentDirectoryInputSchema
->;
+export type ListAgentDirectoryInput = z.infer<typeof ListAgentDirectoryInputSchema>;
 
 export const SearchAgentDirectoryInputSchema = z
   .object({
@@ -1008,9 +883,7 @@ export const SearchAgentDirectoryInputSchema = z
     limit: optionalLimit,
   })
   .strict();
-export type SearchAgentDirectoryInput = z.infer<
-  typeof SearchAgentDirectoryInputSchema
->;
+export type SearchAgentDirectoryInput = z.infer<typeof SearchAgentDirectoryInputSchema>;
 
 export const ChannelDescriptionSchema = z
   .object({
@@ -1025,17 +898,14 @@ export const ChannelDescriptionSchema = z
           kind: z.string().nullable(),
           status: AgentDirectoryStatusSchema.nullable(),
         })
-        .strict(),
+        .strict()
     ),
   })
   .strict();
 export type ChannelDescription = z.infer<typeof ChannelDescriptionSchema>;
 
 export const DescribeChannelsInputSchema = z
-  .object({
-    channelIds: z.array(z.string().min(1)).optional(),
-    limit: optionalLimit,
-  })
+  .object({ channelIds: z.array(z.string().min(1)).optional(), limit: optionalLimit })
   .strict();
 export type DescribeChannelsInput = z.infer<typeof DescribeChannelsInputSchema>;
 
@@ -1049,9 +919,7 @@ export const InspectAgentHealthInputSchema = z
     rowByteLimit: optionalLimit,
   })
   .strict();
-export type InspectAgentHealthInput = z.infer<
-  typeof InspectAgentHealthInputSchema
->;
+export type InspectAgentHealthInput = z.infer<typeof InspectAgentHealthInputSchema>;
 
 export const InspectAgentInputSchema = AgentInspectionRequestSchema.extend({
   channelId: z.string().trim().min(1),
@@ -1079,8 +947,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Ensure that a content digest is registered in GAD blob metadata.",
+    description: "Ensure that a content digest is registered in GAD blob metadata.",
     args: z.tuple([
       z.string(),
       z.number().int().nonnegative().optional(),
@@ -1107,8 +974,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Acknowledge one durable notification for the current account.",
+    description: "Acknowledge one durable notification for the current account.",
     args: z.tuple([z.string()]),
     returns: z.boolean(),
     access: writeAccess,
@@ -1119,8 +985,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Create or update one durable account notification from a trusted runtime.",
+    description: "Create or update one durable account notification from a trusted runtime.",
     args: z.tuple([UserNotificationSchema]),
     returns: UserNotificationSchema,
     access: writeAccess,
@@ -1131,8 +996,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Withdraw one durable account notification from a trusted runtime.",
+    description: "Withdraw one durable account notification from a trusted runtime.",
     args: z.tuple([z.string(), z.string()]),
     returns: z.boolean(),
     access: writeAccess,
@@ -1144,9 +1008,7 @@ export const gadMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "Return the durable head record for one trajectory branch.",
-    args: z.tuple([
-      z.object({ trajectoryId: z.string(), branchId: z.string() }).strict(),
-    ]),
+    args: z.tuple([z.object({ trajectoryId: z.string(), branchId: z.string() }).strict()]),
     returns: TrajectoryBranchHeadSchema.nullable(),
     access: readAccess,
   },
@@ -1168,9 +1030,7 @@ export const gadMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "List invocation summaries for one trajectory branch.",
-    args: z.tuple([
-      z.object({ branchId: z.string(), limit: optionalLimit }).strict(),
-    ]),
+    args: z.tuple([z.object({ branchId: z.string(), limit: optionalLimit }).strict()]),
     returns: z.array(TrajectoryInvocationSchema),
     access: readAccess,
   },
@@ -1191,8 +1051,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "List compact channel envelope records in durable channel order.",
+    description: "List compact channel envelope records in durable channel order.",
     args: z.tuple([z.object({ limit: optionalLimit }).strict().optional()]),
     returns: z.array(CompactChannelEnvelopeSchema),
     access: readAccess,
@@ -1203,8 +1062,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "List hydrated trajectory events after an optional sequence cursor.",
+    description: "List hydrated trajectory events after an optional sequence cursor.",
     args: z.tuple([
       z
         .object({
@@ -1224,8 +1082,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Atomically append one semantic envelope to a durable channel log.",
+    description: "Atomically append one semantic envelope to a durable channel log.",
     args: z.tuple([ChannelEnvelopeAppendInputSchema]),
     returns: channelEnvelopeSchema,
     access: writeAccess,
@@ -1250,9 +1107,7 @@ export const gadMethods = defineServiceMethods({
     } as const,
     description:
       "Get one stored custom message-type definition from a channel registry. PubSub owns its hydration boundary.",
-    args: z.tuple([
-      z.object({ channelId: z.string(), typeId: z.string() }).strict(),
-    ]),
+    args: z.tuple([z.object({ channelId: z.string(), typeId: z.string() }).strict()]),
     returns: StoredChannelMessageTypeDefinitionSchema.nullable(),
     access: readAccess,
   },
@@ -1263,9 +1118,7 @@ export const gadMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "Get one hydrated channel envelope by its durable id.",
-    args: z.tuple([
-      z.object({ envelopeId: z.string(), channelId: optionalString }).strict(),
-    ]),
+    args: z.tuple([z.object({ envelopeId: z.string(), channelId: optionalString }).strict()]),
     returns: channelEnvelopeSchema.nullable(),
     access: readAccess,
   },
@@ -1275,8 +1128,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Resolve the private trajectory lineage that published an envelope.",
+    description: "Resolve the private trajectory lineage that published an envelope.",
     args: z.tuple([z.object({ envelopeId: z.string() }).strict()]),
     returns: EnvelopeLineageSchema.nullable(),
     access: readAccess,
@@ -1308,8 +1160,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "List published envelope lineage matching trajectory selectors.",
+    description: "List published envelope lineage matching trajectory selectors.",
     args: z.tuple([
       z
         .object({
@@ -1331,8 +1182,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "List hydrated published envelopes for matching trajectory selectors.",
+    description: "List hydrated published envelopes for matching trajectory selectors.",
     args: z.tuple([
       z
         .object({
@@ -1354,8 +1204,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "List published artifacts attributed to one durable agent turn.",
+    description: "List published artifacts attributed to one durable agent turn.",
     args: z.tuple([
       z
         .object({
@@ -1375,8 +1224,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Return publication lineage plus the private branch events behind an envelope.",
+    description: "Return publication lineage plus the private branch events behind an envelope.",
     args: z.tuple([z.object({ envelopeId: z.string() }).strict()]),
     returns: PrivateLineageForPublishedEnvelopeSchema.nullable(),
     access: readAccess,
@@ -1388,9 +1236,7 @@ export const gadMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "List trajectory events that consumed a published envelope.",
-    args: z.tuple([
-      z.object({ envelopeId: z.string(), limit: optionalLimit }).strict(),
-    ]),
+    args: z.tuple([z.object({ envelopeId: z.string(), limit: optionalLimit }).strict()]),
     returns: z.array(TrajectoryEventWireSchema),
     access: readAccess,
   },
@@ -1400,8 +1246,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Read one bounded page of hydrated semantic channel envelopes.",
+    description: "Read one bounded page of hydrated semantic channel envelopes.",
     args: z.tuple([ChannelEnvelopePageRequestSchema]),
     returns: channelEnvelopePageSchema(channelEnvelopeSchema),
     access: readAccess,
@@ -1424,8 +1269,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "List stored-value references matching event, envelope, or digest selectors.",
+    description: "List stored-value references matching event, envelope, or digest selectors.",
     args: z.tuple([InspectStoredValueRefsInputSchema.optional()]),
     returns: z.object({ rows: z.array(StoredValueRefSchema) }).strict(),
     access: readAccess,
@@ -1436,8 +1280,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Inspect oversized or unresolved durable storage rows with bounded output.",
+    description: "Inspect oversized or unresolved durable storage rows with bounded output.",
     args: z.tuple([InspectStorageDiagnosticsInputSchema.optional()]),
     returns: z.object({ rows: z.array(StorageDiagnosticSchema) }).strict(),
     access: readAccess,
@@ -1513,8 +1356,7 @@ export const gadMethods = defineServiceMethods({
   inspectAgent: {
     website: {
       kind: "closed",
-      reason:
-        "Agent inspection is admitted by the inspected channel's own channel.admin gate.",
+      reason: "Agent inspection is admitted by the inspected channel's own channel.admin gate.",
     } as const,
     description:
       "Read one agent's activation-local inspection (getDebugState, getAgentSettings, or inspectMethodSuspensions) through the channel's read-only inspectAgent receiver. participantId defaults to the channel's sole agent participant. Never invokes onMethodCall or hydrates GAD state; use chat.callMethod for in-channel RPC.",
@@ -1564,12 +1406,9 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Validate content, manifest, and state hashes without mutating durable state.",
+    description: "Validate content, manifest, and state hashes without mutating durable state.",
     args: z.tuple([z.object({}).strict().optional()]),
-    returns: z
-      .object({ ok: z.boolean(), errors: z.array(z.string()) })
-      .strict(),
+    returns: z.object({ ok: z.boolean(), errors: z.array(z.string()) }).strict(),
     access: readAccess,
   },
   clearDirtyAfterValidation: {
@@ -1578,12 +1417,9 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Clear the dirty marker only after durable hash validation succeeds.",
+    description: "Clear the dirty marker only after durable hash validation succeeds.",
     args: z.tuple([z.object({}).strict().optional()]),
-    returns: z
-      .object({ ok: z.boolean(), errors: z.array(z.string()) })
-      .strict(),
+    returns: z.object({ ok: z.boolean(), errors: z.array(z.string()) }).strict(),
     access: writeAccess,
   },
   checkGadIntegrity: {
@@ -1592,12 +1428,9 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Run durable GAD integrity checks and return structured errors.",
+    description: "Run durable GAD integrity checks and return structured errors.",
     args: z.tuple([z.object({}).strict().optional()]),
-    returns: z
-      .object({ ok: z.boolean(), errors: z.array(gadIntegrityErrorSchema) })
-      .strict(),
+    returns: z.object({ ok: z.boolean(), errors: z.array(gadIntegrityErrorSchema) }).strict(),
     access: readAccess,
   },
   rebuildTrajectoryProjections: {
@@ -1606,8 +1439,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Rebuild trajectory-derived projections from the durable event log.",
+    description: "Rebuild trajectory-derived projections from the durable event log.",
     args: z.tuple([z.object({}).strict().optional()]),
     returns: z.object({ replayed: z.number().int().nonnegative() }).strict(),
     access: adminAccess,
@@ -1624,14 +1456,7 @@ const {
   ...directGadWireMethods
 } = gadMethods;
 
-const semanticCausalParentSchema = z
-  .object({
-    kind: z.literal("trajectory-invocation"),
-    logId: z.string().min(1),
-    head: z.string().min(1),
-    invocationId: z.string().min(1),
-  })
-  .strict();
+const semanticCausalParentSchema = rpcCausalParentSchema;
 const semanticIngressSchema = z
   .object({
     causalParent: semanticCausalParentSchema.nullable(),
@@ -1678,15 +1503,19 @@ const semanticMergeContentHostReadSchema = z
   .strict();
 const semanticHostReadSchema = z.discriminatedUnion("kind", [
   semanticFileHostReadSchema,
+  z
+    .object({
+      kind: z.literal("read-semantic-blobs"),
+      files: z.array(semanticFileHostReadSchema.nullable()).max(500),
+    })
+    .strict(),
   semanticMergeContentHostReadSchema,
 ]);
 const semanticHostReadAcknowledgementSchema = z
   .object({
     request: semanticMergeContentHostReadSchema,
     files: z
-      .array(
-        z.object({ contentHash: z.string().min(1), text: z.string() }).strict(),
-      )
+      .array(z.object({ contentHash: z.string().min(1), text: z.string() }).strict())
       .max(1_500),
   })
   .strict();
@@ -1698,13 +1527,9 @@ const semanticContentRequestSchema = z
     input: GadJsonRecordSchema,
     ingress: semanticIngressSchema,
     observed: z
-      .array(
-        z.object({ contentHash: z.string().min(1), text: z.string() }).strict(),
-      )
+      .array(z.object({ contentHash: z.string().min(1), text: z.string() }).strict())
       .optional(),
-    blobs: z.array(
-      z.object({ contentHash: z.string().min(1), base64: z.string() }).strict(),
-    ),
+    blobs: z.array(z.object({ contentHash: z.string().min(1), base64: z.string() }).strict()),
   })
   .strict();
 const semanticContentAcknowledgementSchema = z
@@ -1714,11 +1539,11 @@ const semanticContentAcknowledgementSchema = z
   })
   .strict();
 
-function semanticWireMethod<
-  M extends (typeof vcsMethods)[keyof typeof vcsMethods],
->(method: M, wireName: string) {
-  const inputSchema =
-    (method.args as z.ZodTuple<[] | [z.ZodTypeAny]>).items[0] ?? z.undefined();
+function semanticWireMethod<M extends (typeof vcsMethods)[keyof typeof vcsMethods]>(
+  method: M,
+  wireName: string
+) {
+  const inputSchema = (method.args as z.ZodTuple<[] | [z.ZodTypeAny]>).items[0] ?? z.undefined();
   const resultSchema = method.returns;
   return {
     website: {
@@ -1727,6 +1552,7 @@ function semanticWireMethod<
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: `Execute the exact ${wireName} semantic workspace operation.`,
+    access: method.access,
     args: z.tuple([
       z
         .object({
@@ -1747,18 +1573,8 @@ function semanticWireMethod<
           effects: z.array(semanticEffectSchema),
         })
         .strict(),
-      z
-        .object({
-          kind: z.literal("host-read"),
-          request: semanticHostReadSchema,
-        })
-        .strict(),
-      z
-        .object({
-          kind: z.literal("host-content"),
-          request: semanticContentRequestSchema,
-        })
-        .strict(),
+      z.object({ kind: z.literal("host-read"), request: semanticHostReadSchema }).strict(),
+      z.object({ kind: z.literal("host-content"), request: semanticContentRequestSchema }).strict(),
     ]),
     agentFacing: false,
   };
@@ -1772,21 +1588,18 @@ const semanticWireMethods = {
   vcsRevert: semanticWireMethod(vcsMethods.revert, "revert"),
   vcsCommit: semanticWireMethod(vcsMethods.commit, "commit"),
   vcsDiscard: semanticWireMethod(vcsMethods.discard, "discard"),
-  vcsImportSnapshot: semanticWireMethod(
-    vcsMethods.importSnapshot,
-    "import snapshot",
-  ),
+  vcsImportSnapshot: semanticWireMethod(vcsMethods.importSnapshot, "import snapshot"),
   vcsRegisterExternalDelta: semanticWireMethod(
     vcsMethods.registerExternalDelta,
-    "register external delta",
+    "register external delta"
   ),
   vcsSupersedeExternalDelta: semanticWireMethod(
     vcsMethods.supersedeExternalDelta,
-    "supersede external delta",
+    "supersede external delta"
   ),
   vcsFinalizeExternalDelta: semanticWireMethod(
     vcsMethods.finalizeExternalDelta,
-    "finalize external delta",
+    "finalize external delta"
   ),
   vcsPush: semanticWireMethod(vcsMethods.push, "push"),
   vcsStatus: semanticWireMethod(vcsMethods.status, "status"),
@@ -1800,15 +1613,10 @@ const semanticWireMethods = {
   vcsQuery: semanticWireMethod(vcsMethods.query, "query"),
   vcsSearch: semanticWireMethod(vcsMethods.search, "search"),
   vcsReadMemory: semanticWireMethod(vcsMethods.readMemory, "read memory"),
-  vcsResolveRepository: semanticWireMethod(
-    vcsMethods.resolveRepository,
-    "resolve repository",
-  ),
+  vcsResolveRepository: semanticWireMethod(vcsMethods.resolveRepository, "resolve repository"),
   vcsReadFile: semanticWireMethod(vcsMethods.readFile, "read file"),
-  vcsListDirectory: semanticWireMethod(
-    vcsMethods.listDirectory,
-    "list directory",
-  ),
+  vcsReadFiles: semanticWireMethod(vcsMethods.readFiles, "read files"),
+  vcsListDirectory: semanticWireMethod(vcsMethods.listDirectory, "list directory"),
   vcsListFiles: semanticWireMethod(vcsMethods.listFiles, "list files"),
 } satisfies ServiceMethodSchemas;
 
@@ -1846,7 +1654,7 @@ const workspaceSnapshotRepositorySchema = z
           byteLength: z.number().int().nonnegative(),
           coordinateExtent: z.number().int().nonnegative(),
         })
-        .strict(),
+        .strict()
     ),
   })
   .strict();
@@ -1904,9 +1712,7 @@ const workspaceInitializationInspectionSchema = z.discriminatedUnion("state", [
     .strict(),
 ]);
 const genericSemanticResultSchema = z.discriminatedUnion("kind", [
-  z
-    .object({ kind: z.literal("complete"), result: GadJsonValueSchema })
-    .strict(),
+  z.object({ kind: z.literal("complete"), result: GadJsonValueSchema }).strict(),
   z
     .object({
       kind: z.literal("effects-pending"),
@@ -1914,15 +1720,8 @@ const genericSemanticResultSchema = z.discriminatedUnion("kind", [
       effects: z.array(semanticEffectSchema),
     })
     .strict(),
-  z
-    .object({ kind: z.literal("host-read"), request: semanticHostReadSchema })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("host-content"),
-      request: semanticContentRequestSchema,
-    })
-    .strict(),
+  z.object({ kind: z.literal("host-read"), request: semanticHostReadSchema }).strict(),
+  z.object({ kind: z.literal("host-content"), request: semanticContentRequestSchema }).strict(),
 ]);
 const materializationFileStateSchema = z
   .object({ contentHash: nonemptyText, mode: z.number().int().nonnegative() })
@@ -1942,12 +1741,7 @@ const materializationRepositorySchema = z.discriminatedUnion("presence", [
       presence: z.literal("present"),
       fileManifestId: nonemptyText,
       source: z.discriminatedUnion("kind", [
-        z
-          .object({
-            kind: z.literal("content-root"),
-            contentRoot: nonemptyText,
-          })
-          .strict(),
+        z.object({ kind: z.literal("content-root"), contentRoot: nonemptyText }).strict(),
         z
           .object({
             kind: z.literal("delta"),
@@ -1959,7 +1753,7 @@ const materializationRepositorySchema = z.discriminatedUnion("presence", [
                   expected: materializationFileStateSchema.nullable(),
                   result: materializationFileStateSchema.nullable(),
                 })
-                .strict(),
+                .strict()
             ),
           })
           .strict(),
@@ -1973,7 +1767,7 @@ const materializationRepositorySchema = z.discriminatedUnion("presence", [
                   contentHash: nonemptyText,
                   mode: z.number().int().nonnegative(),
                 })
-                .strict(),
+                .strict()
             ),
           })
           .strict(),
@@ -1990,9 +1784,7 @@ const materializationCommandSchema = z
     previousState: stateRefSchema.nullable(),
     targetState: stateRefSchema,
     repositories: z.array(materializationRepositorySchema),
-    blobs: z.array(
-      z.object({ contentHash: nonemptyText, base64: z.string() }).strict(),
-    ),
+    blobs: z.array(z.object({ contentHash: nonemptyText, base64: z.string() }).strict()),
     payloadDigest: nonemptyText,
   })
   .strict();
@@ -2040,12 +1832,7 @@ const logAppendEventSchema = z
     publish: z
       .object({
         channels: z.array(
-          z
-            .object({
-              channelId: nonemptyText,
-              audience: GadJsonValueSchema.optional(),
-            })
-            .strict(),
+          z.object({ channelId: nonemptyText, audience: GadJsonValueSchema.optional() }).strict()
         ),
       })
       .strict()
@@ -2066,7 +1853,7 @@ const appendLogResultSchema = z
           channelId: nonemptyText,
           envelopeId: nonemptyText,
         })
-        .strict(),
+        .strict()
     ),
   })
   .strict();
@@ -2077,10 +1864,7 @@ const forkLogInputSchema = z
     toLogId: nonemptyText,
     toHead: nonemptyText,
     atSeq: z.number().int().nonnegative().nullish(),
-    owner: z
-      .object({ kind: nonemptyText, id: nonemptyText })
-      .strict()
-      .nullish(),
+    owner: z.object({ kind: nonemptyText, id: nonemptyText }).strict().nullish(),
   })
   .strict();
 const forkLogResultSchema = z
@@ -2094,9 +1878,7 @@ const forkLogResultSchema = z
     inherited: z.number().int().nonnegative(),
   })
   .strict();
-const channelInviteKeySchema = z
-  .object({ channelId: nonemptyText, userId: nonemptyText })
-  .strict();
+const channelInviteKeySchema = z.object({ channelId: nonemptyText, userId: nonemptyText }).strict();
 
 const gadInternalWireMethods = defineServiceMethods({
   workspaceSourceTemplateInstallation: {
@@ -2104,8 +1886,7 @@ const gadInternalWireMethods = defineServiceMethods({
       kind: "closed",
       reason: "Installation provenance requires a reviewed source consumer.",
     } as const,
-    description:
-      "Read installation provenance at an exact workspace publication event.",
+    description: "Read installation provenance at an exact workspace publication event.",
     args: z.tuple([z.object({ eventId: nonemptyText }).strict()]),
     returns: WorkspaceTemplateInstallationSchema.nullable(),
     agentFacing: false,
@@ -2163,10 +1944,7 @@ const gadInternalWireMethods = defineServiceMethods({
     description: "Check the workspace-source bootstrap protocol.",
     args: z.tuple([]),
     returns: z
-      .object({
-        ok: z.literal(true),
-        protocol: z.literal("vibestudio.workspace-source.v1"),
-      })
+      .object({ ok: z.literal(true), protocol: z.literal("vibestudio.workspace-source.v1") })
       .strict(),
     agentFacing: false,
   },
@@ -2177,9 +1955,7 @@ const gadInternalWireMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "Acknowledge one exact semantic host effect.",
-    args: z.tuple([
-      z.object({ acknowledgement: semanticAcknowledgementSchema }).strict(),
-    ]),
+    args: z.tuple([z.object({ acknowledgement: semanticAcknowledgementSchema }).strict()]),
     returns: genericSemanticResultSchema,
     agentFacing: false,
   },
@@ -2190,11 +1966,7 @@ const gadInternalWireMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "Resume one exact semantic content host read.",
-    args: z.tuple([
-      z
-        .object({ acknowledgement: semanticHostReadAcknowledgementSchema })
-        .strict(),
-    ]),
+    args: z.tuple([z.object({ acknowledgement: semanticHostReadAcknowledgementSchema }).strict()]),
     returns: genericSemanticResultSchema,
     agentFacing: false,
   },
@@ -2204,13 +1976,8 @@ const gadInternalWireMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Resume an exact semantic command after its authored content is available.",
-    args: z.tuple([
-      z
-        .object({ acknowledgement: semanticContentAcknowledgementSchema })
-        .strict(),
-    ]),
+    description: "Resume an exact semantic command after its authored content is available.",
+    args: z.tuple([z.object({ acknowledgement: semanticContentAcknowledgementSchema }).strict()]),
     returns: genericSemanticResultSchema,
     agentFacing: false,
   },
@@ -2234,10 +2001,7 @@ const gadInternalWireMethods = defineServiceMethods({
     description: "List content roots retained by semantic state.",
     args: z.tuple([]),
     returns: z
-      .object({
-        contentRoots: z.array(nonemptyText),
-        contentHashes: z.array(nonemptyText),
-      })
+      .object({ contentRoots: z.array(nonemptyText), contentHashes: z.array(nonemptyText) })
       .strict(),
     agentFacing: false,
   },
@@ -2258,17 +2022,12 @@ const gadInternalWireMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Check whether semantic references are reachable from contexts.",
+    description: "Check whether semantic references are reachable from contexts.",
     args: z.tuple([
       z
         .object({
           contextIds: z.array(nonemptyText),
-          references: z.array(
-            z
-              .object({ kind: nonemptyText, value: GadJsonValueSchema })
-              .strict(),
-          ),
+          references: z.array(z.object({ kind: nonemptyText, value: GadJsonValueSchema }).strict()),
         })
         .strict(),
     ]),
@@ -2322,12 +2081,7 @@ const gadInternalWireMethods = defineServiceMethods({
     } as const,
     description: "Derive the exact repair command for one context projection.",
     args: z.tuple([
-      z
-        .object({
-          contextId: nonemptyText,
-          materializedState: stateRefSchema.nullable(),
-        })
-        .strict(),
+      z.object({ contextId: nonemptyText, materializedState: stateRefSchema.nullable() }).strict(),
     ]),
     returns: materializationCommandSchema,
     agentFacing: false,
@@ -2412,9 +2166,7 @@ const gadInternalWireMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "Delete one exact log head.",
-    args: z.tuple([
-      z.object({ logId: nonemptyText, head: nonemptyText }).strict(),
-    ]),
+    args: z.tuple([z.object({ logId: nonemptyText, head: nonemptyText }).strict()]),
     returns: z.object({ deleted: z.boolean() }).strict(),
     agentFacing: false,
   },
@@ -2426,10 +2178,7 @@ const gadInternalWireMethods = defineServiceMethods({
     } as const,
     description: "List generic references by kind or prefix.",
     args: z.tuple([
-      z
-        .object({ kind: z.string().nullish(), prefix: z.string().nullish() })
-        .strict()
-        .optional(),
+      z.object({ kind: z.string().nullish(), prefix: z.string().nullish() }).strict().optional(),
     ]),
     returns: z.array(refRecordSchema),
     agentFacing: false,
@@ -2442,12 +2191,7 @@ const gadInternalWireMethods = defineServiceMethods({
     } as const,
     description: "List the mutation log for one generic reference.",
     args: z.tuple([
-      z
-        .object({
-          refName: nonemptyText,
-          limit: z.number().int().positive().nullish(),
-        })
-        .strict(),
+      z.object({ refName: nonemptyText, limit: z.number().int().positive().nullish() }).strict(),
     ]),
     returns: z.array(refLogRecordSchema),
     agentFacing: false,
@@ -2459,9 +2203,7 @@ const gadInternalWireMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "Read one exact log head.",
-    args: z.tuple([
-      z.object({ logId: nonemptyText, head: nonemptyText }).strict(),
-    ]),
+    args: z.tuple([z.object({ logId: nonemptyText, head: nonemptyText }).strict()]),
     returns: logHeadSchema.nullable(),
     agentFacing: false,
   },
@@ -2472,9 +2214,7 @@ const gadInternalWireMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "Read the fork lineage of one log head.",
-    args: z.tuple([
-      z.object({ logId: nonemptyText, head: nonemptyText.optional() }).strict(),
-    ]),
+    args: z.tuple([z.object({ logId: nonemptyText, head: nonemptyText.optional() }).strict()]),
     returns: z
       .object({
         parentLogId: nonemptyText.nullable(),
@@ -2514,13 +2254,7 @@ const gadInternalWireMethods = defineServiceMethods({
     } as const,
     description: "Read one exact log envelope.",
     args: z.tuple([
-      z
-        .object({
-          logId: nonemptyText,
-          head: nonemptyText,
-          envelopeId: nonemptyText,
-        })
-        .strict(),
+      z.object({ logId: nonemptyText, head: nonemptyText, envelopeId: nonemptyText }).strict(),
     ]),
     returns: logEnvelopeSchema.nullable(),
     agentFacing: false,
@@ -2531,8 +2265,7 @@ const gadInternalWireMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description:
-      "Return requested envelope identifiers present in a log lineage.",
+    description: "Return requested envelope identifiers present in a log lineage.",
     args: z.tuple([
       z
         .object({
@@ -2543,6 +2276,13 @@ const gadInternalWireMethods = defineServiceMethods({
         .strict(),
     ]),
     returns: z.array(nonemptyText),
+    agentFacing: false,
+  },
+  initializeLogHead: {
+    website: { kind: "closed", reason: "Raw workspace log ownership requires a reviewed public receiver." } as const,
+    description: "Commit an exact empty root log without fabricating an event.",
+    args: z.tuple([z.object({ logId: nonemptyText, head: nonemptyText, logKind: nonemptyText }).strict()]),
+    returns: z.object({ seq: z.literal(0), hash: z.string() }).strict(),
     agentFacing: false,
   },
   appendLogEvent: {
@@ -2587,14 +2327,9 @@ const gadInternalWireMethods = defineServiceMethods({
     } as const,
     description: "Validate durable log chains and head pointers.",
     args: z.tuple([
-      z
-        .object({ logId: z.string().nullish(), head: z.string().nullish() })
-        .strict()
-        .optional(),
+      z.object({ logId: z.string().nullish(), head: z.string().nullish() }).strict().optional(),
     ]),
-    returns: z
-      .object({ ok: z.boolean(), errors: z.array(logIntegrityErrorSchema) })
-      .strict(),
+    returns: z.object({ ok: z.boolean(), errors: z.array(logIntegrityErrorSchema) }).strict(),
     agentFacing: false,
   },
   indexMemoryFiles: {
@@ -2608,13 +2343,7 @@ const gadInternalWireMethods = defineServiceMethods({
       z
         .object({
           files: z.array(
-            z
-              .object({
-                path: z.string(),
-                contentHash: nonemptyText,
-                text: z.string(),
-              })
-              .strict(),
+            z.object({ path: z.string(), contentHash: nonemptyText, text: z.string() }).strict()
           ),
           removedPaths: z.array(z.string()).nullish(),
         })
@@ -2641,9 +2370,7 @@ const gadInternalWireMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "Write one memory-index state marker.",
-    args: z.tuple([
-      z.object({ key: nonemptyText, value: z.string() }).strict(),
-    ]),
+    args: z.tuple([z.object({ key: nonemptyText, value: z.string() }).strict()]),
     returns: z.void(),
     agentFacing: false,
   },
@@ -2682,7 +2409,7 @@ const gadInternalWireMethods = defineServiceMethods({
               actor: GadJsonValueSchema,
               appendedAt: z.string().nullable(),
             })
-            .strict(),
+            .strict()
         ),
       })
       .strict(),
@@ -2744,7 +2471,7 @@ const gadInternalWireMethods = defineServiceMethods({
               sourceEventHash: nonemptyText,
               forkEventHash: nonemptyText,
             })
-            .strict(),
+            .strict()
         ),
       })
       .strict(),
@@ -2757,14 +2484,9 @@ const gadInternalWireMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "Project one versioned channel membership and invite.",
-    args: z.tuple([
-      ChannelInviteSchema.extend({ revision: z.number().int().nonnegative() }),
-    ]),
+    args: z.tuple([ChannelInviteSchema.extend({ revision: z.number().int().nonnegative() })]),
     returns: z
-      .object({
-        applied: z.boolean(),
-        currentRevision: z.number().int().nonnegative(),
-      })
+      .object({ applied: z.boolean(), currentRevision: z.number().int().nonnegative() })
       .strict(),
     agentFacing: false,
   },
@@ -2775,11 +2497,7 @@ const gadInternalWireMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description: "Project one versioned channel membership removal.",
-    args: z.tuple([
-      channelInviteKeySchema.extend({
-        revision: z.number().int().nonnegative(),
-      }),
-    ]),
+    args: z.tuple([channelInviteKeySchema.extend({ revision: z.number().int().nonnegative() })]),
     returns: z
       .object({
         applied: z.boolean(),
@@ -2797,9 +2515,7 @@ const gadInternalWireMethods = defineServiceMethods({
     } as const,
     description: "List channels indexed for one workspace account.",
     args: z.tuple([z.object({ userId: nonemptyText }).strict()]),
-    returns: z
-      .object({ userId: nonemptyText, channelIds: z.array(nonemptyText) })
-      .strict(),
+    returns: z.object({ userId: nonemptyText, channelIds: z.array(nonemptyText) }).strict(),
     agentFacing: false,
   },
   purgeRevokedUserChannelIndexes: {
@@ -2858,7 +2574,7 @@ const gadInternalWireMethods = defineServiceMethods({
           logId: nonemptyText,
           createdAt: z.number().nullable(),
         })
-        .strict(),
+        .strict()
     ),
     agentFacing: false,
   },
@@ -2889,9 +2605,7 @@ const rawGadWireMethods = defineServiceMethods({
   listUserNotificationsForMe: {
     ...publicListUserNotificationsForMe,
     agentFacing: false,
-    returns: z
-      .object({ notifications: z.array(UserNotificationSchema) })
-      .strict(),
+    returns: z.object({ notifications: z.array(UserNotificationSchema) }).strict(),
   },
   acknowledgeUserNotification: {
     ...publicAcknowledgeUserNotification,
@@ -2918,11 +2632,7 @@ type GadAuthorityGroup = {
 
 const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
   {
-    methods: [
-      "ensureBlob",
-      "rebuildTrajectoryProjections",
-      "clearDirtyAfterValidation",
-    ],
+    methods: ["ensureBlob", "rebuildTrajectoryProjections", "clearDirtyAfterValidation"],
     capability: "workspace.graph.write",
     principals: ["host", "user", "code"],
     tier: "open",
@@ -3046,6 +2756,7 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
   {
     methods: [
       "updateRef",
+      "initializeLogHead",
       "appendLogEvent",
       "forkLog",
       "indexMemoryFiles",
@@ -3063,12 +2774,7 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
     effect: { kind: "open" },
   },
   {
-    methods: [
-      "deleteRef",
-      "deleteLogHead",
-      "deleteChannelMembership",
-      "deleteChannelInvite",
-    ],
+    methods: ["deleteRef", "deleteLogHead", "deleteChannelMembership", "deleteChannelInvite"],
     capability: "workspace.graph.delete",
     principals: ["host", "code"],
     tier: "critical",
@@ -3128,22 +2834,15 @@ function applyGadAuthority<const T extends ServiceMethodSchemas>(
   methods: T,
 ): GadAuthorizedMethods<T> {
   const policies = new Map(
-    GAD_AUTHORITY_GROUPS.flatMap((group) =>
-      group.methods.map((method) => [method, group] as const),
-    ),
+    GAD_AUTHORITY_GROUPS.flatMap((group) => group.methods.map((method) => [method, group] as const))
   );
   const declared = Object.keys(methods);
-  if (
-    policies.size !== declared.length ||
-    declared.some((method) => !policies.has(method))
-  ) {
+  if (policies.size !== declared.length || declared.some((method) => !policies.has(method))) {
     const missing = declared.filter((method) => !policies.has(method));
-    const unknown = [...policies.keys()].filter(
-      (method) => !declared.includes(method),
-    );
+    const unknown = [...policies.keys()].filter((method) => !declared.includes(method));
     throw new Error(
       `GAD typed authority groups must classify every wire method exactly once; ` +
-        `missing=[${missing.join(",")}], unknown=[${unknown.join(",")}]`,
+        `missing=[${missing.join(",")}], unknown=[${unknown.join(",")}]`
     );
   }
   return Object.fromEntries(
@@ -3167,7 +2866,7 @@ function applyGadAuthority<const T extends ServiceMethodSchemas>(
           access: { ...schema.access, sensitivity: policy.sensitivity },
         },
       ];
-    }),
+    })
   ) as GadAuthorizedMethods<T>;
 }
 

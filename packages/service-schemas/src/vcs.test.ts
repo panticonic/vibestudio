@@ -98,6 +98,7 @@ const expectedMethods = [
   "push",
   "query",
   "readFile",
+  "readFiles",
   "readMemory",
   "registerExternalDelta",
   "resolveRepository",

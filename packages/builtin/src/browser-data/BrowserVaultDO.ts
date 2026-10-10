@@ -33,6 +33,7 @@ interface PreparedCookiePut {
 }
 
 export class BrowserVaultDO extends DurableObjectBase {
+  static override readonly durableWorkQueues = [] as const;
   static override rpcMethods = browserVaultMethods;
   static override schemaVersion = 1;
 

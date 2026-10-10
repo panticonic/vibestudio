@@ -13,6 +13,7 @@ import {
 import type { AttestedCaller, DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { Pool, type Dispatcher } from "undici";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
+import { doExecutableHeaders } from "./doExecutableDispatch.js";
 import { EntityNotCreatedError } from "@vibestudio/shared/runtime/entitySpec";
 import {
   DURABLE_WORK_READY_HEADER,
@@ -34,9 +35,11 @@ export function getWorkerdConnectionDispatcher(endpoint: string): Dispatcher {
       // Semantic invocation lifetime is controlled by its owner and signal.
       headersTimeout: 0,
       bodyTimeout: 0,
-      // POSTs have no universal replay identity. Give each invocation its own
-      // connection rather than retrying an ambiguous stale keep-alive socket.
-      pipelining: 0,
+      // Reuse connections with one request in flight per socket. Undici treats
+      // POSTs as non-idempotent and reports a failed admitted request; it does
+      // not replay it. Concurrent calls (including cancellation) get other
+      // sockets rather than queueing behind an active response stream.
+      pipelining: 1,
     });
     workerdConnectionDispatchers.set(origin, dispatcher);
   }
@@ -164,6 +167,7 @@ export function doRefUrl(ref: DORef, method: string): string {
 }
 
 export interface DurableObjectRelayDeps {
+  resolveExecutableVersion?: import("./doExecutableDispatch.js").DoExecutableVersionResolver;
   workerdUrl: string;
   workerdGatewayToken: string;
   workerdDispatchSecret?: string;
@@ -263,6 +267,7 @@ async function fetchEnvelopeFromDO(
     res = await fetch(url, {
       method: "POST",
       headers: {
+        ...doExecutableHeaders(ref, deps.resolveExecutableVersion),
         "Content-Type": "application/json",
         Authorization: `Bearer ${deps.workerdGatewayToken}`,
         ...(deps.workerdDispatchSecret

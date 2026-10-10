@@ -1,4 +1,5 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+import { DO_EXECUTABLE_VERSION_HEADER } from "./executableVersion.js";
 
 interface EgressProps {
   id: string;
@@ -13,6 +14,8 @@ interface UniversalDoEnv {
 }
 
 interface DurableObjectCodePayload extends WorkerLoaderWorkerCode {
+  version: string;
+  egressIdentity: string | null;
   wasmModules?: Record<string, string>;
 }
 
@@ -45,9 +48,6 @@ function egressBinding(ctx: DurableObjectState, id: string): Fetcher {
 
 export class EgressGateway extends WorkerEntrypoint<UniversalDoEnv, EgressProps> {
   async fetch(request: Request): Promise<Response> {
-    if (this.ctx.props.id.includes(":__vibestudio_schema_probe:")) {
-      return new Response("Schema probes have no network egress", { status: 403 });
-    }
     const headers = new Headers(request.headers);
     headers.set("X-Vibestudio-Egress-Caller", this.ctx.props.id);
     headers.set("X-Vibestudio-Egress-Secret", this.env.WORKERD_EGRESS_SECRET);
@@ -66,25 +66,25 @@ function decodeKey(encoded: string): { source: string; className: string; userKe
 
 export class UniversalDO extends DurableObject<UniversalDoEnv> {
   private loadedFacet: LoadedFacetClass | null = null;
-  private loadedFacetFlight: { version: string; promise: Promise<LoadedFacetClass> } | null = null;
-
-  private async loadFacetClass(args: {
+  private loadFacetClass(args: {
     source: string;
     className: string;
     userKey: string;
     version: string;
     loaderHeaders: HeadersInit;
-    egressIdentity: string;
-  }): Promise<LoadedFacetClass> {
+  }): LoadedFacetClass {
     if (this.loadedFacet?.version === args.version) return this.loadedFacet;
-    if (this.loadedFacetFlight?.version === args.version) return this.loadedFacetFlight.promise;
-
     if (this.loadedFacet) {
       this.ctx.facets.abort("do", new Error("Runtime image advanced"));
       this.loadedFacet = null;
     }
 
-    const promise = (async (): Promise<LoadedFacetClass> => {
+    // The loader owns one immutable executable unit per exact incarnation.
+    // Objects still own separate facets, SQLite storage, and lifecycle; a live
+    // update selects another unit without replacing a sibling's assigned code.
+    const unitKey = JSON.stringify([args.source, args.className, args.version]);
+    const worker = this.env.LOADER.get(unitKey, async () => {
+      const startedAt = performance.now();
       const identity = `${args.source}:${args.className}`;
       const codeResponse = await fetchLoader(
         this.env.GATEWAY,
@@ -100,40 +100,55 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
             `(${codeResponse.status})`
         );
       }
+      const fetchedAt = performance.now();
       const code = (await codeResponse.json()) as DurableObjectCodePayload;
+      if (code.version !== args.version) {
+        throw new Error(
+          `universal-do: executable changed before loading ${identity}/${args.userKey}`
+        );
+      }
+      if (
+        code.egressIdentity !== null &&
+        (typeof code.egressIdentity !== "string" || code.egressIdentity.length === 0)
+      ) {
+        throw new Error(`universal-do: executable ${identity} has no network identity`);
+      }
       const modules = { ...code.modules };
       if (code.wasmModules) {
         for (const [name, encodedModule] of Object.entries(code.wasmModules)) {
           const binary = atob(encodedModule);
           const bytes = new Uint8Array(binary.length);
-          for (let index = 0; index < binary.length; index++) {
+          for (let index = 0; index < binary.length; index++)
             bytes[index] = binary.charCodeAt(index);
-          }
           modules[name] = { wasm: bytes.buffer };
         }
       }
-      const worker = this.env.LOADER.load({
+      console.info(
+        "Durable Object executable loaded",
+        JSON.stringify({
+          source: args.source,
+          className: args.className,
+          objectKey: args.userKey,
+          version: args.version,
+          fetchMs: fetchedAt - startedAt,
+          decodeMs: performance.now() - fetchedAt,
+        })
+      );
+      return {
         compatibilityDate: code.compatibilityDate,
         compatibilityFlags: code.compatibilityFlags,
         mainModule: code.mainModule,
         modules,
         env: code.env,
-        globalOutbound: egressBinding(this.ctx, args.egressIdentity),
-      });
-      return {
-        version: args.version,
-        class: worker.getDurableObjectClass(args.className),
+        globalOutbound:
+          code.egressIdentity === null ? null : egressBinding(this.ctx, code.egressIdentity),
       };
-    })();
-    const flight = { version: args.version, promise };
-    this.loadedFacetFlight = flight;
-    try {
-      const loaded = await promise;
-      this.loadedFacet = loaded;
-      return loaded;
-    } finally {
-      if (this.loadedFacetFlight === flight) this.loadedFacetFlight = null;
-    }
+    });
+    this.loadedFacet = {
+      version: args.version,
+      class: worker.getDurableObjectClass(args.className),
+    };
+    return this.loadedFacet;
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -161,7 +176,6 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
         )
       );
       this.loadedFacet = null;
-      this.loadedFacetFlight = null;
       return new Response(null, { status: 204 });
     }
 
@@ -177,39 +191,18 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     }
 
     const identity = `${source}:${className}`;
-    const egressIdentity = `do:${identity}:${userKey}`;
     const loaderHeaders = { "X-Vibestudio-Loader-Secret": this.env.WORKERD_LOADER_SECRET };
-    const versionResponse = await fetchLoader(
-      this.env.GATEWAY,
-      new Request(
-        `http://gateway/_doversion/${encodeURIComponent(source)}/${encodeURIComponent(className)}` +
-          `?objectKey=${encodeURIComponent(userKey)}`,
-        { headers: loaderHeaders }
-      )
-    );
-    if (versionResponse.status === 404) {
-      return new Response(`DO class not found: ${identity}`, { status: 404 });
-    }
-    if (versionResponse.status === 503) {
-      return new Response("universal-do: code warming", {
-        status: 503,
-        headers: { "Retry-After": "1" },
-      });
-    }
-    if (!versionResponse.ok) {
-      return new Response(`universal-do: version lookup failed (${versionResponse.status})`, {
-        status: 502,
-      });
-    }
-    const { version } = (await versionResponse.json()) as { version: string };
+    const version = request.headers.get(DO_EXECUTABLE_VERSION_HEADER);
+    if (!version) return new Response("universal-do: missing executable identity", { status: 400 });
 
-    const loaded = await this.loadFacetClass({
+    const activatesFacet = this.loadedFacet?.version !== version;
+    const activationStartedAt = performance.now();
+    const loaded = this.loadFacetClass({
       source,
       className,
       userKey,
       version,
       loaderHeaders,
-      egressIdentity,
     });
 
     // One logical DO per host object means one constant facet name. Keeping it
@@ -222,8 +215,12 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       url.origin
     );
     innerUrl.search = url.search;
+    const dispatchStartedAt = performance.now();
+    let completed = false;
     try {
-      return await facet.fetch(new Request(innerUrl, request));
+      const response = await facet.fetch(new Request(innerUrl, request));
+      completed = true;
+      return response;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("(503)")) {
@@ -240,6 +237,22 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
         error instanceof Error ? (error.stack ?? error.message) : error
       );
       throw error;
+    } finally {
+      if (activatesFacet) {
+        console.info(
+          "Durable Object first activation",
+          JSON.stringify({
+            source,
+            className,
+            objectKey: userKey,
+            version,
+            method: innerRest.join("/"),
+            loadMs: dispatchStartedAt - activationStartedAt,
+            firstFetchMs: performance.now() - dispatchStartedAt,
+            completed,
+          })
+        );
+      }
     }
   }
 }

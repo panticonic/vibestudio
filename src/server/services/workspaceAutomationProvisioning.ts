@@ -21,7 +21,19 @@ export function createWorkspaceAutomationProvisioner(deps: {
 }) {
   const pending = new Map<string, Promise<void>>();
   const completed = new Set<string>();
+  let accepting = true;
+  async function join(work: Iterable<Promise<void>>): Promise<void> {
+    const settled = await Promise.allSettled(work);
+    const failures = settled.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "Workspace automation provisioning failed");
+    }
+  }
   async function reconcile(): Promise<void> {
+    if (!accepting) return;
+    const workToJoin: Promise<void>[] = [];
     for (const member of deps.members()) {
       for (const [id, definition] of Object.entries(deps.config().defaultAutomations ?? {})) {
         if (!definition) continue;
@@ -29,7 +41,7 @@ export function createWorkspaceAutomationProvisioner(deps: {
         if (completed.has(key)) continue;
         const inFlight = pending.get(key);
         if (inFlight) {
-          await inFlight;
+          workToJoin.push(inFlight);
           continue;
         }
         const work = (async () => {
@@ -69,15 +81,18 @@ export function createWorkspaceAutomationProvisioner(deps: {
           } catch (error) {
             deps.failed(id, member.userId, error);
           }
-        })();
-        pending.set(key, work);
-        try {
-          await work;
-        } finally {
+        })().finally(() => {
           pending.delete(key);
-        }
+        });
+        pending.set(key, work);
+        workToJoin.push(work);
       }
     }
+    await join(workToJoin);
   }
-  return { reconcile };
+  async function close(): Promise<void> {
+    accepting = false;
+    await join(pending.values());
+  }
+  return { reconcile, close };
 }

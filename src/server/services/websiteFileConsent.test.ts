@@ -78,6 +78,8 @@ describe("connected website file consent", () => {
     disk = new FsDisk("unused");
     files = new FsService(
       {
+        contextSourcePath: () => scratch,
+        contextScratchPath: () => scratch,
         ensureContextFolder: async () => scratch,
         ensureContextScratch: async () => scratch,
       } as unknown as ContextFolderManager,

@@ -1,3 +1,4 @@
+import { assertSingleInfrastructureModuleTree } from "./lib/bundle-module-identity.mjs";
 import * as esbuild from "esbuild";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -24,6 +25,8 @@ export async function buildWorkerdPrograms(options = {}) {
   const write = options.write ?? true;
   const result = await esbuild.build({
     entryPoints: entries,
+    tsconfig: "tsconfig.json",
+    metafile: true,
     bundle: true,
     platform: "browser",
     target: "es2022",
@@ -38,6 +41,8 @@ export async function buildWorkerdPrograms(options = {}) {
     logOverride: options.logOverride,
     write,
   });
+
+  assertSingleInfrastructureModuleTree(result.metafile, process.cwd());
 
   if (write) {
     return {

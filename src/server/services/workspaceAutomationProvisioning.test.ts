@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createWorkspaceAutomationProvisioner } from "./workspaceAutomationProvisioning";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { EntityRecord, RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
+import type { DORef } from "@vibestudio/shared/doDispatcher";
 
 const definition = {
   source: "workers/agent-worker",
@@ -29,7 +30,9 @@ function fixture() {
         contextId: `context:${spec.key}`,
       }) as RuntimeEntityHandle
   );
-  const dispatch = vi.fn(async () => undefined);
+  const dispatch = vi.fn(
+    async (_ref: DORef, _method: string, ..._args: unknown[]): Promise<unknown> => undefined
+  );
   const failed = vi.fn();
   const entity = vi.fn(async (_id: string): Promise<EntityRecord | null> => null);
   const deps = {
@@ -53,6 +56,61 @@ function fixture() {
   };
 }
 describe("workspace automation provisioning", () => {
+  it("starts independent members without waiting for another member's initialization", async () => {
+    const f = fixture();
+    f.members.push({ userId: "bob", handle: "bob" });
+    let releaseAlice!: () => void;
+    const aliceHeld = new Promise<void>((resolve) => {
+      releaseAlice = resolve;
+    });
+    let bobStarted!: () => void;
+    const bobReady = new Promise<void>((resolve) => {
+      bobStarted = resolve;
+    });
+    f.dispatch.mockImplementation(async (ref) => {
+      if (ref.objectKey.endsWith(":alice")) await aliceHeld;
+      else bobStarted();
+    });
+    const reconciliation = f.provisioner.reconcile();
+    try {
+      await bobReady;
+      expect(f.dispatch).toHaveBeenCalledTimes(2);
+    } finally {
+      releaseAlice();
+      await reconciliation;
+    }
+  });
+  it("closes admission and joins an initialization before dependencies can be destroyed", async () => {
+    const f = fixture();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const initializing = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    f.dispatch.mockImplementation(async () => {
+      started();
+      await held;
+    });
+    const reconciliation = f.provisioner.reconcile();
+    await initializing;
+    let closed = false;
+    const closing = f.provisioner.close().then(() => {
+      closed = true;
+    });
+    try {
+      f.members.push({ userId: "bob", handle: "bob" });
+      await f.provisioner.reconcile();
+      expect(f.createEntity).toHaveBeenCalledOnce();
+      expect(closed).toBe(false);
+    } finally {
+      release();
+      await Promise.all([reconciliation, closing]);
+    }
+    expect(closed).toBe(true);
+  });
   it("provisions without any panel and attributes each runtime to its actual member", async () => {
     const f = fixture();
     f.members.push({ userId: "bob", handle: "bob" });

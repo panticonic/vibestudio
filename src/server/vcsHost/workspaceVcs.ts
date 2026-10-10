@@ -21,14 +21,8 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { TextDecoder } from "node:util";
 
-import type {
-  VcsReadFileResult,
-  VcsStateNodeRef,
-} from "@vibestudio/service-schemas/vcs";
-import {
-  vcsMethods,
-  type VcsMethodName,
-} from "@vibestudio/service-schemas/vcs";
+import type { VcsReadFileResult, VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
+import { vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
 import type {
   ProtectedPublicationEvent,
   ProtectedPublicationFileChange,
@@ -49,6 +43,7 @@ import {
   collectTreeReachableDigests,
   diffTrees,
   getBytes,
+  hasTreeObject,
   materializeTree,
   putBytes,
   readFileAtTree,
@@ -97,10 +92,7 @@ import {
 } from "@vibestudio/service-schemas/workspaceSource";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
-import {
-  retainedBlobDigests,
-  withBlobContentLock,
-} from "../storage/blobRetentions.js";
+import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
 
 /**
  * The semantic wire surface, derived from the port rather than mirrored beside
@@ -110,34 +102,28 @@ import {
  * lists against each other. `satisfies` now makes an undispatched port method
  * a compile error.
  */
-export type WorkspaceSemanticMethod = Extract<
-  keyof WorkspaceSemanticPort,
-  `vcs${string}`
+export type WorkspaceSemanticMethod = Extract<keyof WorkspaceSemanticPort, `vcs${string}`>;
+type VcsApiMethodForWire<M extends WorkspaceSemanticMethod> = M extends `vcs${infer Name}`
+  ? Uncapitalize<Name> extends VcsMethodName
+    ? Uncapitalize<Name>
+    : never
+  : never;
+export type WorkspaceSemanticInput<M extends WorkspaceSemanticMethod> = ReturnType<
+  (typeof vcsMethods)[VcsApiMethodForWire<M>]["args"]["parse"]
+>[0];
+export type WorkspaceSemanticOutput<M extends WorkspaceSemanticMethod> = ReturnType<
+  (typeof vcsMethods)[VcsApiMethodForWire<M>]["returns"]["parse"]
 >;
-type VcsApiMethodForWire<M extends WorkspaceSemanticMethod> =
-  M extends `vcs${infer Name}`
-    ? Uncapitalize<Name> extends VcsMethodName
-      ? Uncapitalize<Name>
-      : never
-    : never;
-export type WorkspaceSemanticInput<M extends WorkspaceSemanticMethod> =
-  ReturnType<(typeof vcsMethods)[VcsApiMethodForWire<M>]["args"]["parse"]>[0];
-export type WorkspaceSemanticOutput<M extends WorkspaceSemanticMethod> =
-  ReturnType<(typeof vcsMethods)[VcsApiMethodForWire<M>]["returns"]["parse"]>;
 type SemanticResultDecoder<T> = (value: unknown) => T;
 function parseSemanticContextResult(value: unknown) {
   return SemanticContextResultSchema.parse(value);
 }
 
-function semanticApiMethodForWire(
-  method: WorkspaceSemanticMethod,
-): VcsMethodName {
+function semanticApiMethodForWire(method: WorkspaceSemanticMethod): VcsMethodName {
   const name = method.slice(3);
   const apiMethod = `${name[0]?.toLowerCase() ?? ""}${name.slice(1)}`;
   if (!Object.hasOwn(vcsMethods, apiMethod)) {
-    throw new Error(
-      `Semantic VCS wire method ${method} has no canonical result schema`,
-    );
+    throw new Error(`Semantic VCS wire method ${method} has no canonical result schema`);
   }
   return apiMethod as VcsMethodName;
 }
@@ -168,13 +154,12 @@ const SEMANTIC_WIRE_METHODS = {
   vcsReadMemory: true,
   vcsResolveRepository: true,
   vcsReadFile: true,
+  vcsReadFiles: true,
   vcsListDirectory: true,
   vcsListFiles: true,
 } as const satisfies Record<WorkspaceSemanticMethod, true>;
 
-export function isSemanticWireMethod(
-  method: string,
-): method is WorkspaceSemanticMethod {
+export function isSemanticWireMethod(method: string): method is WorkspaceSemanticMethod {
   return Object.hasOwn(SEMANTIC_WIRE_METHODS, method);
 }
 
@@ -193,16 +178,9 @@ export interface ExactRepositorySnapshotPlan {
   contentRoot: string;
   repositoryManifestDigest: string;
   materializedTreeDigest: string;
-  requiredFiles: Array<{
-    path: string;
-    contentHash: string;
-    byteLength: number;
-  }>;
+  requiredFiles: Array<{ path: string; contentHash: string; byteLength: number }>;
   realization: {
-    repository: Extract<
-      WorkspaceMaterializationRepository,
-      { presence: "present" }
-    >;
+    repository: Extract<WorkspaceMaterializationRepository, { presence: "present" }>;
     blobs: WorkspaceMaterializationBlob[];
   };
   planDigest: string;
@@ -257,17 +235,13 @@ function semanticRequestContextId(request: unknown): string | null {
   const input = (request as Record<string, unknown>)["input"];
   if (!input || typeof input !== "object") return null;
   const contextId = (input as Record<string, unknown>)["contextId"];
-  return typeof contextId === "string" && contextId.length > 0
-    ? contextId
-    : null;
+  return typeof contextId === "string" && contextId.length > 0 ? contextId : null;
 }
 
 function semanticCallAbortError(signal: AbortSignal): Error {
   if (signal.reason instanceof Error) return signal.reason;
   const error = new Error(
-    typeof signal.reason === "string"
-      ? signal.reason
-      : "Semantic VCS call aborted",
+    typeof signal.reason === "string" ? signal.reason : "Semantic VCS call aborted"
   );
   error.name = "AbortError";
   return error;
@@ -276,16 +250,10 @@ function semanticCallAbortError(signal: AbortSignal): Error {
 /**
  * Caller-driven publication includes review, authority acquisition, protected
  * ref mutation, and semantic acknowledgement. Cancellation owns that complete
- * operation, not only the final authority wait. Racing at the per-context lock
- * boundary releases later status/recovery calls immediately; any detached
- * publication continuation still carries the already-aborted gate signal, so
- * it cannot newly acquire authority. If protected refs were already applied,
- * their durable publication receipt makes the caller's exact retry safe.
+ * operation, not only the final authority wait. An initialization observer
+ * owns only its wait; the shared initialization itself has a separate owner.
  */
-function abortableSemanticCall<T>(
-  operation: () => Promise<T>,
-  signal: AbortSignal,
-): Promise<T> {
+function abortableSemanticCall<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(semanticCallAbortError(signal));
   const pending = operation();
   return new Promise<T>((resolve, reject) => {
@@ -299,9 +267,37 @@ function abortableSemanticCall<T>(
       (error) => {
         signal.removeEventListener("abort", onAbort);
         reject(error);
-      },
+      }
     );
   });
+}
+
+/** Cancellation stops actual publication effects through their gate signal.
+ * Keep the context fence until the complete dispatch joins: even a reply that
+ * arrives after cancellation can contain a committed working-head receipt. */
+async function ownedSemanticCall<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw semanticCallAbortError(signal);
+  let cancellation: Error | undefined;
+  const onAbort = (): void => {
+    cancellation = semanticCallAbortError(signal);
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    const value = await operation();
+    if (cancellation) throw cancellation;
+    return value;
+  } catch (error) {
+    if (cancellation && error !== cancellation) {
+      throw new AggregateError(
+        [cancellation, error],
+        "Cancelled semantic operation failed while joining its owned work",
+        { cause: cancellation }
+      );
+    }
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
 export type CallerPublicationGateContext = {
@@ -314,9 +310,7 @@ export type CallerPublicationGateContext = {
   epochTransition?: true;
 };
 
-type PublicationGateContext =
-  | CallerPublicationGateContext
-  | { kind: "workspace-initialization" };
+type PublicationGateContext = CallerPublicationGateContext | { kind: "workspace-initialization" };
 
 type SemanticEffect = Pick<
   WorkspaceSourceSemanticEffect,
@@ -345,16 +339,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private readonly materializer: ContextMaterializer;
   private readonly locks = new Map<string, Promise<unknown>>();
   private protectedMainMutationTail: Promise<void> = Promise.resolve();
-  private readonly protectedMainMutationScope =
-    new AsyncLocalStorage<boolean>();
-  private readonly semanticContextInitializations = new Map<
-    string,
-    Promise<VcsStateNodeRef>
-  >();
-  private readonly contextInitializations = new Map<
-    string,
-    Promise<VcsStateNodeRef>
-  >();
+  private readonly protectedMainMutationScope = new AsyncLocalStorage<boolean>();
+  private readonly semanticContextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
+  /** Exact working-head receipts owned by this host's context mutation fence.
+   * A null receipt records explicit deletion; a missing receipt needs recovery. */
+  private readonly contextHeads = new Map<string, VcsStateNodeRef | null>();
+  private readonly contextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
   private readonly semanticStateByContent = new Map<string, VcsStateNodeRef>();
   /** Exact materialization receipt verified during this host generation. An
    * absent entry (including after restart) requires one disk integrity scan. */
@@ -372,9 +362,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private ensureFreshInFlight: Promise<{ stateHash: string }> | null = null;
 
   constructor(private readonly deps: WorkspaceVcsDeps) {
-    this.contentProjection = new ContentProjectionStore({
-      blobsDir: deps.blobsDir,
-    });
+    this.contentProjection = new ContentProjectionStore({ blobsDir: deps.blobsDir });
     this.projector = new DiskProjector({
       contentProjection: this.contentProjection,
       workspaceRoot: deps.workspaceRoot,
@@ -391,9 +379,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       contentProjection: this.contentProjection,
       discoverGraph: (stateHash) => this.discoverGraph(stateHash),
     });
-    this.deps.refs.onRefsChanged((publication) =>
-      this.onProtectedRefsPublished(publication),
-    );
+    this.deps.refs.onRefsChanged((publication) => this.onProtectedRefsPublished(publication));
   }
 
   get attached(): boolean {
@@ -405,18 +391,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     epoch: number;
     executionSourceRoots: readonly ExecutionSourceContentRoot[];
   }): Promise<PreparedWorkspaceGc> {
-    const reachable = await this.collectGcReachableDigests(
-      options.executionSourceRoots,
-    );
+    const reachable = await this.collectGcReachableDigests(options.executionSourceRoots);
     let committed = false;
     return {
       epoch: options.epoch,
       commit: () =>
         withBlobContentLock(this.deps.blobsDir, async () => {
-          if (committed)
-            throw new Error(
-              `Content GC epoch ${options.epoch} was already committed`,
-            );
+          if (committed) throw new Error(`Content GC epoch ${options.epoch} was already committed`);
           committed = true;
           // A materialization may finish after the initial read-only preflight
           // and before the shared epoch commits. Re-read all durable and cached
@@ -424,21 +405,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           // be mistaken for garbage. Keeping the first snapshot as well is
           // intentional: roots retired during the epoch remain protected until
           // the normal age grace period expires.
-          const finalReachable = await this.collectGcReachableDigests(
-            options.executionSourceRoots,
-          );
+          const finalReachable = await this.collectGcReachableDigests(options.executionSourceRoots);
           for (const digest of reachable) finalReachable.add(digest);
-          return sweepUnreachableBlobs(
-            this.deps.blobsDir,
-            finalReachable,
-            options.minAgeMs,
-          );
+          return sweepUnreachableBlobs(this.deps.blobsDir, finalReachable, options.minAgeMs);
         }),
     };
   }
 
   private async collectGcReachableDigests(
-    executionSourceRoots: readonly ExecutionSourceContentRoot[],
+    executionSourceRoots: readonly ExecutionSourceContentRoot[]
   ): Promise<Set<string>> {
     const semantic = await this.gad().contentGcRoots();
     const roots = new Set(semantic.contentRoots);
@@ -472,12 +447,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           : mainRoots.has(root)
             ? "protected main"
             : executionRoots.has(root)
-              ? `retained execution source (${[
-                  ...(executionRootPaths.get(root) ?? []),
-                ].join(", ")})`
+              ? `retained execution source (${[...(executionRootPaths.get(root) ?? [])].join(
+                  ", "
+                )})`
               : "unknown";
         throw new Error(
-          `GC root ${root} is missing from the content store (provenance: ${provenance})`,
+          `GC root ${root} is missing from the content store (provenance: ${provenance})`
         );
       }
       for (const digest of tree.treeDigests) reachable.add(digest);
@@ -508,16 +483,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   async inspectContentRoot(
-    stateHash: string,
+    stateHash: string
   ): Promise<{ reconstructible: boolean; missing: readonly string[] }> {
     try {
-      const closure = await collectTreeReachableDigests(
-        this.deps.blobsDir,
-        stateHash,
-        {
-          verifyContent: true,
-        },
-      );
+      const closure = await collectTreeReachableDigests(this.deps.blobsDir, stateHash, {
+        verifyContent: true,
+      });
       if (!closure) {
         return {
           reconstructible: false,
@@ -537,7 +508,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async referencesReachable(
     contextIds: readonly string[],
-    references: readonly { kind: string; value: unknown }[],
+    references: readonly { kind: string; value: unknown }[]
   ): Promise<boolean> {
     await this.whenSemanticReady();
     return this.gad().referencesReachable({
@@ -558,7 +529,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async isStateDescendant(
     ancestor: VcsStateNodeRef,
-    descendant: VcsStateNodeRef,
+    descendant: VcsStateNodeRef
   ): Promise<boolean> {
     await this.whenSemanticReady();
     return this.gad().isStateDescendant({
@@ -582,14 +553,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   whenSemanticReady(signal?: AbortSignal): Promise<void> {
     const initialized = this.semanticInitialization ?? Promise.resolve();
-    return signal
-      ? abortableSemanticCall(() => initialized, signal)
-      : initialized;
+    return signal ? abortableSemanticCall(() => initialized, signal) : initialized;
   }
 
   async attachGad(gad: WorkspaceSemanticPort): Promise<void> {
-    if (this.gadCaller)
-      throw new Error("semantic workspace is already attached");
+    if (this.gadCaller) throw new Error("semantic workspace is already attached");
     this.gadCaller = gad;
   }
 
@@ -622,12 +590,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async semanticCall<M extends WorkspaceSemanticMethod>(
     method: M,
     request: SemanticRequest<M>,
-    publicationGateContext?: CallerPublicationGateContext,
+    publicationGateContext?: CallerPublicationGateContext
   ): Promise<WorkspaceSemanticOutput<M>> {
     await this.whenSemanticReady(
-      publicationGateContext?.kind === "caller"
-        ? publicationGateContext.signal
-        : undefined,
+      publicationGateContext?.kind === "caller" ? publicationGateContext.signal : undefined
     );
     return this.dispatchSemanticCall(method, request, publicationGateContext);
   }
@@ -635,35 +601,50 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private async dispatchSemanticCall<M extends WorkspaceSemanticMethod>(
     method: M,
     request: SemanticRequest<M>,
-    publicationGateContext?: PublicationGateContext,
+    publicationGateContext?: PublicationGateContext
   ): Promise<WorkspaceSemanticOutput<M>> {
     const dispatch = async (): Promise<WorkspaceSemanticOutput<M>> => {
+      const contextId = semanticRequestContextId(request);
+      const operationClass = vcsMethods[semanticApiMethodForWire(method)].operationClass;
+      if (contextId && operationClass !== "read") this.contextHeads.delete(contextId);
       const next = await this.dispatchSemanticWire(method, request);
-      return this.drainSemanticResult(
+      const result = await this.drainSemanticResult(
         next,
         (value) =>
           vcsMethods[semanticApiMethodForWire(method)].returns.parse(
-            value,
+            value
           ) as WorkspaceSemanticOutput<M>,
-        publicationGateContext,
+        publicationGateContext
       );
+      if (contextId && operationClass === "context-write") {
+        // Public mutation results were decoded above. Publish only the exact
+        // resulting working coordinate, never the request's expected basis.
+        const receipt = result as Record<string, unknown>;
+        if (receipt["workingHead"]) {
+          this.publishContextHead(contextId, receipt["workingHead"] as VcsStateNodeRef);
+        } else if (method === "vcsCommit") {
+          this.publishContextHead(contextId, receipt["event"] as VcsStateNodeRef);
+        } else if (method === "vcsImportSnapshot") {
+          this.publishContextHead(contextId, {
+            kind: "event",
+            eventId: receipt["eventId"] as string,
+          });
+        }
+      }
+      return result;
     };
     const operation = (): Promise<WorkspaceSemanticOutput<M>> => {
       const signal =
-        publicationGateContext?.kind === "caller"
-          ? publicationGateContext.signal
-          : undefined;
-      return signal ? abortableSemanticCall(dispatch, signal) : dispatch();
+        publicationGateContext?.kind === "caller" ? publicationGateContext.signal : undefined;
+      return signal ? ownedSemanticCall(dispatch, signal) : dispatch();
     };
     const contextId = semanticRequestContextId(request);
-    return contextId
-      ? this.locked(`context-lifecycle:${contextId}`, operation)
-      : operation();
+    return contextId ? this.locked(`context-lifecycle:${contextId}`, operation) : operation();
   }
 
   private dispatchSemanticWire<M extends WorkspaceSemanticMethod>(
     method: M,
-    request: SemanticRequest<M>,
+    request: SemanticRequest<M>
   ): Promise<WorkspaceSourceSemanticDispatchResult> {
     if (!isSemanticWireMethod(method)) {
       throw new Error(`Invalid semantic VCS method ${JSON.stringify(method)}`);
@@ -673,7 +654,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   semanticDirectCall<M extends WorkspaceSemanticMethod>(
     method: M,
-    input: WorkspaceSemanticInput<M>,
+    input: WorkspaceSemanticInput<M>
   ): Promise<WorkspaceSemanticOutput<M>> {
     return this.semanticCall(method, {
       input,
@@ -683,16 +664,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private dispatchSemanticInput<M extends WorkspaceSemanticMethod>(
     method: M,
-    input: WorkspaceSemanticInput<M>,
+    input: WorkspaceSemanticInput<M>
   ): Promise<WorkspaceSemanticOutput<M>> {
-    return this.dispatchSemanticCall(method, {
-      input,
-      ingress: { causalParent: null },
-    });
+    return this.dispatchSemanticCall(method, { input, ingress: { causalParent: null } });
   }
 
   private semanticWorkspaceInitializationPush(
-    input: WorkspaceSemanticInput<"vcsPush">,
+    input: WorkspaceSemanticInput<"vcsPush">
   ): Promise<WorkspaceSemanticOutput<"vcsPush">> {
     return this.mutateProtectedMain(() =>
       this.dispatchSemanticCall(
@@ -701,8 +679,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           input,
           ingress: { causalParent: null },
         },
-        { kind: "workspace-initialization" },
-      ),
+        { kind: "workspace-initialization" }
+      )
     );
   }
 
@@ -710,7 +688,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   semanticCausalCall<M extends WorkspaceSemanticMethod>(
     method: M,
     input: WorkspaceSemanticInput<M>,
-    causalParent: RpcCausalParent | null,
+    causalParent: RpcCausalParent | null
   ): Promise<WorkspaceSemanticOutput<M>> {
     return this.semanticCall(method, {
       input,
@@ -724,7 +702,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     input: WorkspaceSemanticInput<"vcsPush">,
     causalParent: RpcCausalParent | null,
     caller: VerifiedCaller,
-    signal?: AbortSignal,
+    signal?: AbortSignal
   ): Promise<WorkspaceSemanticOutput<"vcsPush">> {
     return this.withProtectedMainMutation(
       () =>
@@ -734,9 +712,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             input,
             ingress: { causalParent },
           },
-          { kind: "caller", caller, ...(signal ? { signal } : {}) },
+          { kind: "caller", caller, ...(signal ? { signal } : {}) }
         ),
-      signal,
+      signal
     );
   }
 
@@ -744,7 +722,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     input: WorkspaceSemanticInput<"vcsPush">,
     causalParent: RpcCausalParent | null,
     caller: VerifiedCaller,
-    signal?: AbortSignal,
+    signal?: AbortSignal
   ): Promise<WorkspaceSemanticOutput<"vcsPush">> {
     return this.withProtectedMainMutation(
       () =>
@@ -754,14 +732,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             input,
             ingress: { causalParent },
           },
-          {
-            kind: "caller",
-            caller,
-            epochTransition: true,
-            ...(signal ? { signal } : {}),
-          },
+          { kind: "caller", caller, epochTransition: true, ...(signal ? { signal } : {}) }
         ),
-      signal,
+      signal
     );
   }
 
@@ -774,24 +747,20 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    */
   async withProtectedMainMutation<T>(
     operation: () => Promise<T>,
-    signal?: AbortSignal,
+    signal?: AbortSignal
   ): Promise<T> {
     await this.whenSemanticReady(signal);
     return this.mutateProtectedMain(operation);
   }
 
-  private async mutateProtectedMain<T>(
-    operation: () => Promise<T>,
-  ): Promise<T> {
+  private async mutateProtectedMain<T>(operation: () => Promise<T>): Promise<T> {
     if (this.protectedMainMutationScope.getStore()) return operation();
     const previous = this.protectedMainMutationTail;
     let release!: () => void;
     const current = new Promise<void>((resolve) => {
       release = resolve;
     });
-    this.protectedMainMutationTail = previous
-      .catch(() => undefined)
-      .then(() => current);
+    this.protectedMainMutationTail = previous.catch(() => undefined).then(() => current);
     await previous.catch(() => undefined);
     try {
       return await this.protectedMainMutationScope.run(true, operation);
@@ -803,7 +772,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private async drainSemanticResult<T>(
     initial: SemanticDispatchResult,
     decode: SemanticResultDecoder<T>,
-    publicationGateContext?: PublicationGateContext,
+    publicationGateContext?: PublicationGateContext
   ): Promise<T> {
     let result = initial;
     for (let step = 0; step < 1_000; step += 1) {
@@ -820,20 +789,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (result.kind === "host-content") {
         const request = result.request;
         result = await withBlobContentLock(this.deps.blobsDir, () =>
-          this.prepareSemanticContent(request),
+          this.prepareSemanticContent(request)
         );
         continue;
       }
       const effect = result.effects[0];
-      if (!effect)
-        throw new Error(
-          "semantic command reported effects-pending without an effect",
-        );
+      if (!effect) throw new Error("semantic command reported effects-pending without an effect");
       const effectStartedAt = performance.now();
-      const receipt = await this.executeSemanticEffect(
-        effect,
-        publicationGateContext,
-      );
+      const receipt = await this.executeSemanticEffect(effect, publicationGateContext);
       const executeMs = performance.now() - effectStartedAt;
       // The applied head remains replay evidence; marking it acknowledged
       // before the semantic ack closes the crash gap that could otherwise
@@ -888,9 +851,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           selected = { effect, publication: null };
           break;
         }
-        const publication = this.deps.refs.readAppliedPublication(
-          effect.effectId,
-        );
+        const publication = this.deps.refs.readAppliedPublication(effect.effectId);
         if (publication) {
           selected = { effect, publication };
           break;
@@ -907,11 +868,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           !pending.some(
             (candidate) =>
               candidate.effectId === effect.effectId &&
-              candidate.payloadDigest === effect.payloadDigest,
+              candidate.payloadDigest === effect.payloadDigest
           )
         ) {
           return false;
         }
+        // An acknowledgement can finish the authored context transition.
+        // Recovery owns the same fence but may not have its original public
+        // mutation result, so the next read must acquire an exact receipt.
+        if (effect.scopeKind === "context") this.contextHeads.delete(effect.scopeId);
         const receipt: Record<string, unknown> = publication
           ? {
               applied: true,
@@ -934,22 +899,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           : await recover();
       if (didRecover) recovered += 1;
     }
-    throw new Error(
-      "semantic outbox recovery exceeded the host-effect drain limit",
-    );
+    throw new Error("semantic outbox recovery exceeded the host-effect drain limit");
   }
 
   private async executeSemanticEffect(
     effect: SemanticEffect,
-    publicationGateContext?: PublicationGateContext,
+    publicationGateContext?: PublicationGateContext
   ): Promise<GadJsonRecord> {
     switch (effect.kind) {
       case "observe-content":
         return this.observeContent(effect);
       case "materialize-context": {
-        const command = ContextMaterializationCommandSchema.parse(
-          effect.payload,
-        );
+        const command = ContextMaterializationCommandSchema.parse(effect.payload);
         const receipt = await this.materializer.materialize(command);
         await this.rememberVerifiedProjection(command.contextId);
         return GadJsonRecordSchema.parse(receipt);
@@ -966,20 +927,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const representation = effect.payload["representation"];
     if (representation !== "bytes" && representation !== "descriptor") {
       throw new Error(
-        `content observation has unsupported representation ${JSON.stringify(representation)}`,
+        `content observation has unsupported representation ${JSON.stringify(representation)}`
       );
     }
     const files = effect.payload["files"];
-    if (!Array.isArray(files))
-      throw new Error("content observation effect lacks files");
+    if (!Array.isArray(files)) throw new Error("content observation effect lacks files");
     const contentHashes = files.map((value) => {
       if (!value || typeof value !== "object") {
         throw new Error("content observation contains an invalid file");
       }
       const file = value as Record<string, unknown>;
       const contentHash = String(file["contentHash"] ?? "");
-      if (!contentHash)
-        throw new Error("content observation contains an empty content hash");
+      if (!contentHash) throw new Error("content observation contains an empty content hash");
       return contentHash;
     });
     const observed = new Array<Record<string, unknown>>(contentHashes.length);
@@ -987,8 +946,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const observeNext = async (): Promise<void> => {
       for (const [index, contentHash] of pending) {
         const bytes = await getBytes(this.deps.blobsDir, contentHash);
-        if (!bytes)
-          throw new Error(`content observation cannot read ${contentHash}`);
+        if (!bytes) throw new Error(`content observation cannot read ${contentHash}`);
         observed[index] =
           representation === "bytes"
             ? { contentHash, base64: Buffer.from(bytes).toString("base64") }
@@ -997,63 +955,52 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
     await Promise.all(
       Array.from(
-        {
-          length: Math.min(
-            CONTENT_OBSERVATION_CONCURRENCY,
-            contentHashes.length,
-          ),
-        },
-        observeNext,
-      ),
+        { length: Math.min(CONTENT_OBSERVATION_CONCURRENCY, contentHashes.length) },
+        observeNext
+      )
     );
     return GadJsonRecordSchema.parse({ files: observed });
   }
 
   /** Prepared bytes remain transient until the source commits their content identities. */
   private async prepareSemanticContent(
-    request: WorkspaceSourceHostContentRequest,
+    request: WorkspaceSourceHostContentRequest
   ): Promise<SemanticDispatchResult> {
     const seen = new Set<string>();
     const prepared = request.blobs.map(({ contentHash, base64 }) => {
       if (!/^[0-9a-f]{64}$/u.test(contentHash)) {
-        throw new Error(
-          "semantic content preparation contains an invalid content identity",
-        );
+        throw new Error("semantic content preparation contains an invalid content identity");
       }
       if (seen.has(contentHash))
         throw new Error(`semantic content preparation repeats ${contentHash}`);
       seen.add(contentHash);
       const bytes = Buffer.from(base64, "base64");
       if (bytes.toString("base64") !== base64) {
-        throw new Error(
-          `semantic content preparation has invalid bytes for ${contentHash}`,
-        );
+        throw new Error(`semantic content preparation has invalid bytes for ${contentHash}`);
       }
-      if (
-        crypto.createHash("sha256").update(bytes).digest("hex") !== contentHash
-      ) {
-        throw new Error(
-          `semantic content preparation bytes do not match ${contentHash}`,
-        );
+      if (crypto.createHash("sha256").update(bytes).digest("hex") !== contentHash) {
+        throw new Error(`semantic content preparation bytes do not match ${contentHash}`);
       }
       return { contentHash, bytes };
     });
     // Validate the full request before writing, then await every store before
     // allowing the source to commit references. The GC lease spans the ack.
-    await Promise.all(
-      prepared.map(({ bytes }) => putBytes(this.deps.blobsDir, bytes)),
-    );
+    await Promise.all(prepared.map(({ bytes }) => putBytes(this.deps.blobsDir, bytes)));
     const contentHashes = prepared
       .map(({ contentHash }) => contentHash)
       .sort(compareUtf16CodeUnits);
-    return this.gad().semanticContentAck({
-      acknowledgement: { request, contentHashes },
-    });
+    return this.gad().semanticContentAck({ acknowledgement: { request, contentHashes } });
   }
 
-  private async executeHostRead(
-    request: WorkspaceSourceHostReadRequest,
-  ): Promise<unknown> {
+  private async executeHostRead(request: WorkspaceSourceHostReadRequest): Promise<unknown> {
+    if (request.kind === "read-semantic-blobs") {
+      return Promise.all(
+        request.files.map(async (file) => {
+          if (file === null) return null;
+          return this.executeSingleSemanticBlobRead(file);
+        })
+      );
+    }
     if (request.kind === "read-merge-content") {
       return this.executeMergeContentHostRead(request);
     }
@@ -1061,16 +1008,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async executeSingleSemanticBlobRead(
-    request: Extract<
-      WorkspaceSourceHostReadRequest,
-      { kind: "read-semantic-blob" }
-    >,
+    request: Extract<WorkspaceSourceHostReadRequest, { kind: "read-semantic-blob" }>
   ): Promise<NonNullable<VcsReadFileResult>> {
     const bytes = await getBytes(this.deps.blobsDir, request.contentHash);
-    if (!bytes)
-      throw new Error(
-        `semantic content blob ${request.contentHash} is missing`,
-      );
+    if (!bytes) throw new Error(`semantic content blob ${request.contentHash} is missing`);
     return {
       repositoryId: request.repositoryId,
       fileId: request.fileId,
@@ -1087,61 +1028,43 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async executeMergeContentHostRead(
-    request: Extract<
-      WorkspaceSourceHostReadRequest,
-      { kind: "read-merge-content" }
-    >,
+    request: Extract<WorkspaceSourceHostReadRequest, { kind: "read-merge-content" }>
   ): Promise<SemanticDispatchResult> {
     const files = await Promise.all(
       request.contentHashes.map(async (contentHash) => {
         const bytes = await getBytes(this.deps.blobsDir, contentHash);
-        if (!bytes)
-          throw new Error(`semantic content blob ${contentHash} is missing`);
+        if (!bytes) throw new Error(`semantic content blob ${contentHash} is missing`);
         return { contentHash, text: UTF8_DECODER.decode(bytes) };
-      }),
+      })
     );
-    return this.gad().semanticHostReadAck({
-      acknowledgement: { request, files },
-    });
+    return this.gad().semanticHostReadAck({ acknowledgement: { request, files } });
   }
 
   private fileContent(
     bytes: Uint8Array,
-    descriptor: Extract<
-      WorkspaceSourceHostReadRequest,
-      { kind: "read-semantic-blob" }
-    >,
+    descriptor: Extract<WorkspaceSourceHostReadRequest, { kind: "read-semantic-blob" }>
   ): NonNullable<VcsReadFileResult>["content"] {
     if (descriptor["byteLength"] !== bytes.byteLength) {
-      throw new Error(
-        "semantic file byte length does not match its stored content",
-      );
+      throw new Error("semantic file byte length does not match its stored content");
     }
     if (descriptor["contentKind"] === "bytes") {
       if (descriptor["coordinateExtent"] !== bytes.byteLength) {
-        throw new Error(
-          "semantic byte coordinate extent does not match its stored content",
-        );
+        throw new Error("semantic byte coordinate extent does not match its stored content");
       }
       return { kind: "bytes", base64: Buffer.from(bytes).toString("base64") };
     }
     if (descriptor["contentKind"] !== "text")
       throw new Error("semantic file lacks its content kind");
-    const text = new TextDecoder("utf-8", {
-      fatal: true,
-      ignoreBOM: true,
-    }).decode(bytes);
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     if (descriptor["coordinateExtent"] !== text.length) {
-      throw new Error(
-        "semantic text coordinate extent does not match its stored content",
-      );
+      throw new Error("semantic text coordinate extent does not match its stored content");
     }
     return { kind: "text", text };
   }
 
   private async publishMain(
     effect: SemanticEffect,
-    gateContext: PublicationGateContext,
+    gateContext: PublicationGateContext
   ): Promise<GadJsonRecord> {
     const profileStartedAt = performance.now();
     const repositories = effect.payload["repositories"];
@@ -1149,35 +1072,24 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       throw new Error("publication effect lacks exact repository manifests");
     }
     const roots = await this.materializer.contentRoots(
-      repositories as WorkspaceMaterializationRepository[],
+      repositories as WorkspaceMaterializationRepository[]
     );
     const contentRootsCompletedAt = performance.now();
     const current = this.deps.refs.listMains();
-    const currentByPath = new Map(
-      current.map((entry) => [entry.repoPath, entry.contentRoot]),
-    );
-    const targetByPath = new Map(
-      roots.map((entry) => [entry.repoPath, entry.contentRoot]),
-    );
-    const changedPaths = [
-      ...new Set([...currentByPath.keys(), ...targetByPath.keys()]),
-    ]
-      .filter(
-        (repoPath) =>
-          currentByPath.get(repoPath) !== targetByPath.get(repoPath),
-      )
+    const currentByPath = new Map(current.map((entry) => [entry.repoPath, entry.contentRoot]));
+    const targetByPath = new Map(roots.map((entry) => [entry.repoPath, entry.contentRoot]));
+    const changedPaths = [...new Set([...currentByPath.keys(), ...targetByPath.keys()])]
+      .filter((repoPath) => currentByPath.get(repoPath) !== targetByPath.get(repoPath))
       .sort(compareUtf16CodeUnits);
-    const candidateWorkspaceState =
-      await this.repositories.workspaceViewWithReposAt(
-        changedPaths.map((repoPath) => ({
-          repoPath,
-          stateHash: targetByPath.get(repoPath) ?? null,
-        })),
-      );
+    const candidateWorkspaceState = await this.repositories.workspaceViewWithReposAt(
+      changedPaths.map((repoPath) => ({
+        repoPath,
+        stateHash: targetByPath.get(repoPath) ?? null,
+      }))
+    );
     const candidateStateCompletedAt = performance.now();
     const publishedEventId = String(effect.payload["publishedEventId"] ?? "");
-    if (!publishedEventId)
-      throw new Error("publication effect lacks its published event identity");
+    if (!publishedEventId) throw new Error("publication effect lacks its published event identity");
     // BuildV2 seals execution identity while the ref gate validates this
     // candidate. Register the already-committed semantic event before the gate
     // asks for a build, rather than teaching the build store to accept an
@@ -1187,7 +1099,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       eventId: publishedEventId,
     });
     const hostRefsBasisDigest = hostRefBasisDigest(
-      current.map(({ repoPath, contentRoot }) => ({ repoPath, contentRoot })),
+      current.map(({ repoPath, contentRoot }) => ({ repoPath, contentRoot }))
     );
     await this.deps.refs.updateMains({
       entries: changedPaths.map((repoPath) => ({
@@ -1202,16 +1114,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         hostRefsBasisDigest,
       },
       gateContext:
-        gateContext.kind === "caller"
-          ? { ...gateContext, candidateWorkspaceState }
-          : gateContext,
+        gateContext.kind === "caller" ? { ...gateContext, candidateWorkspaceState } : gateContext,
     });
     const refsCompletedAt = performance.now();
     const publication = this.deps.refs.readAppliedPublication(effect.effectId);
-    if (!publication)
-      throw new Error(
-        `protected publication ${effect.effectId} was not recorded`,
-      );
+    if (!publication) throw new Error(`protected publication ${effect.effectId} was not recorded`);
     const profileCompletedAt = performance.now();
     if (profileCompletedAt - profileStartedAt >= 100) {
       console.info("[VcsProfile] protected main publication", {
@@ -1237,9 +1144,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private workspaceSourceProvider(): WorkspaceSourceProviderV1 {
     if (!this.sourceProviderCaller) {
-      throw new Error(
-        "workspace source provider bootstrap ABI is not attached",
-      );
+      throw new Error("workspace source provider bootstrap ABI is not attached");
     }
     return this.sourceProviderCaller;
   }
@@ -1259,12 +1164,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     await this.whenSemanticReady();
     const active = this.semanticContextInitializations.get(contextId);
     if (active) return active;
-    const initialization = this.locked(`context-lifecycle:${contextId}`, () =>
-      this.dispatchEnsureContext(contextId, "deferred"),
-    ).finally(() => {
-      if (
-        this.semanticContextInitializations.get(contextId) === initialization
-      ) {
+    const initialization = this.locked(`context-lifecycle:${contextId}`, async () => {
+      const head = this.contextHeads.get(contextId);
+      // A deferred coordinate admission has no projection to repair. Its
+      // exact owned receipt remains valid until this fence admits a mutation.
+      return head ? { ...head } : this.dispatchEnsureContext(contextId, "deferred");
+    }).finally(() => {
+      if (this.semanticContextInitializations.get(contextId) === initialization) {
         this.semanticContextInitializations.delete(contextId);
       }
     });
@@ -1277,7 +1183,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const active = this.contextInitializations.get(contextId);
     if (active) return active;
     const initialization = this.locked(`context-lifecycle:${contextId}`, () =>
-      this.ensureContextOnce(contextId),
+      this.ensureContextOnce(contextId)
     ).finally(() => {
       if (this.contextInitializations.get(contextId) === initialization) {
         this.contextInitializations.delete(contextId);
@@ -1289,19 +1195,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async ensureContextOnce(contextId: string): Promise<VcsStateNodeRef> {
     const working = await this.dispatchEnsureContext(contextId, "required");
-    const materialized =
-      await this.materializer.materializationState(contextId);
+    const materialized = await this.materializer.materializationState(contextId);
     const materializedKey = materialized ? canonicalJson(materialized) : null;
     const targetMatches =
-      materialized &&
-      canonicalJson(materialized.targetState) === canonicalJson(working);
+      materialized && canonicalJson(materialized.targetState) === canonicalJson(working);
     const alreadyVerified =
-      materializedKey !== null &&
-      this.verifiedProjectionStates.get(contextId) === materializedKey;
+      materializedKey !== null && this.verifiedProjectionStates.get(contextId) === materializedKey;
     if (
       !targetMatches ||
-      (!alreadyVerified &&
-        !(await this.materializer.projectionMatches(materialized)))
+      (!alreadyVerified && !(await this.materializer.projectionMatches(materialized)))
     ) {
       await this.repairContextMaterialization(contextId);
     } else if (materializedKey !== null && !alreadyVerified) {
@@ -1312,18 +1214,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async dispatchEnsureContext(
     contextId: string,
-    projection: "required" | "deferred",
+    projection: "required" | "deferred"
   ): Promise<VcsStateNodeRef> {
+    this.contextHeads.delete(contextId);
     this.projector.contextDir(contextId);
-    const operation =
-      projection === "required"
-        ? "ensure-context"
-        : "ensure-context-coordinate";
+    const operation = projection === "required" ? "ensure-context" : "ensure-context-coordinate";
     const commandId = `${operation}:${sha256HexSyncText(
       canonicalJson({
         workspaceId: this.deps.workspaceId,
         contextId,
-      }),
+      })
     )}`;
     const result = await this.gad().ensureContext({
       contextId,
@@ -1331,11 +1231,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       ...(projection === "deferred" ? { projection } : {}),
       ingress: { causalParent: null },
     });
-    const context = await this.drainSemanticResult(
-      result,
-      parseSemanticContextResult,
-    );
+    const context = await this.drainSemanticResult(result, parseSemanticContextResult);
+    this.publishContextHead(contextId, context.working.ref);
     return context.working.ref;
+  }
+
+  private publishContextHead(contextId: string, head: VcsStateNodeRef): void {
+    this.contextHeads.set(contextId, Object.freeze({ ...head }));
   }
 
   private async repairContextMaterialization(contextId: string): Promise<void> {
@@ -1380,8 +1282,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       : null;
     if (rootPin) {
       let spanStartedAt = performance.now();
-      const initialization =
-        await this.workspaceSourceProvider().inspectInitialization();
+      const initialization = await this.workspaceSourceProvider().inspectInitialization();
       timings.inspectMs = performance.now() - spanStartedAt;
       if (initialization.state === "ready") {
         if (
@@ -1390,7 +1291,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           initialization.receipt.pin.commit !== rootPin.commit
         ) {
           throw new Error(
-            "Workspace source initialization receipt does not match the exact root template",
+            "Workspace source initialization receipt does not match the exact root template"
           );
         }
         spanStartedAt = performance.now();
@@ -1402,12 +1303,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (initialization.state === "failed") {
         throw deserializeRpcFailure(initialization.failure);
       }
-      const preparedRoot =
-        await this.deps.rootTemplateBootstrap!.prepareInitialization();
+      const preparedRoot = await this.deps.rootTemplateBootstrap!.prepareInitialization();
       if (!preparedRoot) {
-        throw new Error(
-          "Workspace root template disappeared during source initialization",
-        );
+        throw new Error("Workspace root template disappeared during source initialization");
       }
       spanStartedAt = performance.now();
       const receipt = await this.initializeExactWorkspaceSource(preparedRoot);
@@ -1419,15 +1317,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       const protectedMain = this.deps.refs.readMainSemanticState();
       if (protectedMain?.eventId !== receipt.initializedEventId) {
         throw new Error(
-          `Workspace source receipt event ${receipt.initializedEventId} does not match protected main ${protectedMain?.eventId ?? "absent"}`,
+          `Workspace source receipt event ${receipt.initializedEventId} does not match protected main ${protectedMain?.eventId ?? "absent"}`
         );
       }
       return { ...fresh, initialized: true, timings };
     }
     let spanStartedAt = performance.now();
     const state = await this.ensureContextOnce(contextId);
-    timings.ensureContextAndMaterializationMs =
-      performance.now() - spanStartedAt;
+    timings.ensureContextAndMaterializationMs = performance.now() - spanStartedAt;
     spanStartedAt = performance.now();
     const inspected = await this.dispatchSemanticInput("vcsInspect", {
       node: state,
@@ -1436,8 +1333,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     timings.inspectMs = performance.now() - spanStartedAt;
     const existingRefs = this.deps.refs.listMains();
     if (
-      (inspected.node.kind !== "event" ||
-        inspected.node.value.kind !== "genesis") &&
+      (inspected.node.kind !== "event" || inspected.node.value.kind !== "genesis") &&
       existingRefs.length > 0
     ) {
       spanStartedAt = performance.now();
@@ -1449,20 +1345,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
     const initializationEvidence = await this.initializationEvidence(state);
 
-    const scanned = await this.contentProjection.localState(
-      this.deps.workspaceRoot,
-    );
+    const scanned = await this.contentProjection.localState(this.deps.workspaceRoot);
     timings.sourceScanMs = scanned.timings.scanMs;
     timings.sourceHashAndBlobIngestMs = scanned.timings.hashAndBlobIngestMs;
     timings.casTreeMirrorMs = scanned.timings.treeMirrorMs;
     if (scanned.skipped.length > 0) {
       throw new Error(
         `workspace source contains unsupported entries: ${scanned.skipped
-          .map(
-            (entry) =>
-              `${entry.path} (${entry.kind}${entry.reason ? `: ${entry.reason}` : ""})`,
-          )
-          .join(", ")}`,
+          .map((entry) => `${entry.path} (${entry.kind}${entry.reason ? `: ${entry.reason}` : ""})`)
+          .join(", ")}`
       );
     }
     if (!scanned.files.some((file) => file.path === "meta/vibestudio.yml")) {
@@ -1470,17 +1361,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
 
     const sourceFiles = [...scanned.files];
-    sourceFiles.sort((left, right) =>
-      compareUtf16CodeUnits(left.path, right.path),
-    );
+    sourceFiles.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
     const repositories = [];
-    for (const repository of discoverRepos(
-      sourceFiles.map((file) => file.path),
-    )) {
+    for (const repository of discoverRepos(sourceFiles.map((file) => file.path))) {
       const prefix = `${repository.repoPath}/`;
-      const repositoryFiles = sourceFiles.filter((file) =>
-        file.path.startsWith(prefix),
-      );
+      const repositoryFiles = sourceFiles.filter((file) => file.path.startsWith(prefix));
       const files = repositoryFiles.map((file) => ({
         path: file.path.slice(prefix.length),
         contentHash: file.contentHash,
@@ -1499,33 +1384,28 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       (evidence) =>
         evidence.sourceKind === "filesystem" &&
         evidence.sourceUri === "vibestudio://workspace/source" &&
-        evidence.snapshotRevision === localSnapshotRevision,
+        evidence.snapshotRevision === localSnapshotRevision
     );
     if (!localAlreadyImported) {
-      const importResult = await this.dispatchSemanticInput(
-        "vcsImportSnapshot",
-        {
-          contextId,
-          commandId: `initial-import:${localSnapshotRevision}`,
-          expectedWorkingHead: workingHead,
-          intentSummary: "Import the initial local workspace snapshot",
-          source: {
-            kind: "filesystem",
-            uri: "vibestudio://workspace/source",
-            snapshotRevision: localSnapshotRevision,
-          },
-          repositories,
-          message: "Import initial local workspace snapshot",
+      const importResult = await this.dispatchSemanticInput("vcsImportSnapshot", {
+        contextId,
+        commandId: `initial-import:${localSnapshotRevision}`,
+        expectedWorkingHead: workingHead,
+        intentSummary: "Import the initial local workspace snapshot",
+        source: {
+          kind: "filesystem",
+          uri: "vibestudio://workspace/source",
+          snapshotRevision: localSnapshotRevision,
         },
-      );
+        repositories,
+        message: "Import initial local workspace snapshot",
+      });
       workingHead = { kind: "event", eventId: importResult.eventId };
     }
     timings.importSnapshotMs = performance.now() - spanStartedAt;
     const genesisEventId = await this.initializationGenesisEventId(workingHead);
     if (workingHead.kind !== "event") {
-      throw new Error(
-        "Workspace initialization did not produce a committed event head",
-      );
+      throw new Error("Workspace initialization did not produce a committed event head");
     }
     spanStartedAt = performance.now();
     await this.semanticWorkspaceInitializationPush({
@@ -1543,7 +1423,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private initializeExactWorkspaceSource(
-    prepared: import("../workspaceRootTemplateBootstrap.js").PreparedRootTemplateInitialization,
+    prepared: import("../workspaceRootTemplateBootstrap.js").PreparedRootTemplateInitialization
   ): Promise<
     import("@vibestudio/workspace-contracts/workspaceSource").WorkspaceSourceInitializationReceipt
   > {
@@ -1568,9 +1448,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         },
         installation: prepared.installation,
         repositories: [...prepared.repositories]
-          .sort((left, right) =>
-            compareUtf16CodeUnits(left.repoPath, right.repoPath),
-          )
+          .sort((left, right) => compareUtf16CodeUnits(left.repoPath, right.repoPath))
           .map((repository) => ({
             repoPath: repository.repoPath,
             subdir: repository.subdir,
@@ -1591,7 +1469,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
                 contentKind,
                 byteLength,
                 coordinateExtent,
-              }),
+              })
             ),
           })),
       } satisfies import("@vibestudio/workspace-contracts/workspaceSource").InitializeExactWorkspaceSnapshotInput;
@@ -1611,9 +1489,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           elapsedMs: providerElapsedMs,
           state: inspection.state,
           pendingEffect:
-            inspection.state === "initializing"
-              ? (inspection.pendingEffect?.kind ?? null)
-              : null,
+            inspection.state === "initializing" ? (inspection.pendingEffect?.kind ?? null) : null,
         });
         acknowledgement = undefined;
         if (inspection.state === "ready") {
@@ -1623,7 +1499,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
               repositories: prepared.repositories.length,
               files: prepared.repositories.reduce(
                 (count, repository) => count + repository.files.length,
-                0,
+                0
               ),
               providerMs,
               providerSteps,
@@ -1638,9 +1514,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           throw deserializeRpcFailure(inspection.failure);
         }
         if (inspection.state === "empty") {
-          throw new Error(
-            "Workspace source provider did not record initialization",
-          );
+          throw new Error("Workspace source provider did not record initialization");
         }
         const effect = inspection.pendingEffect;
         if (!effect) continue;
@@ -1657,7 +1531,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           },
           {
             kind: "workspace-initialization",
-          },
+          }
         );
         const elapsedMs = performance.now() - effectStartedAt;
         effectMs += elapsedMs;
@@ -1674,42 +1548,28 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           receipt,
         };
       }
-      throw new Error(
-        "Workspace source initialization exceeded the host-effect limit",
-      );
+      throw new Error("Workspace source initialization exceeded the host-effect limit");
     });
   }
 
-  private async initializationGenesisEventId(
-    state: VcsStateNodeRef,
-  ): Promise<string> {
+  private async initializationGenesisEventId(state: VcsStateNodeRef): Promise<string> {
     let cursor = state;
     for (;;) {
       if (cursor.kind !== "event") {
-        throw new Error(
-          "Workspace initialization history contains a non-event state",
-        );
+        throw new Error("Workspace initialization history contains a non-event state");
       }
       const inspected = await this.dispatchSemanticInput("vcsInspect", {
         node: cursor,
         edgeLimit: 1,
       });
       if (inspected.node.kind !== "event") {
-        throw new Error(
-          `Workspace initialization event ${cursor.eventId} cannot be inspected`,
-        );
+        throw new Error(`Workspace initialization event ${cursor.eventId} cannot be inspected`);
       }
-      if (inspected.node.value.kind === "genesis")
-        return inspected.node.value.eventId;
+      if (inspected.node.value.kind === "genesis") return inspected.node.value.eventId;
       if (inspected.node.value.parentEventIds.length !== 1) {
-        throw new Error(
-          "Workspace initialization history is not a single import chain",
-        );
+        throw new Error("Workspace initialization history is not a single import chain");
       }
-      cursor = {
-        kind: "event",
-        eventId: inspected.node.value.parentEventIds[0]!,
-      };
+      cursor = { kind: "event", eventId: inspected.node.value.parentEventIds[0]! };
     }
   }
 
@@ -1738,8 +1598,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         node: cursor,
         edgeLimit: 1,
       });
-      if (event.node.kind !== "event" || event.node.value.kind === "genesis")
-        break;
+      if (event.node.kind !== "event" || event.node.value.kind === "genesis") break;
       for (const applicationId of event.node.value.applicationIds) {
         const application = await this.dispatchSemanticInput("vcsInspect", {
           node: { kind: "application", applicationId },
@@ -1747,46 +1606,35 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         });
         if (application.node.kind !== "application") continue;
         const workUnit = await this.dispatchSemanticInput("vcsInspect", {
-          node: {
-            kind: "work-unit",
-            workUnitId: application.node.value.workUnitId,
-          },
+          node: { kind: "work-unit", workUnitId: application.node.value.workUnitId },
           edgeLimit: 1,
         });
-        if (
-          workUnit.node.kind !== "work-unit" ||
-          !workUnit.node.value.externalSnapshot
-        )
-          continue;
+        if (workUnit.node.kind !== "work-unit" || !workUnit.node.value.externalSnapshot) continue;
         evidence.push({
           ...workUnit.node.value.externalSnapshot,
           eventId: event.node.value.eventId,
         });
       }
       if (event.node.value.parentEventIds.length !== 1) {
-        throw new Error(
-          "Workspace initialization history is not a single import chain",
-        );
+        throw new Error("Workspace initialization history is not a single import chain");
       }
       cursor = { kind: "event", eventId: event.node.value.parentEventIds[0]! };
     }
     return evidence;
   }
 
-  async forkContext(
-    sourceContextId: string,
-    targetContextId: string,
-  ): Promise<VcsStateNodeRef> {
+  async forkContext(sourceContextId: string, targetContextId: string): Promise<VcsStateNodeRef> {
     await this.whenSemanticReady();
     this.projector.contextDir(sourceContextId);
     this.projector.contextDir(targetContextId);
     return this.locked(`context-lifecycle:${targetContextId}`, async () => {
+      this.contextHeads.delete(targetContextId);
       const commandId = `fork-context:${sha256HexSyncText(
         canonicalJson({
           workspaceId: this.deps.workspaceId,
           sourceContextId,
           targetContextId,
-        }),
+        })
       )}`;
       const result = await this.gad().forkContext({
         sourceContextId,
@@ -1794,10 +1642,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         commandId,
         ingress: { causalParent: null },
       });
-      const context = await this.drainSemanticResult(
-        result,
-        parseSemanticContextResult,
-      );
+      const context = await this.drainSemanticResult(result, parseSemanticContextResult);
+      this.publishContextHead(targetContextId, context.working.ref);
       return context.working.ref;
     });
   }
@@ -1805,6 +1651,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async dropContext(contextId: string): Promise<void> {
     await this.whenSemanticReady();
     await this.locked(`context-lifecycle:${contextId}`, async () => {
+      this.contextHeads.delete(contextId);
       // Projection bytes are disposable and reconstructible from semantic
       // authority. Remove them first so every interrupted ordering is
       // recoverable: semantic failure can rematerialize, while semantic
@@ -1812,6 +1659,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       await this.materializer.drop(contextId);
       this.verifiedProjectionStates.delete(contextId);
       await this.gad().dropContext({ contextId });
+      this.contextHeads.set(contextId, null);
     });
   }
 
@@ -1821,42 +1669,123 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   async resolveWorkingState(contextId: string): Promise<VcsStateNodeRef> {
-    await this.ensureContext(contextId);
-    const status = await this.semanticDirectCall("vcsStatus", { contextId });
-    return status.workingHead;
+    await this.whenSemanticReady();
+    return this.locked(`context-lifecycle:${contextId}`, async () => {
+      const head = this.contextHeads.get(contextId);
+      if (head === null) throw new Error(`Semantic context ${contextId} was deleted`);
+      if (head) return { ...head };
+      const command = await this.contextContentCommand(contextId);
+      this.publishContextHead(contextId, command.targetState);
+      return { ...command.targetState };
+    });
+  }
+
+  private async contextContentCommand(
+    contextId: string
+  ): Promise<import("@vibestudio/shared/vcs/workspaceProjection").ContextMaterializationCommand> {
+    await this.whenSemanticReady();
+    return this.gad().contextMaterializationCommand({ contextId, materializedState: null });
+  }
+
+  /** One semantic snapshot owns both the working head and its exact content.
+   * CAS trees are build inputs; editable context checkouts are a separate consumer. */
+  private readonly contextContentSnapshots = new Map<
+    string,
+    { semanticState: VcsStateNodeRef; repositories: Array<{ repoPath: string; stateHash: string }> }
+  >();
+
+  private async exactContextContent(contextId: string) {
+    await this.whenSemanticReady();
+    return this.locked(`context-lifecycle:${contextId}`, () =>
+      this.readFencedContextContent(contextId)
+    );
+  }
+
+  private async readFencedContextContent(contextId: string) {
+    const head = this.contextHeads.get(contextId);
+    if (head === null) throw new Error(`Semantic context ${contextId} was deleted`);
+    if (head === undefined) {
+      const snapshot = await this.readExactContextContent(contextId);
+      this.rememberContextContent(snapshot);
+      return snapshot;
+    }
+    const headKey = canonicalJson(head);
+    const cached = this.contextContentSnapshots.get(headKey);
+    if (
+      cached &&
+      (
+        await Promise.all(
+          cached.repositories.map((repository) =>
+            hasTreeObject(this.deps.blobsDir, repository.stateHash)
+          )
+        )
+      ).every(Boolean)
+    )
+      return cached;
+    const snapshot = await this.readExactContextContent(contextId);
+    this.rememberContextContent(snapshot);
+    return snapshot;
+  }
+
+  private rememberContextContent(snapshot: {
+    semanticState: VcsStateNodeRef;
+    repositories: Array<{ repoPath: string; stateHash: string }>;
+  }): void {
+    if (this.contextContentSnapshots.size >= 128) {
+      this.contextContentSnapshots.delete(this.contextContentSnapshots.keys().next().value!);
+    }
+    this.contextContentSnapshots.set(canonicalJson(snapshot.semanticState), snapshot);
+  }
+
+  private async readExactContextContent(contextId: string) {
+    const command = await this.contextContentCommand(contextId);
+    this.publishContextHead(contextId, command.targetState);
+    const roots = await this.materializer.planContentRoots(command.repositories);
+    const realized = await Promise.allSettled(
+      roots.map(async (root) => {
+        if (await hasTreeObject(this.deps.blobsDir, root.contentRoot)) return;
+        const source = command.repositories.find(
+          (
+            repository
+          ): repository is Extract<WorkspaceMaterializationRepository, { presence: "present" }> =>
+            repository.presence === "present" && repository.repositoryId === root.repositoryId
+        );
+        if (!source)
+          throw new Error(`Exact context content has no source for ${root.repositoryId}`);
+        await this.materializer.realizePlannedRepository(source, command.blobs, root.contentRoot);
+      })
+    );
+    const failures = realized.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length === 1) throw failures[0];
+    if (failures.length)
+      throw new AggregateError(failures, "Exact context content realization failed");
+    return {
+      semanticState: command.targetState,
+      repositories: roots.map(({ repoPath, contentRoot }) => ({
+        repoPath,
+        stateHash: contentRoot,
+      })),
+    };
   }
 
   async contextRepoTargets(
-    contextId: string,
+    contextId: string
   ): Promise<Array<{ repoPath: string; stateHash: string }>> {
-    await this.ensureContext(contextId);
-    const state = await this.materializer.materializationState(contextId);
-    if (!state)
-      throw new Error(`context ${contextId} has no materialized state`);
-    return state.repositories.map(({ repoPath, contentRoot }) => ({
-      repoPath,
-      stateHash: contentRoot,
+    return (await this.exactContextContent(contextId)).repositories.map((repository) => ({
+      ...repository,
     }));
   }
 
-  async materializeContextRepos(
-    contextId: string,
-    _scopes: string[] | "all",
-  ): Promise<void> {
+  async materializeContextRepos(contextId: string, _scopes: string[] | "all"): Promise<void> {
     await this.ensureContext(contextId);
   }
 
-  async isContextRepoMaterialized(
-    contextId: string,
-    repoPath: string,
-  ): Promise<boolean> {
+  async isContextRepoMaterialized(contextId: string, repoPath: string): Promise<boolean> {
     const normalized = normalizeRepositoryPath(repoPath);
     const state = await this.materializer.materializationState(contextId);
-    return (
-      state?.repositories.some(
-        (repository) => repository.repoPath === normalized,
-      ) ?? false
-    );
+    return state?.repositories.some((repository) => repository.repoPath === normalized) ?? false;
   }
 
   /**
@@ -1873,103 +1802,70 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       contextId: input.contextId,
       materializedState: null,
     });
-    const roots = await this.materializer.planContentRoots(
-      command.repositories,
-    );
-    const repository = roots.find(
-      (candidate) => candidate.repositoryId === input.repositoryId,
-    );
+    const roots = await this.materializer.planContentRoots(command.repositories);
+    const repository = roots.find((candidate) => candidate.repositoryId === input.repositoryId);
     if (!repository)
-      throw Object.assign(
-        new Error(`Unknown repository ${input.repositoryId}`),
-        {
-          code: "ENOENT",
-        },
-      );
+      throw Object.assign(new Error(`Unknown repository ${input.repositoryId}`), {
+        code: "ENOENT",
+      });
     const repositoryCommand = command.repositories.find(
       (
-        candidate,
-      ): candidate is Extract<
-        WorkspaceMaterializationRepository,
-        { presence: "present" }
-      > =>
-        candidate.presence === "present" &&
-        candidate.repositoryId === input.repositoryId,
+        candidate
+      ): candidate is Extract<WorkspaceMaterializationRepository, { presence: "present" }> =>
+        candidate.presence === "present" && candidate.repositoryId === input.repositoryId
     );
     if (!repositoryCommand) {
-      throw Object.assign(
-        new Error(`Repository ${input.repositoryId} has no exact source`),
-        {
-          code: "ECORRUPT",
-        },
-      );
+      throw Object.assign(new Error(`Repository ${input.repositoryId} has no exact source`), {
+        code: "ECORRUPT",
+      });
     }
     const referencedContent = new Set(
       repositoryCommand.source.kind === "snapshot"
         ? repositoryCommand.source.files.map((file) => file.contentHash)
         : repositoryCommand.source.kind === "delta"
           ? repositoryCommand.source.changes.flatMap((change) =>
-              change.result ? [change.result.contentHash] : [],
+              change.result ? [change.result.contentHash] : []
             )
-          : [],
+          : []
     );
     const realizationBlobs = command.blobs.filter((blob) =>
-      referencedContent.has(blob.contentHash),
+      referencedContent.has(blob.contentHash)
     );
     const requiredFiles = await Promise.all(
-      [...new Set(input.requiredFiles)]
-        .sort(compareUtf16CodeUnits)
-        .map(async (requiredPath) => {
-          const changed =
-            repositoryCommand.source.kind === "delta"
-              ? repositoryCommand.source.changes.find(
-                  (change) => change.path === requiredPath,
-                )
-              : undefined;
-          const file =
-            repositoryCommand.source.kind === "snapshot"
-              ? repositoryCommand.source.files.find(
-                  (candidate) => candidate.path === requiredPath,
-                )
-              : changed
-                ? changed.result
-                : await readFileAtTree(
-                    this.deps.blobsDir,
-                    repositoryCommand.source.kind === "content-root"
-                      ? repositoryCommand.source.contentRoot
-                      : repositoryCommand.source.basisContentRoot,
-                    requiredPath,
-                  );
-          if (!file)
-            throw Object.assign(
-              new Error(
-                `Required development input ${requiredPath} is absent from ${repository.repoPath}`,
-              ),
-              { code: "EDEVELOPMENT_INPUT" },
-            );
-          const storedBytes = await getBytes(
-            this.deps.blobsDir,
-            file.contentHash,
+      [...new Set(input.requiredFiles)].sort(compareUtf16CodeUnits).map(async (requiredPath) => {
+        const changed =
+          repositoryCommand.source.kind === "delta"
+            ? repositoryCommand.source.changes.find((change) => change.path === requiredPath)
+            : undefined;
+        const file =
+          repositoryCommand.source.kind === "snapshot"
+            ? repositoryCommand.source.files.find((candidate) => candidate.path === requiredPath)
+            : changed
+              ? changed.result
+              : await readFileAtTree(
+                  this.deps.blobsDir,
+                  repositoryCommand.source.kind === "content-root"
+                    ? repositoryCommand.source.contentRoot
+                    : repositoryCommand.source.basisContentRoot,
+                  requiredPath
+                );
+        if (!file)
+          throw Object.assign(
+            new Error(
+              `Required development input ${requiredPath} is absent from ${repository.repoPath}`
+            ),
+            { code: "EDEVELOPMENT_INPUT" }
           );
-          const inline = realizationBlobs.find(
-            (blob) => blob.contentHash === file.contentHash,
+        const storedBytes = await getBytes(this.deps.blobsDir, file.contentHash);
+        const inline = realizationBlobs.find((blob) => blob.contentHash === file.contentHash);
+        const bytes = storedBytes ?? (inline ? Buffer.from(inline.base64, "base64") : null);
+        if (!bytes)
+          throw Object.assign(
+            new Error(`Required development input ${requiredPath} is missing from content storage`),
+            { code: "ECORRUPT" }
           );
-          const bytes =
-            storedBytes ??
-            (inline ? Buffer.from(inline.base64, "base64") : null);
-          if (!bytes)
-            throw Object.assign(
-              new Error(
-                `Required development input ${requiredPath} is missing from content storage`,
-              ),
-              { code: "ECORRUPT" },
-            );
-          return {
-            path: requiredPath,
-            contentHash: file.contentHash,
-            byteLength: bytes.byteLength,
-          };
-        }),
+        return { path: requiredPath, contentHash: file.contentHash, byteLength: bytes.byteLength };
+      })
     );
     const base = {
       version: 1 as const,
@@ -1984,10 +1880,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           repoPath: repository.repoPath,
           fileManifestId: repository.fileManifestId,
           contentRoot: repository.contentRoot,
-        }),
+        })
       ),
       materializedTreeDigest: sha256HexSyncText(
-        canonicalJson({ contentRoot: repository.contentRoot }),
+        canonicalJson({ contentRoot: repository.contentRoot })
       ),
       requiredFiles,
       realization: {
@@ -2007,33 +1903,29 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    */
   async materializeExactRepositoryPlan(
     plan: ExactRepositorySnapshotPlan,
-    destinationInput: string,
+    destinationInput: string
   ): Promise<void> {
     const { planDigest, ...base } = plan;
     if (sha256HexSyncText(canonicalJson(base)) !== planDigest) {
       throw Object.assign(
-        new Error(
-          "Development snapshot plan digest does not match its content",
-        ),
+        new Error("Development snapshot plan digest does not match its content"),
         {
           code: "ECORRUPT",
-        },
+        }
       );
     }
     const destination = path.resolve(destinationInput);
     await fsp.mkdir(destination, { recursive: true, mode: 0o700 });
     if ((await fsp.readdir(destination)).length > 0) {
       throw Object.assign(
-        new Error(
-          `Development materialization destination is not empty: ${destination}`,
-        ),
-        { code: "ENOTEMPTY" },
+        new Error(`Development materialization destination is not empty: ${destination}`),
+        { code: "ENOTEMPTY" }
       );
     }
     await this.materializer.realizePlannedRepository(
       plan.realization.repository,
       plan.realization.blobs,
-      plan.contentRoot,
+      plan.contentRoot
     );
     await materializeTree(this.deps.blobsDir, plan.contentRoot, destination, {
       strategy: "copy-on-write",
@@ -2058,34 +1950,26 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       return { stateHash: this.deps.initialContentState };
     }
     const view = await this.repositories.workspaceView();
-    if (semanticState)
-      this.semanticStateByContent.set(view.stateHash, semanticState);
+    if (semanticState) this.semanticStateByContent.set(view.stateHash, semanticState);
     return view;
   }
 
-  private async resolveContentSelector(
-    selector: string,
-  ): Promise<string | null> {
+  private async resolveContentSelector(selector: string): Promise<string | null> {
     if (selector === "main") return (await this.ensureFresh()).stateHash;
-    if (selector.startsWith("ctx:"))
-      return this.resolveContextState(selector.slice(4));
+    if (selector.startsWith("ctx:")) return this.resolveContextState(selector.slice(4));
     return null;
   }
 
   async resolveContextState(contextId: string): Promise<string> {
-    const semanticState = await this.resolveWorkingState(contextId);
-    const repositories = await this.contextRepoTargets(contextId);
-    const stateHash = (await this.repositories.contentView(repositories))
-      .stateHash;
+    const { semanticState, repositories } = await this.exactContextContent(contextId);
+    const stateHash = (await this.repositories.contentView(repositories)).stateHash;
     this.semanticStateByContent.set(stateHash, semanticState);
     return stateHash;
   }
 
   executionStateForContent(
-    stateHash: string,
-  ):
-    | import("@vibestudio/shared/execution/retention").ExecutionSourceStateRef
-    | null {
+    stateHash: string
+  ): import("@vibestudio/shared/execution/retention").ExecutionSourceStateRef | null {
     const semantic = this.semanticStateByContent.get(stateHash);
     if (semantic) return semantic;
     return stateHash === this.deps.initialContentState
@@ -2093,18 +1977,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       : null;
   }
 
-  async unitHashes(
-    stateHash: string,
-    relPaths: string[],
-  ): Promise<Record<string, string | null>> {
+  async unitHashes(stateHash: string, relPaths: string[]): Promise<Record<string, string | null>> {
     await this.contentProjection.ensureStateMirrored(stateHash);
     const result: Record<string, string | null> = {};
     for (const relativePath of relPaths) {
-      const resolved = await resolveTreePath(
-        this.deps.blobsDir,
-        stateHash,
-        relativePath,
-      );
+      const resolved = await resolveTreePath(this.deps.blobsDir, stateHash, relativePath);
       result[relativePath] =
         resolved === null
           ? null
@@ -2116,21 +1993,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   preparedBuildForContent(stateHash: string, unitPath: string) {
-    return (
-      this.deps.rootTemplateBootstrap?.preparedBuildForContent?.(
-        stateHash,
-        unitPath,
-      ) ?? null
-    );
+    return this.deps.rootTemplateBootstrap?.preparedBuildForContent?.(stateHash, unitPath) ?? null;
   }
 
   async discoverGraph(stateHash: string): Promise<PackageGraph> {
     await this.contentProjection.ensureStateMirrored(stateHash);
-    return discoverPackageGraphAtTree(
-      this.deps.blobsDir,
-      stateHash,
-      this.deps.workspaceRoot,
-    );
+    return discoverPackageGraphAtTree(this.deps.blobsDir, stateHash, this.deps.workspaceRoot);
   }
 
   /**
@@ -2146,14 +2014,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async materializeForBuild(
     units: GraphNode[],
     stateRef: string,
-    _workspaceRoot: string,
+    _workspaceRoot: string
   ): Promise<{ sourceRoot: string }> {
     const stateHash = await this.resolveStateReference(stateRef);
-    const key = crypto
-      .createHash("sha256")
-      .update(stateHash)
-      .digest("hex")
-      .slice(0, 24);
+    const key = crypto.createHash("sha256").update(stateHash).digest("hex").slice(0, 24);
     const sourceRoot = path.join(this.deps.buildSourcesRoot, key);
     await this.contentProjection.ensureStateMirrored(stateHash);
 
@@ -2162,19 +2026,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     // must never wait behind one another merely because they come from the same
     // immutable workspace snapshot.
     await this.locked(`build-root:${key}`, async () => {
-      const rootEntries = await readTreeDirectory(
-        this.deps.blobsDir,
-        stateHash,
-      );
-      if (!rootEntries)
-        throw new Error(`build source root is missing at ${stateHash}`);
+      const rootEntries = await readTreeDirectory(this.deps.blobsDir, stateHash);
+      if (!rootEntries) throw new Error(`build source root is missing at ${stateHash}`);
       await fsp.mkdir(sourceRoot, { recursive: true });
       await Promise.all(
         rootEntries
           .filter((entry) => entry.kind === "file")
-          .map((entry) =>
-            this.ensureBuildSupportFile(stateHash, sourceRoot, entry),
-          ),
+          .map((entry) => this.ensureBuildSupportFile(stateHash, sourceRoot, entry))
       );
     });
 
@@ -2186,17 +2044,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     requestedPaths.add("types");
     await Promise.all(
       [...requestedPaths].map(async (relativePath) => {
-        const resolved = await resolveTreePath(
-          this.deps.blobsDir,
-          stateHash,
-          relativePath,
-        );
+        const resolved = await resolveTreePath(this.deps.blobsDir, stateHash, relativePath);
         if (!resolved) return;
         if (resolved.kind !== "dir") {
           const label =
-            relativePath === "types"
-              ? "build support types"
-              : `build unit ${relativePath}`;
+            relativePath === "types" ? "build support types" : `build unit ${relativePath}`;
           throw new Error(`${label} is not a directory at ${stateHash}`);
         }
         await this.locked(`build-tree:${key}:${relativePath}`, () =>
@@ -2204,10 +2056,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             stateHash,
             relativePath,
             resolved.treeHash,
-            path.join(sourceRoot, ...relativePath.split("/")),
-          ),
+            path.join(sourceRoot, ...relativePath.split("/"))
+          )
         );
-      }),
+      })
     );
     return { sourceRoot };
   }
@@ -2218,7 +2070,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     entry: Extract<
       NonNullable<Awaited<ReturnType<typeof readTreeDirectory>>>[number],
       { kind: "file" }
-    >,
+    >
   ): Promise<void> {
     const target = path.join(sourceRoot, entry.name);
     const receiptKey = `${stateHash}\0/${entry.name}`;
@@ -2230,9 +2082,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
     const bytes = await getBytes(this.deps.blobsDir, entry.contentHash);
     if (!bytes) {
-      throw new Error(
-        `build support file ${entry.name} content is missing at ${stateHash}`,
-      );
+      throw new Error(`build support file ${entry.name} content is missing at ${stateHash}`);
     }
     const temporary = `${target}.${crypto.randomUUID()}.tmp`;
     try {
@@ -2249,7 +2099,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     stateHash: string,
     relativePath: string,
     treeHash: string,
-    destination: string,
+    destination: string
   ): Promise<void> {
     const receiptKey = `${stateHash}\0${relativePath}`;
     if (this.verifiedBuildTrees.get(receiptKey) === treeHash) {
@@ -2261,26 +2111,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     this.rememberVerifiedBuildEntry(receiptKey, treeHash);
   }
 
-  private rememberVerifiedBuildEntry(
-    receiptKey: string,
-    identity: string,
-  ): void {
+  private rememberVerifiedBuildEntry(receiptKey: string, identity: string): void {
     if (this.verifiedBuildTrees.size >= VERIFIED_BUILD_TREE_LIMIT) {
-      this.verifiedBuildTrees.delete(
-        this.verifiedBuildTrees.keys().next().value!,
-      );
+      this.verifiedBuildTrees.delete(this.verifiedBuildTrees.keys().next().value!);
     }
     this.verifiedBuildTrees.set(receiptKey, identity);
   }
 
-  private async materializeStateForGraphDiscovery(
-    stateHash: string,
-  ): Promise<string> {
-    const key = crypto
-      .createHash("sha256")
-      .update(`graph:${stateHash}`)
-      .digest("hex")
-      .slice(0, 24);
+  private async materializeStateForGraphDiscovery(stateHash: string): Promise<string> {
+    const key = crypto.createHash("sha256").update(`graph:${stateHash}`).digest("hex").slice(0, 24);
     const root = path.join(this.deps.buildSourcesRoot, `graph-${key}`);
     await this.locked(`graph:${key}`, async () => {
       await this.contentProjection.ensureStateMirrored(stateHash);
@@ -2292,22 +2131,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private async resolveStateReference(ref: string): Promise<string> {
     if (ref.startsWith("state:")) {
       if (!/^state:[0-9a-f]{64}$/.test(ref)) {
-        throw new Error(
-          `content coordinate is not a canonical state hash: ${ref}`,
-        );
+        throw new Error(`content coordinate is not a canonical state hash: ${ref}`);
       }
       return ref;
     }
     const resolved = await this.resolveContentSelector(ref);
-    if (!resolved)
-      throw new Error(`Unknown content revision ${JSON.stringify(ref)}`);
+    if (!resolved) throw new Error(`Unknown content revision ${JSON.stringify(ref)}`);
     return resolved;
   }
 
-  async readFile(
-    stateRef: string,
-    filePath: string,
-  ): Promise<ContentFile | null> {
+  async readFile(stateRef: string, filePath: string): Promise<ContentFile | null> {
     const stateHash = await this.resolveStateReference(stateRef);
     await this.contentProjection.ensureStateMirrored(stateHash);
     const meta = await readFileAtTree(this.deps.blobsDir, stateHash, filePath);
@@ -2330,22 +2163,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   async listFiles(
-    stateRef: string,
+    stateRef: string
   ): Promise<Array<{ path: string; contentHash: string; mode: number }>> {
     const stateHash = await this.resolveStateReference(stateRef);
-    return (await this.contentProjection.listStateFiles(stateHash)).map(
-      (file) => ({
-        path: file.path,
-        contentHash: file.content_hash,
-        mode: file.mode,
-      }),
-    );
+    return (await this.contentProjection.listStateFiles(stateHash)).map((file) => ({
+      path: file.path,
+      contentHash: file.content_hash,
+      mode: file.mode,
+    }));
   }
 
-  async diffStates(
-    leftStateHash: string,
-    rightStateHash: string,
-  ): Promise<TreeDiff> {
+  async diffStates(leftStateHash: string, rightStateHash: string): Promise<TreeDiff> {
     await Promise.all([
       this.contentProjection.ensureStateMirrored(leftStateHash),
       this.contentProjection.ensureStateMirrored(rightStateHash),
@@ -2384,15 +2212,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   // -----------------------------------------------------------------------
 
   onProtectedPublication(
-    callback: (event: ProtectedPublicationEvent) => void | Promise<void>,
+    callback: (event: ProtectedPublicationEvent) => void | Promise<void>
   ): () => void {
     this.protectedPublicationListeners.add(callback);
     return () => this.protectedPublicationListeners.delete(callback);
   }
 
-  private async onProtectedRefsPublished(
-    publication: ProtectedRefPublication,
-  ): Promise<void> {
+  private async onProtectedRefsPublished(publication: ProtectedRefPublication): Promise<void> {
     if (!this.attached || publication.changes.length === 0) return;
     const workspaceStateHash = (await this.ensureFresh()).stateHash;
     const repositories: ProtectedPublicationEvent["repositories"] = [];
@@ -2400,26 +2226,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       const repoPath = normalizeRepositoryPath(change.repoPath);
       const fileChanges = await this.diffFileChanges(
         change.previousContentRoot,
-        change.nextContentRoot,
+        change.nextContentRoot
       );
-      const reroot = (relativePath: string) =>
-        joinRepoPrefix(repoPath, relativePath);
+      const reroot = (relativePath: string) => joinRepoPrefix(repoPath, relativePath);
       repositories.push({
         repoPath,
         previousStateHash: change.previousContentRoot,
         nextStateHash: change.nextContentRoot,
-        fileChanges: fileChanges.map((file) => ({
-          ...file,
-          path: reroot(file.path),
-        })),
+        fileChanges: fileChanges.map((file) => ({ ...file, path: reroot(file.path) })),
       });
     }
     const changedPaths = [
-      ...new Set(
-        repositories.flatMap(({ fileChanges }) =>
-          fileChanges.map(({ path }) => path),
-        ),
-      ),
+      ...new Set(repositories.flatMap(({ fileChanges }) => fileChanges.map(({ path }) => path))),
     ].sort(compareUtf16CodeUnits);
     const event = {
       publicationId: publication.publicationId,
@@ -2445,18 +2263,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       for (const change of publication.changes) {
         const repoPath = normalizeRepositoryPath(change.repoPath);
         try {
-          if (change.nextContentRoot === null)
-            await this.projector.removeRepo(repoPath);
-          else
-            await this.projector.exportMainToSource(
-              repoPath,
-              change.nextContentRoot,
-            );
+          if (change.nextContentRoot === null) await this.projector.removeRepo(repoPath);
+          else await this.projector.exportMainToSource(repoPath, change.nextContentRoot);
         } catch (error) {
-          console.error(
-            `[Vcs] protected publication source mirror failed for ${repoPath}:`,
-            error,
-          );
+          console.error(`[Vcs] protected publication source mirror failed for ${repoPath}:`, error);
         }
       }
     }
@@ -2464,12 +2274,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async diffFileChanges(
     previous: string | null,
-    next: string | null,
+    next: string | null
   ): Promise<ProtectedPublicationFileChange[]> {
-    const diff = await this.diffStates(
-      previous ?? EMPTY_STATE_HASH,
-      next ?? EMPTY_STATE_HASH,
-    );
+    const diff = await this.diffStates(previous ?? EMPTY_STATE_HASH, next ?? EMPTY_STATE_HASH);
     return [
       ...diff.added.map((file) => ({
         kind: "added" as const,
@@ -2500,9 +2307,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private locked<T>(key: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.locks.get(key);
-    const next = previous
-      ? previous.catch(() => {}).then(operation)
-      : operation();
+    const next = previous ? previous.catch(() => {}).then(operation) : operation();
     this.locks.set(key, next);
     return next.finally(() => {
       if (this.locks.get(key) === next) this.locks.delete(key);

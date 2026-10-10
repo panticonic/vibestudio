@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TypingActivity } from "./typingActivity.js";
 
 const mocks = vi.hoisted(() => ({ handlers: new Map<string, Function>(), views: [] as any[] }));
 vi.mock("electron", () => ({
@@ -42,7 +43,12 @@ describe("Quickfire overlay geometry", () => {
     mocks.views.length = 0;
   });
   function setup() {
-    const overlay = new ShellContentOverlayView("preload", () => "https://shell.local", vi.fn());
+    const overlay = new ShellContentOverlayView(
+      "preload",
+      () => "https://shell.local",
+      vi.fn(),
+      new TypingActivity()
+    );
     const size = [1200, 900];
     overlay.setWindow({
       getContentSize: () => size,

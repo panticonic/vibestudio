@@ -17,7 +17,13 @@ export interface LifecycleDriverDeps {
   workerdManager: WorkerdManager;
   doDispatch: LifecycleDoDispatcher;
   workspaceId: string;
+  drainDurableWorkDeliveries: (owners: readonly DORef[], signal?: AbortSignal) => Promise<void>;
   concurrency?: number;
+  prepareDurableWorkRelease: (
+    owner: DORef,
+    stage: import("@vibestudio/shared/durableWork").DurableWorkReleaseStage,
+    signal?: AbortSignal
+  ) => Promise<void>;
 }
 
 export class LifecycleDriver {
@@ -144,70 +150,147 @@ export class LifecycleDriver {
     signal?: AbortSignal
   ): Promise<void> {
     const ordered = this.dedupe(targets);
-    for (const phase of ["quiesce", "peer-obligations", "release"] as const) {
+    const phaseResults = new Map<LifecycleKey, unknown>();
+    const quiesced = new Set<LifecycleKey>();
+    const cancelPreparation = async (): Promise<unknown[]> => {
+      const results = await Promise.allSettled(
+        [...quiesced].map((target) =>
+          this.deps.doDispatch
+            .dispatchLifecycle(this.toRef(target), "prepare", {
+              epoch,
+              phase: "cancel",
+              mode: "suspend",
+              reason,
+              deadlineMs: 0,
+            })
+            .then((result) => {
+              if (result.status !== "ready")
+                throw new Error("Lifecycle cancellation refused", { cause: result });
+            })
+        )
+      );
+      return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+    };
+    for (const phase of [
+      "quiesce",
+      "peer-obligations",
+      "peer-durable-work",
+      "delivery",
+      "durable-work",
+      "release",
+    ] as const) {
       const failures: unknown[] = [];
+      const failedTargets = new Set<LifecycleKey>();
+      phaseResults.clear();
+      if (phase === "delivery") {
+        try {
+          await this.deps.drainDurableWorkDeliveries(
+            ordered.map((target) => this.toRef(target)),
+            signal
+          );
+        } catch (original) {
+          const cleanup = signal?.aborted ? [] : await cancelPreparation();
+          if (cleanup.length)
+            throw new AggregateError(
+              [original, ...cleanup],
+              "Lifecycle delivery preparation failed",
+              { cause: original }
+            );
+          throw original;
+        }
+        continue;
+      }
       await this.runPool(ordered, async (target) => {
         if (signal?.aborted) return;
         let result: unknown;
-        let operationFailure: unknown;
+        if (phase === "quiesce") quiesced.add(target);
         try {
-          result = await this.deps.doDispatch.dispatchLifecycle(this.toRef(target), "prepare", {
-            epoch,
-            phase,
-            mode: "suspend",
-            reason,
-            deadlineMs: 0,
-          });
+          if (phase === "durable-work" || phase === "peer-durable-work") {
+            const ref = this.toRef(target);
+            await this.deps.prepareDurableWorkRelease(
+              ref,
+              phase === "peer-durable-work" ? "peer-obligations" : "owner",
+              signal
+            );
+            result = { status: "ready" };
+          } else {
+            result = await this.deps.doDispatch.dispatchLifecycle(this.toRef(target), "prepare", {
+              epoch,
+              phase,
+              mode: "suspend",
+              reason,
+              deadlineMs: 0,
+            });
+          }
           if (
             !result ||
             typeof result !== "object" ||
             ((result as { status?: unknown }).status !== "ready" &&
               (result as { status?: unknown }).status !== "failed")
-          )
-            throw new Error("Lifecycle prepare returned no valid phase receipt", { cause: result });
+          ) {
+            throw new Error("Lifecycle prepare returned no valid release receipt", {
+              cause: result,
+            });
+          }
           if ((result as { status: string }).status === "failed") {
             const failure = deserializeRpcFailure((result as { failure: unknown }).failure);
             throw new Error(
-              "Lifecycle " +
-                phase +
-                " refused for " +
-                target.source +
-                ":" +
-                target.className +
-                "/" +
-                target.objectKey +
-                ": " +
-                failure.message,
+              `Lifecycle ${phase} refused for ${target.source}:${target.className}/${target.objectKey}: ${failure.message}`,
               { cause: failure }
             );
           }
-        } catch (error) {
-          operationFailure = error;
-          failures.push(error);
-        }
-        if (signal?.aborted) return;
-        try {
-          await this.recordOp(
-            epoch,
-            target,
-            "prepare",
-            operationFailure === undefined ? "ready" : "failed",
-            {
-              phase,
-              result:
-                operationFailure === undefined ? result : serializeRpcFailure(operationFailure),
-            }
-          );
-        } catch (error) {
-          failures.push(error);
+          phaseResults.set(target, result);
+          if (phase === "quiesce") quiesced.add(target);
+        } catch (original) {
+          failures.push(original);
+          failedTargets.add(target);
+          phaseResults.set(target, serializeRpcFailure(original));
         }
       });
-      if (failures.length)
-        throw new AggregateError(failures, "Lifecycle " + phase + " failed", {
-          cause: failures[0],
-        });
-      signal?.throwIfAborted();
+      // Destroyed-generation bookkeeping is invalid, but an owned dispatch's
+      // original failure must still reach the restart owner after it joins.
+      if (signal?.aborted) {
+        if (failures.length)
+          throw new AggregateError(failures, `Lifecycle ${phase} failed`, { cause: failures[0] });
+        signal.throwIfAborted();
+      }
+      if (failures.length) {
+        if (phase !== "release") failures.push(...(await cancelPreparation()));
+        const bookkeeping = await Promise.allSettled(
+          ordered.map((target) =>
+            this.recordOp(
+              epoch,
+              target,
+              "prepare",
+              failedTargets.has(target) ? "failed" : "ready",
+              {
+                phase,
+                result: phaseResults.get(target) ?? null,
+              }
+            )
+          )
+        );
+        for (const result of bookkeeping)
+          if (result.status === "rejected") failures.push(result.reason);
+        throw new AggregateError(failures, `Lifecycle ${phase} failed`, { cause: failures[0] });
+      }
     }
+    const bookkeeping = await Promise.allSettled(
+      ordered.map((target) =>
+        this.recordOp(epoch, target, "prepare", "ready", {
+          phase: "release",
+          result: phaseResults.get(target) ?? null,
+        })
+      )
+    );
+    const failures = bookkeeping.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length)
+      throw new AggregateError(failures, "Lifecycle prepare journal failed", {
+        cause: failures[0],
+      });
+    signal?.throwIfAborted();
   }
 
   private async resumeTargets(

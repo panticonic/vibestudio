@@ -1273,6 +1273,7 @@ describe("createEvalService", () => {
       releaseRetry();
       await domain.releaseForLifecycle({
         epoch: "test:reconcile",
+        phase: "release",
         mode: "suspend",
         reason: "developer_restart",
         deadlineMs: 0,

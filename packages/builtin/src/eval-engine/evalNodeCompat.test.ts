@@ -33,6 +33,13 @@ describe("createEvalNodeCompat", () => {
     expect(modules["os"]).toBe(modules["node:os"]);
     expect(modules["path"]).toBe(modules["node:path"]);
     expect(modules["util"]).toBe(modules["node:util"]);
+    expect(modules["util/types"]).toBe(modules["node:util/types"]);
+    expect(modules["node:util/types"]).toBe(
+      (modules["node:util"] as typeof import("node:util")).types
+    );
+    const types = modules["node:util/types"] as typeof import("node:util/types");
+    expect(types.isArrayBuffer(new ArrayBuffer(0))).toBe(true);
+    expect(types.isArrayBuffer({ [Symbol.toStringTag]: "ArrayBuffer" })).toBe(false);
     expect(modules["crypto"]).toBe(modules["node:crypto"]);
     expect(modules["buffer"]).toBe(modules["node:buffer"]);
     const os = modules["node:os"] as typeof import("node:os");

@@ -183,6 +183,7 @@ export const vcsTrajectoryInvocationRefSchema = z
     logId: id("Trajectory log identity."),
     head: id("Exact trajectory head."),
     invocationId: id("Exact tool invocation that caused a semantic command."),
+    nativeInvocation: nativeInvocationIdentitySchema.optional(),
   })
   .strict();
 
@@ -2190,6 +2191,15 @@ export const vcsFileLineageSchema = z
   })
   .strict();
 
+/** A bounded set of file selectors sharing one immutable semantic state. */
+export const vcsReadFilesInputSchema = z
+  .object({
+    state: vcsStateNodeRefSchema,
+    files: z.array(vcsReadFileInputSchema.omit({ state: true })).max(500),
+  })
+  .strict();
+export type VcsReadFilesInput = z.infer<typeof vcsReadFilesInputSchema>;
+
 export const vcsReadFileResultSchema = z
   .object({
     repositoryId: id("Stable repository identity."),
@@ -2557,6 +2567,7 @@ const vcsFileEffects: Record<string, readonly WorkspaceFileEffect[]> = {
   listDirectory: ["list"],
   listFiles: ["list"],
   readFile: ["list", "read"],
+  readFiles: ["list", "read"],
   readMemory: ["read"],
   blame: ["read"],
   compare: ["read"],
@@ -3227,6 +3238,34 @@ const vcsSemanticMethods = defineVcsMethods({
       ref("state-node", "basis", "state"),
       ref("repository", "resource", "repositoryId"),
       ref("file", "resource", "file", "fileId"),
+    ],
+    errors: [...READ_ERRORS, ...methodErrors("ExternalEffectFailed")],
+    seeAlso: ["vcs.listFiles", "vcs.blame"],
+  },
+  readFiles: {
+    website: {
+      kind: "eligible",
+      rationale:
+        "Workspace authoring and history use ordinary context, resource and publication approvals.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "vcs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    description:
+      "Read a bounded set of files from one exact semantic state, preserving selector order and null for absent files.",
+    args: z.tuple([vcsReadFilesInputSchema]),
+    returns: z.array(vcsReadFileResultSchema).max(500),
+    access: READ_ACCESS,
+    operationClass: "read",
+    references: [
+      ref("state-node", "basis", "state"),
+      ref("repository", "resource", "files", "*", "repositoryId"),
+      ref("file", "resource", "files", "*", "file", "fileId"),
     ],
     errors: [...READ_ERRORS, ...methodErrors("ExternalEffectFailed")],
     seeAlso: ["vcs.listFiles", "vcs.blame"],

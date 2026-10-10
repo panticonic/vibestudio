@@ -148,25 +148,32 @@ export async function vcsFileSelections(
       add("list", `${await repository(request.state, request.repositoryId)}/${parent}`, "folder");
       break;
     }
-    case "readFile": {
-      const [request] = vcsMethods.readFile.args.parse([input]);
-      // Absent identities return null. Resolve names from metadata without
-      // turning that valid result into a semantic inspect failure.
-      let repoPath: string | null = null;
-      for await (const repo of repositories(request.state)) {
-        if (repo.repositoryId === request.repositoryId) {
-          repoPath = repo.path;
-          break;
+    case "readFile":
+    case "readFiles": {
+      const request =
+        method === "readFile"
+          ? vcsMethods.readFile.args.parse([input])[0]
+          : vcsMethods.readFiles.args.parse([input])[0];
+      const selected = "files" in request ? request.files : [request];
+      const paths = new Map<string, string>();
+      const catalog = repositories(request.state);
+      let exhausted = false;
+      for (const selection of selected) {
+        while (!paths.has(selection.repositoryId) && !exhausted) {
+          const next = await catalog.next();
+          if (next.done) exhausted = true;
+          else paths.set(next.value.repositoryId, next.value.path);
         }
-      }
-      if (repoPath === null) add("list", "", "folder");
-      else {
-        const filePath =
-          request.file.kind === "path"
-            ? request.file.path
-            : await findFile(request.state, request.repositoryId, request.file.fileId);
-        if (filePath === null) add("list", repoPath, "folder");
-        else add("read", `${repoPath}/${filePath}`);
+        const repoPath = paths.get(selection.repositoryId);
+        if (repoPath === undefined) add("list", "", "folder");
+        else {
+          const filePath =
+            selection.file.kind === "path"
+              ? selection.file.path
+              : await findFile(request.state, selection.repositoryId, selection.file.fileId);
+          if (filePath === null) add("list", repoPath, "folder");
+          else add("read", `${repoPath}/${filePath}`);
+        }
       }
       break;
     }

@@ -126,12 +126,6 @@
           "data": {
             "anyOf": [
               {
-                "enum": [
-                  "null"
-                ],
-                "nullable": true
-              },
-              {
                 "type": "string"
               },
               {
@@ -139,6 +133,12 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "enum": [
+                  "null"
+                ],
+                "nullable": true
               },
               {
                 "type": "array",
@@ -227,12 +227,6 @@
             "data": {
               "anyOf": [
                 {
-                  "enum": [
-                    "null"
-                  ],
-                  "nullable": true
-                },
-                {
                   "type": "string"
                 },
                 {
@@ -240,6 +234,12 @@
                 },
                 {
                   "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "null"
+                  ],
+                  "nullable": true
                 },
                 {
                   "type": "array",
@@ -299,12 +299,6 @@
         "data": {
           "anyOf": [
             {
-              "enum": [
-                "null"
-              ],
-              "nullable": true
-            },
-            {
               "type": "string"
             },
             {
@@ -312,6 +306,12 @@
             },
             {
               "type": "boolean"
+            },
+            {
+              "enum": [
+                "null"
+              ],
+              "nullable": true
             },
             {
               "type": "array",
@@ -893,12 +893,6 @@
                 "additionalProperties": {
                   "anyOf": [
                     {
-                      "enum": [
-                        "null"
-                      ],
-                      "nullable": true
-                    },
-                    {
                       "type": "string"
                     },
                     {
@@ -906,6 +900,12 @@
                     },
                     {
                       "type": "boolean"
+                    },
+                    {
+                      "enum": [
+                        "null"
+                      ],
+                      "nullable": true
                     },
                     {
                       "type": "array",
@@ -1048,12 +1048,6 @@
                   "additionalProperties": {
                     "anyOf": [
                       {
-                        "enum": [
-                          "null"
-                        ],
-                        "nullable": true
-                      },
-                      {
                         "type": "string"
                       },
                       {
@@ -1061,6 +1055,12 @@
                       },
                       {
                         "type": "boolean"
+                      },
+                      {
+                        "enum": [
+                          "null"
+                        ],
+                        "nullable": true
                       },
                       {
                         "type": "array",
@@ -1234,12 +1234,6 @@
               "additionalProperties": {
                 "anyOf": [
                   {
-                    "enum": [
-                      "null"
-                    ],
-                    "nullable": true
-                  },
-                  {
                     "type": "string"
                   },
                   {
@@ -1247,6 +1241,12 @@
                   },
                   {
                     "type": "boolean"
+                  },
+                  {
+                    "enum": [
+                      "null"
+                    ],
+                    "nullable": true
                   },
                   {
                     "type": "array",
@@ -1472,12 +1472,6 @@
             "additionalProperties": {
               "anyOf": [
                 {
-                  "enum": [
-                    "null"
-                  ],
-                  "nullable": true
-                },
-                {
                   "type": "string"
                 },
                 {
@@ -1485,6 +1479,12 @@
                 },
                 {
                   "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "null"
+                  ],
+                  "nullable": true
                 },
                 {
                   "type": "array",
@@ -1613,12 +1613,6 @@
           "additionalProperties": {
             "anyOf": [
               {
-                "enum": [
-                  "null"
-                ],
-                "nullable": true
-              },
-              {
                 "type": "string"
               },
               {
@@ -1626,6 +1620,12 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "enum": [
+                  "null"
+                ],
+                "nullable": true
               },
               {
                 "type": "array",
@@ -1741,12 +1741,6 @@
               "additionalProperties": {
                 "anyOf": [
                   {
-                    "enum": [
-                      "null"
-                    ],
-                    "nullable": true
-                  },
-                  {
                     "type": "string"
                   },
                   {
@@ -1754,6 +1748,12 @@
                   },
                   {
                     "type": "boolean"
+                  },
+                  {
+                    "enum": [
+                      "null"
+                    ],
+                    "nullable": true
                   },
                   {
                     "type": "array",
@@ -2005,12 +2005,6 @@
                   "additionalProperties": {
                     "anyOf": [
                       {
-                        "enum": [
-                          "null"
-                        ],
-                        "nullable": true
-                      },
-                      {
                         "type": "string"
                       },
                       {
@@ -2018,6 +2012,12 @@
                       },
                       {
                         "type": "boolean"
+                      },
+                      {
+                        "enum": [
+                          "null"
+                        ],
+                        "nullable": true
                       },
                       {
                         "type": "array",
@@ -2444,12 +2444,6 @@
                     "additionalProperties": {
                       "anyOf": [
                         {
-                          "enum": [
-                            "null"
-                          ],
-                          "nullable": true
-                        },
-                        {
                           "type": "string"
                         },
                         {
@@ -2457,6 +2451,12 @@
                         },
                         {
                           "type": "boolean"
+                        },
+                        {
+                          "enum": [
+                            "null"
+                          ],
+                          "nullable": true
                         },
                         {
                           "type": "array",
@@ -2832,12 +2832,6 @@
                     "additionalProperties": {
                       "anyOf": [
                         {
-                          "enum": [
-                            "null"
-                          ],
-                          "nullable": true
-                        },
-                        {
                           "type": "string"
                         },
                         {
@@ -2845,6 +2839,12 @@
                         },
                         {
                           "type": "boolean"
+                        },
+                        {
+                          "enum": [
+                            "null"
+                          ],
+                          "nullable": true
                         },
                         {
                           "type": "array",
@@ -3220,12 +3220,6 @@
                         "additionalProperties": {
                           "anyOf": [
                             {
-                              "enum": [
-                                "null"
-                              ],
-                              "nullable": true
-                            },
-                            {
                               "type": "string"
                             },
                             {
@@ -3233,6 +3227,12 @@
                             },
                             {
                               "type": "boolean"
+                            },
+                            {
+                              "enum": [
+                                "null"
+                              ],
+                              "nullable": true
                             },
                             {
                               "type": "array",
@@ -3600,12 +3600,6 @@
                       "additionalProperties": {
                         "anyOf": [
                           {
-                            "enum": [
-                              "null"
-                            ],
-                            "nullable": true
-                          },
-                          {
                             "type": "string"
                           },
                           {
@@ -3613,6 +3607,12 @@
                           },
                           {
                             "type": "boolean"
+                          },
+                          {
+                            "enum": [
+                              "null"
+                            ],
+                            "nullable": true
                           },
                           {
                             "type": "array",
@@ -3967,12 +3967,6 @@
                 "additionalProperties": {
                   "anyOf": [
                     {
-                      "enum": [
-                        "null"
-                      ],
-                      "nullable": true
-                    },
-                    {
                       "type": "string"
                     },
                     {
@@ -3980,6 +3974,12 @@
                     },
                     {
                       "type": "boolean"
+                    },
+                    {
+                      "enum": [
+                        "null"
+                      ],
+                      "nullable": true
                     },
                     {
                       "type": "array",
@@ -4224,12 +4224,6 @@
                     "additionalProperties": {
                       "anyOf": [
                         {
-                          "enum": [
-                            "null"
-                          ],
-                          "nullable": true
-                        },
-                        {
                           "type": "string"
                         },
                         {
@@ -4237,6 +4231,12 @@
                         },
                         {
                           "type": "boolean"
+                        },
+                        {
+                          "enum": [
+                            "null"
+                          ],
+                          "nullable": true
                         },
                         {
                           "type": "array",
@@ -4645,12 +4645,6 @@
                 "additionalProperties": {
                   "anyOf": [
                     {
-                      "enum": [
-                        "null"
-                      ],
-                      "nullable": true
-                    },
-                    {
                       "type": "string"
                     },
                     {
@@ -4658,6 +4652,12 @@
                     },
                     {
                       "type": "boolean"
+                    },
+                    {
+                      "enum": [
+                        "null"
+                      ],
+                      "nullable": true
                     },
                     {
                       "type": "array",
@@ -5687,12 +5687,6 @@
             "additionalProperties": {
               "anyOf": [
                 {
-                  "enum": [
-                    "null"
-                  ],
-                  "nullable": true
-                },
-                {
                   "type": "string"
                 },
                 {
@@ -5700,6 +5694,12 @@
                 },
                 {
                   "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "null"
+                  ],
+                  "nullable": true
                 },
                 {
                   "type": "array",
@@ -6009,12 +6009,6 @@
                 "additionalProperties": {
                   "anyOf": [
                     {
-                      "enum": [
-                        "null"
-                      ],
-                      "nullable": true
-                    },
-                    {
                       "type": "string"
                     },
                     {
@@ -6022,6 +6016,12 @@
                     },
                     {
                       "type": "boolean"
+                    },
+                    {
+                      "enum": [
+                        "null"
+                      ],
+                      "nullable": true
                     },
                     {
                       "type": "array",
@@ -6524,12 +6524,6 @@
                     "additionalProperties": {
                       "anyOf": [
                         {
-                          "enum": [
-                            "null"
-                          ],
-                          "nullable": true
-                        },
-                        {
                           "type": "string"
                         },
                         {
@@ -6537,6 +6531,12 @@
                         },
                         {
                           "type": "boolean"
+                        },
+                        {
+                          "enum": [
+                            "null"
+                          ],
+                          "nullable": true
                         },
                         {
                           "type": "array",
@@ -7570,12 +7570,6 @@
                   "detail": {
                     "anyOf": [
                       {
-                        "enum": [
-                          "null"
-                        ],
-                        "nullable": true
-                      },
-                      {
                         "type": "string"
                       },
                       {
@@ -7583,6 +7577,12 @@
                       },
                       {
                         "type": "boolean"
+                      },
+                      {
+                        "enum": [
+                          "null"
+                        ],
+                        "nullable": true
                       },
                       {
                         "type": "array",

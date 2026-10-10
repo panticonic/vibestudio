@@ -131,6 +131,41 @@ const scopes = (selections: Awaited<ReturnType<typeof vcsFileSelections>>) =>
   selections.map(({ capability, resource }) => ({ capability, resource }));
 
 describe("website semantic file consent", () => {
+  it("authorizes every batch selector while sharing exact-state repository discovery", async () => {
+    const calls: string[] = [];
+    const source = metadata();
+    const read: RawRead = async (method, input) => {
+      calls.push(method);
+      return source(method, input);
+    };
+    const selected = scopes(
+      await vcsFileSelections(
+        "readFiles",
+        {
+          state,
+          files: [
+            { repositoryId: "repo:one", file: { kind: "path", path: "a.txt" } },
+            { repositoryId: "repo:one", file: { kind: "path", path: "b.txt" } },
+            { repositoryId: "missing", file: { kind: "path", path: "secret.txt" } },
+          ],
+        },
+        typedReads(read)
+      )
+    );
+    expect(selected).toContainEqual({
+      capability: "filesystem.read",
+      resource: { kind: "exact", key: "workspace-path/projects/demo/a.txt" },
+    });
+    expect(selected).toContainEqual({
+      capability: "filesystem.read",
+      resource: { kind: "exact", key: "workspace-path/projects/demo/b.txt" },
+    });
+    expect(selected).toContainEqual({
+      capability: "filesystem.list",
+      resource: { kind: "prefix", prefix: "workspace-path/" },
+    });
+    expect(calls.filter((method) => method === "vcsListDirectory")).toHaveLength(2);
+  });
   it("separates workspace structure from file contents", async () => {
     expect(scopes(await vcsFileSelections("mainState", undefined, typedReads(metadata())))).toEqual(
       [{ capability: "filesystem.list", resource: { kind: "prefix", prefix: "workspace-path/" } }]

@@ -40,16 +40,14 @@ import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import {
   beginDurableObjectRelay,
+  doRefKey,
+  doRefUrl,
   describeWorkerdFetchFailure,
   getWorkerdConnectionDispatcher,
 } from "./workerdRpcRelay.js";
 import { parseDurableWorkReady, type DurableWorkReadyHint } from "@vibestudio/shared/durableWork";
 import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
-
-/** Canonical string key for a DORef, used for maps and logging. */
-export function doRefKey(ref: DORef): string {
-  return `${ref.source}:${ref.className}/${ref.objectKey}`;
-}
+import { doExecutableHeaders, type DoExecutableVersionResolver } from "./doExecutableDispatch.js";
 
 /**
  * Typed error code for dispatches attempted while a workerd generation
@@ -74,35 +72,14 @@ export function isRuntimeRestartingError(error: unknown): boolean {
   return code === RUNTIME_RESTARTING_ERROR_CODE || errorCode === RUNTIME_RESTARTING_ERROR_CODE;
 }
 
-/**
- * Pack a userland DO ref into a single object key for the UniversalDO facet
- * host: `source|className|userKey`, each segment `encodeURIComponent`-escaped
- * (which escapes `|`), so the split back is unambiguous. Mirrored by the
- * generated `universal-do` host's `decodeKey`.
- */
-export function encodeUniversalKey(ref: DORef): string {
-  return [ref.source, ref.className, ref.objectKey].map(encodeURIComponent).join("|");
-}
-
-/**
- * Build the workerd dispatch URL for a DO method call.
- *  - Internal DOs (WorkspaceDO, …) keep static per-class namespaces: `/_w/…`.
- *  - Userland DOs route through the UniversalDO facet host: `/_u/{packedKey}/…`.
- */
-export function doRefUrl(ref: DORef, method: string): string {
-  const methodPath = method.split("/").map(encodeURIComponent).join("/");
-  if (!isInternalDOSource(ref.source)) {
-    return `/_u/${encodeURIComponent(encodeUniversalKey(ref))}/${methodPath}`;
-  }
-  const sourcePath = ref.source.split("/").map(encodeURIComponent).join("/");
-  return `/_w/${sourcePath}/${encodeURIComponent(ref.className)}/${encodeURIComponent(ref.objectKey)}/${methodPath}`;
-}
+export { doRefKey, doRefUrl, encodeUniversalKey } from "./workerdRpcRelay.js";
 
 // ---------------------------------------------------------------------------
 // postToDOWithToken — standalone dispatch with per-instance identity token
 // ---------------------------------------------------------------------------
 
 export interface PostToDOWithTokenDeps {
+  resolveExecutableVersion?: DoExecutableVersionResolver;
   tokenManager: TokenManager;
   workerdUrl: string;
   workerdGatewayToken: string;
@@ -173,6 +150,7 @@ export async function postToDOWithToken(
   };
 
   const headers: Record<string, string> = {
+    ...doExecutableHeaders(ref, deps.resolveExecutableVersion),
     "Content-Type": "application/json",
     Authorization: `Bearer ${deps.workerdGatewayToken}`,
   };
@@ -271,6 +249,7 @@ async function postRpcToDOWithToken(
     message: { type: "request", requestId, fromId: caller.callerId, method, args },
   };
   const headers: Record<string, string> = {
+    ...doExecutableHeaders(ref, deps.resolveExecutableVersion),
     "Content-Type": "application/json",
     Authorization: `Bearer ${deps.workerdGatewayToken}`,
   };
@@ -508,6 +487,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   private tokenManager: TokenManager | null = null;
   private getWorkerdUrl: (() => string) | null = null;
   private getDispatchSecret: (() => string) | null = null;
+  private resolveExecutableVersion: DoExecutableVersionResolver | undefined;
   private getWorkerdGatewayToken: (() => string) | null = null;
   private authorityAttester:
     | ((
@@ -570,6 +550,10 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
    */
   setGetDispatchSecret(fn: () => string): void {
     this.getDispatchSecret = fn;
+  }
+
+  setExecutableVersionResolver(fn: DoExecutableVersionResolver): void {
+    this.resolveExecutableVersion = fn;
   }
 
   setGetWorkerdGatewayToken(fn: () => string): void {
@@ -647,6 +631,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   private buildPostDeps(ref: DORef): PostToDOWithTokenDeps {
     return {
+      resolveExecutableVersion: this.resolveExecutableVersion,
       tokenManager: assertPresent(this.tokenManager),
       workerdUrl: this.requireWorkerdUrl(),
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),

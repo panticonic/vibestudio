@@ -483,20 +483,20 @@ describe("AlarmDriver durable concurrent scheduling", () => {
     const buildKey = "b".repeat(64);
     const sealedDigest = "a".repeat(64);
     const publishedDigest = "c".repeat(64);
-    const record: EntityRecord = {
+    const record: EntityRecord = Object.freeze({
       id: "do:workers/agent-worker:AiChatWorker:agent-1",
       kind: "do",
-      source: { repoPath: "workers/agent-worker", effectiveVersion: "ev-sealed" },
+      source: Object.freeze({ repoPath: "workers/agent-worker", effectiveVersion: "ev-sealed" }),
       activeBuildKey: buildKey,
       activeExecutionDigest: sealedDigest,
-      activeAuthority: { requests: [], provides: [] },
+      activeAuthority: Object.freeze({ requests: Object.freeze([]), provides: Object.freeze([]) }),
       contextId: "ctx-agent",
       className: "AiChatWorker",
       key: "agent-1",
       createdAt: 1,
       status: "active",
       cleanupComplete: true,
-    };
+    });
     const latestByKey = { buildKey, executionDigest: sealedDigest };
     const retainedByExecution = new Map([[sealedDigest, { ...latestByKey }]]);
     let finishBrowserImport!: () => void;

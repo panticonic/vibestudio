@@ -75,6 +75,16 @@ const contracts = [
     mustContain: ["VIBESTUDIO_RIPGREP_PATH"],
   },
   {
+    path: "dist/workspace-child.mjs",
+    runtime: "generation-owned workspace supervisor",
+    format: "esm",
+  },
+  {
+    path: "dist/extension-child.mjs",
+    runtime: "generation-owned extension child",
+    format: "esm",
+  },
+  {
     path: "dist/dependency-content-maintenance.cjs",
     runtime: "detached Node dependency-cache maintenance",
     format: "cjs",

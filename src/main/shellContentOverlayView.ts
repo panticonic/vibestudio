@@ -1,6 +1,7 @@
 import { WebContentsView, ipcMain, type BaseWindow } from "electron";
 import { createDevLogger } from "@vibestudio/dev-log";
-import type { ContentOverlayTheme } from "@vibestudio/service-schemas/view";
+import type { ContentOverlayFocus, ContentOverlayTheme } from "@vibestudio/service-schemas/view";
+import type { TypingActivity } from "./typingActivity.js";
 
 const log = createDevLogger("ShellContentOverlayView");
 
@@ -32,7 +33,7 @@ export interface ContentOverlayShowOptions {
    * including `undefined`, and therefore also accepts an omitted object property. */
   props?: unknown;
   theme: ContentOverlayTheme;
-  focus?: boolean;
+  focus?: ContentOverlayFocus;
 }
 
 export type ContentOverlayUpdateOptions = Partial<ContentOverlayShowOptions>;
@@ -58,7 +59,7 @@ export class ShellContentOverlayView {
   private anchor: ContentOverlayBounds | null = null;
   private contentWidth = DEFAULT_VIEW_WIDTH;
   private contentHeight = MIN_HEIGHT;
-  private pendingFocus = false;
+  private pendingFocus: ContentOverlayFocus | null = null;
   /** Corner the overlay snaps to; persists across re-shows so the card reappears
    *  where the user last placed it. */
   private corner: OverlayCorner = "top-left";
@@ -208,7 +209,8 @@ export class ShellContentOverlayView {
     /** Resolves the hosted-shell URL so the overlay loads the same bundle. */
     private readonly getBaseUrl: () => string | null,
     /** Forward a surface intent to the owning shell chrome. */
-    private readonly forwardIntent: (payload: unknown) => void
+    private readonly forwardIntent: (payload: unknown) => void,
+    private readonly typing: TypingActivity
   ) {
     ipcMain.on("vibestudio:content-overlay:size", this.handleSize);
     ipcMain.on("vibestudio:content-overlay:intent", this.handleIntent);
@@ -242,7 +244,7 @@ export class ShellContentOverlayView {
     this.theme = options.theme;
     this.anchor = options.bounds;
     this.visible = true;
-    this.pendingFocus = options.focus === true;
+    this.pendingFocus = options.focus ?? null;
     this.loadSurface(view, options.surface);
     view.setVisible(true);
     this.applyBounds();
@@ -262,7 +264,7 @@ export class ShellContentOverlayView {
     if (options.props !== undefined) this.props = options.props;
     if (options.theme) this.theme = options.theme;
     if (options.bounds) this.anchor = options.bounds;
-    if (options.focus !== undefined) this.pendingFocus = options.focus === true;
+    if (options.focus !== undefined) this.pendingFocus = options.focus;
     this.applyBounds();
     this.pushRender();
   }
@@ -282,7 +284,7 @@ export class ShellContentOverlayView {
     this.anchor = null;
     this.contentWidth = DEFAULT_VIEW_WIDTH;
     this.contentHeight = MIN_HEIGHT;
-    this.pendingFocus = false;
+    this.pendingFocus = null;
     if (!this.view || this.view.webContents.isDestroyed()) return;
     if (this.loaded) this.view.webContents.send("vibestudio:content-overlay:clear");
     this.view.setVisible(false);
@@ -336,7 +338,7 @@ export class ShellContentOverlayView {
     this.visible = false;
     this.loaded = false;
     this.loadedUrl = null;
-    this.pendingFocus = false;
+    this.pendingFocus = null;
   }
 
   private ensureView(): WebContentsView {
@@ -357,6 +359,7 @@ export class ShellContentOverlayView {
     this.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     this.overlayWcId = this.view.webContents.id;
     const view = this.view;
+    this.typing.watch(view.webContents);
     view.webContents.on("did-finish-load", () => {
       this.markLoaded(view);
     });
@@ -426,9 +429,13 @@ export class ShellContentOverlayView {
   }
 
   private applyPendingFocus(): void {
-    if (!this.pendingFocus || !this.visible || !this.loaded) return;
+    const focus = this.pendingFocus;
+    if (!focus || !this.visible || !this.loaded) return;
     if (!this.view || this.view.webContents.isDestroyed()) return;
-    this.pendingFocus = false;
+    this.pendingFocus = null;
+    // The request is settled either way: a surface that yielded stays
+    // unfocused until the user explicitly asks for it.
+    if (focus === "unless-typing" && this.typing.isTyping()) return;
     this.view.webContents.focus();
   }
 

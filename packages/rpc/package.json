@@ -97,6 +97,7 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
+    "@vibestudio/binary-brand": "workspace:*",
     "@vibestudio/iroh-transport": "workspace:*"
   }
 }

@@ -1,3 +1,4 @@
+import { canonicalEntityId } from "./runtime/entitySpec.js";
 import { createReceiverRpcMethods } from "./rpcMethods.js";
 /** Activation-local receivers owned by explicitly resident operations.
  * Durable state must never depend on this registry: a missing receiver means
@@ -39,6 +40,7 @@ export interface ResidentSessionRegistrar {
 interface ResidentReceiver {
   receiver: ResidentSessionReceiver;
   openedAt: number;
+  channelTargetId: string;
 }
 
 /** Common finite-delivery contract implemented by both host-builtin and
@@ -56,6 +58,26 @@ export interface ResidentChannelDeliveryInput {
   agenticContext: unknown;
 }
 
+/** Live delivery originates only from the exact admitted channel entity;
+ * retained mailbox delivery is dispatched by the trusted host. */
+export function assertChannelDeliverySource(
+  caller: { id: string | null; kind: string | null },
+  input: Pick<ResidentChannelDeliveryInput, "channelId" | "channelRef">,
+  expectedChannelTargetId: string | null
+): void {
+  if (input.channelRef.objectKey !== input.channelId)
+    throw new Error("Channel delivery identity mismatch");
+  if (caller.kind === "server" || caller.kind === "shell") return;
+  const expected = canonicalEntityId({
+    kind: "do",
+    source: input.channelRef.source,
+    className: input.channelRef.className,
+    key: input.channelRef.objectKey,
+  });
+  if (caller.kind !== "do" || caller.id !== expected || expected !== expectedChannelTargetId)
+    throw new Error("Channel delivery requires its exact admitted channel owner");
+}
+
 export interface ResidentChannelInvocationInput {
   channelId: string;
   message: unknown;
@@ -66,89 +88,71 @@ export interface ResidentChannelCancellationInput {
   transportCallId: string;
 }
 
-const receivers = new Map<string, ResidentReceiver>();
+/** Live callbacks belong to one actual owner activation. A facet crash or
+ * eviction discards this registry with its instance, even when executable
+ * module globals are shared by other Durable Objects. */
+export class ResidentSessionRegistry {
+  private readonly receivers = new Map<string, ResidentReceiver>();
 
-function key(ownerEntityId: string, channelId: string): string {
-  return `${ownerEntityId}\u0000${channelId}`;
-}
-
-export function registerResidentSession(
-  ownerEntityId: string,
-  channelId: string,
-  receiver: ResidentSessionReceiver
-): () => void {
-  const identity = key(ownerEntityId, channelId);
-  if (receivers.has(identity)) {
-    throw new Error(`resident channel receiver ${channelId} is already active`);
+  register(
+    channelId: string,
+    receiver: ResidentSessionReceiver,
+    relationship: { targetId: string }
+  ): () => void {
+    if (this.receivers.has(channelId)) {
+      throw new Error(`resident channel receiver ${channelId} is already active`);
+    }
+    const resident = { receiver, openedAt: Date.now(), channelTargetId: relationship.targetId };
+    this.receivers.set(channelId, resident);
+    return () => {
+      if (this.receivers.get(channelId) === resident) this.receivers.delete(channelId);
+    };
   }
-  receivers.set(identity, { receiver, openedAt: Date.now() });
-  return () => {
-    if (receivers.get(identity)?.receiver === receiver) receivers.delete(identity);
-  };
-}
 
-export async function deliverResidentSession(
-  ownerEntityId: string,
-  channelId: string,
-  payload: unknown
-): Promise<void> {
-  const resident = receivers.get(key(ownerEntityId, channelId));
-  if (!resident) {
-    throw Object.assign(new Error(`resident channel receiver ${channelId} is not active`), {
-      code: "ResidentSessionUnavailable",
+  target(channelId: string): string | null {
+    return this.receivers.get(channelId)?.channelTargetId ?? null;
+  }
+
+  async deliver(channelId: string, payload: unknown): Promise<void> {
+    const resident = this.receivers.get(channelId);
+    if (!resident) {
+      throw Object.assign(new Error(`resident channel receiver ${channelId} is not active`), {
+        code: "ResidentSessionUnavailable",
+      });
+    }
+    await resident.receiver(payload);
+  }
+
+  async acceptDelivery(input: ResidentChannelDeliveryInput): Promise<{
+    processed: true;
+    recipientExecutionStartedAt: number;
+  }> {
+    const recipientExecutionStartedAt = Date.now();
+    await this.deliver(input.channelId, { channelId: input.channelId, message: input.envelope });
+    return { processed: true, recipientExecutionStartedAt };
+  }
+
+  async acceptInvocation(input: ResidentChannelInvocationInput): Promise<{ accepted: true }> {
+    await this.deliver(input.channelId, { channelId: input.channelId, message: input.message });
+    return { accepted: true };
+  }
+
+  async cancelInvocation(input: ResidentChannelCancellationInput): Promise<{ accepted: true }> {
+    await this.deliver(input.channelId, {
+      channelId: input.channelId,
+      cancellation: { transportCallId: input.transportCallId },
     });
+    return { accepted: true };
   }
-  await resident.receiver(payload);
-}
 
-export async function acceptResidentChannelDelivery(
-  ownerEntityId: string,
-  input: ResidentChannelDeliveryInput
-): Promise<{ processed: true; recipientExecutionStartedAt: number }> {
-  const recipientExecutionStartedAt = Date.now();
-  await deliverResidentSession(ownerEntityId, input.channelId, {
-    channelId: input.channelId,
-    message: input.envelope,
-  });
-  return { processed: true, recipientExecutionStartedAt };
-}
-
-export async function acceptResidentChannelInvocation(
-  ownerEntityId: string,
-  input: ResidentChannelInvocationInput
-): Promise<{ accepted: true }> {
-  await deliverResidentSession(ownerEntityId, input.channelId, {
-    channelId: input.channelId,
-    message: input.message,
-  });
-  return { accepted: true };
-}
-
-export async function cancelResidentChannelInvocation(
-  ownerEntityId: string,
-  input: ResidentChannelCancellationInput
-): Promise<{ accepted: true }> {
-  await deliverResidentSession(ownerEntityId, input.channelId, {
-    channelId: input.channelId,
-    cancellation: { transportCallId: input.transportCallId },
-  });
-  return { accepted: true };
-}
-
-export function inspectResidentSessions(ownerEntityId: string): Array<{
-  channelId: string;
-  openedAt: number;
-  ageMs: number;
-}> {
-  const prefix = `${ownerEntityId}\u0000`;
-  const now = Date.now();
-  return [...receivers.entries()]
-    .filter(([identity]) => identity.startsWith(prefix))
-    .map(([identity, resident]) => ({
-      channelId: identity.slice(prefix.length),
+  inspect(): Array<{ channelId: string; openedAt: number; ageMs: number }> {
+    const now = Date.now();
+    return [...this.receivers.entries()].map(([channelId, resident]) => ({
+      channelId,
       openedAt: resident.openedAt,
       ageMs: Math.max(0, now - resident.openedAt),
     }));
+  }
 }
 
 /** Lifecycle protocol implemented by the workspace channel receiver and used by host-owned resident sessions. */

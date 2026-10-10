@@ -137,6 +137,8 @@ export type NativeOriginatingInput = z.infer<typeof nativeOriginatingInputSchema
 export const nativeInvocationInspectionSchema = z
   .object({
     source: nativeInvocationSourceSchema,
+    /** Original attribution and current executor are separate facts. */
+    executor: nativeInvocationSourceSchema.shape.owner,
     status: z.enum(["pending", "running", "waiting", "completing", "terminal"]),
     abortRequested: z.boolean(),
     originatingInput: nativeOriginatingInputSchema.nullable(),

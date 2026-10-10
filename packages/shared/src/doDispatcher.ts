@@ -35,8 +35,10 @@ export interface LifecyclePrepareInput {
   epoch: string;
   /** Stop admission, settle peer-facing obligations, then close owned resources. */
   phase: "quiesce" | "peer-obligations" | "release" | "cancel";
+  /** Preserve durable state for resume, or perform terminal entity release. */
   mode: "suspend" | "retire";
   reason: string;
+  /** Remaining preparation budget; zero means the caller imposes no deadline. */
   deadlineMs: number;
 }
 
@@ -45,21 +47,31 @@ export function parseLifecyclePrepareInput(value: unknown): LifecyclePrepareInpu
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new Error("Lifecycle prepare requires an input object");
   const input = value as Record<string, unknown>;
-  const epoch = input["epoch"];
-  const phase = input["phase"];
-  const mode = input["mode"];
-  const reason = input["reason"];
-  const deadlineMs = input["deadlineMs"];
-  if (typeof epoch !== "string" || epoch.length === 0)
+  if (typeof input["epoch"] !== "string" || input["epoch"].length === 0)
     throw new Error("Lifecycle prepare requires an epoch");
-  if (phase !== "quiesce" && phase !== "peer-obligations" && phase !== "release")
+  if (
+    input["phase"] !== "quiesce" &&
+    input["phase"] !== "peer-obligations" &&
+    input["phase"] !== "release" &&
+    input["phase"] !== "cancel"
+  )
     throw new Error("Lifecycle prepare requires a valid phase");
-  if (mode !== "suspend" && mode !== "retire")
+  if (input["mode"] !== "suspend" && input["mode"] !== "retire")
     throw new Error("Lifecycle prepare requires a valid mode");
-  if (typeof reason !== "string") throw new Error("Lifecycle prepare requires a reason");
-  if (typeof deadlineMs !== "number" || !Number.isSafeInteger(deadlineMs) || deadlineMs < 0)
+  if (typeof input["reason"] !== "string") throw new Error("Lifecycle prepare requires a reason");
+  if (
+    typeof input["deadlineMs"] !== "number" ||
+    !Number.isSafeInteger(input["deadlineMs"]) ||
+    input["deadlineMs"] < 0
+  )
     throw new Error("Lifecycle prepare requires a nonnegative deadline");
-  return { epoch, phase, mode, reason, deadlineMs };
+  return {
+    epoch: input["epoch"],
+    phase: input["phase"],
+    mode: input["mode"],
+    reason: input["reason"],
+    deadlineMs: input["deadlineMs"],
+  };
 }
 
 /** Receipt returned only after the activation's owned resources are released. */
@@ -108,7 +120,7 @@ export interface HeldDoDispatcher extends DoDispatcher {
 }
 
 /** Lifecycle capability needed only by the lifecycle driver. */
-export interface LifecycleDoDispatcher extends DoDispatcher {
+export interface LifecycleDoDispatcher extends HeldDoDispatcher {
   dispatchLifecycle(
     ref: DORef,
     method: "prepare",

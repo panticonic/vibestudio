@@ -1,3 +1,4 @@
+import { assertSingleInfrastructureModuleTree } from "./scripts/lib/bundle-module-identity.mjs";
 import * as esbuild from "esbuild";
 import { buildArtifactGroups, joinBuildOperations } from "./scripts/build-artifact-groups.mjs";
 import { stageNodeRuntime } from "./scripts/node-runtime-artifacts.mjs";
@@ -16,6 +17,7 @@ import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
 import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
 import { publishHostBuildGeneration } from "./scripts/host-build-generations.mjs";
 import { buildInfrastructurePackages } from "./scripts/infrastructure-package-cache.mjs";
+import { nativeWorkspaceArtifactConfigs } from "./scripts/native-workspace-artifacts.mjs";
 import { SERVER_WORKER_ENTRIES } from "./scripts/server-runtime-artifacts.mjs";
 import {
   computeHostBuildFingerprint,
@@ -81,7 +83,9 @@ function assertHostBuildMetafiles(results) {
 }
 
 async function buildHostArtifact(config) {
-  return esbuild.build({ ...config, metafile: true });
+  const result = await esbuild.build({ ...config, tsconfig: "tsconfig.json", metafile: true });
+  assertSingleInfrastructureModuleTree(result.metafile, process.cwd());
+  return result;
 }
 
 async function acquireSourcePrerequisiteLock() {
@@ -832,7 +836,7 @@ async function buildInternalDoOnly() {
     releaseLock = await acquireSourcePrerequisiteLock();
     fs.mkdirSync("dist", { recursive: true });
     invalidateHostBuildFingerprints();
-    await esbuild.build(internalDoBundleConfig);
+    await buildHostArtifact(internalDoBundleConfig);
     console.log("Internal Durable Object bundle built successfully!");
   } catch (error) {
     console.error("Internal Durable Object bundle build failed:", error);
@@ -902,7 +906,12 @@ async function buildServerArtifacts(modes, workerdPrograms) {
     ];
   });
   const results = await buildArtifactGroups(
-    [...configs, fsDiskWorkerConfig, dependencyContentMaintenanceConfig],
+    [
+      ...configs,
+      fsDiskWorkerConfig,
+      ...nativeWorkspaceArtifactConfigs({ isDev, logOverride }),
+      dependencyContentMaintenanceConfig,
+    ],
     buildHostArtifact
   );
   assertHostBuildMetafiles(results);

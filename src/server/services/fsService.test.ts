@@ -49,6 +49,8 @@ import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/se
  */
 function makeStubFolderManager(root: string): ContextFolderManager {
   return {
+    contextSourcePath: (contextId: string) => path.join(root, contextId),
+    contextScratchPath: (contextId: string) => path.join(root, `${contextId}-scratch`),
     async ensureContextScratch(contextId: string): Promise<string> {
       const scratch = path.join(root, `${contextId}-scratch`);
       mkdirSync(scratch, { recursive: true });
@@ -145,6 +147,9 @@ function makeProjectedReadBridge(root: string): FsVcsBridge {
         nextCursor: null,
       };
     },
+    readFiles: async function (input) {
+      return Promise.all(input.files.map((file) => this.readFile({ state: input.state, ...file })));
+    },
     readFile: async (input) => {
       const filePath =
         input.file.kind === "path" ? input.file.path : input.file.fileId.split("/").at(-1)!;
@@ -194,7 +199,10 @@ function makeProjectedReadBridge(root: string): FsVcsBridge {
         nextCursor: null,
       };
     },
-    ensureMaterialized: async () => {},
+    // Native reads explicitly demand a projection, including its empty root.
+    ensureMaterialized: async (requestedContextId) => {
+      mkdirSync(path.join(root, requestedContextId), { recursive: true });
+    },
     isMaterialized: async () => true,
   };
 }
@@ -374,6 +382,9 @@ function makeCanonicalSemanticBridge(
           }),
         nextCursor: null,
       };
+    },
+    readFiles: async function (input) {
+      return Promise.all(input.files.map((file) => this.readFile({ state: input.state, ...file })));
     },
     readFile: async (input) => {
       readCalls.push(input);
@@ -1565,6 +1576,156 @@ describe("FsService", () => {
   // ─── Semantic VCS reroute ─────────────────────────────────────────────────
 
   describe("exact context projection (demand + loud assertion)", () => {
+    it("reads a large managed corpus in bounded exact-state batches without disk projection", async () => {
+      const repositories = Array.from({ length: 503 }, (_, i) => `skills/skill${i}`);
+      const { bridge, files } = makeCanonicalSemanticBridge(repositories);
+      files.set("ctx-corpus/skills/skill0/SKILL.md", { kind: "text", text: "first" });
+      files.set("ctx-corpus/skills/skill502/SKILL.md", { kind: "text", text: "last" });
+      const batches = vi.spyOn(bridge, "readFiles");
+      const folderManager = makeStubFolderManager(tmpRoot);
+      const scratch = vi.spyOn(folderManager, "ensureContextScratch");
+      const projection = vi
+        .spyOn(folderManager, "ensureContextFolder")
+        .mockRejectedValue(new Error("Disk projection must not be required"));
+      const svc = new FsService(folderManager, entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:src:class:corpus");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-corpus");
+      await expect(svc.readManagedFiles(ctx, ["*/*/SKILL.md"])).resolves.toEqual([
+        { path: "/skills/skill0/SKILL.md", content: "first" },
+        { path: "/skills/skill502/SKILL.md", content: "last" },
+      ]);
+      expect(projection).not.toHaveBeenCalled();
+      expect(scratch).not.toHaveBeenCalled();
+      expect(batches.mock.calls.map(([input]) => input.files.length)).toEqual([500, 3]);
+      expect(
+        batches.mock.calls.every(
+          ([input]) =>
+            JSON.stringify(input.state) ===
+            JSON.stringify({ kind: "event", eventId: "event:ctx-corpus" })
+        )
+      ).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-corpus", "skills"))).toBe(false);
+    });
+    it("shares exact resource snapshots across fresh agents while latching lineage for each caller", async () => {
+      const { bridge, files } = makeCanonicalSemanticBridge(["meta", "skills/one"]);
+      files.set("ctx-snapshot/meta/AGENTS.md", { kind: "text", text: "instructions" });
+      files.set("ctx-snapshot/skills/one/SKILL.md", { kind: "text", text: "skill" });
+      bridge.status = vi.fn(async () => ({
+        workingHead: { kind: "event" as const, eventId: "event:ctx-snapshot" },
+      }));
+      const read = vi.spyOn(bridge, "readFiles");
+      const discovery = vi.spyOn(bridge, "listDirectory");
+      const latch = vi.fn(async (_ctx: ServiceContext, _inputs: readonly unknown[]) => {});
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion: vi.fn(async () => {}),
+        recordContextIngestionBatch: latch,
+      });
+      const first = makeAgentCtx("first", "ctx-first");
+      const second = makeAgentCtx("second", "ctx-second");
+      const patterns = ["meta/AGENTS.md", "*/*/SKILL.md"];
+      const [a, b] = await Promise.all([
+        svc.readManagedFiles(first, patterns),
+        svc.readManagedFiles(second, patterns),
+      ]);
+      expect(a).toEqual(b);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(latch.mock.calls.map(([ctx]) => ctx)).toEqual([first, second]);
+      const discovered = discovery.mock.calls.length;
+      a[0]!.content = "caller mutation";
+      const again = await svc.readManagedFiles(first, [...patterns].reverse());
+      expect(again[0]!.content).toBe("instructions");
+      expect(discovery).toHaveBeenCalledTimes(discovered);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(bridge.status).toHaveBeenCalledTimes(3);
+      expect(latch).toHaveBeenCalledTimes(3);
+      await expect(svc.readManagedFiles(makeWorkerCtx("unregistered"), patterns)).rejects.toThrow(
+        "No context registered"
+      );
+      expect(latch).toHaveBeenCalledTimes(3);
+    });
+
+    it("loads changed instructions and skill membership when the exact semantic head advances", async () => {
+      const { bridge, files } = makeCanonicalSemanticBridge(["meta", "skills/one"]);
+      files.set("ctx-snapshot/meta/AGENTS.md", { kind: "text", text: "before" });
+      let state: import("@vibestudio/service-schemas/vcs").VcsStateNodeRef = {
+        kind: "event",
+        eventId: "event:ctx-snapshot",
+      };
+      bridge.status = async () => ({ workingHead: state });
+      const read = vi.spyOn(bridge, "readFiles");
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeAgentCtx("agent", "ctx-snapshot");
+      const patterns = ["meta/AGENTS.md", "*/*/SKILL.md"];
+      expect(await svc.readManagedFiles(ctx, patterns)).toEqual([
+        { path: "/meta/AGENTS.md", content: "before" },
+      ]);
+      files.set("ctx-snapshot/meta/AGENTS.md", { kind: "text", text: "after" });
+      files.set("ctx-snapshot/skills/one/SKILL.md", { kind: "text", text: "new skill" });
+      state = { kind: "application", applicationId: "application:ctx-snapshot:1" };
+      expect(await svc.readManagedFiles(ctx, patterns)).toEqual([
+        { path: "/meta/AGENTS.md", content: "after" },
+        { path: "/skills/one/SKILL.md", content: "new skill" },
+      ]);
+      expect(read).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not retain failed snapshot loads or cache caller-specific lineage failures", async () => {
+      const { bridge, files } = makeCanonicalSemanticBridge(["meta"]);
+      files.set("ctx-snapshot/meta/AGENTS.md", { kind: "text", text: "instructions" });
+      const read = vi
+        .spyOn(bridge, "readFiles")
+        .mockRejectedValueOnce(new Error("semantic read failed"));
+      const latch = vi.fn(async () => {}).mockRejectedValueOnce(new Error("caller latch failed"));
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion: latch,
+      });
+      const ctx = makeAgentCtx("agent", "ctx-snapshot");
+      await expect(svc.readManagedFiles(ctx, ["meta/AGENTS.md"])).rejects.toThrow(
+        "semantic read failed"
+      );
+      await expect(svc.readManagedFiles(ctx, ["meta/AGENTS.md"])).rejects.toThrow(
+        "caller latch failed"
+      );
+      expect(await svc.readManagedFiles(ctx, ["meta/AGENTS.md"])).toEqual([
+        { path: "/meta/AGENTS.md", content: "instructions" },
+      ]);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(latch).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects reordered batch identities before exposing managed bytes", async () => {
+      const { bridge, files } = makeCanonicalSemanticBridge(["skills/one"]);
+      files.set("ctx-corpus/skills/one/SKILL.md", { kind: "text", text: "secret" });
+      bridge.readFiles = async () => [
+        {
+          ...(await bridge.readFile({
+            state: { kind: "event", eventId: "event:ctx-corpus" },
+            repositoryId: "repository:skills/one",
+            file: { kind: "path", path: "SKILL.md" },
+          }))!,
+          repositoryId: "repository:other",
+        },
+      ];
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:src:class:corpus");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-corpus");
+      await expect(svc.readManagedFiles(ctx, ["*/*/SKILL.md"])).rejects.toMatchObject({
+        code: "EINTEGRITY",
+      });
+    });
     it("keeps filesystem text editable across base64 writes, appends and binary replacement", async () => {
       const { bridge, files } = makeCanonicalSemanticBridge(["meta"]);
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {

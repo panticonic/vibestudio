@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { nativeInvocationIdentitySchema } from "./nativeInvocation.js";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 
 const coordinate = z
@@ -12,5 +13,6 @@ export const rpcCausalParentSchema = z
     logId: coordinate,
     head: coordinate,
     invocationId: coordinate,
+    nativeInvocation: nativeInvocationIdentitySchema.optional(),
   })
   .strict() satisfies z.ZodType<RpcCausalParent>;

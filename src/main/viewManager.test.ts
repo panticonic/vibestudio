@@ -167,6 +167,40 @@ describe("ViewManager", () => {
   });
 
   describe("initialization", () => {
+    it("keeps a workspace's granted chrome admission independent of other loaded manifests", async () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const id = 'workspace:["system","@workspace-apps/shell"]';
+      // A different workspace's manifest is not the native view's authority.
+      try {
+        vm.createView({
+          id,
+          workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
+          type: "app",
+          hostChrome: true,
+          appCapabilities: ["panel-hosting"],
+          codeIdentity: { source: "apps/shell", effectiveVersion: "first" },
+        });
+        expect(vm.getViewInfo(id)?.hostChrome).toBe(true);
+        await vm.updateAppView(id, "http://localhost/second", ["panel-hosting"], {
+          source: "apps/shell",
+          effectiveVersion: "second",
+        });
+        expect(vm.getViewInfo(id)?.hostChrome).toBe(true);
+        await vm.updateAppView(id, "http://localhost/third", [], {
+          source: "apps/shell",
+          effectiveVersion: "third",
+        });
+        expect(vm.getViewInfo(id)?.hostChrome).toBe(false);
+        vm.createView({ id: "ordinary-app", type: "app", hostChrome: true, appCapabilities: [] });
+        expect(vm.getViewInfo("ordinary-app")?.hostChrome).toBe(false);
+      } finally {
+        vm.destroy();
+      }
+    });
     it("creates shell view on construction", () => {
       const vm = new ViewManager({
         window: mockWindow,
@@ -315,7 +349,7 @@ describe("ViewManager", () => {
         bounds,
         props: { mode: "quickfire" },
         theme: { appearance: "light" },
-        focus: true,
+        focus: "take",
       });
       const quickfireView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
       vm.showContentOverlay({
@@ -323,7 +357,7 @@ describe("ViewManager", () => {
         bounds,
         props: { approvalId: "approval-1" },
         theme: { appearance: "light" },
-        focus: true,
+        focus: "take",
       });
       const approvalView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
       const readyHandlers = (ipcMain.on as Mock).mock.calls
@@ -341,14 +375,14 @@ describe("ViewManager", () => {
         bounds,
         props: { mode: "quickfire" },
         theme: { appearance: "light" },
-        focus: true,
+        focus: "take",
       });
 
       expect(quickfireView.webContents.focus).not.toHaveBeenCalled();
       const children = mockWindow.contentView.children as unknown[];
       expect(children.indexOf(approvalView)).toBeGreaterThan(children.indexOf(quickfireView));
 
-      vm.updateContentOverlay("quickfire", { focus: true });
+      vm.updateContentOverlay("quickfire", { focus: "take" });
       expect(quickfireView.webContents.focus).not.toHaveBeenCalled();
 
       vm.hideContentOverlay("quickfire");
@@ -358,7 +392,6 @@ describe("ViewManager", () => {
         bounds,
         props: { mode: "quickfire" },
         theme: { appearance: "light" },
-        focus: false,
       });
 
       vm.hideContentOverlay("approval-card");
@@ -519,6 +552,42 @@ describe("ViewManager", () => {
       expect(panelView.setVisible).toHaveBeenCalledWith(true);
     });
 
+    it("lets an unbidden overlay yield focus to recent typing but not an explicit request", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const shellContents = vm.getShellWebContents();
+      (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
+      for (const [event, listener] of (shellContents.on as Mock).mock.calls) {
+        if (event === "before-input-event") listener({}, { type: "keyDown", key: "h" });
+      }
+
+      const show = (focus: "take" | "unless-typing") =>
+        vm.showContentOverlay({
+          surface: "approval-card",
+          bounds: { x: 20, y: 40, width: 420, height: 300 },
+          props: { approvalId: "approval-1" },
+          theme: { appearance: "light" },
+          focus,
+        });
+      show("unless-typing");
+      const overlayView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      const readyHandler = (ipcMain.on as Mock).mock.calls.find(
+        ([channel]) => channel === "vibestudio:content-overlay:ready"
+      )?.[1] as (event: { sender: { id: number } }, payload: unknown) => void;
+      readyHandler(
+        { sender: { id: overlayView.webContents.id } },
+        { url: "file:///shell/index.html#overlaySurface=approval-card" }
+      );
+      expect(overlayView.webContents.focus).not.toHaveBeenCalled();
+
+      show("take");
+      expect(overlayView.webContents.focus).toHaveBeenCalledTimes(1);
+    });
+
     it("applies content overlay focus after the first surface load completes", () => {
       const vm = new ViewManager({
         window: mockWindow,
@@ -534,7 +603,7 @@ describe("ViewManager", () => {
         bounds: { x: 20, y: 40, width: 420, height: 300 },
         props: { approvalId: "approval-1" },
         theme: { appearance: "light" },
-        focus: true,
+        focus: "take",
       });
 
       const results = (WebContentsView as unknown as Mock).mock.results;
@@ -589,7 +658,7 @@ describe("ViewManager", () => {
         bounds: { x: 20, y: 40, width: 420, height: 300 },
         props: { mode: "all" },
         theme: { appearance: "light" as const },
-        focus: true,
+        focus: "take" as const,
       };
       vm.showContentOverlay(options);
 

@@ -1,3 +1,4 @@
+import { schemaRpcClient } from "./schemaClient.js";
 import { dispatchRpcCall } from "@vibestudio/rpc/internal";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { defineContract, withCausalParent, withRpcAbortSignal, withRpcContext } from "./client.js";
@@ -1530,8 +1531,9 @@ describe("createRpcClient", () => {
     await expect(peer.call.ping()).resolves.toBe("pong");
     await expect(a.call("b", "forward", [])).resolves.toBe("pong");
 
-    expect(observed).toHaveLength(2);
-    await expect(Promise.all(observed)).resolves.toEqual(["pong", "pong"]);
+    // The contracted preparation and its wire dispatch share one parent lifetime.
+    expect(observed).toHaveLength(3);
+    await expect(Promise.all(observed)).resolves.toEqual(["pong", "pong", "pong"]);
   });
 
   it("generates request ids from secure bytes when crypto.randomUUID is unavailable", async () => {
@@ -2675,4 +2677,27 @@ it("retains host-minted invocation ancestry in borrowed handler clients without 
   expect(sent.find((envelope) => envelope.message.type === "request")!.message).not.toHaveProperty(
     "authorityParentNonce"
   );
+});
+
+
+it.each(["call", "peer", "stream", "readable"] as const)("owns typed %s before async argument validation can yield", async kind => {
+  const observed: Promise<unknown>[] = [];
+  const fake = controllableTransport();
+  const rpc = schemaRpcClient(createRpcClient({ selfId: "typed-owner", callerKind: "worker", transport: fake.transport,
+    onOutboundOperation: operation => observed.push(operation) }));
+  let rejectValidation!: (failure: Error) => void;
+  const parsing = new Promise<never>((_, reject) => { rejectValidation = reject; });
+  const method = { name: "validated", async parseArgs(_args: []) { return parsing; },
+    async invoke(args: [], dispatch: (args: unknown[]) => Promise<unknown>) { return dispatch(await this.parseArgs(args)); } };
+  const typed = rpc.peer("target").withContract(defineContract({ caller: { methods: { validated: method } } }), "caller");
+  const pending = kind === "call" ? rpc.call("target", method, []) : kind === "peer" ? typed.call.validated() :
+    kind === "stream" ? rpc.stream("target", method, []) : rpc.streamReadable("target", method, []);
+  expect(observed).toHaveLength(1);
+  expect(fake.sent).toHaveLength(0);
+  const failure = new Error("Invalid exact receiver arguments");
+  const rejected = expect(pending).rejects.toBe(failure);
+  rejectValidation(failure);
+  await rejected;
+  await expect(observed[0]).rejects.toBe(failure);
+  expect(fake.sent).toHaveLength(0);
 });

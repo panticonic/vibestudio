@@ -1,3 +1,4 @@
+import { isAuthorityPending } from "@vibestudio/shared/authority/reviewPending";
 import {
   assertExecutionAuthorityMatches,
   executionAuthorityForCaller,
@@ -17,6 +18,7 @@ import {
 
 import { createHash, randomUUID } from "node:crypto";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
+import { createDevLogger } from "@vibestudio/dev-log";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
 import type {
@@ -86,6 +88,8 @@ import type { VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import type { UnitSupervisor } from "./unitSupervisor.js";
 import { requireActiveExecutionIdentity } from "../runtimeExecutionIdentity.js";
 
+const initializationLog = createDevLogger("RuntimeInitialization");
+
 export interface RuntimeEntityHooks {
   /**
    * Prepare exactly one incarnation through a surface-correlated contract.
@@ -99,6 +103,13 @@ export interface RuntimeEntityHooks {
   /** Called after the entity row is active but before activation is returned
    * to its creator, so durable-work capability registration precedes work. */
   onDurableObjectActivated?: (record: EntityRecord) => Promise<void>;
+  /** Establish an agent's initial relationship using its verified creator's authority. */
+  initializeAgent?: (input: {
+    record: EntityRecord;
+    caller: VerifiedCaller;
+    signal?: AbortSignal;
+    initialization: import("@vibestudio/shared/runtime/entitySpec").RuntimeAgentInitialization;
+  }) => Promise<{ ok: boolean; participantId: string }>;
   /** Initializes copied receiver state while its sealed incarnation is still preparing. */
   initializeDurableClone: (input: LifecycleCloneInput) => Promise<void>;
 
@@ -116,6 +127,14 @@ export interface RuntimeEntityHooks {
     record: EntityRecord,
     input: LifecyclePrepareInput
   ) => Promise<LifecyclePrepareResult>;
+
+  drainDurableWorkDeliveries: (records: readonly EntityRecord[]) => Promise<void>;
+
+  /** Join exact owner-held durable obligations while its executor and peers remain admitted. */
+  prepareDurableWorkRelease: (
+    record: EntityRecord,
+    stage: import("@vibestudio/shared/durableWork").DurableWorkReleaseStage
+  ) => Promise<void>;
 
   /** Seal external RPC admission and drain calls accepted before retirement. */
   sealAndDrainEntityRelays?: (entityId: string) => Promise<void>;
@@ -230,6 +249,7 @@ export interface RuntimeServiceResult {
 }
 
 interface RuntimeCreationActors {
+  signal?: AbortSignal;
   /** Scope retained when copying an existing executable entity. */
   retainedExecutionAuthority?: import("@vibestudio/rpc").ExecutionAuthorityOrigin;
   /** Authenticated principal that owns and controls the new runtime lifecycle. */
@@ -431,7 +451,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
 
   function selfAgentChannelFromSpec(spec: RuntimeEntityCreateSpec): string | undefined {
     return spec.kind === "do" || spec.kind === "worker" || spec.kind === "session"
-      ? spec.agentChannelId
+      ? spec.kind === "do"
+        ? (spec.agentInitialization?.channelId ?? spec.agentChannelId)
+        : spec.agentChannelId
       : undefined;
   }
 
@@ -610,6 +632,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const caller = actors.lifecycleCaller;
     const spec = { ...applyTestAgentPolicy(caller, rawSpec), key: rawSpec.key ?? randomUUID() };
     assertCreateEntityAllowed(caller, spec);
+    if (
+      spec.kind === "do" &&
+      spec.agentInitialization &&
+      spec.agentChannelId &&
+      spec.agentChannelId !== spec.agentInitialization.channelId
+    ) {
+      throw new Error("Agent initialization channel does not match its execution binding");
+    }
     const canonicalId = canonicalEntityId({
       kind: spec.kind,
       source: runtimeEntitySource(spec),
@@ -652,36 +682,48 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       const contextId =
         preparedResourceBindings?.contextId ??
         (await resolveTargetContext(caller, spec.contextId, agentBinding));
-      const handle = await activateEntityOnce(
+      return activateEntityOnce(
         actors,
         spec,
         contextId,
         agentBinding,
-        selfAgentChannelFromSpec(spec)
-      );
-      if (preparedResourceBindings) {
-        const record = await store.resolveRecord(handle.id);
-        if (!record || record.status !== "active") {
-          throw new Error(`Runtime resource binding target is not active: ${handle.id}`);
-        }
-        try {
-          await preparedResourceBindings.bind(record);
-        } catch (error) {
-          // Already admitted on this entity's transition line. Re-entering
-          // retireEntity would wait behind the creation that owns this cleanup.
+        selfAgentChannelFromSpec(spec),
+        undefined,
+        async (record, previous) => {
           try {
-            await retireRecordOnce(record.id);
-          } catch (cleanupError) {
-            throw new AggregateError(
-              [error, cleanupError],
-              "Runtime resource binding and retirement failed",
-              { cause: error }
-            );
+            actors.signal?.throwIfAborted();
+            // The publication owns this exact row; no read-after-write RPC is needed.
+            await preparedResourceBindings?.bind(record);
+            if (spec.kind !== "do" || !spec.agentInitialization) return undefined;
+            if (!deps.hooks.initializeAgent) throw new Error("Agent initialization is unavailable");
+            const result = await deps.hooks.initializeAgent({
+              record,
+              caller: actors.initiatingCaller,
+              signal: actors.signal,
+              initialization: spec.agentInitialization,
+            });
+            if (!result.ok || !result.participantId?.trim()) {
+              throw new Error("Agent initialization did not establish a participant identity");
+            }
+            return result;
+          } catch (error) {
+            // Authority suspension retains its exact decision target; reattachment
+            // retains the original owner's identity. Only new runtimes are cleanup-owned.
+            if (!isAuthorityPending(error) && (!previous || previous.status === "retired")) {
+              try {
+                await retireRecordOnce(record.id);
+              } catch (cleanupError) {
+                throw new AggregateError(
+                  [error, cleanupError],
+                  "Runtime initialization and retirement failed",
+                  { cause: error }
+                );
+              }
+            }
+            throw error;
           }
-          throw error;
         }
-      }
-      return handle;
+      );
     };
     return serializeByKey(entityTransitions, canonicalId, create);
   }
@@ -1052,8 +1094,20 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     initialContextId: string,
     externalAgentBinding?: RuntimeAgentBinding,
     selfAgentChannelId?: string,
-    cloneSource?: EntityRecord
+    cloneSource?: EntityRecord,
+    completeAdmission?: (
+      record: EntityRecord,
+      previous: EntityRecord | null
+    ) => Promise<RuntimeEntityHandle["agentInitialization"]>
   ): Promise<RuntimeEntityHandle> {
+    const startedAt = performance.now();
+    let phaseStartedAt = startedAt;
+    const phases: Record<string, number> = {};
+    const mark = (phase: string): void => {
+      const now = performance.now();
+      phases[phase] = now - phaseStartedAt;
+      phaseStartedAt = now;
+    };
     const caller = actors.lifecycleCaller;
     let contextId = initialContextId;
     const key = spec.key ?? randomUUID();
@@ -1108,7 +1162,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       contextId = existing.contextId;
     }
 
+    mark("identity");
     await setUpContext(contextId);
+    mark("context");
     const parentKind = caller.runtime.kind;
     // Runtime context owns filesystem/state isolation. Code selection follows
     // the verified authoring caller unless the request pins a ref explicitly.
@@ -1166,6 +1222,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       );
     }
 
+    mark("executable");
     let effectiveVersion = existing?.status === "retired" ? existing.source.effectiveVersion : "";
     let buildKey: string | undefined;
     let executionDigest: string | undefined;
@@ -1269,6 +1326,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     } else {
       record = await store.activate(activateInput);
     }
+    mark("publication");
     if (createsRuntime) inheritTaskAuthority(record.id, actors, contextId);
     if (record.kind === "do") {
       await deps.hooks.onDurableObjectActivated?.(record);
@@ -1276,6 +1334,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (spec.kind === "session" && spec.title) {
       await deps.setEntityTitle?.(record.id, spec.title, { explicit: true });
     }
+
+    const agentInitialization = await completeAdmission?.(record, existing);
+    mark("activation");
+    initializationLog.info(
+      "Entity ready",
+      JSON.stringify({
+        id: record.id,
+        phases,
+        totalMs: performance.now() - startedAt,
+      })
+    );
 
     return {
       id: record.id,
@@ -1290,6 +1359,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         : {}),
       contextId: record.contextId,
       targetId,
+      ...(agentInitialization ? { agentInitialization } : {}),
     };
   }
 
@@ -1356,9 +1426,26 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (!current || (current.status === "retired" && current.cleanupComplete)) return null;
     let record: EntityRecord | null = current;
     if (current.status !== "retired") {
-      const epoch = "retire:" + randomUUID();
-      for (const phase of ["quiesce", "peer-obligations", "release"] as const)
-        await prepareRecordForRetirement(current, epoch, phase);
+      const epoch = `retire:${randomUUID()}`;
+      try {
+        await prepareRecordForRetirement(current, epoch, "quiesce");
+        await prepareRecordForRetirement(current, epoch, "peer-obligations");
+        if (current.status === "active") {
+          await deps.hooks.prepareDurableWorkRelease(current, "peer-obligations");
+          await deps.hooks.drainDurableWorkDeliveries([current]);
+          await deps.hooks.prepareDurableWorkRelease(current, "owner");
+        }
+      } catch (original) {
+        try {
+          await prepareRecordForRetirement(current, epoch, "cancel");
+        } catch (cleanup) {
+          throw new AggregateError([original, cleanup], "Entity retirement preparation failed", {
+            cause: original,
+          });
+        }
+        throw original;
+      }
+      await prepareRecordForRetirement(current, epoch, "release");
       try {
         await deps.hooks.sealAndDrainEntityRelays?.(id);
         record = await store.retire(id);
@@ -1397,7 +1484,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (released.status === "failed") {
       const failure = deserializeRpcFailure(released.failure);
       throw new Error(
-        "Entity " + record.id + " refused " + phase + " lifecycle step: " + failure.message,
+        `Entity ${record.id} refused terminal lifecycle release: ${failure.message}`,
         { cause: failure }
       );
     }
@@ -1413,11 +1500,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   }
 
   /**
-   * Retire a mutually-dependent context as one lifecycle unit. Every entity
-   * first releases its peer-facing resources while all peers remain reachable;
-   * only then are relays sealed and durable rows retired. This is what lets an
-   * agent leave its channel during context teardown without service resolution
-   * racing a channel that was retired earlier in list order.
+   * Retire a mutually-dependent context as one lifecycle unit. Quiesce every
+   * owner first, then discharge all peer-facing obligations while peers remain
+   * reachable, and only then release resources, seal relays, and retire rows.
    */
   async function retireContextRecords(
     records: EntityRecord[]
@@ -1430,23 +1515,48 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ).filter((record): record is EntityRecord =>
           Boolean(record && record.status !== "retired")
         );
-        const epochs = new Map(current.map((record) => [record.id, "retire:" + randomUUID()]));
-        // Every entity crosses each phase barrier before the next phase begins.
-        for (const phase of ["quiesce", "peer-obligations", "release"] as const) {
-          const results = await Promise.allSettled(
-            current.map((record) =>
-              prepareRecordForRetirement(record, epochs.get(record.id)!, phase)
+        const epochs = new Map(current.map((record) => [record.id, `retire:${randomUUID()}`]));
+        const quiesced: EntityRecord[] = [];
+        try {
+          for (const record of current) {
+            quiesced.push(record);
+            await prepareRecordForRetirement(record, epochs.get(record.id)!, "quiesce");
+          }
+          for (const record of current)
+            await prepareRecordForRetirement(record, epochs.get(record.id)!, "peer-obligations");
+          // Each barrier joins the already-owned scheduler work; peers and their
+          // RPC admission remain available until every exact receipt is settled.
+          for (const stage of ["peer-obligations", "owner"] as const) {
+            if (stage === "owner") await deps.hooks.drainDurableWorkDeliveries(current);
+            const drains = await Promise.allSettled(
+              current.map((record) => deps.hooks.prepareDurableWorkRelease(record, stage))
+            );
+            const drainFailures = drains.flatMap((result) =>
+              result.status === "rejected" ? [result.reason] : []
+            );
+            if (drainFailures.length === 1) throw drainFailures[0];
+            if (drainFailures.length)
+              throw new AggregateError(drainFailures, "Context durable-work release failed", {
+                cause: drainFailures[0],
+              });
+          }
+        } catch (original) {
+          const cleanup = await Promise.allSettled(
+            quiesced.map((record) =>
+              prepareRecordForRetirement(record, epochs.get(record.id)!, "cancel")
             )
           );
-          const failures = results.flatMap((result) =>
+          const failures = cleanup.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
           );
-          if (failures.length === 1) throw failures[0];
           if (failures.length)
-            throw new AggregateError(failures, "Context " + phase + " lifecycle step failed", {
-              cause: failures[0],
+            throw new AggregateError([original, ...failures], "Context preparation failed", {
+              cause: original,
             });
+          throw original;
         }
+        for (const record of current)
+          await prepareRecordForRetirement(record, epochs.get(record.id)!, "release");
 
         const sealed: string[] = [];
         const retired: EntityRecord[] = [];
@@ -2675,6 +2785,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           {
             lifecycleCaller: ctx.caller,
             initiatingCaller: verifiedInitiator(ctx),
+            signal: ctx.signal,
           },
           spec
         ),

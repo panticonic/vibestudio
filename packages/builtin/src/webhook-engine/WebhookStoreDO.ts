@@ -21,6 +21,7 @@ interface WebhookIngressSubscriptionRow {
 }
 
 export class WebhookStoreDO extends DurableObjectBase {
+  static override readonly durableWorkQueues = [] as const;
   static override schemaVersion = 1;
 
   static override rpcMethods = webhookEngineMethods;

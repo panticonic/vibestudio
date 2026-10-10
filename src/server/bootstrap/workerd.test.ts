@@ -1,3 +1,4 @@
+import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import type { ManagedService } from "@vibestudio/shared/managedService";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import type { BuildSystemV2 } from "../buildV2/index.js";
@@ -105,16 +106,17 @@ describe("workerd bootstrap policy", () => {
       onPushBuild: vi.fn(),
     };
     const inert = {};
+    const declarations = {
+      routes: [{ source: "workers/source", pattern: "/source/*" }],
+      singletons: new SingletonRegistry([]),
+    } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"];
     wireWorkerdCore({
       container: { registerManaged: (service) => services.push(service) },
       tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
       workspacePath: "/workspace",
       statePath: "/workspace/state",
       workspaceId: "workspace-1",
-      workspaceDeclarations: {
-        routes: [{ source: "workers/source", pattern: "/source/*" }],
-        singletons: inert,
-      } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"],
+      workspaceDeclarations: declarations,
       userlandResourceHandles: {
         reconcileProviders: vi.fn(),
         reconcileReceiverClasses: vi.fn(),
@@ -153,6 +155,13 @@ describe("workerd bootstrap policy", () => {
       { source: "workers/source", pattern: "/source/*" },
     ]);
     expect(provider.getManifestDoClasses("workers/source")).toEqual([{ className: "SourceDO" }]);
+    const originalRegistry = provider.singletonRegistry;
+    declarations.singletons = new SingletonRegistry([
+      { source: "workers/source", className: "SourceDO", key: "reloaded" },
+    ]);
+    expect(provider.singletonRegistry).toBe(declarations.singletons);
+    expect(provider.singletonRegistry).not.toBe(originalRegistry);
+    expect(provider.singletonRegistry.requireKey("workers/source", "SourceDO")).toBe("reloaded");
   });
 
   it("reconciles worker classes from one protected publication without scalar-head branching", async () => {

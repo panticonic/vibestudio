@@ -531,6 +531,7 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     ...internal("write"),
     args: z.tuple([
       LifecycleKeySchema.extend({
+        executionDigest: z.string().regex(/^[a-f0-9]{64}$/),
         incarnation: z.string().min(1),
         generation: z.number().int().positive(),
       }),

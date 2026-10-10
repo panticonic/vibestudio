@@ -204,6 +204,17 @@ export const ContentOverlayThemeSchema = z.object({
 });
 export type ContentOverlayTheme = z.infer<typeof ContentOverlayThemeSchema>;
 
+/**
+ * How a content overlay asks for keyboard focus. `take` is an explicit user act
+ * (a hotkey, a command) and always focuses. `unless-typing` is a surface that
+ * appeared on its own; it yields to someone typing in another view, whose next
+ * key would otherwise land on it.
+ */
+export const ContentOverlayFocusSchema = z
+  .enum(["take", "unless-typing"])
+  .describe("Focus intent: 'take' always focuses; 'unless-typing' yields to recent typing.");
+export type ContentOverlayFocus = z.infer<typeof ContentOverlayFocusSchema>;
+
 export const coreViewMethods = defineServiceMethods({
   setBounds: {
     website: {
@@ -385,7 +396,9 @@ export const coreViewMethods = defineServiceMethods({
         theme: ContentOverlayThemeSchema.describe(
           "Theme identity so the surface matches the chrome."
         ),
-        focus: z.boolean().optional().describe("Whether the overlay should grab focus."),
+        focus: ContentOverlayFocusSchema.optional().describe(
+          "Request keyboard focus for the overlay."
+        ),
       }),
     ]),
     returns: z.void(),
@@ -417,7 +430,9 @@ export const coreViewMethods = defineServiceMethods({
         bounds: ViewBoundsSchema.optional().describe("New anchor region, if changing."),
         props: z.unknown().optional().describe("Replacement props, if changing."),
         theme: ContentOverlayThemeSchema.optional().describe("New theme identity, if changing."),
-        focus: z.boolean().optional().describe("New focus state, if changing."),
+        focus: ContentOverlayFocusSchema.optional().describe(
+          "Request keyboard focus for the overlay."
+        ),
       }),
     ]),
     returns: z.void(),

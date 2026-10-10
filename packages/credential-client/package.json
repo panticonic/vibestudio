@@ -11,10 +11,14 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "worker": "./src/index.ts",
+      "browser": "./src/index.ts",
       "default": "./dist/index.js"
     },
     "./*": {
       "types": "./dist/*.d.ts",
+      "worker": "./src/*.ts",
+      "browser": "./src/*.ts",
       "default": "./dist/*.js"
     }
   },

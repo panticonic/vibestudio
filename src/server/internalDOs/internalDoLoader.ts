@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import * as path from "node:path";
 import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
 import { createHash } from "node:crypto";
@@ -39,6 +40,7 @@ export interface InternalDOExecutionIdentity {
   executionDigest: string;
   artifact: ExecutionArtifactRefV1;
   authority: UnitAuthorityManifest;
+  durableWorkQueues: readonly DurableWorkQueue[];
 }
 
 declare global {
@@ -78,6 +80,11 @@ export function internalDOExecutionIdentity(
   const rawManifest = executionCatalog.classes[reviewedClassName];
   const builtin = productBuiltinByIdentity(INTERNAL_DO_SOURCE, reviewedClassName);
   if (!builtin) throw new Error(`Internal Durable Object ${className} is not cataloged`);
+  const durableWorkQueues = parseDurableWorkReady(rawManifest.durableWorkQueues);
+  if (canonicalJson(durableWorkQueues) !== canonicalJson(builtin.durableWorkQueues))
+    throw new Error(
+      `Internal Durable Object ${className} queue catalog does not match its executable declaration`
+    );
   const authority = parseUnitAuthorityManifest(
     {
       requests: rawManifest.requests,
@@ -128,6 +135,7 @@ export function internalDOExecutionIdentity(
     executionDigest: artifact.executionDigest,
     artifact,
     authority,
+    durableWorkQueues: Object.freeze(durableWorkQueues),
   });
 }
 

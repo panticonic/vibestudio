@@ -15,6 +15,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { RpcServer } from "./rpcServer.js";
+import { createRuntimeAgentInitializer } from "./services/runtimeAgentInitialization.js";
 import { Gateway } from "./gateway.js";
 import { createLiveCallerGate } from "./services/liveCallerGate.js";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
@@ -2129,6 +2130,107 @@ describe("RpcServer relay behavior", () => {
       callerKind: "panel",
       userId: "user-1",
     });
+  });
+
+  it("routes agent initialization through the creator's verified DO authority and cancellation", async () => {
+    const { server, entityCache } = createServer();
+    const targetId = "do:workers/agent:Agent:initialization";
+    const record = makeRecord(targetId, "do", { contextId: "ctx-agent-init" });
+    server.setExecutableVersionResolver(() => record.source.effectiveVersion);
+    entityCache._onActivate(record);
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          from: targetId,
+          target: "main",
+          delivery: { caller: { callerId: targetId, callerKind: "do" } },
+          provenance: [],
+          message: {
+            type: "response",
+            requestId: "x",
+            result: { ok: true, participantId: targetId },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = createVerifiedCaller("panel:nav-a", "panel", null, null, {
+      userId: "usr_creator",
+      handle: "creator",
+    });
+    const signal = new AbortController().signal;
+    const initialize = createRuntimeAgentInitializer(() => server);
+    await expect(
+      initialize({
+        record,
+        caller,
+        signal,
+        initialization: { channelId: "ch-init", replay: false },
+      })
+    ).resolves.toEqual({ ok: true, participantId: targetId });
+    const envelope = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
+    expect(envelope.delivery.caller).toMatchObject({
+      callerId: "panel:nav-a",
+      callerKind: "panel",
+      userId: "usr_creator",
+    });
+    expect(envelope.message).toMatchObject({
+      method: "subscribeChannel",
+      args: [{ channelId: "ch-init", replay: false, contextId: "ctx-agent-init" }],
+    });
+    expect((envelope.delivery.caller as AttestedCaller).authorization).toMatchObject({
+      audience: targetId,
+      method: "subscribeChannel",
+    });
+    expect(testServer(server).dispatcher.dispatch).not.toHaveBeenCalled();
+    const active = new AbortController();
+    const cancellation = new Error("Creator stopped initialization");
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            body = controller;
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
+    );
+    fetchMock.mockImplementationOnce(async () => {
+      body.error(cancellation);
+      return new Response(null, { status: 200 });
+    });
+    const pending = initialize({
+      record,
+      caller,
+      signal: active.signal,
+      initialization: { channelId: "ch-init" },
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const rejection = expect(pending).rejects.toBe(cancellation);
+    active.abort(cancellation);
+    await rejection;
+    expect(JSON.parse(String(fetchMock.mock.calls[2]![1]!.body)).message).toMatchObject({
+      type: "request-cancel",
+      requestId: JSON.parse(String(fetchMock.mock.calls[1]![1]!.body)).message.requestId,
+    });
+    const stopped = new AbortController();
+    stopped.abort(cancellation);
+    expect(() =>
+      initialize({
+        record,
+        caller,
+        signal: stopped.signal,
+        initialization: { channelId: "ch-init" },
+      })
+    ).toThrow(cancellation);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("uses extension code authority with the initiating panel's verified subject", async () => {

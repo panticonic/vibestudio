@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { readDurableWorkDeclaration } from "./durableWorkDeclarations.js";
 import path from "node:path";
 import { format, resolveConfig } from "prettier";
 import type { ServiceMethodSchemas } from "../packages/shared/src/typedServiceClient.js";
@@ -37,7 +38,7 @@ const projectMethods = (owner: string, methods: ServiceMethodSchemas) =>
           effect: method.directEffect ?? {
             kind: "host-capability",
             website: method.website,
-          capability: method.capability,
+            capability: method.capability,
             resource: { kind: "receiver-object" },
           },
         },
@@ -72,6 +73,7 @@ const entries = PRODUCT_BUILTINS.map((entry) => {
     name: entry.name,
     source: entry.source,
     className: entry.className,
+    durableWorkQueues: readDurableWorkDeclaration(source, entry.className, entry.sourceFile),
     implementation: entry.implementation,
     sourceFile: entry.sourceFile,
     builtinBecause: entry.builtinBecause,
@@ -184,6 +186,7 @@ const executionCatalog = {
     entries.map((entry) => [
       entry.className,
       {
+        durableWorkQueues: entry.durableWorkQueues,
         provides: [],
         requests: entry.residentCapabilityRequests,
         methodScopedRequests: entry.hostCapabilityRequests,

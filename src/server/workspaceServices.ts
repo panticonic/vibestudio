@@ -43,8 +43,8 @@ function buildResolution(
   overrideObjectKey: string | null,
   routes: WorkspaceDeclarations["routes"]
 ): ResolvedWorkspaceService {
-  const protocols = service.protocols ?? [];
-  const authority: WorkspaceServiceAuthority = service.authority;
+  const protocols = [...(service.protocols ?? [])];
+  const authority: WorkspaceServiceAuthority = structuredClone(service.authority);
   const source = service.source;
 
   if (service.durableObject) {
@@ -76,7 +76,7 @@ function buildResolution(
       title: service.title,
       action: service.action,
       description: service.description,
-      presentation: service.presentation,
+      presentation: { ...service.presentation },
       protocols,
       source,
       authority,
@@ -101,7 +101,7 @@ function buildResolution(
     title: service.title,
     action: service.action,
     description: service.description,
-    presentation: service.presentation,
+    presentation: { ...service.presentation },
     protocols,
     source,
     authority,

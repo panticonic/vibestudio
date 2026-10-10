@@ -6,20 +6,20 @@ function unavailable(message = "sealed execution unavailable"): Error & { code: 
   return Object.assign(new Error(message), { code: "RUNTIME_IMAGE_UNAVAILABLE" });
 }
 
-const RECORD: EntityRecord = {
+const RECORD: EntityRecord = Object.freeze({
   id: "do:workers/pubsub-channel:PubSubChannel:chat-1",
   kind: "do",
-  source: { repoPath: "workers/pubsub-channel", effectiveVersion: "ev-1" },
+  source: Object.freeze({ repoPath: "workers/pubsub-channel", effectiveVersion: "ev-1" }),
   contextId: "ctx-1",
   className: "PubSubChannel",
   key: "chat-1",
   activeBuildKey: "b".repeat(64),
   activeExecutionDigest: "e".repeat(64),
-  activeAuthority: { provides: [], requests: [] },
+  activeAuthority: Object.freeze({ provides: Object.freeze([]), requests: Object.freeze([]) }),
   createdAt: 1,
   status: "active",
   cleanupComplete: true,
-};
+});
 
 const REF = {
   source: "workers/pubsub-channel",
@@ -28,6 +28,24 @@ const REF = {
 };
 
 describe("DurableObjectExecutionReadiness", () => {
+  it("requires the owner publication witness and refreshes on exact image advancement", async () => {
+    let published = RECORD;
+    const restoreExactExecution = vi.fn(async () => {});
+    const readiness = new DurableObjectExecutionReadiness({
+      resolveEntity: async () => published,
+      restoreExactExecution,
+    });
+    await readiness.ensureReady(REF);
+    await readiness.ensureReady(REF);
+    expect(restoreExactExecution).toHaveBeenCalledOnce();
+    published = Object.freeze({ ...RECORD, activeExecutionDigest: "f".repeat(64) });
+    await readiness.ensureReady(REF);
+    expect(restoreExactExecution).toHaveBeenCalledTimes(2);
+    published = { ...published };
+    await expect(readiness.ensureReady(REF)).rejects.toThrow(/publication is not immutable/);
+    expect(restoreExactExecution).toHaveBeenCalledTimes(2);
+  });
+
   it("restores only an exact sealed preparing witness without admitting ordinary calls", async () => {
     const provenance = {
       storage: "snapshot" as const,

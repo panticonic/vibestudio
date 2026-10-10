@@ -678,6 +678,8 @@ importers:
         specifier: ^10.0.1
         version: 10.0.1
 
+  packages/binary-brand: {}
+
   packages/browser-contracts:
     dependencies:
       zod:
@@ -1012,6 +1014,9 @@ importers:
 
   packages/rpc:
     dependencies:
+      '@vibestudio/binary-brand':
+        specifier: workspace:*
+        version: link:../binary-brand
       '@vibestudio/iroh-transport':
         specifier: workspace:*
         version: link:../iroh-transport

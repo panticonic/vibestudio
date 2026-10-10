@@ -32253,6 +32253,138 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:vcs.readFiles",
+      "rpcPlane": "host-service",
+      "owner": "vcs",
+      "method": "readFiles",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "vcs.read",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "vcs.files.readFiles"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:vcs.readFiles\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:vcs.readFiles\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:vcs.readFiles\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:vcs.readFiles\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:vcs.readFiles\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:vcs.readFiles",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:vcs.readFiles#capability:filesystem.list",
+      "rpcPlane": "host-service",
+      "owner": "vcs",
+      "method": "readFiles",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "vcs.read",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.list",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "vcs.files.readFiles"
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.list\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:vcs.readFiles#capability:filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "vcs",
+      "method": "readFiles",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "vcs.read",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "vcs.files.readFiles"
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:vcs.readMemory",
       "rpcPlane": "host-service",
       "owner": "vcs",

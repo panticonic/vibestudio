@@ -1134,11 +1134,11 @@ export const workspaceStateMethods = defineServiceMethods({
       rationale:
         "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
     },
-    args: z.tuple([LifecycleKeySchema]),
-    description: "Register a durable wake source before admitting execution work.",
+    args: z.tuple([LifecycleKeySchema.extend({ executionDigest: z.string().regex(/^[a-f0-9]{64}$/) })]),
+    description: "Admit the exact active execution, release lease, and durable wake source together.",
     authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
     access: { sensitivity: "write" },
-    returns: z.string().min(1),
+    returns: z.object({ incarnation: z.string().min(1), entity: EntityRecordSchema }).strict(),
   },
   alarmSourcePublish: {
     website: {

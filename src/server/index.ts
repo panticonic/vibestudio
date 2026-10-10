@@ -3,6 +3,7 @@ import { drainDependencyContentMaintenance } from "./buildV2/dependencyContentMa
 import { drainBuildStorePublications } from "./buildV2/buildStore.js";
 import { REPORT_POLICY } from "@vibestudio/service-schemas/problemReportBundle";
 import { workspaceMethodPrincipals } from "./workspaceRpcAuthority.js";
+import { serializeRpcFailure } from "@vibestudio/rpc";
 /**
  * vibestudio-server — the standalone Vibestudio server entry point.
  *
@@ -624,7 +625,7 @@ async function main() {
     );
     for (const route of nextDecls.routes) routeSources.add(route.source);
     replaceWorkspaceConfig(workspaceConfig, authoritativeNextConfig);
-    workspaceDecls.singletons.replaceAll(nextDecls.singletons.all());
+    workspaceDecls.singletons = nextDecls.singletons;
     workspaceDecls.services = nextDecls.services;
     workspaceDecls.routes = nextDecls.routes;
     if (opts.warnRestartBoundChanges !== false) {
@@ -696,7 +697,7 @@ async function main() {
     resolveEntity: (id) =>
       ensureEntityStore(
         container.get<import("./doDispatch.js").DODispatch>("doDispatch")
-      ).resolveRecord(id),
+      ).resolveInvocationRecord(id),
     verifyPreparedStorage: async (record) => {
       const manager = workerdManagerForGateway;
       if (!manager)
@@ -1828,7 +1829,8 @@ async function main() {
 
   const { resolveDeclaredApps, resolveDeclaredExtensions } =
     await import("@vibestudio/workspace/loader");
-  const { readWorkspaceConfigFromState } = await import("./workspaceConfigSource.js");
+  const { readWorkspaceConfigFromState, readWorkspaceDeclarationsFromState } =
+    await import("./workspaceConfigSource.js");
   const loadWorkspaceConfigFromState = async (
     stateHash: string
   ): Promise<typeof workspaceConfig> => {
@@ -4268,6 +4270,8 @@ async function main() {
   // mints or retires entity rows. Cleanup hooks fire post-retire (see §10).
   {
     const { createRuntimeService } = await import("./services/runtimeService.js");
+    const { createRuntimeAgentInitializer } =
+      await import("./services/runtimeAgentInitialization.js");
     let runtimeResult: import("./services/runtimeService.js").RuntimeServiceResult | null = null;
     container.registerManaged({
       name: "runtime",
@@ -4459,7 +4463,8 @@ async function main() {
                 };
               }
               if (spec.execution.surface === "inert") {
-                await contextFolderManager.ensureContextFolder(contextId);
+                // Inert sessions own semantic state, not a disk projection.
+                // Consumers of a filesystem root materialize it at that boundary.
                 return { surface: "inert", target: { id: targetId } };
               }
 
@@ -4593,6 +4598,9 @@ async function main() {
                 objectKey: record.key,
               });
             },
+            initializeAgent: createRuntimeAgentInitializer(() =>
+              assertPresent(rpcServerForGateway)
+            ),
             initializeDurableClone: (input) =>
               doDispatch.dispatchLifecycle(input.target, "initializeClone", input),
             onDurableObjectActivated: async (record) => {
@@ -4602,10 +4610,13 @@ async function main() {
                 className: record.className,
                 objectKey: record.key,
               };
-              const queues = (await doDispatch.dispatch(
-                owner,
-                "durableWorkCapabilities"
-              )) as import("@vibestudio/shared/durableWork").DurableWorkQueue[];
+              if (!record.activeExecutionDigest)
+                throw new Error(`Durable work owner ${record.id} has no sealed execution`);
+              const queues = workerdManager.getDurableWorkQueues(
+                owner.source,
+                owner.className,
+                record.activeExecutionDigest
+              );
               if (queues.length === 0) return;
               await doDispatch.dispatch(
                 {
@@ -4649,7 +4660,9 @@ async function main() {
               if (!record.className) {
                 return {
                   status: "failed",
-                  detail: { error: `Durable Object ${record.id} has no class name` },
+                  failure: serializeRpcFailure(
+                    new Error(`Durable Object ${record.id} has no class name`)
+                  ),
                 };
               }
               const released = await doDispatch.dispatchLifecycle(
@@ -4662,6 +4675,52 @@ async function main() {
                 input
               );
               return released;
+            },
+            drainDurableWorkDeliveries: async (records) => {
+              const { drainDurableWorkDeliveryClosure } =
+                await import("./services/durableWorkRelease.js");
+              await drainDurableWorkDeliveryClosure(
+                records
+                  .filter((record) => record.kind === "do")
+                  .map((record) => {
+                    if (!record.className)
+                      throw new Error(`Durable Object ${record.id} has no class name`);
+                    return {
+                      source: record.source.repoPath,
+                      className: record.className,
+                      objectKey: record.key,
+                    };
+                  }),
+                doDispatch,
+                (hint) =>
+                  container
+                    .get<
+                      import("./services/durableWorkDriver.js").DurableWorkDriver
+                    >("durableWorkDriver")
+                    .notify(hint)
+              );
+            },
+            prepareDurableWorkRelease: async (record, stage) => {
+              if (record.kind !== "do") return;
+              if (!record.className)
+                throw new Error(`Durable Object ${record.id} has no class name`);
+              const { prepareDurableWorkOwnerRelease } =
+                await import("./services/durableWorkRelease.js");
+              await prepareDurableWorkOwnerRelease(
+                {
+                  source: record.source.repoPath,
+                  className: record.className,
+                  objectKey: record.key,
+                },
+                doDispatch,
+                (hint) =>
+                  container
+                    .get<
+                      import("./services/durableWorkDriver.js").DurableWorkDriver
+                    >("durableWorkDriver")
+                    .notify(hint),
+                stage
+              );
             },
             sealAndDrainEntityRelays: (entityId) =>
               sealAndDrainDurableObjectRelays(entityId, `runtime-retire:${entityId}`),
@@ -5393,8 +5452,12 @@ async function main() {
           if (!contextId) return [];
           try {
             const stateHash = await workspaceVcs.resolveContextState(contextId);
-            const config = await readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);
-            return await authoritiesFrom(buildWorkspaceDeclarations(config));
+            const declarations = await readWorkspaceDeclarationsFromState(
+              workspaceVcs,
+              workspaceId,
+              stateHash
+            );
+            return await authoritiesFrom(declarations);
           } catch {
             // Main workspace singletons may use host-owned context ids rather
             // than VCS operation contexts.
@@ -5408,30 +5471,21 @@ async function main() {
         // can persist the asserted causal edge.
         resolveExactCausalInvocation: async (parent, binding) => {
           const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-          const { createWorkspaceSemanticPort, resolveExactCausalInvocation } =
-            await import("./workspaceSourceProvider.js");
-          const fact = await resolveExactCausalInvocation(
-            createWorkspaceSemanticPort(doDispatch, {
-              source: semanticWorkspaceService.source,
-              className: semanticWorkspaceService.className,
-              objectKey: semanticWorkspaceService.objectKey,
-            }),
-            parent,
-            {
-              binding,
-              entities: entityCache,
-              inspect: (source, invocationId) =>
-                doDispatch.dispatch(
-                  {
-                    source: source.owner.source,
-                    className: source.owner.className,
-                    objectKey: source.owner.objectKey,
-                  },
-                  "inspectNativeInvocationSource",
-                  { taskId: source.task.taskId, invocationId }
-                ),
-            }
-          );
+          const { resolveExactCausalInvocation } = await import("./workspaceSourceProvider.js");
+          const fact = await resolveExactCausalInvocation(parent, {
+            binding,
+            entities: entityCache,
+            inspect: (locator, invocationId) => {
+              const owner = entityCache.resolveActive(locator.owner.runtimeId);
+              if (!owner?.className) throw new Error("Native task owner is not active");
+              return doDispatch.dispatch(
+                { source: owner.source.repoPath, className: owner.className, objectKey: owner.key },
+                "inspectNativeInvocationSource",
+                { taskId: locator.task.taskId, invocationId }
+              );
+            },
+            getEnvelope: (ref, envelopeId) => doDispatch.dispatch(ref, "getEnvelope", envelopeId),
+          });
           if (!fact) return null;
           const user = fact.initiatingUserId ? userStore.getUser(fact.initiatingUserId) : null;
           // A website starts work as a website, not as a human message author.
@@ -6197,7 +6251,7 @@ async function main() {
   // entity cache — without a record its principal kind is unknown and every
   // call 403s. Service resolution activates on demand (workersRpc below);
   // Server-dispatched semantic control-plane objects activate explicitly.
-  const durableWorkRegistrationCache = new Set<string>();
+  const durableWorkRegistrationCache = new Map<string, string>();
   const activateDurableObjectEntity = async (
     doDispatch: import("./doDispatch.js").DODispatch,
     workerdManagerInst: import("./workerdManager.js").WorkerdManager,
@@ -6218,20 +6272,23 @@ async function main() {
       className: "WorkspaceDO",
       objectKey: workspaceId,
     };
-    const registerDurableWorkOwner = async (): Promise<void> => {
-      if (durableWorkRegistrationCache.has(targetId)) return;
+    const registerDurableWorkOwner = async (record: EntityRecord): Promise<void> => {
+      if (!record.activeExecutionDigest)
+        throw new Error(`Durable work owner ${record.id} has no sealed execution`);
+      if (durableWorkRegistrationCache.get(targetId) === record.activeExecutionDigest) return;
       const owner = { source, className, objectKey };
-      const queues = (await doDispatch.dispatch(
-        owner,
-        "durableWorkCapabilities"
-      )) as import("@vibestudio/shared/durableWork").DurableWorkQueue[];
+      const queues = workerdManagerInst.getDurableWorkQueues(
+        source,
+        className,
+        record.activeExecutionDigest
+      );
       if (queues.length > 0) {
         await doDispatch.dispatch(workspaceDORef, "durableWorkOwnerRegister", {
           ...owner,
           queues,
         });
       }
-      durableWorkRegistrationCache.add(targetId);
+      durableWorkRegistrationCache.set(targetId, record.activeExecutionDigest);
     };
     const active = entityCache.resolveActive(targetId);
     if (active?.activeBuildKey && active.activeExecutionDigest && active.activeAuthority) {
@@ -6241,7 +6298,7 @@ async function main() {
         );
       }
       await durableObjectExecutionReadiness.materialize(active);
-      await registerDurableWorkOwner();
+      await registerDurableWorkOwner(active);
       return;
     }
     const existing = (await doDispatch.dispatch(
@@ -6262,7 +6319,7 @@ async function main() {
       if (existing.activeBuildKey && existing.activeExecutionDigest && existing.activeAuthority) {
         entityCache._onActivate(existing);
         await durableObjectExecutionReadiness.materialize(existing);
-        await registerDurableWorkOwner();
+        await registerDurableWorkOwner(existing);
         return;
       }
     }
@@ -6285,9 +6342,10 @@ async function main() {
       SYSTEM_SUBJECT.userId
     );
     const store = ensureEntityStore(doDispatch);
-    if (existing) await store.advanceExecution(activation);
-    else await store.activate(activation);
-    await registerDurableWorkOwner();
+    const record = existing
+      ? await store.advanceExecution(activation)
+      : await store.activate(activation);
+    await registerDurableWorkOwner(record);
   };
 
   {
@@ -6345,8 +6403,7 @@ async function main() {
           getCallerContextId: (callerId) => callerRuntimeContextId(entityCache, callerId),
           loadContextDeclarations: async (contextId) => {
             const stateHash = await workspaceVcs.resolveContextState(contextId);
-            const config = await readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);
-            return buildWorkspaceDeclarations(config);
+            return readWorkspaceDeclarationsFromState(workspaceVcs, workspaceId, stateHash);
           },
           canDiscoverCrossWorkspaceMethod: (ctx, { target, operation }) => {
             try {
@@ -6440,6 +6497,7 @@ async function main() {
       status: (input) => callSemantic("vcsStatus", input),
       resolveRepository: (input) => callSemantic("vcsResolveRepository", input),
       readFile: (input) => callSemantic("vcsReadFile", input),
+      readFiles: (input) => callSemantic("vcsReadFiles", input),
       listDirectory: (input) => callSemantic("vcsListDirectory", input),
       listFiles: (input) => callSemantic("vcsListFiles", input),
       ensureMaterialized: (contextId, repos) =>
@@ -6662,6 +6720,37 @@ async function main() {
             resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
           ),
           doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
+          drainDurableWorkDeliveries: async (owners, signal) => {
+            const { drainDurableWorkDeliveryClosure } =
+              await import("./services/durableWorkRelease.js");
+            await drainDurableWorkDeliveryClosure(
+              owners,
+              assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
+              (hint) =>
+                container
+                  .get<
+                    import("./services/durableWorkDriver.js").DurableWorkDriver
+                  >("durableWorkDriver")
+                  .notify(hint),
+              signal
+            );
+          },
+          prepareDurableWorkRelease: async (owner, stage, signal) => {
+            const { prepareDurableWorkOwnerRelease } =
+              await import("./services/durableWorkRelease.js");
+            await prepareDurableWorkOwnerRelease(
+              owner,
+              assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
+              (hint) =>
+                container
+                  .get<
+                    import("./services/durableWorkDriver.js").DurableWorkDriver
+                  >("durableWorkDriver")
+                  .notify(hint),
+              stage,
+              signal
+            );
+          },
           workspaceId,
         });
         driver.start();
@@ -7445,6 +7534,9 @@ async function main() {
   });
   rpcServerInstance.setWorkerdGatewayToken(workerdGatewayToken);
   rpcServerInstance.setWorkerdDispatchSecret(workerdManager.getDispatchSecret());
+  rpcServerInstance.setExecutableVersionResolver((ref) =>
+    workerdManager.getDoVersion(ref.source, ref.className, ref.objectKey)
+  );
   rpcServerInstance.setWorkerInstanceResolver((targetId) =>
     workerdManager.resolveWorkerInstanceName(targetId)
   );
@@ -7718,6 +7810,21 @@ async function main() {
       rejectInitialExtensionDeclarations(error);
       throw error;
     });
+  const startupWorkerArtifactPreparation = Promise.resolve().then(async () => {
+    const { prepareStartupWorkers } = await import("./startupWorkerPreparation.js");
+    const result = await prepareStartupWorkers(
+      assertPresent(buildSystemInstance),
+      (build, classes) => workerdManager.prepareWorkerExecutable(build, classes),
+      startupBackgroundLifetime.signal
+    );
+    console.info(
+      `[StartupBackground] Prepared ${result.sources.length} worker executable(s) in ${Math.round(result.elapsedMs)}ms`
+    );
+    return result;
+  });
+  void startupWorkerArtifactPreparation.catch((error: unknown) => {
+    console.warn("[StartupBackground] Worker executable preparation failed:", error);
+  });
   if (!requireMobileReady && !requireElectronReady) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>
       console.warn(
@@ -7860,6 +7967,15 @@ async function main() {
     };
 
     startupBackgroundLifetime.abort(new Error("Server shutdown cancelled startup recovery"));
+    // Provisioning is opportunistic, but owns its admitted runtime/channel
+    // operations until completion. Stop admission before joining them while
+    // the runtime, durable dispatch and semantic workspace are still live.
+    await shutdownStage("workspace-automation-provisioning", () =>
+      automationProvisioner.close()
+    ).catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] Workspace automation provisioning shutdown failed:", error);
+    });
     stopAuthorityRecoveryOnRestart();
     await shutdownStage("acquisition-owner-delivery", () =>
       acquisitionCoordinator.quiesceOwnerDelivery()
@@ -7872,6 +7988,7 @@ async function main() {
       Promise.allSettled([
         startupExtensionWarming,
         startupPanelArtifactPreparation,
+        startupWorkerArtifactPreparation,
         startupElectronArtifactPreparation,
       ])
     );
@@ -7892,10 +8009,6 @@ async function main() {
       container.get<import("./services/durableWorkDriver.js").DurableWorkDriver>(
         "durableWorkDriver"
       );
-    const durableWorkQuiescence = durableWorkDriver.quiesce().catch((error) => {
-      shutdownErrors.push(error);
-      console.error("[Server] durable work driver quiesce failed:", error);
-    });
 
     // Close the shared eval admission before tearing down its host-held
     // transports. Every EvalDO run is a durable trust unit with its own
@@ -7933,6 +8046,12 @@ async function main() {
       }
     );
     await evalKernelLeaseClose;
+    // Canonical durable observations drain before their owners release. Stop
+    // this sole executor only after the lifecycle barriers have joined them.
+    const durableWorkQuiescence = durableWorkDriver.quiesce().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] durable work driver quiesce failed:", error);
+    });
 
     // These schedulers closed admission above, but their dispatches could only
     // settle after lifecycle release joined the actual activation resources.

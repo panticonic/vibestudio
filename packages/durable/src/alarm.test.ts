@@ -12,12 +12,8 @@ import { createTestDO, createTestDirectAuthority, successfulTestRpcFetch } from 
 
 class AlarmProbeDO extends DurableObjectBase {
   admissionOpen = true;
-  protected override beginLifecycleRelease(): void {
-    this.admissionOpen = false;
-  }
-  protected override async cancelLifecyclePreparation(): Promise<void> {
-    this.admissionOpen = true;
-  }
+  protected override beginLifecycleRelease(): void { this.admissionOpen = false; }
+  protected override async cancelLifecyclePreparation(): Promise<void> { this.admissionOpen = true; }
   nextAlarm: AlarmSchedule | null = null;
   releaseDeferred!: () => void;
   deferredOutbound: Promise<unknown> | null = null;
@@ -32,7 +28,9 @@ class AlarmProbeDO extends DurableObjectBase {
   }
 
   openResidentReceiver(channelId: string, receiver: (payload: unknown) => void): () => void {
-    return this.registerResidentChannelSession(channelId, receiver);
+    return this.registerResidentChannelSession(channelId, receiver, {
+      targetId: `do:workers/pubsub-channel:PubSubChannel:${channelId}`,
+    });
   }
 
   override async alarm(): Promise<AlarmSchedule | null> {
@@ -193,35 +191,6 @@ function assertTestDOCallTypes(
 void assertTestDOCallTypes;
 
 describe("DurableObjectBase alarm dispatch", () => {
-  it("reopens admission only for cancellation of the exact unreleased lifecycle epoch", async () => {
-    const { instance, call, db } = await createTestDO(AlarmProbeDO);
-    const input = {
-      epoch: "owned",
-      mode: "suspend" as const,
-      reason: "replacement",
-      deadlineMs: 0,
-    };
-    try {
-      await call("__lifecycle/prepare", { ...input, phase: "quiesce" });
-      expect(instance.admissionOpen).toBe(false);
-      await expect(
-        call("__lifecycle/prepare", { ...input, epoch: "foreign", phase: "cancel" })
-      ).rejects.toThrow("active preparation epoch");
-      expect(instance.admissionOpen).toBe(false);
-      await call("__lifecycle/prepare", { ...input, phase: "cancel" });
-      expect(instance.admissionOpen).toBe(true);
-      await call("__lifecycle/prepare", { ...input, phase: "cancel" });
-      await call("__lifecycle/prepare", { ...input, epoch: "next", phase: "quiesce" });
-      await call("__lifecycle/prepare", { ...input, epoch: "next", phase: "release" });
-      await expect(
-        call("__lifecycle/prepare", { ...input, epoch: "next", phase: "cancel" })
-      ).rejects.toThrow("released resources");
-      expect(instance.admissionOpen).toBe(false);
-    } finally {
-      db.close();
-    }
-  });
-
   it("reports both handler and persistence failures while preserving the handler's typed cause", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("Alarm owner unavailable", { status: 503 })
@@ -370,10 +339,10 @@ describe("DurableObjectBase alarm dispatch", () => {
       ]);
       preparationStarted = true;
       prepared = call("__lifecycle/prepare", {
-        mode: "suspend",
-        reason: "shutdown",
         epoch: "test",
         phase: "quiesce",
+        mode: "suspend",
+        reason: "shutdown",
         deadlineMs: 0,
       });
       const prepareFailure = expect(prepared).rejects.toThrow();
@@ -533,8 +502,27 @@ describe("DurableObjectBase alarm dispatch", () => {
     }
   });
 
+  it("reopens admission only for cancellation of the exact unreleased lifecycle epoch", async () => {
+    const { instance, call, db } = await createTestDO(AlarmProbeDO);
+    const input = { epoch: "owned", mode: "suspend" as const, reason: "replacement", deadlineMs: 0 };
+    try {
+      await call("__lifecycle/prepare", { ...input, phase: "quiesce" });
+      expect(instance.admissionOpen).toBe(false);
+      await expect(call("__lifecycle/prepare", { ...input, epoch: "foreign", phase: "cancel" })).rejects.toThrow("active preparation epoch");
+      expect(instance.admissionOpen).toBe(false);
+      await call("__lifecycle/prepare", { ...input, phase: "cancel" });
+      expect(instance.admissionOpen).toBe(true);
+      await call("__lifecycle/prepare", { ...input, phase: "cancel" });
+      await call("__lifecycle/prepare", { ...input, epoch: "next", phase: "quiesce" });
+      await call("__lifecycle/prepare", { ...input, epoch: "next", phase: "release" });
+      await expect(call("__lifecycle/prepare", { ...input, epoch: "next", phase: "cancel" })).rejects.toThrow("released resources");
+      expect(instance.admissionOpen).toBe(false);
+    } finally { db.close(); }
+  });
+
   it("maps an original lifecycle release rejection through the request error boundary", async () => {
-    const { instance, db } = await createTestDO(AlarmProbeDO);
+    const { instance, call, db } = await createTestDO(AlarmProbeDO);
+    await call("__lifecycle/prepare", { epoch: "test", phase: "quiesce", mode: "suspend", reason: "shutdown", deadlineMs: 0 });
     const original = new Error("Original activation release failed");
     instance.releaseForLifecycle = async () => {
       throw original;
@@ -545,15 +533,7 @@ describe("DurableObjectBase alarm dispatch", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            args: [
-              {
-                epoch: "test",
-                phase: "peer-obligations",
-                mode: "suspend",
-                reason: "shutdown",
-                deadlineMs: 0,
-              },
-            ],
+            args: [{ epoch: "test", phase: "peer-obligations", mode: "suspend", reason: "shutdown", deadlineMs: 0 }],
             __instanceToken: "token",
             __instanceId: "do:internal/WorkspaceDO:test-key",
             __caller: {
@@ -571,6 +551,39 @@ describe("DurableObjectBase alarm dispatch", () => {
       await expect(response.json()).resolves.toMatchObject({
         error: { message: original.message },
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects a lifecycle wire input with no phase before releasing resources", async () => {
+    const { instance, db } = await createTestDO(AlarmProbeDO);
+    const release = vi.spyOn(instance, "releaseForLifecycle");
+    try {
+      const response = await instance.fetch(
+        new Request("http://test/test-key/__lifecycle/prepare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            args: [{ epoch: "test", mode: "suspend", reason: "shutdown", deadlineMs: 0 }],
+            __instanceToken: "token",
+            __instanceId: "do:internal/WorkspaceDO:test-key",
+            __caller: {
+              callerId: "main",
+              callerKind: "server",
+              authorization: createTestDirectAuthority({
+                callerKind: "server",
+                method: "__lifecycle/prepare",
+              }),
+            },
+          }),
+        }),
+      );
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { message: "Lifecycle prepare requires a valid phase" },
+      });
+      expect(release).not.toHaveBeenCalled();
     } finally {
       db.close();
     }
@@ -614,7 +627,7 @@ describe("DurableObjectBase alarm dispatch", () => {
 
     expect(rpcMethodAuthority(instance, "acceptChannelDelivery")).toMatchObject({
       website: { kind: "closed" },
-      principals: ["host"],
+      principals: ["host", "code"],
       effect: { kind: "open" },
       tier: "open",
       sensitivity: "write",
@@ -622,7 +635,7 @@ describe("DurableObjectBase alarm dispatch", () => {
   });
 
   it("delivers through the receiver registered by the exact object activation", async () => {
-    const { instance } = await createTestDO(AlarmProbeDO);
+    const { instance, call, callAs } = await createTestDO(AlarmProbeDO);
     const received: unknown[] = [];
     const close = instance.openResidentReceiver("channel-1", (payload) => received.push(payload));
     const input = {
@@ -640,7 +653,7 @@ describe("DurableObjectBase alarm dispatch", () => {
       agenticContext: null,
     } satisfies ResidentChannelDeliveryInput;
 
-    await expect(instance.acceptChannelDelivery(input)).resolves.toEqual({
+    await expect(call("acceptChannelDelivery", input)).resolves.toEqual({
       processed: true,
       recipientExecutionStartedAt: expect.any(Number),
     });
@@ -651,8 +664,13 @@ describe("DurableObjectBase alarm dispatch", () => {
       },
     ]);
 
+    await expect(callAs({ callerId: "do:workers/pubsub-channel:PubSubChannel:channel-1", callerKind: "do" },
+      "acceptChannelDelivery", input)).resolves.toMatchObject({ processed: true });
+    await expect(callAs({ callerId: "do:workers/other:OtherDO:channel-1", callerKind: "do" },
+      "acceptChannelDelivery", { ...input, channelRef: { ...input.channelRef, source: "workers/other", className: "OtherDO" } }))
+      .rejects.toThrow("exact admitted channel owner");
     close();
-    await expect(instance.acceptChannelDelivery(input)).rejects.toMatchObject({
+    await expect(call("acceptChannelDelivery", input)).rejects.toMatchObject({
       code: "ResidentSessionUnavailable",
     });
   });

@@ -336,6 +336,7 @@ function assertWorkspaceAlarmColumns(sql: SchemaSqlStorage, label: string): void
 }
 
 export class WorkspaceDO extends DurableObjectBase {
+  static override readonly durableWorkQueues = [] as const;
   static override rpcMethods = workspaceStateEngineMethods;
   static override schemaVersion = 38;
 
@@ -343,7 +344,7 @@ export class WorkspaceDO extends DurableObjectBase {
     super(ctx, env);
   }
 
-  protected override afterSchemaReady(): void {
+  protected override restoreActivationState(): undefined {
     this.repairLifecycleInvariants();
   }
 
@@ -1354,8 +1355,20 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  alarmSourceRegister(key: LifecycleKey & StorageIncarnation): string {
-    return this.wakePublications().register(key, key);
+  alarmSourceRegister(
+    key: LifecycleKey & StorageIncarnation & { executionDigest: string }
+  ): { incarnation: string; entity: EntityRecord } {
+    this.assertLifecycleKey(key);
+    const entity = this.entityResolveActive(canonicalEntityId({
+      kind: "do", source: key.source, className: key.className, key: key.objectKey,
+    }));
+    if (!entity || entity.status !== "active" || entity.activeExecutionDigest !== key.executionDigest)
+      throw new Error("Wake source does not match its active execution image");
+    return this.ctx.storage.transactionSync(() => {
+      const incarnation = this.wakePublications().register(key, key);
+      this.lifecycleLeaseUpsert({ ...key, detail: { owner: "pi" } });
+      return { incarnation, entity };
+    });
   }
 
   @schemaRpc()

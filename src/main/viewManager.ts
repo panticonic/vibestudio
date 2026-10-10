@@ -39,6 +39,7 @@ import {
 } from "./shellContentOverlayView.js";
 import { ContentOverlayManager } from "./contentOverlayManager.js";
 import { interceptChromeShortcuts, isChromeOwnedInput } from "./menu.js";
+import { TypingActivity } from "./typingActivity.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { CompositorRecovery } from "./compositorRecovery.js";
 import { FullscreenPresentation } from "./fullscreenPresentation.js";
@@ -315,6 +316,8 @@ export class ViewManager {
   private bootstrapShellAttached = true;
   private nativeShellOverlay: ShellOverlayView;
   private shellContentOverlay: ContentOverlayManager;
+  /** Recent typing anywhere in the window; overlays that open unbidden yield to it. */
+  private readonly typing = new TypingActivity();
   /** Deliver a surface intent to the chrome owner; also used by key interception. */
   private forwardContentOverlayIntent: (payload: unknown) => void;
   private currentThemeCss: string | null = null;
@@ -472,7 +475,8 @@ export class ViewManager {
         const wc = this.getShellChromeWebContents();
         return wc && !wc.isDestroyed() ? wc.getURL() : null;
       },
-      (payload) => this.forwardContentOverlayIntent(payload)
+      (payload) => this.forwardContentOverlayIntent(payload),
+      this.typing
     );
     this.shellContentOverlay.setWindow(this.window);
 
@@ -604,6 +608,7 @@ export class ViewManager {
    */
   private installContentOverlayKeys(contents: WebContents): void {
     interceptChromeShortcuts(contents);
+    this.typing.watch(contents);
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown" || input.key !== "Escape") return;
       if (this.shellContentOverlay.getVisibleViews().length > 0) {

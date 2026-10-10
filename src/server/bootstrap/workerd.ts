@@ -376,6 +376,9 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         return `http://127.0.0.1:${port}`;
       });
       dispatch.setGetDispatchSecret(() => manager.getDispatchSecret());
+      dispatch.setExecutableVersionResolver((ref) =>
+        manager.getDoVersion(ref.source, ref.className, ref.objectKey)
+      );
       // Typed runtime_restarting failures while a generation transition is in
       // flight, instead of the generic "workerd not running" throw above.
       dispatch.setRuntimeRestartingProbe(() => manager.isGenerationTransitionInFlight());
@@ -431,7 +434,9 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
             .find((entry) => entry.kind === "worker" && entry.relativePath === source);
           return node?.manifest.durable?.classes ?? [];
         },
-        singletonRegistry: deps.workspaceDeclarations.singletons,
+        get singletonRegistry() {
+          return deps.workspaceDeclarations.singletons;
+        },
       };
       manager.bindWorkspaceProvider(provider);
 

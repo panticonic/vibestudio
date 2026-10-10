@@ -1,5 +1,5 @@
 import { encodeRpcJson, decodeRpcJson } from "./wireJson.js";
-import { schemaRpcClient, wireClientFor, registerRpcWireClient } from "./schemaClient.js";
+import { schemaRpcClient, wireClientFor, registerRpcWireClient, ownRpcOperation, registerRpcOperationOwner } from "./schemaClient.js";
 import type { RpcWireClient } from "./internal-types.js";
 import { serializeRpcFailure, deserializeRpcFailure } from "./errors.js";
 import { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "./authority.js";
@@ -160,9 +160,9 @@ export function createRpcPeer(
         call: createCallProxy((name, args) => {
           const method = methods?.[name];
           if (!method) throw new Error(`RPC contract has no ${role} method ${name}`);
-          return method.invoke(args, (parsed) =>
+          return ownRpcOperation(client, () => method.invoke(args, (parsed) =>
             client.call(targetId, method.name, parsed, options)
-          );
+          ));
         }),
       } as never;
     },
@@ -542,7 +542,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         ),
       peer: (targetId, options) => createRpcPeer(scoped, targetId, options),
     };
-    return scoped;
+    return registerRpcWireClient(scoped, operation => observeOutbound(operation()));
   }
 
   function requestContext(
@@ -1335,13 +1335,13 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     options?: RpcTargetOptions
   ): RpcPeer {
     return createRpcPeer(
-      {
+      registerRpcOperationOwner({
         call: (target, method, args, value) =>
           observeOutbound(callWithProvenance(provenance, target, method, args, value)),
         emit: (target, event, payload, value) =>
           observeOutbound(emitWithProvenance(provenance, target, event, payload, value)),
         on: client.on.bind(client),
-      },
+      }, operation => observeOutbound(operation())),
       targetId,
       options
     );
@@ -1666,7 +1666,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
   config.lifetime?.addEventListener("abort", retire, { once: true });
   if (config.lifetime?.aborted) retire();
 
-  return registerRpcWireClient(client);
+  return registerRpcWireClient(client, operation => observeOutbound(operation()));
 }
 
 /** One client view path: peers must retain the same options as direct effects. */
@@ -1694,7 +1694,9 @@ function withCallOptions(
     ready: base.ready.bind(base),
     onStatusChange: base.onStatusChange.bind(base),
   };
-  return registerRpcWireClient(Object.freeze(view));
+  return registerRpcWireClient(Object.freeze(view), operation =>
+    enter(() => ownRpcOperation(base, operation))
+  );
 }
 
 function clientView<Client extends import("./types.js").RpcClient | RpcWireClient>(

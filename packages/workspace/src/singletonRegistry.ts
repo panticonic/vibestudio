@@ -26,14 +26,11 @@ function makeKey(source: string, className: string): SingletonKey {
 }
 
 export class SingletonRegistry {
-  private readonly singletons = new Map<SingletonKey, WorkspaceSingletonObjectDecl>();
+  readonly #singletons = new Map<SingletonKey, WorkspaceSingletonObjectDecl>();
+  readonly #rows: ReadonlyArray<WorkspaceSingletonObjectDecl>;
 
   constructor(decls: ReadonlyArray<WorkspaceSingletonObjectDecl>) {
-    this.replaceAll(decls);
-  }
-
-  replaceAll(decls: ReadonlyArray<WorkspaceSingletonObjectDecl>): void {
-    const next = new Map<SingletonKey, WorkspaceSingletonObjectDecl>();
+    const next = this.#singletons;
     for (const decl of decls) {
       const key = makeKey(decl.source, decl.className);
       if (next.has(key)) {
@@ -41,15 +38,15 @@ export class SingletonRegistry {
           `Duplicate singletonObjects declaration for (source=${decl.source}, className=${decl.className})`
         );
       }
-      next.set(key, decl);
+      next.set(key, Object.freeze({ ...decl }));
     }
-    this.singletons.clear();
-    for (const [key, decl] of next) this.singletons.set(key, decl);
+    this.#rows = Object.freeze(Array.from(next.values()));
+    Object.freeze(this);
   }
 
   /** Returns the singleton row for a (source, className), or null if absent. */
   find(source: string, className: string): WorkspaceSingletonObjectDecl | null {
-    return this.singletons.get(makeKey(source, className)) ?? null;
+    return this.#singletons.get(makeKey(source, className)) ?? null;
   }
 
   /**
@@ -71,7 +68,7 @@ export class SingletonRegistry {
 
   /** All singleton rows. */
   all(): ReadonlyArray<WorkspaceSingletonObjectDecl> {
-    return Array.from(this.singletons.values());
+    return this.#rows;
   }
 }
 

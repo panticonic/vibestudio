@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { rpcFailureSchema } from "./rpcFailure.js";
+import { JsonValueSchema } from "@vibestudio/shared/wireValues";
 import { defineReceiverServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { DURABLE_WORK_QUEUES } from "@vibestudio/shared/durableWork";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
@@ -46,6 +48,24 @@ const hostOwnerAuthority = {
   authority: { principals: ["host"] },
 } satisfies { capability: string; authority: ServiceAuthorityPolicy };
 const ownerWorkMethods = {
+  prepareDurableWorkRelease: {
+    ...hostOwnerAuthority,
+    website: { kind: "closed", reason: "Durable-work release is an internal host lifecycle operation." } as const,
+    tier: { tier: "open" as const, session: "family" as const, rationale: "Join canonical owned work before sealing its receiver." },
+    description: "Capture the stage's exact durable-work frontier; the owner stage seals admission after peer delivery closes.",
+    args: z.tuple([z.enum(["peer-obligations", "delivery", "owner"])]),
+    returns: z.object({ queues: z.array(queueSchema), barrier: JsonValueSchema }).strict(),
+    access: { sensitivity: "write" as const },
+  },
+  waitDurableWorkRelease: {
+    ...hostOwnerAuthority,
+    website: { kind: "closed", reason: "Durable-work release is an internal host lifecycle operation." } as const,
+    tier: { tier: "open" as const, session: "family" as const, rationale: "Join the exact captured owner frontier before sealing its receiver." },
+    description: "Join the owner's canonical captured release receipt.",
+    args: z.tuple([z.enum(["peer-obligations", "delivery", "owner"]), JsonValueSchema]),
+    returns: z.void(),
+    access: { sensitivity: "read" as const },
+  },
   adoptDurableWorkWorker: {
     ...hostOwnerAuthority,
     website: {
@@ -98,14 +118,14 @@ const ownerWorkMethods = {
     ...hostOwnerAuthority,
     website: {
       kind: "closed",
-      reason: "Durable-work retry scheduling is an internal host scheduler operation.",
+      reason: "Durable-work failure settlement is an internal host scheduler operation.",
     } as const,
     tier: {
       tier: "open" as const,
       session: "family" as const,
       rationale: "Host-owned durable-work queue scheduling.",
     },
-    description: "Record a failed durable-work attempt for retry or stale-claim handling.",
+    description: "Record a failed durable-work attempt as terminal, retryable, or stale.",
     args: z.tuple([
       queueSchema,
       z
@@ -113,11 +133,15 @@ const ownerWorkMethods = {
           workerId: z.string().min(1),
           itemId: z.string().min(1),
           generation: z.number().int().nonnegative(),
-          error: z.unknown().optional(),
+          error: rpcFailureSchema,
         })
         .strict(),
     ]),
-    returns: z.union([z.object({ retryAt: z.number() }).strict(), z.literal("stale")]),
+    returns: z.union([
+      z.object({ retryAt: z.number() }).strict(),
+      z.object({ failed: z.literal(true) }).strict(),
+      z.literal("stale"),
+    ]),
     access: { sensitivity: "write" as const },
   },
   durableWorkStatus: {

@@ -4,12 +4,12 @@ import {
   nativeInvocationIdentity,
   type NativeInvocationSource,
 } from "@vibestudio/service-schemas/nativeInvocation";
+import type { RpcCausalParent } from "@vibestudio/rpc";
 import {
   channelTrajectoryFor,
   commandIdForTrajectoryInvocation,
 } from "@vibestudio/trajectory-identity";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
 import { resolveExactCausalInvocation } from "./workspaceSourceProvider.js";
 
 function setup(operation?: NativeInvocationSource["operation"]) {
@@ -40,42 +40,11 @@ function setup(operation?: NativeInvocationSource["operation"]) {
       argumentsDigest: "b".repeat(64),
     },
   };
-  const coordinates = channelTrajectoryFor(binding.channelId);
-  const parent = {
-    kind: "trajectory-invocation" as const,
-    logId: coordinates.logId,
-    head: coordinates.head,
+  const parent: RpcCausalParent = {
+    kind: "trajectory-invocation",
+    ...channelTrajectoryFor(binding.channelId),
     invocationId: nativeInvocationId(source),
-  };
-  const row = {
-    log_id: parent.logId,
-    head: parent.head,
-    invocation_id: parent.invocationId,
-    turn_id: "native-turn:one",
-    initiating_user_id: "user-1",
-    status: "started",
-    terminal_outcome: null,
-    started_events: 1,
-    terminal_events: 0,
-    started_event_id: "started:one",
-    completed_event_id: null,
-    transport_call_id: null,
-    kind: "eval",
-    terminal_reason_code: null,
-    updated_at: "2026-10-02T10:00:00Z",
-  };
-  const event = {
-    logId: parent.logId,
-    head: parent.head,
-    envelopeId: "started:one",
-    seq: 1,
-    actor: { kind: "agent" as const, id: "agent:one" },
-    payloadKind: "invocation.started",
-    payload: { protocol: "agentic", name: "eval", nativeSource: source },
-    causality: { invocationId: parent.invocationId },
-    appendedAt: "2026-10-02T10:00:00Z",
-    prevHash: "previous",
-    hash: "hash",
+    nativeInvocation: nativeInvocationIdentity(source),
   };
   const entity: EntityRecord = {
     id: binding.entityId,
@@ -101,71 +70,77 @@ function setup(operation?: NativeInvocationSource["operation"]) {
       className: "PubSubChannel",
       objectKey: "channel:original",
     },
-    eventSequence: 7,
-    envelopeId: "ik:original-user-envelope",
+    eventSequence: 1,
+    envelopeId: "original-user-envelope",
     messageId: "inner:user-message",
     receiverParticipantId: binding.entityId,
   };
   const originalEvent = {
-    ...event,
-    logId: origin.channelRef.objectKey,
-    head: "main",
-    seq: origin.eventSequence,
-    envelopeId: origin.envelopeId,
-    actor: { kind: "user" as const, id: "user:user-1", participantId: "user:user-1" },
-    payloadKind: "message.completed",
-    causality: { messageId: origin.messageId },
+    id: 1,
+    messageId: origin.envelopeId,
+    senderId: "user:user-1",
+    type: "agentic.trajectory.v1/event",
     payload: {
-      protocol: "agentic.trajectory.v1",
-      role: "user",
-      blocks: [{ type: "text", content: "Original task" }],
-      outcome: "completed",
+      kind: "message.completed",
+      actor: { kind: "user", id: "user:user-1" },
+      causality: { messageId: origin.messageId },
+      payload: {
+        protocol: "agentic.trajectory.v1",
+        role: "user",
+        blocks: [{ type: "text", content: "Original task" }],
+        outcome: "completed",
+      },
     },
   };
-  Object.assign(event.payload, { originatingInput: origin });
-  const inspectInvocationState = vi.fn(async () => ({
-    summary: { projected: 1, startedEvents: 1, terminalEvents: 0, openProjectedInvocations: 1 },
-    rows: [row],
-  }));
-  const getLogEvent = vi.fn(async (input: { envelopeId: string }) =>
-    gadWireMethods.getLogEvent.returns.parse(
-      input.envelopeId === origin.envelopeId ? originalEvent : event
-    )
-  );
   const inspect = vi.fn(
     async (): Promise<unknown> => ({
       source,
+      executor: structuredClone(source.owner),
       status: "waiting",
       abortRequested: false,
       originatingInput: origin,
     })
   );
+  const getEnvelope = vi.fn(async (): Promise<unknown> => originalEvent);
   const entities = { resolveActive: vi.fn((): EntityRecord | null => entity) };
   const resolve = () =>
-    resolveExactCausalInvocation({ inspectInvocationState, getLogEvent }, parent, {
-      binding,
-      entities,
-      inspect,
-    });
+    resolveExactCausalInvocation(parent, { binding, entities, inspect, getEnvelope });
   return {
     binding,
-    origin,
-    originalEvent,
     source,
     parent,
-    row,
-    event,
     entity,
-    inspectInvocationState,
-    getLogEvent,
+    origin,
+    originalEvent,
     inspect,
+    getEnvelope,
     entities,
     resolve,
   };
 }
 
 describe("native exact causal invocation", () => {
-  it("authenticates genuine direct tool coordinates without treating their source as a model-generated call", async () => {
+  it("authenticates the actual task and accepted original sender before any channel journal retention", async () => {
+    const state = setup();
+    await expect(state.resolve()).resolves.toEqual({
+      active: true,
+      owningUserId: "runtime-owner",
+      initiatingUserId: "user-1",
+      nativeInvocation: nativeInvocationIdentity(state.source),
+    });
+    expect(state.inspect).toHaveBeenCalledWith(
+      state.parent.nativeInvocation,
+      state.parent.invocationId
+    );
+    expect(state.getEnvelope).toHaveBeenCalledWith(
+      state.origin.channelRef,
+      state.origin.envelopeId
+    );
+    expect(commandIdForTrajectoryInvocation(state.parent)).toBe(
+      commandIdForTrajectoryInvocation({ ...state.parent })
+    );
+  });
+  it("authenticates direct tool task coordinates without treating them as model-generated calls", async () => {
     const state = setup({
       kind: "direct-tool",
       directEntryId: 9,
@@ -173,25 +148,8 @@ describe("native exact causal invocation", () => {
       name: "eval",
       argumentsDigest: "b".repeat(64),
     });
-    await expect(state.resolve()).resolves.toEqual({
-      active: true,
-      owningUserId: "runtime-owner",
-      initiatingUserId: "user-1",
-      nativeInvocation: nativeInvocationIdentity(state.source),
-    });
-    expect(
-      nativeInvocationId({
-        ...state.source,
-        operation: { kind: "tool", assistantEntryId: 9, callId: "actual-direct" },
-      })
-    ).not.toBe(state.parent.invocationId);
-    expect(
-      nativeInvocationId({
-        ...state.source,
-        operation: { kind: "direct-tool", directEntryId: 10, callId: "actual-direct" },
-      })
-    ).not.toBe(state.parent.invocationId);
-    state.inspect.mockImplementation(async () => ({
+    await expect(state.resolve()).resolves.toMatchObject({ active: true });
+    state.inspect.mockResolvedValue({
       source: {
         ...state.source,
         operation: {
@@ -202,245 +160,242 @@ describe("native exact causal invocation", () => {
           argumentsDigest: "b".repeat(64),
         },
       },
+      executor: structuredClone(state.source.owner),
       status: "waiting",
       abortRequested: false,
       originatingInput: state.origin,
-    }));
+    });
     await expect(state.resolve()).rejects.toThrow("conflicts with its owning task");
   });
-  it("joins the exact published start to its genuine waiting native task and keeps deterministic command identity", async () => {
-    const state = setup();
-    await expect(state.resolve()).resolves.toEqual({
-      active: true,
-      owningUserId: "runtime-owner",
-      initiatingUserId: "user-1",
-      nativeInvocation: nativeInvocationIdentity(state.source),
-    });
-    expect(state.getLogEvent).toHaveBeenCalledWith({
-      logId: state.parent.logId,
-      head: state.parent.head,
-      envelopeId: "started:one",
-    });
-    expect(state.inspect).toHaveBeenCalledWith(state.source, state.parent.invocationId);
-    expect(commandIdForTrajectoryInvocation(state.parent)).toBe(
-      commandIdForTrajectoryInvocation({ ...state.parent })
-    );
-    expect(
-      nativeInvocationId({
-        ...state.source,
-        owner: { ...state.source.owner, authoritySessionId: "new-lifetime" },
-      })
-    ).not.toBe(state.parent.invocationId);
-  });
-
-  it("keeps explicit cancellation cleanup owned until the actual operation settles", async () => {
+  it("keeps explicit cancellation cleanup owned until the native task is terminal", async () => {
     const state = setup();
     state.inspect.mockResolvedValue({
       source: state.source,
+      executor: structuredClone(state.source.owner),
       status: "running",
       abortRequested: true,
       originatingInput: state.origin,
     });
     await expect(state.resolve()).resolves.toMatchObject({ active: true });
   });
-
-  it("verifies a nested host-retained extension cause through the actual source owner's binding", async () => {
+  it("verifies nested host-retained extension causes through their actual source owner", async () => {
     const state = setup();
     await expect(
-      resolveExactCausalInvocation(
-        { inspectInvocationState: state.inspectInvocationState, getLogEvent: state.getLogEvent },
-        state.parent,
-        { binding: null, entities: state.entities, inspect: state.inspect }
-      )
-    ).resolves.toEqual({
-      active: true,
-      owningUserId: "runtime-owner",
-      initiatingUserId: "user-1",
-      nativeInvocation: nativeInvocationIdentity(state.source),
-    });
-    expect(state.inspect).toHaveBeenCalledWith(state.source, state.parent.invocationId);
+      resolveExactCausalInvocation(state.parent, {
+        binding: null,
+        entities: state.entities,
+        inspect: state.inspect,
+        getEnvelope: state.getEnvelope,
+      })
+    ).resolves.toMatchObject({ active: true, initiatingUserId: "user-1" });
   });
-
-  it.each(["progress", "output"])(
-    "keeps a published %s update causally live without a terminal",
-    async (status) => {
-      const state = setup();
-      state.row.status = status;
-      await expect(state.resolve()).resolves.toMatchObject({ active: true });
-    }
-  );
-
-  it("does not grant a terminal published invocation a live task", async () => {
+  it.each(["terminal", "completing"])("refuses live authority from a %s task", async (status) => {
     const state = setup();
-    state.row.status = "completed";
-    state.row.terminal_events = 1;
-    await expect(state.resolve()).resolves.toEqual({
-      active: false,
-      owningUserId: "runtime-owner",
-      initiatingUserId: "user-1",
-      nativeInvocation: nativeInvocationIdentity(state.source),
-    });
-  });
-
-  it("refuses absent task facts and terminal native ownership despite an unclosed publication", async () => {
-    const state = setup();
-    state.inspect.mockResolvedValueOnce(null);
-    await expect(state.resolve()).resolves.toBeNull();
-    state.inspect.mockResolvedValueOnce({
+    state.inspect.mockResolvedValue({
       source: state.source,
-      status: "terminal",
+      executor: structuredClone(state.source.owner),
+      status,
       abortRequested: false,
       originatingInput: state.origin,
     });
     await expect(state.resolve()).resolves.toMatchObject({ active: false });
   });
-
-  it("refuses mismatching source facts and exact entry coordinates", async () => {
+  it("refuses absent actual task facts", async () => {
     const state = setup();
-    state.inspect.mockResolvedValueOnce({
-      source: {
-        ...state.source,
-        operation: { ...state.source.operation, argumentsDigest: "c".repeat(64) },
-      },
-      status: "running",
-      abortRequested: false,
-      originatingInput: state.origin,
-    });
-    await expect(state.resolve()).rejects.toThrow("conflicts with its owning task");
-    state.event.causality.invocationId = "other";
+    state.inspect.mockResolvedValue(null);
     await expect(state.resolve()).resolves.toBeNull();
+    expect(state.getEnvelope).not.toHaveBeenCalled();
   });
-
-  it.each(["authoritySessionId", "contextId", "executionDigest", "effectiveVersion"] as const)(
-    "rejects a changed %s without dispatching owner inspection",
+  it("requires a native task locator without falling back to journal state", async () => {
+    const state = setup();
+    delete state.parent.nativeInvocation;
+    await expect(state.resolve()).rejects.toThrow("requires its exact native task locator");
+    expect(state.inspect).not.toHaveBeenCalled();
+  });
+  it.each(["task", "operation", "lifetime"] as const)(
+    "rejects a spoofed %s locator before owner inspection",
     async (field) => {
       const state = setup();
-      if (field === "executionDigest") state.entity.activeExecutionDigest = "c".repeat(64);
-      else if (field === "effectiveVersion") state.entity.source.effectiveVersion = "state:other";
-      else state.entity[field] = "other";
-      await expect(state.resolve()).rejects.toThrow("retired or different runtime image");
+      const locator = structuredClone(state.parent.nativeInvocation!);
+      if (field === "task")
+        state.parent.nativeInvocation = {
+          ...locator,
+          task: { ...locator.task, taskId: locator.task.taskId + 1 },
+        };
+      if (field === "operation" && locator.operation.kind === "tool")
+        state.parent.nativeInvocation = {
+          ...locator,
+          operation: { ...locator.operation, callId: "forged" },
+        };
+      if (field === "lifetime")
+        state.parent.nativeInvocation = {
+          ...locator,
+          owner: { ...locator.owner, authoritySessionId: "forged" },
+        };
+      await expect(state.resolve()).rejects.toThrow("different invocation identity");
       expect(state.inspect).not.toHaveBeenCalled();
     }
   );
-
-  it("rejects retirement racing owner inspection", async () => {
+  it("rejects copied task identity from another presenting agent or trajectory", async () => {
+    const state = setup();
+    await expect(
+      resolveExactCausalInvocation(state.parent, {
+        binding: { ...state.binding, entityId: "another-agent" },
+        entities: state.entities,
+        inspect: state.inspect,
+        getEnvelope: state.getEnvelope,
+      })
+    ).rejects.toThrow("presenting agent");
+    state.parent.logId = "different-trajectory";
+    await expect(state.resolve()).rejects.toThrow("bound trajectory");
+  });
+  it.each(["authoritySessionId", "contextId", "executionDigest", "effectiveVersion"] as const)(
+    "rejects a different runtime %s",
+    async (field) => {
+      const state = setup();
+      if (field === "executionDigest") state.entity.activeExecutionDigest = "c".repeat(64);
+      else if (field === "effectiveVersion") state.entity.source.effectiveVersion = "other";
+      else state.entity[field] = "other";
+      await expect(state.resolve()).rejects.toThrow(/retired or different runtime/);
+    }
+  );
+  it("rechecks retirement and image replacement during actual task inspection", async () => {
     const state = setup();
     state.inspect.mockImplementation(async () => {
       state.entities.resolveActive.mockReturnValue(null);
-      return { source: state.source, status: "running", abortRequested: false };
+      return null;
     });
     await expect(state.resolve()).rejects.toThrow("retired or different runtime image");
   });
-
-  it("propagates original owner inspection failure and never manufactures attribution", async () => {
+  it("propagates original actual-task inspection failure", async () => {
     const state = setup();
-    const original = new Error("native storage failed");
-    state.inspect.mockRejectedValue(original);
-    await expect(state.resolve()).rejects.toBe(original);
+    const failure = new Error("native storage failed");
+    state.inspect.mockRejectedValue(failure);
+    await expect(state.resolve()).rejects.toBe(failure);
   });
-
-  it("rejects copied source identity on another bound owner", async () => {
+  it("preserves actual current-protocol task authority across an executable image upgrade", async () => {
     const state = setup();
-    state.binding.entityId = "do:workers/other:Other:one";
-    await expect(state.resolve()).rejects.toThrow("does not belong to the bound agent");
-    expect(state.inspect).not.toHaveBeenCalled();
+    const original = structuredClone(state.source);
+    state.entity.activeExecutionDigest = "c".repeat(64);
+    state.entity.source.effectiveVersion = "state:replacement";
+    state.inspect.mockResolvedValue({
+      source: original,
+      executor: {
+        ...original.owner,
+        executionDigest: state.entity.activeExecutionDigest,
+        effectiveVersion: state.entity.source.effectiveVersion,
+      },
+      status: "waiting",
+      abortRequested: false,
+      originatingInput: state.origin,
+    });
+    await expect(state.resolve()).resolves.toMatchObject({
+      active: true,
+      nativeInvocation: nativeInvocationIdentity(original),
+      initiatingUserId: "user-1",
+    });
+    expect(state.source).toEqual(original);
+  });
+  it("keeps actual task channel authority when the primary presentation binding changes", async () => {
+    const state = setup();
+    state.binding.channelId = "channel:new-primary";
+    state.entity.agentBinding = {
+      ...state.entity.agentBinding!,
+      channelId: state.binding.channelId,
+    };
+    await expect(state.resolve()).resolves.toMatchObject({
+      active: true,
+      nativeInvocation: nativeInvocationIdentity(state.source),
+      initiatingUserId: "user-1",
+    });
+  });
+  it("keeps the same task authority after real cursor association and a restored owner image", async () => {
+    const state = setup();
+    await expect(state.resolve()).resolves.toMatchObject({
+      active: true,
+      initiatingUserId: "user-1",
+    });
+    state.origin.eventSequence = 7;
+    state.originalEvent.id = 7;
+    state.entities.resolveActive.mockReturnValue(structuredClone(state.entity));
+    await expect(state.resolve()).resolves.toMatchObject({
+      active: true,
+      initiatingUserId: "user-1",
+    });
   });
 });
 
 describe("native original human authority", () => {
-  it("joins the original placed input's outer channel event, independently of current channel and legacy turns", async () => {
+  it("grants no human authority without an actual placed originating input", async () => {
     const state = setup();
-    state.row.initiating_user_id = "unrelated-old-turn-author";
-    await expect(state.resolve()).resolves.toMatchObject({ initiatingUserId: "user-1" });
-    expect(state.getLogEvent).toHaveBeenCalledWith({
-      logId: "channel:original",
-      head: "main",
-      envelopeId: "ik:original-user-envelope",
-    });
-  });
-  it("cannot mint human authority from a legacy turn or later transcript without an actual originating input", async () => {
-    const state = setup();
-    Object.assign(state.event.payload, { originatingInput: null });
     state.inspect.mockResolvedValue({
       source: state.source,
+      executor: structuredClone(state.source.owner),
       status: "running",
       abortRequested: false,
       originatingInput: null,
     });
     await expect(state.resolve()).resolves.toMatchObject({ initiatingUserId: null });
-    expect(state.getLogEvent).toHaveBeenCalledTimes(1);
+    expect(state.getEnvelope).not.toHaveBeenCalled();
   });
-  it("refuses a published input coordinate that differs from the actual admitted input", async () => {
+  it("does not mint human authority from a code sender's nested human actor or owner metadata", async () => {
     const state = setup();
-    Object.assign(state.event.payload, {
-      originatingInput: { ...state.origin, messageId: "different-message" },
+    state.originalEvent.senderId = "code:headless";
+    Object.assign(state.originalEvent, { senderMetadata: { ownerUserId: "forged-user" } });
+    await expect(state.resolve()).resolves.toMatchObject({
+      initiatingUserId: null,
+      owningUserId: "runtime-owner",
     });
-    await expect(state.resolve()).rejects.toThrow("Published native input conflicts");
   });
-  it("does not invent a runtime owner from input metadata on a bootstrap entity", async () => {
+  it("does not invent a runtime account from an external sender", async () => {
     const state = setup();
     delete state.entity.ownerUserId;
-    Object.assign(state.originalEvent.actor, {
-      kind: "external",
-      id: "code:headless",
-      participantId: "code:headless",
-      metadata: { type: "headless", ownerUserId: "forged-owner" },
-    });
+    state.originalEvent.senderId = "external:integration";
     await expect(state.resolve()).resolves.toMatchObject({
-      active: true,
+      initiatingUserId: null,
       owningUserId: null,
-      initiatingUserId: null,
     });
   });
-  it("keeps an ordinary agent-authored original input as code despite user-looking text", async () => {
+  it.each(["messageId", "type"])("refuses a substituted original envelope %s", async (field) => {
     const state = setup();
-    Object.assign(state.originalEvent.actor, {
-      kind: "agent",
-      id: "do:parent:Agent:one",
-      participantId: "do:parent:Agent:one",
-    });
-    await expect(state.resolve()).resolves.toMatchObject({ initiatingUserId: null });
-  });
-  it("admits a headless client input without minting canonical human authority", async () => {
-    const state = setup();
-    Object.assign(state.originalEvent.actor, {
-      kind: "external",
-      id: "do:vibestudio/internal:EvalDO:headless-client",
-      participantId: "do:vibestudio/internal:EvalDO:headless-client",
-      metadata: { type: "headless" },
-    });
-    await expect(state.resolve()).resolves.toMatchObject({
-      active: true,
-      owningUserId: "runtime-owner",
-      initiatingUserId: null,
-      nativeInvocation: nativeInvocationIdentity(state.source),
-    });
-  });
-  it.each(["seq", "envelopeId", "payloadKind", "logId", "head"])(
-    "refuses a mismatching original %s before admitting human authority",
-    async (field) => {
-      const state = setup();
-      Object.assign(state.originalEvent, { [field]: field === "seq" ? 8 : "different" });
-      await expect(state.resolve()).rejects.toThrow("no exact canonical channel event");
-    }
-  );
-  it("refuses a changed original message identity and a forged human sender", async () => {
-    const state = setup();
-    state.originalEvent.causality.messageId = "different-inner-message";
+    Object.assign(state.originalEvent, { [field]: "different" });
     await expect(state.resolve()).rejects.toThrow("no exact canonical channel event");
-    state.originalEvent.causality.messageId = state.origin.messageId;
-    state.originalEvent.actor.id = "unbound-code";
+  });
+  it("refuses a substituted original message identity or empty user sender", async () => {
+    const state = setup();
+    state.originalEvent.payload.causality.messageId = "different";
+    await expect(state.resolve()).rejects.toThrow("no exact canonical channel event");
+    state.originalEvent.payload.causality.messageId = state.origin.messageId;
+    state.originalEvent.senderId = "user:";
     await expect(state.resolve()).rejects.toThrow("no canonical human sender");
   });
-  it("rechecks the actual native owner after the original channel read", async () => {
+  it("rechecks the task owner after the canonical original envelope read", async () => {
     const state = setup();
-    state.getLogEvent.mockImplementation(async (input) => {
-      if (input.envelopeId === state.origin.envelopeId) {
-        state.entity.authoritySessionId = "replaced-lifetime";
-        return gadWireMethods.getLogEvent.returns.parse(state.originalEvent);
-      }
-      return gadWireMethods.getLogEvent.returns.parse(state.event);
+    state.getEnvelope.mockImplementation(async () => {
+      state.entity.authoritySessionId = "replaced-lifetime";
+      return state.originalEvent;
     });
     await expect(state.resolve()).rejects.toThrow("retired or different runtime image");
+  });
+  it("refuses originating input placed after the model's actual cutoff", async () => {
+    const state = setup({
+      kind: "model",
+      purpose: "generation",
+      attempt: 0,
+      cutoff: 4,
+      requestDigest: "b".repeat(64),
+    });
+    await expect(state.resolve()).rejects.toThrow("does not belong to the invoking task");
+  });
+  it("refuses an input assigned to a different actual receiver", async () => {
+    const state = setup();
+    state.origin.receiverParticipantId = "different-agent";
+    await expect(state.resolve()).rejects.toThrow("does not belong to the invoking task");
+  });
+  it("propagates original channel-owner read failures", async () => {
+    const state = setup();
+    const failure = new Error("channel owner unavailable");
+    state.getEnvelope.mockRejectedValue(failure);
+    await expect(state.resolve()).rejects.toBe(failure);
   });
 });

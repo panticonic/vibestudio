@@ -1,11 +1,30 @@
 import type { DORef } from "./doDispatcher.js";
+import type { JsonValue } from "./wireValues.js";
 
 export const DURABLE_WORK_QUEUES = [
   "channel-delivery",
+  "channel-observation",
   "workspace-publication",
 ] as const;
 
 export type DurableWorkQueue = (typeof DURABLE_WORK_QUEUES)[number];
+
+/** The canonical observer claim carries its immutable causal variant. Root
+ * initialization and append batches have no external prerequisite; forks do. */
+export interface ChannelObservationClaimPayload {
+  laneKey: string;
+  observation: { kind: "root" } | { kind: "append" } | { kind: "fork" };
+}
+
+/** A finite owner-local lifecycle frontier. The host schedules its queues
+ * before joining the same owner's exact immutable barrier. */
+export type DurableWorkReleaseStage = "peer-obligations" | "delivery" | "owner";
+
+export interface DurableWorkReleaseReceipt {
+  queues: DurableWorkQueue[];
+  barrier: JsonValue;
+}
+
 
 export interface DurableWorkRef {
   owner: DORef;

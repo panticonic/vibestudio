@@ -272,7 +272,7 @@ describe("EvalDO canonical result receipts", () => {
       deadlineMs: 0,
     });
     await expect(instance.startRun({ runId: "racing-start", code: "return 99" })).rejects.toThrow(
-      "execution namespace is retired"
+      /execution namespace is (?:quiescing|retired)/
     );
     expect(sql.exec("SELECT run_id FROM runs WHERE run_id = 'racing-start'").toArray()).toEqual([]);
     finish();

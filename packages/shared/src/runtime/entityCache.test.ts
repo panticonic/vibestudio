@@ -230,4 +230,12 @@ describe("callerRuntimeContextId", () => {
   it("returns null when neither is known, rather than inventing one", () => {
     expect(callerRuntimeContextId(new EntityCache(), "extension:absent")).toBeNull();
   });
+  it("fences durable absence even when the mirror was already absent", () => {
+    const cache = new EntityCache();
+    const record = makeRecord({ id: "panel:deleted" });
+    const hydration = cache.beginHydration();
+    cache._onDelete(record.id);
+    cache.hydrate([record], hydration);
+    expect(cache.resolveActive(record.id)).toBeNull();
+  });
 });

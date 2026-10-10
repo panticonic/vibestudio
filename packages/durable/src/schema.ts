@@ -1,3 +1,5 @@
+import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
+
 export interface SchemaSqlResult {
   toArray(): Record<string, unknown>[];
   one(): Record<string, unknown>;
@@ -16,6 +18,11 @@ export interface DurableObjectSchemaDescriptor {
   readonly className: string;
   readonly version: number;
   readonly freshSchemaFingerprint: string;
+}
+
+/** Storage schema and immutable class capabilities admitted from one executable. */
+export interface DurableObjectExecutableDescriptor extends DurableObjectSchemaDescriptor {
+  readonly durableWorkQueues: readonly DurableWorkQueue[];
 }
 
 export type DurableObjectSchemaIncompatibleReason =
@@ -188,6 +195,28 @@ export function durableObjectSchemaDescriptor(
   };
 }
 
+export function durableObjectExecutableDescriptor(
+  definition: DurableObjectSchemaDefinition,
+  queues: readonly DurableWorkQueue[]
+): DurableObjectExecutableDescriptor {
+  return {
+    ...durableObjectSchemaDescriptor(definition),
+    durableWorkQueues: parseDurableWorkReady(queues),
+  };
+}
+
+export function validateDurableObjectExecutableCapabilities(
+  descriptor: DurableObjectExecutableDescriptor,
+  queues: readonly DurableWorkQueue[]
+): void {
+  if (
+    JSON.stringify(parseDurableWorkReady(descriptor.durableWorkQueues)) !==
+    JSON.stringify(parseDurableWorkReady(queues))
+  ) {
+    throw new Error("Durable work descriptor does not match the admitted runtime image");
+  }
+}
+
 function schemaObjects(sql: SchemaSqlStorage): string[] {
   return sql
     .exec(
@@ -235,7 +264,7 @@ function incompatible(
   });
 }
 
-function createMetadata(definition: DurableObjectSchemaDefinition): void {
+function createMetadata(definition: DurableObjectSchemaDefinition, shape: string): void {
   const { sql } = definition.storage;
   sql.exec(`
     CREATE TABLE ${SCHEMA_TABLE} (
@@ -247,7 +276,7 @@ function createMetadata(definition: DurableObjectSchemaDefinition): void {
   sql.exec(
     `INSERT INTO ${SCHEMA_TABLE} (singleton, version, shape_json) VALUES (1, ?, ?)`,
     definition.version,
-    normalizedShape(sql, definition.schemaTables)
+    shape
   );
 }
 
@@ -297,8 +326,9 @@ export async function installDurableObjectSchema(
       definition.storage.sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
       await definition.createSchema();
       await definition.validateSchema();
-      validateTargetFingerprint(definition);
-      createMetadata(definition);
+      const shape = normalizedShape(definition.storage.sql, definition.schemaTables);
+      validateTargetFingerprint(definition, shape);
+      createMetadata(definition, shape);
       return;
     }
 
@@ -374,10 +404,10 @@ export async function installDurableObjectSchema(
   });
 }
 
-function validateTargetFingerprint(definition: DurableObjectSchemaDefinition): void {
+function validateTargetFingerprint(definition: DurableObjectSchemaDefinition, shape?: string): void {
   if (
     definition.expectedFingerprint !== undefined &&
-    normalizedShape(definition.storage.sql, definition.schemaTables) !==
+    (shape ?? normalizedShape(definition.storage.sql, definition.schemaTables)) !==
       definition.expectedFingerprint
   ) {
     throw incompatible(

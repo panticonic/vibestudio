@@ -10,6 +10,7 @@
  */
 
 import { spawn, type ChildProcess } from "child_process";
+import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import { createRequire } from "module";
@@ -43,6 +44,7 @@ import {
   type InternalDOBundle,
 } from "./internalDOs/internalDoLoader.js";
 import { encodeUniversalKey } from "./doDispatch.js";
+import { DO_EXECUTABLE_VERSION_HEADER } from "./workerdPrograms/executableVersion.js";
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
@@ -123,11 +125,12 @@ export interface DurableObjectPublishedSchemaDescriptor {
   className: string;
   version: number;
   freshSchemaFingerprint: string;
+  durableWorkQueues: readonly DurableWorkQueue[];
 }
 
 type DurableObjectRuntimeSchemaDescriptor = DurableObjectPublishedSchemaDescriptor;
 
-const SCHEMA_PROBE_CACHE_VERSION = 1;
+const SCHEMA_PROBE_CACHE_VERSION = 2;
 
 interface SchemaProbeBuild {
   source: string;
@@ -270,6 +273,8 @@ interface DOService {
 }
 
 interface DOObjectBuild {
+  /** Selected once with the admitted immutable image and state-argument snapshot. */
+  version: string;
   buildKey: string;
   imageId: string;
   scopeRef?: string;
@@ -278,22 +283,8 @@ interface DOObjectBuild {
 
 function recordStateArgs(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
+    ? structuredClone(value as Record<string, unknown>)
     : undefined;
-}
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-    .join(",")}}`;
-}
-
-function stableHash(value: unknown): string {
-  return crypto.createHash("sha256").update(stableJson(value)).digest("hex").slice(0, 16);
 }
 
 function runtimeIncarnationVersion(
@@ -616,6 +607,14 @@ export class WorkerdManager {
   private workerdRssSamples: Array<{ at: number; rssBytes: number }> = [];
   private retiredDynamicIsolateGeneration: number | null = null;
   private readonly retiredDynamicIsolateIds = new Set<string>();
+  private readonly loadedDoCodeUnits = new Map<
+    string,
+    { source: string; className: string; version: string }
+  >();
+  private readonly doCodeEgressCallers = new Map<
+    string,
+    { source: string; className: string; version: string }
+  >();
   private dynamicIsolateCompactionFlight: Promise<void> | null = null;
 
   // DO support: shared services (one per source)
@@ -1258,10 +1257,12 @@ export class WorkerdManager {
     this.doObjectBuilds.set(doObjectBuildKey(source, className, record.key), {
       imageId: image.id,
       buildKey: image.artifact.buildKey,
+      version: runtimeIncarnationVersion(image, stateArgs),
       ...(image.scopeRef ? { scopeRef: image.scopeRef } : {}),
       ...(stateArgs ? { stateArgs } : {}),
     });
-    this.registerDoEgressCaller(source, className, image, record.key);
+    this.registerDoEgressCaller(source, className, image);
+    this.reconcileDoCodeUnitOwnership();
   }
 
   /**
@@ -1583,7 +1584,6 @@ export class WorkerdManager {
       className: ref.className,
       key: ref.objectKey,
     });
-    this.retireEgressCaller(targetId);
     const failures: unknown[] = [];
     const attempt = async (operation: () => Promise<unknown>): Promise<void> => {
       try {
@@ -1625,8 +1625,7 @@ export class WorkerdManager {
       });
     }
     if (!isInternalDOSource(ref.source)) {
-      this.retiredDynamicIsolateGeneration ??= this.bootGeneration;
-      this.retiredDynamicIsolateIds.add(targetId);
+      this.reconcileDoCodeUnitOwnership();
       const rssBytes = this.process?.pid ? this.readProcessRssBytes(this.process.pid) : null;
       this.maybeCompactRetiredDynamicIsolates(rssBytes);
     }
@@ -1966,11 +1965,9 @@ export class WorkerdManager {
   }
 
   /**
-   * Current loader-cache version for a userland DO class (its build's effective
-   * version), or null if the class isn't registered. Served by
-   * `GET /_doversion/{source}/{className}?objectKey=...`; the UniversalDO host
-   * keys its loader id on `source:className/objectKey@version` so a rebuild
-   * forces a fresh isolate for that object/ref binding.
+   * Exact runtime incarnation selected by host dispatch, or null if no image
+   * is bound. Carried with the admitted request so the facet host needs no
+   * per-call version lookup. A changed incarnation loads a fresh isolate.
    */
   getDoVersion(source: string, className: string, objectKey?: string): string | null {
     const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
@@ -1979,14 +1976,7 @@ export class WorkerdManager {
     }
     if (objectKey) {
       const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
-      if (objectBuild) {
-        const image = this.sealedDoImages.get(objectBuild.imageId);
-        return image
-          ? runtimeIncarnationVersion(image, objectBuild.stateArgs)
-          : objectBuild.stateArgs
-            ? `${objectBuild.buildKey}:state:${stableHash(objectBuild.stateArgs)}`
-            : objectBuild.buildKey;
-      }
+      if (objectBuild) return objectBuild.version;
     }
     const svc = this.doServices.get(doServiceKey(source, className));
     if (!svc || isInternalDOSource(source)) return null;
@@ -2068,6 +2058,9 @@ export class WorkerdManager {
     className: string,
     objectKey?: string
   ): Promise<{
+    version: string;
+    /** Raw network attribution belongs to the sealed code unit, not an object. */
+    egressIdentity: string | null;
     compatibilityDate: string;
     compatibilityFlags: string[];
     mainModule: string;
@@ -2080,6 +2073,8 @@ export class WorkerdManager {
     const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
     if (probe && probe.source === source && probe.className === className) {
       return {
+        version: `${probe.version}:schema-probe`,
+        egressIdentity: null,
         ...USER_CODE_COMPATIBILITY,
         compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
         modules: probe.modules,
@@ -2124,8 +2119,7 @@ export class WorkerdManager {
     // `do-service:*` is a bearer identity, not an entity id.
     const serviceCallerId = `do-service:${serviceKey}`;
     const serviceToken = this.ensureWorkerBearer(serviceCallerId);
-    // Keep the egress attribution registered for this class identity.
-    this.registerDoEgressCaller(source, className, image, objectKey);
+    const egressIdentity = this.registerDoEgressCaller(source, className, image);
 
     const env: Record<string, unknown> = {
       RPC_AUTH_TOKEN: serviceToken,
@@ -2156,34 +2150,47 @@ export class WorkerdManager {
       env["STATE_ARGS"] = objectBuild.stateArgs;
     }
 
+    const version = objectBuild?.version ?? runtimeIncarnationVersion(image);
+    this.loadedDoCodeUnits.set(JSON.stringify([source, className, version]), {
+      source,
+      className,
+      version,
+    });
+    this.reconcileDoCodeUnitOwnership();
     return {
       ...USER_CODE_COMPATIBILITY,
       compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
       modules,
       ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
       env,
+      version,
+      egressIdentity,
     };
   }
 
-  /** Register a userland DO class's identity (`source:className`) for attributed
-   *  egress through the shared listener. The UniversalDO host stamps this id. */
+  /** Raw network effects are attributable to one sealed executable unit.
+   * Object/task authority remains on the separately authenticated RPC transport. */
   private registerDoEgressCaller(
     source: string,
     className: string,
-    image: RuntimeImageRecord,
-    objectKey?: string
-  ): void {
-    const classIdentity = `${source}:${className}`;
-    const identity = objectKey ? `do:${source}:${className}:${objectKey}` : classIdentity;
-    const caller = createVerifiedCaller(identity, objectKey ? "do" : "worker", {
+    image: RuntimeImageRecord
+  ): string {
+    const identity = `do-code:${source}:${className}:${runtimeIncarnationVersion(image)}`;
+    const caller = createVerifiedCaller(identity, "worker", {
       callerId: identity,
-      callerKind: objectKey ? "do" : "worker",
+      callerKind: "worker",
       repoPath: source,
       effectiveVersion: image.artifact.sourceState.effectiveVersion,
       executionDigest: image.artifact.executionDigest,
       requested: image.authority.requests,
     });
     this.deps.registerEgressCaller(identity, caller);
+    this.doCodeEgressCallers.set(identity, {
+      source,
+      className,
+      version: runtimeIncarnationVersion(image),
+    });
+    return identity;
   }
 
   // =========================================================================
@@ -3103,6 +3110,43 @@ export class WorkerdManager {
     this.workerdMemorySampleTimer.unref?.();
   }
 
+  /** Executable-unit ownership follows actual admitted bindings, not object counts. */
+  private reconcileDoCodeUnitOwnership(): void {
+    const owns = (
+      source: string,
+      className: string,
+      version: string,
+      codeOnly: boolean
+    ): boolean => {
+      const serviceKey = doServiceKey(source, className);
+      const service = this.doServices.get(serviceKey);
+      const image = service?.imageId ? this.runtimeImages.get(service.imageId) : null;
+      if (image && runtimeIncarnationVersion(image) === version) return true;
+      for (const [key, binding] of this.doObjectBuilds) {
+        if (!key.startsWith(`${serviceKey}/`)) continue;
+        if (!codeOnly && binding.version === version) return true;
+        if (codeOnly) {
+          const objectImage =
+            this.sealedDoImages.get(binding.imageId) ?? this.runtimeImages.get(binding.imageId);
+          if (objectImage && runtimeIncarnationVersion(objectImage) === version) return true;
+        }
+      }
+      return false;
+    };
+    this.retiredDynamicIsolateIds.clear();
+    for (const [key, unit] of this.loadedDoCodeUnits) {
+      if (!owns(unit.source, unit.className, unit.version, false))
+        this.retiredDynamicIsolateIds.add(key);
+    }
+    this.retiredDynamicIsolateGeneration =
+      this.retiredDynamicIsolateIds.size > 0 ? this.bootGeneration : null;
+    for (const [identity, unit] of this.doCodeEgressCallers) {
+      if (owns(unit.source, unit.className, unit.version, true)) continue;
+      this.deps.unregisterEgressCaller(identity);
+      this.doCodeEgressCallers.delete(identity);
+    }
+  }
+
   private maybeCompactRetiredDynamicIsolates(rssBytes: number | null): void {
     const retiredGeneration = this.retiredDynamicIsolateGeneration;
     if (
@@ -3139,6 +3183,7 @@ export class WorkerdManager {
   private clearRetiredDynamicIsolatePressure(): void {
     this.retiredDynamicIsolateGeneration = null;
     this.retiredDynamicIsolateIds.clear();
+    this.loadedDoCodeUnits.clear();
   }
 
   private hasLiveUserlandExecutions(): boolean {
@@ -3523,71 +3568,76 @@ export class WorkerdManager {
       stateArgs?: unknown;
     } = {}
   ): Promise<string | undefined> {
+    const serviceKey = doServiceKey(source, className);
+    let service = this.doServices.get(serviceKey);
+    const isNew = !service;
+    let image: RuntimeImageRecord | null = null;
     if (!isInternalDOSource(source)) {
       this.requireWorkspaceProvider(`Durable Object class ${source}:${className}`);
-    }
-    const serviceKey = doServiceKey(source, className);
-    const isNew = !this.doServices.has(serviceKey);
-    let buildKey: string | undefined;
-    let image: RuntimeImageRecord | null = null;
-    if (isNew) {
-      const sourceSegments = source.split("/").filter(Boolean);
-      if (!isInternalDOSource(source) && sourceSegments.length !== 2) {
+      if (source.split("/").filter(Boolean).length !== 2)
         throw new Error(`DO source path must be exactly 2 segments, got: "${source}"`);
+      const scopeRef = opts.scopeRef ?? service?.scopeRef;
+      const serviceImageId = `do-service:${serviceKey}`;
+      // Resolve one immutable executable for this request. A new service and
+      // its first concrete object share that exact binding, even if the source
+      // head advances while activation is in flight.
+      if (!service || (scopeRef && opts.objectKey)) {
+        const imageId =
+          scopeRef && opts.objectKey
+            ? (opts.imageId ??
+              canonicalEntityId({ kind: "do", source, className, key: opts.objectKey }))
+            : serviceImageId;
+        image = await this.bindRuntimeImage(imageId, source, scopeRef);
       }
-      if (isInternalDOSource(source)) {
-        image = this.persistInternalRuntimeImage(`do-service:${serviceKey}`, className);
-        buildKey = image.artifact.buildKey;
-      } else {
-        image = await this.bindRuntimeImage(`do-service:${serviceKey}`, source, opts.scopeRef);
-        buildKey = image.artifact.buildKey;
-      }
-      const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
-      const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
-      this.doServices.set(serviceKey, {
-        buildKey,
-        className,
-        ...(image ? { imageId: image.id } : {}),
-        serviceName,
-        source,
-        scopeRef: image?.scopeRef ?? opts.scopeRef,
-      });
-      if (!isInternalDOSource(source)) {
+      if (!service) {
+        const prepared = assertPresent(image);
+        const serviceImage =
+          prepared.id === serviceImageId
+            ? prepared
+            : this.persistRuntimeImage(serviceImageId, prepared, scopeRef);
+        const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
+        service = {
+          buildKey: serviceImage.artifact.buildKey,
+          className,
+          imageId: serviceImage.id,
+          serviceName: `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`,
+          source,
+          scopeRef,
+        };
+        this.doServices.set(serviceKey, service);
         this.registerRoutesForDoClass(source, className);
-        this.registerDoEgressCaller(source, className, assertPresent(image));
+        this.registerDoEgressCaller(source, className, serviceImage);
       }
-    }
-
-    const serviceScopeRef =
-      image?.scopeRef ?? opts.scopeRef ?? this.doServices.get(serviceKey)?.scopeRef;
-    if (!isInternalDOSource(source) && serviceScopeRef && opts.objectKey) {
-      const imageId =
-        opts.imageId ?? canonicalEntityId({ kind: "do", source, className, key: opts.objectKey });
-      image = await this.bindRuntimeImage(imageId, source, serviceScopeRef);
-      buildKey = image.artifact.buildKey;
-    }
-
-    if (!isInternalDOSource(source) && opts.objectKey) {
-      const svc = this.doServices.get(serviceKey);
-      const imageId = image?.id ?? svc?.imageId;
-      const buildKey = image?.artifact.buildKey ?? svc?.buildKey;
-      if (imageId && buildKey) {
+      if (opts.objectKey) {
+        const imageId = image?.id ?? service.imageId;
+        if (!imageId) throw new Error(`Durable Object ${serviceKey} has no executable binding`);
         const stateArgs = recordStateArgs(opts.stateArgs);
         this.doObjectBuilds.set(doObjectBuildKey(source, className, opts.objectKey), {
           imageId,
-          ...(serviceScopeRef ? { scopeRef: serviceScopeRef } : {}),
-          buildKey,
+          buildKey: image?.artifact.buildKey ?? service.buildKey,
+          version: runtimeIncarnationVersion(
+            image ?? assertPresent(this.runtimeImages.get(imageId)),
+            stateArgs
+          ),
+          ...(scopeRef ? { scopeRef } : {}),
           ...(stateArgs ? { stateArgs } : {}),
         });
       }
-    }
-
-    // Userland DO classes load dynamically into the static `universal-do` facet
-    // host — registering one needs NO config change and NO restart. Just make
-    // sure workerd is up so the host is serving.
-    if (!isInternalDOSource(source)) {
       await this.ensureWorkerdRunning();
-      return buildKey;
+      return image?.artifact.buildKey ?? service.buildKey;
+    }
+    if (!service) {
+      image = this.persistInternalRuntimeImage(`do-service:${serviceKey}`, className);
+      await this.admitDurableObjectSchema(image, className);
+      const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
+      service = {
+        buildKey: image.artifact.buildKey,
+        className,
+        imageId: image.id,
+        serviceName: `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`,
+        source,
+      };
+      this.doServices.set(serviceKey, service);
     }
 
     // Internal DOs are static workerd services: a new one requires a config
@@ -3599,7 +3649,7 @@ export class WorkerdManager {
     }
     // Do NOT probe-and-restart a live workerd (false positives killed all DOs
     // and fed the relay/restart cascade). The relay path retries transients.
-    return buildKey;
+    return service.buildKey;
   }
 
   /**
@@ -3657,9 +3707,25 @@ export class WorkerdManager {
     }
   }
 
+  /** Prepare one immutable worker executable without creating an entity or
+   * registering routes. Class declarations come from the same exact-state
+   * catalog view used to build it; schema admission shares the normal gate. */
+  async prepareWorkerExecutable(build: BuildResult, classNames: readonly string[]): Promise<void> {
+    if (build.metadata.kind !== "worker" || !build.metadata.sourcePath)
+      throw new Error("Worker executable preparation requires an exact workspace worker build");
+    const image: RuntimeImageBinding = {
+      source: build.metadata.sourcePath,
+      unitName: build.metadata.name,
+      artifact: executionArtifactRefFromBuild(this.deps.workspaceId, build),
+      authority: assertPresent(build.metadata.authority),
+    };
+    for (const className of new Set(classNames))
+      await this.admitDurableObjectSchema(image, className);
+  }
+
   /** Admit the schema of the exact executable before its first entity activation. */
   private async admitDurableObjectSchema(
-    image: RuntimeImageRecord,
+    image: RuntimeImageBinding,
     className: string
   ): Promise<void> {
     // Internal classes are the exact product bundle. The class's own kernel
@@ -3678,6 +3744,26 @@ export class WorkerdManager {
     )
       return;
     const admission = (async () => {
+      if (isInternalDOSource(image.source)) {
+        const bundle = this.internalDOBundle();
+        const identity = internalDOExecutionIdentity(bundle, className);
+        if (identity.executionDigest !== image.artifact.executionDigest) {
+          throw new RuntimeImageUnavailableError(
+            `Internal Durable Object ${image.source}:${className} schema executable failed sealed identity verification`
+          );
+        }
+        const descriptor = await this.probeSchemaExecutable(image.source, className, {
+          version: identity.executionDigest,
+          modules: { "worker.js": bundle.bundle },
+        });
+        this.recordDurableObjectSchema({
+          source: image.source,
+          effectiveVersion: identity.effectiveVersion,
+          executionDigest: identity.executionDigest,
+          descriptor,
+        });
+        return;
+      }
       const build = this.requireWorkspaceProvider("schema admission").getBuildByExecution(
         image.artifact.buildKey,
         image.artifact.executionDigest
@@ -3688,7 +3774,7 @@ export class WorkerdManager {
         build.metadata.sourcePath !== image.source
       ) {
         throw new RuntimeImageUnavailableError(
-          `Durable Object ${image.id} has no exact executable for schema admission`
+          `Durable Object ${image.source}:${className} has no exact executable for schema admission`
         );
       }
       const artifact = executionArtifactRefFromBuild(this.deps.workspaceId, build);
@@ -3697,7 +3783,7 @@ export class WorkerdManager {
         canonicalJson(build.metadata.authority) !== canonicalJson(image.authority)
       ) {
         throw new RuntimeImageUnavailableError(
-          `Durable Object ${image.id} schema executable failed sealed identity verification`
+          `Durable Object ${image.source}:${className} schema executable failed sealed identity verification`
         );
       }
       const descriptor = await this.probeDurableObjectSchema(image.source, className, build);
@@ -3714,6 +3800,36 @@ export class WorkerdManager {
     } finally {
       this.schemaAdmissions.delete(key);
     }
+  }
+
+  /** Immutable queue ownership evidence, already admitted with this executable.
+   * This accessor performs no owner RPC or activation of a disposable object. */
+  getDurableWorkQueues(
+    source: string,
+    className: string,
+    executionDigest: string
+  ): DurableWorkQueue[] {
+    if (!/^[a-f0-9]{64}$/.test(executionDigest))
+      throw new Error("Durable work registration requires an exact execution digest");
+    if (isInternalDOSource(source)) {
+      const identity = internalDOExecutionIdentity(this.internalDOBundle(), className);
+      if (identity.executionDigest !== executionDigest)
+        throw new RuntimeImageUnavailableError(
+          "Internal durable work declaration does not match the admitted executable"
+        );
+      return [...identity.durableWorkQueues];
+    }
+    const row = this.doSchemaDescriptorDb
+      .prepare(
+        "SELECT descriptor_json FROM do_schema_descriptors WHERE source = ? AND execution_digest = ? AND class_name = ?"
+      )
+      .get(source, executionDigest, className) as { descriptor_json: string } | undefined;
+    if (!row)
+      throw new RuntimeImageUnavailableError(
+        `Durable Object ${source}:${className} has no admitted executable capability descriptor`
+      );
+    const descriptor = JSON.parse(row.descriptor_json) as DurableObjectPublishedSchemaDescriptor;
+    return parseDurableWorkReady(descriptor.durableWorkQueues);
   }
 
   private recordDurableObjectSchema(candidate: {
@@ -3790,6 +3906,7 @@ export class WorkerdManager {
           headers: {
             Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
             "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
+            [DO_EXECUTABLE_VERSION_HEADER]: `${executable.version}:schema-probe`,
           },
           dispatcher: getWorkerdConnectionDispatcher(
             `http://127.0.0.1:${assertPresent(this.port)}`
@@ -3813,6 +3930,9 @@ export class WorkerdManager {
           `${source}:${className} returned a malformed schema descriptor: ${JSON.stringify(descriptor)}`
         );
       }
+      const queues = parseDurableWorkReady(descriptor.durableWorkQueues);
+      if (canonicalJson(queues) !== canonicalJson(descriptor.durableWorkQueues))
+        throw new Error(`${source}:${className} returned noncanonical durable work declarations`);
       outcome = { ok: true, descriptor };
     } catch (error) {
       outcome = { ok: false, error };
@@ -4641,6 +4761,7 @@ export class WorkerdManager {
     }
     this.doServices.clear();
     this.doObjectBuilds.clear();
+    this.reconcileDoCodeUnitOwnership();
 
     // Clean up config dir
     await attempt(() => fs.promises.rm(this.configDir, { recursive: true, force: true }));
@@ -4761,7 +4882,6 @@ export class WorkerdManager {
       for (const [serviceKey, svc] of Array.from(this.doServices.entries())) {
         if (svc.source !== source || newClassNames.has(svc.className)) continue;
         this.revokeWorkerBearer(`do-service:${serviceKey}`);
-        this.deps.unregisterEgressCaller(`${svc.source}:${svc.className}`);
         this.doServices.delete(serviceKey);
         if (svc.imageId) this.runtimeImages.delete(svc.imageId);
         for (const key of Array.from(this.doObjectBuilds.keys())) {
@@ -4800,6 +4920,7 @@ export class WorkerdManager {
 
     // Reconcile routes: worker source rebuilds and meta-only route edits share
     // the same route-table convergence path.
+    this.reconcileDoCodeUnitOwnership();
     this.reconcileManifestRoutesForSource(source, doClasses);
   }
 }

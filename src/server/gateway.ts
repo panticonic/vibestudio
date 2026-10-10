@@ -25,6 +25,7 @@ import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/se
 import type { RouteRegistry, LookupResult } from "./routeRegistry.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
+import { doExecutableHeaders, type DoExecutableVersionResolver } from "./doExecutableDispatch.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { bridgeDuplexSockets } from "./socketBridge.js";
@@ -129,6 +130,7 @@ export interface WorkerHostCodeProvider {
     className: string,
     objectKey?: string
   ): Promise<{
+    version: string;
     compatibilityDate: string;
     compatibilityFlags: string[];
     mainModule: string;
@@ -307,9 +309,8 @@ export class Gateway {
         return;
       }
 
-      // /_doversion/{source}/{className} and /_docode/{source}/{className} →
-      // UniversalDO facet host loader endpoints (same loader-secret gate).
-      if (url.startsWith("/_doversion/") || url.startsWith("/_docode/")) {
+      // Executable code is fetched only when an admitted incarnation is absent.
+      if (url.startsWith("/_docode/")) {
         const host = this.deps.getWorkerHost?.();
         if (!host) {
           res.writeHead(503, { "Content-Type": "text/plain" });
@@ -325,9 +326,8 @@ export class Gateway {
           res.end("Forbidden");
           return;
         }
-        const isVersion = url.startsWith("/_doversion/");
         const requestUrl = new URL(url, "http://localhost");
-        const prefix = isVersion ? "/_doversion/" : "/_docode/";
+        const prefix = "/_docode/";
         const segs = (url.slice(prefix.length).split("?")[0] ?? "").split("/");
         const source = decodeURIComponent(segs[0] ?? "");
         const className = decodeURIComponent(segs[1] ?? "");
@@ -335,17 +335,6 @@ export class Gateway {
         if (!source || !className) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing DO source/class");
-          return;
-        }
-        if (isVersion) {
-          const version = host.getDoVersion(source, className, objectKey);
-          if (version === null) {
-            res.writeHead(404, { "Content-Type": "text/plain" });
-            res.end("DO class not found");
-            return;
-          }
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ version }));
           return;
         }
         void host
@@ -449,7 +438,10 @@ export class Gateway {
           tokenManager,
           workerdToken,
           this.deps.getWorkerdDispatchSecret?.(),
-          this.deps.ensureDORoute
+          this.deps.ensureDORoute,
+          (ref) =>
+            this.deps.getWorkerHost?.()?.getDoVersion(ref.source, ref.className, ref.objectKey) ??
+            null
         ).catch((err: unknown) => {
           log.warn(`Route dispatch error:`, err);
           if (!res.headersSent && !res.writableEnded) {
@@ -624,7 +616,10 @@ export class Gateway {
           tokenManager,
           workerdToken,
           this.deps.getWorkerdDispatchSecret?.(),
-          this.deps.ensureDORoute
+          this.deps.ensureDORoute,
+          (ref) =>
+            this.deps.getWorkerHost?.()?.getDoVersion(ref.source, ref.className, ref.objectKey) ??
+            null
         ).catch((err: unknown) => {
           log.warn(`Route WS dispatch error:`, err);
           if (!socket.destroyed) {
@@ -1068,7 +1063,8 @@ async function handleRouteRequest(
   tokenManager: TokenManager,
   workerdToken: string,
   workerdDispatchSecret?: string | null,
-  ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void
+  ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void,
+  resolveExecutableVersion?: DoExecutableVersionResolver
 ): Promise<boolean> {
   const qIdx = url.indexOf("?");
   const pathOnly = qIdx === -1 ? url : url.slice(0, qIdx);
@@ -1131,7 +1127,10 @@ async function handleRouteRequest(
   const targetPath = buildWorkerTargetPath(result, url);
   const extraHeaders =
     result.kind === "worker-do" && workerdDispatchSecret
-      ? { "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret }
+      ? {
+          "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret,
+          ...doExecutableHeaders(result, resolveExecutableVersion),
+        }
       : undefined;
   proxyRequest(req, res, workerdPort, targetPath, workerdToken, undefined, extraHeaders);
   return true;
@@ -1151,7 +1150,8 @@ async function handleRouteUpgrade(
   tokenManager: TokenManager,
   workerdToken: string,
   workerdDispatchSecret?: string | null,
-  ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void
+  ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void,
+  resolveExecutableVersion?: DoExecutableVersionResolver
 ): Promise<boolean> {
   const qIdx = url.indexOf("?");
   const pathOnly = qIdx === -1 ? url : url.slice(0, qIdx);
@@ -1204,7 +1204,10 @@ async function handleRouteUpgrade(
   req.url = buildWorkerTargetPath(result, url);
   const extraHeaders =
     result.kind === "worker-do" && workerdDispatchSecret
-      ? { "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret }
+      ? {
+          "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret,
+          ...doExecutableHeaders(result, resolveExecutableVersion),
+        }
       : undefined;
   proxyUpgrade(req, socket, head, workerdPort, workerdToken, extraHeaders);
   return true;

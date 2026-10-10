@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { serializeRpcFailure } from "@vibestudio/rpc";
+import type { LifecyclePrepareInput } from "@vibestudio/shared/doDispatcher";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 
 import { createTestDO } from "@vibestudio/durable/test-utils";
@@ -94,6 +95,7 @@ function makeDODispatch(instance: WorkspaceDO): {
 }
 
 interface BuildDepsOptions {
+  initializeAgent?: RuntimeEntityHooks["initializeAgent"];
   initializeDurableClone?: RuntimeEntityHooks["initializeDurableClone"];
   onDurableObjectActivated?: RuntimeEntityHooks["onDurableObjectActivated"];
   prepareResourceBindings?: Parameters<typeof createRuntimeService>[0]["prepareResourceBindings"];
@@ -117,6 +119,7 @@ interface BuildDepsOptions {
   }) => Promise<Record<string, unknown>>;
   onRetire?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["onRetire"];
   releaseEntity?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["releaseEntity"];
+  prepareDurableWorkRelease?: RuntimeEntityHooks["prepareDurableWorkRelease"];
   sealAndDrainEntityRelays?: Parameters<
     typeof createRuntimeService
   >[0]["hooks"]["sealAndDrainEntityRelays"];
@@ -191,6 +194,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
   const recoverExactExecution = vi.fn(async () => {});
   const restartDurableObjectIncarnation = vi.fn(async () => {});
   const releaseEntity = opts.releaseEntity ?? vi.fn(async () => ({ status: "ready" as const }));
+  const prepareDurableWorkRelease = opts.prepareDurableWorkRelease ?? vi.fn(async () => {});
   const preparePanel =
     opts.preparePanel ?? vi.fn(async () => ({ effectiveVersion: "ev-panel", ...sealedExecution }));
   const resolveAppExecution =
@@ -232,6 +236,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     entityStore,
     hooks: {
       initializeDurableClone,
+      initializeAgent: opts.initializeAgent,
       onDurableObjectActivated: opts.onDurableObjectActivated,
       recoverExactExecution,
       restartDurableObjectIncarnation,
@@ -255,7 +260,6 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
           };
         }
         if (spec.execution.surface === "inert") {
-          await contextFolders.ensureContextFolder(contextId);
           return { surface: "inert", target: { id: targetId } };
         }
         const args = {
@@ -298,6 +302,8 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
         },
       }).retire,
       releaseEntity,
+      drainDurableWorkDeliveries: async () => {},
+      prepareDurableWorkRelease,
       sealAndDrainEntityRelays: opts.sealAndDrainEntityRelays,
       releaseEntityRelaySeal: opts.releaseEntityRelaySeal,
       cloneDurableStorage,
@@ -362,6 +368,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     recoverExactExecution,
     restartDurableObjectIncarnation,
     releaseEntity,
+    prepareDurableWorkRelease,
     preparePanel,
     resolveAppExecution,
     initializeDurableClone,
@@ -2333,7 +2340,7 @@ describe("runtimeService.retireEntity", () => {
       expect(record).toMatchObject({ status: "retired", cleanupComplete: !cleanupFails });
       // A failed retirement retains its exact row for explicit recovery; no
       // second active binding or transient cleanup is manufactured.
-      expect(f.releaseEntity).toHaveBeenCalledOnce();
+      expect(f.releaseEntity).toHaveBeenCalledTimes(3);
     }
   );
 
@@ -2357,11 +2364,7 @@ describe("runtimeService.retireEntity", () => {
       status: "retired",
       cleanupComplete: true,
     });
-    expect(releaseEntity.mock.calls.map(([, input]) => input.phase)).toEqual([
-      "quiesce",
-      "peer-obligations",
-      "release",
-    ]);
+    expect(releaseEntity).toHaveBeenCalledTimes(3);
   });
 
   it.each(["create", "reserve", "activate", "recover"] as const)(
@@ -2502,14 +2505,17 @@ describe("runtimeService.retireEntity", () => {
     const order: string[] = [];
     const { service, instance } = await buildDeps({
       releaseEntity: vi.fn(async (_record, input) => {
-        order.push("release:" + input.phase);
+        order.push(`release:${input.phase}:${input.mode}`);
         return { status: "ready" as const };
       }),
       onRetire: vi.fn(async () => {
         order.push("hook");
       }),
+      sealAndDrainEntityRelays: vi.fn(async () => {
+        order.push("seal-and-drain");
+      }),
       releaseEntityRelaySeal: vi.fn(() => {
-        order.push("release-seal");
+        order.push("unseal");
       }),
     });
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
@@ -2527,14 +2533,14 @@ describe("runtimeService.retireEntity", () => {
 
     await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
     expect(order).toEqual([
-      "release:quiesce",
-      "release:peer-obligations",
-      "release:release",
+      "release:quiesce:retire",
+      "release:peer-obligations:retire",
+      "release:release:retire",
+      "seal-and-drain",
       "do-commit",
-      "release-seal",
+      "unseal",
       "hook",
     ]);
-    expect(releaseEntity).toHaveBeenCalledTimes(3);
     // cleanup_complete should be 1 on success.
     const rec = instance.entityResolve(handle.id);
     expect(rec?.cleanupComplete).toBe(true);
@@ -2551,16 +2557,23 @@ describe("runtimeService.retireEntity", () => {
 
   it("leaves the entity active when terminal release fails", async () => {
     const onRetire = vi.fn(async () => {});
+    const operationFailure = Object.assign(new Error("channel relay release failed"), {
+      code: "CHANNEL_RELEASE_FAILED",
+      errorKind: "service" as const,
+    });
+    const cleanupFailure = new AggregateError([operationFailure], "Agent resource cleanup failed", {
+      cause: operationFailure,
+    });
     const { service, instance } = await buildDeps({
       onRetire,
-      releaseEntity: vi.fn(async () => ({
-        status: "failed" as const,
-        failure: serializeRpcFailure(
-          Object.assign(new AggregateError([new Error("still busy")], "peer remains active"), {
-            code: "PEER_BUSY",
-          })
-        ),
-      })),
+      releaseEntity: vi.fn(async (_record, input) =>
+        input.phase === "release"
+          ? {
+              status: "failed" as const,
+              failure: serializeRpcFailure(cleanupFailure),
+            }
+          : { status: "ready" as const }
+      ),
     });
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
       doCreateSpec({ contextId: "ctx-x" }),
@@ -2569,8 +2582,24 @@ describe("runtimeService.retireEntity", () => {
     await expect(
       service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }])
     ).rejects.toMatchObject({
-      message: expect.stringMatching(/refused quiesce lifecycle step.*peer remains active/u),
-      cause: expect.objectContaining({ message: "peer remains active", code: "PEER_BUSY" }),
+      message: expect.stringMatching(
+        /refused terminal lifecycle release.*Agent resource cleanup failed/u
+      ),
+      cause: expect.objectContaining({
+        message: "Agent resource cleanup failed",
+        cause: expect.objectContaining({
+          message: "channel relay release failed",
+          code: "CHANNEL_RELEASE_FAILED",
+          errorKind: "service",
+        }),
+        errors: [
+          expect.objectContaining({
+            message: "channel relay release failed",
+            code: "CHANNEL_RELEASE_FAILED",
+            errorKind: "service",
+          }),
+        ],
+      }),
     });
     expect(instance.entityResolve(handle.id)?.status).toBe("active");
     expect(onRetire).not.toHaveBeenCalled();
@@ -2804,7 +2833,7 @@ describe("runtimeService session entities", () => {
     execution: overrides.execution ?? { surface: "inert" },
   });
 
-  it("creates an inert session entity and eagerly materializes its context folder", async () => {
+  it("creates an inert session entity without materializing a disk projection", async () => {
     const setEntityTitle = vi.fn();
     const { service, entityCache, contextFolders, prepareDurableObject, prepareWorker } =
       await buildDeps({ setEntityTitle });
@@ -2817,9 +2846,8 @@ describe("runtimeService session entities", () => {
     expect(handle.id).toBe("session:s1");
     expect(handle.targetId).toBe(handle.id);
     expect(handle.contextId).toMatch(/^[0-9a-f-]{36}$/); // fresh UUID minted
-    // Context folder materialized eagerly.
-    expect(contextFolders.ensureContextFolder).toHaveBeenCalledWith(handle.contextId);
-    expect(contextFolders.existing.has(handle.contextId)).toBe(true);
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
+    expect(contextFolders.existing.has(handle.contextId)).toBe(false);
     // No workerd/panel runtime prep.
     expect(prepareDurableObject).not.toHaveBeenCalled();
     expect(prepareWorker).not.toHaveBeenCalled();
@@ -2853,7 +2881,7 @@ describe("runtimeService session entities", () => {
       sessionSpec({ contextId: "ctx-given" }),
     ])) as { contextId: string };
     expect(handle.contextId).toBe("ctx-given");
-    expect(contextFolders.ensureContextFolder).toHaveBeenCalledWith("ctx-given");
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
   });
 
   it("allows host callers and rejects non-host callers", async () => {
@@ -2920,6 +2948,7 @@ describe("runtimeService session entities", () => {
     const handle = (await service.handler({ caller: shellCaller }, "createEntity", [
       sessionSpec({ key: "s-rm" }),
     ])) as { id: string; contextId: string };
+    await contextFolders.ensureContextFolder(handle.contextId);
     expect(contextFolders.existing.has(handle.contextId)).toBe(true);
 
     await service.handler({ caller: shellCaller }, "retireEntity", [
@@ -2936,6 +2965,7 @@ describe("runtimeService session entities", () => {
     const session = (await service.handler({ caller: shellCaller }, "createEntity", [
       sessionSpec({ key: "s-shared", contextId: "ctx-shared" }),
     ])) as { id: string };
+    await contextFolders.ensureContextFolder("ctx-shared");
     await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "worker",
@@ -2953,7 +2983,7 @@ describe("runtimeService session entities", () => {
     expect(contextFolders.existing.has("ctx-shared")).toBe(true);
   });
 
-  it("re-creating a session key after retire+removeContext reuses its contextId and re-materializes the folder", async () => {
+  it("re-creating a session key after retire+removeContext reuses its contextId without a disk projection", async () => {
     const { service, contextFolders } = await buildDeps();
     const first = (await service.handler({ caller: shellCaller }, "createEntity", [
       sessionSpec({ key: "s-again" }),
@@ -2968,14 +2998,16 @@ describe("runtimeService session entities", () => {
     ])) as { id: string; contextId: string };
     expect(second.id).toBe(first.id);
     expect(second.contextId).toBe(first.contextId);
-    expect(contextFolders.existing.has(first.contextId)).toBe(true);
+    expect(contextFolders.existing.has(first.contextId)).toBe(false);
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
   });
 
-  it("retire without removeContext keeps the context folder", async () => {
+  it("retire without removeContext keeps an explicitly materialized context folder", async () => {
     const { service, contextFolders } = await buildDeps();
     const handle = (await service.handler({ caller: shellCaller }, "createEntity", [
       sessionSpec({ key: "s-keep" }),
     ])) as { id: string; contextId: string };
+    await contextFolders.ensureContextFolder(handle.contextId);
 
     await service.handler({ caller: shellCaller }, "retireEntity", [{ id: handle.id }]);
 
@@ -4481,10 +4513,26 @@ describe("runtimeService.destroyContext", () => {
     );
   });
 
-  it("releases every context peer before sealing or retiring any of them", async () => {
+  it("quiesces every context peer, discharges obligations, then releases before sealing", async () => {
     const order: string[] = [];
-    const releaseEntity = vi.fn(async (record: EntityRecord, input) => {
-      order.push(input.phase + ":" + record.id);
+    let channelOpen = true;
+    let terminalPublished = false;
+    let peerIds: { ch: { id: string }; agent: { id: string } } = {
+      ch: { id: "" },
+      agent: { id: "" },
+    };
+    const releaseEntity = vi.fn(async (record: EntityRecord, input: LifecyclePrepareInput) => {
+      order.push(`${input.phase}:${record.id}`);
+      if (input.phase === "peer-obligations" && record.id === peerIds.agent.id) {
+        if (!channelOpen)
+          throw new Error("peer closed before its dependent published terminal state");
+        terminalPublished = true;
+      }
+      if (input.phase === "release" && record.id === peerIds.ch.id) {
+        if (!terminalPublished)
+          throw new Error("channel released before dependent peer obligations completed");
+        channelOpen = false;
+      }
       return { status: "ready" as const };
     });
     const sealAndDrainEntityRelays = vi.fn(async (id: string) => {
@@ -4494,30 +4542,47 @@ describe("runtimeService.destroyContext", () => {
       order.push(`cleanup:${record.id}`);
     });
     const { service } = await buildDeps({
+      prepareDurableWorkRelease: async (record) => {
+        if (!channelOpen || !terminalPublished)
+          throw new Error("observer drain lost its available peer prefix");
+        order.push(`drain:${record.id}`);
+      },
       releaseEntity,
       sealAndDrainEntityRelays,
       onRetire,
     });
-    await seedConversation(service, "ctx-dependent-peers");
+    peerIds = await seedConversation(service, "ctx-dependent-peers");
 
     await service.handler({ caller: serverCaller }, "destroyContext", [
       { contextId: "ctx-dependent-peers" },
     ]);
 
+    const lastQuiesce = Math.max(
+      ...order.map((entry, index) => (entry.startsWith("quiesce:") ? index : -1))
+    );
+    const firstObligation = order.findIndex((entry) => entry.startsWith("peer-obligations:"));
+    const lastObligation = Math.max(
+      ...order.map((entry, index) => (entry.startsWith("peer-obligations:") ? index : -1))
+    );
+    const firstRelease = order.findIndex((entry) => entry.startsWith("release:"));
     const lastRelease = Math.max(
       ...order.map((entry, index) => (entry.startsWith("release:") ? index : -1))
     );
     const firstSeal = order.findIndex((entry) => entry.startsWith("seal:"));
     const firstCleanup = order.findIndex((entry) => entry.startsWith("cleanup:"));
-    expect(lastRelease).toBeGreaterThanOrEqual(0);
-    expect(firstSeal).toBeGreaterThan(lastRelease);
-    const phaseIndexes = ["quiesce", "peer-obligations", "release"].map((phase) =>
-      order.flatMap((entry, index) => (entry.startsWith(phase + ":") ? [index] : []))
+    expect(lastQuiesce).toBeGreaterThanOrEqual(0);
+    expect(firstObligation).toBeGreaterThan(lastQuiesce);
+    const firstDrain = order.findIndex((entry) => entry.startsWith("drain:"));
+    const lastDrain = Math.max(
+      ...order.map((entry, index) => (entry.startsWith("drain:") ? index : -1))
     );
-    for (const indexes of phaseIndexes) expect(indexes).toHaveLength(2);
-    expect(Math.max(...phaseIndexes[0]!)).toBeLessThan(Math.min(...phaseIndexes[1]!));
-    expect(Math.max(...phaseIndexes[1]!)).toBeLessThan(Math.min(...phaseIndexes[2]!));
+    expect(firstDrain).toBeGreaterThan(lastObligation);
+    expect(firstRelease).toBeGreaterThan(lastDrain);
+    expect(firstSeal).toBeGreaterThan(lastRelease);
+    expect(lastRelease).toBeGreaterThanOrEqual(firstRelease);
     expect(firstCleanup).toBeGreaterThan(firstSeal);
+    expect(terminalPublished).toBe(true);
+    expect(channelOpen).toBe(false);
   });
 
   it("reports cleanup failures after attempting every context cleanup boundary", async () => {
@@ -4658,8 +4723,8 @@ describe("runtimeService.destroyContext", () => {
     const dropContext = vi.fn(async (contextId: string) => {
       order.push(`drop:${contextId}`);
     });
-    const releaseEntity = vi.fn(async (record: EntityRecord) => {
-      order.push(`release:${record.contextId}`);
+    const releaseEntity = vi.fn(async (record: EntityRecord, input: LifecyclePrepareInput) => {
+      if (input.phase === "release") order.push(`release:${record.contextId}`);
       return { status: "ready" as const };
     });
     const { service, instance } = await buildDeps({
@@ -4921,5 +4986,112 @@ describe("runtimeService.createSubagentContext", () => {
       expect.objectContaining({ capability: "context.boundary" })
     );
     expect(forkContext).not.toHaveBeenCalled();
+  });
+});
+
+describe("runtimeService agent initialization admission", () => {
+  it("joins initialization before returning the creation receipt and uses the admitted identity", async () => {
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const initializeAgent = vi.fn<NonNullable<RuntimeEntityHooks["initializeAgent"]>>(
+      async ({ record, caller }) => {
+        expect(record.status).toBe("active");
+        expect(caller).toBe(serverCaller);
+        enter();
+        await held;
+        return { ok: true, participantId: record.id };
+      }
+    );
+    const { service } = await buildDeps({ initializeAgent });
+    let returned = false;
+    const creation = service
+      .handler({ caller: serverCaller }, "createEntity", [
+        {
+          kind: "do",
+          execution: { surface: "code", source: "workers/test-agent" },
+          className: "Agent",
+          key: "initializing",
+          agentInitialization: {
+            channelId: "chat-initializing",
+            config: { handle: "assistant" },
+            replay: true,
+          },
+        },
+      ])
+      .then((result) => {
+        returned = true;
+        return result;
+      });
+    await entered;
+    expect(returned).toBe(false);
+    expect(initializeAgent.mock.calls[0]![0].initialization.channelId).toBe("chat-initializing");
+    release();
+    expect(await creation).toMatchObject({
+      agentInitialization: { ok: true, participantId: "do:workers/test-agent:Agent:initializing" },
+    });
+  });
+
+  it("keeps the exact admitted identity while review is unresolved and resumes its initial relationship", async () => {
+    const pending = Object.assign(new Error("Waiting on workspace review"), {
+      code: "EREVIEWPENDING",
+    });
+    const initializeAgent = vi
+      .fn<NonNullable<RuntimeEntityHooks["initializeAgent"]>>()
+      .mockRejectedValueOnce(pending)
+      .mockResolvedValueOnce({ ok: true, participantId: "participant-reviewed" });
+    const { service, instance } = await buildDeps({ initializeAgent });
+    const spec = {
+      kind: "do",
+      execution: { surface: "code", source: "workers/test-agent" },
+      className: "Agent",
+      key: "reviewed",
+      contextId: "ctx-review",
+      agentInitialization: { channelId: "chat-review" },
+    };
+    await expect(service.handler({ caller: serverCaller }, "createEntity", [spec])).rejects.toBe(
+      pending
+    );
+    const record = instance.entityResolve("do:workers/test-agent:Agent:reviewed");
+    expect(record?.status).toBe("active");
+    expect(await service.handler({ caller: serverCaller }, "createEntity", [spec])).toMatchObject({
+      agentInitialization: { participantId: "participant-reviewed" },
+    });
+    expect(initializeAgent.mock.calls[1]![0].record.authoritySessionId).toBe(
+      record!.authoritySessionId
+    );
+  });
+
+  it("retires a fresh failed initialization but retains an existing owner's retryable entity", async () => {
+    const failure = new Error("membership refused");
+    const initializeAgent = vi.fn<NonNullable<RuntimeEntityHooks["initializeAgent"]>>(async () => {
+      throw failure;
+    });
+    const { service, instance } = await buildDeps({ initializeAgent });
+    const base = {
+      kind: "do",
+      execution: { surface: "code", source: "workers/test-agent" },
+      className: "Agent",
+      contextId: "ctx-admission",
+    };
+    await expect(
+      service.handler({ caller: serverCaller }, "createEntity", [
+        { ...base, key: "fresh", agentInitialization: { channelId: "chat-admission" } },
+      ])
+    ).rejects.toBe(failure);
+    expect(instance.entityResolve("do:workers/test-agent:Agent:fresh")?.status).toBe("retired");
+    await service.handler({ caller: serverCaller }, "createEntity", [
+      { ...base, key: "retained", agentChannelId: "chat-admission" },
+    ]);
+    await expect(
+      service.handler({ caller: serverCaller }, "createEntity", [
+        { ...base, key: "retained", agentInitialization: { channelId: "chat-admission" } },
+      ])
+    ).rejects.toBe(failure);
+    expect(instance.entityResolve("do:workers/test-agent:Agent:retained")?.status).toBe("active");
   });
 });

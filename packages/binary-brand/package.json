@@ -1,0 +1,17 @@
+{
+  "name": "@vibestudio/binary-brand",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "node": "./src/native.js",
+      "workerd": "./src/native.js",
+      "default": "./src/browser.js"
+    }
+  }
+}

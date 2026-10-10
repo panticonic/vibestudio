@@ -429,6 +429,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           vcsMethods.readFile.args.parse([input])[0],
           causalParent
         );
+      case "readFiles":
+        return deps.workspaceVcs.semanticCausalCall(
+          "vcsReadFiles",
+          vcsMethods.readFiles.args.parse([input])[0],
+          causalParent
+        );
       case "listDirectory":
         return deps.workspaceVcs.semanticCausalCall(
           "vcsListDirectory",

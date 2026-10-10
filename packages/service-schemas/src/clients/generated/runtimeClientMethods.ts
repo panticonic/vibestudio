@@ -207,6 +207,7 @@ export const VCS_METHOD_NAMES = [
   "readMemory",
   "resolveRepository",
   "readFile",
+  "readFiles",
   "listDirectory",
   "listFiles",
 ] as const;
@@ -285,6 +286,7 @@ export const GAD_WIRE_METHOD_NAMES = [
   "readLog",
   "getLogEvent",
   "hasLogEvents",
+  "initializeLogHead",
   "appendLogEvent",
   "forkLog",
   "checkLogIntegrity",
@@ -331,6 +333,7 @@ export const GAD_WIRE_METHOD_NAMES = [
   "vcsReadMemory",
   "vcsResolveRepository",
   "vcsReadFile",
+  "vcsReadFiles",
   "vcsListDirectory",
   "vcsListFiles",
   "ensureBlob",
