@@ -205,3 +205,36 @@ test("cached declarations resolve dependencies through their owning installation
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("ambient extension contracts remain shared across independent compiler owners", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "validation-ambient-"));
+  fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "dir");
+  fs.writeFileSync(path.join(root, "pnpm-lock.yaml"), "fixture");
+  const write = (name, source) => {
+    const directory = path.join(root, name);
+    fs.mkdirSync(directory);
+    const entry = path.join(directory, "index.ts");
+    fs.writeFileSync(entry, source);
+    return { name, root: directory, files: [entry] };
+  };
+  const api = write("api", 'export interface Registry {}\nexport function use<K extends keyof Registry>(key: K): Registry[K] { throw new Error(String(key)); }');
+  const extension = write("extension", 'import type {} from "api"; declare module "api" { interface Registry { shell: {open(): void} } } export const extension = "shell";');
+  const consumer = write("consumer", 'import {use} from "api"; export function openShell() { use("shell").open(); }');
+  const units = [consumer, extension, api];
+  const paths = Object.fromEntries(units.map((unit) => [unit.name, unit.files]));
+  const options = { target: "ES2022", module: "ESNext", moduleResolution: "bundler", strict: true, skipLibCheck: true, types: [] };
+  const projects = new ValidationProjects(root);
+  try {
+    assert.deepEqual(validationGroups(units, paths).map((group) => group.map((unit) => unit.name)), [["api", "extension"], ["consumer"]]);
+    const declarations = await projects.contracts(units, paths, options);
+    projects.checkUnits(units, paths, declarations, options);
+    const outside = path.join(root, "outside.ts");
+    fs.writeFileSync(outside, 'import {use} from "api"; use("shell").open();');
+    projects.check("remaining compiler roots", [outside, ...projects.ambientDeclarations(units)], {...options, paths: declarations});
+    fs.writeFileSync(consumer.files[0], 'import {use} from "api"; export function openShell() { use("missing").open(); }');
+    await assert.rejects(projects.contracts(units, paths, options));
+  } finally {
+    await projects.close();
+    fs.rmSync(root, {recursive: true, force: true});
+  }
+});

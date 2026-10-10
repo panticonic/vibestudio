@@ -17,6 +17,10 @@ export function configuredFiles(config: string): string[] {
   }
 }
 
+export function isValidationTestFile(file: string): boolean {
+  return /(?:^|[\\/])__tests__[\\/]|\.(test|spec)\.[cm]?tsx?$/.test(file);
+}
+
 export async function prepareHostValidation(appRoot: string, projects: ValidationProjects) {
   buildInfrastructurePackages({ cwd: appRoot });
   const config = JSON.parse(fs.readFileSync(path.join(appRoot, "tsconfig.json"), "utf8"));
@@ -49,7 +53,7 @@ export async function prepareHostValidation(appRoot: string, projects: Validatio
         files: owned.filter(
           (file) =>
             file.startsWith(path.join(root, "src") + path.sep) &&
-            !/\.(test|spec)\.[cm]?tsx?$/.test(file)
+            !isValidationTestFile(file)
         ),
       });
     } else {

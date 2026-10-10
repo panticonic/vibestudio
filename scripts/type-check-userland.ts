@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { configuredFiles, prepareHostValidation } from "./lib/host-validation.js";
+import { configuredFiles, isValidationTestFile, prepareHostValidation } from "./lib/host-validation.js";
 import {
   ValidationProjects,
   type ValidationUnit,
@@ -168,7 +168,7 @@ try {
   const production = (units: ValidationUnit[]) =>
     units.map((unit) => ({
       ...unit,
-      files: unit.files.filter((file) => !/\.(test|spec)\.[cm]?tsx?$/.test(file)),
+      files: unit.files.filter((file) => !isValidationTestFile(file)),
     }));
   const desktopAmbient = baseFiles.filter((file) => /\.d\.[cm]?ts$/.test(file));
   const nativeAmbient = nativeFiles.filter((file) => /\.d\.[cm]?ts$/.test(file));
@@ -209,6 +209,10 @@ try {
         ...new Set([
           ...selectedFiles,
           ...(configName.includes("mobile") ? nativeAmbient : desktopAmbient),
+          ...projects.ambientDeclarations(
+            production(configName.includes("mobile") ? native : desktop),
+            configName.includes("mobile") ? nativeAmbient : desktopAmbient
+          ),
         ]),
       ],
       configName.includes("mobile")

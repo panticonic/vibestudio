@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 import { fileDigest } from "./file-digest.mjs";
-import { compilerImports, relativeCompilerInput } from "./compiler-inputs.mjs";
+import { compilerImports, compilerAmbient, relativeCompilerInput } from "./compiler-inputs.mjs";
 
 export interface ValidationUnit {
   name: string;
@@ -21,7 +21,8 @@ function owner(file: string, units: ValidationUnit[]) {
 // stay valid. Package imports form declaration boundaries; cycles share a group.
 export function validationGroups(
   units: ValidationUnit[],
-  paths: ValidationPaths
+  paths: ValidationPaths,
+  ambientFiles: string[] = []
 ): ValidationUnit[][] {
   const edges = new Map(units.map((unit) => [unit, new Set<ValidationUnit>()]));
   const patterns = Object.keys(paths).sort((a, b) => b.length - a.length);
@@ -45,6 +46,13 @@ export function validationGroups(
         if (specifier.startsWith(".")) edges.get(dependency)!.add(unit);
       }
     }
+  // Ambient declarations participate in the entire compiler realm. Their owners
+  // and source dependencies must be compiled together; all other owners consume
+  // their emitted declarations, even without an explicit import.
+  const ambientOwners = units.filter((unit) => globalInputs([unit], ambientFiles).length > 0);
+  for (const unit of units)
+    for (const ambientOwner of ambientOwners)
+      if (unit !== ambientOwner) edges.get(unit)!.add(ambientOwner);
   const indices = new Map<ValidationUnit, number>();
   const low = new Map<ValidationUnit, number>();
   const stack: ValidationUnit[] = [];
@@ -100,6 +108,10 @@ function inputClosure(group: ValidationUnit[]): string[] {
   return [...files].sort();
 }
 
+function globalInputs(units: ValidationUnit[], ambientFiles: string[] = []): string[] {
+  return inputClosure(units).filter((file) => !ambientFiles.includes(file) && /\.[cm]?tsx?$/.test(file) && compilerAmbient(file));
+}
+
 function outputManifest(root: string): { file: string; hash: string }[] {
   if (!fs.existsSync(root)) return [];
   return fs
@@ -130,6 +142,7 @@ function validContract(root: string): boolean {
 }
 
 export class ValidationProjects {
+  private readonly declarationFiles = new Map<string, string>();
   private readonly root: string;
   private readonly coordinator: DerivedCacheCoordinator;
   private readonly leases: ReturnType<DerivedCacheCoordinator["acquire"]>[] = [];
@@ -146,10 +159,18 @@ export class ValidationProjects {
     nodeModulesDir: string = path.join(this.appRoot, "node_modules")
   ): Promise<ValidationPaths> {
     const paths = { ...inputPaths };
-    for (const group of validationGroups(units, inputPaths)) {
+    const globals = globalInputs(units, ambientFiles);
+    for (const group of validationGroups(units, inputPaths, ambientFiles)) {
       const ownedFiles = inputClosure(group);
       if (!ownedFiles.length) continue;
-      const files = [...new Set([...ownedFiles, ...ambientFiles])].sort();
+      const inheritedGlobals = globals
+        .filter((file) => !owner(file, group))
+        .map((file) => {
+          const declaration = this.declarationFiles.get(file);
+          if (!declaration) throw new Error(`Missing ambient declaration owner: ${file}`);
+          return declaration;
+        });
+      const files = [...new Set([...ownedFiles, ...ambientFiles, ...inheritedGlobals])].sort();
       const rootDir = commonRoot(group.map((unit) => path.join(unit.root, "package.json")));
       const manifests = group
         .map((unit) => path.join(unit.root, "package.json"))
@@ -178,7 +199,7 @@ export class ValidationProjects {
           : file;
       };
       const identity = JSON.stringify({
-        version: 4,
+        version: 5,
         nodeModulesDir,
         compilerOptions: {
           ...compilerOptions,
@@ -286,6 +307,13 @@ export class ValidationProjects {
             .replace(/\.tsx?$/, ".d.ts");
         });
       }
+      for (const file of ownedFiles) {
+        const output = path.join(target, "types", path.relative(rootDir, file));
+        this.declarationFiles.set(file, /\.d\.[cm]?ts$/.test(file) ? output : output
+          .replace(/\.mts$/, ".d.mts")
+          .replace(/\.cts$/, ".d.cts")
+          .replace(/\.tsx?$/, ".d.ts"));
+      }
       console.log(`✓ declarations: ${group.map((unit) => unit.name).join(", ")}`);
     }
     return paths;
@@ -337,6 +365,14 @@ export class ValidationProjects {
     }
   }
 
+  ambientDeclarations(units: ValidationUnit[], ambientFiles: string[] = []): string[] {
+    return globalInputs(units, ambientFiles).map((file) => {
+      const declaration = this.declarationFiles.get(file);
+      if (!declaration) throw new Error(`Missing ambient declaration owner: ${file}`);
+      return declaration;
+    });
+  }
+
   checkUnits(
     units: ValidationUnit[],
     sourcePaths: ValidationPaths,
@@ -344,7 +380,15 @@ export class ValidationProjects {
     options: Record<string, unknown>,
     ambientFiles: string[] = []
   ): void {
-    for (const group of validationGroups(units, sourcePaths)) {
+    const globals = globalInputs(units, ambientFiles);
+    for (const group of validationGroups(units, sourcePaths, ambientFiles)) {
+      const inheritedGlobals = globals
+        .filter((file) => !owner(file, group))
+        .map((file) => {
+          const declaration = this.declarationFiles.get(file);
+          if (!declaration) throw new Error(`Missing ambient declaration owner: ${file}`);
+          return declaration;
+        });
       const paths = { ...declarationPaths };
       for (const [name, targets] of Object.entries(sourcePaths)) {
         if (targets.some((target) => group.some((unit) => owner(target.split("*")[0]!, [unit]))))
@@ -352,7 +396,7 @@ export class ValidationProjects {
       }
       this.check(
         group.map((unit) => unit.name).join(", "),
-        [...new Set([...group.flatMap((unit) => unit.files), ...ambientFiles])],
+        [...new Set([...group.flatMap((unit) => unit.files), ...ambientFiles, ...inheritedGlobals])],
         { ...options, paths }
       );
     }
