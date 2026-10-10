@@ -2376,7 +2376,6 @@ async function startHubControlTransport(
       state.identityDb.getDeviceForEndpoint(endpointId) !== null ||
       state.deviceAuthStore.hasLivePairingInvite(),
     attach: (connection) => rpcServer.attachIrohConnection(connection),
-    waitUntilOnline: (endpoint) => endpoint.native.online(),
     log: (message) => console.warn(`[iroh-hub] ${message}`),
   });
   await ingress.ready;

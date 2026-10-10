@@ -5512,7 +5512,6 @@ async function main() {
             return !!device && membershipStore.has(device.userId, entryWorkspaceId);
           },
           attach: (connection) => rpc.attachIrohConnection(connection),
-          waitUntilOnline: (endpoint) => endpoint.native.online(),
           log: (message) => console.warn(`[iroh-workspace] ${message}`),
         });
         await ingress.ready;
