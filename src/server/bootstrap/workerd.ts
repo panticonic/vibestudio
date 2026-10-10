@@ -339,12 +339,9 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       });
 
       const { INTERNAL_DO_SOURCE } = await import("../internalDOs/internalDoLoader.js");
-      const { PRODUCT_BUILTIN_CATALOG } =
-        await import("@vibestudio/shared/productBuiltinCatalog.generated");
+      const { INTERNAL_DO_CLASSES } = await import("../internalDOs/internalDoLoader.js");
       await manager.registerAllDOClasses(
-        PRODUCT_BUILTIN_CATALOG.filter((entry) => entry.workerd.bootstrapPhase === "first").map(
-          (entry) => ({ source: INTERNAL_DO_SOURCE, className: entry.className })
-        )
+        INTERNAL_DO_CLASSES.map((className) => ({ source: INTERNAL_DO_SOURCE, className }))
       );
       return manager;
     },
@@ -479,12 +476,6 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           "receiver classes reconciled"
         );
       }
-
-      const { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } =
-        await import("../internalDOs/internalDoLoader.js");
-      await manager.registerAllDOClasses(
-        INTERNAL_DO_CLASSES.map((className) => ({ source: INTERNAL_DO_SOURCE, className }))
-      );
 
       const sourceBuildChains = new Map<string, Promise<void>>();
       buildSystem.onPushBuild((source, trigger, buildKey) => {

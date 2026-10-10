@@ -1,3 +1,4 @@
+import type { PreparedWorkspaceTemplate } from "./preparedWorkspaceTemplate.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -283,6 +284,13 @@ export interface WorkspaceRootTemplateBootstrapDeps {
   acquire(pin: WorkspaceTemplatePin): Promise<ExactGitSnapshot>;
   sink: SnapshotContentSink;
   expectedSystemEpoch: number;
+  preparedTemplate?(
+    pin: WorkspaceTemplatePin,
+    purpose: "use" | "author"
+  ): Promise<{
+    record: PreparedWorkspaceTemplate;
+    readFile(filePath: string): Uint8Array | null;
+  } | null>;
   /**
    * Whether the host build designates this template as its own, and whether it
    * designated a local checkout rather than a fetched pin. Only a designated
@@ -394,6 +402,8 @@ export class WorkspaceRootTemplateBootstrap {
   private acquiredSnapshot: ExactGitSnapshot | null = null;
   private acquiredLayers: MaterializedLayer[] = [];
   private acquiredInstallation: WorkspaceTemplateInstallation | null = null;
+  private preparedStateHash: string | null = null;
+  private installedPackage: PreparedWorkspaceTemplate | null = null;
 
   constructor(private readonly deps: WorkspaceRootTemplateBootstrapDeps) {
     this.descriptorPath = path.join(deps.statePath, CREATION_DESCRIPTOR_PATH);
@@ -443,6 +453,7 @@ export class WorkspaceRootTemplateBootstrap {
    * mutable source projection. Existing workspaces recover protected main. */
   async prepareBootstrapState(): Promise<string> {
     await this.prepareInitialization();
+    if (this.preparedStateHash) return this.preparedStateHash;
     const snapshot = this.acquiredSnapshot;
     if (!snapshot) throw new Error("Root template acquisition produced no source snapshot");
     const encoded = repositoryContentTree(snapshot.files);
@@ -459,7 +470,42 @@ export class WorkspaceRootTemplateBootstrap {
     if (state.digest !== treeHashDigest(encoded.stateHash)) {
       throw new Error("Content sink changed the bootstrap publication identity");
     }
+    this.preparedStateHash = encoded.stateHash;
     return encoded.stateHash;
+  }
+
+  /** Export the immutable install input, never a workspace database or grants. */
+  preparedRecord(
+    blobs: Array<{ digest: string; size: number }>,
+    builds: PreparedWorkspaceTemplate["builds"]
+  ): PreparedWorkspaceTemplate {
+    const snapshot = this.acquiredSnapshot;
+    const initialization = this.preparedInitialization;
+    if (!snapshot || !initialization || !this.preparedStateHash)
+      throw new Error("Template source preparation is incomplete");
+    return {
+      format: "vibestudio-prepared-workspace/1",
+      purpose: this.readDescriptor().purpose ?? "use",
+      pin: initialization.pin,
+      layers: this.acquiredLayers,
+      installation: initialization.installation,
+      snapshot: snapshot.snapshot,
+      files: snapshot.files,
+      repositories: initialization.repositories,
+      stateHash: this.preparedStateHash,
+      blobs,
+      builds,
+    };
+  }
+
+  preparedBuildForContent(
+    stateHash: string,
+    unitPath: string
+  ): { buildKey: string; effectiveVersion: string } | null {
+    if (this.installedPackage?.stateHash !== stateHash) return null;
+    const build = this.installedPackage.builds.find((build) => build.source === unitPath);
+    if (!build) throw new Error(`Installed template has no artifact for ${unitPath}`);
+    return build;
   }
 
   /**
@@ -498,6 +544,32 @@ export class WorkspaceRootTemplateBootstrap {
   private async acquireInitialization(
     pin: WorkspaceTemplatePin
   ): Promise<PreparedRootTemplateInitialization> {
+    const prepared = await this.deps.preparedTemplate?.(
+      pin,
+      this.readDescriptor().purpose ?? "use"
+    );
+    if (prepared) {
+      const record = prepared.record;
+      this.installedPackage = record;
+      this.acquiredSnapshot = {
+        commit: pin.commit,
+        snapshot: record.snapshot as CanonicalSnapshotDigest,
+        files: record.files,
+        readFile: prepared.readFile,
+      };
+      this.acquiredLayers = record.layers;
+      this.acquiredInstallation = record.installation;
+      this.preparedStateHash = record.stateHash;
+      return {
+        pin,
+        installation: record.installation,
+        repositories: record.repositories.map((repository) => ({
+          ...repository,
+          snapshot: repository.snapshot as CanonicalSnapshotDigest,
+          contentRoot: repository.contentRoot as `state:${string}`,
+        })),
+      };
+    }
     const acquired = await this.deps.acquire(pin);
     if (acquired.commit !== pin.commit) {
       throw new Error(

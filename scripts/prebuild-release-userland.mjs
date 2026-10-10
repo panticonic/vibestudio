@@ -110,13 +110,17 @@ export async function exportReleaseBuild(source, destination, expectedKey) {
   }
 }
 
-export async function withInstalledReleaseSession(context, operation) {
+function assertNativeReleaseRunner(context) {
   const arch =
     typeof context.arch === "string" ? context.arch : { 1: "x64", 3: "arm64" }[context.arch];
   if (context.electronPlatformName !== process.platform || arch !== process.arch)
     throw new Error(
       `Userland release builds require a native ${context.electronPlatformName}-${arch} runner`
     );
+}
+
+export async function withInstalledReleaseSession(context, operation) {
+  assertNativeReleaseRunner(context);
   const resources = context.packager.getResourcesDir(context.appOutDir);
   const product = context.packager.appInfo.productFilename;
   const executable =
@@ -125,8 +129,41 @@ export async function withInstalledReleaseSession(context, operation) {
       : path.join(context.appOutDir, `${product}${process.platform === "win32" ? ".exe" : ""}`);
   const appRoot = path.join(resources, "app.asar");
   const unpacked = path.join(resources, "app.asar.unpacked");
-  // The packager owns this disk-backed staging directory and joins us before retiring it.
-  const scratch = await fsp.mkdtemp(path.join(path.dirname(context.appOutDir), ".userland-build-"));
+  return withReleaseConsumerSession(
+    {
+      appRoot,
+      resources,
+      executable,
+      scratchParent: path.dirname(context.appOutDir),
+      serverEntry: path.join(unpacked, "dist/server-electron.cjs"),
+      cliEntry: path.join(unpacked, "dist/cli/client.mjs"),
+      environment: { ELECTRON_RUN_AS_NODE: "1" },
+    },
+    operation
+  );
+}
+
+export async function withStandaloneReleaseSession(appRoot, executable, scratchParent, operation) {
+  return withReleaseConsumerSession(
+    {
+      appRoot,
+      resources: appRoot,
+      executable,
+      scratchParent,
+      serverEntry: path.join(appRoot, "dist/server.mjs"),
+      cliEntry: path.join(appRoot, "dist/cli/client.mjs"),
+      environment: {},
+    },
+    operation
+  );
+}
+
+async function withReleaseConsumerSession(
+  { appRoot, resources, executable, scratchParent, serverEntry, cliEntry, environment },
+  operation
+) {
+  // The publisher owns this disk-backed staging directory and joins the consumer.
+  const scratch = await fsp.mkdtemp(path.join(scratchParent, ".userland-build-"));
   let server;
   let closed;
   let serverError;
@@ -166,7 +203,7 @@ export async function withInstalledReleaseSession(context, operation) {
     const env = {
       ...inherited,
       NODE_ENV: "production",
-      ELECTRON_RUN_AS_NODE: "1",
+      ...environment,
       VIBESTUDIO_APP_ROOT: appRoot,
       VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
       VIBESTUDIO_INSTANCE_ROOT: path.join(scratch, "instance"),
@@ -191,22 +228,12 @@ export async function withInstalledReleaseSession(context, operation) {
       await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
     const readyFile = path.join(scratch, "ready.json");
     cancellation.signal.throwIfAborted();
-    server = spawn(
-      executable,
-      [
-        path.join(unpacked, "dist/server-electron.cjs"),
-        "--app-root",
-        appRoot,
-        "--ready-file",
-        readyFile,
-      ],
-      {
-        env,
-        cwd: scratch,
-        detached: process.platform !== "win32",
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
-      }
-    );
+    server = spawn(executable, [serverEntry, "--app-root", appRoot, "--ready-file", readyFile], {
+      env,
+      cwd: scratch,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
     server.on("error", (error) => {
       serverError ??= error;
     });
@@ -229,11 +256,12 @@ export async function withInstalledReleaseSession(context, operation) {
       server.once("error", onServerClose);
       let output = "",
         errorOutput = "";
-      const child = spawn(
-        executable,
-        [path.join(unpacked, "dist/cli/client.mjs"), ...args, "--json"],
-        { env, cwd: scratch, signal: controller.signal, stdio: ["ignore", "pipe", "pipe"] }
-      );
+      const child = spawn(executable, [cliEntry, ...args, "--json"], {
+        env,
+        cwd: scratch,
+        signal: controller.signal,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       const joined = joinChildProcess(child);
       let failure;
       child.on("error", (error) => {
@@ -288,116 +316,156 @@ export async function withInstalledReleaseSession(context, operation) {
   }
 }
 
+/** The installed dependency boundary produces the source package and artifacts
+ * before a fresh consumer workspace is allowed to boot. */
+export async function prepareInstalledWorkspaceTemplates(context) {
+  assertNativeReleaseRunner(context);
+  const resources = context.packager.getResourcesDir(context.appOutDir);
+  const product = context.packager.appInfo.productFilename;
+  const executable =
+    context.electronPlatformName === "darwin"
+      ? path.join(context.appOutDir, `${product}.app`, "Contents", "MacOS", product)
+      : path.join(context.appOutDir, `${product}${process.platform === "win32" ? ".exe" : ""}`);
+  await prepareInstalledTemplateRelease({
+    appRoot: path.join(resources, "app.asar"),
+    resources,
+    executable,
+    electron: true,
+    entry: path.join(resources, "app.asar.unpacked", "dist/prepare-workspace-templates.cjs"),
+    scratchParent: path.dirname(context.appOutDir),
+  });
+}
+
+export async function prepareInstalledTemplateRelease({
+  appRoot,
+  resources,
+  executable,
+  entry,
+  scratchParent,
+  electron = false,
+}) {
+  const scratch = await fsp.mkdtemp(path.join(scratchParent, ".template-release-"));
+  const env = {
+    ...process.env,
+    NODE_ENV: "production",
+    ...(electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+    VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
+    VIBESTUDIO_INSTANCE_ROOT: path.join(scratch, "instance"),
+    VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: path.join(scratch, "derived"),
+    VIBESTUDIO_WORKSPACE_RELEASE_ROOT: resources,
+    TMPDIR: path.join(scratch, "tmp"),
+    TMP: path.join(scratch, "tmp"),
+    TEMP: path.join(scratch, "tmp"),
+  };
+  // Installed release pins and dependencies are the producer's complete input;
+  // developer template selection must never enter a product artifact.
+  for (const key of [
+    "VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES",
+    "VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE",
+    "VIBESTUDIO_WORKSPACE_SOURCES",
+  ])
+    delete env[key];
+  await fsp.mkdir(env.TMPDIR, { recursive: true });
+  let child, joined, cancellation;
+  const stop = () => {
+    cancellation ??= new Error("Template release preparation cancelled");
+    child?.kill("SIGTERM");
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  try {
+    child = spawn(
+      executable,
+      [
+        entry,
+        "--app-root",
+        appRoot,
+        "--output",
+        resources,
+        "--scratch",
+        path.join(scratch, "producer"),
+      ],
+      { env, stdio: ["ignore", "pipe", "pipe"] }
+    );
+    joined = joinChildProcess(child);
+    let tail = "";
+    for (const stream of [child.stdout, child.stderr])
+      stream.on("data", (chunk) => {
+        tail = (tail + chunk).slice(-8192);
+        process.stdout.write(chunk);
+      });
+    const result = await joined;
+    if (cancellation) throw cancellation;
+    if (result.error || result.code !== 0)
+      throw new Error(
+        `Template release preparation failed (${result.signal ?? result.code}): ${tail}`,
+        { cause: result.error }
+      );
+  } finally {
+    child?.kill("SIGTERM");
+    await joined;
+    await fsp.rm(scratch, { recursive: true, force: true });
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
+}
+
 export async function prebuildReleaseUserland(context) {
-  await withInstalledReleaseSession(
-    context,
-    async ({ cli, pair, scratch, resources, env, signal }) => {
-      const destination = path.join(resources, "userland-builds");
-      const staged = path.join(scratch, "records");
-      const records = new Map();
-      for (const workspace of [pair.system, pair.personal]) {
-        await cli(["remote", "select", workspace.name]);
-        const units = await cli(["agent", "call", "build.listUnits", "[]"]);
-        for (const unit of units) {
-          if (unit.kind === "app" && unit.target === "react-native") continue;
-          console.log(`[release-builds] Building ${workspace.name}: ${unit.source}`);
-          const result = await cli([
-            "agent",
-            "call",
-            "build.getBuild",
-            JSON.stringify([unit.source]),
-          ]);
-          const key = result.bundle?.buildKey ?? result.buildKey;
-          if (!/^[0-9a-f]{64}$/u.test(key))
-            throw new Error(`Build returned no immutable key for ${unit.source}`);
-          const source = path.join(
-            env.VIBESTUDIO_INSTANCE_ROOT,
-            "workspaces",
-            workspace.name,
-            "state",
-            "builds",
-            key
-          );
-          await exportReleaseBuild(source, path.join(staged, key), key);
-          const metadata = JSON.parse(
-            await fsp.readFile(path.join(source, "metadata.json"), "utf8")
-          );
-          records.set(`${workspace.name}:${unit.source}`, {
-            buildKey: key,
-            source: unit.source,
-            workspace: workspace.name === pair.system.name ? "system" : "personal",
-            builtAt: metadata.builtAt,
-          });
-        }
-      }
-      if (![...records.values()].some((record) => record.source === "apps/shell"))
-        throw new Error("Release prebuild did not produce the desktop shell");
-      await fsp.writeFile(
-        path.join(staged, "release.json"),
-        JSON.stringify(
-          {
-            version: 1,
-            platform: process.platform,
-            arch: process.arch,
-            templates: JSON.parse(
-              await fsp.readFile(path.join(resources, "workspace-template-release.json"), "utf8")
-            ),
-            builds: [...records.values()],
-          },
-          null,
-          2
-        )
-      );
-      signal.throwIfAborted();
-      await fsp.rm(destination, { recursive: true, force: true });
-      await fsp.rename(staged, destination);
-      console.log(
-        `[release-builds] Packaged ${new Set([...records.values()].map((record) => record.buildKey)).size} exact artifacts for ${records.size} workspace units (${process.platform}-${process.arch})`
-      );
-    }
-  );
+  await prepareInstalledWorkspaceTemplates(context);
   await verifyReleaseUserland(context);
 }
 
 /** A clean consumer must reuse the producer's exact immutable records. */
 export async function verifyReleaseUserland(context) {
-  await withInstalledReleaseSession(context, async ({ cli, pair, resources, env }) => {
-    const manifest = JSON.parse(
-      await fsp.readFile(path.join(resources, "userland-builds/release.json"), "utf8")
-    );
-    for (const kind of ["system", "personal"]) {
-      const workspace = pair[kind];
-      await cli(["remote", "select", workspace.name]);
-      for (const record of manifest.builds.filter((record) => record.workspace === kind)) {
-        console.log(`[release-builds] Verifying ${kind}: ${record.source}`);
-        const result = await cli([
-          "agent",
-          "call",
-          "build.getBuild",
-          JSON.stringify([record.source]),
-        ]);
-        const key = result.bundle?.buildKey ?? result.buildKey;
-        if (key !== record.buildKey)
-          throw new Error(
-            `Release build identity changed for ${kind}:${record.source}: ${key} != ${record.buildKey}`
-          );
-        const local = path.join(
-          env.VIBESTUDIO_INSTANCE_ROOT,
-          "workspaces",
-          workspace.name,
-          "state",
-          "builds",
-          key
+  await withInstalledReleaseSession(context, verifyPreparedReleaseUserland);
+}
+
+export async function verifyPreparedReleaseUserland({ cli, pair, resources, env }) {
+  const manifest = JSON.parse(
+    await fsp.readFile(path.join(resources, "userland-builds/release.json"), "utf8")
+  );
+  const base = await cli([
+    "remote",
+    "create-workspace",
+    "release-base",
+    "--operation-id",
+    "release_verification_base",
+  ]);
+  const workspaces = { ...pair, base };
+  let verified = 0;
+  for (const kind of ["base", "system", "personal"]) {
+    const workspace = workspaces[kind];
+    await cli(["remote", "select", workspace.name]);
+    const records = manifest.builds.filter((record) => record.workspace === kind);
+    if (records.length === 0) throw new Error(`Release has no prepared artifacts for ${kind}`);
+    for (const record of records) {
+      console.log(`[release-builds] Verifying ${kind}: ${record.source}`);
+      const result = await cli([
+        "agent",
+        "call",
+        "build.getBuild",
+        JSON.stringify([record.source]),
+      ]);
+      const key = result.bundle?.buildKey ?? result.buildKey;
+      if (key !== record.buildKey)
+        throw new Error(
+          `Release build identity changed for ${kind}:${record.source}: ${key} != ${record.buildKey}`
         );
-        const metadata = JSON.parse(await fsp.readFile(path.join(local, "metadata.json"), "utf8"));
-        if (metadata.builtAt !== record.builtAt)
-          throw new Error(
-            `Fresh installation rebuilt ${kind}:${record.source} instead of reusing its release artifact`
-          );
-      }
+      const local = path.join(
+        env.VIBESTUDIO_INSTANCE_ROOT,
+        "workspaces",
+        workspace.name,
+        "state",
+        "builds",
+        key
+      );
+      const metadata = JSON.parse(await fsp.readFile(path.join(local, "metadata.json"), "utf8"));
+      if (metadata.builtAt !== record.builtAt)
+        throw new Error(
+          `Fresh installation rebuilt ${kind}:${record.source} instead of reusing its release artifact`
+        );
+      verified++;
     }
-    console.log(
-      `[release-builds] Verified ${manifest.builds.length} exact artifacts in a fresh installation`
-    );
-  });
+  }
+  console.log(`[release-builds] Verified ${verified} exact artifacts in a fresh installation`);
 }

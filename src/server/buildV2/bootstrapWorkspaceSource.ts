@@ -50,6 +50,10 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
     return this.source.discoverGraph(this.coordinate(stateHash));
   }
 
+  preparedBuildForContent(stateHash: string, unitPath: string) {
+    return this.source.preparedBuildForContent?.(this.coordinate(stateHash), unitPath) ?? null;
+  }
+
   materializeForBuild(units: GraphNode[], ref: string, workspaceRoot: string) {
     return this.source.materializeForBuild(units, this.coordinate(ref), workspaceRoot);
   }

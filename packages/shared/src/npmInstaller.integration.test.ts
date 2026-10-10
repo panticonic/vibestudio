@@ -50,7 +50,6 @@ describe.runIf(process.platform === "linux")("sandboxed native npm builds", () =
       await runNpmInstall(install, {
         appRoot: fileURLToPath(new URL("../../../", import.meta.url)),
         ignoreScripts: false,
-        timeout: 30_000,
       });
       expect(await readFile(path.join(install, "result"), "utf8")).toBe("42");
       expect(await readFile(canary, "utf8")).toBe("private host state");

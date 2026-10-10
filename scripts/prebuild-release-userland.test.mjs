@@ -10,6 +10,7 @@ import {
   awaitHubReady,
   exportReleaseBuild,
   joinChildProcess,
+  prepareInstalledTemplateRelease,
 } from "./prebuild-release-userland.mjs";
 const roots = [];
 async function fixture() {
@@ -119,4 +120,45 @@ test("rejects artifact paths that would escape the release record", async () => 
     exportReleaseBuild(root, path.join(root, "release"), key),
     /Invalid release artifact path/
   );
+});
+
+test("template preparation joins cancellation before retiring private scratch", async () => {
+  const root = await fixture();
+  const entry = path.join(root, "preparer.mjs");
+  const ready = path.join(root, "ready");
+  const receipt = path.join(root, "retired");
+  await fs.writeFile(
+    entry,
+    `import fs from "node:fs";
+    process.on("SIGTERM", () => { fs.writeFileSync(${JSON.stringify(receipt)}, "joined"); process.exit(0); });
+    fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+    setInterval(() => {}, 1000);`
+  );
+  const watcher = (await import("node:fs")).watch(root);
+  const started = new Promise((resolve, reject) => {
+    watcher.on("change", (_event, file) => {
+      if (String(file) === "ready") resolve();
+    });
+    watcher.on("error", reject);
+  });
+  try {
+    const prepared = prepareInstalledTemplateRelease({
+      appRoot: root,
+      resources: root,
+      executable: process.execPath,
+      entry,
+      scratchParent: root,
+    });
+    const cancelled = assert.rejects(prepared, /preparation cancelled/);
+    await started;
+    process.emit("SIGTERM");
+    await cancelled;
+    assert.equal(await fs.readFile(receipt, "utf8"), "joined");
+    assert.equal(
+      (await fs.readdir(root)).some((name) => name.startsWith(".template-release-")),
+      false
+    );
+  } finally {
+    watcher.close();
+  }
 });

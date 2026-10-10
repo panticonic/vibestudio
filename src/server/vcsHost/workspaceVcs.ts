@@ -182,7 +182,7 @@ export interface WorkspaceVcsDeps {
   /** The only pre-userland template path: acquire one exact root for first publication. */
   rootTemplateBootstrap?: Pick<
     WorkspaceRootTemplateBootstrap,
-    "prepareSource" | "prepareInitialization"
+    "prepareSource" | "prepareInitialization" | "preparedBuildForContent"
   >;
 }
 
@@ -1729,6 +1729,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             : resolved.contentHash;
     }
     return result;
+  }
+
+  preparedBuildForContent(stateHash: string, unitPath: string) {
+    return this.deps.rootTemplateBootstrap?.preparedBuildForContent?.(stateHash, unitPath) ?? null;
   }
 
   async discoverGraph(stateHash: string): Promise<PackageGraph> {

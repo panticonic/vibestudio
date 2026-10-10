@@ -844,6 +844,16 @@ async function build() {
     const serverBuilds = await Promise.all([
       buildHostArtifact(serverElectronWithBundle),
       buildHostArtifact(serverWithBundle),
+      buildHostArtifact({
+        ...serverWithBundle,
+        entryPoints: ["scripts/prepare-workspace-templates.ts"],
+        outfile: "dist/prepare-workspace-templates.mjs",
+      }),
+      buildHostArtifact({
+        ...serverElectronWithBundle,
+        entryPoints: ["scripts/prepare-workspace-templates.ts"],
+        outfile: "dist/prepare-workspace-templates.cjs",
+      }),
       buildHostArtifact(authorityAnalysisWorkerElectronConfig),
       buildHostArtifact(authorityAnalysisWorkerConfig),
       buildHostArtifact(libraryLoweringWorkerElectronConfig),
@@ -937,6 +947,7 @@ async function buildSourceServerPrerequisites() {
     // an older wire protocol even when packages/rpc/dist is current.
     await esbuild.build(browserTransportConfig);
     await esbuild.build(fsDiskWorkerConfig);
+    await esbuild.build(dependencyContentMaintenanceConfig);
     await esbuild.build(internalDoBundleConfig);
     await buildWorkerdPrograms({ minify: !isDev, logOverride });
 

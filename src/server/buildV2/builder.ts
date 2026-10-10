@@ -209,6 +209,8 @@ function resolveHostDependency(specifier: string): string {
   );
 }
 
+let buildSignal: AbortSignal | undefined;
+
 /**
  * Initialize the builder with the app's node_modules paths.
  * Must be called once before any buildUnit() calls.
@@ -217,13 +219,15 @@ export function initBuilder(
   appNodeModules: string | string[],
   appRoot: string,
   runNativeJob: RunNativeWorkspaceJob,
-  ensureBuildProvider?: (target: "react-native") => Promise<void>
+  ensureBuildProvider?: (target: "react-native") => Promise<void>,
+  signal?: AbortSignal
 ): void {
   const reuseWorkers = _appRoot === path.resolve(appRoot) && _libraryLoweringWorker !== null;
   _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
   _appRoot = path.resolve(appRoot);
   _runNativeJob = runNativeJob;
   _ensureBuildProvider = ensureBuildProvider;
+  buildSignal = signal;
   _hostWorkspacePackageManifests = discoverHostWorkspacePackageManifests(_appRoot);
   if (!reuseWorkers) {
     workerRetirement = joinWorkerRetirement([
@@ -2133,6 +2137,40 @@ export function computeBuildUnitKey(
   );
 }
 
+function preparedRuntimeBuild(
+  node: GraphNode,
+  ev: string,
+  stateRef: string,
+  options?: BuildUnitOptions
+) {
+  const prepared =
+    !options?.library &&
+    !options?.test &&
+    !options?.website &&
+    node.kind !== "package" &&
+    node.kind !== "template" &&
+    !(node.kind === "app" && node.manifest.app?.target === "react-native")
+      ? getBuildSourceProvider().preparedBuildForContent?.(stateRef, node.relativePath)
+      : null;
+  if (prepared && prepared.effectiveVersion !== ev) {
+    throw new Error(`Installed template artifact does not match its source: ${node.relativePath}`);
+  }
+  return prepared;
+}
+
+/** Resolve the installed artifact or the recipe for a future compilation. */
+export function resolveBuildUnitKey(
+  node: GraphNode,
+  ev: string,
+  stateRef: string,
+  options?: BuildUnitOptions
+): string {
+  return (
+    preparedRuntimeBuild(node, ev, stateRef, options)?.buildKey ??
+    computeBuildUnitKey(node, ev, options)
+  );
+}
+
 /**
  * Build a single unit (panel, about page, worker, or library).
  * Returns a BuildResult from the content-addressed store.
@@ -2152,7 +2190,10 @@ export async function buildUnit(
 ): Promise<BuildResult> {
   const sourcemap = buildSourcemapForNode(node, options);
   let provider: BuildProvider | null = null;
-  let buildKey = computeBuildUnitKey(node, ev, options);
+  const prepared = preparedRuntimeBuild(node, ev, stateRef, options);
+  // A release manifest selects finished bytes. The consumer's npm installation
+  // is an input to future compilation, not to selection of published artifacts.
+  let buildKey = prepared?.buildKey ?? computeBuildUnitKey(node, ev, options);
   if (
     !options?.library &&
     !options?.test &&
@@ -2188,6 +2229,9 @@ export async function buildUnit(
     }
     return cached;
   }
+
+  if (prepared)
+    throw new Error(`Installed template artifact is missing: ${node.relativePath} (${buildKey})`);
 
   // Check for in-flight build (coalescing). An adopted promise is worth saying
   // out loud: if the original never settles, every adopter inherits that, and
@@ -2590,7 +2634,8 @@ async function prepareBuildEnv(
     graph,
     sourceRoot,
     _appRoot,
-    _appNodeModules
+    _appNodeModules,
+    buildSignal
   );
   const {
     externalDeps,
@@ -4665,7 +4710,8 @@ async function buildExtension(
       _appRoot,
       runtimeExternalDeps,
       env.dependencyOverrides,
-      runtimeDependencyPatches
+      runtimeDependencyPatches,
+      buildSignal
     );
     try {
       const bundlePath = path.join(outdir, "bundle.js");
@@ -4808,7 +4854,8 @@ async function refreshCachedExtensionRuntimeDeps(result: BuildResult): Promise<v
     _appRoot,
     deps,
     extensionDetails?.dependencyOverrides ?? {},
-    extensionDetails?.dependencyPatches ?? []
+    extensionDetails?.dependencyPatches ?? [],
+    buildSignal
   );
   try {
     if (runtimeDeps.nodeModulesDir) {

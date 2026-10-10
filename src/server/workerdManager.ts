@@ -2243,18 +2243,10 @@ export class WorkerdManager {
         executionDigest: serviceIdentity.executionDigest,
         requested: serviceIdentity.authority.requests,
       });
-      const schemaDescriptor = this.doSchemaDescriptorDb
-        .prepare(
-          "SELECT descriptor_json FROM do_schema_descriptors WHERE source = ? AND execution_digest = ? AND class_name = ?"
-        )
-        .get(doService.source, serviceIdentity.executionDigest, className) as
-        | { descriptor_json: string }
-        | undefined;
-      if (!schemaDescriptor) {
-        throw new Error(`Internal Durable Object ${className} has no admitted schema descriptor`);
-      }
+      // Product code owns its schema directly. Its first real object installs
+      // and validates that schema; a disposable host probe would repeat it and
+      // require an otherwise unnecessary workerd generation.
       const bindings: object[] = [
-        { name: "VIBESTUDIO_SCHEMA_DESCRIPTOR", json: schemaDescriptor.descriptor_json },
         { name: "RPC_AUTH_TOKEN", text: serviceToken },
         // Source-scoped class identity
         { name: "WORKER_SOURCE", text: doService.source },
@@ -3425,7 +3417,8 @@ export class WorkerdManager {
 
   /**
    * Register a batch of DO classes. Internal DO classes are static workerd
-   * services and trigger a single restart when new. Userland DO classes load
+   * services before the first launch. Later static configuration changes restart
+   * the existing process. Userland DO classes load
    * through universal-do; startup should prefer route metadata + lazy
    * ensureDORoute unless an explicit prewarm is required.
    */
@@ -3445,7 +3438,6 @@ export class WorkerdManager {
         ? this.persistInternalRuntimeImage(imageId, className)
         : await this.bindRuntimeImage(imageId, source, undefined);
       const buildKey = image.artifact.buildKey;
-      if (isInternalDOSource(source)) await this.admitDurableObjectSchema(image, className);
       const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
       const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
       this.doServices.set(serviceKey, {
@@ -3463,10 +3455,11 @@ export class WorkerdManager {
       }
     }
 
-    // Only INTERNAL DO classes change the static config (and need a restart);
-    // userland classes load on demand into the static universal-do host.
+    // Install the complete static configuration before workerd starts. Dynamic
+    // workspace classes continue to load without a configuration restart.
     if (internalAdded) {
-      await this.restartWorkerd();
+      if (this.process) await this.restartWorkerd();
+      await this.ensureWorkerdRunning();
       log.info(`Pre-registered ${this.doServices.size} DO class(es)`);
     }
   }
@@ -3553,7 +3546,6 @@ export class WorkerdManager {
       if (isInternalDOSource(source)) {
         image = this.persistInternalRuntimeImage(`do-service:${serviceKey}`, className);
         buildKey = image.artifact.buildKey;
-        await this.admitDurableObjectSchema(image, className);
       } else {
         image = await this.bindRuntimeImage(`do-service:${serviceKey}`, source, opts.scopeRef);
         buildKey = image.artifact.buildKey;
@@ -3678,6 +3670,10 @@ export class WorkerdManager {
     image: RuntimeImageRecord,
     className: string
   ): Promise<void> {
+    // Internal classes are the exact product bundle. The class's own kernel
+    // creates and validates its database; host schema admission is for loaded
+    // workspace artifacts, whose definitions are publication inputs.
+    if (isInternalDOSource(image.source)) return;
     const key = canonicalJson([image.source, image.artifact.executionDigest, className]);
     const pending = this.schemaAdmissions.get(key);
     if (pending) return pending;
@@ -3690,26 +3686,6 @@ export class WorkerdManager {
     )
       return;
     const admission = (async () => {
-      if (isInternalDOSource(image.source)) {
-        const bundle = this.internalDOBundle();
-        const identity = internalDOExecutionIdentity(bundle, className);
-        if (identity.executionDigest !== image.artifact.executionDigest) {
-          throw new RuntimeImageUnavailableError(
-            `Internal Durable Object ${image.id} schema executable failed sealed identity verification`
-          );
-        }
-        const descriptor = await this.probeSchemaExecutable(image.source, className, {
-          version: identity.executionDigest,
-          modules: { "worker.js": bundle.bundle },
-        });
-        this.recordDurableObjectSchema({
-          source: image.source,
-          effectiveVersion: identity.effectiveVersion,
-          executionDigest: identity.executionDigest,
-          descriptor,
-        });
-        return;
-      }
       const build = this.requireWorkspaceProvider("schema admission").getBuildByExecution(
         image.artifact.buildKey,
         image.artifact.executionDigest

@@ -27,6 +27,7 @@ export const SERVER_WORKER_ENTRIES = Object.freeze({
 
 export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/server.mjs",
+  "dist/prepare-workspace-templates.mjs",
   "dist/fs-disk-worker.cjs",
   "dist/browserTransport.js",
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),

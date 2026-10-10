@@ -49,7 +49,7 @@ import * as buildStore from "./buildStore.js";
 import { primaryTextArtifactContent, type BuildResult } from "./buildStore.js";
 import {
   buildUnit,
-  computeBuildUnitKey,
+  resolveBuildUnitKey,
   buildNpmLibrary,
   buildPlatformLibrary,
   closeBuilder,
@@ -255,6 +255,8 @@ export interface BuildUnitCatalogEntry extends BuildUnitResolution {
 }
 
 export interface BuildSystemRootOptions {
+  /** Owning operation cancellation, propagated to dependency acquisition. */
+  signal?: AbortSignal;
   runNativeJob: RunNativeWorkspaceJob;
   /** Admit an acquired, immutable dependency tree to the native workspace owner. */
   admitNativeDependencies?: (
@@ -473,6 +475,8 @@ export interface BuildSystemV2 {
 
   /** Get effective version by package name or workspace-relative source path. */
   getEffectiveVersion(unitNameOrPath: string): string | null;
+  /** Current runtime artifact selected by publication, or its compilation recipe. */
+  getBuildKey(unitNameOrPath: string): string | null;
 
   /** Get external npm runtime/build dependencies for a unit. */
   getExternalDeps(unitName: string): Record<string, string>;
@@ -1273,7 +1277,8 @@ export async function initBuildSystemV2(
     appNodeModuleRoots,
     rootOptions.appRoot,
     rootOptions.runNativeJob,
-    rootOptions.ensureBuildProvider
+    rootOptions.ensureBuildProvider,
+    rootOptions.signal
   );
   buildStore.configureReleaseBuilds(rootOptions.appRoot);
   const typecheckWorker = new TypecheckWorkerClient(rootOptions.appRoot);
@@ -1654,7 +1659,7 @@ export async function initBuildSystemV2(
           priority,
         }
       : { priority };
-    const buildKey = computeBuildUnitKey(node, ev, options);
+    const buildKey = resolveBuildUnitKey(node, ev, viewStateHash, options);
 
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
@@ -3111,7 +3116,7 @@ export async function initBuildSystemV2(
       for (const name of buildableChanged) {
         const n = snapshot.graph.get(name);
         const ev = assertPresent(snapshot.evMap[name]);
-        const bk = computeBuildKey(name, ev, sourcemapForNode(n));
+        const bk = resolveBuildUnitKey(n, ev, snapshot.stateHash);
         if (!buildStore.has(bk)) {
           try {
             await buildUnit(n, ev, snapshot.graph, workspaceRoot, snapshot.stateHash);
@@ -3244,13 +3249,20 @@ export async function initBuildSystemV2(
       return null;
     },
 
+    getBuildKey(unitNameOrPath: string): string | null {
+      const snapshot = currentState();
+      const node = resolveUnit(snapshot.graph, unitNameOrPath, workspaceRoot);
+      const ev = node ? snapshot.evMap[node.name] : null;
+      return node && ev ? resolveBuildUnitKey(node, ev, snapshot.stateHash) : null;
+    },
+
     getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null {
       const node = resolveUnit(currentState().graph, unitName, workspaceRoot);
       return diagnosticsForUnit(node?.name ?? unitName);
     },
 
     async prepareGc({ epoch }): Promise<PreparedBuildGc> {
-      const { graph, evMap } = currentState();
+      const { graph, evMap, stateHash } = currentState();
       const roots = new Set<string>();
       const authoritativeRoots = new Set<string>();
       const authoritativeSourceRoots = new Map<string, ExecutionSourceContentRoot>();
@@ -3259,7 +3271,7 @@ export async function initBuildSystemV2(
       for (const node of graph.allNodes()) {
         const ev = evMap[node.name];
         if (!ev) continue;
-        roots.add(computeBuildKey(node.name, ev, sourcemapForNode(node)));
+        roots.add(resolveBuildUnitKey(node, ev, stateHash));
       }
 
       for (const root of providerSnapshot.roots) {

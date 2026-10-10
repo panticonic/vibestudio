@@ -1,4 +1,4 @@
-import { createRuntimeLayout } from "@vibestudio/shared/runtimePaths";
+import { workspaceReleaseResourceRoot } from "../preparedWorkspaceTemplate.js";
 import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
 /**
  * Content-Addressed Build Store — immutable artifact storage.
@@ -1024,7 +1024,7 @@ export function get(key: string): BuildResult | null {
 let releaseBuildRoot: string | null = null;
 
 export function configureReleaseBuilds(appRoot: string): void {
-  releaseBuildRoot = path.join(createRuntimeLayout(appRoot).resourcesRoot, "userland-builds");
+  releaseBuildRoot = path.join(workspaceReleaseResourceRoot(appRoot), "userland-builds");
 }
 
 /** Hydrate immutable build artifacts through one provenance-binding boundary. */

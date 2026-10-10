@@ -86,6 +86,33 @@ describe("blobCas", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it("atomically installs reconstructable content across volumes and retires its copy", async () => {
+    const bytes = Buffer.from("release source on another volume");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const source = path.join(rootDir, "release-source");
+    await fsp.writeFile(source, bytes);
+    vi.spyOn(fsp, "link").mockRejectedValueOnce(
+      Object.assign(new Error("Different volume"), { code: "EXDEV" })
+    );
+    const target = await linkReconstructableBlobFile(rootDir, digest, source, bytes.length);
+    expect(await fsp.readFile(target)).toEqual(bytes);
+    expect(await fsp.readdir(path.dirname(target))).toEqual([path.basename(target)]);
+  });
+
+  it("retires a cross-volume private copy when publication fails", async () => {
+    const bytes = Buffer.from("release source");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const source = path.join(rootDir, "release-source");
+    await fsp.writeFile(source, bytes);
+    vi.spyOn(fsp, "link")
+      .mockRejectedValueOnce(Object.assign(new Error("Different volume"), { code: "EXDEV" }))
+      .mockRejectedValueOnce(Object.assign(new Error("No permission"), { code: "EACCES" }));
+    await expect(
+      linkReconstructableBlobFile(rootDir, digest, source, bytes.length)
+    ).rejects.toThrow("No permission");
+    expect(await fsp.readdir(path.dirname(blobCasPath(rootDir, digest)))).toEqual([]);
+  });
+
   it("rejects a same-size corrupt reconstructable destination that wins publication", async () => {
     const bytes = Buffer.from("valid");
     const digest = createHash("sha256").update(bytes).digest("hex");

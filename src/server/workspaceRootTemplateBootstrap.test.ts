@@ -56,6 +56,7 @@ function snapshot(
 function fixture(
   rootSnapshot: ExactGitSnapshot,
   options: {
+    preparedTemplate?: import("./workspaceRootTemplateBootstrap.js").WorkspaceRootTemplateBootstrapDeps["preparedTemplate"];
     designation?: (pin: { url: string }) => { vouchesWholeTree: boolean } | null;
     layers?: Record<string, ExactGitSnapshot>;
     resolveTrack?: (address: { url: string; track: string }) => Promise<{
@@ -107,6 +108,7 @@ function fixture(
           return { digest, size: bytes.byteLength };
         },
       },
+      ...(options.preparedTemplate ? { preparedTemplate: options.preparedTemplate } : {}),
       ...(options.designation ? { designation: options.designation } : {}),
       ...(options.resolveTrack ? { resolveTrack: options.resolveTrack } : {}),
     }),
@@ -149,6 +151,50 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     expect(
       [...fx.blobs.values()].some((bytes) => new TextDecoder().decode(bytes).includes(sourceDigest))
     ).toBe(true);
+  });
+
+  it("installs a prepared source and its publication without Git acquisition or tree reconstruction", async () => {
+    const source = seededSnapshot();
+    const producer = fixture(source);
+    await producer.bootstrap.prepareSource();
+    const expectedState = await producer.bootstrap.prepareBootstrapState();
+    const build = {
+      source: "extensions/templates",
+      buildKey: "a".repeat(64),
+      effectiveVersion: "b".repeat(64),
+    };
+    const record = producer.bootstrap.preparedRecord([], [build]);
+    const bytes = new Map(
+      record.files.map((file) => [
+        file.path,
+        fs.readFileSync(path.join(producer.sourcePath, file.path)),
+      ])
+    );
+    const preparedTemplate = vi.fn(async () => ({
+      record,
+      readFile: (filePath: string) => bytes.get(filePath) ?? null,
+    }));
+    const consumer = fixture(source, { preparedTemplate });
+    await consumer.bootstrap.prepareSource();
+    expect(await consumer.bootstrap.prepareBootstrapState()).toBe(expectedState);
+    expect(await consumer.bootstrap.prepareInitialization()).toEqual(
+      await producer.bootstrap.prepareInitialization()
+    );
+    expect(consumer.acquire).not.toHaveBeenCalled();
+    expect(consumer.blobs.size).toBe(0);
+    expect(
+      fs.readFileSync(path.join(consumer.sourcePath, "extensions/templates/index.ts"), "utf8")
+    ).toBe("export {};");
+    expect(preparedTemplate).toHaveBeenCalledOnce();
+    expect(
+      consumer.bootstrap.preparedBuildForContent(expectedState, "extensions/templates")
+    ).toEqual(build);
+    expect(
+      consumer.bootstrap.preparedBuildForContent(`state:${"c".repeat(64)}`, "extensions/templates")
+    ).toBeNull();
+    expect(() =>
+      consumer.bootstrap.preparedBuildForContent(expectedState, "workers/missing")
+    ).toThrow("no artifact");
   });
 
   it("records what a designated template shipped, so units need no signature", async () => {

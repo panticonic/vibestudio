@@ -1521,7 +1521,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
       keyMode: "workspace-scoped",
     },
     workerd: {
-      bootstrapPhase: "first",
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
@@ -3669,7 +3668,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
       keyMode: "verified-user-workspace",
     },
     workerd: {
-      bootstrapPhase: "normal",
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
@@ -4352,7 +4350,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
       keyMode: "caller-supplied",
     },
     workerd: {
-      bootstrapPhase: "normal",
       staticAuthorityProjection: true,
       unsafeEval: true,
     },
@@ -4792,7 +4789,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
       keyMode: "caller-supplied",
     },
     workerd: {
-      bootstrapPhase: "normal",
       staticAuthorityProjection: true,
       unsafeEval: false,
     },

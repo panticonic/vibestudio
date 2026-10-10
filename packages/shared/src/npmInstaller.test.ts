@@ -142,7 +142,6 @@ describe("runNpmInstall", () => {
     try {
       await runNpmInstall(fixture.installDir, {
         appRoot: fixture.appRoot,
-        timeout: 5_000,
         ignoreScripts: false,
       });
     } finally {
@@ -196,9 +195,8 @@ describe("runNpmInstall", () => {
       await expect(
         runNpmInstall(fixture.installDir, {
           appRoot: fixture.appRoot,
-          timeout: 5_000,
         })
-      ).rejects.toThrow("Command failed");
+      ).rejects.toThrow("E401: authentication required");
     } finally {
       restoreEnv();
     }
@@ -231,7 +229,6 @@ describe("runNpmInstall", () => {
       phase: "resolve",
       state: "failed",
       code: 1,
-      timedOut: false,
       stderr: "npm error code E401: authentication required\n",
     });
     expect(profiles[1].npmLogTail).toHaveLength(4_000);
@@ -252,7 +249,6 @@ describe("runNpmInstall", () => {
       await expect(
         runNpmInstall(fixture.installDir, {
           appRoot: fixture.appRoot,
-          timeout: 5_000,
         })
       ).rejects.toMatchObject({
         name: "NpmResolutionError",
@@ -277,7 +273,6 @@ describe("runNpmInstall", () => {
       await expect(
         runNpmInstall(fixture.installDir, {
           appRoot: fixture.appRoot,
-          timeout: 5_000,
         })
       ).rejects.toMatchObject({
         name: "NpmResolutionError",
@@ -300,7 +295,7 @@ describe("runNpmInstall", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     try {
-      await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot, timeout: 5_000 });
+      await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot });
     } finally {
       restoreEnv();
     }
@@ -333,36 +328,53 @@ describe("runNpmInstall", () => {
     );
   });
 
-  it("joins a killed download process and discards its partial tree before retrying", async () => {
+  it("cancels and joins the entire npm guest without retrying", async () => {
     const fixture = createFakeNpmFixture();
-    const restoreEnv = replaceEnv({ VIBESTUDIO_NPM_INSTALLER_TEST_HANG_CI_ONCE: "1" });
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const controller = new AbortController();
+    const reason = new Error("Release publication cancelled");
+    const restoreEnv = replaceEnv({ VIBESTUDIO_NPM_INSTALLER_TEST_CHILD: "1" });
     try {
-      await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot, timeout: 1000 });
+      const install = runNpmInstall(fixture.installDir, {
+        appRoot: fixture.appRoot,
+        signal: controller.signal,
+      });
+      const cancelled = expect(install).rejects.toBe(reason);
+      const receipt = path.join(fixture.installDir, "child.json");
+      await vi.waitFor(() => expect(fs.existsSync(receipt)).toBe(true));
+      controller.abort(reason);
+      await cancelled;
+      expect(readAttempts(fixture.installDir)).toHaveLength(1);
+      if (process.platform === "linux") {
+        const pid = JSON.parse(fs.readFileSync(receipt, "utf8")) as number;
+        const stat = `/proc/${pid}/stat`;
+        expect(
+          !fs.existsSync(stat) ||
+            ["Z", "X"].includes(fs.readFileSync(stat, "utf8").split(") ")[1]!.split(" ")[0]!)
+        ).toBe(true);
+      }
     } finally {
       restoreEnv();
     }
-    expect(readAttempts(fixture.installDir)).toHaveLength(4);
   });
 
-  it("hard-stops and retries an npm process that ignores SIGTERM", async () => {
+  it("cancels dependency download without admitting a retry", async () => {
     const fixture = createFakeNpmFixture();
-
-    const restoreEnv = replaceEnv({
-      VIBESTUDIO_APP_ROOT: fixture.appRoot,
-      VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE: "1",
-    });
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
+    const controller = new AbortController();
+    const reason = new Error("Download cancelled");
+    const restoreEnv = replaceEnv({ VIBESTUDIO_NPM_INSTALLER_TEST_HANG_CI_ONCE: "1" });
     try {
-      // Leave enough time for a cold Node process to start and persist its
-      // first-attempt marker before exercising the install deadline.
-      await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot, timeout: 500 });
+      const install = runNpmInstall(fixture.installDir, {
+        appRoot: fixture.appRoot,
+        signal: controller.signal,
+      });
+      const cancelled = expect(install).rejects.toBe(reason);
+      await vi.waitFor(() => expect(readAttempts(fixture.installDir)).toHaveLength(2));
+      controller.abort(reason);
+      await cancelled;
+      expect(readAttempts(fixture.installDir)).toHaveLength(2);
     } finally {
       restoreEnv();
     }
-
-    expect(readAttempts(fixture.installDir)).toHaveLength(3);
   });
 });
 
@@ -404,6 +416,13 @@ const control = JSON.parse(fs.readFileSync(path.join(process.cwd(), "control.jso
 const args = process.argv.slice(2);
 attempts.push(args);
 fs.writeFileSync(attemptsPath, JSON.stringify(attempts));
+if (control.VIBESTUDIO_NPM_INSTALLER_TEST_CHILD) {
+  const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], {stdio:"inherit"});
+  fs.writeFileSync(path.join(process.cwd(), "child.json"), JSON.stringify(child.pid));
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
+  return;
+}
 if ((control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE && attempts.length === 1) || (control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_CI_ONCE && args[0] === "ci" && attempts.length === 2)) {
   fs.mkdirSync(path.join(process.cwd(), "node_modules", "half-extracted"), { recursive: true });
   fs.writeFileSync(path.join(process.cwd(), "package-lock.json"), "partial lock");

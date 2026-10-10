@@ -1147,7 +1147,7 @@ function borrowedDependencyEnvironment(
 export async function acquireExternalDeps(
   deps: Record<string, string>,
   dependencyOverrides: Record<string, string> = {},
-  options: { appRoot: string; patches?: readonly ExternalDependencyPatch[] }
+  options: { appRoot: string; patches?: readonly ExternalDependencyPatch[]; signal?: AbortSignal }
 ): Promise<ExternalDependencyBorrow> {
   const overrides = { ...dependencyOverrides };
   const patches = validateDependencyPatches(options.patches ?? []);
@@ -1159,6 +1159,7 @@ export async function acquireExternalDeps(
     appRoot: options.appRoot,
     overrides,
     patches,
+    signal: options.signal,
     contentDeduplication: "background",
   });
 }
@@ -1244,7 +1245,8 @@ export async function prepareExternalDependencyEnvironment(
   graph: PackageGraph,
   sourceRoot: string,
   appRoot: string,
-  appNodeModules: string[] = []
+  appNodeModules: string[] = [],
+  signal?: AbortSignal
 ): Promise<ExternalDependencyEnvironment> {
   const requirements = await resolveExternalDependencyRequirements(
     unit,
@@ -1265,6 +1267,7 @@ export async function prepareExternalDependencyEnvironment(
     : await acquireExternalDeps(externalDeps, dependencyOverrides, {
         appRoot,
         patches: dependencyPatches,
+        signal,
       });
   if (hostProjection) {
     console.log(
@@ -1323,7 +1326,8 @@ export async function ensureExtensionRuntimeDeps(
   appRoot: string,
   deps: Record<string, string>,
   dependencyOverrides: Record<string, string> = {},
-  patches: readonly ExternalDependencyPatch[] = []
+  patches: readonly ExternalDependencyPatch[] = [],
+  signal?: AbortSignal
 ): Promise<ExternalDependencyBorrow> {
   const validatedPatches = validateDependencyPatches(patches);
   assertDependencyPatchRootsPresent(validatedPatches, deps);
@@ -1344,6 +1348,7 @@ export async function ensureExtensionRuntimeDeps(
     appRoot,
     overrides,
     patches: validatedPatches,
+    signal,
     // Runtime publication requires an immutable dependency tree, not immediate
     // physical byte sharing. Hashing and relinking every installed payload in
     // the workspace server can monopolize its event loop for tens of seconds,
@@ -1358,6 +1363,7 @@ type EnsureDepsOptions = {
   baseDir: string;
   key: string;
   ignoreScripts: boolean;
+  signal?: AbortSignal;
   appRoot: string;
   overrides?: Record<string, string>;
   patches?: readonly ExternalDependencyPatch[];
@@ -1463,6 +1469,7 @@ async function ensureDepsInstalledOnce(
     const npmStartedAt = Date.now();
     await runNpmInstall(tmpDir, {
       appRoot: options.appRoot,
+      signal: options.signal,
       ignoreScripts: options.ignoreScripts,
     });
     profile.npmInstallMs = Date.now() - npmStartedAt;

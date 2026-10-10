@@ -1539,6 +1539,13 @@ async function main() {
     return { ref: discovered.ref, commit: discovered.commit };
   };
   const designatedTemplateUrls = hostDesignatedTemplateUrls(appRoot);
+  const {
+    workspaceReleaseResourceRoot,
+    preparedWorkspaceTemplatePath,
+    installPreparedWorkspaceTemplate,
+  } = await import("./preparedWorkspaceTemplate.js");
+  const { blobCasPath } = await import("./storage/blobCas.js");
+  const releaseResourceRoot = workspaceReleaseResourceRoot(appRoot);
   const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
     releaseTemplates: Object.values(readDefaultWorkspaceTemplates(appRoot)),
     workspaceId,
@@ -1547,6 +1554,33 @@ async function main() {
     expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
     sink: { put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)) },
     acquire: acquireWorkspaceTemplate,
+    preparedTemplate: async (pin, purpose) => {
+      // Runtime installation of a GitHub template remains ordinary source
+      // acquisition. Default launch roots must have their prepared release;
+      // a missing release is a publication defect, never a rebuild fallback.
+      if (
+        purpose !== "use" ||
+        !Object.values(readDefaultWorkspaceTemplates(appRoot)).some((candidate) =>
+          sameWorkspaceTemplatePin(candidate, pin)
+        )
+      )
+        return null;
+      const directory = preparedWorkspaceTemplatePath(releaseResourceRoot, pin, purpose);
+      const record = await installPreparedWorkspaceTemplate(
+        directory,
+        layout.blobsDir,
+        pin,
+        purpose
+      );
+      const files = new Map(record.files.map((file) => [file.path, file]));
+      return {
+        record,
+        readFile: (filePath) => {
+          const file = files.get(filePath);
+          return file ? fs.readFileSync(blobCasPath(layout.blobsDir, file.contentHash)) : null;
+        },
+      };
+    },
     resolveTrack: resolveTemplateTrack,
     // Only a template this build designates as its own can contribute
     // host-build units. A checkout the host designated is vouched for whole,

@@ -537,6 +537,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       ],
     };
     const rootTemplateBootstrap = {
+      preparedBuildForContent: () => null,
       prepareSource: vi.fn(async () => pin),
       prepareInitialization: vi.fn(async () => prepared),
     };
@@ -617,6 +618,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const vcs = new WorkspaceVcs({
       ...deps,
       rootTemplateBootstrap: {
+        preparedBuildForContent: () => null,
         prepareSource: vi.fn(async () => pin),
         prepareInitialization,
       },

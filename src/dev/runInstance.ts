@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { prepareWorkspaceRelease } from "./prepareWorkspaceRelease.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
@@ -193,6 +194,23 @@ function run(
   });
 }
 
+/** Source launches publish the same resources an installed product ships.
+ * Preparation owns its native domains and scratch; the supervisor owns the
+ * resulting immutable resources for the entire instance generation. */
+async function prepareLaunchTemplates(
+  env: NodeJS.ProcessEnv,
+  root: string,
+  generationId: string
+): Promise<void> {
+  const output = path.join(root, "workspace-release", generationId);
+  await prepareWorkspaceRelease({
+    appRoot: process.cwd(),
+    output,
+    scratch: path.join(root, "template-preparation", generationId),
+    env,
+  });
+}
+
 async function runServer(
   forwarded: string[],
   env: NodeJS.ProcessEnv,
@@ -206,6 +224,7 @@ async function runServer(
   await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
   await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
+  await prepareLaunchTemplates(env, instance.root, instance.generationId);
   const configuredReadyFile = optionValue(forwarded, "--ready-file");
   const readyFile =
     configuredReadyFile ?? path.join(instance.root, "server-auth", "hub-ready.json");
@@ -263,7 +282,8 @@ async function runServer(
 
 async function runDesktop(
   forwarded: string[],
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  instance: DevInstanceRecord
 ): Promise<DevInstanceSupervisor> {
   await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
   // Desktop launches share the repository host artifacts with parallel
@@ -271,6 +291,8 @@ async function runDesktop(
   // reuses its verified output; invoking build.mjs directly would clean the
   // shared dist/ while another instance is starting its workspace runtime.
   await run(process.execPath, ["scripts/ensure-host-build.mjs"], { env });
+  env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "desktop");
+  await prepareLaunchTemplates(env, instance.root, instance.generationId);
   const supervisor = new DevInstanceSupervisor({
     sourceRoot: fs.realpathSync(process.cwd()),
     command: process.execPath,
@@ -458,7 +480,7 @@ async function main(): Promise<void> {
     supervisor =
       mode === "server"
         ? await runServer(launchArgs, env, instance)
-        : await runDesktop(launchArgs, env);
+        : await runDesktop(launchArgs, env, instance);
     process.exitCode = await supervisor.wait();
   } catch (error) {
     retirementFailed = (error as NodeJS.ErrnoException)?.code === "EOWNERSHIP";
@@ -474,6 +496,14 @@ async function main(): Promise<void> {
         // registry and source checkpoints when that join cannot be established.
         console.error(`[instance:${id}] resource retirement failed; retaining owned state ${root}`);
       } else {
+        fs.rmSync(path.join(root, "workspace-release", instance.generationId), {
+          recursive: true,
+          force: true,
+        });
+        fs.rmSync(path.join(root, "template-preparation", instance.generationId), {
+          recursive: true,
+          force: true,
+        });
         if (!disposable) await prunePersistentInstanceBuildCache(root, id);
         fs.rmSync(checkpointTarget, { recursive: true, force: true });
         fs.rmSync(templateCheckpointRoot, { recursive: true, force: true });

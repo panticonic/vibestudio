@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+import {
+  prepareInstalledTemplateRelease,
+  joinChildProcess,
+  withStandaloneReleaseSession,
+  verifyPreparedReleaseUserland,
+} from "./prebuild-release-userland.mjs";
+import spawn from "cross-spawn";
 import { DEVELOPMENT_DIST_ENTRIES } from "./build-artifact-contracts.mjs";
 // Stage the one publishable npm package from a completed `pnpm build`:
 //
@@ -17,7 +24,8 @@ import { DEVELOPMENT_DIST_ENTRIES } from "./build-artifact-contracts.mjs";
 // and assembles its file tree. Host @vibestudio/* packages are vendored under
 // vendor/ and copied into node_modules by postinstall. @workspace/* packages are
 // not host dependencies; userland is acquired from the exact external Base
-// release and built by the runtime workspace build system. Userland dependencies
+// release and prepared before publication. Later installs use the runtime build
+// system. Userland dependencies
 // include packages that require Node >=22.13, so the generated package declares
 // the same floor.
 //
@@ -59,9 +67,95 @@ async function main() {
   buildSelfContainedExtensionHost();
   rmrf(outRoot);
   await stageServer(nativeArtifacts);
+  await prepareServerTemplateRelease(path.join(outRoot, "server"));
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
   console.log("\n✔ Staged dist-packages/server. Validate with:");
   console.log("    (cd dist-packages/server && npm publish --dry-run)");
+}
+
+/** Compile against a real installation of the staged package. Publication
+ * ships the resulting source and artifacts, rather than making its first user
+ * install development dependencies and compile the default workspaces. */
+async function prepareServerTemplateRelease(root) {
+  const run = async (executable, args) => {
+    const child = spawn(executable, args, {
+      cwd: root,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let cancellation, stopping;
+    const stop = () => {
+      cancellation ??= new Error("Staged dependency installation cancelled");
+      stopping ??= new Promise((resolve, reject) => {
+        if (!child.pid) return resolve();
+        if (process.platform === "win32") {
+          const killer = spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], {
+            stdio: "ignore",
+          });
+          killer.once("error", reject);
+          killer.once("close", (code) =>
+            code === 0
+              ? resolve()
+              : reject(new Error(`Dependency guest retirement failed (${code})`))
+          );
+        } else {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+            resolve();
+          } catch (error) {
+            if (error.code === "ESRCH") resolve();
+            else reject(error);
+          }
+        }
+      });
+      void stopping.catch(() => {});
+    };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    const joined = joinChildProcess(child);
+    for (const stream of [child.stdout, child.stderr])
+      stream.on("data", (chunk) => process.stdout.write(chunk));
+    try {
+      const result = await joined;
+      await stopping;
+      if (cancellation) throw cancellation;
+      if (result.error || result.code !== 0)
+        throw new Error(`Staged dependency installation failed (${result.signal ?? result.code})`, {
+          cause: result.error,
+        });
+    } finally {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+    }
+  };
+  try {
+    // The installation exists only during publication; npm owns the consumer's
+    // dependency tree after the package is installed there.
+    copyTree(path.join(repoRoot, "dist/node"), path.join(root, "dist/node"), defaultSkip);
+    await run(process.platform === "win32" ? "npm.cmd" : "npm", [
+      "install",
+      "--omit=dev",
+      "--no-audit",
+      "--no-fund",
+    ]);
+    await prepareInstalledTemplateRelease({
+      appRoot: root,
+      resources: root,
+      executable: process.execPath,
+      entry: path.join(root, "dist/prepare-workspace-templates.mjs"),
+      scratchParent: outRoot,
+    });
+    await withStandaloneReleaseSession(
+      root,
+      process.execPath,
+      outRoot,
+      verifyPreparedReleaseUserland
+    );
+  } finally {
+    rmrf(path.join(root, "node_modules"));
+    rmrf(path.join(root, "dist/node"));
+    fs.rmSync(path.join(root, "package-lock.json"), { force: true });
+  }
 }
 
 function assertBuilt() {
@@ -84,7 +178,7 @@ function buildSelfContainedExtensionHost() {
 // ---------------------------------------------------------------------------
 // @panticonic/vibestudio-server
 // ---------------------------------------------------------------------------
-async function stageServer(nativeArtifacts) {
+export async function stageServer(nativeArtifacts) {
   const root = path.join(outRoot, "server");
   console.log(`• Staging ${PUBLIC_SERVER_PACKAGE_NAME}…`);
   mkdirp(root);
@@ -153,6 +247,8 @@ async function stageServer(nativeArtifacts) {
       "vendor",
       "scripts",
       "build-resources",
+      "workspace-templates",
+      "userland-builds",
       "native/node/distribution.json",
       ".nvmrc",
     ],
