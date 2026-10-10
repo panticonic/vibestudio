@@ -32,6 +32,7 @@ import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
+import { rpcDiagnosticIdOf } from "@vibestudio/rpc";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 import type {
   BuildProvider,
@@ -1130,21 +1131,49 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     operation: "invoke" | "invokeProvider",
     call: (entry: RegistryEntry, invocation: ExtensionInvocation) => Promise<unknown>
   ): Promise<unknown> {
+    console.info("[ExtensionHost] invocation requested", {
+      extension: name,
+      method: invocationMethod,
+    });
     // Do not wait for the global background approval/build flow here. Invocation is target-local:
     // use the currently active bundle if one exists, or fail fast below. Waiting for `whenSettled()`
     // can park a low-value call to an already-running extension behind an unrelated pending
     // extension approval, which in turn can wedge eval/tool callers that are just awaiting an
     // extension-backed helper.
     const entry = await this.requireInvocationEntry(name, operation, ctx.signal);
+    console.info("[ExtensionHost] invocation target resolved", {
+      extension: entry.name,
+      method: invocationMethod,
+    });
     this.assertWebsiteMethod(ctx, entry, invocationMethod);
     await this.ensureTargetRunning(entry, ctx.signal, operation);
+    console.info("[ExtensionHost] invocation target ready", {
+      extension: entry.name,
+      method: invocationMethod,
+    });
     ctx.signal?.throwIfAborted();
     this.assertWebsiteMethod(ctx, entry, invocationMethod);
     this.assertAdmittedMethod(ctx, entry, invocationMethod);
     const invocation = this.createTrackedInvocation(ctx, entry.name, invocationMethod);
+    console.info("[ExtensionHost] invocation admitted", {
+      extension: entry.name,
+      method: invocationMethod,
+    });
     try {
-      return await call(entry, invocation);
+      const result = await call(entry, invocation);
+      console.info("[ExtensionHost] invocation completed", {
+        extension: entry.name,
+        method: invocationMethod,
+      });
+      return result;
     } catch (error) {
+      console.warn("[ExtensionHost] invocation failed", {
+        extension: entry.name,
+        method: invocationMethod,
+        message: error instanceof Error ? error.message : String(error),
+        code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
+        diagnosticId: rpcDiagnosticIdOf(error),
+      });
       const message = error instanceof Error ? error.message : String(error);
       const wrapped = new Error(
         `Extension ${entry.name}.${invocationMethod} invocation failed: ${message}`

@@ -9,6 +9,7 @@ import {
   decodeRpcJson,
   encodeRpcJson,
   envelopeFromMessage,
+  rpcDiagnosticIdOf,
   rpcErrorDataOf,
   rpcErrorKindOf,
   type EnvelopeRpcTransport,
@@ -44,6 +45,40 @@ const lifecycle = new ExtensionRuntimeLifecycle();
 const pendingShutdowns: ExtensionShutdownRequest[] = [];
 let shutdownHandler: ((message: ExtensionShutdownRequest) => Promise<void>) | undefined;
 let lifetimeCleanup: () => Promise<void> = () => Promise.resolve();
+
+function runOwnedLifecycle<T>(
+  owner: string,
+  signal: AbortSignal,
+  operation: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const extension = process.env["VIBESTUDIO_EXTENSION_NAME"] ?? "unknown";
+  const flight = lifecycle.run(signal, async (ownedSignal) => {
+    console.info("[ExtensionRuntime] invocation started", {
+      extension,
+      owner,
+    });
+    return operation(ownedSignal);
+  });
+  return flight.then(
+    (value) => {
+      console.info("[ExtensionRuntime] invocation completed", {
+        extension,
+        owner,
+      });
+      return value;
+    },
+    (error) => {
+      console.warn("[ExtensionRuntime] invocation failed", {
+        extension,
+        owner,
+        message: error instanceof Error ? error.message : String(error),
+        code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
+        diagnosticId: rpcDiagnosticIdOf(error),
+      });
+      throw error;
+    }
+  );
+}
 process.on("message", (message: unknown) => {
   if (
     message &&
@@ -825,12 +860,23 @@ async function main(): Promise<void> {
   const extensionName = requiredEnv("VIBESTUDIO_EXTENSION_NAME");
   installCommonJsGlobals(bundlePath);
   let mod: Awaited<ReturnType<typeof importExtensionModule>>;
+  console.info("[ExtensionRuntime] extension module import started", { extension: extensionName });
   try {
     mod = await importExtensionModule(bundlePath);
+    console.info("[ExtensionRuntime] extension module import completed", {
+      extension: extensionName,
+    });
   } catch (err) {
+    console.warn("[ExtensionRuntime] extension module import failed", {
+      extension: extensionName,
+      message: err instanceof Error ? err.message : String(err),
+      code: err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined,
+      diagnosticId: rpcDiagnosticIdOf(err),
+    });
     throw extensionRuntimeError("runtime-import", err, { extension: extensionName, bundlePath });
   }
   const ctx = createContext();
+  console.info("[ExtensionRuntime] extension activation started", { extension: extensionName });
   const activation = Promise.resolve().then(() =>
     typeof mod["activate"] === "function" ? mod["activate"](ctx) : undefined
   );
@@ -860,7 +906,14 @@ async function main(): Promise<void> {
   let api: unknown;
   try {
     api = await activation;
+    console.info("[ExtensionRuntime] extension activation completed", { extension: extensionName });
   } catch (err) {
+    console.warn("[ExtensionRuntime] extension activation failed", {
+      extension: extensionName,
+      message: err instanceof Error ? err.message : String(err),
+      code: err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined,
+      diagnosticId: rpcDiagnosticIdOf(err),
+    });
     throw extensionRuntimeError("activate", err, { extension: extensionName, bundlePath });
   }
   const apiObject = api && typeof api === "object" ? (api as Record<string, unknown>) : {};
@@ -894,7 +947,7 @@ async function main(): Promise<void> {
     async (req) => {
       assertHostControlCaller(req, "extension.invoke");
       const [method, args, invocation] = req.args as [string, unknown[], ExtensionInvocation];
-      return lifecycle.run(req.signal, (signal) =>
+      return runOwnedLifecycle(`extension.invoke:${method}`, req.signal, (signal) =>
         invocationStore.run({ invocation, signal }, async () => {
           const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
             ? apiObject[method]
@@ -932,32 +985,35 @@ async function main(): Promise<void> {
         unknown[],
         ExtensionInvocation,
       ];
-      return lifecycle.run(req.signal, (signal) =>
-        invocationStore.run({ invocation, signal }, async () => {
-          const providerApi = Object.prototype.hasOwnProperty.call(providerApis, provider)
-            ? providerApis[provider]
-            : undefined;
-          const fn =
-            providerApi && typeof providerApi === "object"
-              ? (providerApi as Record<string, unknown>)[method]
+      return runOwnedLifecycle(
+        `extension.invokeProvider:${provider}.${method}`,
+        req.signal,
+        (signal) =>
+          invocationStore.run({ invocation, signal }, async () => {
+            const providerApi = Object.prototype.hasOwnProperty.call(providerApis, provider)
+              ? providerApis[provider]
               : undefined;
-          if (typeof fn !== "function") {
-            const err = new Error(
-              `Extension provider method not found: providers.${provider}.${method}`
-            ) as NodeJS.ErrnoException;
-            err.code = "ENOMETHOD";
-            throw err;
-          }
-          try {
-            return await fn(...args);
-          } catch (err) {
-            throw extensionRuntimeError("invoke", err, {
-              extension: extensionName,
-              method: `providers.${provider}.${method}`,
-              caller: invocation.caller.callerId,
-            });
-          }
-        })
+            const fn =
+              providerApi && typeof providerApi === "object"
+                ? (providerApi as Record<string, unknown>)[method]
+                : undefined;
+            if (typeof fn !== "function") {
+              const err = new Error(
+                `Extension provider method not found: providers.${provider}.${method}`
+              ) as NodeJS.ErrnoException;
+              err.code = "ENOMETHOD";
+              throw err;
+            }
+            try {
+              return await fn(...args);
+            } catch (err) {
+              throw extensionRuntimeError("invoke", err, {
+                extension: extensionName,
+                method: `providers.${provider}.${method}`,
+                caller: invocation.caller.callerId,
+              });
+            }
+          })
       );
     },
     {
@@ -971,7 +1027,7 @@ async function main(): Promise<void> {
     async (req, sink) => {
       assertHostControlCaller(req, "extension.invokeStream");
       const [method, methodArgs, invocation] = req.args as [string, unknown[], ExtensionInvocation];
-      await lifecycle.run(req.signal, (signal) =>
+      await runOwnedLifecycle(`extension.invokeStream:${method}`, req.signal, (signal) =>
         invocationStore.run({ invocation, signal }, async () => {
           const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
             ? apiObject[method]
@@ -1005,7 +1061,9 @@ async function main(): Promise<void> {
     async (req) => {
       assertHostControlCaller(req, "extension.fetchResponseBodyChunk");
       const [streamId] = req.args as [string];
-      return lifecycle.run(req.signal, () => readNextResponseBodyChunk(streamId));
+      return runOwnedLifecycle("extension.fetchResponseBodyChunk", req.signal, () =>
+        readNextResponseBodyChunk(streamId)
+      );
     },
     {
       kind: "closed",
@@ -1018,7 +1076,7 @@ async function main(): Promise<void> {
     async (req) => {
       assertHostControlCaller(req, "extension.fetchResponseBodyClose");
       const [streamId] = req.args as [string];
-      return lifecycle.run(req.signal, async () => {
+      return runOwnedLifecycle("extension.fetchResponseBodyClose", req.signal, async () => {
         await closeResponseBodyStream(streamId);
         return null;
       });
@@ -1044,7 +1102,7 @@ async function main(): Promise<void> {
         err.code = "ENOFETCH";
         throw err;
       }
-      return lifecycle.run(req.signal, (signal) =>
+      return runOwnedLifecycle(`extension.fetch:${requestEnvelope.method}`, req.signal, (signal) =>
         invocationStore.run({ invocation, signal }, async () => {
           const body = await requestBodyFromEnvelope(requestEnvelope.body);
           const request = new Request(requestEnvelope.url, {
@@ -1123,9 +1181,21 @@ async function main(): Promise<void> {
   ]).catch((err) => {
     console.error("[ExtensionRuntime] Failed to report initial health:", err);
   });
-  await rpcCall("runtime.supervision.reportReady", [
-    { methods, providerMethods, hasFetch: !!fetchHandler },
-  ]);
+  console.info("[ExtensionRuntime] readiness report started", { extension: extensionName });
+  try {
+    await rpcCall("runtime.supervision.reportReady", [
+      { methods, providerMethods, hasFetch: !!fetchHandler },
+    ]);
+    console.info("[ExtensionRuntime] readiness report completed", { extension: extensionName });
+  } catch (error) {
+    console.warn("[ExtensionRuntime] readiness report failed", {
+      extension: extensionName,
+      message: error instanceof Error ? error.message : String(error),
+      code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
+      diagnosticId: rpcDiagnosticIdOf(error),
+    });
+    throw error;
+  }
 }
 
 function importExtensionModule(bundlePath: string): Promise<Record<string, unknown>> {

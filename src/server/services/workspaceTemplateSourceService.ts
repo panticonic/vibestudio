@@ -51,7 +51,24 @@ export function createWorkspaceTemplateSourceService(deps: {
   put(bytes: Uint8Array): Promise<unknown>;
 }): ServiceDefinition {
   const acquireValidated = async (pin: WorkspaceTemplatePin) => {
-    const snapshot = await deps.acquire(pin);
+    const source = `${pin.url}@${pin.commit}`;
+    console.info("[workspaceTemplateSource] exact inspection acquisition started", {
+      source,
+    });
+    let snapshot: ExactGitSnapshot;
+    try {
+      snapshot = await deps.acquire(pin);
+    } catch (error) {
+      console.warn("[workspaceTemplateSource] exact inspection acquisition failed", {
+        source,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    console.info("[workspaceTemplateSource] exact inspection acquisition completed", {
+      source,
+      files: snapshot.files.length,
+    });
     const bytes = snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
     if (!bytes) throw new Error(`Upstream snapshot is missing ${TEMPLATE_SOURCE_MANIFEST_PATH}`);
     const content = Buffer.from(bytes).toString("utf8");
@@ -148,13 +165,28 @@ export function createWorkspaceTemplateSourceService(deps: {
       },
       inspectExact: async (ctx, [pin]) => {
         requireReviewedSourceConsumer(ctx.caller);
-        const { manifest, repositories } = await acquireValidated(pin);
-        return {
-          pin,
-          ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
-          repositories,
-          dependencies: manifest.dependencies,
-        };
+        const source = `${pin.url}@${pin.commit}`;
+        console.info("[workspaceTemplateSource] inspectExact started", { source });
+        try {
+          const { manifest, repositories } = await acquireValidated(pin);
+          const result = {
+            pin,
+            ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
+            repositories,
+            dependencies: manifest.dependencies,
+          };
+          console.info("[workspaceTemplateSource] inspectExact completed", {
+            source,
+            repositories: repositories.length,
+          });
+          return result;
+        } catch (error) {
+          console.warn("[workspaceTemplateSource] inspectExact failed", {
+            source,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
       },
     }),
   };
