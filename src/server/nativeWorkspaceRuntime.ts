@@ -146,7 +146,7 @@ export async function startNativeWorkspaceRuntime(input: {
     }
   );
   const dependencyRoot = path.join(runtimeRoot, "dependencies");
-  const dependencyWorker = new ImmutableTreeWorkerClient(input.appRoot);
+  const dependencyWorker = new ImmutableTreeWorkerClient();
   const dependencyAdmissions = new Map<string, Promise<NativeDependencyResources>>();
   let retiring = false;
   let dependencyRetirement: Promise<void> | undefined;

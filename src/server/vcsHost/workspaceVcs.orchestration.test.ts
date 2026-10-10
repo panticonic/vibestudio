@@ -73,6 +73,28 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("uses one source owner before and after semantic publication", async () => {
+    const { deps, refs } = await harness();
+    const initialContentState = `state:${"a".repeat(64)}`;
+    const vcs = new WorkspaceVcs({ ...deps, initialContentState });
+    const view = vi.spyOn(vcs.repositories, "workspaceView");
+    await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: initialContentState });
+    expect(view).not.toHaveBeenCalled();
+    expect(vcs.executionStateForContent(initialContentState)).toEqual({
+      kind: "bootstrap-snapshot",
+      snapshotHash: initialContentState,
+    });
+    const semantic = { kind: "event", eventId: "event:initialized" } as const;
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue(semantic);
+    view.mockResolvedValueOnce({ stateHash: initialContentState });
+    await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: initialContentState });
+    expect(vcs.executionStateForContent(initialContentState)).toEqual(semantic);
+    const changed = `state:${"b".repeat(64)}`;
+    view.mockResolvedValueOnce({ stateHash: changed });
+    await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: changed });
+    expect(vcs.executionStateForContent(changed)).toEqual(semantic);
+  });
+
   it.each([
     {
       authoredChangeId: "change:test",
@@ -530,6 +552,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
               path: "index.ts",
               contentHash: templateHash,
               size: templateBytes.byteLength,
+              contentKind: "text" as const,
+              byteLength: templateBytes.byteLength,
+              coordinateExtent: new TextDecoder().decode(templateBytes).length,
               mode: 0o644 as const,
             },
           ],

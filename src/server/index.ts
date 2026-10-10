@@ -354,7 +354,6 @@ async function main() {
   const eventService = new EventService();
   const { RpcServer, SYSTEM_SUBJECT } = await import("./rpcServer.js");
   const { ServiceContainer } = await import("@vibestudio/shared/serviceContainer");
-  const { initBuildSystemV2 } = await import("./buildV2/index.js");
   console.log(
     `[Perf] server core imports ready at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
@@ -390,6 +389,8 @@ async function main() {
     await runHubServer({ args, appRoot });
     return;
   }
+
+  const { initBuildSystemV2 } = await import("./buildV2/index.js");
 
   // Consume hub-only capabilities before resolving or loading any
   // workspace-controlled code. Descendants must never inherit these values.
@@ -1605,6 +1606,9 @@ async function main() {
   const restoredLaunch = readWorkspaceHostLaunchRecord(statePath);
   const bootstrapStateHash =
     restoredLaunch?.stateHash ?? (await rootTemplateBootstrap.prepareBootstrapState());
+  if (restoredLaunch && !protectedRefStore.readMainSemanticState()) {
+    throw new Error("Workspace launch has no protected semantic main");
+  }
   const { readFileAtTree, getBytes } = await import("./services/blobstoreService.js");
   const materializedWorkspaceConfig = await readWorkspaceConfig(
     {
@@ -1652,6 +1656,7 @@ async function main() {
     buildSourcesRoot: layout.buildSourcesDir,
     refs: protectedRefStore,
     rootTemplateBootstrap,
+    initialContentState: bootstrapStateHash,
     // Public context bindings contain durable identities only. Reachability is
     // resolved from the caller's current hub/session credential.
     workspaceId,
@@ -1686,9 +1691,7 @@ async function main() {
       isBootstrapRepository: async (repoPath) => {
         const stateHash = trustedBootstrapStateHash;
         if (!stateHash) return false;
-        return (
-          (await bootstrapWorkspaceSource.readFile(stateHash, `${repoPath}/package.json`)) !== null
-        );
+        return (await workspaceVcs.readFile(stateHash, `${repoPath}/package.json`)) !== null;
       },
       hostBuildVersion: () => serverVersion,
       admittedOriginKeys: () => unitAdmissionStore.admittedOriginKeys(),
@@ -2420,54 +2423,16 @@ async function main() {
     appRoot,
     buildDependencyWorkspaceRoot
   );
-  const { BootstrapWorkspaceSource } = await import("./buildV2/bootstrapWorkspaceSource.js");
-  const bootstrapSemanticState = restoredLaunch ? protectedRefStore.readMainSemanticState() : null;
-  if (restoredLaunch && !bootstrapSemanticState)
-    throw new Error("Workspace launch has no protected semantic main");
-  const bootstrapWorkspaceSource = new BootstrapWorkspaceSource(
-    workspaceId,
-    workspaceVcs,
-    bootstrapStateHash,
-    bootstrapSemanticState ?? { kind: "bootstrap-snapshot", snapshotHash: bootstrapStateHash }
-  );
   console.log(
     `[Perf] workspace bootstrap publication recovered at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
   trustedBootstrapStateHash = bootstrapStateHash;
-  container.registerManaged({
-    name: "bootstrapBuildSystem",
-    dependencies: ["nativeWorkspace"],
-    async start(resolve) {
-      const nativeWorkspace = assertPresent(
-        resolve<
-          Awaited<
-            ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
-          >
-        >("nativeWorkspace")
-      );
-      return initBuildSystemV2(
-        workspacePath,
-        bootstrapWorkspaceSource,
-        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
-        {
-          appRoot,
-          runNativeJob: (input) => nativeWorkspace.runJob(input),
-          admitNativeDependencies: (input) => nativeWorkspace.admitDependencies(input),
-          dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
-          dependencyFingerprint,
-        }
-      );
-    },
-    async stop(instance: import("./buildV2/index.js").BuildSystemV2 | null) {
-      await instance?.shutdown();
-    },
-  });
 
-  // Steady-state build system, installed only after the workspace source
-  // provider has accepted the exact bootstrap snapshot.
+  // One build owner follows the exact initial content through semantic
+  // publication and every subsequent workspace edit.
   container.registerManaged({
     name: "buildSystem",
-    dependencies: ["semanticWorkspace", "nativeWorkspace"],
+    dependencies: ["nativeWorkspace"],
     async start(resolve) {
       const nativeWorkspace = assertPresent(
         resolve<
@@ -4025,7 +3990,7 @@ async function main() {
           resolveContextSource: async (contextId, sourcePath) => {
             const contentStateHash = await workspaceVcs.resolveContextState(contextId);
             const sourceState = workspaceVcs.executionStateForContent(contentStateHash);
-            if (!sourceState) {
+            if (!sourceState || sourceState.kind === "bootstrap-snapshot") {
               throw new Error(
                 `eval context ${contextId} has no semantic identity for ${contentStateHash}`
               );
@@ -4225,6 +4190,7 @@ async function main() {
             source: presentation.source,
             className: presentation.className,
             objectKey: presentation.objectKey,
+            buildRef: "main",
           });
           await presentationReady;
           return doDispatch.dispatch(
@@ -6218,7 +6184,7 @@ async function main() {
       objectKey: string;
       contextId?: string;
       contextPolicy?: "exact" | "initial";
-      buildRef?: string;
+      buildRef: string;
     }
   ): Promise<void> => {
     const { source, className, objectKey, buildRef } = ref;
@@ -6328,6 +6294,7 @@ async function main() {
             source: development.source,
             className: development.className,
             objectKey: development.objectKey,
+            buildRef: "main",
           });
           await developmentReady;
           return doDispatch.dispatch(
@@ -6404,7 +6371,7 @@ async function main() {
               objectKey,
               ...(contextId ? { contextId } : {}),
               ...(contextPolicy ? { contextPolicy } : {}),
-              ...(buildRef ? { buildRef } : {}),
+              buildRef,
             });
           },
           resetDurableObjectStorage: (target, intent) =>
@@ -7328,6 +7295,7 @@ async function main() {
 
   // Start the readiness dependency closure; extend the lifecycle in the background.
   await container.startRequired([
+    "semanticWorkspace",
     "runtime",
     "workspace-state",
     "build",

@@ -28,6 +28,11 @@ const file = z
     mode: z.union([z.literal(0o644), z.literal(0o755)]),
   })
   .strict();
+const snapshotFile = file.extend({
+  contentKind: z.enum(["text", "bytes"]),
+  byteLength: z.number().int().nonnegative(),
+  coordinateExtent: z.number().int().nonnegative(),
+});
 const snapshotDigest = z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u);
 const stateHash = z.string().regex(/^state:[0-9a-f]{64}$/u);
 export const preparedWorkspaceTemplateSchema = z
@@ -46,7 +51,7 @@ export const preparedWorkspaceTemplateSchema = z
           subdir: relativePath,
           snapshot: snapshotDigest,
           contentRoot: stateHash,
-          files: z.array(file),
+          files: z.array(snapshotFile),
         })
         .strict()
     ),

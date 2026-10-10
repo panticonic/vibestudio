@@ -24,12 +24,12 @@ import {
 } from "./services/blobstoreService.js";
 import { acquireRootTemplateSnapshot } from "./acquireRootTemplateSnapshot.js";
 import { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
-import { BootstrapWorkspaceSource } from "./buildV2/bootstrapWorkspaceSource.js";
 import { createProtectedRefStore } from "./services/protectedRefStore.js";
 import { initBuildSystemV2 } from "./buildV2/index.js";
 import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
 import { getExistingAppNodeModulesRoots } from "@vibestudio/shared/runtimePaths";
 import { exportReleaseBuild } from "../../scripts/prebuild-release-userland.mjs";
+import { drainBuildStorePublications } from "./buildV2/buildStore.js";
 import { blobCasPath, linkReconstructableBlobFile } from "./storage/blobCas.js";
 
 /** Prepare the same immutable release for a source supervisor or a packager.
@@ -64,8 +64,9 @@ export async function prepareWorkspaceTemplates(input: {
     for (const [role, pin] of Object.entries(pins)) {
       input.signal?.throwIfAborted();
       const workspaceId = `prepare-${role}`;
-      const statePath = path.join(input.scratch, role);
-      const sourcePath = path.join(statePath, "source");
+      const workspacePath = path.join(input.scratch, "workspaces", workspaceId);
+      const statePath = path.join(workspacePath, "state");
+      const sourcePath = path.join(workspacePath, "source");
       const blobsDir = path.join(statePath, "blobs");
       fs.mkdirSync(sourcePath, { recursive: true });
       fs.mkdirSync(path.join(statePath, "workspace-creation"), { recursive: true });
@@ -161,6 +162,7 @@ export async function prepareWorkspaceTemplates(input: {
         [];
       const vcs = new WorkspaceVcs({
         workspaceId,
+        initialContentState: stateHash,
         workspaceRoot: sourcePath,
         blobsDir,
         contextProjectionsRoot: path.join(statePath, "contexts"),
@@ -171,10 +173,6 @@ export async function prepareWorkspaceTemplates(input: {
             throw new Error("A release producer cannot publish semantic state");
           },
         }),
-      });
-      const source = new BootstrapWorkspaceSource(workspaceId, vcs, stateHash, {
-        kind: "bootstrap-snapshot",
-        snapshotHash: stateHash,
       });
       const native = await startNativeWorkspaceRuntime({
         workspaceId,
@@ -200,6 +198,7 @@ export async function prepareWorkspaceTemplates(input: {
               throw new Error("Template preparation still owns a native executor");
           }),
         ]);
+        outcomes.push(...(await Promise.allSettled([drainBuildStorePublications()])));
         for (const outcome of outcomes) {
           if (outcome.status === "rejected") {
             retirementFailed = true;
@@ -210,7 +209,7 @@ export async function prepareWorkspaceTemplates(input: {
       try {
         builds = await initBuildSystemV2(
           sourcePath,
-          source,
+          vcs,
           getExistingAppNodeModulesRoots(input.appRoot),
           {
             appRoot: input.appRoot,

@@ -59,6 +59,9 @@ export interface WorkspaceSourceSnapshotRepository {
     path: string;
     contentHash: string;
     mode: number;
+    contentKind: "text" | "bytes";
+    byteLength: number;
+    coordinateExtent: number;
   }[];
 }
 

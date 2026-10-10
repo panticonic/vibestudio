@@ -44,7 +44,7 @@ describe("wireVcsDurability", () => {
       { name: "vcsAttach", dependencies: ["doDispatch", "workerdManager"] },
       {
         name: "semanticWorkspace",
-        dependencies: ["vcsAttach", "workerdManager"],
+        dependencies: ["vcsAttach"],
       },
       {
         name: "gcEpochCoordinator",
@@ -157,13 +157,7 @@ describe("wireVcsDurability", () => {
     await attach?.start?.(bootstrapResolve);
     await expect(semantic?.start?.(resolve)).resolves.toBe(workspaceVcs);
     expect(activateSemanticWorkspace).toHaveBeenCalledWith(workspaceVcs);
-    expect(manager.ensureDurableObjectEntity).toHaveBeenLastCalledWith({
-      source: "workers/workspace-source",
-      ref: "main",
-      className: "GadWorkspaceDO",
-      key: "workspace",
-      contextId: expect.stringMatching(/^object-/u),
-    });
-    expect(publishWorkspaceSourceEntity).toHaveBeenCalledTimes(2);
+    expect(manager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
+    expect(publishWorkspaceSourceEntity).toHaveBeenCalledOnce();
   });
 });

@@ -58,6 +58,38 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
     };
   }
 
+  it("keeps its graph when semantic publication adopts the same content", async () => {
+    const graph = discoverPackageGraph(workspaceRoot);
+    const { evMap, contentHashes } = computeEffectiveVersions(graph, {});
+    let publication!: (event: ProtectedPublicationEvent) => void | Promise<void>;
+    const source = {
+      workspaceId: "workspace:test",
+      discoverGraph: vi.fn(),
+      unitHashes: vi.fn(),
+      onProtectedPublication: (cb: typeof publication) => {
+        publication = cb;
+        return () => {};
+      },
+    } as unknown as WorkspaceStateSource;
+    trigger = new StateTransitionTrigger({
+      graph,
+      evMap,
+      contentHashes,
+      stateHash: "state:0",
+      workspaceRoot,
+      source,
+    });
+    const changed = vi.fn();
+    trigger.on("change-detected", changed);
+    trigger.start();
+    await publication({ ...makeEvent("state:0"), changedPaths: ["packages/a/package.json"] });
+    await trigger.whenSettled();
+    expect(source.discoverGraph).not.toHaveBeenCalled();
+    expect(source.unitHashes).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
+    expect(trigger.getState().graph).toBe(graph);
+  });
+
   it("processes every repository effect sharing one workspace state", async () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const { evMap, contentHashes } = computeEffectiveVersions(graph, {});

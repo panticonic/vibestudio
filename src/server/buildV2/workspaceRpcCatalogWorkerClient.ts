@@ -1,5 +1,4 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { resolveHostWorkerEntry } from "../hostWorkerEntry.js";
 import type { Worker } from "node:worker_threads";
 import { createMeasuredWorker } from "../workerPerformance.js";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
@@ -10,18 +9,10 @@ declare global {
   var __VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__: string | undefined;
 }
 
-const SOURCE_ENTRY = "src/server/buildV2/workspaceRpcCatalogWorkerBootstrap.mjs";
-
-export function resolveWorkspaceRpcCatalogWorkerEntry(appRoot: string): string {
-  const candidate = path.join(appRoot, SOURCE_ENTRY);
-  if (fs.existsSync(candidate)) return candidate;
-  throw new Error(`Workspace RPC catalog worker entry is missing at ${candidate}`);
-}
-
-function workerEntry(appRoot: string): string {
-  const emitted = globalThis.__VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__;
-  if (emitted) return path.resolve(path.dirname(process.argv[1]!), emitted);
-  return resolveWorkspaceRpcCatalogWorkerEntry(appRoot);
+export function resolveWorkspaceRpcCatalogWorkerEntry(): string {
+  return resolveHostWorkerEntry(
+    globalThis.__VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__ ?? "workspace-rpc-catalog-worker.mjs"
+  );
 }
 
 interface Pending {
@@ -34,8 +25,6 @@ export class WorkspaceRpcCatalogWorkerClient {
   private worker: Worker | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
-
-  constructor(private readonly appRoot: string) {}
 
   collect(
     workerSourcePath: string,
@@ -61,7 +50,10 @@ export class WorkspaceRpcCatalogWorkerClient {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = createMeasuredWorker("workspaceRpcCatalog", workerEntry(this.appRoot));
+    const worker = createMeasuredWorker(
+      "workspaceRpcCatalog",
+      resolveWorkspaceRpcCatalogWorkerEntry()
+    );
     worker.unref();
     worker.on(
       "message",

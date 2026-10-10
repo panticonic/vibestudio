@@ -82,12 +82,8 @@ describe("workerd bootstrap policy", () => {
         dependencies: ["fsService", "rpcServer"],
       },
       {
-        name: "workerdBootstrapWorkspace",
-        dependencies: ["workerdManager", "bootstrapBuildSystem"],
-      },
-      {
         name: "doDispatch",
-        dependencies: ["workerdManager", "rpcServer", "workerdBootstrapWorkspace"],
+        dependencies: ["workerdManager", "rpcServer", "workerdWorkspace"],
       },
       { name: "workerdWorkspace", dependencies: ["workerdManager", "buildSystem"] },
     ]);
@@ -95,17 +91,18 @@ describe("workerd bootstrap policy", () => {
 
   it("attaches the exact workspace provider after general workerd startup", async () => {
     const services: ManagedService[] = [];
-    const manager = { bindWorkspaceProvider: vi.fn() };
+    const manager = { bindWorkspaceProvider: vi.fn(), reconcileManifestRoutes: vi.fn() };
     const workerNode = {
       kind: "worker",
       relativePath: "workers/source",
       manifest: { durable: { classes: [{ className: "SourceDO" }] } },
     };
-    const bootstrapBuildSystem = {
+    const buildSystem = {
       bindRuntimeImage: vi.fn(),
       getBuildByKey: vi.fn(),
       getBuildByExecution: vi.fn(),
       getGraph: () => ({ allNodes: () => [workerNode] }),
+      onPushBuild: vi.fn(),
     };
     const inert = {};
     wireWorkerdCore({
@@ -118,8 +115,13 @@ describe("workerd bootstrap policy", () => {
         routes: [{ source: "workers/source", pattern: "/source/*" }],
         singletons: inert,
       } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"],
-      userlandResourceHandles: inert as WorkerdBootstrapDeps["userlandResourceHandles"],
-      routeRegistry: inert as WorkerdBootstrapDeps["routeRegistry"],
+      userlandResourceHandles: {
+        reconcileProviders: vi.fn(),
+        reconcileReceiverClasses: vi.fn(),
+      } as unknown as WorkerdBootstrapDeps["userlandResourceHandles"],
+      routeRegistry: {
+        registerDoRoutes: vi.fn(),
+      } as unknown as WorkerdBootstrapDeps["routeRegistry"],
       egressProxy: egressProxyMock(),
       gatewayToken: "gateway-token",
       gateway: {
@@ -136,11 +138,11 @@ describe("workerd bootstrap policy", () => {
       publishSourceBuild: vi.fn(async () => undefined),
     });
 
-    const attachment = services.find(({ name }) => name === "workerdBootstrapWorkspace");
+    const attachment = services.find(({ name }) => name === "workerdWorkspace");
     await expect(
       attachment?.start?.(<D>(name: string): D | undefined => {
         if (name === "workerdManager") return manager as D;
-        if (name === "bootstrapBuildSystem") return bootstrapBuildSystem as D;
+        if (name === "buildSystem") return buildSystem as D;
         return undefined;
       })
     ).resolves.toBe(manager);
@@ -158,7 +160,6 @@ describe("workerd bootstrap policy", () => {
     const reconcileMutableSourceBuild = vi.fn(async () => undefined);
     const manager = {
       bindWorkspaceProvider: vi.fn(),
-      replaceWorkspaceProvider: vi.fn(),
       registerAllDOClasses: vi.fn(async () => undefined),
       reconcileManifestRoutes: vi.fn(),
       reconcileMutableSourceBuild,

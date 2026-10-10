@@ -16,7 +16,8 @@ import {
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import type { BuildSourceProvider } from "./buildSource.js";
 import { collectTransitiveInternalDeps } from "./buildSource.js";
-import { collectWorkspaceRpcCatalog, type WorkspaceRpcMethodDoc } from "./workspaceRpcCatalog.js";
+import type { WorkspaceRpcMethodDoc } from "./workspaceRpcCatalog.js";
+import type { WorkspaceRpcCatalogWorkerClient } from "./workspaceRpcCatalogWorkerClient.js";
 import {
   unknownWorkspaceRpcSchemaError,
   workspaceRpcSchema,
@@ -120,6 +121,8 @@ export interface ProviderCatalogResolverInput {
   graph: PackageGraph;
   workspaceRoot: string;
   source: BuildSourceProvider;
+  collectRpcCatalog: WorkspaceRpcCatalogWorkerClient["collect"];
+  compiledRpcCatalog: () => Promise<readonly WorkspaceRpcMethodDoc[] | null>;
 }
 
 interface CatalogCacheEntry {
@@ -326,36 +329,39 @@ export async function resolveProviderRpcCatalog(
   const flight = rpcCatalogFlights.get(key);
   if (flight) return flight;
   const pending = (async () => {
-    const materialized = await input.source.materializeForBuild(
-      collectTransitiveInternalDeps(input.provider, input.graph),
-      input.stateHash,
-      input.workspaceRoot
-    );
-    const sourcePath = path.join(materialized.sourceRoot, input.provider.relativePath);
-    const packageAuthority = materializedAuthority(input.provider, materialized.sourceRoot);
-    const schema = classManifest.rpcSchema
-      ? workspaceRpcSchema(classManifest.rpcSchema)
-      : undefined;
-    if (classManifest.rpcSchema && !schema) {
-      throw unknownWorkspaceRpcSchemaError({
-        repoPath: input.provider.relativePath,
-        className: input.className,
-        rpcSchema: classManifest.rpcSchema,
-      });
-    }
-    const methods = (
-      await collectWorkspaceRpcCatalog(sourcePath, {
-        provider: input.provider.relativePath,
-        authority: packageAuthority,
-        ...(schema
-          ? { rpcSchemas: { [input.className]: workspaceRpcSchemaMetadata(schema) } }
-          : {}),
-        // This resolver only accepts a declared Durable Object class (see
-        // providerCatalogIdentity); keep its source checks aligned with the
-        // worker build path, which rejects clients bound to a module runtime.
-        durableObjects: true,
-      })
-    ).filter((entry) => entry.className === input.className);
+    const compiled = await input.compiledRpcCatalog();
+    const methods =
+      compiled ??
+      (await (async () => {
+        const materialized = await input.source.materializeForBuild(
+          collectTransitiveInternalDeps(input.provider, input.graph),
+          input.stateHash,
+          input.workspaceRoot
+        );
+        const sourcePath = path.join(materialized.sourceRoot, input.provider.relativePath);
+        const packageAuthority = materializedAuthority(input.provider, materialized.sourceRoot);
+        const schema = classManifest.rpcSchema
+          ? workspaceRpcSchema(classManifest.rpcSchema)
+          : undefined;
+        if (classManifest.rpcSchema && !schema) {
+          throw unknownWorkspaceRpcSchemaError({
+            repoPath: input.provider.relativePath,
+            className: input.className,
+            rpcSchema: classManifest.rpcSchema,
+          });
+        }
+        return await input.collectRpcCatalog(sourcePath, {
+          provider: input.provider.relativePath,
+          authority: packageAuthority,
+          ...(schema
+            ? { rpcSchemas: { [input.className]: workspaceRpcSchemaMetadata(schema) } }
+            : {}),
+          // This resolver only accepts a declared Durable Object class (see
+          // providerCatalogIdentity); keep its source checks aligned with the
+          // worker build path, which rejects clients bound to a module runtime.
+          durableObjects: true,
+        });
+      })());
     const catalog: ExactProviderRpcCatalog = {
       provider: {
         unitName: input.provider.name,
@@ -363,7 +369,7 @@ export async function resolveProviderRpcCatalog(
         effectiveVersion: input.effectiveVersion,
         className: input.className,
       },
-      methods,
+      methods: methods.filter((entry) => entry.className === input.className),
     };
     rememberRpcCatalog(key, catalog);
     return catalog;

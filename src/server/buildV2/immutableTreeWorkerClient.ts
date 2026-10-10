@@ -1,5 +1,4 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { resolveHostWorkerEntry } from "../hostWorkerEntry.js";
 import type { Worker } from "node:worker_threads";
 import { createMeasuredWorker } from "../workerPerformance.js";
 
@@ -7,18 +6,10 @@ declare global {
   var __VIBESTUDIO_IMMUTABLE_TREE_WORKER_ENTRY__: string | undefined;
 }
 
-const SOURCE_ENTRY = "src/server/buildV2/immutableTreeWorkerBootstrap.mjs";
-
-export function resolveImmutableTreeWorkerEntry(appRoot: string): string {
-  const candidate = path.join(appRoot, SOURCE_ENTRY);
-  if (fs.existsSync(candidate)) return candidate;
-  throw new Error(`Immutable tree worker entry is missing at ${candidate}`);
-}
-
-function workerEntry(appRoot: string): string {
-  const emitted = globalThis.__VIBESTUDIO_IMMUTABLE_TREE_WORKER_ENTRY__;
-  if (emitted) return path.resolve(path.dirname(process.argv[1]!), emitted);
-  return resolveImmutableTreeWorkerEntry(appRoot);
+export function resolveImmutableTreeWorkerEntry(): string {
+  return resolveHostWorkerEntry(
+    globalThis.__VIBESTUDIO_IMMUTABLE_TREE_WORKER_ENTRY__ ?? "immutable-tree-worker.mjs"
+  );
 }
 
 interface Pending {
@@ -31,8 +22,6 @@ export class ImmutableTreeWorkerClient {
   private worker: Worker | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
-
-  constructor(private readonly appRoot: string) {}
 
   materialize(source: string, target: string): Promise<void> {
     return this.project("tree", source, target);
@@ -58,7 +47,7 @@ export class ImmutableTreeWorkerClient {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = createMeasuredWorker("immutableTree", workerEntry(this.appRoot));
+    const worker = createMeasuredWorker("immutableTree", resolveImmutableTreeWorkerEntry());
     worker.unref();
     worker.on(
       "message",

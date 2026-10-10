@@ -660,7 +660,7 @@ export class WorkerdManager {
     this.deps = deps;
     this.egressSecret = deps.egressSecret;
     this.runtimeImages = new RuntimeImageStore(deps.statePath, deps.executionPublicationPort);
-    this.sqliteIntegrityWorker = new SqliteIntegrityWorkerClient(resolveRequiredAppRoot());
+    this.sqliteIntegrityWorker = new SqliteIntegrityWorkerClient();
     // Generated execution inputs belong to the workspace lifetime. A killed
     // runtime cannot run its finally blocks; the instance owner must still be
     // able to reclaim them by removing its own state root.
@@ -789,14 +789,6 @@ export class WorkerdManager {
   bindWorkspaceProvider(provider: WorkerdWorkspaceProvider): void {
     if (this.workspaceProvider) {
       throw new Error("Workerd workspace provider is already bound");
-    }
-    this.workspaceProvider = provider;
-  }
-
-  /** Replace the bootstrap snapshot view with the semantic source provider. */
-  replaceWorkspaceProvider(provider: WorkerdWorkspaceProvider): void {
-    if (!this.workspaceProvider) {
-      throw new Error("Cannot replace a workspace provider before bootstrap binding");
     }
     this.workspaceProvider = provider;
   }

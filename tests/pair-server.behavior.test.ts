@@ -19,7 +19,7 @@ vi.mock("../scripts/host-build-generations.mjs", () => ({
   // Launchers share one derivation of the coordinate a host runs from, so the
   // isolated generation has to answer through it too.
   hostArtifactRootForServerEntry: vi.fn((_root: string, entry: string) =>
-    entry === "src/server/index.ts" ? "/isolated/host-generation" : "/repo/dist"
+    entry === "/isolated/host-generation/server.mjs" ? "/isolated/host-generation" : "/repo/dist"
   ),
 }));
 
@@ -93,16 +93,28 @@ describe("pair-server runner", () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const child = new FakeChild();
     const prepareSourceServer = vi.fn();
+    let preparationRoot = "";
+    const prepareRelease = vi.fn(
+      async ({ output, env }: { output: string; env: NodeJS.ProcessEnv }) => {
+        preparationRoot = output;
+        mkdirSync(output, { recursive: true });
+        env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = output;
+      }
+    );
     await runPairServer(config, [], {
       prepareSourceServer,
+      prepareWorkspaceRelease: prepareRelease,
       developmentWorkspaceTemplateEnv: () => ({}),
       spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
         expect(prepareSourceServer).toHaveBeenCalledOnce();
+        expect(prepareRelease).toHaveBeenCalledOnce();
+        expect(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT).toBe(preparationRoot);
+        expect(fs.existsSync(preparationRoot)).toBe(true);
         // Resolved through the derivation every launcher shares, so a launcher
         // that reimplements it cannot quietly diverge from this guarantee.
         expect(hostArtifactRootForServerEntry).toHaveBeenCalledWith(
           expect.any(String),
-          "src/server/index.ts"
+          "/isolated/host-generation/server.mjs"
         );
         // And resolved only after the rebuild, which is what publishes the
         // generation it names. Asking first reads a file that does not exist
@@ -114,7 +126,10 @@ describe("pair-server runner", () => {
         queueMicrotask(() => child.emit("exit", 0, null));
         return child;
       },
-      onChildExit: () => true,
+      onChildExit: () => {
+        expect(fs.existsSync(preparationRoot)).toBe(false);
+        return true;
+      },
     });
   });
 

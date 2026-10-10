@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-import { prepareWorkspaceRelease } from "./prepareWorkspaceRelease.js";
+import { prepareWorkspaceRelease } from "../../scripts/prepare-workspace-release.mjs";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 import { CLI_WORKSPACE_ENV, isCliWorkspaceSelection } from "./cliWorkspaceSelection.js";
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 import {
@@ -28,9 +27,6 @@ import {
   inspectWorkspaceSources,
   workspaceSourceFromCheckout,
 } from "../workspaceTemplateSource.js";
-
-const require = createRequire(import.meta.url);
-const tsxLoader = require.resolve("tsx");
 
 type Mode = DevInstanceRecord["kind"];
 
@@ -233,7 +229,7 @@ async function runServer(
   const supervisor = new DevInstanceSupervisor({
     sourceRoot: fs.realpathSync(process.cwd()),
     command: process.execPath,
-    args: ["--import", tsxLoader, "src/server/index.ts", ...serverArgs],
+    args: [path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "server.mjs"), ...serverArgs],
     env,
     stdio: "inherit",
     forwardParentSignals: true,
@@ -332,7 +328,7 @@ async function main(): Promise<void> {
     env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
     process.exitCode = await run(
       process.execPath,
-      ["--import", tsxLoader, "src/server/index.ts", ...parsed.forwarded],
+      [path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "server.mjs"), ...parsed.forwarded],
       { env }
     );
     return;

@@ -1,3 +1,4 @@
+import { intrinsicContentDescriptor } from "@vibestudio/content-addressing";
 /**
  * Host boundary for the semantic workspace history.
  *
@@ -156,20 +157,6 @@ export interface ExactRepositorySnapshotPlan {
   planDigest: string;
 }
 
-function intrinsicContentDescriptor(bytes: Uint8Array): {
-  contentKind: "text" | "bytes";
-  byteLength: number;
-  coordinateExtent: number;
-} {
-  const byteLength = bytes.byteLength;
-  try {
-    const text = UTF8_DECODER.decode(bytes);
-    return { contentKind: "text", byteLength, coordinateExtent: text.length };
-  } catch {
-    return { contentKind: "bytes", byteLength, coordinateExtent: byteLength };
-  }
-}
-
 export interface WorkspaceVcsDeps {
   blobsDir: string;
   workspaceRoot: string;
@@ -179,6 +166,8 @@ export interface WorkspaceVcsDeps {
   workspaceId: string;
   buildSourcesRoot: string;
   refs: ProtectedRefStore;
+  /** Exact acquired content used until the first protected semantic publication. */
+  initialContentState?: string;
   /** The only pre-userland template path: acquire one exact root for first publication. */
   rootTemplateBootstrap?: Pick<
     WorkspaceRootTemplateBootstrap,
@@ -1320,11 +1309,23 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             subdir: repository.subdir,
             snapshot: repository.snapshot,
             contentRoot: repository.contentRoot,
-            files: repository.files.map(({ path: filePath, contentHash, mode }) => ({
-              path: filePath,
-              contentHash,
-              mode,
-            })),
+            files: repository.files.map(
+              ({
+                path: filePath,
+                contentHash,
+                mode,
+                contentKind,
+                byteLength,
+                coordinateExtent,
+              }) => ({
+                path: filePath,
+                contentHash,
+                mode,
+                contentKind,
+                byteLength,
+                coordinateExtent,
+              })
+            ),
           })),
       } satisfies import("@vibestudio/workspace-contracts/workspaceSource").InitializeExactWorkspaceSnapshotInput;
       let acknowledgement:
@@ -1692,8 +1693,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async ensureFreshUncoalesced(): Promise<{ stateHash: string }> {
-    const view = await this.repositories.workspaceView();
     const semanticState = this.deps.refs.readMainSemanticState();
+    if (!semanticState && this.deps.initialContentState) {
+      return { stateHash: this.deps.initialContentState };
+    }
+    const view = await this.repositories.workspaceView();
     if (semanticState) this.semanticStateByContent.set(view.stateHash, semanticState);
     return view;
   }
@@ -1712,8 +1716,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return stateHash;
   }
 
-  executionStateForContent(stateHash: string): VcsStateNodeRef | null {
-    return this.semanticStateByContent.get(stateHash) ?? null;
+  executionStateForContent(
+    stateHash: string
+  ): import("@vibestudio/shared/execution/retention").ExecutionSourceStateRef | null {
+    const semantic = this.semanticStateByContent.get(stateHash);
+    if (semantic) return semantic;
+    return stateHash === this.deps.initialContentState
+      ? { kind: "bootstrap-snapshot", snapshotHash: stateHash }
+      : null;
   }
 
   async unitHashes(stateHash: string, relPaths: string[]): Promise<Record<string, string | null>> {
@@ -1959,7 +1969,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async onProtectedRefsPublished(publication: ProtectedRefPublication): Promise<void> {
     if (!this.attached || publication.changes.length === 0) return;
-    const workspaceStateHash = (await this.repositories.workspaceView()).stateHash;
+    const workspaceStateHash = (await this.ensureFresh()).stateHash;
     const repositories: ProtectedPublicationEvent["repositories"] = [];
     for (const change of publication.changes) {
       const repoPath = normalizeRepositoryPath(change.repoPath);

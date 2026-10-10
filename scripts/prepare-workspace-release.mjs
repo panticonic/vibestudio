@@ -1,24 +1,17 @@
 import * as path from "node:path";
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
 
 /** Publish source-launch resources through the ordinary template preparer.
  * The launch owner retains output for its generation and owns its retirement.
  * Cancellation reaches the preparer's native owners and is joined before the
- * launch caller may remove either scratch or prepared output. */
-export async function prepareWorkspaceRelease(input: {
-  appRoot: string;
-  output: string;
-  scratch: string;
-  env: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const loader = createRequire(import.meta.url).resolve("tsx/esm");
+ * launch caller may remove either scratch or prepared output.
+ * @param {{ appRoot: string, output: string, scratch: string, env: NodeJS.ProcessEnv }} input
+ */
+export async function prepareWorkspaceRelease(input) {
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      loader,
-      path.join(input.appRoot, "scripts/prepare-workspace-templates.ts"),
+      path.join(input.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"], "prepare-workspace-templates.mjs"),
       "--app-root",
       input.appRoot,
       "--output",
@@ -28,7 +21,7 @@ export async function prepareWorkspaceRelease(input: {
     ],
     { cwd: input.appRoot, env: input.env, stdio: "inherit" }
   );
-  let cancelled: Error | null = null;
+  let cancelled = null;
   const interrupt = () => {
     cancelled ??= new Error("Workspace release preparation cancelled");
     child.kill("SIGTERM");
@@ -36,8 +29,8 @@ export async function prepareWorkspaceRelease(input: {
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
   try {
-    await new Promise<void>((resolve, reject) => {
-      let failure: Error | undefined;
+    await new Promise((resolve, reject) => {
+      let failure;
       child.once("error", (error) => {
         failure = error;
       });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { prepareWorkspaceRelease } from "./prepareWorkspaceRelease.js";
+import { prepareWorkspaceRelease } from "../../scripts/prepare-workspace-release.mjs";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import * as fs from "node:fs";
 import * as path from "node:path";

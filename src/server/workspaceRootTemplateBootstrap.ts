@@ -1,3 +1,4 @@
+import { intrinsicContentDescriptor, type ContentDescriptor } from "@vibestudio/content-addressing";
 import type { PreparedWorkspaceTemplate } from "./preparedWorkspaceTemplate.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -268,7 +269,7 @@ export interface RootTemplateRepository {
   subdir: string;
   snapshot: CanonicalSnapshotDigest;
   contentRoot: `state:${string}`;
-  files: ExactSnapshotFile[];
+  files: (ExactSnapshotFile & ContentDescriptor)[];
 }
 
 export interface PreparedRootTemplateInitialization {
@@ -375,7 +376,15 @@ export function enumerateRootTemplateRepositories(
     const prefix = repository.repoPath === "meta" ? "meta/" : `${repository.repoPath}/`;
     const files = snapshot.files
       .filter((file) => file.path.startsWith(prefix))
-      .map((file) => ({ ...file, path: file.path.slice(prefix.length) }))
+      .map((file) => {
+        const bytes = snapshot.readFile(file.path);
+        if (!bytes) throw new Error(`Root template source is missing ${file.path}`);
+        return {
+          ...file,
+          ...intrinsicContentDescriptor(bytes),
+          path: file.path.slice(prefix.length),
+        };
+      })
       .sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
     const contentTree = repositoryContentTree(files);
     repositories.push({

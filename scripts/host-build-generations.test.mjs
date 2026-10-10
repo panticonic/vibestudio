@@ -9,6 +9,7 @@ import {
   readCurrentHostBuildGeneration,
   releaseHostBuildGeneration,
 } from "./host-build-generations.mjs";
+import { SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
 import { cleanHostBuildOutput } from "./clean-host-build-output.mjs";
 
 test("publishes immutable complete generations and leaves the prior one readable", () => {
@@ -26,6 +27,9 @@ test("publishes immutable complete generations and leaves the prior one readable
     fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
     fs.mkdirSync(path.join(root, "dist/workerd-programs"), { recursive: true });
     for (const entry of [
+      "server.mjs",
+      "prepare-workspace-templates.mjs",
+      ...Object.values(SERVER_WORKER_ENTRIES.standalone),
       "server-electron.cjs",
       "adblock-engine-worker.cjs",
       "browserPrivacyPreload.cjs",
@@ -145,6 +149,9 @@ test("refuses an incomplete generation without replacing current", () => {
     fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
     fs.mkdirSync(path.join(root, "dist/workerd-programs"), { recursive: true });
     for (const entry of [
+      "server.mjs",
+      "prepare-workspace-templates.mjs",
+      ...Object.values(SERVER_WORKER_ENTRIES.standalone),
       "browserTransport.js",
       "fs-disk-worker.cjs",
       "dependency-content-maintenance.cjs",

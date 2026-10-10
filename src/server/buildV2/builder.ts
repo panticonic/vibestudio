@@ -215,6 +215,16 @@ let buildSignal: AbortSignal | undefined;
  * Initialize the builder with the app's node_modules paths.
  * Must be called once before any buildUnit() calls.
  */
+/** Compilation, authority and documentation use the same owned extractor. */
+export function collectWorkspaceRpcMethods(
+  ...args: Parameters<WorkspaceRpcCatalogWorkerClient["collect"]>
+): ReturnType<WorkspaceRpcCatalogWorkerClient["collect"]> {
+  return withBuilderWorkers(async () => {
+    if (!_workspaceRpcCatalogWorker) throw new Error("builder is not initialized");
+    return _workspaceRpcCatalogWorker.collect(...args);
+  });
+}
+
 export function initBuilder(
   appNodeModules: string | string[],
   appRoot: string,
@@ -239,9 +249,9 @@ export function initBuilder(
     // Initialization is synchronous; admitted builds and closeBuilder consume
     // this same retirement promise and receive its original failure.
     void workerRetirement.catch(() => undefined);
-    _libraryLoweringWorker = new LibraryLoweringWorkerClient(_appRoot);
-    _workspaceRpcCatalogWorker = new WorkspaceRpcCatalogWorkerClient(_appRoot);
-    _immutableTreeWorker = new ImmutableTreeWorkerClient(_appRoot);
+    _libraryLoweringWorker = new LibraryLoweringWorkerClient();
+    _workspaceRpcCatalogWorker = new WorkspaceRpcCatalogWorkerClient();
+    _immutableTreeWorker = new ImmutableTreeWorkerClient();
   }
 }
 
@@ -3949,9 +3959,7 @@ async function buildWorker(
         return [entry.className, workspaceRpcSchemaMetadata(schema)];
       })
   );
-  const catalogWorker = _workspaceRpcCatalogWorker;
-  if (!catalogWorker) throw new Error("builder is not initialized");
-  const workspaceRpcCatalog = await catalogWorker.collect(workerSourcePath, {
+  const workspaceRpcCatalog = await collectWorkspaceRpcMethods(workerSourcePath, {
     provider: node.relativePath,
     authority,
     rpcSchemas,

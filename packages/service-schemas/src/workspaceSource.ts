@@ -1619,6 +1619,9 @@ const workspaceSnapshotRepositorySchema = z
           path: z.string(),
           contentHash: nonemptyText,
           mode: z.number().int().nonnegative(),
+          contentKind: z.enum(["text", "bytes"]),
+          byteLength: z.number().int().nonnegative(),
+          coordinateExtent: z.number().int().nonnegative(),
         })
         .strict()
     ),

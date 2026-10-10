@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PackageManifest } from "@vibestudio/shared/types";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { directorySourceProvider } from "./buildSource.js";
@@ -12,8 +12,15 @@ import {
   type ExactWorkspaceServiceBinding,
 } from "./userlandAuthority.js";
 
+import { WorkspaceRpcCatalogWorkerClient } from "./workspaceRpcCatalogWorkerClient.js";
+
 const ownedRoots = new Set<string>();
-afterEach(() => {
+let catalogWorker: WorkspaceRpcCatalogWorkerClient;
+beforeEach(() => {
+  catalogWorker = new WorkspaceRpcCatalogWorkerClient();
+});
+afterEach(async () => {
+  await catalogWorker.close();
   for (const root of ownedRoots) {
     rmSync(root, { recursive: true, force: true });
     ownedRoots.delete(root);
@@ -148,8 +155,26 @@ describe("exact userland provider catalogs", () => {
       graph,
       workspaceRoot: root,
       source,
+      collectRpcCatalog: catalogWorker.collect.bind(catalogWorker),
+      compiledRpcCatalog: async () => null,
     };
     const sourceCatalog = await resolveProviderRpcCatalog(input);
+    const preparedMaterialize = vi.fn(() => {
+      throw new Error("Prepared catalog must not materialize source");
+    });
+    const preparedExtract = vi.fn(() => {
+      throw new Error("Prepared catalog must not re-extract RPC");
+    });
+    const preparedCatalog = await resolveProviderRpcCatalog({
+      ...input,
+      effectiveVersion: "ev-notes-prepared",
+      source: { ...source, materializeForBuild: preparedMaterialize },
+      collectRpcCatalog: preparedExtract,
+      compiledRpcCatalog: async () => sourceCatalog.methods,
+    });
+    expect(preparedCatalog.methods).toEqual(sourceCatalog.methods);
+    expect(preparedMaterialize).not.toHaveBeenCalled();
+    expect(preparedExtract).not.toHaveBeenCalled();
     const first = await resolveProviderCatalog(input);
     const second = await resolveProviderCatalog(input);
     expect(second).toBe(first);
@@ -203,6 +228,8 @@ class NotesDO {
       graph: {} as PackageGraph,
       workspaceRoot: root,
       source: directorySourceProvider(root),
+      collectRpcCatalog: catalogWorker.collect.bind(catalogWorker),
+      compiledRpcCatalog: async () => null,
     };
 
     await expect(resolveProviderRpcCatalog(input)).rejects.toThrow(

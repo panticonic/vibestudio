@@ -205,7 +205,11 @@ export function publishHostBuildGeneration(cwd, build) {
             ...(build.kind === "desktop" ? { main: "main.cjs" } : {}),
           })}\n`
         );
-        fs.symlinkSync(path.resolve(cwd, "node_modules"), path.join(staging, "node_modules"), "dir");
+        fs.symlinkSync(
+          path.resolve(cwd, "node_modules"),
+          path.join(staging, "node_modules"),
+          "dir"
+        );
         fs.renameSync(staging, target);
       } finally {
         fs.rmSync(staging, { recursive: true, force: true });
@@ -244,16 +248,12 @@ export function readCurrentHostBuildGeneration(cwd = process.cwd(), kind) {
  *
  * A host refuses to start without this coordinate, so every launcher must
  * supply it — and each one that derived it independently was a launcher that
- * could forget. A compiled entry names its own directory; a live source entry
- * names the current source generation, because compiled artifacts must come
- * from exactly one of them.
+ * could forget. Every server entry is compiled and names the directory of
+ * its exact generation.
  *
  * Packaged launchers are the exception and name their own root: an installed
  * app resolves it from the archive it was installed as, not from a checkout.
  */
 export function hostArtifactRootForServerEntry(repoRoot, serverEntry) {
-  if (serverEntry !== "src/server/index.ts") {
-    return path.dirname(path.resolve(repoRoot, serverEntry));
-  }
-  return readCurrentHostBuildGeneration(repoRoot, "source");
+  return path.dirname(path.resolve(repoRoot, serverEntry));
 }

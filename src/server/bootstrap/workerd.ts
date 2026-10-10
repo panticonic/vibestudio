@@ -256,7 +256,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
     // release settle. Starting after RpcServer and stopping before it keeps
     // that return path available for the whole sandbox generation. The general
     // runtime owns only host-provided programs; workspace source is attached by
-    // workerdBootstrapWorkspace once its exact build provider is ready.
+    // workerdWorkspace once its exact build provider is ready.
     dependencies: ["fsService", "rpcServer"],
     async start(resolve) {
       const { WorkerdManager } = await import("../workerdManager.js");
@@ -357,37 +357,11 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
   });
 
   deps.container.registerManaged({
-    name: "workerdBootstrapWorkspace",
-    dependencies: ["workerdManager", "bootstrapBuildSystem"],
-    async start(resolve) {
-      const manager = assertPresent(resolve<WorkerdManager>("workerdManager"));
-      const bootstrapBuildSystem = assertPresent(resolve<BuildSystemV2>("bootstrapBuildSystem"));
-      manager.bindWorkspaceProvider({
-        bindRuntimeImage: (unitPath, ref) => bootstrapBuildSystem.bindRuntimeImage(unitPath, ref),
-        getBuildByKey: (key) => bootstrapBuildSystem.getBuildByKey(key),
-        getBuildByExecution: (key, executionDigest) =>
-          bootstrapBuildSystem.getBuildByExecution(key, executionDigest),
-        getManifestRoutes: (source) =>
-          deps.workspaceDeclarations.routes.filter((route) => route.source === source),
-        getManifestDoClasses: (source) => {
-          const node = bootstrapBuildSystem
-            .getGraph()
-            .allNodes()
-            .find((entry) => entry.kind === "worker" && entry.relativePath === source);
-          return node?.manifest.durable?.classes ?? [];
-        },
-        singletonRegistry: deps.workspaceDeclarations.singletons,
-      });
-      return manager;
-    },
-  });
-
-  deps.container.registerManaged({
     name: "doDispatch",
     // Workspace dispatch becomes visible only after the exact bootstrap
     // provider is attached. The workerd process itself is already free to boot
     // and host internal programs while that provider is being prepared.
-    dependencies: ["workerdManager", "rpcServer", "workerdBootstrapWorkspace"],
+    dependencies: ["workerdManager", "rpcServer", "workerdWorkspace"],
     async start(resolve) {
       const { DODispatch } = await import("../doDispatch.js");
       const manager = assertPresent(resolve<WorkerdManager>("workerdManager"));
@@ -459,7 +433,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         },
         singletonRegistry: deps.workspaceDeclarations.singletons,
       };
-      manager.replaceWorkspaceProvider(provider);
+      manager.bindWorkspaceProvider(provider);
 
       const graphNodes = buildSystem.getGraph().allNodes();
       deps.userlandResourceHandles.reconcileProviders(

@@ -263,6 +263,9 @@ export class StateTransitionTrigger extends EventEmitter {
   }
 
   private async process(event: ProtectedPublicationEvent): Promise<void> {
+    // Semantic provenance can advance without changing executable content.
+    // The current graph and effective versions already describe this exact tree.
+    if (event.workspaceStateHash === this.stateHash) return;
     const { units, unmatched, manifestTouched } = unitsForChangedPaths(
       this.graph,
       event.changedPaths

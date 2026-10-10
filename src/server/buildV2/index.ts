@@ -53,6 +53,7 @@ import {
   buildNpmLibrary,
   buildPlatformLibrary,
   closeBuilder,
+  collectWorkspaceRpcMethods,
   initBuilder,
   withBuilderWorkers,
   type BuildUnitOptions,
@@ -106,7 +107,7 @@ import {
   type AuthorityConsumerIdentity,
   type AuthorityIndexIdentity,
 } from "./authorityAnalysisCache.js";
-import { analyzeWorkspaceServiceCalls } from "./userlandAuthorityAnalyzer.js";
+import type { analyzeWorkspaceServiceCalls } from "./userlandAuthorityAnalyzer.js";
 import type {
   AuthorityCompilerSnapshot,
   createAuthorityCompilerSnapshot,
@@ -620,12 +621,32 @@ export async function initBuildSystemV2(
     { facts: ReturnType<typeof analyzeWorkspaceServiceCalls>; moduleClosureDigest: string }
   >(256);
   const authorityIndexManager = new AuthorityIndexManager();
-  const authorityAnalysisWorker = new AuthorityAnalysisWorkerClient(rootOptions.appRoot);
+  const authorityAnalysisWorker = new AuthorityAnalysisWorkerClient();
   const authorityEpoch = {
     analyzerVersion: "userland-authority-v6",
     rpcSchemaVersion: workspaceRpcSchemaVersion(),
   } as const;
   const authorityFactEpoch = { analyzerVersion: authorityEpoch.analyzerVersion } as const;
+  const compiledRpcCatalogAt = async (
+    provider: GraphNode,
+    effectiveVersion: string,
+    stateHash: string
+  ) => {
+    const key = resolveBuildUnitKey(provider, effectiveVersion, stateHash);
+    const metadata = buildStore.compilationMetadata(key);
+    if (
+      metadata &&
+      metadata.ev === effectiveVersion &&
+      metadata.sourcePath === provider.relativePath &&
+      metadata.workspaceRpcCatalog
+    ) {
+      return metadata.workspaceRpcCatalog;
+    }
+    if (source.preparedBuildForContent?.(stateHash, provider.relativePath)) {
+      throw new Error(`Prepared provider ${provider.relativePath} has no compiled RPC catalog`);
+    }
+    return null;
+  };
   const authorityEnvironmentAt = (
     stateHash: string,
     graphAtView: PackageGraph,
@@ -674,6 +695,8 @@ export async function initBuildSystemV2(
             graph: graphAtView,
             workspaceRoot,
             source: getBuildSourceProvider(),
+            collectRpcCatalog: collectWorkspaceRpcMethods,
+            compiledRpcCatalog: () => compiledRpcCatalogAt(provider, effectiveVersion, stateHash),
           });
         },
       });
@@ -1281,7 +1304,7 @@ export async function initBuildSystemV2(
     rootOptions.signal
   );
   buildStore.configureReleaseBuilds(rootOptions.appRoot);
-  const typecheckWorker = new TypecheckWorkerClient(rootOptions.appRoot);
+  const typecheckWorker = new TypecheckWorkerClient();
   const unitValidationStore = new UnitValidationStore();
   setBuildSourceProvider(source);
   buildStore.setBuildExecutionIdentityContext({
@@ -1359,8 +1382,7 @@ export async function initBuildSystemV2(
 
   // Step 3: Start the state trigger (subscribes to vcs state advances).
   // The owning steady-state host may start the bounded panel/worker prewarm
-  // lane after initialization. Keeping that explicit prevents the bootstrap
-  // build system from duplicating speculative work on the startup path.
+  // lane after initialization, once workspace runtime reconciliation completes.
   const trigger = new StateTransitionTrigger({
     graph,
     evMap,
@@ -2857,6 +2879,8 @@ export async function initBuildSystemV2(
         graph,
         workspaceRoot,
         source: getBuildSourceProvider(),
+        collectRpcCatalog: collectWorkspaceRpcMethods,
+        compiledRpcCatalog: () => compiledRpcCatalogAt(provider, effectiveVersion, stateHash),
       });
       return {
         source: provider.relativePath,

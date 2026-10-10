@@ -30,3 +30,5 @@ export {
   type CanonicalSnapshotDigest,
   type CanonicalSnapshotEntry,
 } from "./snapshot-digest.js";
+
+export { intrinsicContentDescriptor, type ContentDescriptor } from "./content-descriptor.js";

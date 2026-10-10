@@ -1027,6 +1027,24 @@ export function configureReleaseBuilds(appRoot: string): void {
   releaseBuildRoot = path.join(workspaceReleaseResourceRoot(appRoot), "userland-builds");
 }
 
+/** Compiler facts belong to immutable artifacts, before workspace execution
+ * provenance is sealed. Reading them must not hydrate a build or recursively
+ * resolve the service contracts needed to seal that same build. */
+export function compilationMetadata(key: string): BuildMetadata | null {
+  const directories = [
+    getBuildDir(key),
+    ...(releaseBuildRoot ? [path.join(releaseBuildRoot, key)] : []),
+    ...(getConfiguredSharedBuildResultCacheDir()
+      ? [path.join(getConfiguredSharedBuildResultCacheDir()!, key)]
+      : []),
+  ];
+  for (const directory of directories) {
+    const build = readBuildDir(directory, key, { verifyExecution: false });
+    if (build) return build.metadata;
+  }
+  return null;
+}
+
 /** Hydrate immutable build artifacts through one provenance-binding boundary. */
 export async function getOrHydrate(
   key: string,

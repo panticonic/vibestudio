@@ -7,14 +7,14 @@ import { workerPerformanceSnapshot } from "../workerPerformance.js";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 describe("TypecheckWorkerClient", () => {
-  it("resolves the source-mode worker bootstrap", () => {
-    expect(resolveTypecheckWorkerEntry(REPO_ROOT)).toBe(
-      path.join(REPO_ROOT, "src/server/buildV2/typecheckWorkerBootstrap.mjs")
+  it("resolves the compiled generation worker", () => {
+    expect(resolveTypecheckWorkerEntry()).toBe(
+      path.join(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "typecheck-worker.mjs")
     );
   });
 
   it("returns fail-closed diagnostics from the owned worker thread", async () => {
-    const client = new TypecheckWorkerClient(REPO_ROOT);
+    const client = new TypecheckWorkerClient();
     try {
       const diagnostics = await client.check({
         unitRelativePath: "does-not-exist",
@@ -31,7 +31,7 @@ describe("TypecheckWorkerClient", () => {
     }
   });
   it("reuses the compiler thread across reports and joins it at build-system shutdown", async () => {
-    const client = new TypecheckWorkerClient(REPO_ROOT);
+    const client = new TypecheckWorkerClient();
     const input = {
       unitRelativePath: "does-not-exist",
       sourceRoot: REPO_ROOT,
@@ -59,7 +59,7 @@ describe("TypecheckWorkerClient", () => {
   });
 
   it("settles every queued request on explicit shutdown and joins the worker", async () => {
-    const client = new TypecheckWorkerClient(REPO_ROOT);
+    const client = new TypecheckWorkerClient();
     const input = {
       unitRelativePath: "does-not-exist",
       sourceRoot: REPO_ROOT,

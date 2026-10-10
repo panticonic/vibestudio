@@ -1,5 +1,4 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { resolveHostWorkerEntry } from "../hostWorkerEntry.js";
 import type { Worker } from "node:worker_threads";
 import { createMeasuredWorker } from "../workerPerformance.js";
 
@@ -12,20 +11,10 @@ interface Pending {
   reject(error: Error): void;
 }
 
-const WORKER_BOOTSTRAP_RELATIVE_PATH =
-  "src/server/buildV2/libraryLoweringWorkerBootstrap.mjs" as const;
-
-export function resolveLibraryLoweringWorkerEntry(appRoot: string): string {
-  const candidate = path.join(appRoot, WORKER_BOOTSTRAP_RELATIVE_PATH);
-  if (fs.existsSync(candidate)) return candidate;
-  throw new Error(`Library lowering worker entry is missing at ${candidate}`);
-}
-
-function workerEntry(appRoot: string): string {
-  const emitted = globalThis.__VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__;
-  return emitted
-    ? path.resolve(path.dirname(process.argv[1]!), emitted)
-    : resolveLibraryLoweringWorkerEntry(appRoot);
+export function resolveLibraryLoweringWorkerEntry(): string {
+  return resolveHostWorkerEntry(
+    globalThis.__VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__ ?? "library-lowering-worker.mjs"
+  );
 }
 
 /** Keeps Babel's CPU-heavy library lowering off the workspace server event loop. */
@@ -33,8 +22,6 @@ export class LibraryLoweringWorkerClient {
   private worker: Worker | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
-
-  constructor(private readonly appRoot: string) {}
 
   lower(source: string): Promise<string> {
     const worker = this.ensureWorker();
@@ -52,7 +39,7 @@ export class LibraryLoweringWorkerClient {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = createMeasuredWorker("libraryLowering", workerEntry(this.appRoot));
+    const worker = createMeasuredWorker("libraryLowering", resolveLibraryLoweringWorkerEntry());
     worker.unref();
     worker.on(
       "message",
