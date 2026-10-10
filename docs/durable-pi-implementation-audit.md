@@ -1907,10 +1907,16 @@ owner/image/lifetime and native task before Eval/VCS admission. The affected hos
 cohort passes 298 tests; four real-kernel Base source tests pass. Exact per-task
 approval withdrawal and full shipping caller composition remain work in progress.
 
-Normal RuntimeService retirement already invokes the owner's lifecycle prepare
-before canonical retirement; its resource cleanup is the later destructive phase.
-Reuse that path. The concrete transition gap is concurrent create/recover/retire
-using different serialization owners, not a missing normal release hook.
+RuntimeService retirement invokes the lifecycle phases across the whole affected
+context before canonical retirement: quiesce every owner and drain admitted alarm
+RPCs, settle every peer-facing obligation while peer services remain available,
+then close local resources before relay sealing and durable row retirement. Peer
+obligations include terminal publication and unsubscribe; the final release phase
+does not begin until all owners have settled them. Single-entity retirement and
+planned suspend/restart use the same phase order. This prevents an early resource
+owner from closing a peer-facing service while another entity still uses it. The
+separate transition gap is concurrent create/recover/retire using different
+serialization owners, not a missing normal release hook.
 
 At this historical review checkpoint NativeAgentOwner had no production
 subclass and AgentVessel/AgentWorker still selected the old engine. The current
