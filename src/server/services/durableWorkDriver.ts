@@ -31,7 +31,7 @@ export interface DurableWorkFailure {
  * returns one ordered target batch as one claim).
  */
 export interface DurableWorkHandler {
-  claim(owner: DORef, request: ClaimRequest): Promise<WorkClaim[]>;
+  claim(owner: DORef, request: ClaimRequest, signal: AbortSignal): Promise<WorkClaim[]>;
   laneKey(owner: DORef, claim: WorkClaim): string;
   execute(owner: DORef, claim: WorkClaim, signal: AbortSignal): Promise<unknown>;
   settle(owner: DORef, request: SettleRequest): Promise<ClaimSettlement>;
@@ -40,7 +40,7 @@ export interface DurableWorkHandler {
 
 export interface DurableWorkDriverDeps {
   handlers: Record<DurableWorkQueue, DurableWorkHandler>;
-  scanReadyOwners: () => Promise<DurableWorkReadyHint[]>;
+  scanReadyOwners: (signal: AbortSignal) => Promise<DurableWorkReadyHint[]>;
   concurrency?: number;
   recoveryScanMs?: number;
   workerId?: string;
@@ -86,18 +86,20 @@ interface PendingHint {
 }
 
 export function createDurableWorkOwnerScanner(
-  doDispatch: Pick<DODispatch, "dispatch">,
+  doDispatch: Pick<DODispatch, "dispatchHeldWithSignal">,
   workspaceOwner: DORef,
   workerId: string,
   concurrency = DEFAULT_RECOVERY_SCAN_CONCURRENCY
-): () => Promise<DurableWorkReadyHint[]> {
+): (signal: AbortSignal) => Promise<DurableWorkReadyHint[]> {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
     throw new Error("Durable-work recovery scan concurrency must be a positive integer");
   }
   const reportedPermanentFailures = new Map<string, string>();
-  return async () => {
-    const registered = (await doDispatch.dispatch(
+  return async (signal) => {
+    signal.throwIfAborted();
+    const registered = (await doDispatch.dispatchHeldWithSignal(
       workspaceOwner,
+      signal,
       "durableWorkOwnerList"
     )) as DurableWorkReadyHint[];
     const ready: DurableWorkReadyHint[] = [];
@@ -106,10 +108,20 @@ export function createDurableWorkOwnerScanner(
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < registered.length) {
+        signal.throwIfAborted();
         const { owner, queues } = registered[next++]!;
         try {
-          await doDispatch.dispatch(owner, "adoptDurableWorkWorker", workerId);
-          const local = (await doDispatch.dispatch(owner, "durableWorkStatus")) as {
+          await doDispatch.dispatchHeldWithSignal(
+            owner,
+            signal,
+            "adoptDurableWorkWorker",
+            workerId
+          );
+          const local = (await doDispatch.dispatchHeldWithSignal(
+            owner,
+            signal,
+            "durableWorkStatus"
+          )) as {
             readyQueues?: unknown;
           };
           const declared = new Set(queues);
@@ -122,6 +134,7 @@ export function createDurableWorkOwnerScanner(
           reportedPermanentFailures.delete(`${owner.source}:${owner.className}:${owner.objectKey}`);
           if (readyQueues.length > 0) ready.push({ owner, queues: readyQueues });
         } catch (error) {
+          if (signal.aborted) throw signal.reason ?? error;
           const failure = {
             owner: `${owner.source}:${owner.className}:${owner.objectKey}`,
             error: error instanceof Error ? error.message : String(error),
@@ -137,9 +150,12 @@ export function createDurableWorkOwnerScanner(
         }
       }
     };
-    await Promise.all(
+    const results = await Promise.allSettled(
       Array.from({ length: Math.min(concurrency, registered.length) }, () => worker())
     );
+    if (signal.aborted) throw signal.reason;
+    const rejected = results.find((result) => result.status === "rejected");
+    if (rejected?.status === "rejected") throw rejected.reason;
     if (failures.length > 0) {
       log.warn(
         `readiness scan failed for ${failures.length}/${registered.length} durable-work owner(s); sample=${JSON.stringify(failures.slice(0, 5))}`
@@ -189,7 +205,7 @@ export function createDurableWorkHandlers(
   doDispatch: Pick<DODispatch, "dispatch" | "dispatchHeldWithSignal">
 ): Record<DurableWorkQueue, DurableWorkHandler> {
   const common = (queue: DurableWorkQueue): Omit<DurableWorkHandler, "execute"> => ({
-    claim: async (owner, request) => {
+    claim: async (owner, request, signal) => {
       // The recovery scanner adopts every registered owner before it asks for
       // readiness. Normal hints and continuations already name a durable row,
       // so adopting again here only adds a serialized host→DO round trip to
@@ -205,9 +221,20 @@ export function createDurableWorkHandlers(
       // invariant in its own conformance tests; skipping it reintroduces the
       // stuck-lease-after-host-restart failure on non-recovery claims.
       if (request.trigger === "recovery") {
-        await doDispatch.dispatch(owner, "adoptDurableWorkWorker", request.workerId);
+        await doDispatch.dispatchHeldWithSignal(
+          owner,
+          signal,
+          "adoptDurableWorkWorker",
+          request.workerId
+        );
       }
-      return doDispatch.dispatch(owner, "claimReadyWork", queue, request) as Promise<WorkClaim[]>;
+      return doDispatch.dispatchHeldWithSignal(
+        owner,
+        signal,
+        "claimReadyWork",
+        queue,
+        request
+      ) as Promise<WorkClaim[]>;
     },
     laneKey: (owner, claim) => {
       const supplied = (claim.payload as DriverClaimPayload | null)?.laneKey;
@@ -321,7 +348,7 @@ export function createDurableWorkHandlers(
  */
 export class DurableWorkDriver {
   private readonly handlers: Record<DurableWorkQueue, DurableWorkHandler>;
-  private readonly scanReadyOwners: () => Promise<DurableWorkReadyHint[]>;
+  private readonly scanReadyOwners: (signal: AbortSignal) => Promise<DurableWorkReadyHint[]>;
   private readonly concurrency: number;
   private readonly recoveryScanMs: number;
   private readonly workerId: string;
@@ -334,6 +361,7 @@ export class DurableWorkDriver {
   private accepting = false;
   private pumping: Promise<void> | null = null;
   private recovering: Promise<void> | null = null;
+  private recoveryController: AbortController | null = null;
   private duplicateHints = 0;
   private staleSettlements = 0;
   private recoveryScans = 0;
@@ -390,23 +418,27 @@ export class DurableWorkDriver {
   async recoverNow(): Promise<void> {
     if (!this.accepting) return;
     if (this.recovering) return this.recovering;
-    const recovering = this.runRecovery();
+    const controller = new AbortController();
+    this.recoveryController = controller;
+    const recovering = this.runRecovery(controller.signal);
     this.recovering = recovering;
     try {
       await recovering;
     } finally {
       if (this.recovering === recovering) this.recovering = null;
+      if (this.recoveryController === controller) this.recoveryController = null;
     }
   }
 
-  private async runRecovery(): Promise<void> {
+  private async runRecovery(signal: AbortSignal): Promise<void> {
     this.recoveryScans++;
     try {
-      const hints = await this.scanReadyOwners();
+      const hints = await this.scanReadyOwners(signal);
       if (!this.accepting) return;
       if (hints.length > 0) this.recoveryHits += hints.length;
       for (const hint of hints) this.notify(hint, "recovery");
     } catch (error) {
+      if (signal.aborted) return;
       log.warn("owner-registry recovery scan failed", error);
     }
   }
@@ -419,6 +451,7 @@ export class DurableWorkDriver {
     }
     this.pending.clear();
     const reason = new Error("durable work driver quiesced");
+    this.recoveryController?.abort(reason);
     for (const controller of this.controllers) controller.abort(reason);
     await this.pumping;
     await Promise.allSettled([...this.runners]);
@@ -477,6 +510,8 @@ export class DurableWorkDriver {
       const handler = this.handlers[queue];
       this.claiming.add(key);
       let claims: WorkClaim[];
+      const claimController = new AbortController();
+      this.controllers.add(claimController);
       const claimStartedAt = Date.now();
       this.trace({
         phase: "claim.started",
@@ -485,24 +520,29 @@ export class DurableWorkDriver {
         owner: this.ownerKey(hint.owner),
       });
       try {
-        claims = await handler.claim(hint.owner, {
-          workerId: this.workerId,
-          trigger,
-          now: Date.now(),
-          limit: this.concurrency - this.runners.size,
-        });
+        claims = await handler.claim(
+          hint.owner,
+          {
+            workerId: this.workerId,
+            trigger,
+            now: Date.now(),
+            limit: this.concurrency - this.runners.size,
+          },
+          claimController.signal
+        );
       } catch (error) {
         if (isRetiredOwnerHint(error)) {
           // Hints are disposable. Lifecycle retirement can remove the owner
           // after it emitted a hint but before the host claims it; there is no
           // durable owner left to recover and no retry to perform.
           log.verbose(`discarded hint for retired owner ${key}`);
-        } else {
+        } else if (!claimController.signal.aborted) {
           log.warn(`claim failed for ${key}`, error);
         }
         continue;
       } finally {
         this.claiming.delete(key);
+        this.controllers.delete(claimController);
       }
       this.claimsByTrigger[trigger] += claims.length;
       this.trace({

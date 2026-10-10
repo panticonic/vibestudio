@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { rpcMethodAuthority } from "@vibestudio/rpc";
+import { encodeRpcJson, rpcMethodAuthority } from "@vibestudio/rpc";
 import type { ResidentChannelDeliveryInput } from "@vibestudio/shared/residentSession";
 import { defineReceiverServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { z } from "zod";
@@ -13,6 +13,9 @@ class AlarmProbeDO extends DurableObjectBase {
   nextAlarm: AlarmSchedule | null = null;
   releaseDeferred!: () => void;
   deferredOutbound: Promise<unknown> | null = null;
+  cancellationEntered: () => void = () => {};
+  cancellationCleanupEntered: () => void = () => {};
+  cancellationCleanup: Promise<void> = Promise.resolve();
 
   protected createTables(): void {}
 
@@ -38,6 +41,22 @@ class AlarmProbeDO extends DurableObjectBase {
   schedule(wakeAt: number): string {
     this.setAlarmAt(wakeAt);
     return "scheduled";
+  }
+
+  @rpc({
+    website: { kind: "closed", reason: "Test joined failure reporting." },
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  failAfterScheduling(): never {
+    this.setAlarmAt(100);
+    throw Object.assign(new Error("Handler failed after scheduling"), {
+      code: "HANDLER_FAILED",
+      errorKind: "service",
+      errorData: { operation: "schedule" },
+    });
   }
 
   @rpc({
@@ -67,6 +86,28 @@ class AlarmProbeDO extends DurableObjectBase {
     void this.rpc.call("main", "probe.immediate", []);
     if (throwAfterStart) throw new Error("parent failed after starting child");
     return "started";
+  }
+
+  @rpc({
+    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async waitForCancellation(): Promise<void> {
+    const signal = this.rpcAbortSignal;
+    if (!signal) throw new Error("No request cancellation owner");
+    try {
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal.throwIfAborted();
+        this.cancellationEntered();
+      });
+    } finally {
+      this.cancellationCleanupEntered();
+      await this.cancellationCleanup;
+    }
   }
 }
 
@@ -129,6 +170,160 @@ afterEach(() => {
 });
 
 describe("DurableObjectBase alarm dispatch", () => {
+  it("reports both handler and persistence failures while preserving the handler's typed cause", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("Alarm owner unavailable", { status: 503 })
+    );
+    const { call, db } = await createTestDO(AlarmProbeDO);
+    try {
+      await expect(call("failAfterScheduling")).rejects.toMatchObject({
+        message: expect.stringMatching(/Handler failed after scheduling.*Alarm owner unavailable/s),
+        code: "HANDLER_FAILED",
+        errorKind: "service",
+        errorData: { operation: "schedule" },
+      });
+    } finally {
+      db.close();
+    }
+  });
+  it("acknowledges request admission and retains the terminal body through cancellation cleanup", async () => {
+    const { instance, db } = await createTestDO(AlarmProbeDO);
+    let entered!: () => void;
+    const running = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    instance.cancellationEntered = entered;
+    let cleanupEntered!: () => void;
+    const cleaning = new Promise<void>((resolve) => {
+      cleanupEntered = resolve;
+    });
+    instance.cancellationCleanupEntered = cleanupEntered;
+    let release!: () => void;
+    instance.cancellationCleanup = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const caller = { callerId: "main", callerKind: "server" as const };
+    const envelope = {
+      from: "main",
+      target: "do:test:TestDO:test-key",
+      provenance: [caller],
+      delivery: {
+        caller: {
+          ...caller,
+          authorization: createTestDirectAuthority({
+            callerKind: "server",
+            method: "waitForCancellation",
+            effect: { kind: "open" },
+            tier: "open",
+          }),
+        },
+      },
+      message: {
+        type: "request",
+        requestId: "cancel-owned",
+        fromId: "main",
+        method: "waitForCancellation",
+        args: [],
+      },
+    };
+    const send = (body: unknown) =>
+      instance.fetch(
+        new Request("http://test/test-key/__rpc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: encodeRpcJson(body),
+        })
+      );
+    let terminal: Promise<unknown> | undefined;
+    try {
+      const response = await send(envelope);
+      let settled = false;
+      terminal = response.json().finally(() => {
+        settled = true;
+      });
+      await Promise.race([
+        running,
+        terminal.then((result) => {
+          throw new Error(
+            `Cancellation handler terminated before entering: ${JSON.stringify(result)}`
+          );
+        }),
+      ]);
+      const cancelled = await send({
+        ...envelope,
+        delivery: { caller },
+        message: { type: "request-cancel", requestId: "cancel-owned", fromId: "main" },
+      });
+      expect(cancelled.ok).toBe(true);
+      await cleaning;
+      expect(settled).toBe(false);
+      release();
+      await expect(terminal).resolves.toMatchObject({
+        message: { type: "response", requestId: "cancel-owned", error: expect.any(String) },
+      });
+    } finally {
+      release();
+      await terminal;
+      db.close();
+    }
+  });
+
+  it("releases lifecycle resources even when a pending alarm persistence write fails", async () => {
+    let entered!: () => void;
+    const writing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let failWrite!: () => void;
+    const held = new Promise<void>((resolve) => {
+      failWrite = resolve;
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      entered();
+      await held;
+      return new Response("alarm owner unavailable", { status: 503 });
+    });
+    const { instance, call, db } = await createTestDO(AlarmProbeDO);
+    const release = vi.spyOn(instance, "releaseForLifecycle");
+    let preparing!: () => void;
+    const draining = new Promise<void>((resolve) => {
+      preparing = resolve;
+    });
+    const lifecycleOwner = instance as unknown as { drainAlarmRpcs(): Promise<void> };
+    const drain = lifecycleOwner.drainAlarmRpcs.bind(instance);
+    let preparationStarted = false;
+    vi.spyOn(lifecycleOwner, "drainAlarmRpcs").mockImplementation(() => {
+      const pending = drain();
+      if (preparationStarted) preparing();
+      return pending;
+    });
+    const scheduled = call("schedule", 100);
+    const scheduledFailure = expect(scheduled).rejects.toThrow();
+    let prepared: Promise<unknown> | undefined;
+    try {
+      await Promise.race([
+        writing,
+        scheduled.then(() => {
+          throw new Error("Scheduling completed before its persistence write was admitted");
+        }),
+      ]);
+      preparationStarted = true;
+      prepared = call("__lifecycle/prepare", {
+        mode: "suspend",
+        reason: "shutdown",
+        epoch: "test",
+      });
+      const prepareFailure = expect(prepared).rejects.toThrow();
+      await draining;
+      failWrite();
+      await scheduledFailure;
+      await prepareFailure;
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      failWrite();
+      await Promise.allSettled([scheduled, ...(prepared ? [prepared] : [])]);
+      db.close();
+    }
+  });
   it("consumes workspace-addressed replies using its host-injected workspace identity", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const response = await successfulTestRpcFetch(input, init);
@@ -219,14 +414,21 @@ describe("DurableObjectBase alarm dispatch", () => {
     const { instance, call, db } = await createTestDO(AsyncWakeProbeDO);
     const original = Object.assign(new Error("Original native wake publication failed"), {
       code: "WAKE_FAILED",
+      errorKind: "service",
+      errorData: { operation: "publish-native-wake" },
     });
     instance.publishWake = async () => {
       throw original;
     };
     const fetched = vi.spyOn(instance, "fetch");
     try {
-      await expect(call("complete")).rejects.toThrow(original.message);
-      await expect(fetched.mock.results[0]!.value).resolves.toMatchObject({ status: 500 });
+      await expect(call("complete")).rejects.toMatchObject({
+        message: original.message,
+        code: "WAKE_FAILED",
+        errorKind: "service",
+        errorData: { operation: "publish-native-wake" },
+      });
+      await expect(fetched.mock.results[0]!.value).resolves.toMatchObject({ status: 200 });
     } finally {
       db.close();
     }
@@ -259,7 +461,7 @@ describe("DurableObjectBase alarm dispatch", () => {
       await running;
       await harness.close(BACKGROUND_CONTEXT);
       await failed;
-      await expect(fetched.mock.results[0]!.value).resolves.toMatchObject({ status: 500 });
+      await expect(fetched.mock.results[0]!.value).resolves.toMatchObject({ status: 200 });
     } finally {
       await harness.close(BACKGROUND_CONTEXT);
       await failed;
@@ -410,27 +612,36 @@ describe("DurableObjectBase alarm dispatch", () => {
     const response = await (
       instance as unknown as { fetch(request: Request): Promise<Response> }
     ).fetch(
-      new Request("http://test/test-key/__alarm", {
+      new Request("http://test/test-key/__rpc", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          args: [],
-          __instanceToken: "token",
-          __instanceId: "do:test:TestDO:test-key",
-          __caller: { callerId: "main", callerKind: "server" },
+          from: "main",
+          target: "do:test:TestDO:test-key",
+          delivery: { caller: { callerId: "main", callerKind: "server" } },
+          provenance: [{ callerId: "main", callerKind: "server" }],
+          message: {
+            type: "request",
+            requestId: "unattested-alarm",
+            fromId: "main",
+            method: "__alarm",
+            args: [],
+          },
         }),
       })
     );
 
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      errorCode: "EACCES",
-      errorKind: "access",
-      error: expect.stringMatching(/host attestation required/),
-      errorData: {
-        authorityFailure: {
-          reasonCode: "attestation-invalid",
-          remediation: { kind: "retry-through-host" },
+      message: {
+        errorCode: "EACCES",
+        errorKind: "access",
+        error: expect.stringMatching(/host attestation required/),
+        errorData: {
+          authorityFailure: {
+            reasonCode: "attestation-invalid",
+            remediation: { kind: "retry-through-host" },
+          },
         },
       },
     });
@@ -448,14 +659,21 @@ describe("DurableObjectBase alarm dispatch", () => {
     };
     const dispatch = (instance: AlarmProbeDO) =>
       (instance as unknown as { fetch(request: Request): Promise<Response> }).fetch(
-        new Request("http://test/test-key/__alarm", {
+        new Request("http://test/test-key/__rpc", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            args: [],
-            __instanceToken: "token",
-            __instanceId: "do:test:TestDO:test-key",
-            __caller: caller,
+            from: "main",
+            target: "do:test:TestDO:test-key",
+            delivery: { caller },
+            provenance: [caller],
+            message: {
+              type: "request",
+              requestId: crypto.randomUUID(),
+              fromId: "main",
+              method: "__alarm",
+              args: [],
+            },
           }),
         })
       );
@@ -463,15 +681,17 @@ describe("DurableObjectBase alarm dispatch", () => {
     await expect(dispatch(first.instance)).resolves.toMatchObject({ status: 200 });
     const reconstructed = await createTestDO(AlarmProbeDO, undefined, { db: first.db });
     const replay = await dispatch(reconstructed.instance);
-    expect(replay.status).toBe(403);
+    expect(replay.status).toBe(200);
     await expect(replay.json()).resolves.toMatchObject({
-      errorCode: "EACCES",
-      errorKind: "access",
-      error: expect.stringMatching(/replayed/),
-      errorData: {
-        authorityFailure: {
-          reasonCode: "attestation-invalid",
-          remediation: { kind: "retry-through-host" },
+      message: {
+        errorCode: "EACCES",
+        errorKind: "access",
+        error: expect.stringMatching(/replayed/),
+        errorData: {
+          authorityFailure: {
+            reasonCode: "attestation-invalid",
+            remediation: { kind: "retry-through-host" },
+          },
         },
       },
     });

@@ -274,7 +274,7 @@ describe("DurableWorkDriver", () => {
       release = resolve;
     });
     const suite = handlers();
-    const scanReadyOwners = vi.fn(async () => {
+    const scanReadyOwners = vi.fn(async (_signal: AbortSignal) => {
       await held;
       return [];
     });
@@ -296,6 +296,79 @@ describe("DurableWorkDriver", () => {
     await driver.quiesce();
   });
 
+  it("cancels and joins an owned recovery adoption before quiesce settles", async () => {
+    let markAdoptionStarted!: () => void;
+    const adoptionStarted = new Promise<void>((resolve) => {
+      markAdoptionStarted = resolve;
+    });
+    let markCancellationObserved!: () => void;
+    const cancellationObserved = new Promise<void>((resolve) => {
+      markCancellationObserved = resolve;
+    });
+    let finishRemoteCleanup!: () => void;
+    const remoteCleanup = new Promise<void>((resolve) => {
+      finishRemoteCleanup = resolve;
+    });
+    const registration = {
+      owner: owner("recovering-owner"),
+      queues: ["channel-delivery"] as const,
+    };
+    const dispatchHeldWithSignal = vi.fn(
+      async (_ref: DORef, signal: AbortSignal, method: string) => {
+        if (method === "durableWorkOwnerList") return [registration];
+        if (method === "adoptDurableWorkWorker") {
+          markAdoptionStarted();
+          return new Promise<never>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                markCancellationObserved();
+                void remoteCleanup.then(() => reject(signal.reason));
+              },
+              { once: true }
+            );
+          });
+        }
+        return { readyQueues: [] };
+      }
+    );
+    const scanReadyOwners = createDurableWorkOwnerScanner(
+      { dispatchHeldWithSignal } as never,
+      {
+        source: "vibestudio/internal",
+        className: "WorkspaceDO",
+        objectKey: "workspace",
+      },
+      "driver-generation-1"
+    );
+    const suite = handlers();
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners,
+      workerId: "driver-generation-1",
+    });
+    driver.start();
+
+    const recovery = driver.recoverNow();
+    await adoptionStarted;
+    let quiesced = false;
+    const stopping = driver.quiesce().then(() => {
+      quiesced = true;
+    });
+    await cancellationObserved;
+    expect(quiesced).toBe(false);
+
+    finishRemoteCleanup();
+    await Promise.all([recovery, stopping]);
+    expect(quiesced).toBe(true);
+    expect(dispatchHeldWithSignal).toHaveBeenCalledWith(
+      registration.owner,
+      expect.objectContaining({ aborted: true }),
+      "adoptDurableWorkWorker",
+      "driver-generation-1"
+    );
+  });
+
   it("scans owner recovery status through a single low-priority lane", async () => {
     const registrations = Array.from({ length: 12 }, (_, index) => ({
       owner: owner(`registered-${index}`),
@@ -303,16 +376,18 @@ describe("DurableWorkDriver", () => {
     }));
     let active = 0;
     let maxActive = 0;
-    const dispatch = vi.fn(async (_ref: DORef, method: string) => {
-      if (method === "durableWorkOwnerList") return registrations;
-      active++;
-      maxActive = Math.max(maxActive, active);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      active--;
-      return { readyQueues: ["workspace-publication"] };
-    });
+    const dispatchHeldWithSignal = vi.fn(
+      async (_ref: DORef, _signal: AbortSignal, method: string) => {
+        if (method === "durableWorkOwnerList") return registrations;
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active--;
+        return { readyQueues: ["workspace-publication"] };
+      }
+    );
     const scan = createDurableWorkOwnerScanner(
-      { dispatch } as never,
+      { dispatchHeldWithSignal } as never,
       {
         source: "vibestudio/internal",
         className: "WorkspaceDO",
@@ -321,7 +396,7 @@ describe("DurableWorkDriver", () => {
       "driver-generation-1"
     );
 
-    const result = scan();
+    const result = scan(new AbortController().signal);
     await vi.advanceTimersByTimeAsync(200);
 
     await expect(result).resolves.toHaveLength(registrations.length);
@@ -331,14 +406,16 @@ describe("DurableWorkDriver", () => {
   it("reports an unchanged permanent readiness failure only once while continuing probes", async () => {
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const registration = { owner: owner("blocked"), queues: ["channel-delivery"] as const };
-    const dispatch = vi.fn(async (_ref: DORef, method: string) => {
-      if (method === "durableWorkOwnerList") return [registration];
-      throw Object.assign(new Error("sealed execution unavailable"), {
-        code: "RUNTIME_IMAGE_UNAVAILABLE",
-      });
-    });
+    const dispatchHeldWithSignal = vi.fn(
+      async (_ref: DORef, _signal: AbortSignal, method: string) => {
+        if (method === "durableWorkOwnerList") return [registration];
+        throw Object.assign(new Error("sealed execution unavailable"), {
+          code: "RUNTIME_IMAGE_UNAVAILABLE",
+        });
+      }
+    );
     const scan = createDurableWorkOwnerScanner(
-      { dispatch } as never,
+      { dispatchHeldWithSignal } as never,
       {
         source: "vibestudio/internal",
         className: "WorkspaceDO",
@@ -347,10 +424,10 @@ describe("DurableWorkDriver", () => {
       "driver-generation-1"
     );
 
-    await scan();
-    await scan();
+    await scan(new AbortController().signal);
+    await scan(new AbortController().signal);
 
-    expect(dispatch).toHaveBeenCalledTimes(4);
+    expect(dispatchHeldWithSignal).toHaveBeenCalledTimes(4);
     expect(
       consoleWarn.mock.calls.filter(([message]) => String(message).includes("readiness blocked"))
     ).toHaveLength(1);
@@ -539,12 +616,13 @@ describe("DurableWorkDriver", () => {
   });
 
   it("adopts only on recovery claims", async () => {
-    const dispatch = vi.fn(async (_ref: DORef, method: string) =>
-      method === "claimReadyWork" ? [] : undefined
+    const dispatchHeldWithSignal = vi.fn(
+      async (_ref: DORef, _signal: AbortSignal, method: string) =>
+        method === "claimReadyWork" ? [] : undefined
     );
     const record = createDurableWorkHandlers({
-      dispatch,
-      dispatchHeldWithSignal: vi.fn(),
+      dispatch: vi.fn(),
+      dispatchHeldWithSignal,
     } as never);
     const request = {
       workerId: "driver-1",
@@ -552,24 +630,43 @@ describe("DurableWorkDriver", () => {
       limit: 1,
     };
 
-    await record["channel-delivery"].claim(owner("agent-1"), {
-      ...request,
-      trigger: "hint",
-    });
-    await record["channel-delivery"].claim(owner("agent-1"), {
-      ...request,
-      trigger: "continuation",
-    });
-    expect(dispatch).not.toHaveBeenCalledWith(
+    await record["channel-delivery"].claim(
       owner("agent-1"),
+      {
+        ...request,
+        trigger: "hint",
+      },
+      new AbortController().signal
+    );
+    await record["channel-delivery"].claim(
+      owner("agent-1"),
+      {
+        ...request,
+        trigger: "continuation",
+      },
+      new AbortController().signal
+    );
+    expect(dispatchHeldWithSignal).not.toHaveBeenCalledWith(
+      owner("agent-1"),
+      expect.any(AbortSignal),
       "adoptDurableWorkWorker",
       "driver-1"
     );
 
-    await record["channel-delivery"].claim(owner("agent-1"), {
-      ...request,
-      trigger: "recovery",
-    });
-    expect(dispatch).toHaveBeenCalledWith(owner("agent-1"), "adoptDurableWorkWorker", "driver-1");
+    await record["channel-delivery"].claim(
+      owner("agent-1"),
+      {
+        ...request,
+        trigger: "recovery",
+      },
+      new AbortController().signal
+    );
+    expect(dispatchHeldWithSignal).toHaveBeenNthCalledWith(
+      3,
+      owner("agent-1"),
+      expect.any(AbortSignal),
+      "adoptDurableWorkWorker",
+      "driver-1"
+    );
   });
 });

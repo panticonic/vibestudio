@@ -29,6 +29,8 @@ export interface InternalConnectionlessRpcConfig extends ConnectionlessRpcConfig
   authorityParentNonce?: () => string | undefined;
   /** Runtime lifecycle hook; not exposed to workspace-authored clients. */
   onOutboundOperation?: (operation: Promise<unknown>) => void;
+  /** Cancellation of the currently executing receiver request. */
+  invocationSignal?: () => AbortSignal | null | undefined;
 }
 
 export interface ConnectionlessRpcClient {
@@ -264,6 +266,7 @@ function createConnectionlessRpcClientCore(
     ...(config.workspaceId ? { workspaceId: config.workspaceId } : {}),
     ...(config.authorityParentNonce ? { authorityParentNonce: config.authorityParentNonce } : {}),
     ...(config.onOutboundOperation ? { onOutboundOperation: config.onOutboundOperation } : {}),
+    ...(config.invocationSignal ? { invocationSignal: config.invocationSignal } : {}),
   });
 
   return {

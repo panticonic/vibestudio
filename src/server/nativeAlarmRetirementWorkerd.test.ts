@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { build } from "esbuild";
 import { WebSocket, WebSocketServer } from "ws";
 import { expect, it, onTestFinished } from "vitest";
+import { decodeRpcJson, encodeRpcJson, type RpcEnvelope } from "@vibestudio/rpc";
 import { createTestDirectAuthority } from "../../packages/durable/src/test-utils.js";
 
 import { requireDevelopmentTemplateCheckout } from "../dev/developmentTemplateConfig.js";
@@ -21,7 +23,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-it("joins native alarm retirement after its original HTTP consumer disconnects", async () => {
+it("cancels and joins native alarm work through its correlated RPC owner", async () => {
   const root = await mkdtemp(join(homedir(), ".native-alarm-retirement-"));
   const provider = createServer();
   const sockets = new WebSocketServer({ server: provider });
@@ -31,7 +33,6 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
   const exceptions: unknown[] = [];
   const contexts: unknown[] = [];
   const requests = new AbortController();
-  const originalController = new AbortController();
   const fetches: Promise<unknown>[] = [];
   let child: ReturnType<typeof spawn> | undefined;
   let childClosed: Promise<void> | undefined;
@@ -41,6 +42,56 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
   let lifecycleJoined = false;
   let cleanupFlight: Promise<void> | undefined;
   const observations: unknown[] = [];
+  const stages: string[] = [];
+  let stage = "setup";
+  let originalAlarmSettled = true;
+  let alarmCancellationAttempted = false;
+  const evidenceDirectory = join(
+    homedir(),
+    ".cache",
+    "vibestudio",
+    "test-evidence",
+    "native-alarm-retirement",
+    basename(root)
+  );
+  const evidencePath = join(evidenceDirectory, "stage.json");
+  let evidencePathLogged = false;
+
+  function persistEvidence(): void {
+    mkdirSync(evidenceDirectory, { recursive: true, mode: 0o700 });
+    chmodSync(evidenceDirectory, 0o700);
+    writeFileSync(
+      evidencePath,
+      JSON.stringify(
+        {
+          root,
+          stage,
+          stages,
+          lifecycleJoined,
+          originalAlarmSettled,
+          alarmCancellationAttempted,
+          observations: observations.slice(-100),
+          exceptions: exceptions.slice(-100),
+          contexts: contexts.slice(-100),
+          stdout,
+          stderr,
+        },
+        null,
+        2
+      ),
+      { mode: 0o600 }
+    );
+  }
+
+  function markStage(next: string): void {
+    stage = next;
+    stages.push(next);
+    persistEvidence();
+    if (!evidencePathLogged) {
+      evidencePathLogged = true;
+      console.log("Native alarm retirement evidence", evidencePath);
+    }
+  }
 
   function hostRequest(method: string, args: unknown[] = [], signal = requests.signal) {
     const promise = fetch(`http://${endpoint}/one/${method}`, {
@@ -68,22 +119,66 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
     return promise;
   }
 
+  function alarmEnvelope(type: "request" | "request-cancel", requestId = crypto.randomUUID()) {
+    const caller = {
+      callerId: "main",
+      callerKind: "server" as const,
+      authorization: createTestDirectAuthority({
+        callerKind: "server",
+        source: "fixture",
+        className: "Probe",
+        objectKey: "one",
+        method: "__alarm",
+      }),
+    };
+    return {
+      requestId,
+      envelope: {
+        from: "main",
+        target: "do:fixture:Probe:one",
+        delivery: { caller },
+        provenance: [caller],
+        message:
+          type === "request"
+            ? { type, requestId, fromId: "main", method: "__alarm", args: [] }
+            : { type, requestId, fromId: "main" },
+      } satisfies RpcEnvelope,
+    };
+  }
+
+  function hostAlarmRequest(
+    envelope: RpcEnvelope,
+    onTerminal?: (result: { status: number; body: RpcEnvelope }) => void
+  ) {
+    const promise = fetch(`http://${endpoint}/one/__rpc`, {
+      method: "POST",
+      signal: requests.signal,
+      headers: { "Content-Type": "application/json" },
+      body: encodeRpcJson(envelope),
+    }).then(async (response) => {
+      const result = {
+        status: response.status,
+        body: decodeRpcJson(await response.text()) as RpcEnvelope,
+      };
+      onTerminal?.(result);
+      return result;
+    });
+    fetches.push(promise);
+    return promise;
+  }
+
   const cleanup = () =>
     (cleanupFlight ??= (async () => {
       const errors: unknown[] = [];
       if (endpoint && child?.exitCode === null && child.signalCode === null && !lifecycleJoined) {
-        try {
-          const release = await hostRequest("__lifecycle/prepare", [
-            { mode: "suspend", reason: "shutdown" },
-          ]);
-          if (release.status !== 200 || release.body.status !== "ready")
-            throw new Error("Native fixture release failed", { cause: release });
-          lifecycleJoined = true;
-        } catch (error) {
-          errors.push(error);
-        }
+        // A failed assertion may mean the receiver is still stranded. Destroy
+        // this owned target directly; teardown must not repeat a possibly stuck
+        // lifecycle exchange while the primary failure is being reported.
+        markStage("cleanup: destroy failed native target");
+        if (!child.kill("SIGKILL")) errors.push(new Error("Workerd termination was refused"));
+        await childClosed;
+        requests.abort(new Error("Native alarm fixture failed and was retired"));
       }
-      originalController.abort(new Error("Native alarm fixture retired"));
       requests.abort(new Error("Native alarm fixture retired"));
       for (const inspector of inspectors) {
         if (inspector.readyState === WebSocket.CLOSED) continue;
@@ -92,7 +187,7 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
         await closed;
       }
       // Explicit failed-test destruction is distinct from a successful native release.
-      if (child && child.exitCode === null && child.signalCode === null && !child.kill("SIGTERM"))
+      if (child && child.exitCode === null && child.signalCode === null && !child.kill("SIGKILL"))
         errors.push(new Error("Workerd termination was refused"));
       await childClosed;
       await Promise.allSettled(fetches);
@@ -104,28 +199,14 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
         );
         provider.closeAllConnections();
       });
-      const evidence = {
-        root,
-        lifecycleJoined,
-        observations,
-        exceptions,
-        contexts,
-        stdout,
-        stderr,
-      };
-      await mkdir(resolve("experiments/durable-pi"), { recursive: true, mode: 0o700 });
-      await writeFile(
-        resolve("experiments/durable-pi/native-alarm-retirement-workerd10-evidence.json"),
-        JSON.stringify(evidence, null, 2),
-        { mode: 0o600 }
-      );
-      console.log("Native alarm retirement evidence", evidence);
+      persistEvidence();
       if (errors.length)
         throw new AggregateError(errors, "Native alarm fixture cleanup failed; scratch retained");
       await rm(root, { recursive: true, force: true });
     })());
   onTestFinished(cleanup);
   try {
+    markStage("start provider");
     await new Promise<void>((yes, no) => {
       provider.once("error", no);
       provider.listen(0, "127.0.0.1", yes);
@@ -163,7 +244,7 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
       import { openaiCodexProvider } from '@panticonic/pi-ai/providers/openai-codex';
       import { createCredentialedModelConnection } from ${JSON.stringify(join(base, "packages/agentic-do/src/native-model-transport.ts"))};
       export class Probe extends DurableObjectBase {
-        constructor(ctx,env) { super(ctx,env); this.observations=[]; this.opening=null; this.flight=null; this.closed=false; this.alarmEntered=new Promise(resolve=>{this.admitAlarm=resolve;}); }
+        constructor(ctx,env) { super(ctx,env); this.observations=[]; this.opening=null; this.flight=null; this.terminalFlight=null; this.closed=false; this.alarmEntered=new Promise(resolve=>{this.admitAlarm=resolve;}); }
         createTables() {}
         async open() { return this.opening ??= (async()=>{
           await this.initializeSchema();
@@ -174,15 +255,22 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
           const conversation=await harness.root(BACKGROUND_CONTEXT,{agent:{model:{provider:'openai-codex',modelId:'gpt-6.1-sol'},stream:{transport:'websocket',cacheRetention:'none'}}});
           await conversation.submit({type:'input',content:'fixture'},BACKGROUND_CONTEXT); return harness;
         })(); }
-        async alarm() { const harness=await this.open(); try { const pass=harness.runPass(BACKGROUND_CONTEXT); this.admitAlarm(); const schedule=await pass; return schedule.wakeAt===null?null:{wakeAt:schedule.wakeAt}; } catch(error) { this.passFailure={name:error.name,message:error.message,stack:error.stack}; throw error; } }
+        async alarm() { this.alarmSignal=this.rpcAbortSignal; const harness=await this.open(); try { const pass=harness.runPass(BACKGROUND_CONTEXT); this.admitAlarm(); const schedule=await pass; return schedule.wakeAt===null?null:{wakeAt:schedule.wakeAt}; } catch(error) { this.passFailure={name:error.name,message:error.message,stack:error.stack}; throw error; } }
         async releaseForLifecycle(input) { await (await this.open()).close(BACKGROUND_CONTEXT); this.closed=true; return {status:'ready'}; }
         async fetch(request) {
           const path=new URL(request.url).pathname;
           if(path.startsWith('/one/fixture-')) await request.text();
           if(path==='/one/fixture-init') { await this.open(); return Response.json({opened:true}); }
           if(path==='/one/fixture-alarm-entered') { await this.alarmEntered; return Response.json({entered:true}); }
-          if(path==='/one/fixture-join') { if(this.flight) await this.flight; return Response.json({closed:this.closed,passFailure:this.passFailure,response:this.response,observations:this.observations}); }
-          if(path==='/one/__alarm') { this.flight=(async()=>{ const response=await super.fetch(request); this.response={status:response.status,body:await response.clone().json()}; return response; })(); return await this.flight; }
+          if(path==='/one/fixture-alarm-aborted') { return Response.json({aborted:this.alarmSignal?.aborted===true}); }
+          if(path==='/one/fixture-join') { if(this.flight) await this.flight; if(this.terminalFlight) await this.terminalFlight; return Response.json({closed:this.closed,passFailure:this.passFailure,response:this.response,observations:this.observations}); }
+          if(path==='/one/__rpc') {
+            const envelope=JSON.parse(await request.clone().text());
+            if(envelope.message?.type==='request' && envelope.message.method==='__alarm') {
+              this.flight=(async()=>{ const response=await super.fetch(request); this.terminalFlight=response.clone().text().then(body=>{this.response={status:response.status,body:JSON.parse(body)};}); return response; })();
+              return await this.flight;
+            }
+          }
           return await super.fetch(request);
         }
       }
@@ -213,7 +301,7 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
     await writeFile(
       join(root, "config.capnp"),
       `using Workerd = import "/workerd/workerd.capnp";
-      const config :Workerd.Config = (services=[(name="main",worker=(compatibilityDate="2025-12-01",compatibilityFlags=["nodejs_compat"],globalOutbound="network",bindings=[(name="WORKER_SOURCE",text="fixture"),(name="WORKER_CLASS_NAME",text="Probe"),(name="PROBE",durableObjectNamespace="Probe")],durableObjectNamespaces=[(className="Probe",uniqueKey="native-alarm-probe",enableSql=true)],durableObjectStorage=(localDisk="storage"),modules=[(name="worker.js",esModule=embed "worker.js")])),(name="network",network=(allow=["private"])),(name="storage",disk=(path=${JSON.stringify(join(root, "storage"))},writable=true))],sockets=[(name="http",address="127.0.0.1",http=(),service="main")]);`
+      const config :Workerd.Config = (services=[(name="main",worker=(compatibilityDate="2025-12-01",compatibilityFlags=["nodejs_compat"],globalOutbound="network",bindings=[(name="WORKER_SOURCE",text="fixture"),(name="WORKER_CLASS_NAME",text="Probe"),(name="RPC_AUTH_TOKEN",text="fixture-rpc-token"),(name="GATEWAY_URL",text=${JSON.stringify(`http://127.0.0.1:${address.port}`)}),(name="WORKSPACE_ID",text="fixture-workspace"),(name="PROBE",durableObjectNamespace="Probe")],durableObjectNamespaces=[(className="Probe",uniqueKey="native-alarm-probe",enableSql=true)],durableObjectStorage=(localDisk="storage"),modules=[(name="worker.js",esModule=embed "worker.js")])),(name="network",network=(allow=["private"])),(name="storage",disk=(path=${JSON.stringify(join(root, "storage"))},writable=true))],sockets=[(name="http",address="127.0.0.1",http=(),service="main")]);`
     );
     const listening = deferred<string>();
     child = spawn(
@@ -255,6 +343,7 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
         throw Error(`Workerd exited before readiness: ${stderr}`);
       }),
     ]);
+    markStage("initialize fixture");
     expect(await hostRequest("fixture-init")).toEqual({ status: 200, body: { opened: true } });
     const targets = (await (
       await fetch(`http://127.0.0.1:${inspectorPort}/json/list`, { signal: requests.signal })
@@ -281,53 +370,104 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
       socket.send(JSON.stringify({ id: 1, method: "Runtime.enable" }));
       await enabled.promise;
     }
-    const original = hostRequest("__alarm", [], originalController.signal);
+    const alarm = alarmEnvelope("request");
+    if (alarm.envelope.message.type !== "request")
+      throw new Error("Fixture alarm envelope is not a request");
+    originalAlarmSettled = false;
+    markStage("send canonical alarm request");
+    const original = hostAlarmRequest(alarm.envelope, (terminal) => {
+      originalAlarmSettled = true;
+      observations.push({ originalTerminal: terminal });
+      persistEvidence();
+    }).catch((error) => {
+      originalAlarmSettled = true;
+      observations.push({ originalFailure: String(error) });
+      persistEvidence();
+      throw error;
+    });
     const observedOriginal = original.then(
       (value) => ({ value }),
       (error) => ({ error })
     );
-    expect(await hostRequest("fixture-alarm-entered")).toEqual({
+    async function beforeOriginalTerminal<T>(label: string, pending: Promise<T>): Promise<T> {
+      const outcome = await Promise.race([
+        pending.then((value) => ({ kind: "value" as const, value })),
+        observedOriginal.then((terminal) => ({ kind: "terminal" as const, terminal })),
+      ]);
+      if (outcome.kind === "terminal") {
+        throw new Error(`Original alarm request completed before ${label}`, {
+          cause: outcome.terminal,
+        });
+      }
+      return outcome.value;
+    }
+    expect(
+      await beforeOriginalTerminal("alarm entry", hostRequest("fixture-alarm-entered"))
+    ).toEqual({
       status: 200,
       body: { entered: true },
     });
-    await Promise.race([
-      accepted.promise,
-      childClosed.then(() => {
-        throw Error(`Workerd exited before native request: ${stderr}`);
-      }),
-    ]);
-    const cancellation = new Error("Original alarm HTTP consumer explicitly cancelled");
-    originalController.abort(cancellation);
-    expect(await observedOriginal).toEqual({ error: cancellation });
+    markStage("wait for provider request acceptance");
+    await beforeOriginalTerminal(
+      "provider request acceptance",
+      Promise.race([
+        accepted.promise,
+        childClosed.then(() => {
+          throw Error(`Workerd exited before native request: ${stderr}`);
+        }),
+      ])
+    );
+    markStage("deliver canonical alarm cancellation");
+    const cancellation = alarmEnvelope("request-cancel", alarm.requestId);
+    alarmCancellationAttempted = true;
+    expect(await hostAlarmRequest(cancellation.envelope)).toMatchObject({ status: 200 });
+    expect(originalAlarmSettled).toBe(false);
+    markStage("observe alarm signal");
+    expect(await hostRequest("fixture-alarm-aborted")).toEqual({
+      status: 200,
+      body: { aborted: true },
+    });
+    markStage("prepare lifecycle while original alarm remains owned");
     const release = await hostRequest("__lifecycle/prepare", [
       { mode: "suspend", reason: "shutdown" },
     ]);
-    expect(release).toEqual({ status: 200, body: { status: "ready" } });
+    expect(release).toMatchObject({
+      status: 200,
+      body: {
+        value: { status: "ready" },
+        metadata: { durableWorkReady: [] },
+      },
+    });
     lifecycleJoined = true;
+    markStage("join original terminal response");
+    const terminal = await observedOriginal;
+    expect(terminal).toHaveProperty("value.status", 200);
+    expect(terminal).toHaveProperty("value.body.message.type", "response");
+    expect(terminal).toHaveProperty("value.body.message.error", "Harness is closed");
+    markStage("join native peer close");
+    await peerClosed.promise;
     const joined = await hostRequest("fixture-join");
     observations.push(joined);
     expect(joined).toMatchObject({ status: 200, body: { closed: true } });
-    // A runPass may already have returned its wake schedule while its native
-    // model request remains owned. Closing that request must join either the
-    // completed pass or its actual failure; it need not manufacture an error.
-    // The admission and provider barriers above prove this was live work,
-    // rather than closing a fixture whose alarm never entered.
+    // The provider barrier, correlated cancellation, and lifecycle release
+    // prove shutdown joined live work rather than detaching the alarm request.
     expect(joined.body.response).toBeDefined();
-    if (joined.body.passFailure) {
-      expect(joined.body.response).toMatchObject({
-        status: 500,
-        body: { error: joined.body.passFailure.message },
-      });
-    } else {
-      expect(joined.body.response.status).toBe(200);
-    }
-    await peerClosed.promise;
-    // An already-issued wake may arrive after release. Its actual closed
-    // Harness refusal must cross the shipped Base HTTP boundary as the
-    // original structured error, never as an uncaught workerd rejection.
-    expect(await hostRequest("__alarm")).toMatchObject({
-      status: 500,
-      body: { error: "Harness is closed" },
+    expect(joined.body.response.status).toBe(200);
+    expect(joined.body.response.body.message.type).toBe("response");
+    expect(joined.body.passFailure).toMatchObject({
+      message: "Harness is closed",
+    });
+    expect(joined.body.response.body.message).toMatchObject({
+      error: "Harness is closed",
+    });
+    // Later host-control calls use the same canonical response envelope and
+    // preserve the Harness's terminal failure.
+    const afterClose = alarmEnvelope("request");
+    expect(await hostAlarmRequest(afterClose.envelope)).toMatchObject({
+      status: 200,
+      body: {
+        message: { type: "response", error: "Harness is closed" },
+      },
     });
     expect(joined.body.observations).toEqual(
       expect.arrayContaining([
@@ -339,16 +479,9 @@ it("joins native alarm retirement after its original HTTP consumer disconnects",
     expect(
       exceptions.filter((event) => JSON.stringify(event).includes("Harness is closed"))
     ).toEqual([]);
-    // Workerd reports the explicitly disconnected original HTTP consumer.
-    // Every other uncaught exception is a fixture or product defect.
-    expect(
-      exceptions.filter((event) => {
-        const text = (event as { params?: { exceptionDetails?: { text?: string } } }).params
-          ?.exceptionDetails?.text;
-        return text !== "Uncaught Error: Network connection lost.";
-      })
-    ).toEqual([]);
+    expect(exceptions).toEqual([]);
     expect(stderr).not.toMatch(/Uncaught exception:/);
+    markStage("completed successfully");
   } finally {
     await cleanup();
   }

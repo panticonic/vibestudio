@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
+import { decodeRpcJson, encodeRpcJson, RemoteRpcError, type RpcEnvelope } from "@vibestudio/rpc";
 import { doRefKey, doRefUrl, encodeUniversalKey, DODispatch } from "./doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
@@ -9,7 +10,7 @@ import {
   sealAndDrainDurableObjectRelays,
 } from "./workerdRpcRelay.js";
 import type { AuthorizationContext } from "@vibestudio/rpc";
-import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
+import type { AttestedCaller, DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 
 /** Expected workerd path for a userland DO ref (UniversalDO facet host). */
 function userlandUrl(ref: DORef, methodPath: string): string {
@@ -68,6 +69,30 @@ function testAttestation(
     providerExecutionDigest: "-",
     ...overrides,
   };
+}
+
+function rpcSuccessResponse(
+  init: RequestInit | undefined,
+  result: unknown,
+  metadata?: Record<string, unknown>
+): Response {
+  const request = decodeRpcJson(String(init?.body)) as RpcEnvelope;
+  if (request.message.type !== "request") throw new Error("expected an RPC request envelope");
+  return new Response(
+    encodeRpcJson({
+      from: request.target,
+      target: request.from,
+      delivery: { caller: request.delivery.caller },
+      provenance: request.provenance,
+      message: {
+        type: "response",
+        requestId: request.message.requestId,
+        result,
+        ...(metadata ? { metadata } : {}),
+      },
+    } satisfies RpcEnvelope),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -221,12 +246,9 @@ describe("DODispatch", () => {
         events.push("attest");
         return testAttestation();
       });
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
         events.push("invoke");
-        return new Response(JSON.stringify({ value: { ok: true } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return rpcSuccessResponse(init, { ok: true });
       });
       vi.stubGlobal("fetch", fetchMock);
       dispatch.setTokenManager(new TokenManager());
@@ -254,12 +276,13 @@ describe("DODispatch", () => {
       guarded.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
       vi.stubGlobal(
         "fetch",
-        vi.fn(
-          async () =>
-            new Response(JSON.stringify({ value: null }), {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            })
+        vi.fn(async (url: string, init?: RequestInit) =>
+          url.endsWith("/__rpc")
+            ? rpcSuccessResponse(init, null)
+            : new Response(JSON.stringify({ value: null }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              })
         )
       );
       const ref = makeRef();
@@ -303,19 +326,19 @@ describe("DODispatch", () => {
       const observer = vi.fn();
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue(
-          new Response(
-            JSON.stringify({
-              value: { committed: true },
-              metadata: {
+        vi.fn((_url: string, init?: RequestInit) =>
+          Promise.resolve(
+            rpcSuccessResponse(
+              init,
+              { committed: true },
+              {
                 durableWorkReady: [
                   "workspace-publication",
                   "channel-delivery",
                   "workspace-publication",
                 ],
-              },
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
+              }
+            )
           )
         )
       );
@@ -332,13 +355,200 @@ describe("DODispatch", () => {
       });
     });
 
+    it("keeps the authority parent until a cancelled RPC reaches its terminal response", async () => {
+      const controller = new AbortController();
+      let initialStarted!: () => void;
+      let cancelSent!: () => void;
+      const started = new Promise<void>((resolve) => {
+        initialStarted = resolve;
+      });
+      const cancellationSent = new Promise<void>((resolve) => {
+        cancelSent = resolve;
+      });
+      let releaseTerminal!: () => void;
+      let terminalReleased = false;
+      let parentReleased = false;
+      const ref = makeRef();
+      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+        const envelope = decodeRpcJson(String(init?.body)) as RpcEnvelope;
+        if (envelope.message.type === "request-cancel") {
+          expect(parentReleased).toBe(false);
+          cancelSent();
+          return new Response(encodeRpcJson({}), { status: 200 });
+        }
+        if (envelope.message.type !== "request") throw new Error("expected unary RPC request");
+        expect(init?.signal).toBeUndefined();
+        initialStarted();
+        const terminalEnvelope: RpcEnvelope = {
+          from: envelope.target,
+          target: envelope.from,
+          delivery: { caller: envelope.delivery.caller },
+          provenance: envelope.provenance,
+          message: {
+            type: "response",
+            requestId: envelope.message.requestId,
+            result: { completed: true },
+          },
+        };
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(stream) {
+              releaseTerminal = () => {
+                if (terminalReleased) return;
+                terminalReleased = true;
+                stream.enqueue(new TextEncoder().encode(encodeRpcJson(terminalEnvelope)));
+                stream.close();
+              };
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      dispatch.setAuthorityParentRunner(async (_id, _authorization, invoke) => {
+        try {
+          return await invoke();
+        } finally {
+          parentReleased = true;
+        }
+      });
+      dispatch.setTokenManager(new TokenManager());
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+
+      let settled = false;
+      const operation = dispatch
+        .dispatchHeldWithSignal(ref, controller.signal, "held")
+        .finally(() => {
+          settled = true;
+        });
+      await started;
+      const reason = new Error("driver quiesced");
+      controller.abort(reason);
+      await cancellationSent;
+      expect(settled).toBe(false);
+      expect(parentReleased).toBe(false);
+
+      releaseTerminal();
+      await expect(operation).rejects.toBe(reason);
+      expect(parentReleased).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("joins a failed cancellation delivery and preserves the terminal cleanup failure", async () => {
+      const controller = new AbortController();
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      let markAdmitted!: () => void;
+      const admitted = new Promise<void>((resolve) => {
+        markAdmitted = resolve;
+      });
+      let markCancelFailed!: () => void;
+      const cancelFailed = new Promise<void>((resolve) => {
+        markCancelFailed = resolve;
+      });
+      let releaseTerminal!: () => void;
+      let terminalReleased = false;
+      const cancellationFailure = new Error("cancel endpoint unavailable");
+      let parentReleased = false;
+      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+        const envelope = decodeRpcJson(String(init?.body)) as RpcEnvelope;
+        if (envelope.message.type === "request-cancel") {
+          markCancelFailed();
+          throw cancellationFailure;
+        }
+        if (envelope.message.type !== "request") throw new Error("expected unary RPC request");
+        markStarted();
+        const terminalEnvelope: RpcEnvelope = {
+          from: envelope.target,
+          target: envelope.from,
+          delivery: { caller: envelope.delivery.caller },
+          provenance: envelope.provenance,
+          message: {
+            type: "response",
+            requestId: envelope.message.requestId,
+            error: "remote cleanup failed",
+            errorKind: "internal",
+            errorCode: "CLEANUP_FAILED",
+            errorData: { owner: "receiver" },
+          },
+        };
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(stream) {
+              releaseTerminal = () => {
+                if (terminalReleased) return;
+                terminalReleased = true;
+                stream.enqueue(new TextEncoder().encode(encodeRpcJson(terminalEnvelope)));
+                stream.close();
+              };
+            },
+            pull() {
+              markAdmitted();
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      dispatch.setAuthorityParentRunner(async (_id, _authorization, invoke) => {
+        try {
+          return await invoke();
+        } finally {
+          parentReleased = true;
+        }
+      });
+      dispatch.setTokenManager(new TokenManager());
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+
+      let settled = false;
+      const operation = dispatch
+        .dispatchHeldWithSignal(makeRef(), controller.signal, "held")
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await started;
+        await admitted;
+        controller.abort(new Error("driver quiesced"));
+        await cancelFailed;
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        expect(parentReleased).toBe(false);
+
+        releaseTerminal();
+        await expect(operation).rejects.toSatisfy((error: unknown) => {
+          if (!(error instanceof AggregateError)) return false;
+          const [terminal, cancellation] = error.errors;
+          const errorData = terminal instanceof RemoteRpcError ? terminal.errorData : undefined;
+          return (
+            terminal instanceof RemoteRpcError &&
+            terminal.message === "remote cleanup failed" &&
+            terminal.code === "CLEANUP_FAILED" &&
+            errorData !== null &&
+            typeof errorData === "object" &&
+            "owner" in errorData &&
+            errorData.owner === "receiver" &&
+            cancellation === cancellationFailure
+          );
+        });
+        expect(parentReleased).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      } finally {
+        releaseTerminal?.();
+        await operation.catch(() => {});
+      }
+    });
+
     it("does not impose Undici response deadlines on DO method lifetimes", async () => {
       const tokenManager = new TokenManager();
-      const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ value: { nextAlarm: null } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
+      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+        rpcSuccessResponse(init, { nextAlarm: null })
       );
 
       vi.stubGlobal("fetch", fetchMock);
@@ -359,13 +569,13 @@ describe("DODispatch", () => {
       vi.useFakeTimers();
       const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-      let finish!: (response: Response) => void;
+      let finish!: () => void;
       vi.stubGlobal(
         "fetch",
         vi.fn(
-          () =>
+          (_url: string, init?: RequestInit) =>
             new Promise<Response>((resolve) => {
-              finish = resolve;
+              finish = () => resolve(rpcSuccessResponse(init, { nextAlarm: null }));
             })
         )
       );
@@ -379,52 +589,89 @@ describe("DODispatch", () => {
       expect(info).toHaveBeenCalledWith(expect.stringContaining("state=working"));
       expect(warn).not.toHaveBeenCalled();
 
-      finish(
-        new Response(JSON.stringify({ value: { nextAlarm: null } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
-      );
+      finish();
       await pending;
       expect(info).toHaveBeenCalledWith(expect.stringContaining("state=completed"));
     });
 
-    it("forwards scheduler cancellation to exactly the owned alarm transport", async () => {
-      const tokenManager = new TokenManager();
+    it("cancels and joins alarm work before releasing its authority parent", async () => {
       const controller = new AbortController();
-      const transportAborted = new Promise<never>((_resolve, reject) => {
-        controller.signal.addEventListener("abort", () => reject(controller.signal.reason), {
-          once: true,
-        });
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
       });
-      const fetchMock = vi.fn((_url: string, init: RequestInit) => {
-        expect(init.signal).toBe(controller.signal);
-        return transportAborted;
+      let markCancelSent!: () => void;
+      const cancelSent = new Promise<void>((resolve) => {
+        markCancelSent = resolve;
+      });
+      let finishTerminal!: () => void;
+      let parentReleased = false;
+      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+        const request = decodeRpcJson(String(init?.body)) as RpcEnvelope;
+        if (request.message.type === "request-cancel") {
+          expect(parentReleased).toBe(false);
+          markCancelSent();
+          return new Response(encodeRpcJson({}), { status: 200 });
+        }
+        if (request.message.type !== "request") {
+          throw new Error("expected canonical alarm request");
+        }
+        expect(request.message.method).toBe("__alarm");
+        expect(init?.signal).toBeUndefined();
+        markStarted();
+        const terminal: RpcEnvelope = {
+          from: request.target,
+          target: request.from,
+          delivery: { caller: request.delivery.caller },
+          provenance: request.provenance,
+          message: {
+            type: "response",
+            requestId: request.message.requestId,
+            result: { nextAlarm: null },
+          },
+        };
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(stream) {
+              finishTerminal = () => {
+                stream.enqueue(new TextEncoder().encode(encodeRpcJson(terminal)));
+                stream.close();
+              };
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
       });
 
       vi.stubGlobal("fetch", fetchMock);
-      dispatch.setTokenManager(tokenManager);
+      dispatch.setAuthorityParentRunner(async (_id, _authorization, invoke) => {
+        try {
+          return await invoke();
+        } finally {
+          parentReleased = true;
+        }
+      });
+      dispatch.setTokenManager(new TokenManager());
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
 
       const pending = dispatch.dispatchAlarm(makeRef(), controller.signal);
-      const rejected = expect(pending).rejects.toBeInstanceOf(Error);
+      await started;
       const reason = new Error("alarm scheduler quiesced");
       controller.abort(reason);
-
-      await rejected;
+      await cancelSent;
+      expect(parentReleased).toBe(false);
+      finishTerminal();
       await expect(pending).rejects.toBe(reason);
-      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(parentReleased).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it("keeps test-scoped alarm authority active for the complete durable invocation", async () => {
       const tokenManager = new TokenManager();
-      const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ value: { nextAlarm: null } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
+      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+        rpcSuccessResponse(init, { nextAlarm: null })
       );
       const authorization = testAttestation({
         nonce: "alarm-parent-nonce",
@@ -462,10 +709,17 @@ describe("DODispatch", () => {
           }),
         },
       ]);
-      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
-        __caller: { authorization: unknown };
-      };
-      expect(body.__caller.authorization).toEqual(scopeCalls[0]!.authorization);
+      const body = decodeRpcJson(
+        String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)
+      ) as RpcEnvelope;
+      expect(body.message.type).toBe("request");
+      if (body.message.type !== "request") {
+        throw new Error("expected canonical alarm request");
+      }
+      expect(body.message.method).toBe("__alarm");
+      expect((body.delivery.caller as AttestedCaller).authorization).toEqual(
+        scopeCalls[0]!.authorization
+      );
     });
 
     it("does not replay a semantic call after connection refusal", async () => {
@@ -485,7 +739,7 @@ describe("DODispatch", () => {
       const ref = makeRef();
       const failure = dispatch.dispatch(ref, "ping", "arg");
       await expect(failure).rejects.toThrow(
-        `DO dispatch fetch to http://127.0.0.1:10001${userlandUrl(ref, "ping")} failed: ` +
+        `DO dispatch fetch to http://127.0.0.1:10001${userlandUrl(ref, "__rpc")} failed: ` +
           "fetch failed (cause: Error: connect ECONNREFUSED 127.0.0.1:10001)"
       );
       await expect(failure).rejects.toMatchObject({ cause: fetchFailure });
@@ -494,7 +748,7 @@ describe("DODispatch", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenNthCalledWith(
         1,
-        `http://127.0.0.1:10001${userlandUrl(ref, "ping")}`,
+        `http://127.0.0.1:10001${userlandUrl(ref, "__rpc")}`,
         expect.any(Object)
       );
     });
@@ -513,7 +767,7 @@ describe("DODispatch", () => {
       const ref = makeRef();
       const failure = dispatch.dispatch(ref, "getRun");
       await expect(failure).rejects.toThrow(
-        `DO dispatch fetch to http://127.0.0.1:10001${userlandUrl(ref, "getRun")} failed: fetch failed`
+        `DO dispatch fetch to http://127.0.0.1:10001${userlandUrl(ref, "__rpc")} failed: fetch failed`
       );
       await expect(failure).rejects.toMatchObject({ cause: fetchFailure });
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -565,16 +819,26 @@ describe("DODispatch", () => {
       };
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue(
-          new Response(
-            JSON.stringify({
-              error: "revision does not resolve",
-              errorKind: "application",
-              errorData,
-            }),
-            { status: 500, headers: { "Content-Type": "application/json" } }
-          )
-        )
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          const request = decodeRpcJson(String(init?.body)) as RpcEnvelope;
+          if (request.message.type !== "request") throw new Error("expected RPC request");
+          return new Response(
+            encodeRpcJson({
+              from: request.target,
+              target: request.from,
+              delivery: { caller: request.delivery.caller },
+              provenance: request.provenance,
+              message: {
+                type: "response",
+                requestId: request.message.requestId,
+                error: "revision does not resolve",
+                errorKind: "application",
+                errorData,
+              },
+            } satisfies RpcEnvelope),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        })
       );
       dispatch.setTokenManager(tokenManager);
       dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");

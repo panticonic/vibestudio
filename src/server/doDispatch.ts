@@ -20,6 +20,7 @@ import {
   decodeRpcJson,
   encodeRpcJson,
   RemoteRpcError,
+  type RpcEnvelope,
   type AgentExecutionTestPolicy,
   type RpcErrorKind,
 } from "@vibestudio/rpc";
@@ -188,7 +189,7 @@ export async function postToDOWithToken(
       body: encodeRpcJson(envelope),
       signal,
       // The method's owner defines its semantic lifetime. In particular,
-      // `__alarm` may legitimately await an agent model effect, so Undici's
+      // lifecycle release may legitimately join owned model work, so Undici's
       // response-header/body defaults must never become a hidden deadline.
       dispatcher: getWorkerdConnectionDispatcher(url),
     } as RequestInit);
@@ -261,6 +262,185 @@ export async function postToDOWithToken(
       error
     );
   }
+}
+
+/**
+ * Invoke an ordinary durable-object RPC through the receiver's canonical
+ * request/cancel channel. The response headers are the admission receipt: the
+ * receiver has installed its request owner before they are sent. A caller
+ * cancellation is delivered as `request-cancel`, while this original request
+ * remains open and owns the response body until the receiver's terminal
+ * completion (including any alarm drain).
+ */
+async function postRpcToDOWithToken(
+  ref: DORef,
+  method: string,
+  args: unknown[],
+  deps: PostToDOWithTokenDeps,
+  caller: DOCallerEnvelope,
+  signal?: AbortSignal
+): Promise<unknown> {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("DO dispatch aborted");
+  }
+  const instanceId = doTargetId(ref);
+  const url = `${deps.workerdUrl}${doRefUrl(ref, "__rpc")}`;
+  const requestId = crypto.randomUUID();
+  const envelope: RpcEnvelope = {
+    from: caller.callerId,
+    target: instanceId,
+    delivery: { caller },
+    provenance: [caller],
+    message: { type: "request", requestId, fromId: caller.callerId, method, args },
+  };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${deps.workerdGatewayToken}`,
+  };
+  if (deps.dispatchSecret) headers["X-Vibestudio-Dispatch-Secret"] = deps.dispatchSecret;
+  const init: RequestInit = {
+    method: "POST",
+    headers,
+    body: encodeRpcJson(envelope),
+    // The caller signal owns cancellation of the admitted RPC, not this HTTP
+    // response reader. Aborting this fetch would release the authority parent
+    // before the receiver had finished its handler and alarm drain.
+    dispatcher: getWorkerdConnectionDispatcher(url),
+  } as RequestInit;
+
+  let cancelDelivery: Promise<void> | null = null;
+  let admitted = false;
+  let terminalReceived = false;
+  const cancel = (): void => {
+    if (!signal?.aborted || !admitted || terminalReceived || cancelDelivery) return;
+    const cancellation: RpcEnvelope = {
+      ...envelope,
+      message: { type: "request-cancel", requestId, fromId: caller.callerId },
+    };
+    cancelDelivery = (async () => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: encodeRpcJson(cancellation),
+        dispatcher: getWorkerdConnectionDispatcher(url),
+      } as RequestInit);
+      const body = await response.text();
+      if (!response.ok) {
+        throw new Error(
+          `DO cancellation delivery failed (${response.status})${body ? `: ${body}` : ""}`
+        );
+      }
+    })();
+    // The original invocation may still be joining receiver cleanup when the
+    // cancellation delivery fails. Observe rejection now and retain the same
+    // promise so the owner can report both failures after joining completion.
+    void cancelDelivery.catch(() => {});
+  };
+  signal?.addEventListener("abort", cancel, { once: true });
+  let terminal: unknown;
+  let terminalFailure: unknown;
+  let hasTerminalFailure = false;
+  try {
+    let response: Response;
+    try {
+      response = await fetch(url, init);
+    } catch (error) {
+      throw new AmbiguousDoDispatchError(
+        `DO dispatch fetch to ${url} failed: ${describeWorkerdFetchFailure(error)}`,
+        error
+      );
+    }
+    if (!response.ok) {
+      const body = await response.text();
+      let parsed: {
+        error?: unknown;
+        errorCode?: unknown;
+        errorKind?: unknown;
+        errorData?: unknown;
+      };
+      try {
+        parsed = decodeRpcJson(body) as typeof parsed;
+      } catch {
+        throw new Error(`DO dispatch failed (${response.status}): ${body}`);
+      }
+      if (typeof parsed.error === "string") {
+        throw new RemoteRpcError(
+          parsed.error,
+          parsed.errorKind === "access" ||
+            parsed.errorKind === "service" ||
+            parsed.errorKind === "transport" ||
+            parsed.errorKind === "protocol" ||
+            parsed.errorKind === "application" ||
+            parsed.errorKind === "internal"
+            ? parsed.errorKind
+            : "application",
+          typeof parsed.errorCode === "string" ? parsed.errorCode : undefined,
+          parsed.errorData
+        );
+      }
+      throw new Error(`DO dispatch failed (${response.status}): ${body}`);
+    }
+    admitted = true;
+    cancel();
+    const decoded = decodeRpcJson(await response.text()) as RpcEnvelope;
+    const message = decoded?.message;
+    if (message?.type !== "response" || message.requestId !== requestId) {
+      throw new Error("DO RPC returned a mismatched terminal response");
+    }
+    if ("error" in message) {
+      const error = new RemoteRpcError(
+        message.error,
+        message.errorKind,
+        message.errorCode,
+        message.errorData
+      );
+      if (message.diagnosticId) attachRpcDiagnosticId(error, message.diagnosticId);
+      terminalReceived = true;
+      throw error;
+    }
+    notifyDurableWorkReady(message.metadata?.durableWorkReady, deps.onWorkReady);
+    terminal = message.result;
+    terminalReceived = true;
+  } catch (error) {
+    terminalFailure = error;
+    hasTerminalFailure = true;
+  } finally {
+    signal?.removeEventListener("abort", cancel);
+  }
+  if (signal?.aborted) cancel();
+  let cancellationFailure: unknown;
+  let hasCancellationFailure = false;
+  if (cancelDelivery) {
+    try {
+      await cancelDelivery;
+    } catch (error) {
+      cancellationFailure = error;
+      hasCancellationFailure = true;
+    }
+  }
+  if (hasTerminalFailure && hasCancellationFailure) {
+    throw new AggregateError(
+      [terminalFailure, cancellationFailure],
+      "DO invocation and cancellation delivery both failed",
+      { cause: terminalFailure }
+    );
+  }
+  if (hasTerminalFailure) throw terminalFailure;
+  if (signal?.aborted) {
+    const reason = signal.reason;
+    const aborted =
+      reason instanceof Error ? reason : new Error("DO dispatch aborted", { cause: reason });
+    if (hasCancellationFailure) {
+      throw new AggregateError(
+        [aborted, cancellationFailure],
+        "DO cancellation delivery failed after the receiver completed",
+        { cause: aborted }
+      );
+    }
+    throw aborted;
+  }
+  if (hasCancellationFailure) throw cancellationFailure;
+  return terminal;
 }
 
 function notifyDurableWorkReady(
@@ -628,13 +808,16 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     args: unknown[],
     signal?: AbortSignal
   ): Promise<unknown> {
+    signal?.throwIfAborted();
     await this.prepareTarget(ref);
+    signal?.throwIfAborted();
 
     // `DODispatch.dispatch` is the SERVER's internal service→DO channel (eval.start,
     // workspace methods, …), so the caller is always the server — stamp it so the
     // DO's converged envelope dispatch surfaces `callerKind: "server"` (e.g. the
     // EvalDO server-only gate). Mirrors dispatchLifecycle/dispatchAlarm.
     const serverCaller = await this.serverCaller(ref, method, args);
+    signal?.throwIfAborted();
     const authorization = assertPresent(serverCaller.authorization);
     const dispatchedArgs = [...args];
     if (
@@ -651,12 +834,11 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     }
     const result = await this.authorityParentRunner(doTargetId(ref), authorization, () =>
       this.withRelayAdmission(ref, () =>
-        postToDOWithToken(
+        postRpcToDOWithToken(
           ref,
           method,
           dispatchedArgs,
           this.buildPostDeps(ref),
-          "main",
           serverCaller,
           signal
         )
@@ -767,12 +949,11 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       this.withRelayAdmission(
         ref,
         () =>
-          postToDOWithToken(
+          postRpcToDOWithToken(
             ref,
             "__alarm",
             [],
             this.buildPostDeps(ref),
-            "main",
             serverCaller,
             signal
           ) as Promise<DoAlarmDispatchResult>

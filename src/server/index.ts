@@ -7833,13 +7833,23 @@ async function main() {
       shutdownErrors.push(error);
       console.error("[Server] Cleanup reaper shutdown failed:", error);
     });
-    // Stop scheduling admission before asking activations to release. A
-    // scheduler-owned __alarm may be awaiting a long model/tool effect; cancel
-    // only that transport and preserve its durable wake row so lifecycle
-    // prepare can enter the activation and release its live resources.
-    await alarmDriver
-      .quiesce()
-      .catch((err) => console.warn("[Server] alarm scheduler quiesce failed:", err));
+    // Stop scheduler admission now, but retain both owned joins while lifecycle
+    // prepare releases resources held by their in-flight work. In particular,
+    // an alarm RPC remains owned through its terminal response; joining it
+    // before lifecycle preparation would prevent that preparation from closing
+    // the native resource the alarm is awaiting.
+    const alarmQuiescence = alarmDriver.quiesce().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] alarm scheduler quiesce failed:", error);
+    });
+    const durableWorkDriver =
+      container.get<import("./services/durableWorkDriver.js").DurableWorkDriver>(
+        "durableWorkDriver"
+      );
+    const durableWorkQuiescence = durableWorkDriver.quiesce().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] durable work driver quiesce failed:", error);
+    });
 
     // Close the shared eval admission before tearing down its host-held
     // transports. Every EvalDO run is a durable trust unit with its own
@@ -7865,6 +7875,10 @@ async function main() {
       shutdownErrors.push(error);
       console.error("[Server] lifecycle shutdown prepare failed:", error);
     });
+
+    // These schedulers closed admission above, but their dispatches could only
+    // settle after lifecycle release joined the actual activation resources.
+    await Promise.all([alarmQuiescence, durableWorkQuiescence]);
 
     // Client stop receipts arrive over RPC. Release native child ownership
     // while those transports are still available; the managed service stop

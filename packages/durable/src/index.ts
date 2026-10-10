@@ -6,6 +6,8 @@ import {
   rpcExposedMethodNames,
   rpcErrorDataOf,
   rpcErrorKindOf,
+  rpcDiagnosticIdOf,
+  responseEnvelopeFor,
   rpcMethodAuthority,
   rpc,
   type AuthenticatedCaller,
@@ -15,6 +17,7 @@ import {
   type RpcEnvelope,
   type RpcEvent,
   type RpcRequest,
+  type RpcRequestContext,
   type ResolvedRpcAuthority,
 } from "@vibestudio/rpc";
 import {
@@ -144,6 +147,8 @@ interface RpcInvocationContext {
   requestId: string | null;
   idempotencyKey: string | null;
   readyQueues: Set<DurableWorkQueue>;
+  alarmRpcs: Set<Promise<void>>;
+  requestSignal?: AbortSignal;
 }
 
 export interface LifecyclePrepareResult {
@@ -525,23 +530,46 @@ export abstract class DurableObjectBase {
             ? this.invocationContext.current()?.verifiedCaller?.authorization?.nonce
             : undefined,
         onOutboundOperation: this.causalRpcOperations.observe,
+        invocationSignal: () => this.invocationContext.current()?.requestSignal,
       });
-      // Expose ONLY this DO's `@rpc`-marked methods (opt-in / default-deny). Private/protected helpers
-      // and all framework plumbing (`dispatchInboundEnvelope`, state-KV, alarms) are unreachable over
-      // the open relay; a forgotten `@rpc` fails loud ("not exposed"). The decorator allow-list is
-      // the boundary, including the framework methods declared on this base.
+      // Application exposure is opt-in through @rpc. The scheduler's internal
+      // alarm handler shares this request owner but uses host-control admission,
+      // never an application declaration or website policy.
       connectionless.client.exposeAll(
-        collectExposableMethods(this, rpcExposedMethodNames(this), Object.prototype),
         Object.fromEntries(
-          [...rpcExposedMethodNames(this)].map((name) => {
-            const policy = this.rpcAuthorityDeclaration(
-              name,
-              (this.constructor as typeof DurableObjectBase).rpcMethods?.[name]
-            );
-            if (!policy) throw new Error(`RPC method ${name} lacks an authority declaration`);
-            return [name, policy.website];
-          })
-        )
+          Object.entries({
+            ...collectExposableMethods(this, rpcExposedMethodNames(this), Object.prototype),
+            __alarm: async (_request: RpcRequestContext) => ({ nextAlarm: await this.alarm() }),
+          }).map(([name, handler]) => [
+            name,
+            async (request: RpcRequestContext) => {
+              const invocation = this.invocationContext.current();
+              const previous = invocation?.requestSignal;
+              if (invocation) invocation.requestSignal = request.signal;
+              try {
+                return await handler(request);
+              } finally {
+                if (invocation) {
+                  if (previous === undefined) delete invocation.requestSignal;
+                  else invocation.requestSignal = previous;
+                }
+              }
+            },
+          ])
+        ),
+        {
+          ...Object.fromEntries(
+            [...rpcExposedMethodNames(this)].map((name) => {
+              const policy = this.rpcAuthorityDeclaration(
+                name,
+                (this.constructor as typeof DurableObjectBase).rpcMethods?.[name]
+              );
+              if (!policy) throw new Error(`RPC method ${name} lacks an authority declaration`);
+              return [name, policy.website];
+            })
+          ),
+          __alarm: { kind: "closed", reason: "Only the host scheduler may invoke an alarm." },
+        }
       );
       this.connectionless = connectionless;
     }
@@ -567,6 +595,11 @@ export abstract class DurableObjectBase {
 
   protected get rpcCallerId(): string | null {
     return this.invocationContext.current()?.callerId ?? null;
+  }
+
+  /** Cancellation belongs to this exact incoming request, including its cleanup. */
+  protected get rpcAbortSignal(): AbortSignal | null {
+    return this.invocationContext.current()?.requestSignal ?? null;
   }
 
   protected get rpcCallerKind(): string | null {
@@ -631,20 +664,37 @@ export abstract class DurableObjectBase {
   }
 
   private readonly pendingAlarmRpcs = new Set<Promise<void>>();
+  private readonly terminalAlarmDrainResponses = new WeakSet<Response>();
 
   private trackAlarmRpc(pending: Promise<void>): void {
     this.pendingAlarmRpcs.add(pending);
+    const invocation = this.invocationContext.current();
+    if (invocation?.authorityActive) invocation.alarmRpcs.add(pending);
+    // The drain retains and propagates the original rejection. Observe it now
+    // while another owned operation may still be running before that drain.
+    void pending.catch(() => undefined);
   }
 
   private async drainAlarmRpcs(): Promise<void> {
-    while (this.pendingAlarmRpcs.size > 0) {
-      const pending = [...this.pendingAlarmRpcs];
-      try {
-        await Promise.all(pending);
-      } finally {
-        for (const settled of pending) this.pendingAlarmRpcs.delete(settled);
+    await this.drainOwnedAlarmRpcs(this.pendingAlarmRpcs);
+  }
+
+  private async drainOwnedAlarmRpcs(owned: Set<Promise<void>>): Promise<void> {
+    const failures: unknown[] = [];
+    while (owned.size > 0) {
+      const pending = [...owned];
+      const settled = await Promise.allSettled(pending);
+      for (const operation of pending) {
+        owned.delete(operation);
+        this.pendingAlarmRpcs.delete(operation);
       }
+      for (const result of settled) if (result.status === "rejected") failures.push(result.reason);
     }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Durable alarm persistence failed", {
+        cause: failures[0],
+      });
   }
 
   private lifecycleKey(): { source: string; className: string; objectKey: string } {
@@ -732,12 +782,14 @@ export abstract class DurableObjectBase {
     const acceptedAtHeader = acceptedAtRaw === null ? Number.NaN : Number(acceptedAtRaw);
     const authorityAcceptedAt = Number.isFinite(acceptedAtHeader) ? acceptedAtHeader : Date.now();
 
+    let envelopeResponse: Response | undefined;
     try {
       // Converged inbound dispatch: an `RpcEnvelope` POSTed to `__rpc` (relay
       // traffic, server→DO event push, deferred replies) flows through the
       // shared core's `handleEnvelope` → `exposeAll`'d method / event listeners.
       if (method === "__rpc") {
-        return await this.handleInboundEnvelope(request, authorityAcceptedAt);
+        envelopeResponse = await this.handleInboundEnvelope(request, authorityAcceptedAt);
+        return envelopeResponse;
       }
 
       let args: unknown[] = [];
@@ -778,29 +830,31 @@ export abstract class DurableObjectBase {
           const result =
             method === "__lifecycle/prepare"
               ? await (async () => {
-                  await this.drainAlarmRpcs();
-                  return this.releaseForLifecycle(args[0] as LifecyclePrepareInput);
+                  const failures: unknown[] = [];
+                  try {
+                    await this.drainAlarmRpcs();
+                  } catch (error) {
+                    failures.push(error);
+                  }
+                  let released: LifecyclePrepareResult | undefined;
+                  try {
+                    released = await this.releaseForLifecycle(args[0] as LifecyclePrepareInput);
+                  } catch (error) {
+                    failures.push(error);
+                  }
+                  if (failures.length === 1) throw failures[0];
+                  if (failures.length > 1)
+                    throw new AggregateError(
+                      failures,
+                      "Alarm persistence and lifecycle release failed",
+                      {
+                        cause: failures[0],
+                      }
+                    );
+                  return released;
                 })()
               : await this.resumeAfterRestart(args[0] as LifecycleResumeInput);
           return jsonResponse({ value: result ?? null });
-        });
-      }
-
-      if (method === "__alarm") {
-        return await this.withCaller(verifiedCallerFromBody, async () => {
-          const denial = this.hostControlDenial(method, authorityAcceptedAt);
-          if (denial) {
-            return jsonResponse(
-              {
-                error: denial.reason,
-                errorCode: denial.code,
-                errorKind: "access",
-                errorData: { authorityFailure: denial.failure },
-              },
-              403
-            );
-          }
-          return jsonResponse({ value: { nextAlarm: await this.alarm() } });
         });
       }
 
@@ -810,6 +864,8 @@ export abstract class DurableObjectBase {
       // dispatch as `__rpc`, so `(this)[method]` is gone and `exposeAll` is the
       // single dispatch. Returns the raw method result (the relay/DODispatch
       // contract), not the response envelope.
+      if (!rpcExposedMethodNames(this).has(method))
+        return jsonResponse({ error: `Unknown method: ${method}` }, 404);
       const caller: AuthenticatedCaller = verifiedCallerFromBody ?? {
         callerId: "",
         callerKind: "unknown",
@@ -888,12 +944,17 @@ export abstract class DurableObjectBase {
       // single scheduling write fails, the request fails too; returning a
       // successful domain response would otherwise acknowledge work whose
       // only future wake was never recorded.
-      await this.drainAlarmRpcs();
+      if (!envelopeResponse || !this.terminalAlarmDrainResponses.has(envelopeResponse))
+        await this.drainAlarmRpcs();
     }
   }
 
-  private hostControlDenial(method: string, authorityAcceptedAt: number): HostControlDenial | null {
-    const attestation = this.invocationContext.current()?.verifiedCaller?.authorization ?? null;
+  private hostControlDenial(
+    method: string,
+    authorityAcceptedAt: number,
+    caller = this.invocationContext.current()?.verifiedCaller
+  ): HostControlDenial | null {
+    const attestation = caller?.authorization ?? null;
     const denial = hostControlDenial({
       method,
       attestation,
@@ -1007,11 +1068,125 @@ export abstract class DurableObjectBase {
         500
       );
     }
-    const dispatched = await this.dispatchInboundEnvelope(envelope, authorityAcceptedAt);
-    return jsonResponse(
-      dispatched.result ?? {},
-      200
-    );
+    let markAdmitted!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+      markAdmitted = resolve;
+    });
+    const alarmRpcs = new Set<Promise<void>>();
+    const completion = this.dispatchInboundEnvelope(
+      envelope,
+      authorityAcceptedAt,
+      markAdmitted,
+      alarmRpcs
+    )
+      .then(async (dispatched) => {
+        try {
+          // A handler may schedule its alarm after the outer fetch has already
+          // crossed the admission boundary. Keep that durability write inside
+          // the terminal response owner so the caller cannot observe completion
+          // before the next wake is committed.
+          await this.drainOwnedAlarmRpcs(alarmRpcs);
+        } catch (alarmFailure) {
+          const previous = dispatched.result?.message;
+          const failure =
+            previous?.type === "response" && "error" in previous
+              ? new AggregateError(
+                  [new Error(previous.error), alarmFailure],
+                  `RPC handler and durable alarm persistence failed: ${previous.error}; ${alarmFailure instanceof Error ? alarmFailure.message : String(alarmFailure)}`,
+                  { cause: alarmFailure }
+                )
+              : alarmFailure;
+          const errorCode =
+            failure instanceof Error ? (failure as Error & { code?: string }).code : undefined;
+          dispatched = {
+            ...dispatched,
+            result: responseEnvelopeFor(
+              envelope,
+              { callerId: envelope.target, callerKind: "do" },
+              {
+                type: "response",
+                requestId: message.requestId,
+                error: failure instanceof Error ? failure.message : String(failure),
+                ...(previous?.type === "response" && "error" in previous
+                  ? {
+                      errorKind: previous.errorKind,
+                      errorCode: previous.errorCode,
+                      errorData: previous.errorData,
+                      diagnosticId: previous.diagnosticId,
+                    }
+                  : {
+                      errorKind: rpcErrorKindOf(failure),
+                      ...(rpcDiagnosticIdOf(failure)
+                        ? { diagnosticId: rpcDiagnosticIdOf(failure) }
+                        : {}),
+                      ...(typeof errorCode === "string" ? { errorCode } : {}),
+                      ...(rpcErrorDataOf(failure) === undefined
+                        ? {}
+                        : { errorData: rpcErrorDataOf(failure) }),
+                    }),
+              }
+            ),
+          };
+        }
+        return dispatched;
+      })
+      .catch(async (primary: unknown) => {
+        let failure = primary;
+        try {
+          await this.drainOwnedAlarmRpcs(alarmRpcs);
+        } catch (alarmFailure) {
+          failure = new AggregateError(
+            [primary, alarmFailure],
+            `RPC dispatch and alarm persistence failed: ${primary instanceof Error ? primary.message : String(primary)}; ${alarmFailure instanceof Error ? alarmFailure.message : String(alarmFailure)}`,
+            { cause: primary }
+          );
+        }
+        const errorCode =
+          primary instanceof Error ? (primary as Error & { code?: string }).code : undefined;
+        return {
+          result: responseEnvelopeFor(
+            envelope,
+            { callerId: this.rpcSelfId, callerKind: "do" },
+            {
+              type: "response",
+              requestId: message.requestId,
+              error: failure instanceof Error ? failure.message : String(failure),
+              errorKind: rpcErrorKindOf(primary),
+              ...(typeof errorCode === "string" ? { errorCode } : {}),
+              ...(rpcErrorDataOf(primary) === undefined
+                ? {}
+                : { errorData: rpcErrorDataOf(primary) }),
+              ...(rpcDiagnosticIdOf(primary) ? { diagnosticId: rpcDiagnosticIdOf(primary) } : {}),
+            }
+          ),
+          readyQueues: [],
+        };
+      });
+    const first = await Promise.race([
+      admitted.then(() => ({ kind: "admitted" as const })),
+      completion.then((dispatched) => ({ kind: "completed" as const, dispatched })),
+    ]);
+    if (first.kind === "completed") {
+      return new Response(encodeRpcJson(first.dispatched.result ?? {}), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        void completion.then(
+          (dispatched) => {
+            controller.enqueue(new TextEncoder().encode(encodeRpcJson(dispatched.result ?? {})));
+            controller.close();
+          },
+          (error: unknown) => controller.error(error)
+        );
+      },
+    });
+    const terminalResponse = new Response(body, {
+      headers: { "Content-Type": "application/json" },
+    });
+    this.terminalAlarmDrainResponses.add(terminalResponse);
+    return terminalResponse;
   }
 
   /**
@@ -1021,7 +1196,9 @@ export abstract class DurableObjectBase {
    */
   private async dispatchInboundEnvelope(
     envelope: RpcEnvelope,
-    authorityAcceptedAt: number
+    authorityAcceptedAt: number,
+    onAdmitted?: () => void,
+    alarmRpcs = new Set<Promise<void>>()
   ): Promise<{ result: RpcEnvelope | null; readyQueues: DurableWorkQueue[] }> {
     const connectionless = this.connectionlessClient();
     // An unattributed method-path call carries a synthetic empty caller; surface
@@ -1068,17 +1245,20 @@ export abstract class DurableObjectBase {
       attestation,
       args: message?.args ?? [],
     });
-    const denial = directRpcDenial({
-      kind: "call",
-      method: method ?? "",
-      caller,
-      attestation,
-      declaration,
-      audience,
-      resourceKey,
-      capability: caller?.authorization?.capability ?? "",
-      now: authorityAcceptedAt,
-    });
+    const denial =
+      method === "__alarm"
+        ? this.hostControlDenial(method, authorityAcceptedAt, caller)
+        : directRpcDenial({
+            kind: "call",
+            method: method ?? "",
+            caller,
+            attestation,
+            declaration,
+            audience,
+            resourceKey,
+            capability: caller?.authorization?.capability ?? "",
+            now: authorityAcceptedAt,
+          });
     if (denial) {
       return {
         result: {
@@ -1099,8 +1279,13 @@ export abstract class DurableObjectBase {
       };
     }
     if (
-      !attestation ||
-      !this.directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
+      method !== "__alarm" &&
+      (!attestation ||
+        !this.directRpcNonces.consume(
+          attestation.nonce,
+          attestation.expiresAt,
+          authorityAcceptedAt
+        ))
     ) {
       const reason =
         `${method ?? "<unknown>"}: host authority attestation nonce was replayed or is outside ` +
@@ -1125,8 +1310,16 @@ export abstract class DurableObjectBase {
         readyQueues: [],
       };
     }
-    const dispatched = await this.withRpcCaller(caller, message, envelope, () =>
-      connectionless.respond(envelope).completion
+    const dispatched = await this.withRpcCaller(
+      caller,
+      message,
+      envelope,
+      () => {
+        const invocation = connectionless.respond(envelope);
+        onAdmitted?.();
+        return invocation.completion;
+      },
+      alarmRpcs
     );
     const attachReadyMetadata = (result: RpcEnvelope | null): RpcEnvelope | null => {
       if (result?.message.type === "response" && dispatched.readyQueues.length > 0) {
@@ -1146,11 +1339,13 @@ export abstract class DurableObjectBase {
       const parsedResult = wireMethod.returns.safeParse(response.message.result);
       if (!parsedResult.success) {
         return {
-          result: attachReadyMetadata(this.schemaDenialResponse(
-            envelope,
-            message,
-            `Invalid result from ${method}: ${parsedResult.error.message}`
-          )),
+          result: attachReadyMetadata(
+            this.schemaDenialResponse(
+              envelope,
+              message,
+              `Invalid result from ${method}: ${parsedResult.error.message}`
+            )
+          ),
           readyQueues: dispatched.readyQueues,
         };
       }
@@ -1371,6 +1566,7 @@ export abstract class DurableObjectBase {
       requestId: null,
       idempotencyKey: null,
       readyQueues: new Set(),
+      alarmRpcs: new Set(),
     };
     try {
       const response = await this.invocationContext.run(context, async () => {
@@ -1388,19 +1584,22 @@ export abstract class DurableObjectBase {
           : { value: decoded };
       const headers = new Headers(response.headers);
       headers.set("Content-Type", "application/json");
-      return new Response(encodeRpcJson({
-        ...record,
-        metadata: {
-          ...(record["metadata"] && typeof record["metadata"] === "object"
-            ? (record["metadata"] as Record<string, unknown>)
-            : {}),
-          durableWorkReady: [...context.readyQueues].sort(),
-        },
-      }), {
-        status: response.status,
-        statusText: response.statusText,
-        headers,
-      });
+      return new Response(
+        encodeRpcJson({
+          ...record,
+          metadata: {
+            ...(record["metadata"] && typeof record["metadata"] === "object"
+              ? (record["metadata"] as Record<string, unknown>)
+              : {}),
+            durableWorkReady: [...context.readyQueues].sort(),
+          },
+        }),
+        {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        }
+      );
     } finally {
       context.authorityActive = false;
     }
@@ -1410,7 +1609,8 @@ export abstract class DurableObjectBase {
     caller: AttestedCaller | null,
     message: RpcRequest,
     envelope: RpcEnvelope,
-    callback: () => Promise<T>
+    callback: () => Promise<T>,
+    alarmRpcs = new Set<Promise<void>>()
   ): Promise<{ result: T; readyQueues: DurableWorkQueue[] }> {
     const context: RpcInvocationContext = {
       verifiedCaller: caller,
@@ -1421,14 +1621,17 @@ export abstract class DurableObjectBase {
       requestId: message?.requestId ?? null,
       idempotencyKey: envelope.delivery.idempotencyKey ?? null,
       readyQueues: new Set(),
+      alarmRpcs,
     };
     try {
       const result = await this.invocationContext.run(context, async () => {
         try {
           const value = await callback();
-          const nextAlarm = await this.nextAlarmAfterRequest();
-          if (nextAlarm === null) this.deleteAlarm();
-          else if (nextAlarm !== undefined) this.setAlarmAt(nextAlarm.wakeAt);
+          if (message.method !== "__alarm") {
+            const nextAlarm = await this.nextAlarmAfterRequest();
+            if (nextAlarm === null) this.deleteAlarm();
+            else if (nextAlarm !== undefined) this.setAlarmAt(nextAlarm.wakeAt);
+          }
           return value;
         } finally {
           // Wake publication can itself start causal RPCs; join them before

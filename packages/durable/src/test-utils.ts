@@ -1,7 +1,13 @@
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import type { AuthenticatedCaller, AuthorizationContext, RpcEnvelope } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
-import { rpcMethodAuthority } from "@vibestudio/rpc";
+import {
+  attachRpcDiagnosticId,
+  decodeRpcJson,
+  encodeRpcJson,
+  RemoteRpcError,
+  rpcMethodAuthority,
+} from "@vibestudio/rpc";
 import { parseDurableWorkReady } from "@vibestudio/shared/durableWork";
 
 type BindParams = Parameters<Database["run"]>[1];
@@ -337,7 +343,10 @@ export async function createTestDO<T>(
     if (typeof fetchable.fetch !== "function") {
       throw new Error("DO instance does not have a fetch() method");
     }
-    const url = `http://test/${encodeURIComponent(objectKey)}/${encodeURIComponent(method)}`;
+    const lifecycle = method.startsWith("__lifecycle/");
+    const targetId = `do:${mergedEnv["WORKER_SOURCE"]}:${mergedEnv["WORKER_CLASS_NAME"]}:${objectKey}`;
+    const methodPath = lifecycle ? method.split("/").map(encodeURIComponent).join("/") : "__rpc";
+    const url = `http://test/${encodeURIComponent(objectKey)}/${methodPath}`;
     const localDeclaration = rpcMethodAuthority(instance as object, method);
     const schemaMethod = (
       (instance as object).constructor as unknown as {
@@ -365,29 +374,45 @@ export async function createTestDO<T>(
         : localDeclaration?.effect);
     const attestedCapability =
       effect?.kind === "userland-capability" ? `userland:${effect.capability}` : capability;
+    const attestedCaller = {
+      ...caller,
+      authorization: createTestDirectAuthority({
+        callerKind: caller.callerKind,
+        method,
+        capability: attestedCapability,
+        ...(effect ? { effect } : {}),
+        tier: schemaMethod?.tier?.tier ?? localDeclaration?.tier,
+        source: String(mergedEnv["WORKER_SOURCE"]),
+        className: String(mergedEnv["WORKER_CLASS_NAME"]),
+        objectKey,
+      }),
+    };
+    const envelope: RpcEnvelope = {
+      from: caller.callerId,
+      target: targetId,
+      delivery: { caller: attestedCaller },
+      provenance: [attestedCaller],
+      message: {
+        type: "request",
+        requestId: crypto.randomUUID(),
+        fromId: caller.callerId,
+        method,
+        args,
+      },
+    };
     const request = new Request(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // Attribute the request as the trusted server relay. The instance token
-      // gates whether this caller and its direct-authority attestation are accepted.
-      body: JSON.stringify({
-        args,
-        __instanceToken: "token",
-        __instanceId: "do:internal/WorkspaceDO:test-key",
-        __caller: {
-          ...caller,
-          authorization: createTestDirectAuthority({
-            callerKind: caller.callerKind,
-            method,
-            capability: attestedCapability,
-            ...(effect ? { effect } : {}),
-            tier: schemaMethod?.tier?.tier ?? localDeclaration?.tier,
-            source: String(mergedEnv["WORKER_SOURCE"]),
-            className: String(mergedEnv["WORKER_CLASS_NAME"]),
-            objectKey,
-          }),
-        },
-      }),
+      body: encodeRpcJson(
+        lifecycle
+          ? {
+              args,
+              __instanceToken: "token",
+              __instanceId: targetId,
+              __caller: attestedCaller,
+            }
+          : envelope
+      ),
     });
     const response = await fetchable.fetch(request);
     const text = await response.text();
@@ -399,17 +424,31 @@ export async function createTestDO<T>(
           : `DO call ${method} failed: ${response.status}`
       );
     }
+    if (!lifecycle) {
+      const reply = decodeRpcJson(text) as RpcEnvelope;
+      if (reply.message?.type !== "response")
+        throw new Error("DO request did not return a terminal response");
+      if ("error" in reply.message) {
+        const failure = new RemoteRpcError(
+          reply.message.error,
+          reply.message.errorKind,
+          reply.message.errorCode,
+          reply.message.errorData
+        );
+        if (reply.message.diagnosticId) attachRpcDiagnosticId(failure, reply.message.diagnosticId);
+        throw failure;
+      }
+      if (reply.message.metadata?.durableWorkReady !== undefined)
+        parseDurableWorkReady(reply.message.metadata.durableWorkReady);
+      return reply.message.result as R;
+    }
     const reply = text
-      ? (JSON.parse(text) as { value?: unknown; metadata?: { durableWorkReady?: unknown } })
+      ? (decodeRpcJson(text) as { value?: unknown; metadata?: { durableWorkReady?: unknown } })
       : null;
-    if (!reply || !Object.prototype.hasOwnProperty.call(reply, "value")) {
-      throw new Error("DO dispatch success response must contain its canonical value field");
-    }
-    // The instance-token channel owns a result plus its durable-work receipt.
-    // Tests have no host supervisor to wake, but still validate that receipt.
-    if (reply.metadata?.durableWorkReady !== undefined) {
+    if (!reply || !Object.prototype.hasOwnProperty.call(reply, "value"))
+      throw new Error("DO lifecycle response must contain its canonical value field");
+    if (reply.metadata?.durableWorkReady !== undefined)
       parseDurableWorkReady(reply.metadata.durableWorkReady);
-    }
     return reply.value as R;
   };
 

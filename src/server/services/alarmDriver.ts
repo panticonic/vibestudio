@@ -109,10 +109,11 @@ export class AlarmDriver {
   }
 
   /**
-   * Close admission, cancel scheduler-owned transports, and wait until the one
-   * driving operation has relinquished ownership. Interrupted alarms are not
-   * acknowledged or re-armed here: their existing durable rows are recovered
-   * by the next scheduler activation.
+   * Close admission, signal scheduler-owned dispatches, and wait until the
+   * driving operation has relinquished ownership. Correlated RPC cancellation
+   * keeps each admitted receiver owned through its terminal response;
+   * interrupted alarms are not acknowledged or re-armed here, so their durable
+   * rows remain for the next scheduler activation.
    */
   async quiesce(): Promise<void> {
     this.stop();

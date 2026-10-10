@@ -45,6 +45,24 @@ function makeClient(fetchImpl: typeof fetch, authorityParentNonce?: () => string
   });
 }
 
+it("inherits the receiver invocation cancellation before admitting a child call", async () => {
+  const owner = new AbortController();
+  owner.abort(new Error("Receiver invocation was cancelled"));
+  const fetch = vi.fn();
+  const connectionless = createInternalConnectionlessRpcClient({
+    selfId: SELF,
+    serverUrl: "http://gw.test",
+    authToken: "T",
+    callerKind: "do",
+    fetch,
+    invocationSignal: () => owner.signal,
+  });
+  await expect(connectionless.client.call("main", "child.operation", [])).rejects.toMatchObject({
+    code: "RPC_ABORTED",
+  });
+  expect(fetch).not.toHaveBeenCalled();
+});
+
 describe("createConnectionlessRpcClient", () => {
   it("carries the current invocation authority parent on unary and streaming calls", async () => {
     const seen: RpcEnvelope[] = [];
