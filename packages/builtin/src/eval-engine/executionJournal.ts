@@ -177,14 +177,15 @@ export class ExecutionJournal {
         !health.logs.every((entry) => sameIdentity(entry.identity)) ||
         !health.errors.every((entry) => sameIdentity(entry.identity)))
       throw new Error("Runtime health read returned a different supervised entity identity");
-    // Unbounded/default reads remain useful, but this receipt proves an explicit
-    // bound independently of whatever summary the evaluated program returns.
-    if (!options?.limit || !options.errorLimit) return;
+    const limit = options?.limit ?? health.capacity.entries;
+    const errorLimit = options?.errorLimit ?? health.capacity.errors;
+    if (health.logs.length > limit || health.errors.length > errorLimit) {
+      throw new Error("Runtime health read returned more records than its reported bounds");
+    }
     this.append({ type: "runtime.health", receipt: NativeRuntimeHealthObservationSchema.parse({
       protocol: "runtime-health-observation.v1", identity, source: health.entity.source,
       logCount: health.logs.length, errorCount: health.errors.length,
-      limit: options.limit, errorLimit: options.errorLimit,
-      dropped: health.dropped, capacity: health.capacity,
+      limit, errorLimit, dropped: health.dropped, capacity: health.capacity,
     }) });
   }
 

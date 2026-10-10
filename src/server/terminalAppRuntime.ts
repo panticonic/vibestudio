@@ -2,6 +2,7 @@ import { normalizeUnitRepoPath as normalizeRepoPath } from "@vibestudio/unit-hos
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { AppBuildResultLike, AppRegistryEntry } from "./appHost.js";
+import type { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import { TerminalAppRunner } from "./terminalAppRunner.js";
 
 export interface AppRuntimeLog {
@@ -31,12 +32,12 @@ export interface TerminalAppRuntimeDeps {
   getGatewayUrl(): string;
   validateBuild(appId: string, build: AppBuildResultLike): void;
   emitStatus(appId: string, status: AppRegistryEntry["status"], error: string | null): void;
+  diagnostics: Pick<RuntimeDiagnosticsStore, "record" | "history">;
 }
 
 /** Owns terminal child-process lifecycle, connection grants, statuses, and captured output. */
 export class TerminalAppRuntime {
   private readonly runner: TerminalAppRunner | null;
-  private readonly logs = new Map<string, AppRuntimeLog[]>();
 
   constructor(private readonly deps: TerminalAppRuntimeDeps) {
     this.runner =
@@ -127,7 +128,17 @@ export class TerminalAppRuntime {
 
   logsFor(sourceOrName: string): AppRuntimeLog[] {
     const name = this.findEntry(sourceOrName)?.name ?? sourceOrName;
-    return this.logs.get(name) ?? [];
+    return this.deps.diagnostics.history(name).entries.map((entry) => ({
+      workspaceId: entry.workspaceId ?? this.deps.workspaceId,
+      unitName: entry.entityId,
+      kind: "app",
+      timestamp: entry.timestamp,
+      level: entry.level === "error" ? "error" : "info",
+      message: entry.message,
+      ...(entry.source === "stdout" || entry.source === "stderr" || entry.source === "runner"
+        ? { source: entry.source }
+        : {}),
+    }));
   }
 
   private updateStatus(
@@ -148,18 +159,14 @@ export class TerminalAppRuntime {
     message: string,
     source: "stdout" | "stderr" | "runner"
   ): void {
-    const records = this.logs.get(appId) ?? [];
-    records.push({
+    this.deps.diagnostics.record({
       workspaceId: this.deps.workspaceId,
-      unitName: appId,
+      entityId: appId,
       kind: "app",
-      timestamp: Date.now(),
       level,
       message,
       source,
     });
-    if (records.length > 500) records.splice(0, records.length - 500);
-    this.logs.set(appId, records);
   }
 
   private findEntry(sourceOrName: string): AppRegistryEntry | null {

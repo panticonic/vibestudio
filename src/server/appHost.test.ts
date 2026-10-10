@@ -27,6 +27,7 @@ import {
   executionSourceClosureDigest,
 } from "@vibestudio/shared/execution/retention";
 import { AppHost, type AppHostDeps } from "./appHost.js";
+import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import { UnitInstallReviewCoordinator } from "./unitInstallReviewCoordinator.js";
 import type { BuildArtifactManifestEntry, BuildMetadata } from "./buildV2/buildStore.js";
 
@@ -304,10 +305,13 @@ function makeHarness(
   const approvalCoordinator = opts.useApprovalCoordinator
     ? new UnitInstallReviewCoordinator({ approvalQueue, delayMs: 10_000 })
     : undefined;
+  const statePath = path.join(root, "state");
+  const diagnostics = new RuntimeDiagnosticsStore({ statePath });
   const host = new AppHost({
-    statePath: path.join(root, "state"),
+    statePath,
     workspacePath,
     workspaceId: "ws",
+    diagnostics,
     isSystemWorkspace: opts.isSystemWorkspace ?? (() => true),
     buildSystem,
     isAdmitted: opts.isAdmitted,
@@ -348,6 +352,7 @@ function makeHarness(
     approvalQueue,
     approvalCoordinator,
     notificationService,
+    diagnostics,
     graphNode,
     appPath,
     root,
@@ -920,7 +925,8 @@ describe("AppHost", () => {
   });
 
   it("surfaces push rebuild failures and keeps the previous app build active", async () => {
-    const { host, buildSystem, eventService, notificationService, graphNode } = makeHarness();
+    const { host, buildSystem, eventService, notificationService, diagnostics, graphNode } =
+      makeHarness();
     installApp(host, graphNode);
     buildSystem.getBuild.mockRejectedValueOnce(new Error("broken app code"));
 
@@ -949,6 +955,13 @@ describe("AppHost", () => {
         canRollback: false,
       })
     );
+    expect(diagnostics.history("@workspace-apps/shell").errors[0]).toMatchObject({
+      message: "broken app code",
+      fields: {
+        status: "error",
+        errorDetails: { phase: "build", source: "apps/shell" },
+      },
+    });
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:lifecycle",
       expect.objectContaining({

@@ -4,10 +4,13 @@ import type {
   RuntimeSupervisionLogRecord,
 } from "@vibestudio/service-schemas/runtime";
 import type { UnitDriver, UnitLogQuery } from "./unitSupervisor.js";
+import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
+import { runtimeDiagnosticHistory } from "./runtimeDiagnosticProjection.js";
 
 export function createExtensionUnitDriver(
   getHost: () => ExtensionHost | null,
-  ensureDeclaration: (releaseId: string) => Promise<void>
+  ensureDeclaration: (releaseId: string) => Promise<void>,
+  diagnostics: Pick<RuntimeDiagnosticsStore, "history">
 ): UnitDriver {
   const host = () => {
     const value = getHost();
@@ -43,22 +46,11 @@ export function createExtensionUnitDriver(
       code: "UNIT_ENTITY_NOT_FOUND",
     });
   };
-  const logs = (entityId: string, query?: UnitLogQuery): RuntimeSupervisionLogRecord[] =>
-    host()
-      .listWorkspaceUnitLogs(entityId, query)
-      .map((entry) => ({
-        identity: { kind: "extension", entityId },
-        timestamp: entry.timestamp,
-        level: entry.level,
-        message: entry.message,
-        ...(entry.fields ? { fields: entry.fields } : {}),
-        source:
-          entry.source === "ctx.log"
-            ? ("structured" as const)
-            : entry.source === "stdout" || entry.source === "stderr"
-              ? entry.source
-              : ("system" as const),
-      }));
+  const history = (entityId: string, query?: UnitLogQuery) => diagnostics.history(entityId, query);
+  const logs = (entityId: string, query?: UnitLogQuery): RuntimeSupervisionLogRecord[] => {
+    requireRow(entityId);
+    return runtimeDiagnosticHistory({ kind: "extension", entityId }, history(entityId, query)).logs;
+  };
   return {
     kind: "extension",
     list: () => rows().map(describeRow),
@@ -73,8 +65,10 @@ export function createExtensionUnitDriver(
     health: (entityId, query) => {
       const row = requireRow(entityId);
       const description = describeRow(row);
-      const entries = logs(entityId, query);
-      const errors = entries.filter((entry) => entry.level === "error");
+      const snapshot = runtimeDiagnosticHistory(
+        { kind: "extension", entityId },
+        history(entityId, query)
+      );
       const reported =
         row.health && typeof row.health === "object" && "state" in row.health
           ? String((row.health as { state?: unknown }).state)
@@ -88,10 +82,10 @@ export function createExtensionUnitDriver(
               ? "unhealthy"
               : "unknown",
         summary: row.lastError,
-        logs: entries,
-        errors,
-        dropped: { entries: 0, errors: 0 },
-        capacity: { entries: entries.length, errors: errors.length },
+        logs: snapshot.logs,
+        errors: snapshot.errors,
+        dropped: snapshot.dropped,
+        capacity: snapshot.capacity,
       };
     },
     restart: (ctx, entityId) => host().reload(ctx, requireRow(entityId).name),

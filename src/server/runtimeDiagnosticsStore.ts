@@ -10,6 +10,7 @@ export type RuntimeDiagnosticSource =
   | "ctx.log"
   | "stdout"
   | "stderr"
+  | "runner"
   | "lifecycle"
   | "system";
 

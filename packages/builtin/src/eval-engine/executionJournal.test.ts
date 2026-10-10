@@ -568,20 +568,24 @@ describe("execution-owned native operation evidence", () => {
     expect(nextOwner.close().entries).toEqual([]);
   });
 
-  it("retains native bounded health counts independently of guest summaries and rejects foreign identity", () => {
+  it("records effective default bounds and rejects foreign health identity", () => {
     const owner = new ExecutionJournal();
     const identity = { kind: "extension" as const, entityId: "extension:one" };
     const health = { entity: { identity, release: { kind: "extension" as const, releaseId: identity.entityId }, source: "extensions/one", status: "running",
       lastError: null, artifact: { effectiveVersion: null, buildKey: null, executionDigest: null },
       facets: { activation: true, release: false, inspector: false } },
       state: "healthy", summary: "private diagnostic prose", logs: [{ identity, timestamp: 1, level: "info", message: "private log prose" }],
-      errors: [], dropped: { entries: 0, errors: 0 }, capacity: { entries: 100, errors: 50 } };
+      errors: [{ identity, timestamp: 2, level: "error", message: "private failure" }],
+      dropped: { entries: 7, errors: 2 }, capacity: { entries: 100, errors: 50 } };
     owner.recordRuntimeHealth("runtime.supervision.health", [identity], health);
-    expect(owner.entries).toEqual([]);
+    expect(owner.entries[0]).toMatchObject({ type: "runtime.health", receipt: {
+      identity, logCount: 1, errorCount: 1, limit: 100, errorLimit: 50,
+      dropped: { entries: 7, errors: 2 }, capacity: { entries: 100, errors: 50 },
+    } });
     owner.recordRuntimeHealth("runtime.supervision.health", [identity, { limit: 8, errorLimit: 5 }], health);
     health.logs.length = 0;
     const wire = { entries: owner.entries };
-    expect(wire.entries[0]).toMatchObject({ type: "runtime.health", receipt: { identity, logCount: 1, errorCount: 0, limit: 8, errorLimit: 5 } });
+    expect(wire.entries[1]).toMatchObject({ type: "runtime.health", receipt: { identity, logCount: 1, errorCount: 1, limit: 8, errorLimit: 5 } });
     expect(JSON.stringify(wire)).not.toContain("private");
     expect(() => owner.recordRuntimeHealth("runtime.supervision.health", [identity, { limit: 8, errorLimit: 5 }],
       { ...health, errors: [{ identity: { ...identity, entityId: "extension:other" }, timestamp: 2, level: "error", message: "foreign" }] })).toThrow("different supervised entity identity");

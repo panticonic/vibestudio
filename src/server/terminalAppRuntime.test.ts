@@ -34,6 +34,15 @@ describe("TerminalAppRuntime startup failures", () => {
       workspaceId: "workspace-test",
       registry,
       buildSystem: { getBuildByKey: vi.fn(() => null) },
+      diagnostics: {
+        record: vi.fn(),
+        history: () => ({
+          entries: [],
+          errors: [],
+          dropped: { entries: 0, errors: 0 },
+          capacity: { entries: 1000, errors: 500 },
+        }),
+      },
       getGatewayUrl: () => "http://127.0.0.1:1234",
       validateBuild: vi.fn(),
       emitStatus: status,

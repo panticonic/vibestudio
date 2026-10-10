@@ -1,12 +1,13 @@
 import type {
   RuntimeSupervisionDescription,
   RuntimeSupervisionKind,
-  RuntimeSupervisionLogRecord,
 } from "@vibestudio/service-schemas/runtime";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { UnitDriver, UnitLogQuery } from "./unitSupervisor.js";
+import type { RuntimeDiagnosticHistory } from "../runtimeDiagnosticsStore.js";
+import { runtimeDiagnosticHistory } from "./runtimeDiagnosticProjection.js";
 
 type EntityDriverKind = Extract<RuntimeSupervisionKind, "panel" | "worker" | "do">;
 
@@ -14,7 +15,7 @@ export function createEntityUnitDriver(input: {
   kind: EntityDriverKind;
   entityCache: Pick<EntityCache, "listActive" | "resolveActive">;
   hasInspector?(entityId: string): boolean;
-  logs(entity: EntityRecord, query?: UnitLogQuery): RuntimeSupervisionLogRecord[];
+  history(entity: EntityRecord, query?: UnitLogQuery): RuntimeDiagnosticHistory;
   restart(ctx: ServiceContext, entity: EntityRecord): Promise<void> | void;
   retire(ctx: ServiceContext, entity: EntityRecord): Promise<void> | void;
 }): UnitDriver {
@@ -61,20 +62,25 @@ export function createEntityUnitDriver(input: {
       const record = resolve(entityId);
       return record ? describe(record) : null;
     },
-    logs: (entityId, query) => input.logs(requireEntity(entityId), query),
+    logs: (entityId, query) => {
+      const entity = requireEntity(entityId);
+      return runtimeDiagnosticHistory(describe(entity).identity, input.history(entity, query)).logs;
+    },
     health: (entityId, query) => {
       const entity = requireEntity(entityId);
       const description = describe(entity);
-      const logs = input.logs(entity, query);
-      const errors = logs.filter((entry) => entry.level === "error");
+      const { logs, errors, dropped, capacity } = runtimeDiagnosticHistory(
+        description.identity,
+        input.history(entity, query)
+      );
       return {
         entity: description,
         state: entity.error ? "unhealthy" : "healthy",
         summary: entity.error ?? null,
         logs,
         errors,
-        dropped: { entries: 0, errors: 0 },
-        capacity: { entries: logs.length, errors: errors.length },
+        dropped,
+        capacity,
       };
     },
     restart: (ctx, entityId) => input.restart(ctx, requireEntity(entityId)),

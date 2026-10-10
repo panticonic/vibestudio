@@ -82,6 +82,7 @@ import {
 } from "./services/capabilityAuthorizer.js";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import { TerminalAppRuntime } from "./terminalAppRuntime.js";
+import type { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import {
   ReactNativeAppAdapter,
   isBuildProviderDetailsLike,
@@ -332,6 +333,7 @@ export interface AppHostDeps {
   statePath: string;
   workspacePath: string;
   workspaceId: string;
+  diagnostics: Pick<RuntimeDiagnosticsStore, "record" | "history">;
   /** Protected hub designation, never workspace-authored app or trust configuration. */
   isSystemWorkspace(): boolean;
   readWorkspaceFileAtState(stateHash: string, filePath: string): Promise<string | null>;
@@ -550,6 +552,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       workspaceId: deps.workspaceId,
       registry: this.registry,
       buildSystem: deps.buildSystem,
+      diagnostics: deps.diagnostics,
       connectionGrants: deps.connectionGrants,
       entityCache: deps.entityCache,
       getGatewayUrl: () => deps.getGatewayUrl(),
@@ -1271,10 +1274,14 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     level: "info" | "error";
     message: string;
   }> {
-    return this.unitHost
-      .listWorkspaceUnitLogs(this.deps.workspaceId, name)
-      .concat(this.terminal.logsFor(name))
-      .sort((a, b) => a.timestamp - b.timestamp);
+    return this.deps.diagnostics.history(name).entries.map((entry) => ({
+      workspaceId: entry.workspaceId ?? this.deps.workspaceId,
+      unitName: entry.entityId,
+      kind: "app",
+      timestamp: entry.timestamp,
+      level: entry.level === "error" ? "error" : "info",
+      message: entry.message,
+    }));
   }
 
   hasAppCapability(callerId: string, capability: AppCapability): boolean {
@@ -2016,6 +2023,18 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     errorDetails?: AppUpdateErrorDiagnostic | null
   ): void {
     const entry = this.registry.get(name);
+    this.deps.diagnostics.record({
+      workspaceId: this.deps.workspaceId,
+      entityId: name,
+      kind: "app",
+      level: status === "error" ? "error" : "info",
+      message: error ?? `App ${name} is ${status}`,
+      source: "lifecycle",
+      fields: {
+        status,
+        errorDetails: errorDetails ?? entry?.lastErrorDetails ?? null,
+      },
+    });
     this.deps.eventService.emit("apps:status" as EventName, {
       name,
       status,

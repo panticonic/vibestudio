@@ -240,3 +240,34 @@ The helper now uses the shared RPC encoder and decoder, and the exact image
 extension smoke passes with its owned server and scratch paths retired. The
 production HTTP, process, and CLI RPC boundaries already use that codec; no
 binary compatibility wrapper was added.
+
+The affected agentic rerun used 20 exact tests in shuffled order on a fresh
+managed instance, with concurrency one and no competing heavy workload. Run
+`st_2e08975f20c24fdd8b9f47896a54a1c2` completed with 17 passes, three failures,
+and no infrastructure or cleanup errors. The initial bootstrap also exposed
+the VCS client's loss of zero-argument tuples; Base commit `5b755e0` preserves
+those tuples through the canonical context binder and passes 14 focused tests.
+
+The notification failure was a false rejection of the successful report
+"accepted its dismissal." System Testing commit `e7535d0` accepts that wording
+while retaining native show/dismiss identity and ordering evidence; seven
+focused tests and its composition typecheck pass. The fresh exact notification
+rerun passes in `st_b363db27114c4804a5e097a85ef944ea`. The panel rebuild case
+corrected an initial incorrect locator and completed the same-session rebuild
+verification, but remains a recorded failure for its unexpected tool error.
+
+The diagnostics follow-up distinguished bounded default reads from missing
+evidence. `health(identity)` is bounded by the retained buffers even without
+explicit options, and legitimate aliases need not spell a prescribed call in
+the guest source. System Testing commits `1b0e49a` and `8be7500` validate native
+effective bounds, exact identity, and separate counts; all 49 focused tests
+pass. Base commit `92036b5` clarifies raw services with dotted method names.
+
+That investigation also found real reporting defects: supervision adapters
+fabricated capacities from slice lengths and derived errors from the selected
+log slice. Health now projects one persisted diagnostic snapshot, preserving
+the separate error buffer, dropped counts, and actual capacities. Exact entity
+history does not substitute release history. App lifecycle and terminal output
+feed that same store, preserving structured build errors. Native eval receipts
+record authoritative default bounds as well as explicit ones. The initial six
+focused host test files pass all 103 tests, and host typechecking passes.

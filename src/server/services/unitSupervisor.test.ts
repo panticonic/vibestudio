@@ -4,7 +4,10 @@ import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { UnitSupervisor, type UnitDriver } from "./unitSupervisor.js";
 import { createEntityUnitDriver } from "./entityUnitDriver.js";
+import { registerEntityUnitDrivers } from "./registerEntityUnitDrivers.js";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
 
 const ctx: ServiceContext = { caller: createHostCaller("server") };
 
@@ -54,6 +57,120 @@ function driver(
 }
 
 describe("UnitSupervisor", () => {
+  it("returns one exact diagnostic snapshot with independent error metadata", async () => {
+    const entity = {
+      id: "worker:one",
+      kind: "worker",
+      source: { repoPath: "workers/one", effectiveVersion: "ev" },
+      contextId: "main",
+      key: "one",
+      createdAt: 1,
+      status: "active",
+    } as EntityRecord;
+    const identity = { kind: "worker" as const, entityId: entity.id };
+    const history = vi.fn(() => ({
+      entries: [
+        {
+          entityId: entity.id,
+          kind: "worker" as const,
+          timestamp: 1,
+          level: "info" as const,
+          message: "ready",
+          source: "console" as const,
+        },
+      ],
+      errors: [
+        {
+          entityId: entity.id,
+          kind: "worker" as const,
+          timestamp: 2,
+          level: "error" as const,
+          message: "failed",
+          source: "stderr" as const,
+        },
+      ],
+      dropped: { entries: 7, errors: 2 },
+      capacity: { entries: 1000, errors: 500 },
+    }));
+    const unit = createEntityUnitDriver({
+      kind: "worker",
+      entityCache: {
+        listActive: () => [entity],
+        resolveActive: (id) => (id === entity.id ? entity : null),
+      },
+      history,
+      restart: () => {},
+      retire: () => {},
+    });
+
+    expect(unit.health(entity.id)).toMatchObject({
+      entity: { identity },
+      logs: [{ identity, message: "ready", source: "console" }],
+      errors: [{ identity, message: "failed", source: "stderr" }],
+      dropped: { entries: 7, errors: 2 },
+      capacity: { entries: 1000, errors: 500 },
+    });
+    expect(history).toHaveBeenCalledExactlyOnceWith(entity, undefined);
+    expect(unit.logs(entity.id)).toMatchObject([{ identity, message: "ready", source: "console" }]);
+    expect(history).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not substitute release-level diagnostics when the exact entity snapshot is empty", async () => {
+    const entity = {
+      id: "worker:incarnation",
+      kind: "worker",
+      source: { repoPath: "workers/example", effectiveVersion: "ev" },
+      contextId: "main",
+      key: "one",
+      createdAt: 1,
+      status: "active",
+    } as EntityRecord;
+    const history = vi.fn((entityId: string) =>
+      entityId === entity.id
+        ? {
+            entries: [],
+            errors: [],
+            dropped: { entries: 2, errors: 1 },
+            capacity: { entries: 1000, errors: 500 },
+          }
+        : {
+            entries: [
+              {
+                entityId,
+                kind: "worker" as const,
+                timestamp: 1,
+                level: "info" as const,
+                message: "release build",
+                source: "lifecycle" as const,
+              },
+            ],
+            errors: [],
+            dropped: { entries: 0, errors: 0 },
+            capacity: { entries: 1000, errors: 500 },
+          }
+    );
+    const supervisor = new UnitSupervisor();
+    registerEntityUnitDrivers({
+      supervisor,
+      entityCache: {
+        listActive: () => [entity],
+        resolveActive: (id: string) => (id === entity.id ? entity : null),
+      } as unknown as EntityCache,
+      diagnostics: { history } as unknown as RuntimeDiagnosticsStore,
+      restartPanel: async () => {},
+      restartWorker: async () => {},
+      restartDurableObject: async () => {},
+      retire: async () => {},
+    });
+
+    expect(supervisor.health({ kind: "worker", entityId: entity.id })).toMatchObject({
+      logs: [],
+      errors: [],
+      dropped: { entries: 2, errors: 1 },
+    });
+    expect(history).toHaveBeenCalledExactlyOnceWith(entity.id, undefined);
+  });
+
   it("groups worker and Durable Object incarnations by their source release", async () => {
     const records = ["worker", "do", "panel"].map((kind) => ({
       id: `${kind}:one`,
@@ -76,7 +193,12 @@ describe("UnitSupervisor", () => {
             listActive: () => records,
             resolveActive: (id) => records.find((row) => row.id === id) ?? null,
           },
-          logs: () => [],
+          history: () => ({
+            entries: [],
+            errors: [],
+            dropped: { entries: 0, errors: 0 },
+            capacity: { entries: 1000, errors: 500 },
+          }),
           restart: () => {},
           retire: () => {},
         })

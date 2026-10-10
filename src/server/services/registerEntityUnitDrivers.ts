@@ -1,4 +1,3 @@
-import type { RuntimeSupervisionLogRecord } from "@vibestudio/service-schemas/runtime";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
@@ -15,36 +14,11 @@ export function registerEntityUnitDrivers(input: {
   restartDurableObject(ctx: ServiceContext, entity: EntityRecord): Promise<void>;
   retire(ctx: ServiceContext, entity: EntityRecord): Promise<void>;
 }): void {
-  const logs = (entity: EntityRecord, query?: UnitLogQuery): RuntimeSupervisionLogRecord[] => {
-    const exact = input.diagnostics.history(entity.id, query);
-    const history =
-      exact.entries.length > 0 ? exact : input.diagnostics.history(entity.source.repoPath, query);
-    return history.entries.map((entry) => ({
-      identity: { kind: entity.kind as "panel" | "worker" | "do", entityId: entity.id },
-      timestamp: entry.timestamp,
-      level: entry.level,
-      message: entry.message,
-      ...(entry.fields ? { fields: entry.fields } : {}),
-      ...(entry.source
-        ? {
-            source:
-              entry.source === "ctx.log"
-                ? ("structured" as const)
-                : entry.source === "system" ||
-                    entry.source === "console" ||
-                    entry.source === "lifecycle"
-                  ? entry.source
-                  : entry.source === "stdout" || entry.source === "stderr"
-                    ? entry.source
-                    : ("structured" as const),
-          }
-        : {}),
-      ...(entry.seq === undefined ? {} : { seq: entry.seq }),
-    }));
-  };
+  const history = (entity: EntityRecord, query?: UnitLogQuery) =>
+    input.diagnostics.history(entity.id, query);
   const common = {
     entityCache: input.entityCache,
-    logs,
+    history,
     retire: input.retire,
   };
   input.supervisor.register(

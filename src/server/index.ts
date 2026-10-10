@@ -6122,6 +6122,7 @@ async function main() {
         statePath,
         workspacePath,
         workspaceId,
+        diagnostics: runtimeDiagnostics,
         isSystemWorkspace: () => {
           // Native app units are hosted only in a System workspace. Ordinarily
           // that is an account-scoped designation, but a host launched to serve
@@ -6914,13 +6915,15 @@ async function main() {
           }
         }
         await extensionHostForGateway?.whenDeclarationsStaged();
-      }
+      },
+      runtimeDiagnostics
     )
   );
   unitSupervisor.register(
     (await import("./services/appUnitDriver.js")).createAppUnitDriver({
       getHost: () => appHostForGateway,
       entityCache,
+      diagnostics: runtimeDiagnostics,
     })
   );
   await registerPanelServices(commonDeps);

@@ -6,10 +6,13 @@ import type {
 } from "@vibestudio/service-schemas/runtime";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { UnitDriver, UnitLogQuery } from "./unitSupervisor.js";
+import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
+import { runtimeDiagnosticHistory } from "./runtimeDiagnosticProjection.js";
 
 export function createAppUnitDriver(input: {
   getHost(): AppHost | null;
   entityCache: Pick<EntityCache, "listActive" | "resolveActive">;
+  diagnostics: Pick<RuntimeDiagnosticsStore, "history">;
 }): UnitDriver {
   const host = () => {
     const value = input.getHost();
@@ -47,16 +50,13 @@ export function createAppUnitDriver(input: {
       code: "UNIT_ENTITY_NOT_FOUND",
     });
   };
-  const logs = (entityId: string, _query?: UnitLogQuery): RuntimeSupervisionLogRecord[] =>
-    host()
-      .listWorkspaceUnitLogs(entityId)
-      .map((entry) => ({
-        identity: { kind: "app", entityId },
-        timestamp: entry.timestamp,
-        level: entry.level,
-        message: entry.message,
-        source: "runner" as const,
-      }));
+  const logs = (entityId: string, query?: UnitLogQuery): RuntimeSupervisionLogRecord[] => {
+    requireDescription(entityId);
+    return runtimeDiagnosticHistory(
+      { kind: "app", entityId },
+      input.diagnostics.history(entityId, query)
+    ).logs;
+  };
   const releaseVersion = (
     releaseId: string,
     value: ReturnType<AppHost["listAppVersions"]>["previous"][number]
@@ -80,16 +80,18 @@ export function createAppUnitDriver(input: {
     },
     health: (entityId, query) => {
       const entity = requireDescription(entityId);
-      const entries = logs(entityId, query);
-      const errors = entries.filter((entry) => entry.level === "error");
+      const snapshot = runtimeDiagnosticHistory(
+        { kind: "app", entityId },
+        input.diagnostics.history(entityId, query)
+      );
       return {
         entity,
         state: entity.lastError ? "unhealthy" : "healthy",
         summary: entity.lastError,
-        logs: entries,
-        errors,
-        dropped: { entries: 0, errors: 0 },
-        capacity: { entries: entries.length, errors: errors.length },
+        logs: snapshot.logs,
+        errors: snapshot.errors,
+        dropped: snapshot.dropped,
+        capacity: snapshot.capacity,
       };
     },
     restart: (_ctx, entityId) => host().restart(requireDescription(entityId).identity.entityId),
