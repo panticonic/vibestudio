@@ -1,3 +1,4 @@
+import { deserializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 import { randomBytes } from "node:crypto";
 import { developmentClientExecutorMethods } from "@vibestudio/service-schemas/developmentClientExecutor";
 import type { EventService } from "@vibestudio/shared/eventsService";
@@ -57,7 +58,7 @@ export interface DevelopmentClientLaunchInput {
     unexpected: boolean;
     exitCode: number | null;
     signal: string | null;
-    cleanupError?: string;
+    cleanupError?: RpcFailure;
     exitedAt: number;
   }) => void;
 }
@@ -271,10 +272,14 @@ export class DevelopmentClientExecutorRegistry {
           const request = this.requirePending(input.requestId, ctx.caller);
           this.pending.delete(input.requestId);
           clearTimeout(request.timeout);
-          request.settle.reject(coded(input.code, input.message));
+          const failure = deserializeRpcFailure(input.failure);
+          request.settle.reject(failure);
           if (request.stop) {
             clearTimeout(request.stop.timeout);
-            if (input.code === "EOWNERSHIP") request.stop.reject(coded("ECLEANUP", input.message));
+            if (failure.code === "EOWNERSHIP")
+              request.stop.reject(
+                coded("ECLEANUP", "Development client launch cleanup failed", failure)
+              );
             else request.stop.resolve();
           }
           return { accepted: true as const };
@@ -303,7 +308,14 @@ export class DevelopmentClientExecutorRegistry {
             pending.settle.reject(error);
             if (pending.stop) {
               clearTimeout(pending.stop.timeout);
-              if (input.cleanupError) pending.stop.reject(coded("ECLEANUP", input.cleanupError));
+              if (input.cleanupError)
+                pending.stop.reject(
+                  coded(
+                    "ECLEANUP",
+                    "Development client resources did not retire",
+                    deserializeRpcFailure(input.cleanupError)
+                  )
+                );
               else pending.stop.resolve();
             }
             pending.onExited?.({
@@ -324,7 +336,13 @@ export class DevelopmentClientExecutorRegistry {
           if (launch.stop) {
             clearTimeout(launch.stop.timeout);
             if (input.cleanupError) {
-              launch.stop.reject(coded("ECLEANUP", input.cleanupError));
+              launch.stop.reject(
+                coded(
+                  "ECLEANUP",
+                  "Development client resources did not retire",
+                  deserializeRpcFailure(input.cleanupError)
+                )
+              );
             } else {
               launch.stop.resolve();
             }
@@ -626,6 +644,6 @@ function stableIdentity(
   };
 }
 
-function coded(code: string, message: string): Error {
-  return Object.assign(new Error(message), { code });
+function coded(code: string, message: string, cause?: unknown): Error {
+  return Object.assign(new Error(message, cause === undefined ? undefined : { cause }), { code });
 }

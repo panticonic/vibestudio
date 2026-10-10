@@ -3,8 +3,12 @@ import type { EventName } from "@vibestudio/shared/events";
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
-import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
+import {
+  credentialsMethods,
+  type CredentialCaptureCompletion,
+} from "@vibestudio/service-schemas/credentials";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import type { ServerClient } from "./serverClient.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { AppAvailableEvent } from "./appOrchestrator.js";
@@ -188,24 +192,26 @@ export function createServerEventBridge(
       const captureRequest = deps.onCredentialCaptureRequest;
       if (typeof captureId !== "string" || !captureRequest) return;
       void (async () => {
-        let result: Record<string, unknown>;
+        let result: CredentialCaptureCompletion;
         try {
-          result = await captureRequest(request);
+          result = { kind: "success", value: await captureRequest(request) };
         } catch (err) {
-          result = { error: err instanceof Error ? err.message : String(err) };
+          result = { kind: "failure", failure: serializeRpcFailure(err) };
         }
         const client = deps.getServerClient();
         if (!client) {
           deps.warn("[credentialCapture] no server client to complete capture");
           return;
         }
-        await client.call("credentials", "completeCapture", [captureId, result]).catch((err) => {
-          deps.warn(
-            `[credentialCapture] completeCapture failed: ${
-              err instanceof Error ? err.message : String(err)
-            }`
-          );
-        });
+        await credentialsClientFor(client)
+          .completeCapture(captureId, result)
+          .catch((err) => {
+            deps.warn(
+              `[credentialCapture] completeCapture failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          });
       })();
       return;
     }

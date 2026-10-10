@@ -22,8 +22,16 @@ import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
+import { rpcFailureSchema } from "./rpcFailure.js";
 
 const IDENTIFIER_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
+
+/** Result sent by a shell to settle a pending interactive credential capture. */
+export const credentialCaptureCompletionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("success"), value: z.record(z.string(), z.unknown()) }).strict(),
+  z.object({ kind: z.literal("failure"), failure: rpcFailureSchema }).strict(),
+]);
+export type CredentialCaptureCompletion = z.infer<typeof credentialCaptureCompletionSchema>;
 
 // Access descriptors shared across the credentials method groups. The
 // service-level `policy` on the registration is the enforced caller gate; these
@@ -1777,8 +1785,8 @@ export const credentialsMethods = defineServiceMethods({
       },
     },
     description:
-      "Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell.",
-    args: z.tuple([z.string(), z.record(z.string(), z.unknown())]),
+      "Complete a pending server-initiated session credential capture (`credential:capture-request` event) with a typed success value or serialized RPC failure graph; callable only by the attached desktop shell.",
+    args: z.tuple([z.string(), credentialCaptureCompletionSchema]),
     returns: z.void(),
     access: { sensitivity: "write" },
   },

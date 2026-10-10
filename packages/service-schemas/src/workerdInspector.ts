@@ -6,6 +6,7 @@ import {
 } from "@vibestudio/shared/typedServiceClient";
 export const workerdInspectorMethods = defineServiceMethods({
   listTargets: {
+    description: "List workspace runtime targets available for inspection.",
     website: {
       kind: "closed",
       reason:
@@ -27,6 +28,7 @@ export const workerdInspectorMethods = defineServiceMethods({
     access: { sensitivity: "read" as const },
   },
   getEndpoint: {
+    description: "Return an authenticated inspection endpoint for one runtime target.",
     website: {
       kind: "closed",
       reason:

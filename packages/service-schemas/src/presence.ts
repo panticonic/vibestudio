@@ -12,6 +12,7 @@ export const presenceMethods = defineServiceMethods({
         "The presenceService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
     } as const,
     capability: "panel.presence.update",
+    description: "Record which runtime currently owns an active panel.",
     tier: {
       tier: "gated",
       session: "family",
@@ -30,6 +31,10 @@ export const presenceMethods = defineServiceMethods({
       },
     },
     args: z.tuple([z.string()]),
+    returns: z
+      .object({ panelId: z.string(), ownerCallerId: z.string(), updatedAt: z.number() })
+      .strict(),
+    access: { sensitivity: "write" as const },
   },
   markPanelsOwned: {
     website: {
@@ -38,6 +43,7 @@ export const presenceMethods = defineServiceMethods({
         "The presenceService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
     } as const,
     capability: "panel.presence.update",
+    description: "Record ownership of a set of active panels for the current runtime.",
     tier: {
       tier: "gated",
       session: "family",
@@ -56,6 +62,8 @@ export const presenceMethods = defineServiceMethods({
       },
     },
     args: z.tuple([z.array(z.string())]),
+    returns: z.void(),
+    access: { sensitivity: "write" as const },
   },
   getPanelActiveOwner: {
     website: {
@@ -64,6 +72,7 @@ export const presenceMethods = defineServiceMethods({
         "The presenceService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
     } as const,
     capability: "panel.presence.read",
+    description: "Return the current owner of a panel when one is active.",
     tier: {
       tier: "gated",
       session: "family",
@@ -82,6 +91,10 @@ export const presenceMethods = defineServiceMethods({
       },
     },
     args: z.tuple([z.string()]),
+    returns: z
+      .object({ panelId: z.string(), ownerCallerId: z.string(), updatedAt: z.number() })
+      .strict()
+      .nullable(),
     authority: readAuthority,
     access: { sensitivity: "read" as const },
   },

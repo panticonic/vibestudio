@@ -8,6 +8,7 @@ import {
 } from "@vibestudio/shared/typedServiceClient";
 import { CapabilityScopeSchema, executionArtifactRefSchema } from "./build.js";
 import { vcsImportSnapshotResultSchema, vcsStateNodeRefSchema } from "./vcs.js";
+import { rpcFailureSchema } from "./rpcFailure.js";
 
 const nonEmpty = z.string().min(1);
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/u);
@@ -79,8 +80,8 @@ const nativeCheckpointSchema = z
 const nativeRepairSchema = z
   .object({
     phase: nonEmpty,
-    primaryError: nonEmpty,
-    cleanupErrors: z.array(nonEmpty),
+    primaryFailure: rpcFailureSchema,
+    cleanupFailures: z.array(rpcFailureSchema),
     attention: z.enum(["actionable", "kept"]),
     knownEffects: z
       .object({
@@ -140,8 +141,8 @@ export const developmentSessionSchema = z
     repairAttention: z.enum(["actionable", "kept"]).nullable(),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
-    primaryDiagnostic: diagnosticSchema.nullable(),
-    cleanupDiagnostics: z.array(diagnosticSchema),
+    primaryFailure: rpcFailureSchema.nullable(),
+    cleanupFailures: z.array(rpcFailureSchema),
   })
   .strict();
 export type DevelopmentSession = z.infer<typeof developmentSessionSchema>;
@@ -341,8 +342,8 @@ export type DevelopmentRunEvent = z.infer<typeof developmentRunEventSchema>;
 const repairSchema = z
   .object({
     phase: nonEmpty,
-    primaryError: diagnosticSchema,
-    cleanupErrors: z.array(diagnosticSchema),
+    primaryFailure: rpcFailureSchema,
+    cleanupFailures: z.array(rpcFailureSchema),
     retryable: z.boolean(),
     attention: z.enum(["actionable", "kept"]),
     knownEffects: z

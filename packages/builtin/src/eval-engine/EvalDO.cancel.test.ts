@@ -18,7 +18,11 @@
  * verifies cleanup failures still reach a durable terminal result.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
+import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
+import {
+  createTestDO,
+  successfulTestRpcFetch,
+} from "@vibestudio/durable/test-utils";
 import type { RpcCallOptions, RpcCaller, RpcClient } from "@vibestudio/rpc";
 import {
   executionSessionNonceFor,
@@ -28,7 +32,10 @@ import {
 } from "@vibestudio/rpc/internal";
 import { EVAL_ENGINE_HOST_CONTRACT_VERSION } from "@vibestudio/service-schemas/evalEngine";
 import { createReceiverRpcMethods } from "@vibestudio/shared/rpcMethods";
-import { mainRpcMethod, mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import {
+  mainRpcMethod,
+  mainRpcMethods,
+} from "@vibestudio/service-schemas/mainRpc";
 import type { Sha256 } from "@vibestudio/shared/execution/identity";
 import {
   executionArtifactDigest,
@@ -41,10 +48,14 @@ type RunResult = {
   success: boolean;
   console: string;
   returnValue?: unknown;
-  error?: string;
+  error?: RpcFailure;
   failureCode?: string;
 };
-type RunLockedFn = (args: unknown, signal?: AbortSignal, runId?: string) => Promise<RunResult>;
+type RunLockedFn = (
+  args: unknown,
+  signal?: AbortSignal,
+  runId?: string,
+) => Promise<RunResult>;
 
 /** Access a private method/field on the instance without TS visibility friction (test-only). */
 function priv<T = unknown>(instance: object, key: string): T {
@@ -59,9 +70,9 @@ function ownedRpc(
     targetId: string,
     method: string,
     args: unknown[],
-    options?: RpcCallOptions
+    options?: RpcCallOptions,
   ) => Promise<unknown>,
-  overrides: Partial<Pick<RpcWireClient, "stream" | "emit">> = {}
+  overrides: Partial<Pick<RpcWireClient, "stream" | "emit">> = {},
 ): RpcWireClient {
   return registerRpcWireClient({
     selfId: "do:test:EvalDO:test-key",
@@ -94,12 +105,12 @@ function mockOwnedCall(
     targetId: string,
     method: string,
     args: unknown[],
-    options?: RpcCallOptions
-  ) => Promise<unknown>
+    options?: RpcCallOptions,
+  ) => Promise<unknown>,
 ): void {
   const owner = wireClientFor(stablePublicRpc(instance));
   vi.spyOn(owner, "call").mockImplementation((target, method, args, options) =>
-    implementation(target, method, args, options)
+    implementation(target, method, args, options),
   );
 }
 
@@ -109,11 +120,14 @@ function mockOwnedCallOnce(
     targetId: string,
     method: string,
     args: unknown[],
-    options?: RpcCallOptions
-  ) => Promise<unknown>
+    options?: RpcCallOptions,
+  ) => Promise<unknown>,
 ): void {
-  vi.spyOn(wireClientFor(stablePublicRpc(instance)), "call").mockImplementationOnce(
-    (target, method, args, options) => implementation(target, method, args, options)
+  vi.spyOn(
+    wireClientFor(stablePublicRpc(instance)),
+    "call",
+  ).mockImplementationOnce((target, method, args, options) =>
+    implementation(target, method, args, options),
   );
 }
 
@@ -129,11 +143,14 @@ function mockOwnedStream(
     targetId: string,
     method: string,
     args: unknown[],
-    options?: import("@vibestudio/rpc").RpcStreamOptions
-  ) => Promise<Response>
+    options?: import("@vibestudio/rpc").RpcStreamOptions,
+  ) => Promise<Response>,
 ): void {
-  vi.spyOn(wireClientFor(stablePublicRpc(instance)), "stream").mockImplementation(
-    (targetId, method, args, options) => implementation(targetId, method, args, options)
+  vi.spyOn(
+    wireClientFor(stablePublicRpc(instance)),
+    "stream",
+  ).mockImplementation((targetId, method, args, options) =>
+    implementation(targetId, method, args, options),
   );
 }
 
@@ -143,11 +160,12 @@ function mockOwnedEmit(
     targetId: string,
     event: string,
     payload: unknown,
-    options?: RpcCallOptions
-  ) => Promise<void>
+    options?: RpcCallOptions,
+  ) => Promise<void>,
 ): void {
   vi.spyOn(wireClientFor(stablePublicRpc(instance)), "emit").mockImplementation(
-    (targetId, event, payload, options) => implementation(targetId, event, payload, options)
+    (targetId, event, payload, options) =>
+      implementation(targetId, event, payload, options),
   );
 }
 
@@ -167,7 +185,7 @@ const testProbeRpcMethods = createReceiverRpcMethods<{
     "method",
     "panel.rebuild",
   ],
-  ""
+  "",
 );
 const testPanelRebuildRpcMethods = createReceiverRpcMethods<{
   "panel.rebuild": () => Promise<unknown>;
@@ -220,12 +238,19 @@ function executionArtifact(seed = "e"): ExecutionArtifactRefV1 {
  */
 function blockUntilAborted(): {
   runLocked: RunLockedFn;
-  started: Promise<{ signal: AbortSignal | undefined; runId: string | undefined }>;
+  started: Promise<{
+    signal: AbortSignal | undefined;
+    runId: string | undefined;
+  }>;
 } {
-  let resolveStarted!: (v: { signal: AbortSignal | undefined; runId: string | undefined }) => void;
-  const started = new Promise<{ signal: AbortSignal | undefined; runId: string | undefined }>(
-    (r) => (resolveStarted = r)
-  );
+  let resolveStarted!: (v: {
+    signal: AbortSignal | undefined;
+    runId: string | undefined;
+  }) => void;
+  const started = new Promise<{
+    signal: AbortSignal | undefined;
+    runId: string | undefined;
+  }>((r) => (resolveStarted = r));
   const runLocked: RunLockedFn = (_args, signal, runId) =>
     new Promise<RunResult>((_resolve, reject) => {
       resolveStarted({ signal, runId });
@@ -233,7 +258,9 @@ function blockUntilAborted(): {
         reject(new Error("aborted"));
         return;
       }
-      signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+        once: true,
+      });
     });
   return { runLocked, started };
 }
@@ -242,7 +269,7 @@ function blockUntilAborted(): {
 function seedPendingRun(
   sql: { exec: (q: string, ...b: unknown[]) => unknown },
   runId: string,
-  args: Record<string, unknown> = { code: "return 1;", contextId: "ctx" }
+  args: Record<string, unknown> = { code: "return 1;", contextId: "ctx" },
 ): void {
   const normalizedArgs = {
     intentDigest: "i".repeat(64),
@@ -255,51 +282,60 @@ function seedPendingRun(
      VALUES (?, ?, NULL, NULL, 'pending', ?, NULL)`,
     runId,
     JSON.stringify(normalizedArgs),
-    Date.now()
+    Date.now(),
   );
 }
 
 function redeliveryState(sql: {
-  exec: (query: string, ...bindings: unknown[]) => { toArray(): Record<string, unknown>[] };
+  exec: (
+    query: string,
+    ...bindings: unknown[]
+  ) => { toArray(): Record<string, unknown>[] };
 }): Record<string, number> {
   return Object.fromEntries(
     sql
-      .exec(`SELECT run_id, attempt FROM eval_result_redeliveries ORDER BY run_id`)
+      .exec(
+        `SELECT run_id, attempt FROM eval_result_redeliveries ORDER BY run_id`,
+      )
       .toArray()
-      .map((row) => [String(row["run_id"]), Number(row["attempt"])])
+      .map((row) => [String(row["run_id"]), Number(row["attempt"])]),
   );
 }
 
 describe("EvalDO cancellation + forced recovery", () => {
   it("rejects an incompatible workspace eval engine before executing a cell", async () => {
     const { instance } = await createTestDO(EvalDO);
-    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_ENGINE_SOURCE"] =
-      "@workspace/eval";
-    const ensureEngine = priv<(execution: unknown) => Promise<unknown>>(instance, "ensureEngine");
-
-    setPriv(
+    (instance as unknown as { env: Record<string, unknown> }).env[
+      "EVAL_ENGINE_SOURCE"
+    ] = "@workspace/eval";
+    const ensureEngine = priv<(execution: unknown) => Promise<unknown>>(
       instance,
-      "loadLibraryModule",
-      vi.fn(async () => ({}))
-    );
-    await expect(ensureEngine.call(instance, {})).rejects.toThrow(
-      /uses host contract undefined; this runtime requires 1/
+      "ensureEngine",
     );
 
     setPriv(
       instance,
       "loadLibraryModule",
-      vi.fn(async () => ({ EVAL_ENGINE_HOST_CONTRACT_VERSION: 2 }))
+      vi.fn(async () => ({})),
     );
     await expect(ensureEngine.call(instance, {})).rejects.toThrow(
-      /uses host contract 2; this runtime requires 1/
+      /uses host contract undefined; this runtime requires 1/,
+    );
+
+    setPriv(
+      instance,
+      "loadLibraryModule",
+      vi.fn(async () => ({ EVAL_ENGINE_HOST_CONTRACT_VERSION: 2 })),
+    );
+    await expect(ensureEngine.call(instance, {})).rejects.toThrow(
+      /uses host contract 2; this runtime requires 1/,
     );
 
     const compatible = { EVAL_ENGINE_HOST_CONTRACT_VERSION };
     setPriv(
       instance,
       "loadLibraryModule",
-      vi.fn(async () => compatible)
+      vi.fn(async () => compatible),
     );
     await expect(ensureEngine.call(instance, {})).resolves.toBe(compatible);
   });
@@ -312,25 +348,29 @@ describe("EvalDO cancellation + forced recovery", () => {
       return result;
     });
     mockOwnedCall(instance, dispatch);
-    const execution = priv<(input: { contextId: string }) => { rpc: RpcWireClient }>(
+    const execution = priv<
+      (input: { contextId: string }) => { rpc: RpcWireClient }
+    >(instance, "createExecutionContext").call(instance, { contextId: "ctx" });
+    const retained = priv<() => RpcClient>(
       instance,
-      "createExecutionContext"
-    ).call(instance, { contextId: "ctx" });
-    const retained = priv<() => RpcClient>(instance, "createActiveRuntimeRpc").call(instance);
+      "createActiveRuntimeRpc",
+    ).call(instance);
     const active = priv<{ run<T>(store: unknown, callback: () => T): T }>(
       instance,
-      "activeEvalExecution"
+      "activeEvalExecution",
     );
-    const contract = { filesystem: { methods: { read: mainRpcMethods["fs.readFile"] } } };
+    const contract = {
+      filesystem: { methods: { read: mainRpcMethods["fs.readFile"] } },
+    };
     for (const caller of [execution.rpc, retained]) {
       const peer = caller.peer("main").withContract(contract, "filesystem");
       await expect(
-        active.run(execution, () => peer.call.read("file.txt", "utf8"))
+        active.run(execution, () => peer.call.read("file.txt", "utf8")),
       ).rejects.toThrow();
       result = "contents";
-      await expect(active.run(execution, () => peer.call.read("file.txt", "utf8"))).resolves.toBe(
-        "contents"
-      );
+      await expect(
+        active.run(execution, () => peer.call.read("file.txt", "utf8")),
+      ).resolves.toBe("contents");
       result = 42;
     }
     expect(dispatch).toHaveBeenCalledTimes(4);
@@ -346,7 +386,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         registerResidentSession(
           channelId: string,
           receiver: (payload: unknown) => void | Promise<void>,
-          relationship: { targetId: string }
+          relationship: { targetId: string },
         ): {
           transport: Pick<RpcCaller, "call">;
           close(): void | Promise<void>;
@@ -355,7 +395,12 @@ describe("EvalDO cancellation + forced recovery", () => {
     >(instance, "createActiveRuntimeRpc").call(instance);
     const received: unknown[] = [];
     const contextualCall = vi.fn(
-      (target: string, method: string, _args: unknown[], _options?: unknown) => {
+      (
+        target: string,
+        method: string,
+        _args: unknown[],
+        _options?: unknown,
+      ) => {
         if (target === "main" && method === "workers.resolveService") {
           return Promise.resolve({
             kind: "durable-object",
@@ -371,9 +416,10 @@ describe("EvalDO cancellation + forced recovery", () => {
             targetId: "channel-target",
           });
         }
-        if (target === "channel-target" && method === "detach") return Promise.resolve(undefined);
+        if (target === "channel-target" && method === "detach")
+          return Promise.resolve(undefined);
         return Promise.resolve("context-restored");
-      }
+      },
     );
     const residentSessionCleanups = new Set<() => Promise<void>>();
     const execution = {
@@ -386,10 +432,14 @@ describe("EvalDO cancellation + forced recovery", () => {
         "channel-eval",
         async (payload) => {
           received.push(payload);
-          await registration.transport.call("target", testProbeRpcMethods.method, []);
+          await registration.transport.call(
+            "target",
+            testProbeRpcMethods.method,
+            [],
+          );
         },
-        { targetId: "channel-target" }
-      )
+        { targetId: "channel-target" },
+      ),
     );
 
     await expect(
@@ -406,7 +456,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         eventSequence: 1,
         envelope: { kind: "message.completed" },
         agenticContext: null,
-      })
+      }),
     ).resolves.toEqual({
       processed: true,
       recipientExecutionStartedAt: expect.any(Number),
@@ -417,18 +467,23 @@ describe("EvalDO cancellation + forced recovery", () => {
         message: { kind: "message.completed" },
       },
     ]);
-    expect(contextualCall).toHaveBeenCalledWith("target", "method", [], undefined);
-
-    await priv<(execution: unknown) => Promise<void>>(instance, "settleResidentSessions").call(
-      instance,
-      execution
+    expect(contextualCall).toHaveBeenCalledWith(
+      "target",
+      "method",
+      [],
+      undefined,
     );
+
+    await priv<(execution: unknown) => Promise<void>>(
+      instance,
+      "settleResidentSessions",
+    ).call(instance, execution);
     expect(residentSessionCleanups.size).toBe(0);
     expect(contextualCall).toHaveBeenCalledWith(
       "channel-target",
       "detach",
       [{ participantId: "do:test:TestDO:test-key" }],
-      undefined
+      undefined,
     );
     await expect(
       instance.acceptChannelDelivery({
@@ -444,7 +499,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         eventSequence: 2,
         envelope: { kind: "message.completed" },
         agenticContext: null,
-      })
+      }),
     ).rejects.toMatchObject({ code: "ResidentSessionUnavailable" });
   });
 
@@ -487,7 +542,10 @@ describe("EvalDO cancellation + forced recovery", () => {
       },
     });
     expect(
-      priv<() => { event?: unknown }>(second.instance, "kernelStatusForRun").call(second.instance)
+      priv<() => { event?: unknown }>(
+        second.instance,
+        "kernelStatusForRun",
+      ).call(second.instance),
     ).not.toHaveProperty("event");
   });
 
@@ -501,18 +559,23 @@ describe("EvalDO cancellation + forced recovery", () => {
       source: "panels/tour",
       kind: "workspace",
     });
-    priv<() => void>(first.instance, "persistOpenPanelResources").call(first.instance);
+    priv<() => void>(first.instance, "persistOpenPanelResources").call(
+      first.instance,
+    );
 
     const second = await createTestDO(EvalDO, undefined, { db: first.db });
-    expect([...priv<Map<string, unknown>>(second.instance, "openPanelResources").values()]).toEqual(
-      [
-        {
-          id: "panel:tree/preview",
-          source: "panels/tour",
-          kind: "workspace",
-        },
-      ]
-    );
+    expect([
+      ...priv<Map<string, unknown>>(
+        second.instance,
+        "openPanelResources",
+      ).values(),
+    ]).toEqual([
+      {
+        id: "panel:tree/preview",
+        source: "panels/tour",
+        kind: "workspace",
+      },
+    ]);
   });
 
   it("holds one notebook kernel across cells until its refreshed idle lease expires", async () => {
@@ -521,12 +584,18 @@ describe("EvalDO cancellation + forced recovery", () => {
       const { instance } = await createTestDO(EvalDO);
       const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
       mockOwnedCall(instance, lifecycleCall);
-      const first = await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
+      const first = await instance.acquireKernelLease({
+        leaseId: "kernel-1",
+        idleMs: 1_000,
+      });
       await instance.attachKernelLeaseHolder("kernel-1");
       const held = instance.holdKernelLease("kernel-1");
 
       await vi.advanceTimersByTimeAsync(750);
-      const refreshed = await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
+      const refreshed = await instance.acquireKernelLease({
+        leaseId: "kernel-1",
+        idleMs: 1_000,
+      });
       expect(refreshed.expiresAt).toBeGreaterThan(first.expiresAt!);
 
       await vi.advanceTimersByTimeAsync(750);
@@ -538,7 +607,10 @@ describe("EvalDO cancellation + forced recovery", () => {
       expect(settled).toBe(false);
 
       await vi.advanceTimersByTimeAsync(250);
-      await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "expired" });
+      await expect(held).resolves.toEqual({
+        leaseId: "kernel-1",
+        reason: "expired",
+      });
       expect(lifecycleCall).toHaveBeenNthCalledWith(
         1,
         "main",
@@ -551,14 +623,14 @@ describe("EvalDO cancellation + forced recovery", () => {
             },
           }),
         ],
-        undefined
+        undefined,
       );
       expect(lifecycleCall).toHaveBeenNthCalledWith(
         2,
         "main",
         "workspace-state.lifecycleLeaseClear",
         [expect.any(Object)],
-        undefined
+        undefined,
       );
     } finally {
       vi.useRealTimers();
@@ -573,7 +645,10 @@ describe("EvalDO cancellation + forced recovery", () => {
       mockOwnedCall(instance, lifecycleCall);
       const { runLocked, started } = blockUntilAborted();
       setPriv(instance, "runLocked", runLocked);
-      await instance.acquireKernelLease({ leaseId: "active-kernel", idleMs: 1_000 });
+      await instance.acquireKernelLease({
+        leaseId: "active-kernel",
+        idleMs: 1_000,
+      });
       await instance.attachKernelLeaseHolder("active-kernel");
       const held = instance.holdKernelLease("active-kernel");
       let settled = false;
@@ -581,28 +656,34 @@ describe("EvalDO cancellation + forced recovery", () => {
         settled = true;
       });
       seedPendingRun(sql, "long-active-run");
-      const run = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      const run = priv<(id: string) => Promise<RunResult>>(
         instance,
-        "long-active-run"
-      );
+        "executeRun",
+      ).call(instance, "long-active-run");
       await started;
       await vi.advanceTimersByTimeAsync(10_000);
       expect(settled).toBe(false);
       expect(
-        await instance.acquireKernelLease({ leaseId: "active-kernel", idleMs: 1_000 })
+        await instance.acquireKernelLease({
+          leaseId: "active-kernel",
+          idleMs: 1_000,
+        }),
       ).toMatchObject({ expiresAt: null });
       await instance.cancel("long-active-run");
       await run;
       await vi.advanceTimersByTimeAsync(999);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
-      await expect(held).resolves.toEqual({ leaseId: "active-kernel", reason: "expired" });
+      await expect(held).resolves.toEqual({
+        leaseId: "active-kernel",
+        reason: "expired",
+      });
       expect(lifecycleCall).toHaveBeenCalledTimes(2);
       expect(lifecycleCall).toHaveBeenLastCalledWith(
         "main",
         "workspace-state.lifecycleLeaseClear",
         [expect.any(Object)],
-        undefined
+        undefined,
       );
     } finally {
       vi.useRealTimers();
@@ -623,28 +704,35 @@ describe("EvalDO cancellation + forced recovery", () => {
         mode: "suspend",
         reason: "test",
         deadlineMs: 1_000,
-      })
+      }),
     ).resolves.toEqual({ status: "ready" });
-    await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "released" });
+    await expect(held).resolves.toEqual({
+      leaseId: "kernel-1",
+      reason: "released",
+    });
     expect(lifecycleCall).toHaveBeenLastCalledWith(
       "main",
       "workspace-state.lifecycleLeaseClear",
       [expect.any(Object)],
-      undefined
+      undefined,
     );
   });
 
   it("retires resident channels through their recorded target without contextual rediscovery", async () => {
-    const { instance, sql } = await createTestDO(EvalDO, { WORKER_CLASS_NAME: "EvalDO" });
+    const { instance, sql } = await createTestDO(EvalDO, {
+      WORKER_CLASS_NAME: "EvalDO",
+    });
     sql.exec(
       `INSERT INTO resident_channel_memberships (channel_id, target_id, registered_at)
        VALUES ('channel-retire', 'channel-target', 1),
-              ('channel-gone', 'retired-target', 1)`
+              ('channel-gone', 'retired-target', 1)`,
     );
     const lifecycleCall = vi.fn((targetId: string, method: string) => {
       if (targetId === "retired-target" && method === "relationshipState") {
         return Promise.reject(
-          Object.assign(new Error("retired"), { code: "DURABLE_OBJECT_RETIRED" })
+          Object.assign(new Error("retired"), {
+            code: "DURABLE_OBJECT_RETIRED",
+          }),
         );
       }
       if (targetId === "channel-target" && method === "relationshipState") {
@@ -663,28 +751,30 @@ describe("EvalDO cancellation + forced recovery", () => {
         mode: "retire",
         reason: "test",
         deadlineMs: 1_000,
-      })
+      }),
     ).resolves.toEqual({ status: "ready" });
 
     expect(lifecycleCall).not.toHaveBeenCalledWith(
       "main",
       "workers.resolveService",
       expect.anything(),
-      undefined
+      undefined,
     );
     expect(lifecycleCall).toHaveBeenCalledWith(
       "channel-target",
       "relationshipState",
       ["do:test:EvalDO:test-key"],
-      undefined
+      undefined,
     );
     expect(lifecycleCall).toHaveBeenCalledWith(
       "channel-target",
       "leave",
       [{ participantId: "do:test:EvalDO:test-key", revision: 5 }],
-      undefined
+      undefined,
     );
-    expect(sql.exec(`SELECT * FROM resident_channel_memberships`).toArray()).toEqual([]);
+    expect(
+      sql.exec(`SELECT * FROM resident_channel_memberships`).toArray(),
+    ).toEqual([]);
   });
 
   it("cancels active durable runs before claiming lifecycle release", async () => {
@@ -694,14 +784,17 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { runLocked, started } = blockUntilAborted();
     setPriv(instance, "runLocked", runLocked);
 
-    await instance.acquireKernelLease({ leaseId: "kernel-active", idleMs: 60_000 });
+    await instance.acquireKernelLease({
+      leaseId: "kernel-active",
+      idleMs: 60_000,
+    });
     await instance.attachKernelLeaseHolder("kernel-active");
     const held = instance.holdKernelLease("kernel-active");
     seedPendingRun(sql, "lifecycle-active-run");
-    const run = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const run = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "lifecycle-active-run"
-    );
+      "executeRun",
+    ).call(instance, "lifecycle-active-run");
     await started;
 
     await expect(
@@ -710,15 +803,19 @@ describe("EvalDO cancellation + forced recovery", () => {
         mode: "suspend",
         reason: "test",
         deadlineMs: 1_000,
-      })
+      }),
     ).resolves.toEqual({ status: "ready" });
     await expect(run).resolves.toMatchObject({
       success: false,
-      error: expect.stringMatching(/runtime generation was retired/i),
+      error: expect.objectContaining({
+        message: expect.stringMatching(/runtime generation was retired/i),
+      }),
       failureKind: "infrastructure",
       failureCode: "runtime_generation_lost",
     });
-    expect(instance.getRun("lifecycle-active-run")).toMatchObject({ status: "cancelled" });
+    expect(instance.getRun("lifecycle-active-run")).toMatchObject({
+      status: "cancelled",
+    });
     await expect(held).resolves.toEqual({
       leaseId: "kernel-active",
       reason: "released",
@@ -733,25 +830,31 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
     let releaseFirst!: () => void;
     const firstDelivery = new Promise<{ delivered: boolean }>(
-      (resolve) => (releaseFirst = () => resolve({ delivered: false }))
+      (resolve) => (releaseFirst = () => resolve({ delivered: false })),
     );
     let firstStarted!: () => void;
-    const firstStartedPromise = new Promise<void>((resolve) => (firstStarted = resolve));
-    const calls: Array<{ method: string; args: unknown[] }> = [];
-    const rpcCall = vi.fn((_target: string, method: string, args: unknown[]) => {
-      calls.push({ method, args });
-      if (calls.length === 1) {
-        firstStarted();
-        return firstDelivery;
-      }
-      return Promise.resolve({ delivered: false });
-    });
-    mockOwnedCall(instance, rpcCall);
-    const append = priv<(runId: string, kind: string, payload: unknown) => void>(
-      instance,
-      "appendRunEvent"
+    const firstStartedPromise = new Promise<void>(
+      (resolve) => (firstStarted = resolve),
     );
-    const drain = priv<(runId: string) => Promise<void>>(instance, "drainLiveEventDelivery");
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const rpcCall = vi.fn(
+      (_target: string, method: string, args: unknown[]) => {
+        calls.push({ method, args });
+        if (calls.length === 1) {
+          firstStarted();
+          return firstDelivery;
+        }
+        return Promise.resolve({ delivered: false });
+      },
+    );
+    mockOwnedCall(instance, rpcCall);
+    const append = priv<
+      (runId: string, kind: string, payload: unknown) => void
+    >(instance, "appendRunEvent");
+    const drain = priv<(runId: string) => Promise<void>>(
+      instance,
+      "drainLiveEventDelivery",
+    );
 
     append.call(instance, "event-order", "state", { status: "running" });
     append.call(instance, "event-order", "progress", { step: 1 });
@@ -771,9 +874,14 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(calls).toHaveLength(3);
     expect(
       sql
-        .exec(`SELECT kind, payload FROM run_events WHERE run_id = 'event-order' ORDER BY sequence`)
+        .exec(
+          `SELECT kind, payload FROM run_events WHERE run_id = 'event-order' ORDER BY sequence`,
+        )
         .toArray()
-        .map((row) => ({ kind: row["kind"], payload: JSON.parse(String(row["payload"])) }))
+        .map((row) => ({
+          kind: row["kind"],
+          payload: JSON.parse(String(row["payload"])),
+        })),
     ).toEqual([
       { kind: "state", payload: { status: "running" } },
       { kind: "progress", payload: { step: 1 } },
@@ -785,17 +893,23 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("does not execute or emit running for a run already owned by another incarnation", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "already-running");
-    sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'already-running'`);
+    sql.exec(
+      `UPDATE runs SET status = 'running' WHERE run_id = 'already-running'`,
+    );
     const runLocked = vi.fn();
     setPriv(instance, "runLocked", runLocked);
 
-    await expect(instance.executeRun("already-running")).resolves.toMatchObject({
-      success: false,
-      failureCode: "eval_invalid_run_state",
-    });
+    await expect(instance.executeRun("already-running")).resolves.toMatchObject(
+      {
+        success: false,
+        failureCode: "eval_invalid_run_state",
+      },
+    );
     expect(runLocked).not.toHaveBeenCalled();
     expect(
-      sql.exec(`SELECT * FROM run_events WHERE run_id = 'already-running'`).toArray()
+      sql
+        .exec(`SELECT * FROM run_events WHERE run_id = 'already-running'`)
+        .toArray(),
     ).toHaveLength(0);
   });
 
@@ -804,7 +918,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const call = vi.fn(() => Promise.resolve(undefined));
     mockOwnedCall(instance, call);
     setPriv(instance, "runLocked", () =>
-      Promise.resolve({ success: true, console: "ok", returnValue: 7 })
+      Promise.resolve({ success: true, console: "ok", returnValue: 7 }),
     );
 
     await instance.startRun({
@@ -834,7 +948,7 @@ describe("EvalDO cancellation + forced recovery", () => {
           result: expect.objectContaining({ success: true, returnValue: 7 }),
         }),
       ],
-      expect.any(Object)
+      expect.any(Object),
     );
     const deliveryCalls = call.mock.calls as unknown as Array<
       [string, string, unknown[], RpcCallOptions]
@@ -847,10 +961,10 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance } = await createTestDO(EvalDO);
     mockOwnedCall(
       instance,
-      vi.fn(async () => undefined)
+      vi.fn(async () => undefined),
     );
     setPriv(instance, "runLocked", () =>
-      Promise.resolve({ success: true, console: "", returnValue: 1 })
+      Promise.resolve({ success: true, console: "", returnValue: 1 }),
     );
     await instance.startRun({ runId: "root-run", code: "return 1" });
     const artifact = executionArtifact();
@@ -859,7 +973,11 @@ describe("EvalDO cancellation + forced recovery", () => {
     instance.retainExecutionRoot("root-run", "@workspace/example", artifact);
     await instance.startRun({ runId: "conflicting-run", code: "return 1" });
     expect(() =>
-      instance.retainExecutionRoot("conflicting-run", "@workspace/example", executionArtifact("d"))
+      instance.retainExecutionRoot(
+        "conflicting-run",
+        "@workspace/example",
+        executionArtifact("d"),
+      ),
     ).toThrow(
       expect.objectContaining({
         code: "eval_module_execution_conflict",
@@ -869,7 +987,7 @@ describe("EvalDO cancellation + forced recovery", () => {
           moduleSpecifier: "@workspace/example",
           failureKind: "user-code",
         }),
-      })
+      }),
     );
     expect(instance.listRetainedExecutionRoots()).toEqual([
       {
@@ -894,31 +1012,54 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const firstArtifact = executionArtifact();
     const secondArtifact = executionArtifact("d");
-    setPriv(instance, "runLocked", async (_args: unknown, signal?: AbortSignal, runId?: string) => {
-      instance.retainExecutionRoot(runId!, "@workspace/example", firstArtifact);
-      await new Promise<void>((_resolve, reject) => {
-        if (signal?.aborted) {
-          reject(new Error("aborted"));
-          return;
-        }
-        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-      });
-      return { success: true, console: "" };
+    setPriv(
+      instance,
+      "runLocked",
+      async (_args: unknown, signal?: AbortSignal, runId?: string) => {
+        instance.retainExecutionRoot(
+          runId!,
+          "@workspace/example",
+          firstArtifact,
+        );
+        await new Promise<void>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new Error("aborted"));
+            return;
+          }
+          signal?.addEventListener(
+            "abort",
+            () => reject(new Error("aborted")),
+            { once: true },
+          );
+        });
+        return { success: true, console: "" };
+      },
+    );
+    seedPendingRun(sql, "deadline-root", {
+      code: "await never()",
+      timeoutMs: 5,
     });
-    seedPendingRun(sql, "deadline-root", { code: "await never()", timeoutMs: 5 });
-    sql.exec(`UPDATE runs SET deadline_at = ? WHERE run_id = ?`, Date.now() + 5, "deadline-root");
+    sql.exec(
+      `UPDATE runs SET deadline_at = ? WHERE run_id = ?`,
+      Date.now() + 5,
+      "deadline-root",
+    );
 
     await expect(
       priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
         instance,
-        "deadline-root"
-      )
+        "deadline-root",
+      ),
     ).resolves.toMatchObject({ failureCode: "eval_deadline_exceeded" });
     expect(instance.listRetainedExecutionRoots()).toEqual([]);
 
     seedPendingRun(sql, "next-head");
     expect(() =>
-      instance.retainExecutionRoot("next-head", "@workspace/example", secondArtifact)
+      instance.retainExecutionRoot(
+        "next-head",
+        "@workspace/example",
+        secondArtifact,
+      ),
     ).not.toThrow();
     expect(instance.listRetainedExecutionRoots()).toEqual([
       {
@@ -935,7 +1076,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     first.instance.retainExecutionRoot(
       "prior-incarnation",
       "@workspace/example",
-      executionArtifact()
+      executionArtifact(),
     );
     expect(first.instance.listRetainedExecutionRoots()).toHaveLength(1);
 
@@ -955,7 +1096,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const enqueue = priv<
       (
         args: Record<string, unknown> & { runId: string },
-        schedule: boolean
+        schedule: boolean,
       ) => Promise<{ runId: string; status: string }>
     >(instance, "enqueueRun").bind(instance);
 
@@ -968,8 +1109,8 @@ describe("EvalDO cancellation + forced recovery", () => {
           gatewayToken: "gateway-new",
           executionSessionNonce: "session-new",
         },
-        false
-      )
+        false,
+      ),
     ).resolves.toEqual({
       runId: "credential-redrive",
       runDigest: "r".repeat(64),
@@ -979,8 +1120,10 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
     const stored = JSON.parse(
       String(
-        sql.exec(`SELECT args FROM runs WHERE run_id = 'credential-redrive'`).toArray()[0]?.["args"]
-      )
+        sql
+          .exec(`SELECT args FROM runs WHERE run_id = 'credential-redrive'`)
+          .toArray()[0]?.["args"],
+      ),
     ) as Record<string, unknown>;
     expect(stored).toMatchObject({
       code: "return 7",
@@ -997,8 +1140,8 @@ describe("EvalDO cancellation + forced recovery", () => {
           gatewayToken: "gateway-newer",
           executionSessionNonce: "session-newer",
         },
-        false
-      )
+        false,
+      ),
     ).rejects.toThrow(/reused with different input/);
   });
 
@@ -1007,7 +1150,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const enqueue = priv<
       (
         args: Record<string, unknown> & { runId: string },
-        schedule: boolean
+        schedule: boolean,
       ) => Promise<{
         runId: string;
         runDigest: string;
@@ -1026,7 +1169,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         contentStateHash: `state:${"b".repeat(64)}`,
         intentDigest: "c".repeat(64),
       },
-      false
+      false,
     );
     expect(accepted).toMatchObject({
       scopeInputRevision: "scope:initial",
@@ -1045,8 +1188,8 @@ describe("EvalDO cancellation + forced recovery", () => {
           contentStateHash: `state:${"b".repeat(64)}`,
           intentDigest: "c".repeat(64),
         },
-        false
-      )
+        false,
+      ),
     ).resolves.toMatchObject({
       scopeInputRevision: accepted.scopeInputRevision,
       runDigest: accepted.runDigest,
@@ -1064,8 +1207,8 @@ describe("EvalDO cancellation + forced recovery", () => {
           contentStateHash: `state:${"e".repeat(64)}`,
           intentDigest: "f".repeat(64),
         },
-        false
-      )
+        false,
+      ),
     ).rejects.toThrow(/reused with different input/);
   });
 
@@ -1077,7 +1220,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const exitEval = vi.fn(() => Promise.resolve());
     const persist = vi.fn(() => Promise.resolve());
     setPriv(instance, "ensureEngine", () =>
-      Promise.resolve({ SqlScopePersistence: class SqlScopePersistence {} })
+      Promise.resolve({ SqlScopePersistence: class SqlScopePersistence {} }),
     );
     setPriv(instance, "scopeManager", {
       current,
@@ -1089,8 +1232,13 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
 
     const first = await instance.readScopeTextPage("temporary", 0, 131_072);
-    const second = await instance.readScopeTextPage("temporary", 131_072, 131_072);
-    const decode = (chunk: string) => Buffer.from(chunk, "base64").toString("utf16le");
+    const second = await instance.readScopeTextPage(
+      "temporary",
+      131_072,
+      131_072,
+    );
+    const decode = (chunk: string) =>
+      Buffer.from(chunk, "base64").toString("utf16le");
     expect(decode(first.chunk) + decode(second.chunk)).toBe(value);
     expect(first.length).toBe(value.length);
 
@@ -1098,31 +1246,37 @@ describe("EvalDO cancellation + forced recovery", () => {
       ok: true,
       existed: true,
     });
-    expect(Object.prototype.hasOwnProperty.call(current, "temporary")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(current, "temporary")).toBe(
+      false,
+    );
     expect(enterEval).toHaveBeenCalledOnce();
     expect(exitEval).toHaveBeenCalledOnce();
   });
 
   it("persists bounded run progress without queueing another eval", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
-    seedPendingRun(sql, "run-progress", { code: "return 1", syntax: "typescript" });
+    seedPendingRun(sql, "run-progress", {
+      code: "return 1",
+      syntax: "typescript",
+    });
 
-    priv<(runId: string, progress: unknown) => void>(instance, "persistRunProgress").call(
+    priv<(runId: string, progress: unknown) => void>(
       instance,
-      "run-progress",
-      { active: ["fs-write-read"], completed: 2 }
-    );
+      "persistRunProgress",
+    ).call(instance, "run-progress", {
+      active: ["fs-write-read"],
+      completed: 2,
+    });
 
     expect(instance.getRun("run-progress")).toMatchObject({
       status: "pending",
       progress: { active: ["fs-write-read"], completed: 2 },
     });
     expect(() =>
-      priv<(runId: string, progress: unknown) => void>(instance, "persistRunProgress").call(
+      priv<(runId: string, progress: unknown) => void>(
         instance,
-        "run-progress",
-        "x".repeat(256 * 1024 + 1)
-      )
+        "persistRunProgress",
+      ).call(instance, "run-progress", "x".repeat(256 * 1024 + 1)),
     ).toThrow(/256 KiB/);
   });
 
@@ -1130,14 +1284,12 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "run-checkpoint");
 
-    const record = priv<(runId: string, checkpoint: Record<string, unknown>) => void>(
-      instance,
-      "recordRunCheckpoint"
-    );
-    const complete = priv<(runId: string, checkpoint: Record<string, unknown>) => void>(
-      instance,
-      "completeRunCheckpoint"
-    );
+    const record = priv<
+      (runId: string, checkpoint: Record<string, unknown>) => void
+    >(instance, "recordRunCheckpoint");
+    const complete = priv<
+      (runId: string, checkpoint: Record<string, unknown>) => void
+    >(instance, "completeRunCheckpoint");
     record.call(instance, "run-checkpoint", {
       stage: "outbound-rpc",
       state: "waiting",
@@ -1176,14 +1328,16 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("records exact RPC state while an outbound service owns the awaited work", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "rpc-over-lease");
-    sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'rpc-over-lease'`);
+    sql.exec(
+      `UPDATE runs SET status = 'running' WHERE run_id = 'rpc-over-lease'`,
+    );
     let release!: () => void;
     mockOwnedCallOnce(
       instance,
       () =>
         new Promise<void>((resolve) => {
           release = resolve;
-        })
+        }),
     );
     const execution = priv<
       (input: { runId: string; contextId: string }) => {
@@ -1214,14 +1368,16 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("surfaces contract-declared panel boot waits as external activity", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "panel-boot-wait");
-    sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'panel-boot-wait'`);
+    sql.exec(
+      `UPDATE runs SET status = 'running' WHERE run_id = 'panel-boot-wait'`,
+    );
     let release!: () => void;
     mockOwnedCallOnce(
       instance,
       () =>
         new Promise<void>((resolve) => {
           release = resolve;
-        })
+        }),
     );
     const execution = priv<
       (input: { runId: string; contextId: string }) => {
@@ -1233,7 +1389,10 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
 
     const ref = { epoch: "epoch-a", attemptId: "attempt-a" };
-    const pending = execution.rpc.call("main", "panelRuntime.awaitAttempt", [ref, 2]);
+    const pending = execution.rpc.call("main", "panelRuntime.awaitAttempt", [
+      ref,
+      2,
+    ]);
     expect(instance.getRun("panel-boot-wait")).toMatchObject({
       checkpoint: {
         stage: "external-wait",
@@ -1270,12 +1429,18 @@ describe("EvalDO cancellation + forced recovery", () => {
       channelId: "channel-1",
       executionSessionNonce: "session-authority-123456",
     });
-    sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'authority-lifecycle'`);
+    sql.exec(
+      `UPDATE runs SET status = 'running' WHERE run_id = 'authority-lifecycle'`,
+    );
 
-    instance.appendAuthorityEvent("authority-lifecycle", "authority-requested", {
-      acquisitionId: "acq-1",
-      capability: "context.boundary",
-    });
+    instance.appendAuthorityEvent(
+      "authority-lifecycle",
+      "authority-requested",
+      {
+        acquisitionId: "acq-1",
+        capability: "context.boundary",
+      },
+    );
     expect(instance.getRun("authority-lifecycle")).toMatchObject({
       status: "running",
       activity: {
@@ -1295,8 +1460,8 @@ describe("EvalDO cancellation + forced recovery", () => {
             activity: expect.objectContaining({ kind: "authority-requested" }),
           }),
         ],
-        expect.any(Object)
-      )
+        expect.any(Object),
+      ),
     );
     const progressCall = call.mock.calls[0] as unknown as
       | [string, string, unknown[], RpcCallOptions]
@@ -1317,20 +1482,34 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("keeps reporting authority pending until every concurrent request is decided", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "authority-concurrent");
-    sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'authority-concurrent'`);
+    sql.exec(
+      `UPDATE runs SET status = 'running' WHERE run_id = 'authority-concurrent'`,
+    );
 
-    instance.appendAuthorityEvent("authority-concurrent", "authority-requested", {
-      snapshotDigest: "snapshot-a",
-      capability: "context.boundary",
-    });
-    instance.appendAuthorityEvent("authority-concurrent", "authority-requested", {
-      snapshotDigest: "snapshot-b",
-      capability: "service:models.generate",
-    });
-    instance.appendAuthorityEvent("authority-concurrent", "authority-requested", {
-      snapshotDigest: "snapshot-b",
-      capability: "service:models.generate",
-    });
+    instance.appendAuthorityEvent(
+      "authority-concurrent",
+      "authority-requested",
+      {
+        snapshotDigest: "snapshot-a",
+        capability: "context.boundary",
+      },
+    );
+    instance.appendAuthorityEvent(
+      "authority-concurrent",
+      "authority-requested",
+      {
+        snapshotDigest: "snapshot-b",
+        capability: "service:models.generate",
+      },
+    );
+    instance.appendAuthorityEvent(
+      "authority-concurrent",
+      "authority-requested",
+      {
+        snapshotDigest: "snapshot-b",
+        capability: "service:models.generate",
+      },
+    );
     instance.appendAuthorityEvent("authority-concurrent", "authority-decided", {
       snapshotDigest: "already-granted-snapshot",
       decision: "allow",
@@ -1344,7 +1523,10 @@ describe("EvalDO cancellation + forced recovery", () => {
       status: "running",
       activity: {
         kind: "authority-pending",
-        request: { snapshotDigest: "snapshot-a", capability: "context.boundary" },
+        request: {
+          snapshotDigest: "snapshot-a",
+          capability: "context.boundary",
+        },
       },
     });
 
@@ -1366,25 +1548,36 @@ describe("EvalDO cancellation + forced recovery", () => {
       seedPendingRun(sql, "unbounded-run");
       let observedSignal: AbortSignal | undefined;
       const started = new Promise<void>((resolveStarted) => {
-        setPriv(instance, "runLocked", async (_args: unknown, signal?: AbortSignal) => {
-          observedSignal = signal;
-          resolveStarted();
-          await new Promise<void>((resolve) => {
-            release = resolve;
-          });
-          return { success: true, console: "", returnValue: 1 };
-        });
+        setPriv(
+          instance,
+          "runLocked",
+          async (_args: unknown, signal?: AbortSignal) => {
+            observedSignal = signal;
+            resolveStarted();
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            return { success: true, console: "", returnValue: 1 };
+          },
+        );
       });
       const execution = instance.executeRun("unbounded-run");
       await started;
       await vi.advanceTimersByTimeAsync(60 * 60 * 1_000);
       expect(observedSignal?.aborted).toBe(false);
-      expect(instance.getRun("unbounded-run")).toMatchObject({ status: "running" });
+      expect(instance.getRun("unbounded-run")).toMatchObject({
+        status: "running",
+      });
       expect(
-        sql.exec(`SELECT deadline_at FROM runs WHERE run_id = 'unbounded-run'`).toArray()[0]
+        sql
+          .exec(`SELECT deadline_at FROM runs WHERE run_id = 'unbounded-run'`)
+          .toArray()[0],
       ).toMatchObject({ deadline_at: null });
       release();
-      await expect(execution).resolves.toMatchObject({ success: true, returnValue: 1 });
+      await expect(execution).resolves.toMatchObject({
+        success: true,
+        returnValue: 1,
+      });
     } finally {
       release?.();
       vi.useRealTimers();
@@ -1392,7 +1585,9 @@ describe("EvalDO cancellation + forced recovery", () => {
   });
 
   it("serves getRun through a concurrent fetch while executeRun is held", async () => {
-    const hostFetch = vi.spyOn(globalThis, "fetch").mockImplementation(successfulTestRpcFetch);
+    const hostFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(successfulTestRpcFetch);
     const { instance, sql, call } = await createTestDO(EvalDO);
     let releaseRun!: () => void;
     let markStarted!: () => void;
@@ -1408,34 +1603,47 @@ describe("EvalDO cancellation + forced recovery", () => {
       return { success: true, console: "", returnValue: "done" };
     });
     vi.spyOn(
-      instance as unknown as { setAlarmAt: (timeMs: number, opts?: unknown) => void },
-      "setAlarmAt"
+      instance as unknown as {
+        setAlarmAt: (timeMs: number, opts?: unknown) => void;
+      },
+      "setAlarmAt",
     ).mockImplementation(() => undefined);
     seedPendingRun(sql, "held-run");
 
     const held = call("executeRun", "held-run");
     await started;
 
-    await expect(call("getRun", "held-run")).resolves.toMatchObject({ status: "running" });
+    await expect(call("getRun", "held-run")).resolves.toMatchObject({
+      status: "running",
+    });
 
     releaseRun();
-    await expect(held).resolves.toMatchObject({ success: true, returnValue: "done" });
+    await expect(held).resolves.toMatchObject({
+      success: true,
+      returnValue: "done",
+    });
     hostFetch.mockRestore();
   });
 
   it("executeRun persists a bounded terminal result for huge console and return payloads", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const hugeConsole = `console-start\n${"c".repeat(220_000)}\nconsole-end`;
-    const hugeReturn = { value: `return-start\n${"r".repeat(220_000)}\nreturn-end` };
+    const hugeReturn = {
+      value: `return-start\n${"r".repeat(220_000)}\nreturn-end`,
+    };
     setPriv(instance, "runLocked", () =>
-      Promise.resolve({ success: true, console: hugeConsole, returnValue: hugeReturn })
+      Promise.resolve({
+        success: true,
+        console: hugeConsole,
+        returnValue: hugeReturn,
+      }),
     );
     seedPendingRun(sql, "huge-run");
 
-    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const result = await priv<(id: string) => Promise<RunResult>>(
       instance,
-      "huge-run"
-    );
+      "executeRun",
+    ).call(instance, "huge-run");
 
     expect(result.success).toBe(true);
     expect(result.console.length).toBeLessThan(100_000);
@@ -1446,10 +1654,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       scopeKey: "$lastLargeReturn",
     });
 
-    const persisted = priv<(id: string) => { status: string; result?: RunResult }>(
-      instance,
-      "getRun"
-    ).call(instance, "huge-run");
+    const persisted = priv<
+      (id: string) => { status: string; result?: RunResult }
+    >(instance, "getRun").call(instance, "huge-run");
     expect(persisted.status).toBe("done");
     expect(persisted.result).toEqual(result);
     expect(JSON.stringify(persisted.result).length).toBeLessThan(250_000);
@@ -1461,26 +1668,28 @@ describe("EvalDO cancellation + forced recovery", () => {
       Promise.reject(
         Object.assign(new Error("parent callback disconnected"), {
           code: "EAPPROVALROUTELOST",
-        })
-      )
+        }),
+      ),
     );
     seedPendingRun(sql, "route-lost-run");
 
     await expect(
       priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
         instance,
-        "route-lost-run"
-      )
+        "route-lost-run",
+      ),
     ).resolves.toMatchObject({
       success: false,
       failureCode: "approval-route-lost",
-      error: expect.stringContaining("restart"),
+      error: expect.objectContaining({
+        message: expect.stringContaining("restart"),
+      }),
     });
     expect(
-      priv<(id: string) => { status: string; result?: RunResult }>(instance, "getRun").call(
+      priv<(id: string) => { status: string; result?: RunResult }>(
         instance,
-        "route-lost-run"
-      )
+        "getRun",
+      ).call(instance, "route-lost-run"),
     ).toMatchObject({
       status: "approval-route-lost",
       result: { failureCode: "approval-route-lost" },
@@ -1492,13 +1701,8 @@ describe("EvalDO cancellation + forced recovery", () => {
     const scope: Record<string, unknown> = {};
 
     priv<
-      (
-        scope: Record<string, unknown>,
-        console: string,
-        error: string | undefined,
-        value: unknown
-      ) => void
-    >(instance, "spillLargeOutput").call(instance, scope, "", undefined, {
+      (scope: Record<string, unknown>, console: string, value: unknown) => void
+    >(instance, "spillLargeOutput").call(instance, scope, "", {
       methods: { inspect: true },
     });
 
@@ -1509,49 +1713,66 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance } = await createTestDO(EvalDO);
     const scope: Record<string, unknown> = {};
     const spill = priv<
-      (
-        scope: Record<string, unknown>,
-        console: string,
-        error: string | undefined,
-        value: unknown
-      ) => void
+      (scope: Record<string, unknown>, console: string, value: unknown) => void
     >(instance, "spillLargeOutput");
     const largeConsole = "c".repeat(90_000);
-    const largeError = "e".repeat(60_000);
     const largeReturn = { body: "r".repeat(60_000) };
 
-    spill.call(instance, scope, largeConsole, largeError, largeReturn);
+    spill.call(instance, scope, largeConsole, largeReturn);
     const savedReturn = scope["$lastLargeReturn"];
     expect(scope).toMatchObject({
       $lastLargeConsole: largeConsole,
-      $lastLargeError: largeError,
       $lastReturn: savedReturn,
     });
 
-    spill.call(instance, scope, "", undefined, { pageLength: 40_000 });
+    spill.call(instance, scope, "", { pageLength: 40_000 });
 
     expect(scope["$lastReturn"]).toEqual({ pageLength: 40_000 });
     expect(scope["$lastLargeConsole"]).toBe(largeConsole);
-    expect(scope["$lastLargeError"]).toBe(largeError);
     expect(scope["$lastLargeReturn"]).toBe(savedReturn);
   });
 
-  it("retains oversized structured failure data in its advertised recovery slot", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    const scope: Record<string, unknown> = {};
-    const errorData = { diagnostics: "d".repeat(60_000) };
+  it("preserves an oversized complete failure graph through durable receipt persistence", async () => {
+    const { instance } = await createTestDO(EvalDO, {
+      RPC_FETCH: successfulTestRpcFetch,
+    });
+    const shared = new Error("shared nested cause");
+    const graph = serializeRpcFailure(
+      Object.assign(
+        new AggregateError(
+          [
+            new Error("first branch", { cause: shared }),
+            new Error("second branch", { cause: shared }),
+          ],
+          "aggregate root",
+        ),
+        { errorData: { diagnostics: "d".repeat(300_000) } },
+      ),
+    );
+    setPriv(instance, "runLocked", async () => ({
+      success: false,
+      console: "",
+      error: graph,
+    }));
+    await instance.startRun({
+      runId: "large-failure-graph",
+      code: "throw new Error()",
+    });
+    await vi.waitFor(() =>
+      expect(instance.getRunReceipt("large-failure-graph")).not.toBeNull(),
+    );
 
-    priv<
-      (
-        scope: Record<string, unknown>,
-        console: string,
-        error: string | undefined,
-        value: unknown,
-        errorData?: unknown
-      ) => void
-    >(instance, "spillLargeOutput").call(instance, scope, "", undefined, undefined, errorData);
-
-    expect(scope["$lastLargeErrorData"]).toBe(JSON.stringify(errorData, null, 2));
+    const receipt = instance.getRunReceipt("large-failure-graph");
+    expect(receipt?.result.error).toEqual(graph);
+    expect(JSON.stringify(receipt?.result.error).length).toBeGreaterThan(
+      250_000,
+    );
+    expect(receipt?.result.error?.errors?.[0]).toMatchObject({
+      cause: { id: 2 },
+    });
+    expect(receipt?.result.error?.errors?.[1]).toMatchObject({
+      cause: { reference: 2 },
+    });
   });
 
   it("cancel(runId): an in-flight run wedged on an outbound call unwinds once cancelled", async () => {
@@ -1562,37 +1783,38 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     seedPendingRun(sql, "run-A");
     // Kick the held execution; do NOT await — it wedges until cancelled.
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "run-A"
-    );
+      "executeRun",
+    ).call(instance, "run-A");
     runP.catch(() => undefined); // avoid an unhandled-rejection warning before the assertion awaits
 
     // The run is now executing (blocked on the simulated outbound call).
     const { signal } = await started;
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal!.aborted).toBe(false);
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'run-A'`).toArray()[0]).toMatchObject({
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-A'`).toArray()[0],
+    ).toMatchObject({
       status: "running",
     });
     const cleanup = vi.fn(async () => {
       if (!signal!.aborted) {
         await new Promise<void>((resolve) =>
-          signal!.addEventListener("abort", () => resolve(), { once: true })
+          signal!.addEventListener("abort", () => resolve(), { once: true }),
         );
       }
       expect(signal!.aborted).toBe(true);
     });
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-      "run-A",
-      new Set([cleanup])
-    );
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set("run-A", new Set([cleanup]));
 
     // Cancel: CAS row → cancelled, then abort the controller threaded into the run.
-    const cancelRet = await priv<(id: string) => Promise<{ ok: boolean; forcedReset: boolean }>>(
-      instance,
-      "cancel"
-    ).call(instance, "run-A");
+    const cancelRet = await priv<
+      (id: string) => Promise<{ ok: boolean; forcedReset: boolean }>
+    >(instance, "cancel").call(instance, "run-A");
     expect(cancelRet).toEqual({ ok: true, forcedReset: false });
     expect(cleanup).toHaveBeenCalledOnce();
     expect(signal!.aborted).toBe(true);
@@ -1601,8 +1823,10 @@ describe("EvalDO cancellation + forced recovery", () => {
     // it can NEVER resurrect itself `done` (the CAS persist requires status='running').
     const result = await runP;
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/cancelled/i);
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'run-A'`).toArray()[0]).toMatchObject({
+    expect(result.error?.message).toMatch(/cancelled/i);
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-A'`).toArray()[0],
+    ).toMatchObject({
       status: "cancelled",
     });
     expect(errorLog).not.toHaveBeenCalled();
@@ -1615,34 +1839,41 @@ describe("EvalDO cancellation + forced recovery", () => {
     setPriv(instance, "runLocked", runLocked);
     seedPendingRun(sql, "run-cleanup-waits");
 
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "run-cleanup-waits"
-    );
+      "executeRun",
+    ).call(instance, "run-cleanup-waits");
     const { signal } = await started;
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set(
       "run-cleanup-waits",
       new Set([
         async () => {
           if (!signal?.aborted) {
             await new Promise<void>((resolve) =>
-              signal?.addEventListener("abort", () => resolve(), { once: true })
+              signal?.addEventListener("abort", () => resolve(), {
+                once: true,
+              }),
             );
           }
           await runP;
         },
-      ])
+      ]),
     );
 
     await expect(
       priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
         instance,
-        "run-cleanup-waits"
-      )
+        "run-cleanup-waits",
+      ),
     ).resolves.toEqual({ ok: true, forcedReset: false });
     await expect(runP).resolves.toMatchObject({
       success: false,
-      error: expect.stringMatching(/cancelled/i),
+      error: expect.objectContaining({
+        message: expect.stringMatching(/cancelled/i),
+      }),
     });
   });
 
@@ -1652,31 +1883,36 @@ describe("EvalDO cancellation + forced recovery", () => {
     setPriv(instance, "runLocked", runLocked);
     seedPendingRun(sql, "run-cleanup-first");
 
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "run-cleanup-first"
-    );
+      "executeRun",
+    ).call(instance, "run-cleanup-first");
     const { signal } = await started;
     let cleanupStartedBeforeAbort = false;
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set(
       "run-cleanup-first",
       new Set([
         async () => {
           cleanupStartedBeforeAbort = !signal?.aborted;
         },
-      ])
+      ]),
     );
 
     await expect(
       priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
         instance,
-        "run-cleanup-first"
-      )
+        "run-cleanup-first",
+      ),
     ).resolves.toEqual({ ok: true, forcedReset: false });
     expect(cleanupStartedBeforeAbort).toBe(true);
     await expect(runP).resolves.toMatchObject({
       success: false,
-      error: expect.stringMatching(/cancelled/i),
+      error: expect.objectContaining({
+        message: expect.stringMatching(/cancelled/i),
+      }),
     });
   });
 
@@ -1686,23 +1922,31 @@ describe("EvalDO cancellation + forced recovery", () => {
     setPriv(instance, "runLocked", runLocked);
     seedPendingRun(sql, "run-context-owner");
 
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "run-context-owner"
-    );
+      "executeRun",
+    ).call(instance, "run-context-owner");
     await started;
     const ownerExecution = { contextId: "owner-cell" };
     const foreignExecution = { contextId: "foreign-cell" };
     const seen: unknown[] = [];
     const handler = priv<
       (execution: unknown, callback: () => Promise<void>) => () => Promise<void>
-    >(instance, "bindRunCancelHandler").call(instance, ownerExecution, async () => {
-      seen.push(priv<() => unknown>(instance, "requireActiveEvalExecution").call(instance));
-    });
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-      "run-context-owner",
-      new Set([handler])
+    >(instance, "bindRunCancelHandler").call(
+      instance,
+      ownerExecution,
+      async () => {
+        seen.push(
+          priv<() => unknown>(instance, "requireActiveEvalExecution").call(
+            instance,
+          ),
+        );
+      },
     );
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set("run-context-owner", new Set([handler]));
 
     const activeExecution = priv<{
       run<T>(store: unknown, callback: () => T): T;
@@ -1711,14 +1955,16 @@ describe("EvalDO cancellation + forced recovery", () => {
       activeExecution.run(foreignExecution, () =>
         priv<(id: string) => Promise<{ ok: boolean; forcedReset: boolean }>>(
           instance,
-          "cancel"
-        ).call(instance, "run-context-owner")
-      )
+          "cancel",
+        ).call(instance, "run-context-owner"),
+      ),
     ).resolves.toEqual({ ok: true, forcedReset: false });
 
     expect(seen).toEqual([ownerExecution]);
     expect(() =>
-      priv<() => unknown>(instance, "requireActiveEvalExecution").call(instance)
+      priv<() => unknown>(instance, "requireActiveEvalExecution").call(
+        instance,
+      ),
     ).toThrow(/actively executing/);
     await runP;
   });
@@ -1734,29 +1980,39 @@ describe("EvalDO cancellation + forced recovery", () => {
     sql.exec(
       `UPDATE runs SET deadline_at = ? WHERE run_id = ?`,
       Date.now() + 5,
-      "deadline-context-owner"
+      "deadline-context-owner",
     );
     const ownerExecution = { contextId: "deadline-owner-cell" };
     const seen: unknown[] = [];
     const handler = priv<
       (execution: unknown, callback: () => Promise<void>) => () => Promise<void>
-    >(instance, "bindRunCancelHandler").call(instance, ownerExecution, async () => {
-      seen.push(priv<() => unknown>(instance, "requireActiveEvalExecution").call(instance));
-    });
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-      "deadline-context-owner",
-      new Set([handler])
+    >(instance, "bindRunCancelHandler").call(
+      instance,
+      ownerExecution,
+      async () => {
+        seen.push(
+          priv<() => unknown>(instance, "requireActiveEvalExecution").call(
+            instance,
+          ),
+        );
+      },
     );
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set("deadline-context-owner", new Set([handler]));
 
     await expect(
       priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
         instance,
-        "deadline-context-owner"
-      )
+        "deadline-context-owner",
+      ),
     ).resolves.toMatchObject({ failureCode: "eval_deadline_exceeded" });
     expect(seen).toEqual([ownerExecution]);
     expect(() =>
-      priv<() => unknown>(instance, "requireActiveEvalExecution").call(instance)
+      priv<() => unknown>(instance, "requireActiveEvalExecution").call(
+        instance,
+      ),
     ).toThrow(/actively executing/);
   });
 
@@ -1766,42 +2022,57 @@ describe("EvalDO cancellation + forced recovery", () => {
     setPriv(instance, "runLocked", runLocked);
     seedPendingRun(sql, "run-cancelling-state");
 
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "run-cancelling-state"
-    );
+      "executeRun",
+    ).call(instance, "run-cancelling-state");
     await started;
     let announceCleanup!: () => void;
     let releaseCleanup!: () => void;
-    const cleanupStarted = new Promise<void>((resolve) => (announceCleanup = resolve));
-    const cleanupGate = new Promise<void>((resolve) => (releaseCleanup = resolve));
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+    const cleanupStarted = new Promise<void>(
+      (resolve) => (announceCleanup = resolve),
+    );
+    const cleanupGate = new Promise<void>(
+      (resolve) => (releaseCleanup = resolve),
+    );
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set(
       "run-cancelling-state",
       new Set([
         async () => {
           announceCleanup();
           await cleanupGate;
         },
-      ])
+      ]),
     );
 
-    const cancellation = priv<(id: string) => Promise<{ ok: boolean; forcedReset: boolean }>>(
-      instance,
-      "cancel"
-    ).call(instance, "run-cancelling-state");
+    const cancellation = priv<
+      (id: string) => Promise<{ ok: boolean; forcedReset: boolean }>
+    >(instance, "cancel").call(instance, "run-cancelling-state");
     await cleanupStarted;
     await expect(runP).resolves.toMatchObject({
       success: false,
-      error: expect.stringMatching(/cancelled/i),
+      error: expect.objectContaining({
+        message: expect.stringMatching(/cancelled/i),
+      }),
     });
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-cancelling-state'`).toArray()[0]
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'run-cancelling-state'`)
+        .toArray()[0],
     ).toMatchObject({ status: "cancelling" });
 
     releaseCleanup();
-    await expect(cancellation).resolves.toEqual({ ok: true, forcedReset: false });
+    await expect(cancellation).resolves.toEqual({
+      ok: true,
+      forcedReset: false,
+    });
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-cancelling-state'`).toArray()[0]
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'run-cancelling-state'`)
+        .toArray()[0],
     ).toMatchObject({ status: "cancelled" });
   });
 
@@ -1812,35 +2083,41 @@ describe("EvalDO cancellation + forced recovery", () => {
     setPriv(instance, "cancellationGraceMs", 1);
     seedPendingRun(sql, "run-owned-cleanup");
 
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "run-owned-cleanup"
-    );
+      "executeRun",
+    ).call(instance, "run-owned-cleanup");
     await started;
     let releaseCleanup!: () => void;
-    const cleanupGate = new Promise<void>((resolve) => (releaseCleanup = resolve));
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-      "run-owned-cleanup",
-      new Set([async () => cleanupGate])
+    const cleanupGate = new Promise<void>(
+      (resolve) => (releaseCleanup = resolve),
     );
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set("run-owned-cleanup", new Set([async () => cleanupGate]));
     const reset = vi.spyOn(
       instance as unknown as { forceReset: () => Promise<{ ok: boolean }> },
-      "forceReset"
+      "forceReset",
     );
 
-    const cancellation = priv<(id: string) => Promise<{ ok: boolean; forcedReset: boolean }>>(
-      instance,
-      "cancel"
-    ).call(instance, "run-owned-cleanup");
+    const cancellation = priv<
+      (id: string) => Promise<{ ok: boolean; forcedReset: boolean }>
+    >(instance, "cancel").call(instance, "run-owned-cleanup");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(reset).not.toHaveBeenCalled();
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-owned-cleanup'`).toArray()[0]
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'run-owned-cleanup'`)
+        .toArray()[0],
     ).toMatchObject({ status: "cancelling" });
 
     releaseCleanup();
-    await expect(cancellation).resolves.toEqual({ ok: true, forcedReset: false });
+    await expect(cancellation).resolves.toEqual({
+      ok: true,
+      forcedReset: false,
+    });
     await runP;
   });
 
@@ -1850,35 +2127,43 @@ describe("EvalDO cancellation + forced recovery", () => {
     setPriv(instance, "runLocked", runLocked);
     seedPendingRun(sql, "run-concurrent-cancel");
 
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "run-concurrent-cancel"
-    );
+      "executeRun",
+    ).call(instance, "run-concurrent-cancel");
     await started;
     let announceCleanup!: () => void;
     let releaseCleanup!: () => void;
-    const cleanupStarted = new Promise<void>((resolve) => (announceCleanup = resolve));
-    const cleanupGate = new Promise<void>((resolve) => (releaseCleanup = resolve));
+    const cleanupStarted = new Promise<void>(
+      (resolve) => (announceCleanup = resolve),
+    );
+    const cleanupGate = new Promise<void>(
+      (resolve) => (releaseCleanup = resolve),
+    );
     const cleanup = vi.fn(async () => {
       announceCleanup();
       await cleanupGate;
     });
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-      "run-concurrent-cancel",
-      new Set([cleanup])
-    );
-
-    const cancel = priv<(id: string) => Promise<{ ok: boolean; forcedReset: boolean }>>(
+    priv<Map<string, Set<() => Promise<void>>>>(
       instance,
-      "cancel"
-    ).bind(instance);
+      "runCancelHandlers",
+    ).set("run-concurrent-cancel", new Set([cleanup]));
+
+    const cancel = priv<
+      (id: string) => Promise<{ ok: boolean; forcedReset: boolean }>
+    >(instance, "cancel").bind(instance);
     const first = cancel("run-concurrent-cancel");
     await cleanupStarted;
     const second = cancel("run-concurrent-cancel");
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(priv<Map<string, Promise<unknown>>>(instance, "inFlightCancellations").size).toBe(1);
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-concurrent-cancel'`).toArray()[0]
+      priv<Map<string, Promise<unknown>>>(instance, "inFlightCancellations")
+        .size,
+    ).toBe(1);
+    expect(
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'run-concurrent-cancel'`)
+        .toArray()[0],
     ).toMatchObject({ status: "cancelling" });
 
     releaseCleanup();
@@ -1888,9 +2173,14 @@ describe("EvalDO cancellation + forced recovery", () => {
     ]);
     await runP;
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(priv<Map<string, Promise<unknown>>>(instance, "inFlightCancellations").size).toBe(0);
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-concurrent-cancel'`).toArray()[0]
+      priv<Map<string, Promise<unknown>>>(instance, "inFlightCancellations")
+        .size,
+    ).toBe(0);
+    expect(
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'run-concurrent-cancel'`)
+        .toArray()[0],
     ).toMatchObject({ status: "cancelled" });
   });
 
@@ -1899,10 +2189,10 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { runLocked, started } = blockUntilAborted();
     setPriv(instance, "runLocked", runLocked);
     seedPendingRun(sql, "run-cleanup-rejects");
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "run-cleanup-rejects"
-    );
+      "executeRun",
+    ).call(instance, "run-cleanup-rejects");
     await started;
     const scope: Record<string, unknown> = {};
     const persisted: Array<Record<string, unknown>> = [];
@@ -1916,31 +2206,44 @@ describe("EvalDO cancellation + forced recovery", () => {
       enterEval: () => undefined,
       exitEval: () => Promise.resolve(),
     });
-    setPriv(instance, "engine", { SqlScopePersistence: class SqlScopePersistence {} });
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+    setPriv(instance, "engine", {
+      SqlScopePersistence: class SqlScopePersistence {},
+    });
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set(
       "run-cleanup-rejects",
       new Set([
         async () => {
-          scope["terminalRecord"] = { status: "cancelled", cleanupFailed: true };
+          scope["terminalRecord"] = {
+            status: "cancelled",
+            cleanupFailed: true,
+          };
           throw new Error("cleanup rejected visibly");
         },
-      ])
+      ]),
     );
 
     await expect(
       priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
         instance,
-        "run-cleanup-rejects"
-      )
+        "run-cleanup-rejects",
+      ),
     ).rejects.toThrow(/cleanup rejected visibly/);
     await runP;
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-cleanup-rejects'`).toArray()[0]
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'run-cleanup-rejects'`)
+        .toArray()[0],
     ).toMatchObject({ status: "cancelled" });
     expect(persisted.at(-1)).toEqual({
       terminalRecord: { status: "cancelled", cleanupFailed: true },
     });
-    expect(priv<Map<string, Promise<unknown>>>(instance, "inFlightCancellations").size).toBe(0);
+    expect(
+      priv<Map<string, Promise<unknown>>>(instance, "inFlightCancellations")
+        .size,
+    ).toBe(0);
   });
 
   it("persists scope mutations made by cancellation cleanup after the run unwinds", async () => {
@@ -1961,27 +2264,32 @@ describe("EvalDO cancellation + forced recovery", () => {
       enterEval: () => undefined,
       exitEval: () => Promise.resolve(),
     });
-    setPriv(instance, "engine", { SqlScopePersistence: class SqlScopePersistence {} });
+    setPriv(instance, "engine", {
+      SqlScopePersistence: class SqlScopePersistence {},
+    });
 
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "run-cleanup-scope"
-    );
+      "executeRun",
+    ).call(instance, "run-cleanup-scope");
     await started;
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set(
       "run-cleanup-scope",
       new Set([
         async () => {
           scope["terminalRecord"] = { status: "cancelled" };
         },
-      ])
+      ]),
     );
 
     await expect(
       priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
         instance,
-        "run-cleanup-scope"
-      )
+        "run-cleanup-scope",
+      ),
     ).resolves.toEqual({ ok: true, forcedReset: false });
     await runP;
     expect(persistedSnapshots.at(-1)).toEqual({
@@ -2001,27 +2309,29 @@ describe("EvalDO cancellation + forced recovery", () => {
       return { success: true, console: "" };
     });
     seedPendingRun(sql, "cleanup-owns-terminal");
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "cleanup-owns-terminal"
-    );
+      "executeRun",
+    ).call(instance, "cleanup-owns-terminal");
     await started;
     const cleanup = vi.fn(async () => releaseRun());
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-      "cleanup-owns-terminal",
-      new Set([cleanup])
-    );
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set("cleanup-owns-terminal", new Set([cleanup]));
 
     await expect(
       priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
         instance,
-        "cleanup-owns-terminal"
-      )
+        "cleanup-owns-terminal",
+      ),
     ).resolves.toEqual({ ok: true, forcedReset: false });
     expect(cleanup).toHaveBeenCalledOnce();
     await expect(runP).resolves.toMatchObject({
       success: false,
-      error: expect.stringMatching(/cancelled/i),
+      error: expect.objectContaining({
+        message: expect.stringMatching(/cancelled/i),
+      }),
     });
   });
 
@@ -2030,23 +2340,29 @@ describe("EvalDO cancellation + forced recovery", () => {
     // A done run + a pending run that is NOT the cancel target.
     sql.exec(
       `INSERT INTO runs (run_id, args, status, started_at) VALUES ('done-1', '{}', 'done', ?)`,
-      Date.now()
+      Date.now(),
     );
     seedPendingRun(sql, "other");
 
-    const ret = await priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
+    const ret = await priv<(id: string) => Promise<{ ok: boolean }>>(
       instance,
-      "done-1"
-    );
+      "cancel",
+    ).call(instance, "done-1");
     expect(ret).toEqual({ ok: true, forcedReset: false });
     // The done run is NOT flipped to cancelled (CAS only touches pending/running), and `other` is untouched.
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'done-1'`).toArray()[0]).toMatchObject({
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'done-1'`).toArray()[0],
+    ).toMatchObject({
       status: "done",
     });
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'other'`).toArray()[0]).toMatchObject({
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'other'`).toArray()[0],
+    ).toMatchObject({
       status: "pending",
     });
-    expect(sql.exec(`SELECT * FROM run_events WHERE run_id = 'done-1'`).toArray()).toHaveLength(0);
+    expect(
+      sql.exec(`SELECT * FROM run_events WHERE run_id = 'done-1'`).toArray(),
+    ).toHaveLength(0);
   });
 
   it("bounds non-cooperative cancellation and reports the resulting scope reset", async () => {
@@ -2062,34 +2378,45 @@ describe("EvalDO cancellation + forced recovery", () => {
     seedPendingRun(sql, "queued-peer");
     sql.exec(`CREATE TABLE user_before_forced_cancel (value TEXT)`);
 
-    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const runP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "wedged-target"
-    );
+      "executeRun",
+    ).call(instance, "wedged-target");
     runP.catch(() => undefined);
     await started;
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warning = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
 
     await expect(
-      priv<(id: string) => Promise<{ ok: boolean; forcedReset: boolean }>>(instance, "cancel").call(
+      priv<(id: string) => Promise<{ ok: boolean; forcedReset: boolean }>>(
         instance,
-        "wedged-target"
-      )
+        "cancel",
+      ).call(instance, "wedged-target"),
     ).resolves.toEqual({ ok: true, forcedReset: true });
 
-    expect(warning).toHaveBeenCalledWith(expect.stringMatching(/did not settle.*resetting/i));
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringMatching(/did not settle.*resetting/i),
+    );
     warning.mockRestore();
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'queued-peer'`).toArray()[0]
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'queued-peer'`)
+        .toArray()[0],
     ).toMatchObject({ status: "cancelled" });
     expect(
-      sql.exec(`SELECT name FROM sqlite_master WHERE name = 'user_before_forced_cancel'`).toArray()
+      sql
+        .exec(
+          `SELECT name FROM sqlite_master WHERE name = 'user_before_forced_cancel'`,
+        )
+        .toArray(),
     ).toEqual([]);
     expect(priv<number>(instance, "scopeGeneration")).toBe(1);
     expect(
-      priv<Map<string, { active: boolean; revoked: boolean }>>(instance, "runCleanupPhases").get(
-        "wedged-target"
-      )
+      priv<Map<string, { active: boolean; revoked: boolean }>>(
+        instance,
+        "runCleanupPhases",
+      ).get("wedged-target"),
     ).toEqual({ active: false, revoked: true });
   });
 
@@ -2101,51 +2428,70 @@ describe("EvalDO cancellation + forced recovery", () => {
       "expired",
       JSON.stringify({ code: "return 1", contextId: "ctx", timeoutMs: 1 }),
       Date.now() - 10,
-      Date.now() - 1
+      Date.now() - 1,
     );
-    const runLocked = vi.fn(async () => ({ success: true, console: "unexpected" }));
+    const runLocked = vi.fn(async () => ({
+      success: true,
+      console: "unexpected",
+    }));
     setPriv(instance, "runLocked", runLocked);
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set(
       "expired",
-      new Set([async () => Promise.reject(new Error("cleanup exploded"))])
+      new Set([async () => Promise.reject(new Error("cleanup exploded"))]),
     );
 
-    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const result = await priv<(id: string) => Promise<RunResult>>(
       instance,
-      "expired"
-    );
+      "executeRun",
+    ).call(instance, "expired");
 
     expect(result).toMatchObject({ success: false });
-    expect(result.error).toMatch(/cancellation cleanup failed/i);
-    expect(runLocked).not.toHaveBeenCalled();
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'expired'`).toArray()[0]).toMatchObject(
-      {
-        status: "done",
-      }
+    expect(JSON.stringify(result.error)).toMatch(
+      /cancellation cleanup failed/i,
     );
-    expect(priv<Map<string, unknown>>(instance, "runAborts").has("expired")).toBe(false);
+    expect(runLocked).not.toHaveBeenCalled();
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'expired'`).toArray()[0],
+    ).toMatchObject({
+      status: "done",
+    });
+    expect(
+      priv<Map<string, unknown>>(instance, "runAborts").has("expired"),
+    ).toBe(false);
   });
 
   it("normalizes a guest abort caused by the deadline as a timeout", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const { runLocked } = blockUntilAborted();
     setPriv(instance, "runLocked", runLocked);
-    seedPendingRun(sql, "deadline-abort", { code: "await never();", timeoutMs: 5 });
-    sql.exec(`UPDATE runs SET deadline_at = ? WHERE run_id = ?`, Date.now() + 5, "deadline-abort");
-
-    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
-      instance,
-      "deadline-abort"
+    seedPendingRun(sql, "deadline-abort", {
+      code: "await never();",
+      timeoutMs: 5,
+    });
+    sql.exec(
+      `UPDATE runs SET deadline_at = ? WHERE run_id = ?`,
+      Date.now() + 5,
+      "deadline-abort",
     );
+
+    const result = await priv<(id: string) => Promise<RunResult>>(
+      instance,
+      "executeRun",
+    ).call(instance, "deadline-abort");
 
     expect(result).toMatchObject({
       success: false,
-      error: "eval timed out after 5ms",
+      error: expect.objectContaining({ message: "eval timed out after 5ms" }),
       failureKind: "cancelled",
       failureCode: "eval_deadline_exceeded",
     });
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'deadline-abort'`).toArray()[0]
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'deadline-abort'`)
+        .toArray()[0],
     ).toMatchObject({ status: "done" });
   });
 
@@ -2157,27 +2503,31 @@ describe("EvalDO cancellation + forced recovery", () => {
     setPriv(instance, "runLocked", wedge);
     seedPendingRun(sql, "wedged");
     seedPendingRun(sql, "already-cancelling");
-    sql.exec(`UPDATE runs SET status = 'cancelling' WHERE run_id = 'already-cancelling'`);
-    const wedgedP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
-      instance,
-      "wedged"
+    sql.exec(
+      `UPDATE runs SET status = 'cancelling' WHERE run_id = 'already-cancelling'`,
     );
+    const wedgedP = priv<(id: string) => Promise<RunResult>>(
+      instance,
+      "executeRun",
+    ).call(instance, "wedged");
     wedgedP.catch(() => undefined);
     const { signal } = await wedgeStarted; // the wedged run now occupies runChain
     let releaseCleanup!: () => void;
     let announceCleanup!: () => void;
-    const cleanupStarted = new Promise<void>((resolve) => (announceCleanup = resolve));
+    const cleanupStarted = new Promise<void>(
+      (resolve) => (announceCleanup = resolve),
+    );
     const cleanup = vi.fn(
       () =>
         new Promise<void>((resolve) => {
           announceCleanup();
           releaseCleanup = resolve;
-        })
+        }),
     );
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-      "wedged",
-      new Set([cleanup])
-    );
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set("wedged", new Set([cleanup]));
 
     // Seed user table + a fake scope table so we can assert resetLocked wiped them.
     sql.exec(`CREATE TABLE IF NOT EXISTS user_data (k TEXT)`);
@@ -2187,9 +2537,10 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     // 2) forceReset: cancel non-terminal runs, abort in-flight, REPLACE runChain, resetLocked NOW.
     const chainBefore = priv<Promise<unknown>>(instance, "runChain");
-    const forcePromise = priv<() => Promise<{ ok: boolean }>>(instance, "forceReset").call(
-      instance
-    );
+    const forcePromise = priv<() => Promise<{ ok: boolean }>>(
+      instance,
+      "forceReset",
+    ).call(instance);
     await cleanupStarted;
     expect(cleanup).toHaveBeenCalledOnce();
     expect(signal?.aborted).toBe(true);
@@ -2198,11 +2549,15 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(forceRet).toEqual({ ok: true });
 
     // The wedged run was CAS'd to cancelled and aborted (so it unwinds rather than leaking forever).
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'wedged'`).toArray()[0]).toMatchObject({
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'wedged'`).toArray()[0],
+    ).toMatchObject({
       status: "cancelled",
     });
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'already-cancelling'`).toArray()[0]
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'already-cancelling'`)
+        .toArray()[0],
     ).toMatchObject({ status: "cancelled" });
     const wedgedResult = await wedgedP;
     expect(wedgedResult.success).toBe(false);
@@ -2236,14 +2591,16 @@ describe("EvalDO cancellation + forced recovery", () => {
     })();
     setPriv(instance, "runLocked", fresh);
     seedPendingRun(sql, "after");
-    const afterP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const afterP = priv<(id: string) => Promise<RunResult>>(
       instance,
-      "after"
-    );
+      "executeRun",
+    ).call(instance, "after");
     await freshStarted; // proves the new run actually ran (did not hang behind the wedged chain)
     const afterResult = await afterP;
     expect(afterResult).toMatchObject({ success: true, console: "ok" });
-    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'after'`).toArray()[0]).toMatchObject({
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'after'`).toArray()[0],
+    ).toMatchObject({
       status: "done",
     });
   });
@@ -2251,12 +2608,16 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("reconciles a stale cancelling row as terminal cancellation after restart", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "stale-cancelling");
-    sql.exec(`UPDATE runs SET status = 'cancelling' WHERE run_id = 'stale-cancelling'`);
+    sql.exec(
+      `UPDATE runs SET status = 'cancelling' WHERE run_id = 'stale-cancelling'`,
+    );
 
     priv<() => void>(instance, "reconcileOrphanedRuns").call(instance);
 
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'stale-cancelling'`).toArray()[0]
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'stale-cancelling'`)
+        .toArray()[0],
     ).toMatchObject({ status: "cancelled" });
   });
 
@@ -2264,7 +2625,10 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
     mockOwnedCall(instance, lifecycleCall);
-    await instance.acquireKernelLease({ leaseId: "finite-kernel", idleMs: 60_000 });
+    await instance.acquireKernelLease({
+      leaseId: "finite-kernel",
+      idleMs: 60_000,
+    });
     await instance.attachKernelLeaseHolder("finite-kernel");
     const held = instance.holdKernelLease("finite-kernel");
     seedPendingRun(sql, "finite");
@@ -2272,7 +2636,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       `INSERT INTO run_progress (run_id, progress, updated_at) VALUES (?, ?, ?)`,
       "finite",
       JSON.stringify({ running: true }),
-      Date.now()
+      Date.now(),
     );
     setPriv(instance, "engine", { loaded: true });
     setPriv(instance, "runtimeSupport", { loaded: true });
@@ -2282,7 +2646,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       gatewayToken: "secret",
     });
     setPriv(instance, "moduleMap", { package: { loaded: true } });
-    priv<Record<string, unknown>>(instance, "isolateModuleMap")["package"] = { loaded: true };
+    priv<Record<string, unknown>>(instance, "isolateModuleMap")["package"] = {
+      loaded: true,
+    };
 
     await expect(
       instance.releaseForLifecycle({
@@ -2290,18 +2656,25 @@ describe("EvalDO cancellation + forced recovery", () => {
         mode: "retire",
         reason: "test",
         deadlineMs: 0,
-      })
+      }),
     ).resolves.toEqual({ status: "ready" });
-    await expect(held).resolves.toEqual({ leaseId: "finite-kernel", reason: "released" });
+    await expect(held).resolves.toEqual({
+      leaseId: "finite-kernel",
+      reason: "released",
+    });
 
-    expect(sql.exec(`SELECT COUNT(*) AS count FROM runs`).toArray()[0]).toMatchObject({ count: 1 });
-    await expect(instance.startRun({ runId: "finite", code: "return 1" })).rejects.toThrow(
-      "execution namespace is retired"
-    );
-    await expect(instance.startRun({ runId: "new", code: "return 2" })).rejects.toThrow(
-      "execution namespace is retired"
-    );
-    expect(sql.exec(`SELECT COUNT(*) AS count FROM run_progress`).toArray()[0]).toMatchObject({
+    expect(
+      sql.exec(`SELECT COUNT(*) AS count FROM runs`).toArray()[0],
+    ).toMatchObject({ count: 1 });
+    await expect(
+      instance.startRun({ runId: "finite", code: "return 1" }),
+    ).rejects.toThrow("execution namespace is retired");
+    await expect(
+      instance.startRun({ runId: "new", code: "return 2" }),
+    ).rejects.toThrow("execution namespace is retired");
+    expect(
+      sql.exec(`SELECT COUNT(*) AS count FROM run_progress`).toArray()[0],
+    ).toMatchObject({
       count: 1,
     });
     expect(priv(instance, "engine")).toBeNull();
@@ -2309,12 +2682,14 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(priv(instance, "portableHelpers")).toBeNull();
     expect(priv(instance, "hostedRuntimeIdentity")).toBeNull();
     expect(priv(instance, "moduleMap")).toEqual({});
-    expect(Object.keys(priv(instance, "isolateModuleMap"))).toEqual(["node:async_hooks"]);
+    expect(Object.keys(priv(instance, "isolateModuleMap"))).toEqual([
+      "node:async_hooks",
+    ]);
     expect(lifecycleCall).toHaveBeenLastCalledWith(
       "main",
       "workspace-state.lifecycleLeaseClear",
       [expect.any(Object)],
-      undefined
+      undefined,
     );
   });
 
@@ -2326,21 +2701,40 @@ describe("EvalDO cancellation + forced recovery", () => {
     }> = [];
     const fakeRpc = {
       selfId: "do:test:EvalDO:test-key",
-      call: vi.fn((_target: string, method: string, _args: unknown[], options?: RpcCallOptions) => {
-        calls.push({ method, options });
-        return Promise.resolve("ok");
-      }),
+      call: vi.fn(
+        (
+          _target: string,
+          method: string,
+          _args: unknown[],
+          options?: RpcCallOptions,
+        ) => {
+          calls.push({ method, options });
+          return Promise.resolve("ok");
+        },
+      ),
       stream: vi.fn(
-        (_target: string, method: string, _args: unknown[], options?: RpcCallOptions) => {
+        (
+          _target: string,
+          method: string,
+          _args: unknown[],
+          options?: RpcCallOptions,
+        ) => {
           calls.push({ method, options });
           return Promise.resolve(new Response("service proof"));
-        }
+        },
       ),
       streamReadable: vi.fn(),
-      emit: vi.fn((_target: string, event: string, _payload: unknown, options?: RpcCallOptions) => {
-        calls.push({ method: event, options });
-        return Promise.resolve();
-      }),
+      emit: vi.fn(
+        (
+          _target: string,
+          event: string,
+          _payload: unknown,
+          options?: RpcCallOptions,
+        ) => {
+          calls.push({ method: event, options });
+          return Promise.resolve();
+        },
+      ),
       on: vi.fn(() => vi.fn()),
       expose: vi.fn(),
       exposeAll: vi.fn(),
@@ -2359,8 +2753,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     mockOwnedCall(instance, fakeRpc.call);
     mockOwnedStream(instance, fakeRpc.stream);
     mockOwnedEmit(instance, fakeRpc.emit);
-    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
-      "@workspace/runtime";
+    (instance as unknown as { env: Record<string, unknown> }).env[
+      "EVAL_RUNTIME_SOURCE"
+    ] = "@workspace/runtime";
     setPriv(instance, "portableHelpers", { journal: { current: () => null } });
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
@@ -2374,7 +2769,9 @@ describe("EvalDO cancellation + forced recovery", () => {
         createRuntimeScopeRehydrators: () => ({}),
         createGatewayFetch: (config: { rpc?: Pick<RpcClient, "stream"> }) => {
           if (!config.rpc)
-            throw new Error("Sandbox gateway requires an authenticated RPC transport");
+            throw new Error(
+              "Sandbox gateway requires an authenticated RPC transport",
+            );
           const rpc = config.rpc;
           return (path: string) =>
             rpc.stream("main", mainRpcMethod("gateway.fetch"), [
@@ -2386,7 +2783,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         createServicesProxy: () => ({}),
         createAttachedHostsApi: () => ({}),
         createWorkerdClient: () => ({}),
-      })
+      }),
     );
     const fakeScope = {
       current: {},
@@ -2412,7 +2809,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         SqlScopePersistence: class SqlScopePersistence {},
         executeSandbox: async (
           code: string,
-          options: { bindings: Record<string, unknown>; signal?: AbortSignal }
+          options: { bindings: Record<string, unknown>; signal?: AbortSignal },
         ) => {
           const rpc = options.bindings["rpc"] as RpcClient;
           runSignals.set(code, options.signal);
@@ -2425,18 +2822,24 @@ describe("EvalDO cancellation + forced recovery", () => {
               .call["run-a-after-b-started"]();
             calledA();
           } else {
-            await rpc.call("main", testProbeRpcMethods["run-b-before-a-resumes"], []);
+            await rpc.call(
+              "main",
+              testProbeRpcMethods["run-b-before-a-resumes"],
+              [],
+            );
             startB();
             await bResumed;
             await rpc.peer("main").emit("run-b-after-a-finished", {});
             const gatewayFetch = options.bindings["gatewayFetch"] as (
-              path: string
+              path: string,
             ) => Promise<Response>;
-            expect(await (await gatewayFetch("/service-proof")).text()).toBe("service proof");
+            expect(await (await gatewayFetch("/service-proof")).text()).toBe(
+              "service proof",
+            );
           }
           return { success: true, consoleOutput: "", returnValue: code };
         },
-      })
+      }),
     );
 
     const causeA = {
@@ -2462,13 +2865,17 @@ describe("EvalDO cancellation + forced recovery", () => {
     await Promise.race([
       aStarted,
       runA.then((result) => {
-        throw new Error(`Run A settled before sandbox readiness: ${JSON.stringify(result)}`);
+        throw new Error(
+          `Run A settled before sandbox readiness: ${JSON.stringify(result)}`,
+        );
       }),
     ]);
 
     // A ignores its abort and remains suspended. forceReset therefore orphans
     // its chain, allowing B to begin with a different immutable context.
-    await priv<() => Promise<{ ok: boolean }>>(instance, "forceReset").call(instance);
+    await priv<() => Promise<{ ok: boolean }>>(instance, "forceReset").call(
+      instance,
+    );
     await instance.startRun({
       runId: "run-b",
       code: "B",
@@ -2481,7 +2888,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     await Promise.race([
       bStarted,
       runB.then((result) => {
-        throw new Error(`Run B settled before sandbox readiness: ${JSON.stringify(result)}`);
+        throw new Error(
+          `Run B settled before sandbox readiness: ${JSON.stringify(result)}`,
+        );
       }),
     ]);
 
@@ -2489,7 +2898,10 @@ describe("EvalDO cancellation + forced recovery", () => {
     await aCalled;
     await runA;
     resumeB();
-    await expect(runB).resolves.toMatchObject({ success: true, returnValue: "B" });
+    await expect(runB).resolves.toMatchObject({
+      success: true,
+      returnValue: "B",
+    });
 
     const aSignal = runSignals.get("A");
     const bSignal = runSignals.get("B");
@@ -2505,7 +2917,11 @@ describe("EvalDO cancellation + forced recovery", () => {
       readOnly: true,
       signal: aSignal,
     });
-    for (const method of ["run-b-before-a-resumes", "run-b-after-a-finished", "gateway.fetch"]) {
+    for (const method of [
+      "run-b-before-a-resumes",
+      "run-b-after-a-finished",
+      "gateway.fetch",
+    ]) {
       const options = byMethod.get(method);
       expect(options).toMatchObject({ causalParent: causeB, signal: bSignal });
       expect(options?.readOnly).toBeUndefined();
@@ -2514,20 +2930,30 @@ describe("EvalDO cancellation + forced recovery", () => {
 
   it("borrows the current admission for cached scope persistence without guest effect context", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
-    const scopeOperations: Array<{ method: string; options: RpcCallOptions | undefined }> = [];
+    const scopeOperations: Array<{
+      method: string;
+      options: RpcCallOptions | undefined;
+    }> = [];
     const fakeRpc = {
       selfId: "do:test:EvalDO:test-key",
-      call: vi.fn((_target: string, method: string, _args: unknown[], options?: RpcCallOptions) => {
-        if (method === "blobstore.getText") {
-          scopeOperations.push({ method, options });
-          return Promise.resolve("{}");
-        }
-        if (method === "blobstore.putText") {
-          scopeOperations.push({ method, options });
-          return Promise.resolve({ digest: "a".repeat(64), size: 2 });
-        }
-        return Promise.resolve(null);
-      }),
+      call: vi.fn(
+        (
+          _target: string,
+          method: string,
+          _args: unknown[],
+          options?: RpcCallOptions,
+        ) => {
+          if (method === "blobstore.getText") {
+            scopeOperations.push({ method, options });
+            return Promise.resolve("{}");
+          }
+          if (method === "blobstore.putText") {
+            scopeOperations.push({ method, options });
+            return Promise.resolve({ digest: "a".repeat(64), size: 2 });
+          }
+          return Promise.resolve(null);
+        },
+      ),
       stream: vi.fn(),
       streamReadable: vi.fn(),
       emit: vi.fn(() => Promise.resolve()),
@@ -2548,8 +2974,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     };
     mockOwnedCall(instance, fakeRpc.call);
     mockOwnedEmit(instance, fakeRpc.emit);
-    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
-      "@workspace/runtime";
+    (instance as unknown as { env: Record<string, unknown> }).env[
+      "EVAL_RUNTIME_SOURCE"
+    ] = "@workspace/runtime";
     setPriv(instance, "portableHelpers", { journal: { current: () => null } });
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
@@ -2566,11 +2993,14 @@ describe("EvalDO cancellation + forced recovery", () => {
         createServicesProxy: () => ({}),
         createAttachedHostsApi: () => ({}),
         createWorkerdClient: () => ({}),
-      })
+      }),
     );
 
     let persistenceBackend:
-      | { putText(value: string): Promise<unknown>; getText(digest: string): Promise<unknown> }
+      | {
+          putText(value: string): Promise<unknown>;
+          getText(digest: string): Promise<unknown>;
+        }
       | undefined;
     let managerConstructions = 0;
     let retainedScopes: { save(): Promise<void> } | undefined;
@@ -2585,7 +3015,7 @@ describe("EvalDO cancellation + forced recovery", () => {
           backend: {
             putText(value: string): Promise<unknown>;
             getText(digest: string): Promise<unknown>;
-          }
+          },
         ) {
           this.backend = backend;
           persistenceBackend = backend;
@@ -2596,7 +3026,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       },
       ScopeManager: class {
         readonly current: Record<string, unknown> = {};
-        apiFrom(resolvePersistence: () => { putBlob(value: string): Promise<void> }): {
+        apiFrom(
+          resolvePersistence: () => { putBlob(value: string): Promise<void> },
+        ): {
           save(): Promise<void>;
         } {
           return { save: () => resolvePersistence().putBlob("{}") };
@@ -2611,11 +3043,16 @@ describe("EvalDO cancellation + forced recovery", () => {
         async exitEval(): Promise<void> {
           await persistenceBackend!.putText("{}");
         }
-        async persist(persistence: { putBlob(value: string): Promise<void> }): Promise<void> {
+        async persist(persistence: {
+          putBlob(value: string): Promise<void>;
+        }): Promise<void> {
           await persistence.putBlob("{}");
         }
       },
-      executeSandbox: async (_code: string, options: { bindings: Record<string, unknown> }) => {
+      executeSandbox: async (
+        _code: string,
+        options: { bindings: Record<string, unknown> },
+      ) => {
         const scopes = options.bindings["scopes"] as { save(): Promise<void> };
         if (retainedScopes) await retainedScopes.save();
         else retainedScopes = scopes;
@@ -2640,7 +3077,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         readOnly: true,
       },
       controllerA.signal,
-      "run-a"
+      "run-a",
     );
     controllerA.abort();
 
@@ -2653,7 +3090,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         executionSessionNonce: "session-scope-b-123456",
       },
       controllerB.signal,
-      "run-b"
+      "run-b",
     );
 
     seedPendingRun(sql, "run-cleanup-persist", {
@@ -2667,10 +3104,10 @@ describe("EvalDO cancellation + forced recovery", () => {
       readOnly: true,
     });
     setPriv(instance, "engine", engine);
-    await priv<(runId: string) => Promise<void>>(instance, "persistRunScope").call(
+    await priv<(runId: string) => Promise<void>>(
       instance,
-      "run-cleanup-persist"
-    );
+      "persistRunScope",
+    ).call(instance, "run-cleanup-persist");
 
     expect(managerConstructions).toBe(1);
     expect(scopeOperations.map(({ method }) => method)).toEqual([
@@ -2680,7 +3117,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       "blobstore.putText",
       "blobstore.putText",
     ]);
-    expect(scopeOperations.map(({ options }) => executionSessionNonceFor(options))).toEqual([
+    expect(
+      scopeOperations.map(({ options }) => executionSessionNonceFor(options)),
+    ).toEqual([
       "session-scope-a-123456",
       "session-scope-a-123456",
       "session-scope-b-123456",
@@ -2698,20 +3137,31 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "cleanup-failure");
     sql.exec(`CREATE TABLE IF NOT EXISTS user_cleanup_probe (value TEXT)`);
-    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+    priv<Map<string, Set<() => Promise<void>>>>(
+      instance,
+      "runCancelHandlers",
+    ).set(
       "cleanup-failure",
-      new Set([async () => Promise.reject(new Error("cleanup failed"))])
+      new Set([async () => Promise.reject(new Error("cleanup failed"))]),
     );
 
     await expect(
-      priv<() => Promise<{ ok: boolean }>>(instance, "forceReset").call(instance)
+      priv<() => Promise<{ ok: boolean }>>(instance, "forceReset").call(
+        instance,
+      ),
     ).rejects.toThrow(/cancellation cleanup failed during force reset/i);
 
     expect(
-      sql.exec(`SELECT name FROM sqlite_master WHERE name = 'user_cleanup_probe'`).toArray()
+      sql
+        .exec(
+          `SELECT name FROM sqlite_master WHERE name = 'user_cleanup_probe'`,
+        )
+        .toArray(),
     ).toEqual([]);
     expect(
-      sql.exec(`SELECT status FROM runs WHERE run_id = 'cleanup-failure'`).toArray()[0]
+      sql
+        .exec(`SELECT status FROM runs WHERE run_id = 'cleanup-failure'`)
+        .toArray()[0],
     ).toMatchObject({ status: "cancelled" });
   });
 
@@ -2773,7 +3223,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       runDigest: first.runDigest,
     });
     expect(
-      sql.exec(`SELECT name FROM sqlite_master WHERE name='user_after_insert'`).toArray()
+      sql
+        .exec(`SELECT name FROM sqlite_master WHERE name='user_after_insert'`)
+        .toArray(),
     ).toHaveLength(1);
   });
 
@@ -2807,52 +3259,79 @@ describe("EvalDO cancellation + forced recovery", () => {
       setPriv(instance, "ensureRuntimeSupport", async () => support);
       const active = priv<{ run<T>(execution: unknown, callback: () => T): T }>(
         instance,
-        "activeEvalExecution"
+        "activeEvalExecution",
       );
-      setPriv(instance, "runLocked", async (_args: unknown, signal: AbortSignal, runId: string) => {
-        priv<(support: unknown, context: string, parent: null, journal: () => void) => unknown>(
-          instance,
-          "createEvalPanelRuntime"
-        ).call(instance, support, "ctx", null, () => {});
-        const open = ownerOptions["onOpen"] as (entry: unknown) => void;
-        const claim = ownerOptions["claimPanelLifetime"] as (entry: unknown) => void;
-        active.run({ runId, signal, contextId: "ctx" }, () => {
-          for (const lifetime of ["invocation", "session"] as const) {
-            open({ id: lifetime, source: "panels/example", kind: "workspace" });
-            claim({ id: lifetime, lifetime });
-          }
-        });
-        if (outcome === "cancel") {
-          let markUnwound!: () => void;
-          const unwound = new Promise<void>((resolve) => {
-            markUnwound = resolve;
-          });
-          priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
-            runId,
-            new Set([
-              async () => {
-                await unwound;
-                expect(
-                  priv<Map<string, unknown>>(instance, "openPanelResources").has("invocation")
-                ).toBe(true);
-              },
-            ])
+      setPriv(
+        instance,
+        "runLocked",
+        async (_args: unknown, signal: AbortSignal, runId: string) => {
+          priv<
+            (
+              support: unknown,
+              context: string,
+              parent: null,
+              journal: () => void,
+            ) => unknown
+          >(instance, "createEvalPanelRuntime").call(
+            instance,
+            support,
+            "ctx",
+            null,
+            () => {},
           );
-          return new Promise<RunResult>((_resolve, reject) => {
-            signal.addEventListener(
-              "abort",
-              () => {
-                reject(signal.reason);
-                markUnwound();
-              },
-              { once: true }
-            );
-            markStarted();
+          const open = ownerOptions["onOpen"] as (entry: unknown) => void;
+          const claim = ownerOptions["claimPanelLifetime"] as (
+            entry: unknown,
+          ) => void;
+          active.run({ runId, signal, contextId: "ctx" }, () => {
+            for (const lifetime of ["invocation", "session"] as const) {
+              open({
+                id: lifetime,
+                source: "panels/example",
+                kind: "workspace",
+              });
+              claim({ id: lifetime, lifetime });
+            }
           });
-        }
-        if (outcome === "failure") throw new Error("Guest failed after panel commit");
-        return { success: true, console: "" };
-      });
+          if (outcome === "cancel") {
+            let markUnwound!: () => void;
+            const unwound = new Promise<void>((resolve) => {
+              markUnwound = resolve;
+            });
+            priv<Map<string, Set<() => Promise<void>>>>(
+              instance,
+              "runCancelHandlers",
+            ).set(
+              runId,
+              new Set([
+                async () => {
+                  await unwound;
+                  expect(
+                    priv<Map<string, unknown>>(
+                      instance,
+                      "openPanelResources",
+                    ).has("invocation"),
+                  ).toBe(true);
+                },
+              ]),
+            );
+            return new Promise<RunResult>((_resolve, reject) => {
+              signal.addEventListener(
+                "abort",
+                () => {
+                  reject(signal.reason);
+                  markUnwound();
+                },
+                { once: true },
+              );
+              markStarted();
+            });
+          }
+          if (outcome === "failure")
+            throw new Error("Guest failed after panel commit");
+          return { success: true, console: "" };
+        },
+      );
       seedPendingRun(sql, "owned-panels", { code: "open panels" });
       const running = instance.executeRun("owned-panels");
       if (outcome === "cancel") {
@@ -2862,7 +3341,10 @@ describe("EvalDO cancellation + forced recovery", () => {
       const result = await running;
       expect(result.success).toBe(outcome === "success");
       expect(archived).toEqual(["invocation"]);
-      const resources = priv<Map<string, unknown>>(instance, "openPanelResources");
+      const resources = priv<Map<string, unknown>>(
+        instance,
+        "openPanelResources",
+      );
       expect([...resources.keys()]).toEqual(["session"]);
       // The ownership survives cold hydration and planned suspension.
       resources.clear();
@@ -2883,12 +3365,15 @@ describe("EvalDO cancellation + forced recovery", () => {
       });
       expect(archived).toEqual(["invocation", "session"]);
       expect(resources.size).toBe(0);
-    }
+    },
   );
 
   it("propagates panel retirement failure and keeps ownership until cleanup succeeds", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
-    const resources = priv<Map<string, unknown>>(instance, "openPanelResources");
+    const resources = priv<Map<string, unknown>>(
+      instance,
+      "openPanelResources",
+    );
     let fail = true;
     setPriv(instance, "clearLifecycleRelease", async () => {});
     setPriv(instance, "ensureRuntimeSupport", async () => ({
@@ -2914,7 +3399,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     seedPendingRun(sql, "cleanup-failed", { code: "open panel" });
     const result = await instance.executeRun("cleanup-failed");
     expect(result.success).toBe(false);
-    expect(result.error).toContain("panel lifetime cleanup failed");
+    expect(JSON.stringify(result.error)).toContain(
+      "panel lifetime cleanup failed",
+    );
     expect(resources.has("owned")).toBe(true);
     await expect(
       instance.releaseForLifecycle({
@@ -2922,7 +3409,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         mode: "retire",
         reason: "test",
         deadlineMs: 0,
-      })
+      }),
     ).rejects.toThrow("panel lifetime cleanup failed");
     expect(resources.has("owned")).toBe(true);
     fail = false;
@@ -2937,7 +3424,10 @@ describe("EvalDO cancellation + forced recovery", () => {
 
   it("propagates owned panel cleanup failure to the cancellation owner", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
-    const resources = priv<Map<string, unknown>>(instance, "openPanelResources");
+    const resources = priv<Map<string, unknown>>(
+      instance,
+      "openPanelResources",
+    );
     const { runLocked, started } = blockUntilAborted();
     setPriv(instance, "runLocked", runLocked);
     setPriv(instance, "ensureRuntimeSupport", async () => ({
@@ -2960,18 +3450,28 @@ describe("EvalDO cancellation + forced recovery", () => {
       runId: "cancel-owned-panel",
     });
     await expect(instance.cancel("cancel-owned-panel")).rejects.toThrow(
-      "Owned entity retirement failed"
+      "Owned entity retirement failed",
     );
-    await expect(running).resolves.toMatchObject({ success: false, failureKind: "cancelled" });
+    await expect(running).resolves.toMatchObject({
+      success: false,
+      failureKind: "cancelled",
+    });
     expect(resources.has("owned")).toBe(true);
-    expect(sql.exec("SELECT status FROM runs WHERE run_id = 'cancel-owned-panel'").one()).toEqual({
+    expect(
+      sql
+        .exec("SELECT status FROM runs WHERE run_id = 'cancel-owned-panel'")
+        .one(),
+    ).toEqual({
       status: "cancelled",
     });
   });
 
   it("drains interrupted invocation panel ownership before the next cell", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
-    const resources = priv<Map<string, unknown>>(instance, "openPanelResources");
+    const resources = priv<Map<string, unknown>>(
+      instance,
+      "openPanelResources",
+    );
     resources.set("interrupted", {
       id: "interrupted",
       source: "panel",
@@ -2994,13 +3494,18 @@ describe("EvalDO cancellation + forced recovery", () => {
       return { success: true, console: "" };
     });
     seedPendingRun(sql, "next-cell");
-    await expect(instance.executeRun("next-cell")).resolves.toMatchObject({ success: true });
+    await expect(instance.executeRun("next-cell")).resolves.toMatchObject({
+      success: true,
+    });
     expect(resources.size).toBe(0);
   });
 
   it("keeps a failed panel owner when a later owned panel archives successfully", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
-    const resources = priv<Map<string, unknown>>(instance, "openPanelResources");
+    const resources = priv<Map<string, unknown>>(
+      instance,
+      "openPanelResources",
+    );
     const archived: string[] = [];
     let failFirst = true;
     setPriv(instance, "clearLifecycleRelease", async () => {});
@@ -3039,7 +3544,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     const result = await instance.executeRun("multi-owned-panels");
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("First panel retirement failed");
+    expect(JSON.stringify(result.error)).toContain(
+      "First panel retirement failed",
+    );
     expect(archived).toEqual(["first", "second"]);
     expect([...resources.keys()]).toEqual(["first"]);
 
@@ -3067,20 +3574,28 @@ describe("EvalDO cancellation + forced recovery", () => {
         const rpc = options["rpc"] as Pick<RpcCaller, "call">;
         return {
           getPanelHandle: (id: string): Handle => ({
-            rebuild: () => rpc.call("main", testProbeRpcMethods["panel.rebuild"], [id]),
+            rebuild: () =>
+              rpc.call("main", testProbeRpcMethods["panel.rebuild"], [id]),
           }),
         };
       },
-      createRuntimeScopeRehydrators: (lookup: (id: string) => unknown) => ({ panel: lookup }),
+      createRuntimeScopeRehydrators: (lookup: (id: string) => unknown) => ({
+        panel: lookup,
+      }),
     };
     setPriv(instance, "ensureRuntimeSupport", async () => support);
     const engine = {
       ScopeManager: class {
         current: Record<string, unknown> = {};
-        constructor(private options: { rehydrators: Record<string, (id: string) => unknown> }) {}
+        constructor(
+          private options: {
+            rehydrators: Record<string, (id: string) => unknown>;
+          },
+        ) {}
         async hydrate(input: unknown) {
           expect(input).toBe(persistence);
-          this.current["handle"] = this.options.rehydrators["panel"]!("tree/saved");
+          this.current["handle"] =
+            this.options.rehydrators["panel"]!("tree/saved");
           return { restored: ["handle"], lost: [] };
         }
       },
@@ -3090,22 +3605,30 @@ describe("EvalDO cancellation + forced recovery", () => {
         engine: unknown,
         generation: number,
         persistence: unknown,
-        execution: unknown
+        execution: unknown,
       ) => Promise<{ current: Record<string, unknown> }>
-    >(instance, "ensureScopeManager").call(instance, engine, 0, persistence, maintenance);
+    >(instance, "ensureScopeManager").call(
+      instance,
+      engine,
+      0,
+      persistence,
+      maintenance,
+    );
     const handle = manager.current["handle"] as Handle;
     expect(maintenanceRpc.call).not.toHaveBeenCalled();
     await expect(handle.rebuild()).rejects.toThrow(/actively executing/);
     const active = priv<{ run<T>(execution: unknown, callback: () => T): T }>(
       instance,
-      "activeEvalExecution"
+      "activeEvalExecution",
     );
-    await expect(active.run(execution, () => handle.rebuild())).resolves.toBe("active-run");
+    await expect(active.run(execution, () => handle.rebuild())).resolves.toBe(
+      "active-run",
+    );
     expect(runRpc.call).toHaveBeenCalledExactlyOnceWith(
       "main",
       "panel.rebuild",
       ["tree/saved"],
-      undefined
+      undefined,
     );
     expect(maintenanceRpc.call).not.toHaveBeenCalled();
   });
@@ -3117,7 +3640,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const rpcA = { call: vi.fn(async () => "cell-a") };
     const rpcB = {
       call: vi.fn(async (_target: string, method: string) =>
-        method === "fs.exists" ? true : "cell-b"
+        method === "fs.exists" ? true : "cell-b",
       ),
     };
     let retainedLoadModule!: (id: string) => Promise<unknown>;
@@ -3138,14 +3661,20 @@ describe("EvalDO cancellation + forced recovery", () => {
     };
     const support = {
       createPanelRuntime: (options: Record<string, unknown>) => {
-        retainedLoadModule = options["loadModule"] as (id: string) => Promise<unknown>;
+        retainedLoadModule = options["loadModule"] as (
+          id: string,
+        ) => Promise<unknown>;
         recordOperation = options["recordOperation"] as typeof recordOperation;
         const retainedRpc = options["rpc"] as Pick<RpcCaller, "call">;
         return {
           getPanelHandle: () => ({
             cdp: { session: () => retainedLoadModule("@workspace/cdp-client") },
             rebuild: () =>
-              retainedRpc.call("main", testPanelRebuildRpcMethods["panel.rebuild"], []),
+              retainedRpc.call(
+                "main",
+                testPanelRebuildRpcMethods["panel.rebuild"],
+                [],
+              ),
           }),
         };
       },
@@ -3153,7 +3682,9 @@ describe("EvalDO cancellation + forced recovery", () => {
         expect(host["recordOperation"]).toBe(recordOperation);
         return {
           getPanelHandle: (id: string) =>
-            (host["panelRuntime"] as { getPanelHandle(id: string): unknown }).getPanelHandle(id),
+            (
+              host["panelRuntime"] as { getPanelHandle(id: string): unknown }
+            ).getPanelHandle(id),
         };
       },
       createRuntimeSelfHandle: () => ({}),
@@ -3175,7 +3706,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         support: unknown,
         execution: unknown,
         gatewayToken: string,
-        parent: null
+        parent: null,
       ) => {
         getPanelHandle(id: string): {
           cdp: { session(): Promise<unknown> };
@@ -3187,7 +3718,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       support,
       executionA,
       "gateway-token",
-      null
+      null,
     );
     const retainedHandle = runtime.getPanelHandle("panel:tree/retained");
     const receipt = {
@@ -3196,22 +3727,31 @@ describe("EvalDO cancellation + forced recovery", () => {
       receipt: { delivery: "dispatched" },
     };
     expect(() => recordOperation(receipt)).toThrow(/actively executing/);
-    await expect(retainedHandle.cdp.session()).rejects.toThrow(/actively executing/);
-    await expect(retainedHandle.rebuild()).rejects.toThrow(/actively executing/);
+    await expect(retainedHandle.cdp.session()).rejects.toThrow(
+      /actively executing/,
+    );
+    await expect(retainedHandle.rebuild()).rejects.toThrow(
+      /actively executing/,
+    );
     const activeExecution = priv<{
       run<T>(store: unknown, callback: () => T): T;
     }>(instance, "activeEvalExecution");
     activeExecution.run(executionB, () => recordOperation(receipt));
     expect(journalA.append).not.toHaveBeenCalled();
     expect(journalB.append).toHaveBeenCalledExactlyOnceWith(receipt);
-    await expect(activeExecution.run(executionB, () => retainedHandle.cdp.session())).resolves.toBe(
-      loaded
-    );
-    await expect(activeExecution.run(executionB, () => retainedHandle.rebuild())).resolves.toBe(
-      "cell-b"
-    );
+    await expect(
+      activeExecution.run(executionB, () => retainedHandle.cdp.session()),
+    ).resolves.toBe(loaded);
+    await expect(
+      activeExecution.run(executionB, () => retainedHandle.rebuild()),
+    ).resolves.toBe("cell-b");
     expect(rpcA.call).not.toHaveBeenCalled();
-    expect(rpcB.call).toHaveBeenCalledWith("main", "panel.rebuild", [], undefined);
+    expect(rpcB.call).toHaveBeenCalledWith(
+      "main",
+      "panel.rebuild",
+      [],
+      undefined,
+    );
     expect(loadLibraryModule).toHaveBeenCalledOnce();
   });
 
@@ -3220,7 +3760,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const rpcA = { call: vi.fn(async () => "cell-a") };
     const rpcB = {
       call: vi.fn(async (_target: string, method: string) =>
-        method === "fs.exists" ? true : "cell-b"
+        method === "fs.exists" ? true : "cell-b",
       ),
     };
     const openA = vi.fn(async () => ({ openedBy: "cell-a" }));
@@ -3247,7 +3787,10 @@ describe("EvalDO cancellation + forced recovery", () => {
       createRuntimeScopeRehydrators: () => ({}),
       createGatewayFetch: () => () => undefined,
       createRpcFs: (rpc: Pick<RpcCaller, "call">) => ({
-        exists: () => rpc.call("main", mainRpcMethod("fs.exists"), ["workers/vibe-board-agent"]),
+        exists: () =>
+          rpc.call("main", mainRpcMethod("fs.exists"), [
+            "workers/vibe-board-agent",
+          ]),
       }),
       createRuntimeParentHandle: () => null,
       createWorkerdClient: () => ({}),
@@ -3257,7 +3800,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         support: unknown,
         execution: unknown,
         gatewayToken: string,
-        parent: null
+        parent: null,
       ) => {
         fs: { exists(): Promise<unknown> };
         openExternal(url: string): Promise<unknown>;
@@ -3267,16 +3810,20 @@ describe("EvalDO cancellation + forced recovery", () => {
       support,
       executionA,
       "gateway-token",
-      null
+      null,
     );
 
     await expect(runtime.fs.exists()).rejects.toThrow(/actively executing/);
     const activeExecution = priv<{
       run<T>(store: unknown, callback: () => T): T;
     }>(instance, "activeEvalExecution");
-    await expect(activeExecution.run(executionB, () => runtime.fs.exists())).resolves.toBe(true);
     await expect(
-      activeExecution.run(executionB, () => runtime.openExternal("https://example.test"))
+      activeExecution.run(executionB, () => runtime.fs.exists()),
+    ).resolves.toBe(true);
+    await expect(
+      activeExecution.run(executionB, () =>
+        runtime.openExternal("https://example.test"),
+      ),
     ).resolves.toEqual({ openedBy: "cell-b" });
 
     expect(rpcA.call).not.toHaveBeenCalled();
@@ -3285,7 +3832,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       "main",
       "fs.exists",
       ["workers/vibe-board-agent"],
-      undefined
+      undefined,
     );
     expect(openB).toHaveBeenCalledWith("https://example.test", undefined);
   });
@@ -3299,10 +3846,17 @@ describe("EvalDO cancellation + forced recovery", () => {
     const seenOptions: Array<{ method: string; options: unknown }> = [];
     const fakeRpc = {
       selfId: "do:test:EvalDO:test-key",
-      call: vi.fn((_target: string, method: string, _args: unknown[], options?: unknown) => {
-        seenOptions.push({ method, options });
-        return Promise.resolve("ok");
-      }),
+      call: vi.fn(
+        (
+          _target: string,
+          method: string,
+          _args: unknown[],
+          options?: unknown,
+        ) => {
+          seenOptions.push({ method, options });
+          return Promise.resolve("ok");
+        },
+      ),
       stream: vi.fn(),
       streamReadable: vi.fn(),
       emit: vi.fn(),
@@ -3323,8 +3877,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     // host bundle carries no static workspace imports. Declare the provider on
     // the env and stub the loaded module with minimal factories — the rt's
     // `rpc` is the host's option-threading proxy, which is what this test pins.
-    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
-      "@workspace/runtime";
+    (instance as unknown as { env: Record<string, unknown> }).env[
+      "EVAL_RUNTIME_SOURCE"
+    ] = "@workspace/runtime";
     setPriv(instance, "portableHelpers", { journal: { current: () => null } });
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
@@ -3341,7 +3896,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         createServicesProxy: () => ({}),
         createAttachedHostsApi: () => ({}),
         createWorkerdClient: () => ({}),
-      })
+      }),
     );
 
     // Stub the heavy engine path: capture the bindings, then invoke the eval's rpc binding ourselves.
@@ -3360,10 +3915,12 @@ describe("EvalDO cancellation + forced recovery", () => {
             bindings: Record<string, unknown>;
             moduleMap: Record<string, unknown>;
             require: (id: string) => unknown;
-          }
+          },
         ) => {
           expect(opts.moduleMap["node:async_hooks"]).toBeUndefined();
-          expect(() => opts.require("node:async_hooks")).toThrow(/not available in EvalDO/);
+          expect(() => opts.require("node:async_hooks")).toThrow(
+            /not available in EvalDO/,
+          );
           const rpcBinding = opts.bindings["rpc"] as Pick<RpcCaller, "call">;
           // Eval uses the same portable RpcClient call shape as panels/workers.
           await rpcBinding.call("main", testProbeRpcMethods["svc.method"], [], {
@@ -3377,7 +3934,7 @@ describe("EvalDO cancellation + forced recovery", () => {
           await rpcBinding.call("do:peer", testProbeRpcMethods.ping, []);
           return { success: true, consoleOutput: "", returnValue: undefined };
         },
-      })
+      }),
     );
     setPriv(instance, "ensureScopeManager", () => Promise.resolve(fakeScope));
 
@@ -3396,7 +3953,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         },
       },
       controller.signal,
-      "run-sig"
+      "run-sig",
     );
 
     // Both outbound calls carried the SAME run signal in their options.
@@ -3415,7 +3972,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     controller.abort(new Error("cancel test run"));
     for (const { options } of seenOptions) {
       expect((options as { signal?: AbortSignal }).signal?.aborted).toBe(true);
-      expect((options as { signal?: AbortSignal }).signal?.reason).toBe(controller.signal.reason);
+      expect((options as { signal?: AbortSignal }).signal?.reason).toBe(
+        controller.signal.reason,
+      );
     }
   });
 
@@ -3425,10 +3984,15 @@ describe("EvalDO cancellation + forced recovery", () => {
     const fakeRpc = {
       selfId: "do:test:EvalDO:test-key",
       call: vi.fn(
-        (_target: string, _method: string, _args: unknown[], options?: RpcCallOptions) => {
+        (
+          _target: string,
+          _method: string,
+          _args: unknown[],
+          options?: RpcCallOptions,
+        ) => {
           calls.push(options);
           return Promise.resolve(null);
-        }
+        },
       ),
       stream: vi.fn(),
       streamReadable: vi.fn(),
@@ -3449,13 +4013,21 @@ describe("EvalDO cancellation + forced recovery", () => {
       (
         input: { contextId: string; causalParent: null; readOnly: boolean },
         signal: AbortSignal,
-        cleanup: { active: boolean }
-      ) => { rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> } }
+        cleanup: { active: boolean },
+      ) => {
+        rpc: {
+          call(
+            target: string,
+            method: string,
+            args: unknown[],
+          ): Promise<unknown>;
+        };
+      }
     >(instance, "createExecutionContext").call(
       instance,
       { contextId: "ctx", causalParent: null, readOnly: false },
       controller.signal,
-      cleanupPhase
+      cleanupPhase,
     );
 
     await execution.rpc.call("main", "before", []);
@@ -3471,11 +4043,14 @@ describe("EvalDO cancellation + forced recovery", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { instance, sql } = await createTestDO(EvalDO);
     const call = vi.fn((_target: string, method: string) => {
-      if (method === "evalEventIngress.publish") return new Promise<never>(() => {});
+      if (method === "evalEventIngress.publish")
+        return new Promise<never>(() => {});
       return Promise.resolve(undefined);
     });
     mockOwnedCall(instance, call);
-    setPriv(instance, "runLocked", () => Promise.resolve({ success: true, console: "" }));
+    setPriv(instance, "runLocked", () =>
+      Promise.resolve({ success: true, console: "" }),
+    );
     seedPendingRun(sql, "hung-publisher", {
       code: "return 1;",
       contextId: "ctx",
@@ -3483,10 +4058,10 @@ describe("EvalDO cancellation + forced recovery", () => {
       eventSinkNonce: "sink-hung-123456",
     });
 
-    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const result = await priv<(id: string) => Promise<RunResult>>(
       instance,
-      "hung-publisher"
-    );
+      "executeRun",
+    ).call(instance, "hung-publisher");
 
     expect(result).toMatchObject({ success: true });
     expect(instance.getRun("hung-publisher")).toMatchObject({ status: "done" });
@@ -3494,7 +4069,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       "main",
       "evalEventIngress.publish",
       expect.anything(),
-      expect.anything()
+      expect.anything(),
     );
     warn.mockRestore();
   });
@@ -3502,18 +4077,19 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("retains a post-terminal authority decision and reports no activity for a terminal run", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "authority-terminal");
-    sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'authority-terminal'`);
+    sql.exec(
+      `UPDATE runs SET status = 'running' WHERE run_id = 'authority-terminal'`,
+    );
     instance.appendAuthorityEvent("authority-terminal", "authority-requested", {
       acquisitionId: "acq-9",
     });
-    const append = priv<(runId: string, kind: string, payload: unknown) => boolean>(
-      instance,
-      "appendRunEvent"
-    );
+    const append = priv<
+      (runId: string, kind: string, payload: unknown) => boolean
+    >(instance, "appendRunEvent");
     append.call(instance, "authority-terminal", "state", { status: "failed" });
     sql.exec(
       `UPDATE runs SET status = 'done', result = '{"success":false,"console":""}'
-        WHERE run_id = 'authority-terminal'`
+        WHERE run_id = 'authority-terminal'`,
     );
 
     // A terminal run whose LAST authority event is a request must not report a
@@ -3526,10 +4102,18 @@ describe("EvalDO cancellation + forced recovery", () => {
       decision: "deny",
     });
     // …while ordinary post-terminal events stay absorbed.
-    expect(append.call(instance, "authority-terminal", "progress", { step: 1 })).toBe(false);
-    expect(append.call(instance, "authority-terminal", "state", { status: "running" })).toBe(false);
+    expect(
+      append.call(instance, "authority-terminal", "progress", { step: 1 }),
+    ).toBe(false);
+    expect(
+      append.call(instance, "authority-terminal", "state", {
+        status: "running",
+      }),
+    ).toBe(false);
     const kinds = sql
-      .exec(`SELECT kind FROM run_events WHERE run_id = 'authority-terminal' ORDER BY sequence`)
+      .exec(
+        `SELECT kind FROM run_events WHERE run_id = 'authority-terminal' ORDER BY sequence`,
+      )
       .toArray()
       .map((row) => String(row["kind"]));
     expect(kinds.at(-1)).toBe("authority-decided");
@@ -3544,7 +4128,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     seedPendingRun(sql, "user-cancelled");
     await priv<(id: string) => Promise<unknown>>(instance, "cancel").call(
       instance,
-      "user-cancelled"
+      "user-cancelled",
     );
 
     await expect(
@@ -3553,7 +4137,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         mode: "suspend",
         reason: "test",
         deadlineMs: 1_000,
-      })
+      }),
     ).resolves.toEqual({ status: "ready" });
 
     expect(instance.getRun("lifecycle-pending")).toMatchObject({
@@ -3588,7 +4172,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
     mockOwnedCall(instance, call);
     setPriv(instance, "runLocked", () =>
-      Promise.resolve({ success: true, console: "", returnValue: 3 })
+      Promise.resolve({ success: true, console: "", returnValue: 3 }),
     );
 
     await instance.startRun({
@@ -3601,13 +4185,19 @@ describe("EvalDO cancellation + forced recovery", () => {
       executionSessionNonce: "session-redeliver-123456",
     });
     await vi.waitFor(() => {
-      expect(instance.getRun("redeliver-run")).toMatchObject({ status: "done" });
-      expect(call.mock.calls.filter(([, method]) => method === "onEvalComplete")).toHaveLength(1);
+      expect(instance.getRun("redeliver-run")).toMatchObject({
+        status: "done",
+      });
+      expect(
+        call.mock.calls.filter(([, method]) => method === "onEvalComplete"),
+      ).toHaveLength(1);
     });
     const deliveryCalls = call.mock.calls as unknown as Array<
       [string, string, unknown[], RpcCallOptions]
     >;
-    const firstDelivery = deliveryCalls.find(([, method]) => method === "onEvalComplete");
+    const firstDelivery = deliveryCalls.find(
+      ([, method]) => method === "onEvalComplete",
+    );
     expect(executionSessionNonceFor(firstDelivery?.[3])).toBeUndefined();
     // The failed push durably queued one redelivery entry.
     await vi.waitFor(() => {
@@ -3617,7 +4207,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     // A due hint retries; the exact domain ack closes its delivery slot.
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_001);
     await expect(instance.alarm()).resolves.toBeNull();
-    expect(call.mock.calls.filter(([, method]) => method === "onEvalComplete")).toHaveLength(2);
+    expect(
+      call.mock.calls.filter(([, method]) => method === "onEvalComplete"),
+    ).toHaveLength(2);
     expect(redeliveryState(sql)).toEqual({});
     clock.mockRestore();
     warn.mockRestore();
@@ -3628,11 +4220,14 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const receiver = "do:workers/agent-worker:AiChatWorker:agent-1";
     const call = vi.fn((_target: string, method: string) => {
-      if (method === "onEvalComplete") return Promise.reject(new Error("receiver gone"));
+      if (method === "onEvalComplete")
+        return Promise.reject(new Error("receiver gone"));
       return Promise.resolve(undefined);
     });
     mockOwnedCall(instance, call);
-    setPriv(instance, "runLocked", () => Promise.resolve({ success: true, console: "" }));
+    setPriv(instance, "runLocked", () =>
+      Promise.resolve({ success: true, console: "" }),
+    );
 
     await instance.startRun({
       runId: "redeliver-exhaust",
@@ -3645,23 +4240,33 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
     await vi.waitFor(() => {
       expect(redeliveryState(sql)).toEqual({ "redeliver-exhaust": 1 });
-      expect(instance.getRunReceipt("redeliver-exhaust")?.acknowledged).toBe(false);
+      expect(instance.getRunReceipt("redeliver-exhaust")?.acknowledged).toBe(
+        false,
+      );
     });
 
     const clock = vi.spyOn(Date, "now");
     try {
       for (let attempt = 0; attempt < 12; attempt++) {
         const due = Number(
-          sql.exec("SELECT wake_at FROM eval_result_redeliveries").one()["wake_at"]
+          sql.exec("SELECT wake_at FROM eval_result_redeliveries").one()[
+            "wake_at"
+          ],
         );
         clock.mockReturnValue(due);
-        await expect(instance.alarm()).resolves.toMatchObject({ wakeAt: expect.any(Number) });
+        await expect(instance.alarm()).resolves.toMatchObject({
+          wakeAt: expect.any(Number),
+        });
         const next = Number(
-          sql.exec("SELECT wake_at FROM eval_result_redeliveries").one()["wake_at"]
+          sql.exec("SELECT wake_at FROM eval_result_redeliveries").one()[
+            "wake_at"
+          ],
         );
         expect(next - due).toBeGreaterThanOrEqual(5_000);
         expect(next - due).toBeLessThanOrEqual(300_000);
-        expect(instance.getRunReceipt("redeliver-exhaust")?.acknowledged).toBe(false);
+        expect(instance.getRunReceipt("redeliver-exhaust")?.acknowledged).toBe(
+          false,
+        );
       }
       expect(redeliveryState(sql)).toEqual({ "redeliver-exhaust": 7 });
       const receipt = instance.getRunReceipt("redeliver-exhaust")!;
@@ -3689,7 +4294,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       sql.exec(
         `UPDATE runs SET status = 'done', result = ? WHERE run_id = ?`,
         JSON.stringify({ success: true, console: "", returnValue: 1 }),
-        runId
+        runId,
       );
     }
 
@@ -3717,7 +4322,7 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     priv<(runId: string) => void>(instance, "scheduleResultRedelivery").call(
       instance,
-      "redeliver-in-flight"
+      "redeliver-in-flight",
     );
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_001);
     const alarm = instance.alarm();
@@ -3727,7 +4332,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     // terminal push and enqueue itself while this alarm is waiting.
     priv<(runId: string) => void>(instance, "scheduleResultRedelivery").call(
       instance,
-      "redeliver-concurrent"
+      "redeliver-concurrent",
     );
     releaseFirst();
     await expect(alarm).resolves.toMatchObject({ wakeAt: expect.any(Number) });
@@ -3738,7 +4343,9 @@ describe("EvalDO cancellation + forced recovery", () => {
 
   it("keeps a non-abort failure after a fired deadline out of the timeout classification", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const errorLog = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     const { instance, sql } = await createTestDO(EvalDO);
     setPriv(
       instance,
@@ -3751,22 +4358,26 @@ describe("EvalDO cancellation + forced recovery", () => {
           }
           signal?.addEventListener(
             "abort",
-            () => reject(new TypeError("cleanup dereferenced a torn-down handle")),
-            { once: true }
+            () =>
+              reject(new TypeError("cleanup dereferenced a torn-down handle")),
+            { once: true },
           );
-        })
+        }),
     );
-    seedPendingRun(sql, "deadline-nonabort", { code: "await never();", timeoutMs: 5 });
+    seedPendingRun(sql, "deadline-nonabort", {
+      code: "await never();",
+      timeoutMs: 5,
+    });
     sql.exec(
       `UPDATE runs SET deadline_at = ? WHERE run_id = ?`,
       Date.now() + 5,
-      "deadline-nonabort"
+      "deadline-nonabort",
     );
 
-    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const result = await priv<(id: string) => Promise<RunResult>>(
       instance,
-      "deadline-nonabort"
-    );
+      "executeRun",
+    ).call(instance, "deadline-nonabort");
 
     // Not the deadline: the error is unrelated to the abort, so it keeps its
     // own classification and is logged at warn instead of being suppressed.
@@ -3777,7 +4388,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("deadline-nonabort"),
-      expect.stringContaining("cleanup dereferenced a torn-down handle")
+      expect.stringContaining("cleanup dereferenced a torn-down handle"),
     );
     expect(errorLog).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -3785,30 +4396,40 @@ describe("EvalDO cancellation + forced recovery", () => {
   });
 
   it("surfaces execution-admission loss as recoverable without blindly replaying the cell", async () => {
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const errorLog = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     const { instance, sql } = await createTestDO(EvalDO);
     setPriv(instance, "runLocked", () =>
       Promise.reject(
         Object.assign(new Error("Evaluated execution session is not active"), {
           code: "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE",
-        })
-      )
+        }),
+      ),
     );
     seedPendingRun(sql, "admission-lost", { code: "await performEffect()" });
 
-    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+    const result = await priv<(id: string) => Promise<RunResult>>(
       instance,
-      "admission-lost"
-    );
+      "executeRun",
+    ).call(instance, "admission-lost");
 
     expect(result).toMatchObject({
       success: false,
       failureKind: "infrastructure",
       failureCode: "eval_execution_admission_lost",
-      errorData: {
-        retry: { policy: "reobserve", commandIdPolicy: "use-new-after-reobserve" },
-        recovery: { action: "reobserve", instruction: expect.stringContaining("unfinished work") },
-      },
+      error: expect.objectContaining({
+        errorData: {
+          retry: {
+            policy: "reobserve",
+            commandIdPolicy: "use-new-after-reobserve",
+          },
+          recovery: {
+            action: "reobserve",
+            instruction: expect.stringContaining("unfinished work"),
+          },
+        },
+      }),
     });
     errorLog.mockRestore();
   });
@@ -3823,7 +4444,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       executionSessionNonce: "session-old",
       eventSinkNonce: "sink-old",
     });
-    sql.exec(`UPDATE runs SET status = 'cancelling' WHERE run_id = 'cancelling-redrive'`);
+    sql.exec(
+      `UPDATE runs SET status = 'cancelling' WHERE run_id = 'cancelling-redrive'`,
+    );
     const runLocked = vi.fn();
     setPriv(instance, "runLocked", runLocked);
 
@@ -3835,13 +4458,15 @@ describe("EvalDO cancellation + forced recovery", () => {
         gatewayToken: "gateway-new",
         executionSessionNonce: "session-new",
         eventSinkNonce: "sink-new",
-      })
+      }),
     ).resolves.toMatchObject({ status: "cancelling", existing: true });
 
     const stored = JSON.parse(
       String(
-        sql.exec(`SELECT args FROM runs WHERE run_id = 'cancelling-redrive'`).toArray()[0]?.["args"]
-      )
+        sql
+          .exec(`SELECT args FROM runs WHERE run_id = 'cancelling-redrive'`)
+          .toArray()[0]?.["args"],
+      ),
     ) as Record<string, unknown>;
     // The freshly prepared admission owns the event route, so the tail of the
     // cancellation (its terminal event) reaches the NEW sink.

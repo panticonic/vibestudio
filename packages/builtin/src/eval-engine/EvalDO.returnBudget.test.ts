@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
 import { EVAL_RESULT_RETURN_PREVIEW_CHARS } from "@vibestudio/service-schemas/eval";
 import { EvalDO } from "./EvalDO.js";
@@ -14,7 +15,7 @@ type Reach = {
   compactRunResult(result: {
     success: boolean;
     console: string;
-    error?: string;
+    error?: RpcFailure;
     returnValue?: unknown;
     operationJournal: import("@vibestudio/service-schemas/eval").EvalOperationJournal;
   }): { operationJournal?: unknown };
@@ -44,7 +45,7 @@ describe("eval return budget", () => {
     const result = reach(instance).compactRunResult({
       success: false,
       console: "x".repeat(400_000),
-      error: "later failure",
+      error: serializeRpcFailure(new Error("later failure")),
       returnValue: { projected: true },
       operationJournal,
     });

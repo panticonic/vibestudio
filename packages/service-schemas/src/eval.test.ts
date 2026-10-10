@@ -260,7 +260,10 @@ describe("eval lifecycle contract", () => {
     const generationLost = {
       success: false,
       console: "",
-      error: "eval runtime generation was retired by a planned lifecycle transition",
+      error: {
+        message: "eval runtime generation was retired by a planned lifecycle transition",
+        errorKind: "application",
+      },
       failureKind: "infrastructure",
       failureCode: evalLifecycleFailureCodes.runtimeGenerationLost,
     };

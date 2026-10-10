@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import { rpcFailureSchema } from "./rpcFailure.js";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { CapabilityScopeSchema } from "./build.js";
 export { mapEvalResultLeaves } from "./eval/resultTree.js";
@@ -258,9 +259,8 @@ export const evalRunResultSchema = z
     /** Safe-serialized return value (present on success). Oversized values may be replaced with a
      *  structured truncation summary pointing at `scope.$lastLargeReturn`. */
     returnValue: z.unknown().optional(),
-    /** Error message (present on failure). Oversized errors are windowed and retained at
-     *  `scope.$lastLargeError` for bounded follow-up inspection. */
-    error: z.string().optional(),
+    /** Complete RPC failure graph (present on failure), including causes and aggregate errors. */
+    error: rpcFailureSchema.optional(),
     /** Failure domain controls whether an agent may recover in-turn. */
     failureKind: z.enum(["user-code", "infrastructure", "cancelled"]).optional(),
     /** Stable machine-readable diagnostic, independent of displayed copy. */
@@ -270,7 +270,6 @@ export const evalRunResultSchema = z
      * Consumers use this for typed recovery (for example publication recovery);
      * it is diagnostic data, not display copy.
      */
-    errorData: z.unknown().optional(),
     /** Keys currently held in the live notebook scope (for the agent's awareness). */
     scopeKeys: z.array(z.string()).optional(),
     /** Runtime-emitted completed operations, independent of the guest return value. */
@@ -842,7 +841,10 @@ function settledResult(
       snapshot.result ?? {
         success: false,
         console: "",
-        error: "eval: run cancelled",
+        error: {
+          message: "eval: run cancelled",
+          errorKind: "application",
+        },
         failureKind: "cancelled",
         failureCode: evalLifecycleFailureCodes.cancelled,
       }

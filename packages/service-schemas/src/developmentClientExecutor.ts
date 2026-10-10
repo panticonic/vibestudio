@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { rpcFailureSchema } from "./rpcFailure.js";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 
@@ -9,7 +10,11 @@ const open = { sensitivity: "read" as const };
 
 export const developmentClientExecutorMethods = defineServiceMethods({
   register: {
-    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -35,7 +40,11 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   claim: {
-    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -70,7 +79,11 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   readArtifact: {
-    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -106,7 +119,11 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   launched: {
-    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -130,7 +147,11 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   attest: {
-    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -147,7 +168,11 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   bindIsolatedManager: {
-    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -164,7 +189,11 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   consumeAttestation: {
-    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -188,23 +217,31 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   fail: {
-    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
       residency: "untrusted-execution",
       family: "developmentClientExecutor.control",
       rationale:
-        "Selected desktop terminates one pending launch with a bounded diagnostic and no widened authority",
+        "Selected desktop terminates one pending launch with its complete failure graph and no widened authority",
     },
-    description: "Report a bounded launch failure from the exact selected desktop executor.",
-    args: z.tuple([z.object({ requestId: nonEmpty, code: nonEmpty, message: nonEmpty }).strict()]),
+    description: "Report a complete launch failure from the exact selected desktop executor.",
+    args: z.tuple([z.object({ requestId: nonEmpty, failure: rpcFailureSchema }).strict()]),
     returns: z.object({ accepted: z.literal(true) }).strict(),
     authority,
     access: open,
   },
   exited: {
-    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -222,7 +259,7 @@ export const developmentClientExecutorMethods = defineServiceMethods({
           childPid: z.number().int().positive(),
           exitCode: z.number().int().nullable(),
           signal: nonEmpty.nullable(),
-          cleanupError: z.string().min(1).max(2_000).optional(),
+          cleanupError: rpcFailureSchema.optional(),
         })
         .strict(),
     ]),

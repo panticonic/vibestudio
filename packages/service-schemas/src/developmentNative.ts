@@ -13,6 +13,7 @@ import {
   nativeDevelopmentToolSchema,
 } from "./development.js";
 import { vcsImportSnapshotResultSchema, vcsStateNodeRefSchema } from "./vcs.js";
+import { rpcFailureSchema } from "./rpcFailure.js";
 
 const nonEmpty = z.string().min(1);
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/u);
@@ -113,8 +114,8 @@ export const nativeDevelopmentCheckpointReceiptSchema = z
 export const nativeDevelopmentRepairSchema = z
   .object({
     phase: nonEmpty,
-    primaryError: nonEmpty,
-    cleanupErrors: z.array(nonEmpty),
+    primaryFailure: rpcFailureSchema,
+    cleanupFailures: z.array(rpcFailureSchema),
     attention: z.enum(["actionable", "kept"]),
     knownEffects: z
       .object({
@@ -434,7 +435,9 @@ export const developmentNativeMethods = defineServiceMethods({
         "Retires only the private root and process proven by one exact native session handle",
     },
     args: z.tuple([z.object({ sessionId: nonEmpty }).strict()]),
-    returns: z.object({ retired: z.boolean(), cleanupErrors: z.array(nonEmpty) }).strict(),
+    returns: z
+      .object({ retired: z.boolean(), cleanupFailures: z.array(rpcFailureSchema) })
+      .strict(),
     authority: nativePrincipals,
     access: { sensitivity: "destructive" },
   },
@@ -725,7 +728,7 @@ export const developmentNativeMethods = defineServiceMethods({
       z
         .object({
           state: z.literal("failed"),
-          error: nonEmpty,
+          error: rpcFailureSchema,
           artifact: developmentRunSchema.shape.artifact,
           instance: developmentRunSchema.shape.instance,
           hostReadiness: developmentRunSchema.shape.hostReadiness,
@@ -770,7 +773,13 @@ export const developmentNativeMethods = defineServiceMethods({
       rationale: "Stops only the process group owned by one exact build handle",
     },
     args: z.tuple([z.object({ runId: nonEmpty, snapshotDigest: sha256 }).strict()]),
-    returns: developmentRunSchema.pick({ artifact: true, instance: true, hostReadiness: true, client: true, attachedHost: true }),
+    returns: developmentRunSchema.pick({
+      artifact: true,
+      instance: true,
+      hostReadiness: true,
+      client: true,
+      attachedHost: true,
+    }),
     authority: nativePrincipals,
     access: { sensitivity: "write" },
   },

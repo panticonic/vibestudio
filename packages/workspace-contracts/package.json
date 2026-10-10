@@ -21,6 +21,7 @@
     "test": "cd ../.. && vitest run packages/workspace-contracts/src"
   },
   "dependencies": {
+    "@vibestudio/rpc": "workspace:*",
     "zod": "^3.25.76",
     "semver": "^7.8.4"
   },

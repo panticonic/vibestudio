@@ -1,4 +1,5 @@
 import { schemaRpcCaller } from "@vibestudio/rpc/internal";
+import { deserializeRpcFailure, formatRpcFailure } from "@vibestudio/rpc";
 /**
  * `vibestudio eval ...` — run TypeScript/JavaScript server-side in the CLI
  * session's EvalDO, via the `eval` service. The paired shell credential is the
@@ -310,7 +311,9 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
       if (remaining) process.stderr.write(remaining.endsWith("\n") ? remaining : `${remaining}\n`);
     }
     if (!result.success) {
-      throw new CliError(result.error ?? "eval failed");
+      throw new CliError(
+        result.error ? formatRpcFailure(deserializeRpcFailure(result.error)) : "eval failed"
+      );
     }
     if (result.returnValue !== undefined) {
       printResult(result.returnValue, { json: false });

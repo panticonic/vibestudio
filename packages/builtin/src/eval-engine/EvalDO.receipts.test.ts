@@ -45,7 +45,7 @@ describe("EvalDO canonical result receipts", () => {
     expect(receipt.result).toMatchObject({
       success: false,
       failureKind: "cancelled",
-      error: "eval: run cancelled before admission",
+      error: { message: "eval: run cancelled before admission", errorKind: "application" },
     });
     expect(fixture.instance.getRun("never-admitted")).toMatchObject({
       status: "cancelled",

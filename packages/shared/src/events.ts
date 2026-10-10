@@ -501,7 +501,8 @@ export interface EventPayloads {
   /**
    * The server asks the attached desktop shell to run an interactive session
    * credential capture (browser sign-in). The shell answers with
-   * `credentials.completeCapture(captureId, result)`.
+   * `credentials.completeCapture(captureId, completion)`, carrying either the
+   * captured value or a serialized RPC failure graph.
    */
   "credential:capture-request": {
     captureId: string;

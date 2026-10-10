@@ -27,6 +27,7 @@ import { browserVaultNativeMethods } from "./browserVaultNative.js";
 import { browserPermissionsMethods } from "./browserPermissions.js";
 import { buildMethods } from "./build.js";
 import { channelMethods } from "./channel.js";
+import { chromiumFetchMethods } from "./chromiumFetch.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
 import { docsMethods } from "./docs.js";
@@ -37,12 +38,14 @@ import { mobileNativeMethods } from "./mobileNative.js";
 import { developmentClientExecutorMethods } from "./developmentClientExecutor.js";
 import { attachedHostsMethods } from "./attachedHosts.js";
 import { durableWorkMethods } from "./durableWork.js";
+import { durableWorkOwnerMethods } from "./durableWorkOwner.js";
 import { eventsMethods } from "./events.js";
 import { extensionsMethods } from "./extensions.js";
 import { externalOpenMethods } from "./externalOpen.js";
 import { fsMethods } from "./fs.js";
 import { gatewayMethods } from "./gateway.js";
 import { gitInteropMethods } from "./gitInterop.js";
+import { governanceMethods } from "./governance.js";
 import { hostLifecycleMethods } from "./hostLifecycle.js";
 import { hostPerformanceMethods } from "./hostPerformance.js";
 import { hubControlMethods } from "./hubControl.js";
@@ -54,10 +57,12 @@ import { missionsMethods } from "./missions.js";
 import { shellBrowserPrivacyMethods } from "./shellBrowserPrivacy.js";
 import { notificationMethods } from "./notification.js";
 import { panelMethods } from "./panel.js";
+import { panelCdpMethods } from "./panelCdp.js";
 import { panelLogMethods } from "./panelLog.js";
 import { panelContextMethods } from "./panelContext.js";
 import { panelRuntimeMethods } from "./panelRuntime.js";
 import { pushMethods, PushRegisterRequestSchema } from "./push.js";
+import { presenceMethods } from "./presence.js";
 import { permissionsMethods } from "./permissions.js";
 import { phoneProvisioningMethods } from "./phoneProvisioning.js";
 import { phoneNativeEndpointMethods } from "./phoneNativeEndpoint.js";
@@ -74,7 +79,9 @@ import { vcsMethods } from "./vcs.js";
 import { viewMethods } from "./view.js";
 import { webhookIngressMethods } from "./webhookIngress.js";
 import { webhookEngineMethods } from "./webhookEngine.js";
+import { workerdInspectorMethods } from "./workerdInspector.js";
 import { workerLogMethods } from "./workerLog.js";
+import { workersMethods } from "./workers.js";
 import { workspaceMethods } from "./workspace.js";
 import { workspaceCreationMethods } from "./workspaceCreation.js";
 import { workspacePresenceMethods } from "./workspacePresence.js";
@@ -146,11 +153,17 @@ const serviceTables: ServiceTable[] = [
     methods: developmentClientExecutorMethods,
   },
   { service: "durableWork", file: "durableWork.ts", methods: durableWorkMethods },
+  {
+    service: "durableWorkOwner",
+    file: "durableWorkOwner.ts",
+    methods: durableWorkOwnerMethods,
+  },
   { service: "events", file: "events.ts", methods: eventsMethods },
   { service: "extensions", file: "extensions.ts", methods: extensionsMethods },
   { service: "externalOpen", file: "externalOpen.ts", methods: externalOpenMethods },
   { service: "fs", file: "fs.ts", methods: fsMethods },
   { service: "gitInterop", file: "gitInterop.ts", methods: gitInteropMethods },
+  { service: "governance", file: "governance.ts", methods: governanceMethods },
   { service: "hostLifecycle", file: "hostLifecycle.ts", methods: hostLifecycleMethods },
   { service: "hostPerformance", file: "hostPerformance.ts", methods: hostPerformanceMethods },
   { service: "hubControl", file: "hubControl.ts", methods: hubControlMethods },
@@ -167,10 +180,12 @@ const serviceTables: ServiceTable[] = [
   },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
   { service: "panel", file: "panel.ts", methods: panelMethods },
+  { service: "panelCdp", file: "panelCdp.ts", methods: panelCdpMethods },
   { service: "panelLog", file: "panelLog.ts", methods: panelLogMethods },
   { service: "panelContext", file: "panelContext.ts", methods: panelContextMethods },
   { service: "panelRuntime", file: "panelRuntime.ts", methods: panelRuntimeMethods },
   { service: "permissions", file: "permissions.ts", methods: permissionsMethods },
+  { service: "presence", file: "presence.ts", methods: presenceMethods },
   {
     service: "phoneProvisioning",
     file: "phoneProvisioning.ts",
@@ -204,6 +219,17 @@ const serviceTables: ServiceTable[] = [
   { service: "webhookEngine", file: "webhookEngine.ts", methods: webhookEngineMethods },
   { service: "webhookIngress", file: "webhookIngress.ts", methods: webhookIngressMethods },
   { service: "workerLog", file: "workerLog.ts", methods: workerLogMethods },
+  { service: "workers", file: "workers.ts", methods: workersMethods },
+  {
+    service: "chromiumFetch",
+    file: "chromiumFetch.ts",
+    methods: chromiumFetchMethods,
+  },
+  {
+    service: "workerdInspector",
+    file: "workerdInspector.ts",
+    methods: workerdInspectorMethods,
+  },
   { service: "workspace", file: "workspace.ts", methods: workspaceMethods },
   {
     service: "workspaceCreation",
@@ -391,14 +417,17 @@ describe("service schema contracts", () => {
     const result = {
       success: false,
       console: "",
-      error: "Project publication failed",
+      error: {
+        message: "Project publication failed",
+        errorKind: "application" as const,
+        errorData: {
+          code: "scaffold_publication_failed",
+          committedEventId: "event:committed",
+          publicationRequest: { commandId: "command:publish" },
+        },
+      },
       failureKind: "user-code" as const,
       failureCode: "scaffold_publication_failed",
-      errorData: {
-        code: "scaffold_publication_failed",
-        committedEventId: "event:committed",
-        publicationRequest: { commandId: "command:publish" },
-      },
     };
 
     expect(
@@ -467,6 +496,7 @@ describe("service schema contracts", () => {
       .filter(
         (file) =>
           file.endsWith(".ts") &&
+          !file.endsWith(".d.ts") &&
           !file.endsWith(".test.ts") &&
           file !== "productBuiltinServices.ts" &&
           file !== "browserPrivacy.ts" &&
@@ -474,6 +504,12 @@ describe("service schema contracts", () => {
           file !== "usageAnalytics.ts" &&
           file !== "nativeInvocation.ts" &&
           file !== "rpcCausality.ts" &&
+          file !== "rpcFailure.ts" &&
+          file !== "governanceQuery.ts" &&
+          file !== "mainRpc.ts" &&
+          file !== "systemTestRunner.ts" &&
+          file !== "test-utils.ts" &&
+          file !== "workspaceHubControl.ts" &&
           !file.startsWith("progressSemantics")
       )
       .sort();

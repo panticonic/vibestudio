@@ -171,7 +171,7 @@ Authority principals: `code`, `host`, `user`, `website`
 | `credentials.revokeCredential` | Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); requires critical account-disconnection authority bound to the exact credential id. |
 | `credentials.resolveCredential` | Resolve the host's exact URL/provider/id and intended-use selection. An unbound audience returns null without opening UI; a matched credential returns a secret-free summary after any required use authorization. Preserve failures other than the canonical null miss. |
 | `credentials.beginWebsitePublication` | Review one exact artifact and destination, then open or resume its host-journaled publication operation and return the receipt of its last completed phase. The operation id stays bound to the first artifact digest, provider, destination, and environment; a different intent under the same id fails with WEBSITE_PUBLICATION_INTENT_CONFLICT. Provider requests stay authorized for the caller until the operation is submitted or the caller retires. |
-| `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell. |
+| `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with a typed success value or serialized RPC failure graph; callable only by the attached desktop shell. |
 | `credentials.audit` | Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after). |
 
 ## `docs`
@@ -452,9 +452,9 @@ Authority principals: `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `presence.markPanelActive` |  |
-| `presence.markPanelsOwned` |  |
-| `presence.getPanelActiveOwner` |  |
+| `presence.markPanelActive` | Record which runtime currently owns an active panel. |
+| `presence.markPanelsOwned` | Record ownership of a set of active panels for the current runtime. |
+| `presence.getPanelActiveOwner` | Return the current owner of a panel when one is active. |
 
 ## `problemReports`
 
@@ -635,8 +635,8 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `workerdInspector.listTargets` |  |
-| `workerdInspector.getEndpoint` |  |
+| `workerdInspector.listTargets` | List workspace runtime targets available for inspection. |
+| `workerdInspector.getEndpoint` | Return an authenticated inspection endpoint for one runtime target. |
 
 ## `workerLog`
 

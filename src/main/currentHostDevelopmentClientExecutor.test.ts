@@ -1,3 +1,4 @@
+import { deserializeRpcFailure, type RpcFailure, RemoteRpcAggregateError } from "@vibestudio/rpc";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,6 +50,7 @@ function materializationFixture(
             expiresAt: Date.now() + 60_000,
           };
         if (method === "readArtifact") return readArtifact(args[0] as { offset: number });
+        if (method === "register") return { leaseExpiresAt: Date.now() + 60_000 };
         return { accepted: true };
       },
     } as never,
@@ -87,9 +89,43 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
     expect(fixture.spawnProcess).not.toHaveBeenCalled();
     expect(fs.existsSync(fixture.ownedRoot)).toBe(false);
     expect(fixture.calls.find((call) => call.method === "fail")?.args[0]).toMatchObject({
-      code: "ECONNRESET",
-      message: "Artifact transport disconnected",
+      failure: {
+        code: "ECONNRESET",
+        message: "Artifact transport disconnected",
+      },
     });
+  });
+
+  it("reports the complete artifact failure graph to the launch owner", async () => {
+    const child = Object.assign(new Error("Artifact storage unavailable"), {
+      code: "ESTORAGE",
+      errorData: { artifact: "dist/main.cjs" },
+    });
+    const failure = Object.assign(
+      new AggregateError(
+        [child, new Error("Artifact stream aborted", { cause: child })],
+        "Artifact materialization failed",
+        { cause: child }
+      ),
+      { code: "EARTIFACT" }
+    );
+    const fixture = materializationFixture(async () => {
+      throw failure;
+    });
+    await fixture.executor.handleLaunchRequest({ requestId: fixture.requestId });
+    const report = fixture.calls.find((call) => call.method === "fail")?.args[0] as {
+      failure: RpcFailure;
+    };
+    const graph = deserializeRpcFailure(report.failure) as RemoteRpcAggregateError;
+    expect(graph).toBeInstanceOf(RemoteRpcAggregateError);
+    expect(graph).toMatchObject({ code: "EARTIFACT" });
+    expect(graph.errors[0]).toMatchObject({
+      code: "ESTORAGE",
+      errorData: { artifact: "dist/main.cjs" },
+    });
+    expect(graph.cause).toBe(graph.errors[0]);
+    expect((graph.errors[1] as Error).cause).toBe(graph.errors[0]);
+    expect(fs.existsSync(fixture.ownedRoot)).toBe(false);
   });
 
   it("joins native spawn failure before removing the materialized root or reporting failure", async () => {
@@ -116,7 +152,9 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
     expect(childClosed).toBe(true);
     expect(fs.existsSync(fixture.ownedRoot)).toBe(false);
     expect(fixture.calls.find((call) => call.method === "fail")?.args[0]).toMatchObject({
-      code: "ENOENT",
+      failure: {
+        code: "ENOENT",
+      },
     });
     expect(fixture.calls.some((call) => call.method === "launched")).toBe(false);
   });
@@ -212,7 +250,9 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
     expect(fixture.spawnProcess).not.toHaveBeenCalled();
     expect(fs.existsSync(fixture.ownedRoot)).toBe(false);
     expect(fixture.calls.find((call) => call.method === "fail")?.args[0]).toMatchObject({
-      code: "ESHUTDOWN",
+      failure: {
+        code: "ESHUTDOWN",
+      },
     });
     const callsBefore = fixture.calls.length;
     await expect(
@@ -233,7 +273,9 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
     expect(fs.readFileSync(sentinel, "utf8")).toBe("retained generation");
     expect(fixture.calls.some((call) => call.method === "readArtifact")).toBe(false);
     expect(fixture.calls.find((call) => call.method === "fail")?.args[0]).toMatchObject({
-      code: "EEXIST",
+      failure: {
+        code: "EEXIST",
+      },
     });
     await fixture.executor.close();
     expect(fs.readFileSync(sentinel, "utf8")).toBe("retained generation");
@@ -302,6 +344,7 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
             expect(fs.existsSync(ownedRoot)).toBe(false);
             reported();
           }
+          if (method === "register") return { leaseExpiresAt: Date.now() + 60_000 };
           return { accepted: true };
         },
       } as never,
@@ -351,6 +394,7 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
             eof: true,
           };
         }
+        if (method === "register") return { leaseExpiresAt: Date.now() + 60_000 };
         return { accepted: true };
       },
     };

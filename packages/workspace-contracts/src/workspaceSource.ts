@@ -1,3 +1,4 @@
+import type { RpcFailure } from "@vibestudio/rpc";
 import { z } from "zod";
 import {
   WorkspaceTemplateDependencySchema,
@@ -104,7 +105,7 @@ export type WorkspaceSourceInitializationInspection =
   | {
       state: "failed";
       commandId: string;
-      failure: { message: string; retryable: boolean };
+      failure: RpcFailure;
     };
 
 export interface InitializeExactWorkspaceSnapshotInput {

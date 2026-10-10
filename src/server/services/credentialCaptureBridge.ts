@@ -13,6 +13,8 @@
 
 import { randomUUID } from "node:crypto";
 import type { EventService } from "@vibestudio/shared/eventsService";
+import { deserializeRpcFailure } from "@vibestudio/rpc";
+import type { CredentialCaptureCompletion } from "@vibestudio/service-schemas/credentials";
 
 export const DESKTOP_ATTACHMENT_REQUIRED = "desktop-attachment-required";
 
@@ -28,7 +30,7 @@ export interface CredentialCaptureBridge {
     signal?: AbortSignal
   ): Promise<T>;
   /** Shell-side completion callback (dispatched from `credentials.completeCapture`). */
-  completeCapture(userId: string, captureId: string, response: Record<string, unknown>): void;
+  completeCapture(userId: string, captureId: string, completion: CredentialCaptureCompletion): void;
 }
 
 interface PendingCapture {
@@ -109,16 +111,20 @@ export function createCredentialCaptureBridge(deps: {
         }
       });
     },
-    completeCapture(userId: string, captureId: string, response: Record<string, unknown>): void {
+    completeCapture(
+      userId: string,
+      captureId: string,
+      completion: CredentialCaptureCompletion
+    ): void {
       const entry = pending.get(captureId);
       if (!entry || entry.userId !== userId) {
         throw new Error(`No pending credential capture for id ${captureId}`);
       }
-      if (response["error"] != null) {
-        entry.reject(new Error(String(response["error"])));
+      if (completion.kind === "failure") {
+        entry.reject(deserializeRpcFailure(completion.failure));
         return;
       }
-      entry.resolve(response);
+      entry.resolve(completion.value);
     },
   };
 }

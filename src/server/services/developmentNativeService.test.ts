@@ -42,8 +42,8 @@ function fixture(target: DevelopmentRun["target"] = { kind: "build-only" }) {
     repairAttention: null,
     createdAt: 1,
     updatedAt: 1,
-    primaryDiagnostic: null,
-    cleanupDiagnostics: [],
+    primaryFailure: null,
+    cleanupFailures: [],
   };
   const pair = {
     kind: "combined" as const,

@@ -3,6 +3,7 @@ import { rpcCausalParentSchema } from "./rpcCausality.js";
 import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { executionArtifactRefSchema } from "./build.js";
+import { rpcFailureSchema } from "./rpcFailure.js";
 import {
   evalEventsPageSchema,
   evalRunResultSchema,
@@ -249,7 +250,7 @@ const rawEvalEngineMethods = defineServiceMethods({
       reason: "Execution engine control is internal to reviewed execution receivers.",
     } as const,
     ...managed("write"),
-    args: z.tuple([runIdSchema, z.string()]),
+    args: z.tuple([runIdSchema, rpcFailureSchema]),
     returns: evalRunResultSchema.nullable(),
   },
   readScopeTextPage: {

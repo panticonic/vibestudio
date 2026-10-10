@@ -62,7 +62,12 @@ async function fixture(options: { importFailsOnce?: boolean } = {}): Promise<Fix
       importedDescriptors.push(structuredClone(input.descriptor));
       if (shouldFailImport) {
         shouldFailImport = false;
-        throw Object.assign(new Error("ambiguous transport loss"), { code: "ECONNRESET" });
+        const cause = Object.assign(new Error("underlying import socket failure"), {
+          code: "ESOCKET",
+        });
+        throw Object.assign(new AggregateError([cause], "ambiguous transport loss", { cause }), {
+          code: "ECONNRESET",
+        });
       }
       const eventId = `event:checkpoint:${input.descriptor.source.snapshotRevision}`;
       working = { kind: "event", eventId };
@@ -372,9 +377,68 @@ describe("NativeDevelopmentExecutor", () => {
       state: "requires-repair",
       repair: {
         phase: "pending-change-resume",
-        primaryError: "resume failed",
+        primaryFailure: { message: "resume failed", errorKind: "application" },
         knownEffects: { process: "unknown" },
       },
+    });
+  });
+
+  it("preserves checkpoint and resume failures as one aggregate graph and migrates v1 durable markers", async () => {
+    const fx = await fixture({ importFailsOnce: true });
+    await open(fx);
+    const markerPath = path.join(fx.root, "sessions", "session-1", "SESSION.json");
+    const legacy = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
+    legacy["version"] = 1;
+    legacy["repair"] = {
+      phase: "legacy-repair",
+      primaryError: "old persisted error",
+      cleanupErrors: ["old cleanup error"],
+      attention: "actionable",
+      knownEffects: {
+        nativeTree: "owned",
+        process: "unknown",
+        importedEvent: "absent",
+      },
+    };
+    await fs.writeFile(markerPath, JSON.stringify(legacy));
+    const migratedReceipt = await fx.executor.inspect("session-1");
+    expect(migratedReceipt.repair?.primaryFailure.message).toBe("old persisted error");
+    expect(migratedReceipt.repair?.cleanupFailures[0]?.message).toBe("old cleanup error");
+    const migratedMarker = JSON.parse(await fs.readFile(markerPath, "utf8")) as { version: number };
+    expect(migratedMarker.version).toBe(2);
+    vi.mocked(fx.handle.resumeCheckpoint).mockRejectedValueOnce(
+      Object.assign(new Error("tool resume failed"), { code: "ERESUME" })
+    );
+
+    let caught: unknown;
+    try {
+      await fx.executor.checkpoint({
+        sessionId: "session-1",
+        idempotencyKey: "checkpoint-graph",
+        ingress,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AggregateError);
+    const aggregate = caught as AggregateError;
+    expect(aggregate.cause).toMatchObject({
+      code: "ECONNRESET",
+      message: "ambiguous transport loss",
+    });
+    expect((aggregate.cause as AggregateError).cause).toMatchObject({ code: "ESOCKET" });
+    expect(aggregate.errors[1]).toMatchObject({ code: "ERESUME" });
+
+    const migrated = JSON.parse(await fs.readFile(markerPath, "utf8")) as {
+      version: number;
+      repair: { primaryFailure: { message: string }; cleanupFailures: Array<{ code?: string }> };
+    };
+    expect(migrated.version).toBe(2);
+    const inspected = await fx.executor.inspect("session-1");
+    expect(inspected.repair?.cleanupFailures[0]).toMatchObject({ code: "ERESUME" });
+    expect(inspected.repair?.primaryFailure).toMatchObject({
+      code: "ECONNRESET",
+      cause: { code: "ESOCKET" },
     });
   });
 
@@ -408,7 +472,10 @@ describe("NativeDevelopmentExecutor", () => {
     });
     const retired = await cold.forceRetire("session-1");
     expect(retired.retired).toBe(false);
-    expect(retired.cleanupErrors[0]).toContain("no exact live handle");
+    expect(retired.cleanupFailures[0]).toMatchObject({
+      message: expect.stringContaining("no exact live handle"),
+      code: "EOWNERSHIP",
+    });
     await expect(
       fs.stat(path.join(fx.root, "sessions", "session-1", "repository"))
     ).resolves.toBeDefined();
@@ -444,7 +511,7 @@ describe("NativeDevelopmentExecutor", () => {
     await open(fx);
     const retired = await fx.executor.forceRetire("session-1");
 
-    expect(retired).toEqual({ retired: true, cleanupErrors: [] });
+    expect(retired).toEqual({ retired: true, cleanupFailures: [] });
     expect(fx.handle.stop).toHaveBeenCalledTimes(1);
     await expect(fs.stat(path.join(fx.root, "sessions", "session-1"))).rejects.toMatchObject({
       code: "ENOENT",
@@ -469,13 +536,13 @@ describe("NativeDevelopmentExecutor", () => {
       const retired = await fx.executor.forceRetire("session-1");
       expect(retired).toEqual({
         retired: false,
-        cleanupErrors: ["repository: filesystem busy"],
+        cleanupFailures: [expect.objectContaining({ message: "repository: filesystem busy" })],
       });
       await expect(fx.executor.inspect("session-1")).resolves.toMatchObject({
         state: "requires-repair",
         repair: {
           phase: "force-retire",
-          cleanupErrors: ["repository: filesystem busy"],
+          cleanupFailures: [expect.objectContaining({ message: "repository: filesystem busy" })],
         },
       });
     } finally {

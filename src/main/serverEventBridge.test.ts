@@ -226,7 +226,7 @@ describe("createServerEventBridge", () => {
     await vi.waitFor(() =>
       expect(serverClient.call).toHaveBeenCalledWith("credentials", "completeCapture", [
         "cap-1",
-        { cookieHeader: "a=b" },
+        { kind: "success", value: { cookieHeader: "a=b" } },
       ])
     );
     expect(onCredentialCaptureRequest).toHaveBeenCalledWith(
@@ -245,7 +245,10 @@ describe("createServerEventBridge", () => {
     await vi.waitFor(() =>
       expect(serverClient.call).toHaveBeenCalledWith("credentials", "completeCapture", [
         "cap-2",
-        { error: "browser unavailable" },
+        expect.objectContaining({
+          kind: "failure",
+          failure: expect.objectContaining({ message: "browser unavailable" }),
+        }),
       ])
     );
   });

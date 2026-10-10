@@ -18,6 +18,7 @@ import {
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 import type { DevelopmentExecutor, PreparedDevelopmentBuild } from "./developmentExecutor.js";
 import type { IsolatedDevelopmentHostExecutor } from "./isolatedDevelopmentHostExecutor.js";
 import type { DevelopmentClientExecutorRegistry } from "./developmentClientExecutorService.js";
@@ -60,7 +61,10 @@ export interface ExactNativeDevelopmentController {
   close(): Promise<void>;
   recover(sessionId: string): Promise<NativeDevelopmentSessionReceipt>;
   keep(sessionId: string): Promise<NativeDevelopmentSessionReceipt>;
-  forceRetire(sessionId: string): Promise<{ retired: boolean; cleanupErrors: string[] }>;
+  forceRetire(sessionId: string): Promise<{
+    retired: boolean;
+    cleanupFailures: import("@vibestudio/rpc").RpcFailure[];
+  }>;
   readTerminal(input: {
     sessionId: string;
     after?: number;
@@ -85,7 +89,7 @@ type NativeBuildState = {
   result:
     | { state: "running" }
     | ({ state: "succeeded" | "ready" | "stopped" } & NativeTargetFields)
-    | ({ state: "failed"; error: string } & NativeTargetFields);
+    | ({ state: "failed"; error: RpcFailure } & NativeTargetFields);
 };
 
 /**
@@ -423,7 +427,10 @@ export function createDevelopmentNativeService(deps: {
         if (build.result.state === "ready" && code !== 0) {
           build.result = {
             state: "failed",
-            error: `Isolated host exited with code ${code}`,
+            error: serializeRpcFailure(
+              new Error(`Isolated host exited with code ${code}`),
+              "application"
+            ),
             artifact: run.artifact,
             instance: stoppedInstance,
             hostReadiness: "failed",
@@ -596,7 +603,7 @@ export function createDevelopmentNativeService(deps: {
             // even when startup or cancellation prevents a ready result.
             build.result = {
               state: "failed",
-              error: error instanceof Error ? error.message : String(error),
+              error: serializeRpcFailure(error, "application"),
               artifact: build.run.artifact,
               instance: build.run.instance,
               hostReadiness:

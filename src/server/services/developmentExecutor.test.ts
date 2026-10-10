@@ -63,8 +63,8 @@ function session(
     repairAttention: null,
     createdAt: 1,
     updatedAt: 1,
-    primaryDiagnostic: null,
-    cleanupDiagnostics: [],
+    primaryFailure: null,
+    cleanupFailures: [],
   };
 }
 

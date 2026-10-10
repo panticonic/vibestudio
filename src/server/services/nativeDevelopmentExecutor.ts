@@ -4,7 +4,8 @@ import fsSync, { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { VcsImportSnapshotResult, VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
-import type { RpcCausalParent } from "@vibestudio/rpc";
+import { rpcFailureSchema } from "@vibestudio/service-schemas/rpcFailure";
+import { serializeRpcFailure, type RpcCausalParent, type RpcFailure } from "@vibestudio/rpc";
 import { canonicalJson, compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import { semanticVcsPathAdmission } from "@vibestudio/shared/vcs/pathAdmission";
@@ -210,8 +211,8 @@ export interface NativeDevelopmentSessionReceipt {
 
 interface NativeRepair {
   phase: string;
-  primaryError: string;
-  cleanupErrors: string[];
+  primaryFailure: RpcFailure;
+  cleanupFailures: RpcFailure[];
   attention: "actionable" | "kept";
   knownEffects: {
     nativeTree: "owned" | "absent" | "unknown";
@@ -232,7 +233,7 @@ interface PendingCheckpoint {
 }
 
 interface NativeSessionMarker {
-  version: 1;
+  version: 2;
   sessionId: string;
   ownedRootId: string;
   executorId: string;
@@ -382,7 +383,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
           await this.requireRepair(
             existing,
             "open-recovery",
-            "Native tool launch outcome cannot be proven after executor interruption"
+            new Error("Native tool launch outcome cannot be proven after executor interruption")
           )
         );
       }
@@ -423,7 +424,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
       const root = await this.claimRoot(input.sessionId);
       const now = this.now();
       let marker: NativeSessionMarker = {
-        version: 1,
+        version: 2,
         sessionId: input.sessionId,
         ownedRootId: nativeDevelopmentOwnedRootId(this.deps.executorId, input.sessionId),
         executorId: this.deps.executorId,
@@ -485,7 +486,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
         this.activeTools.set(input.sessionId, { handle, repoPath: marker.repoPath });
         return publicReceipt(marker);
       } catch (error) {
-        marker = await this.requireRepair(marker, "native-tool-launch", errorMessage(error), [], {
+        marker = await this.requireRepair(marker, "native-tool-launch", asError(error), [], {
           process: "unknown",
         });
         throw Object.assign(error instanceof Error ? error : new Error(errorMessage(error)), {
@@ -617,23 +618,19 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
         this.writeMarker(root, marker);
         return receipt;
       } catch (error) {
-        const cleanupErrors: string[] = [];
+        const cleanupFailures: unknown[] = [];
         if (frozen) {
           try {
             await active.handle.resumeCheckpoint();
             frozen = false;
           } catch (resumeError) {
-            cleanupErrors.push(errorMessage(resumeError));
+            cleanupFailures.push(resumeError);
           }
         }
-        if (cleanupErrors.length > 0) {
-          await this.requireRepair(
-            marker,
-            "checkpoint-resume",
-            errorMessage(error),
-            cleanupErrors,
-            { process: "unknown" }
-          );
+        if (cleanupFailures.length > 0) {
+          await this.requireRepair(marker, "checkpoint-resume", asError(error), cleanupFailures, {
+            process: "unknown",
+          });
         } else if (marker.pendingCheckpoint?.phase === "freezing") {
           marker = {
             ...marker,
@@ -643,6 +640,13 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
             updatedAt: this.now(),
           };
           this.writeMarker(root, marker);
+        }
+        if (cleanupFailures.length > 0) {
+          throw new AggregateError(
+            [asError(error), ...cleanupFailures],
+            "Native checkpoint failed and the tool could not resume",
+            { cause: asError(error) }
+          );
         }
         throw error;
       }
@@ -686,11 +690,17 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
           marker = await this.requireRepair(
             marker,
             "pending-change-resume",
-            primaryError ? errorMessage(primaryError) : errorMessage(resumeError),
-            primaryError ? [errorMessage(resumeError)] : [],
+            primaryError ? asError(primaryError) : asError(resumeError),
+            primaryError ? [resumeError] : [],
             { process: "unknown" }
           );
-          if (primaryError) throw primaryError;
+          if (primaryError) {
+            throw new AggregateError(
+              [asError(primaryError), resumeError],
+              "Pending-change inspection failed and the tool could not resume",
+              { cause: asError(primaryError) }
+            );
+          }
           return publicReceipt(marker);
         }
       }
@@ -735,7 +745,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
         return publicReceipt(marker);
       } catch (error) {
         return publicReceipt(
-          await this.requireRepair(marker, "native-tool-stop", errorMessage(error), [], {
+          await this.requireRepair(marker, "native-tool-stop", asError(error), [], {
             process: "unknown",
           })
         );
@@ -761,7 +771,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
         await this.requireRepair(
           marker,
           "cold-recovery",
-          "Exact native process ownership is unavailable after restart",
+          new Error("Exact native process ownership is unavailable after restart"),
           [],
           { process: marker.process ? "unknown" : "absent" }
         )
@@ -786,19 +796,21 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
 
   async forceRetire(sessionId: string): Promise<{
     retired: boolean;
-    cleanupErrors: string[];
+    cleanupFailures: RpcFailure[];
   }> {
     return this.locked(sessionId, async () => {
       let marker = await this.requireMarker(sessionId);
       const root = await this.assertOwnedRoot(sessionId, marker);
-      const cleanupErrors: string[] = [];
+      const cleanupErrors: Error[] = [];
       const active = this.activeTools.get(sessionId);
       if (active) {
         if (
           !marker.process ||
           active.handle.identity.ownershipToken !== marker.process.ownershipToken
         ) {
-          cleanupErrors.push("Live native tool handle does not match the owner marker");
+          cleanupErrors.push(
+            coded("EOWNERSHIP", "Live native tool handle does not match the owner marker")
+          );
         } else {
           try {
             await active.handle.stop();
@@ -807,12 +819,15 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
             marker = { ...marker, process: null, state: "stopped", updatedAt: this.now() };
             this.writeMarker(root, marker);
           } catch (error) {
-            cleanupErrors.push(errorMessage(error));
+            cleanupErrors.push(asError(error));
           }
         }
       } else if (marker.process && marker.state !== "stopped") {
         cleanupErrors.push(
-          "Persisted native process identity has no exact live handle; tree was preserved"
+          coded(
+            "EOWNERSHIP",
+            "Persisted native process identity has no exact live handle; tree was preserved"
+          )
         );
       }
       if (cleanupErrors.length === 0) {
@@ -820,7 +835,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
           try {
             await fs.rm(path.join(root, ownedName), { recursive: true, force: true });
           } catch (error) {
-            cleanupErrors.push(`${ownedName}: ${errorMessage(error)}`);
+            cleanupErrors.push(new Error(`${ownedName}: ${errorMessage(error)}`, { cause: error }));
           }
         }
       }
@@ -828,7 +843,10 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
         const unexpected = (await fs.readdir(root)).filter((name) => name !== MARKER_FILE);
         if (unexpected.length > 0) {
           cleanupErrors.push(
-            `Owned root contains unexpected entries: ${unexpected.sort().join(", ")}`
+            coded(
+              "EUNEXPECTED_ENTRIES",
+              `Owned root contains unexpected entries: ${unexpected.sort().join(", ")}`
+            )
           );
         }
       }
@@ -836,9 +854,9 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
         try {
           await fs.unlink(path.join(root, MARKER_FILE));
           await fs.rmdir(root);
-          return { retired: true, cleanupErrors };
+          return { retired: true, cleanupFailures: [] };
         } catch (error) {
-          cleanupErrors.push(errorMessage(error));
+          cleanupErrors.push(asError(error));
           // If removal stopped after unlinking the marker, restore the exact
           // durable ownership/repair anchor before reporting failure.
           try {
@@ -847,18 +865,21 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
           } catch {
             // A missing root is a completed retirement despite an ambiguous
             // final directory result.
-            return { retired: true, cleanupErrors: [] };
+            return { retired: true, cleanupFailures: [] };
           }
         }
       }
       await this.requireRepair(
         marker,
         "force-retire",
-        "Owned cleanup was incomplete",
+        new Error("Owned cleanup was incomplete"),
         cleanupErrors,
         { process: marker.process ? "unknown" : "absent" }
       );
-      return { retired: false, cleanupErrors };
+      return {
+        retired: false,
+        cleanupFailures: cleanupErrors.map((error) => serializeRpcFailure(error, "application")),
+      };
     });
   }
 
@@ -925,7 +946,11 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
     const markerPath = path.join(this.deps.root, sessionId, MARKER_FILE);
     try {
       const parsed: unknown = JSON.parse(await fs.readFile(markerPath, "utf8"));
-      return parseMarker(parsed);
+      const marker = parseMarker(parsed);
+      if ((parsed as Record<string, unknown>)["version"] === 1) {
+        writeFileAtomicSync(markerPath, `${canonicalJson(marker)}\n`, { mode: 0o600 });
+      }
+      return marker;
     } catch (error) {
       if (!required && (error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
@@ -968,8 +993,8 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
   private async requireRepair(
     marker: NativeSessionMarker,
     phase: string,
-    primaryError: string,
-    cleanupErrors: string[] = [],
+    primaryError: unknown,
+    cleanupErrors: unknown[] = [],
     knownOverrides: Partial<NativeRepair["knownEffects"]> = {}
   ): Promise<NativeSessionMarker> {
     const root = await this.assertOwnedRoot(marker.sessionId, marker);
@@ -978,8 +1003,8 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
       state: "requires-repair",
       repair: {
         phase,
-        primaryError,
-        cleanupErrors,
+        primaryFailure: serializeRpcFailure(primaryError, "application"),
+        cleanupFailures: cleanupErrors.map((error) => serializeRpcFailure(error, "application")),
         attention: "actionable",
         knownEffects: {
           nativeTree: "owned",
@@ -1210,9 +1235,13 @@ function parseDescriptor(value: unknown): NativeSnapshotDescriptor {
 
 function parseMarker(value: unknown): NativeSessionMarker {
   if (!value || typeof value !== "object") throw coded("ECORRUPT", "Invalid native session marker");
-  const marker = value as Partial<NativeSessionMarker>;
+  const raw = value as Record<string, unknown>;
+  const marker = value as Partial<Omit<NativeSessionMarker, "version" | "repair">> & {
+    version?: unknown;
+    repair?: unknown;
+  };
   if (
-    marker.version !== 1 ||
+    (raw["version"] !== 1 && raw["version"] !== 2) ||
     typeof marker.sessionId !== "string" ||
     typeof marker.ownedRootId !== "string" ||
     typeof marker.executorId !== "string" ||
@@ -1241,6 +1270,52 @@ function parseMarker(value: unknown): NativeSessionMarker {
     throw coded("ECORRUPT", "Invalid native session marker");
   }
   if (marker.process) assertProcessIdentity(marker.process);
+  if (raw["version"] === 1) {
+    const legacyRepair = marker.repair as
+      | {
+          phase?: unknown;
+          primaryError?: unknown;
+          cleanupErrors?: unknown;
+          attention?: unknown;
+          knownEffects?: unknown;
+        }
+      | null
+      | undefined;
+    let repair: NativeRepair | null = null;
+    if (legacyRepair) {
+      if (
+        typeof legacyRepair.phase !== "string" ||
+        typeof legacyRepair.primaryError !== "string" ||
+        !Array.isArray(legacyRepair.cleanupErrors) ||
+        !legacyRepair.cleanupErrors.every((entry) => typeof entry === "string") ||
+        (legacyRepair.attention !== "actionable" && legacyRepair.attention !== "kept") ||
+        !legacyRepair.knownEffects
+      )
+        throw coded("ECORRUPT", "Invalid v1 native repair marker");
+      repair = {
+        phase: legacyRepair.phase,
+        primaryFailure: serializeRpcFailure(new Error(legacyRepair.primaryError), "application"),
+        cleanupFailures: legacyRepair.cleanupErrors.map((message) =>
+          serializeRpcFailure(new Error(message), "application")
+        ),
+        attention: legacyRepair.attention,
+        knownEffects: legacyRepair.knownEffects as NativeRepair["knownEffects"],
+      };
+    }
+    return { ...marker, version: 2, repair } as NativeSessionMarker;
+  }
+  if (marker.repair !== null && marker.repair !== undefined) {
+    const repair = marker.repair as NativeRepair;
+    if (
+      typeof repair.phase !== "string" ||
+      (repair.attention !== "actionable" && repair.attention !== "kept") ||
+      !repair.knownEffects ||
+      !rpcFailureSchema.safeParse(repair.primaryFailure).success ||
+      !Array.isArray(repair.cleanupFailures) ||
+      repair.cleanupFailures.some((failure) => !rpcFailureSchema.safeParse(failure).success)
+    )
+      throw coded("ECORRUPT", "Invalid v2 native repair marker");
+  }
   return marker as NativeSessionMarker;
 }
 
@@ -1384,6 +1459,10 @@ function octal(mode: number): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function coded(code: string, message: string): Error {

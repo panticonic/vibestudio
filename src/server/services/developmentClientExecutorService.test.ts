@@ -1,3 +1,4 @@
+import { serializeRpcFailure, RemoteRpcAggregateError } from "@vibestudio/rpc";
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { DevelopmentClientExecutorRegistry } from "./developmentClientExecutorService.js";
@@ -300,20 +301,32 @@ describe("DevelopmentClientExecutorRegistry", () => {
       artifactSource: { manifest: [], read: () => Buffer.alloc(0) },
       pairingDeepLink: "vibestudio://connect?request=opaque",
     });
-    const readiness = expect(launch.ready).rejects.toMatchObject({ code: "EOWNERSHIP" });
-    const stopping = expect(f.registry.stop("run:retirement-failed")).rejects.toMatchObject({
-      code: "ECLEANUP",
+    const readiness = launch.ready.catch((error: unknown) => error);
+    const stopping = f.registry.stop("run:retirement-failed").catch((error: unknown) => error);
+    const child = Object.assign(new Error("Owned descendant is still running"), {
+      code: "EPROCESS",
+      errorData: { pid: 42 },
     });
+    const cleanup = new Error("Retirement verification failed", { cause: child });
+    const failure = Object.assign(
+      new AggregateError([child, cleanup], "Owned descendants did not retire", { cause: child }),
+      { code: "EOWNERSHIP" }
+    );
 
     await f.invoke(caller("shell:initiating", "user:one"), "fail", [
-      {
-        requestId: launch.requestId,
-        code: "EOWNERSHIP",
-        message: "Owned descendants did not retire",
-      },
+      { requestId: launch.requestId, failure: serializeRpcFailure(failure) },
     ]);
 
-    await Promise.all([readiness, stopping]);
+    const readyError = await readiness;
+    expect(readyError).toBeInstanceOf(RemoteRpcAggregateError);
+    const graph = readyError as RemoteRpcAggregateError;
+    expect(graph).toMatchObject({ code: "EOWNERSHIP" });
+    expect(graph.errors[0]).toMatchObject({ code: "EPROCESS", errorData: { pid: 42 } });
+    expect(graph.cause).toBe(graph.errors[0]);
+    expect((graph.errors[1] as Error).cause).toBe(graph.errors[0]);
+    const stopError = await stopping;
+    expect(stopError).toMatchObject({ code: "ECLEANUP" });
+    expect((stopError as Error).cause).toBe(graph);
   });
 
   it("holds a stop requested during launch until the selected provider proves process exit", async () => {

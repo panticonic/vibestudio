@@ -7,6 +7,10 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { EventService } from "@vibestudio/shared/eventsService";
+import type { EventName } from "@vibestudio/shared/events";
+import { RemoteRpcAggregateError, serializeRpcFailure } from "@vibestudio/rpc";
+import { createServerEventBridge } from "../../main/serverEventBridge.js";
+import type { CredentialCaptureCompletion } from "@vibestudio/service-schemas/credentials";
 import {
   createCredentialCaptureBridge,
   DESKTOP_ATTACHMENT_REQUIRED,
@@ -35,9 +39,12 @@ describe("createCredentialCaptureBridge", () => {
     try {
       const bridge = createCredentialCaptureBridge({ eventService });
       await expect(bridge.captureSessionCredential("alice", {})).rejects.toBe(original);
-      expect(() => bridge.completeCapture("alice", captureId, {})).toThrow(
-        "No pending credential capture"
-      );
+      expect(() =>
+        bridge.completeCapture("alice", captureId, {
+          kind: "success",
+          value: {},
+        })
+      ).toThrow("No pending credential capture");
     } finally {
       release();
     }
@@ -78,7 +85,10 @@ describe("createCredentialCaptureBridge", () => {
       expect(aliceShell).toHaveBeenCalledOnce();
       expect(bobShell).not.toHaveBeenCalled();
       expect(alicePanel).not.toHaveBeenCalled();
-      bridge.completeCapture("alice", aliceShell.mock.calls[0]![1].captureId, { token: "owned" });
+      bridge.completeCapture("alice", aliceShell.mock.calls[0]![1].captureId, {
+        kind: "success",
+        value: { token: "owned" },
+      });
       await expect(result).resolves.toEqual({ token: "owned" });
     } finally {
       for (const release of releases) release();
@@ -106,7 +116,7 @@ describe("createCredentialCaptureBridge", () => {
     expect(payload["url"]).toBe("https://example.test");
 
     const captureId = payload["captureId"] as string;
-    bridge.completeCapture("alice", captureId, { token: "abc" });
+    bridge.completeCapture("alice", captureId, { kind: "success", value: { token: "abc" } });
 
     await expect(promise).resolves.toEqual({ token: "abc" });
   });
@@ -138,9 +148,99 @@ describe("createCredentialCaptureBridge", () => {
     const captureId = ((emit.mock.calls[0] as unknown[])![2] as Record<string, unknown>)[
       "captureId"
     ] as string;
-    bridge.completeCapture("alice", captureId, { error: "denied" });
+    bridge.completeCapture("alice", captureId, {
+      kind: "failure",
+      failure: serializeRpcFailure(Object.assign(new Error("denied"), { code: "DENIED" })),
+    });
 
-    await expect(promise).rejects.toThrow("denied");
+    await expect(promise).rejects.toMatchObject({ message: "denied", code: "DENIED" });
+  });
+
+  it("preserves the full failure graph through the shell observer to its waiting caller", async () => {
+    const eventService = new EventService();
+    const captureBridge = createCredentialCaptureBridge({ eventService });
+    const shared = Object.assign(new Error("shared credential failure"), {
+      code: "SHARED_FAILURE",
+      errorData: { source: "browser" },
+    });
+    const leaf = Object.assign(new Error("cookie extraction failed"), {
+      code: "COOKIE_FAILURE",
+      errorData: { stage: "extract" },
+    });
+    const original = Object.assign(
+      new AggregateError([leaf, shared, shared], "credential capture failed", { cause: shared }),
+      { code: "CAPTURE_FAILURE", errorData: { captureId: "capture-graph" } }
+    );
+
+    let dispatchServerEvent: (event: string, payload: unknown) => void = () => {};
+    const clientRelease = eventService.registerTransportSession({
+      callerId: "alice-desktop",
+      connectionId: "capture-graph",
+      userId: "alice",
+      callerKind: "shell",
+      send: (event, payload) => dispatchServerEvent(String(event), payload),
+    });
+    const serverClient = {
+      call: vi.fn(async (_service: string, _method: string, args: unknown[]) => {
+        captureBridge.completeCapture(
+          "alice",
+          args[0] as string,
+          args[1] as CredentialCaptureCompletion
+        );
+      }),
+    };
+    const eventHandler = createServerEventBridge({
+      eventService,
+      getPanelOrchestrator: () => null,
+      getServerClient: () => serverClient as never,
+      openExternal: async () => {},
+      warn: () => {},
+      onCredentialCaptureRequest: async () => {
+        throw original;
+      },
+    });
+    dispatchServerEvent = (event, payload) => eventHandler(event as EventName, payload);
+
+    try {
+      const waitingCaller = captureBridge.captureSessionCredential("alice", { kind: "cookies" });
+      let received: unknown;
+      try {
+        await waitingCaller;
+      } catch (error) {
+        received = error;
+      }
+
+      expect(received).toBeInstanceOf(RemoteRpcAggregateError);
+      const aggregate = received as RemoteRpcAggregateError;
+      expect(aggregate).toMatchObject({
+        message: "credential capture failed",
+        code: "CAPTURE_FAILURE",
+        errorData: { captureId: "capture-graph" },
+      });
+      expect(aggregate.errors).toHaveLength(3);
+      expect(aggregate.errors[0]).toMatchObject({
+        message: "cookie extraction failed",
+        code: "COOKIE_FAILURE",
+        errorData: { stage: "extract" },
+      });
+      expect(aggregate.errors[1]).toMatchObject({
+        message: "shared credential failure",
+        code: "SHARED_FAILURE",
+        errorData: { source: "browser" },
+      });
+      expect(aggregate.errors[1]).toBe(aggregate.errors[2]);
+      expect(aggregate.cause).toBe(aggregate.errors[1]);
+      expect(serverClient.call).toHaveBeenCalledWith(
+        "credentials",
+        "completeCapture",
+        expect.arrayContaining([
+          expect.any(String),
+          expect.objectContaining({ kind: "failure", failure: expect.any(Object) }),
+        ])
+      );
+    } finally {
+      clientRelease();
+    }
   });
 
   it("waits for the person and rejects only when the addressed shell disconnects", async () => {
@@ -174,9 +274,12 @@ describe("createCredentialCaptureBridge", () => {
       await assertion;
 
       // Pending entry is gone: completing the same id now throws.
-      expect(() => bridge.completeCapture("alice", captureId, { token: "late" })).toThrow(
-        "No pending credential capture"
-      );
+      expect(() =>
+        bridge.completeCapture("alice", captureId, {
+          kind: "success",
+          value: { token: "late" },
+        })
+      ).toThrow("No pending credential capture");
     } finally {
       release();
       vi.useRealTimers();
@@ -217,9 +320,12 @@ describe("createCredentialCaptureBridge", () => {
       eventService,
     });
 
-    expect(() => bridge.completeCapture("alice", "nope", { token: "x" })).toThrow(
-      "No pending credential capture"
-    );
+    expect(() =>
+      bridge.completeCapture("alice", "nope", {
+        kind: "success",
+        value: { token: "x" },
+      })
+    ).toThrow("No pending credential capture");
   });
 
   it("binds completion to the authenticated owner and replaces claimed correlation fields", async () => {
@@ -229,10 +335,16 @@ describe("createCredentialCaptureBridge", () => {
     const payload = (emit.mock.calls[0] as unknown[])[2] as { userId: string; captureId: string };
     expect(payload.userId).toBe("alice");
     expect(payload.captureId).not.toBe("forged");
-    expect(() => bridge.completeCapture("bob", payload.captureId, { token: "stolen" })).toThrow(
-      "No pending credential capture"
-    );
-    bridge.completeCapture("alice", payload.captureId, { token: "owned" });
+    expect(() =>
+      bridge.completeCapture("bob", payload.captureId, {
+        kind: "success",
+        value: { token: "stolen" },
+      })
+    ).toThrow("No pending credential capture");
+    bridge.completeCapture("alice", payload.captureId, {
+      kind: "success",
+      value: { token: "owned" },
+    });
     await expect(result).resolves.toEqual({ token: "owned" });
   });
 });

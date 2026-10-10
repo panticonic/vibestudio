@@ -4,6 +4,7 @@ import {
   defineServiceMethods,
   fixedPreparedAuthorityRequirement,
 } from "@vibestudio/shared/typedServiceClient";
+import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
 const consoleHistoryOptionsSchema = z
   .object({
     limit: z.number().int().min(1).max(1000).optional(),
@@ -16,6 +17,16 @@ const consoleHistoryOptionsSchema = z
     beforeSeq: z.number().int().positive().optional(),
   })
   .optional();
+const browserDownloadSchema = z
+  .object({
+    id: z.string(),
+    url: z.string(),
+    filename: z.string(),
+    state: z.string(),
+    receivedBytes: z.number(),
+    totalBytes: z.number(),
+  })
+  .strict();
 
 const screenshotOptionsSchema = z
   .object({
@@ -141,6 +152,7 @@ export const panelCdpMethods = defineServiceMethods({
     },
     description: "Stop loading an approved panel target through its active CDP host.",
     args: z.tuple([z.string()]),
+    returns: z.void(),
     authority: cdpBoundaryAuthority("stop"),
     access: { sensitivity: "write" },
   },
@@ -175,6 +187,12 @@ export const panelCdpMethods = defineServiceMethods({
           })
           .strict(),
       ]),
+    ]),
+    returns: z.union([
+      z.array(browserDownloadSchema),
+      browserDownloadSchema,
+      z.object({ base64: z.string(), eof: z.boolean() }).strict(),
+      z.void(),
     ]),
     authority: cdpBoundaryAuthority("browserOperation"),
     access: { sensitivity: "write" },
@@ -292,7 +310,7 @@ export const panelCdpMethods = defineServiceMethods({
     },
     description: "Internal shell/server transport: open a streamed CDP host-provider channel.",
     args: z.tuple([z.string(), z.string()]),
-    returns: z.instanceof(Response),
+    returns: StreamResponseSchema,
     authority: { principals: ["user", "host"] },
     access: { sensitivity: "admin" as const },
   },

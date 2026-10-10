@@ -1,24 +1,22 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ServerClient } from "./serverClient.js";
+import { developmentClientExecutorMethods } from "@vibestudio/service-schemas/developmentClientExecutor";
+import {
+  createTypedServiceClient,
+  type TypedServiceClient,
+} from "@vibestudio/shared/typedServiceClient";
 import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
 import { createOwnedProcessGroupReceiver } from "@vibestudio/shared/ownedProcessRegistration";
 
 const MARKER = ".vibestudio-development-client.json";
 const CHUNK_BYTES = 1024 * 1024;
 
-interface LaunchClaim {
-  requestId: string;
-  runId: string;
-  mainEntryBuildId: string;
-  executionDigest: string;
-  recipeId: string;
-  artifacts: Array<{ path: string; integrity: string; byteLength: number }>;
-  pairingDeepLink: string;
-  expiresAt: number;
-}
+type ExecutorClient = TypedServiceClient<typeof developmentClientExecutorMethods>;
+type LaunchClaim = Awaited<ReturnType<ExecutorClient["claim"]>>;
 
 interface OwnedClient {
   requestId: string;
@@ -40,6 +38,7 @@ export class CurrentHostDevelopmentClientExecutor {
   private closing: Promise<void> | null = null;
   private readonly executorDigest: string;
   private readonly providerId: string;
+  private readonly executor: ExecutorClient;
 
   constructor(
     private readonly deps: {
@@ -55,6 +54,11 @@ export class CurrentHostDevelopmentClientExecutor {
       log?: (message: string) => void;
     }
   ) {
+    this.executor = createTypedServiceClient(
+      "developmentClientExecutor",
+      developmentClientExecutorMethods,
+      (service, method, args) => deps.client.call(service, method, args)
+    );
     const executable = fs.realpathSync(deps.electronExecutable ?? process.execPath);
     this.executorDigest = sha256(fs.readFileSync(executable));
     this.providerId = `electron-${this.executorDigest.slice(0, 24)}`;
@@ -134,9 +138,7 @@ export class CurrentHostDevelopmentClientExecutor {
     let launchedClient: OwnedClient | null = null;
     try {
       if (this.closed) throw coded("ESHUTDOWN", "Development client executor is closed");
-      const claim = (await this.deps.client.call("developmentClientExecutor", "claim", [
-        { requestId },
-      ])) as LaunchClaim;
+      const claim = await this.executor.claim({ requestId });
       if (claim.requestId !== requestId || claim.expiresAt <= this.now()) {
         throw coded("ESTALE", "Development client launch request expired");
       }
@@ -187,13 +189,11 @@ export class CurrentHostDevelopmentClientExecutor {
         { mode: 0o600 }
       );
       const ownershipDigest = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
-      await this.deps.client.call("developmentClientExecutor", "launched", [
-        {
-          requestId,
-          childPid: child.pid,
-          ownershipDigest,
-        },
-      ]);
+      await this.executor.launched({
+        requestId,
+        childPid: identity.pid,
+        ownershipDigest,
+      });
     } catch (error) {
       const owned = launchedClient ?? this.children.get(requestId);
       if (owned) {
@@ -204,9 +204,10 @@ export class CurrentHostDevelopmentClientExecutor {
                 { code: "EOWNERSHIP" }
               )
             : error;
-          await this.deps.client.call("developmentClientExecutor", "fail", [
-            { requestId, code: code(failure), message: message(failure).slice(0, 2_000) },
-          ]);
+          await this.executor.fail({
+            requestId,
+            failure: Object.assign(serializeRpcFailure(failure), { code: code(failure) }),
+          });
         });
         return;
       }
@@ -224,9 +225,10 @@ export class CurrentHostDevelopmentClientExecutor {
           { code: "EOWNERSHIP" }
         );
       }
-      await this.deps.client.call("developmentClientExecutor", "fail", [
-        { requestId, code: code(failure), message: message(failure).slice(0, 2_000) },
-      ]);
+      await this.executor.fail({
+        requestId,
+        failure: Object.assign(serializeRpcFailure(failure), { code: code(failure) }),
+      });
     }
   }
 
@@ -246,14 +248,12 @@ export class CurrentHostDevelopmentClientExecutor {
   }
 
   private async register(): Promise<void> {
-    await this.deps.client.call("developmentClientExecutor", "register", [
-      {
-        providerId: this.providerId,
-        platform: process.platform,
-        arch: process.arch,
-        executorDigest: this.executorDigest,
-      },
-    ]);
+    await this.executor.register({
+      providerId: this.providerId,
+      platform: process.platform,
+      arch: process.arch,
+      executorDigest: this.executorDigest,
+    });
   }
 
   private async materialize(claim: LaunchClaim): Promise<string> {
@@ -286,18 +286,12 @@ export class CurrentHostDevelopmentClientExecutor {
           while (offset < artifact.byteLength) {
             if (this.closed)
               throw coded("ESHUTDOWN", "Client materialization cancelled by owner closure");
-            const chunk = (await this.deps.client.call(
-              "developmentClientExecutor",
-              "readArtifact",
-              [
-                {
-                  requestId: claim.requestId,
-                  path: artifact.path,
-                  offset,
-                  length: Math.min(CHUNK_BYTES, artifact.byteLength - offset),
-                },
-              ]
-            )) as { base64: string; nextOffset: number; eof: boolean };
+            const chunk = await this.executor.readArtifact({
+              requestId: claim.requestId,
+              path: artifact.path,
+              offset,
+              length: Math.min(CHUNK_BYTES, artifact.byteLength - offset),
+            });
             if (this.closed)
               throw coded("ESHUTDOWN", "Client materialization cancelled by owner closure");
             const bytes = Buffer.from(chunk.base64, "base64");
@@ -421,17 +415,16 @@ export class CurrentHostDevelopmentClientExecutor {
     signal: NodeJS.Signals | null
   ): Promise<void> {
     const owned = this.children.get(requestId);
-    if (!owned?.child.pid) return Promise.resolve();
+    const childPid = owned?.child.pid;
+    if (!owned || childPid === undefined) return Promise.resolve();
     return this.completeClient(owned, async (cleanupError) => {
-      await this.deps.client.call("developmentClientExecutor", "exited", [
-        {
-          requestId,
-          childPid: owned.child.pid,
-          exitCode,
-          signal,
-          ...(cleanupError ? { cleanupError: message(cleanupError).slice(0, 2_000) } : {}),
-        },
-      ]);
+      await this.executor.exited({
+        requestId,
+        childPid,
+        exitCode,
+        signal,
+        ...(cleanupError ? { cleanupError: serializeRpcFailure(cleanupError) } : {}),
+      });
     });
   }
 
@@ -450,12 +443,28 @@ export class CurrentHostDevelopmentClientExecutor {
       }
       try {
         await report(cleanupError);
+      } catch (error) {
+        if (cleanupError !== null) {
+          throw Object.assign(
+            new AggregateError(
+              [cleanupError, error],
+              "Development client retirement and receipt delivery failed",
+              { cause: cleanupError }
+            ),
+            { code: "EOWNERSHIP" }
+          );
+        }
+        throw error;
       } finally {
         // Failed receipt delivery must not retain an already retired client.
         // Retirement failures retain their known owner/root for diagnosis.
         if (!cleanupError) this.children.delete(owned.requestId);
       }
-      if (cleanupError) throw coded("EOWNERSHIP", message(cleanupError));
+      if (cleanupError)
+        throw Object.assign(
+          new Error("Development client resources did not retire", { cause: cleanupError }),
+          { code: "EOWNERSHIP" }
+        );
     });
     return owned.completion;
   }
