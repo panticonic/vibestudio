@@ -36,10 +36,12 @@ export interface ServiceStartupReport {
 export class ServiceContainer {
   private services = new Map<string, ManagedService>();
   private instances = new Map<string, unknown>();
+  private rpcDefinitions = new Map<string, ServiceDefinition>();
   private startOrder: string[] = [];
   private started = false;
   private startupReport: ServiceStartupReport | null = null;
   private startupFlight: Promise<void> | null = null;
+  private startupRegistration: ReturnType<ServiceDispatcher["beginServiceStartup"]> | null = null;
   private readonly startupTasks = new Set<Promise<void>>();
   private startupStartedAt: number | null = null;
   private readonly startupTimings = new Map<string, ServiceStartupTiming>();
@@ -100,11 +102,18 @@ export class ServiceContainer {
     if (this.retiring) return Promise.reject(new Error("Service container is retiring"));
     if (this.startupFlight)
       return Promise.reject(new Error("Service startup is already in progress"));
+    const registration = this.dispatcher?.beginServiceStartup();
+    this.startupRegistration = registration ?? null;
     const flight = this.startSelected(names);
+    void flight.then(
+      () => registration?.complete(),
+      (error) => registration?.fail(error)
+    );
     this.startupFlight = flight;
     void flight
       .finally(() => {
         if (this.startupFlight === flight) this.startupFlight = null;
+        if (this.startupRegistration === registration) this.startupRegistration = null;
       })
       .catch(() => {});
     return flight;
@@ -132,8 +141,10 @@ export class ServiceContainer {
     const started = new Set<string>();
     const activeWatchdogs = new Set<ReturnType<typeof setInterval>>();
     let startupAborted = false;
+    let firstError: unknown = null;
 
     const stopStartedInstance = async (name: string, instance: unknown): Promise<void> => {
+      this.retireRpc(name, firstError);
       const service = this.services.get(name);
       if (!service?.stop) return;
       try {
@@ -186,7 +197,7 @@ export class ServiceContainer {
           if (startDurationMs >= 500) {
             log.info(`[${name}] started in ${startDurationMs}ms`);
           }
-          if (startupAborted) {
+          if (startupAborted || this.retiring) {
             await stopStartedInstance(name, instance);
             return;
           }
@@ -196,7 +207,7 @@ export class ServiceContainer {
           activeWatchdogs.delete(watchdog);
         }
       } else {
-        if (startupAborted) return;
+        if (startupAborted || this.retiring) return;
         this.instances.set(name, undefined);
       }
       started.add(name);
@@ -208,6 +219,7 @@ export class ServiceContainer {
         const def = service.getServiceDefinition();
         if (def) {
           this.dispatcher.registerService(def);
+          this.rpcDefinitions.set(name, def);
           log.info(`[${name}] Registered RPC service "${def.name}"`);
         }
       }
@@ -230,7 +242,6 @@ export class ServiceContainer {
     // dependents). A failed dependency rejects every transitive dependent
     // before its start hook runs.
     const startPromises = new Map<string, Promise<void>>();
-    let firstError: unknown = null;
     const startService = (name: string): Promise<void> => {
       if (this.instances.has(name)) return Promise.resolve();
       const existing = startPromises.get(name);
@@ -241,7 +252,7 @@ export class ServiceContainer {
         ...(service.optionalDependencies ?? []).filter((dep) => this.services.has(dep)),
       ];
       const promise = Promise.all(deps.map(startService)).then(async () => {
-        if (startupAborted) return;
+        if (startupAborted || this.retiring) return;
         try {
           await startOne(name);
         } catch (error) {
@@ -314,6 +325,7 @@ export class ServiceContainer {
    */
   async stopAll(): Promise<void> {
     this.retiring = true;
+    this.startupRegistration?.fail(new Error("Service container is retiring"));
     await Promise.allSettled([
       ...(this.startupFlight ? [this.startupFlight] : []),
       ...this.startupTasks,
@@ -323,6 +335,7 @@ export class ServiceContainer {
     log.info(`Stopping ${this.startOrder.length} services...`);
     const failures: unknown[] = [];
     for (const name of [...this.startOrder].reverse()) {
+      this.retireRpc(name);
       const service = this.services.get(name);
       if (service?.stop) {
         try {
@@ -339,6 +352,13 @@ export class ServiceContainer {
     }
     if (failures.length) throw new AggregateError(failures, "Service container cleanup failed");
     this.started = this.startOrder.length > 0;
+  }
+
+  private retireRpc(name: string, reason?: unknown): void {
+    const definition = this.rpcDefinitions.get(name);
+    if (!definition) return;
+    this.dispatcher?.unregisterService(definition, reason);
+    this.rpcDefinitions.delete(name);
   }
 
   /**

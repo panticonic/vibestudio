@@ -40,7 +40,6 @@ import {
 import { ContentOverlayManager } from "./contentOverlayManager.js";
 import { interceptChromeShortcuts, isChromeOwnedInput } from "./menu.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import { CompositorRecovery } from "./compositorRecovery.js";
 import { FullscreenPresentation } from "./fullscreenPresentation.js";
 import type { CapabilityScope } from "@vibestudio/rpc";
@@ -805,13 +804,12 @@ export class ViewManager {
     // Browser panels share BROWSER_SESSION_PARTITION for cookies/auth.
     // Workspace panels use the default session (no external sites).
     const ses = config.partition ? session.fromPartition(config.partition) : session.defaultSession;
+    // App capabilities are granted by the owning workspace server. Loading
+    // another workspace manifest in this process must not reinterpret them.
     const hostChrome =
       config.type === "app" &&
       (config.hostChrome ?? false) &&
-      isAuthorizedChromeAppCaller(
-        config.workspaceIdentity?.runtimeId ?? "",
-        config.codeIdentity?.source
-      );
+      config.appCapabilities?.includes("panel-hosting") === true;
 
     // All panels run in safe sandboxed mode
     const runtimeMustRemainSchedulable = hostChrome || config.type === "panel";
@@ -3289,9 +3287,7 @@ export class ViewManager {
     if (managed.type !== "app") throw new Error(`View is not an app view: ${id}`);
     managed.appCapabilities = [...(capabilities ?? [])];
     const nextIdentity = identity;
-    managed.hostChrome =
-      capabilities?.includes("panel-hosting") === true &&
-      isAuthorizedChromeAppCaller(managed.workspaceIdentity?.runtimeId ?? "", nextIdentity?.source);
+    managed.hostChrome = capabilities?.includes("panel-hosting") === true;
     if (!managed.hostChrome && this.nativePanelSlots.activeHostedShellViewId === id) {
       this.nativePanelSlots.hostedShellReady = false;
       this.clearAllPanelSlots();

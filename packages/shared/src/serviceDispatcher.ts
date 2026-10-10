@@ -848,6 +848,13 @@ export type ServiceFailureObserver = (failure: {
 export class ServiceDispatcher {
   private handlers = new Map<string, ServiceHandler>();
   private definitions = new Map<string, ServiceDefinition>();
+  private retiredServices = new Map<string, unknown>();
+  private serviceStartups = new Set<symbol>();
+  private serviceStartupFailure?: { cause: unknown };
+  private serviceRegistrationWaiters = new Map<
+    string,
+    Set<{ resolve(): void; reject(error: unknown): void }>
+  >();
   private readonly methodTiers = new Map<string, MethodTierPolicy>();
   private initialized = false;
   private authorityAcquirer?: AuthorityAcquirer;
@@ -1028,10 +1035,62 @@ export class ServiceDispatcher {
   }
 
   /**
-   * Mark the dispatcher as initialized. Must be called after all services are registered.
+   * Mark initial workspace readiness. Later registrations remain owned by startup.
    */
   markInitialized(): void {
     this.initialized = true;
+  }
+
+  /** Registration is owned by startup; callers wait only while that work is live. */
+  beginServiceStartup(): { complete(): void; fail(error: unknown): void } {
+    const owner = Symbol("service startup");
+    if (this.serviceStartups.size === 0) this.serviceStartupFailure = undefined;
+    this.serviceStartups.add(owner);
+    const finish = (failure?: { cause: unknown }) => {
+      if (!this.serviceStartups.delete(owner)) return;
+      if (failure) this.serviceStartupFailure ??= failure;
+      if (this.serviceStartups.size !== 0) return;
+      for (const [service, waiters] of this.serviceRegistrationWaiters) {
+        for (const waiter of waiters) {
+          if (this.serviceStartupFailure) waiter.reject(this.serviceStartupFailure.cause);
+          else waiter.reject(new Error(`Service "${service}" was not registered during startup`));
+        }
+      }
+    };
+    return { complete: () => finish(), fail: (error) => finish({ cause: error }) };
+  }
+
+  private waitForServiceRegistration(service: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    if (this.handlers.has(service)) return Promise.resolve();
+    if (this.retiredServices.has(service)) return Promise.reject(this.retiredServices.get(service));
+    if (this.serviceStartups.size === 0) {
+      return this.serviceStartupFailure
+        ? Promise.reject(this.serviceStartupFailure.cause)
+        : Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const waiters = this.serviceRegistrationWaiters.get(service) ?? new Set();
+      this.serviceRegistrationWaiters.set(service, waiters);
+      const cleanup = () => {
+        signal?.removeEventListener("abort", aborted);
+        waiters.delete(waiter);
+        if (waiters.size === 0) this.serviceRegistrationWaiters.delete(service);
+      };
+      const waiter = {
+        resolve: () => {
+          cleanup();
+          resolve();
+        },
+        reject: (error: unknown) => {
+          cleanup();
+          reject(error);
+        },
+      };
+      const aborted = () => waiter.reject(signal!.reason);
+      waiters.add(waiter);
+      signal?.addEventListener("abort", aborted, { once: true });
+    });
   }
 
   /**
@@ -1099,7 +1158,24 @@ export class ServiceDispatcher {
     }
     this.definitions.set(def.name, def);
     this.handlers.set(def.name, def.handler);
+    this.retiredServices.delete(def.name);
+    for (const waiter of this.serviceRegistrationWaiters.get(def.name) ?? []) waiter.resolve();
     return previous;
+  }
+
+  /** Retire only the definition owned by the caller, preserving any replacement. */
+  unregisterService(
+    def: ServiceDefinition,
+    reason: unknown = new Error(`Service "${def.name}" has stopped`)
+  ): boolean {
+    if (this.definitions.get(def.name) !== def) return false;
+    this.definitions.delete(def.name);
+    this.handlers.delete(def.name);
+    this.retiredServices.set(def.name, reason);
+    for (const method of Object.keys(def.methods)) {
+      this.methodTiers.delete(`${def.name}.${method}`);
+    }
+    return true;
   }
 
   /**
@@ -1151,6 +1227,15 @@ export class ServiceDispatcher {
     args: unknown[]
   ): Promise<unknown> {
     this.assertWorkspaceConnection(ctx, service, method);
+    if (!this.handlers.has(service)) {
+      const signal =
+        ctx.signal && ctx.connectionSignal
+          ? AbortSignal.any([ctx.signal, ctx.connectionSignal])
+          : (ctx.signal ?? ctx.connectionSignal);
+      await this.waitForServiceRegistration(service, signal);
+      signal?.throwIfAborted();
+    }
+    if (this.retiredServices.has(service)) throw this.retiredServices.get(service);
     if (!this.initialized && !this.handlers.has(service)) {
       throw new ServiceError(service, method, "Services not yet initialized");
     }

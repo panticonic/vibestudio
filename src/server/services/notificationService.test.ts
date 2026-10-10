@@ -1,10 +1,35 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import { createNotificationService } from "./notificationService.js";
 
 describe("server notification service", () => {
-  afterEach(() => setWorkspaceAppTrust(null));
+  it("requires a current server-granted chrome capability even for an app named shell", async () => {
+    const eventService = { emit: vi.fn(), emitToUser: vi.fn(() => true) };
+    const hasAppCapability = vi.fn(() => false);
+    const service = createNotificationService({
+      eventService: eventService as never,
+      hasAppCapability,
+    }).definition;
+    const caller = createVerifiedCaller("app:apps/shell:device", "app", {
+      callerId: "app:apps/shell:device",
+      callerKind: "app",
+      repoPath: "apps/shell",
+      effectiveVersion: "a".repeat(64),
+    });
+    await expect(service.handler({ caller }, "reportAction", ["notice", "open"])).rejects.toThrow(
+      "Only trusted workspace chrome"
+    );
+    hasAppCapability.mockReturnValue(true);
+    await expect(
+      service.handler({ caller }, "reportAction", ["notice", "open"])
+    ).resolves.toBeUndefined();
+    expect(hasAppCapability).toHaveBeenCalledWith(caller.runtime.id, "panel-hosting");
+    hasAppCapability.mockReturnValue(false);
+    await expect(service.handler({ caller }, "reportAction", ["notice", "open"])).rejects.toThrow(
+      "Only trusted workspace chrome"
+    );
+  });
+
   it("issues a caller-attributed id and scopes the notification to the verified account", async () => {
     const eventService = {
       emit: vi.fn(),
@@ -57,12 +82,15 @@ describe("server notification service", () => {
   });
 
   it("accepts user actions only from the shell belonging to the addressed account", async () => {
-    setWorkspaceAppTrust({ chromeApps: ["apps/shell"] });
     const eventService = {
       emit: vi.fn(),
       emitToUser: vi.fn(() => true),
     };
-    const result = createNotificationService({ eventService: eventService as never });
+    const result = createNotificationService({
+      eventService: eventService as never,
+      hasAppCapability: (callerId, capability) =>
+        callerId === "app:@workspace-apps/shell" && capability === "panel-hosting",
+    });
     const panel = createVerifiedCaller("panel:alice", "panel", null, null, {
       userId: "usr_alice",
       handle: "alice",

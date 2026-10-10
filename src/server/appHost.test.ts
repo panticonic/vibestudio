@@ -4,11 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import {
   buildHostBuildUnitInventory,
   hostBuildUnitInventoryPath,
@@ -77,18 +76,7 @@ function publicationEvent(): ProtectedPublicationEvent {
   };
 }
 
-// App trust is manifest-declared (meta/vibestudio.yml trust.*) and seeded per
-// process by the workspace loader / server startup. Seed the shipped default
-// grants here so the AppHost's trust filtering is exercised the way a live
-// server sees it.
-beforeEach(() => {
-  setWorkspaceAppTrust({
-    chromeApps: ["apps/shell", "apps/mobile"],
-  });
-});
-
 afterEach(() => {
-  setWorkspaceAppTrust(null);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   if (originalAppDevStatus === undefined) delete process.env["VIBESTUDIO_APP_DEV_STATUS"];
   else process.env["VIBESTUDIO_APP_DEV_STATUS"] = originalAppDevStatus;
@@ -133,6 +121,7 @@ function makeHarness(
     terminalAppArtifactBaseUrl?: string;
     affectedBuildUnits?: string[];
     isSystemWorkspace?: () => boolean;
+    getWorkspaceTrustGrants?: AppHostDeps["getWorkspaceTrustGrants"];
     connectionGrants?: AppHostDeps["connectionGrants"];
     configureTerminalRunner?: boolean;
     ensureHostTargetExtensions?: AppHostDeps["ensureHostTargetExtensions"];
@@ -313,6 +302,8 @@ function makeHarness(
     workspaceId: "ws",
     diagnostics,
     isSystemWorkspace: opts.isSystemWorkspace ?? (() => true),
+    getWorkspaceTrustGrants:
+      opts.getWorkspaceTrustGrants ?? (() => ({ chromeApps: ["apps/shell", "apps/mobile"] })),
     buildSystem,
     isAdmitted: opts.isAdmitted,
     openUnitReviewFor: opts.openUnitReviewFor,
@@ -1447,7 +1438,7 @@ describe("AppHost", () => {
 
   it("keeps panel-hosting in apps:available for a trusted chrome app", async () => {
     const { host, eventService, graphNode } = makeHarness();
-    // apps/shell is seeded into trust.chromeApps by the shared beforeEach.
+    // This workspace manifest grants chrome authority to apps/shell.
     graphNode.manifest.app.capabilities = ["panel-hosting", "notifications"] as never;
 
     await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
@@ -1464,12 +1455,36 @@ describe("AppHost", () => {
     );
   });
 
+  it("uses the owning workspace's current manifest for chrome grants through bootstrap and revocation", async () => {
+    let systemTrust = { chromeApps: [] as string[] };
+    const system = makeHarness({ getWorkspaceTrustGrants: () => systemTrust });
+    const other = makeHarness({ getWorkspaceTrustGrants: () => ({ chromeApps: [] }) });
+    for (const owner of [system, other]) {
+      owner.graphNode.manifest.app.capabilities = ["panel-hosting", "notifications"] as never;
+    }
+    // Bootstrap materializes the semantic System manifest after its initial descriptor.
+    systemTrust = { chromeApps: ["apps/shell"] };
+    for (const owner of [system, other]) {
+      await owner.host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
+      await owner.host.whenSettled();
+      await owner.host.activateRelease("@workspace-apps/shell");
+    }
+    expect(system.host.hasAppCapability("@workspace-apps/shell", "panel-hosting")).toBe(true);
+    expect(other.host.hasAppCapability("@workspace-apps/shell", "panel-hosting")).toBe(false);
+    expect(system.eventService.emit).toHaveBeenCalledWith(
+      "apps:available",
+      expect.objectContaining({
+        capabilities: expect.arrayContaining(["panel-hosting", "notifications"]),
+      })
+    );
+    systemTrust = { chromeApps: [] };
+    expect(system.host.hasAppCapability("@workspace-apps/shell", "panel-hosting")).toBe(false);
+  });
+
   it("strips panel-hosting from apps:available for an app absent from trust.chromeApps", async () => {
-    const { host, eventService, graphNode } = makeHarness();
-    // Remove apps/shell from the chrome trust list: the app now self-declares
-    // panel-hosting without authorization, so the server-vetted (effective)
-    // capability set projected into apps:available must drop it.
-    setWorkspaceAppTrust({ chromeApps: [] });
+    const { host, eventService, graphNode } = makeHarness({
+      getWorkspaceTrustGrants: () => ({ chromeApps: [] }),
+    });
     graphNode.manifest.app.capabilities = ["panel-hosting", "notifications"] as never;
 
     await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);

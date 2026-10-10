@@ -11,7 +11,6 @@ import type { ApplicationWindowController } from "./applicationWindowController.
 import type { CdpHostProvider } from "./cdpHostProvider.js";
 import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { readEventWatchRecords } from "@vibestudio/shared/events";
-import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 
 const edges = vi.hoisted(() => ({
   controller: vi.fn(),
@@ -222,7 +221,6 @@ describe("prepareDesktopWorkspaceRuntime", () => {
 beforeEach(() => {
   vi.resetAllMocks();
   edges.reportingRoot = mkdtempSync(join(tmpdir(), "workspace-runtime-reporting-"));
-  setWorkspaceAppTrust({ chromeApps: ["apps/shell"] });
   edges.partition.mockResolvedValue("persist:workspace-test");
   edges.personal.mockResolvedValue({ publishedServices: [] });
 });
@@ -230,7 +228,6 @@ afterEach(async () => {
   await Promise.allSettled(closing.splice(0).map((runtime) => runtime.close()));
   rmSync(edges.reportingRoot, { recursive: true, force: true });
   vi.useRealTimers();
-  setWorkspaceAppTrust(null);
 });
 
 function fixture(

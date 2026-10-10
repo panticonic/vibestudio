@@ -41,6 +41,7 @@ import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPubl
 import {
   isAuthorizedChromeAppSource,
   normalizeAppSourcePath,
+  type WorkspaceAppTrustGrants,
 } from "@vibestudio/shared/chromeTrust";
 import type {
   PendingApproval,
@@ -336,6 +337,8 @@ export interface AppHostDeps {
   diagnostics: Pick<RuntimeDiagnosticsStore, "record" | "history">;
   /** Protected hub designation, never workspace-authored app or trust configuration. */
   isSystemWorkspace(): boolean;
+  /** Current semantic manifest of this workspace, independent of other loaded manifests. */
+  getWorkspaceTrustGrants(): WorkspaceAppTrustGrants;
   readWorkspaceFileAtState(stateHash: string, filePath: string): Promise<string | null>;
   describeCapability?: CapabilityPresentationResolver;
   buildSystem: BuildSystemLike;
@@ -1315,7 +1318,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    */
   private isTrustGatedCapabilityAuthorized(repo: string, capability: AppCapability): boolean {
     if (capability === "panel-hosting") {
-      if (isAuthorizedChromeAppSource(repo)) return true;
+      if (isAuthorizedChromeAppSource(repo, this.deps.getWorkspaceTrustGrants())) return true;
       const source = normalizeAppSourcePath(repo);
       if (!this.loggedUnauthorizedPanelHostingSources.has(source)) {
         this.loggedUnauthorizedPanelHostingSources.add(source);

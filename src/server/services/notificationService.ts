@@ -13,7 +13,7 @@ import type { NotificationPayload } from "@vibestudio/shared/events";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { notificationMethods } from "@vibestudio/service-schemas/notification";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
+import { isAuthorizedChrome, type CapabilityTrustDeps } from "./chromeTrust.js";
 import type { UserInboxPushRequest } from "@vibestudio/service-schemas/notification";
 import type { PushUserInboxDataPayload } from "@vibestudio/shared/userNotifications";
 import type { PushServiceInternal } from "./pushService.js";
@@ -30,6 +30,7 @@ export interface NotificationServiceInternal {
 
 export interface NotificationServiceDeps {
   eventService: EventService;
+  hasAppCapability?: CapabilityTrustDeps["hasAppCapability"];
   /**
    * The push half of a userland inbox escalation (messaging plan §4.5 step 5).
    * Optional so callers without a device registry (tests, headless hosts) still
@@ -204,12 +205,7 @@ export function createNotificationService(deps: NotificationServiceDeps): {
         internal.dismiss(id, ctx.caller.subject?.userId);
       },
       reportAction: (ctx, [id, actionId]) => {
-        const runtime = ctx.caller.runtime;
-        const isChrome =
-          runtime.kind === "shell" ||
-          (runtime.kind === "app" &&
-            isAuthorizedChromeAppCaller(runtime.id, ctx.caller.code?.repoPath));
-        if (!isChrome) {
+        if (!isAuthorizedChrome(ctx.caller, deps)) {
           throw new Error("Only trusted workspace chrome can report a notification action");
         }
         const targetUserId = ctx.caller.subject?.userId;

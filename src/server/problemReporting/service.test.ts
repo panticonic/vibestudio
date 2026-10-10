@@ -9,6 +9,8 @@ import { problemReportsMethods } from "@vibestudio/service-schemas/problemReport
 import { ProblemReportingStore } from "./store";
 import { createProblemReportsService } from "../services/problemReportsService";
 import { reportFixture } from "./testFixture";
+import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 const cleanup: (() => void)[] = [];
 afterEach(() =>
   cleanup
@@ -59,8 +61,57 @@ function fixture(
         args
       )
     );
-  return { store, human: client("shell"), agent: client("do"), other: client("do", "bob") };
+  return {
+    store,
+    service,
+    human: client("shell"),
+    agent: client("do"),
+    other: client("do", "bob"),
+  };
 }
+
+it("loads reporting consent when its background service registers while other startup work remains pending", async () => {
+  const f = fixture();
+  const dispatcher = createTestServiceDispatcher({ openMethods: ["problemReports.consent"] });
+  const container = new ServiceContainer(dispatcher);
+  let releaseReporting!: () => void;
+  let releaseBackground!: () => void;
+  const reporting = new Promise<void>((resolve) => {
+    releaseReporting = resolve;
+  });
+  const background = new Promise<void>((resolve) => {
+    releaseBackground = resolve;
+  });
+  container.registerManaged({ name: "core", start: async () => {} });
+  container.registerManaged({
+    name: "problemReports",
+    start: () => reporting,
+    getServiceDefinition: () => f.service,
+  });
+  container.registerManaged({ name: "background", start: () => background });
+  await container.startRequired(["core"]);
+  dispatcher.markInitialized();
+  const startup = container.startAll();
+  const readConsent = vi.spyOn(f.store, "consent");
+  const caller = createVerifiedCaller("human", "shell", null, null, {
+    userId: "alice",
+    handle: "alice",
+  });
+  const consent = dispatcher.dispatch({ caller }, "problemReports", "consent", []);
+  try {
+    expect(container.has("core")).toBe(true);
+    expect(readConsent).not.toHaveBeenCalled();
+    releaseReporting();
+    await expect(consent).resolves.toMatchObject({ state: "undecided", revision: 0 });
+    expect(readConsent).toHaveBeenCalledOnce();
+    expect(container.has("background")).toBe(false);
+  } finally {
+    releaseReporting();
+    releaseBackground();
+    await startup;
+    await container.stopAll();
+  }
+});
 it("allows agent preparation while only a verified human can consent or send, and isolates owners", async () => {
   const f = fixture();
   expect((await f.human.consent()).state).toBe("undecided");

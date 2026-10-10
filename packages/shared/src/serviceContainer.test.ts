@@ -5,6 +5,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ServiceContainer } from "./serviceContainer.js";
 import type { ManagedService } from "./managedService.js";
+import { ServiceDispatcher, type ServiceContext } from "./serviceDispatcher.js";
 
 vi.mock("./devLog.js", () => ({
   createDevLogger: vi.fn().mockReturnValue({
@@ -35,6 +36,128 @@ function createService(
 }
 
 describe("ServiceContainer", () => {
+  it("settles pending RPC registration on shutdown while joining the owned start", async () => {
+    const dispatcher = new ServiceDispatcher();
+    const container = new ServiceContainer(dispatcher);
+    let release!: () => void;
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stop = vi.fn(async () => {});
+    container.registerManaged({
+      name: "reporting",
+      start: async () => {
+        began();
+        await held;
+      },
+      stop,
+      getServiceDefinition: () => ({
+        name: "reporting",
+        methods: {},
+        handler: vi.fn(),
+        authority: { principals: ["user"] },
+      }),
+    });
+    const startup = container.startAll();
+    await started;
+    const call = dispatcher.dispatch({ caller: {} } as ServiceContext, "reporting", "consent", []);
+    const shutdown = container.stopAll();
+    await expect(call).rejects.toThrow("Service container is retiring");
+    expect(stop).not.toHaveBeenCalled();
+    release();
+    await Promise.all([startup, shutdown]);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(dispatcher.hasService("reporting")).toBe(false);
+  });
+
+  it("withdraws RPC access before startup failure closes a service's resources", async () => {
+    const dispatcher = new ServiceDispatcher();
+    const container = new ServiceContainer(dispatcher);
+    const handler = vi.fn();
+    const definition = {
+      name: "reporting",
+      methods: {},
+      handler,
+      authority: { principals: ["user" as const] },
+    };
+    const failure = new Error("background startup failed");
+    let fail!: () => void;
+    const pending = new Promise<void>((_resolve, reject) => {
+      fail = () => reject(failure);
+    });
+    let retiredCall: Promise<unknown> | undefined;
+    const stop = vi.fn(async () => {
+      retiredCall = dispatcher.dispatch(
+        { caller: {} } as ServiceContext,
+        "reporting",
+        "consent",
+        []
+      );
+      void retiredCall.catch(() => {});
+    });
+    container.registerManaged({
+      name: "reporting",
+      getServiceDefinition: () => definition,
+      stop,
+    });
+    container.registerManaged({ name: "background", start: () => pending });
+    const startup = container.startAll();
+    await vi.waitFor(() => expect(container.has("reporting")).toBe(true));
+    fail();
+    await expect(startup).rejects.toBe(failure);
+    await expect(retiredCall).rejects.toBe(failure);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("withdraws RPC access on shutdown without removing a replacement registration", async () => {
+    const dispatcher = new ServiceDispatcher();
+    const container = new ServiceContainer(dispatcher);
+    const definition = {
+      name: "reporting",
+      methods: {},
+      handler: vi.fn(),
+      authority: { principals: ["user" as const] },
+    };
+    container.registerRpc(definition);
+    await container.startAll();
+    const replacement = { ...definition, handler: vi.fn() };
+    dispatcher.registerService(replacement);
+    await container.stopAll();
+    expect(dispatcher.unregisterService(replacement)).toBe(true);
+    expect(dispatcher.unregisterService(definition)).toBe(false);
+  });
+
+  it("withdraws RPC access before normal shutdown closes resources", async () => {
+    const dispatcher = new ServiceDispatcher();
+    const container = new ServiceContainer(dispatcher);
+    const definition = {
+      name: "reporting",
+      methods: {},
+      handler: vi.fn(),
+      authority: { principals: ["user" as const] },
+    };
+    let registeredAtStop: boolean | undefined;
+    container.registerManaged({
+      name: "reporting",
+      getServiceDefinition: () => definition,
+      stop: async () => {
+        registeredAtStop = dispatcher.hasService("reporting");
+      },
+    });
+    await container.startAll();
+    expect(dispatcher.hasService("reporting")).toBe(true);
+    await container.stopAll();
+    expect(registeredAtStop).toBe(false);
+    await expect(
+      dispatcher.dispatch({ caller: {} } as ServiceContext, "reporting", "consent", [])
+    ).rejects.toThrow('Service "reporting" has stopped');
+  });
+
   it("opens the required dependency closure while unrelated services remain unstarted", async () => {
     const container = new ServiceContainer();
     const core = createService("core");
@@ -354,8 +477,8 @@ describe("ServiceContainer", () => {
   });
 
   it("auto-registers service definitions on dispatcher", async () => {
-    const registerService = vi.fn();
-    const dispatcher = { registerService } as any;
+    const dispatcher = new ServiceDispatcher();
+    const registerService = vi.spyOn(dispatcher, "registerService");
     const container = new ServiceContainer(dispatcher);
 
     const serviceDef = {
@@ -376,8 +499,8 @@ describe("ServiceContainer", () => {
   });
 
   it("skips dispatcher registration when no getServiceDefinition", async () => {
-    const registerService = vi.fn();
-    const dispatcher = { registerService } as any;
+    const dispatcher = new ServiceDispatcher();
+    const registerService = vi.spyOn(dispatcher, "registerService");
     const container = new ServiceContainer(dispatcher);
 
     container.registerManaged(createService("a"));
@@ -400,8 +523,8 @@ describe("ServiceContainer", () => {
   });
 
   it("handles services without start() (definition-only)", async () => {
-    const registerService = vi.fn();
-    const dispatcher = { registerService } as any;
+    const dispatcher = new ServiceDispatcher();
+    const registerService = vi.spyOn(dispatcher, "registerService");
     const container = new ServiceContainer(dispatcher);
 
     const serviceDef = {
@@ -527,8 +650,8 @@ describe("ServiceContainer", () => {
   });
 
   it("registerRpc() registers the RPC definition with the dispatcher", async () => {
-    const registerService = vi.fn();
-    const dispatcher = { registerService } as any;
+    const dispatcher = new ServiceDispatcher();
+    const registerService = vi.spyOn(dispatcher, "registerService");
     const container = new ServiceContainer(dispatcher);
 
     const def = {

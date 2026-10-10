@@ -72,6 +72,63 @@ function makeService(name: string, handler: ServiceHandler): ServiceDefinition {
 }
 
 describe("ServiceDispatcher", () => {
+  it("waits for the requested service to register without waiting for the rest of startup", async () => {
+    const sd = createDispatcher();
+    const startup = sd.beginServiceStartup();
+    sd.markInitialized();
+    const handler = vi.fn(async () => "ready");
+    const call = sd.dispatch(ctx, "echo", "run", []);
+    let settled = false;
+    void call.then(() => {
+      settled = true;
+    });
+    sd.registerService(makeService("beta", vi.fn()));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(handler).not.toHaveBeenCalled();
+    sd.registerService(makeService("echo", handler));
+    await expect(call).resolves.toBe("ready");
+    expect(handler).toHaveBeenCalledOnce();
+    startup.complete();
+  });
+
+  it.each(["signal", "connectionSignal"] as const)(
+    "cancels a registration wait on %s without cancelling shared startup",
+    async (signalKey) => {
+      const sd = createDispatcher();
+      const startup = sd.beginServiceStartup();
+      const controller = new AbortController();
+      const failure = new Error("caller disconnected");
+      const cancelled = sd.dispatch({ ...ctx, [signalKey]: controller.signal }, "echo", "run", []);
+      const surviving = sd.dispatch(ctx, "echo", "run", []);
+      controller.abort(failure);
+      await expect(cancelled).rejects.toBe(failure);
+      const handler = vi.fn(async () => "ready");
+      sd.registerService(makeService("echo", handler));
+      await expect(surviving).resolves.toBe("ready");
+      expect(handler).toHaveBeenCalledOnce();
+      startup.complete();
+    }
+  );
+
+  it("propagates startup failure to pending and subsequent requests for an unregistered service", async () => {
+    const sd = createDispatcher();
+    const startup = sd.beginServiceStartup();
+    const failure = new Error("reporting initialization failed");
+    const call = sd.dispatch(ctx, "echo", "run", []);
+    startup.fail(failure);
+    await expect(call).rejects.toBe(failure);
+    await expect(sd.dispatch(ctx, "echo", "run", [])).rejects.toBe(failure);
+  });
+
+  it("settles a wait for an absent service when registration completes", async () => {
+    const sd = createDispatcher();
+    const startup = sd.beginServiceStartup();
+    const call = sd.dispatch(ctx, "echo", "run", []);
+    startup.complete();
+    await expect(call).rejects.toThrow('Service "echo" was not registered during startup');
+  });
+
   it("threads invocation cancellation into a parked authority acquisition", async () => {
     const sd = new ServiceDispatcher();
     const caller = createVerifiedCaller(

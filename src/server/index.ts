@@ -566,7 +566,6 @@ async function main() {
     WORKSPACE_EXTENSION_PROVIDER_NAMES,
     workspaceProviderExtensionPackageName,
   } = await import("@vibestudio/workspace/configParser");
-  const { setWorkspaceAppTrust } = await import("@vibestudio/shared/chromeTrust");
   const restartBoundManifestChanges = (
     previousConfig: typeof workspaceConfig,
     nextConfig: typeof workspaceConfig,
@@ -627,7 +626,6 @@ async function main() {
     workspaceDecls.singletons.replaceAll(nextDecls.singletons.all());
     workspaceDecls.services = nextDecls.services;
     workspaceDecls.routes = nextDecls.routes;
-    setWorkspaceAppTrust(resolveWorkspaceTrustGrants(authoritativeNextConfig));
     if (opts.warnRestartBoundChanges !== false) {
       for (const change of restartBoundChanges) {
         console.warn(`[WorkspaceConfig] ${change}`);
@@ -3252,6 +3250,8 @@ async function main() {
   const { createNotificationService } = await import("./services/notificationService.js");
   const notificationResult = createNotificationService({
     eventService,
+    hasAppCapability: (callerId, capability) =>
+      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
     push: pushResult.internal,
     // Include root's implicit membership, which intentionally has no row.
     workspaceMemberUserIds: listWorkspaceMemberUserIds,
@@ -6135,6 +6135,7 @@ async function main() {
         workspacePath,
         workspaceId,
         diagnostics: runtimeDiagnostics,
+        getWorkspaceTrustGrants: () => resolveWorkspaceTrustGrants(workspaceConfig),
         isSystemWorkspace: () => {
           // Native app units are hosted only in a System workspace. Ordinarily
           // that is an account-scoped designation, but a host launched to serve

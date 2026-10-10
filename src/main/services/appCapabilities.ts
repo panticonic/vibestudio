@@ -1,6 +1,5 @@
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import type { ViewManager } from "../viewManager.js";
 
 type AppViewInfo = NonNullable<ReturnType<ViewManager["getViewInfo"]>>;
@@ -25,10 +24,7 @@ export function viewHasAppCapability(
 ): boolean {
   if (viewInfo?.type !== "app" || !viewInfo.capabilities.includes(capability)) return false;
   if (capability !== "panel-hosting") return true;
-  return isAuthorizedChromeAppCaller(
-    viewInfo.workspaceIdentity?.runtimeId ?? "",
-    viewInfo.codeIdentity?.source
-  );
+  return viewInfo.hostChrome;
 }
 
 export function requireAppCapability(
