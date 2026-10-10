@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
+import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { LifecycleDriver } from "./lifecycleDriver.js";
 import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
 import type { DODispatch } from "../doDispatch.js";
@@ -114,8 +115,13 @@ describe("LifecycleDriver", () => {
       harness.calls.some((call) => call.kind === "lifecycle" && call.method === "resume")
     ).toBe(false);
     expect(
+      harness.calls
+        .filter((call) => call.kind === "lifecycle" && call.method === "prepare")
+        .map((call) => (call.arg as LifecyclePrepareInput).phase)
+    ).toEqual(["quiesce", "peer-obligations", "release"]);
+    expect(
       harness.calls.find((call) => call.kind === "lifecycle" && call.method === "prepare")?.arg
-    ).toMatchObject({ mode: "suspend" });
+    ).toMatchObject({ mode: "suspend", phase: "quiesce" });
 
     await harness.fireReady({
       correlationId: "r1",
@@ -282,14 +288,54 @@ describe("LifecycleDriver", () => {
     expect(harness.calls.filter((call) => call.method === "lifecycleRecordOp")).toHaveLength(1);
   });
 
+  it("preserves nested aggregate failure identity and codes in the lifecycle journal", async () => {
+    const shared = Object.assign(new Error("original cause"), { code: "CAUSE_CODE" });
+    const original = Object.assign(
+      new AggregateError([shared, shared], "original aggregate", { cause: shared }),
+      { code: "AGGREGATE_CODE" }
+    );
+    const harness = makeHarness({
+      prepare: async (_ref, input) => {
+        if (input.phase === "quiesce") throw original;
+        return { status: "ready" };
+      },
+    });
+    const failure = await harness.driver.prepareForShutdown().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors[0]).toBe(original);
+    expect((failure as AggregateError).cause).toBe(original);
+    const journal = harness.calls.find((call) => call.method === "lifecycleRecordOp")?.arg as {
+      status: string;
+      detail: { phase: string; result: unknown };
+    };
+    expect(journal).toMatchObject({
+      status: "failed",
+      detail: {
+        phase: "quiesce",
+        result: { message: "original aggregate", code: "AGGREGATE_CODE" },
+      },
+    });
+    const restored = deserializeRpcFailure(journal.detail.result);
+    expect(restored).toBeInstanceOf(AggregateError);
+    if (!(restored instanceof AggregateError)) throw new Error("Expected an aggregate RPC failure");
+    expect(restored.code).toBe("AGGREGATE_CODE");
+    expect(restored.errors).toHaveLength(2);
+    expect(restored.errors[0]).toBe(restored.errors[1]);
+    expect(restored.errors[0]).toBe(restored.cause);
+    expect(restored.errors[0]).toMatchObject({ message: "original cause", code: "CAUSE_CODE" });
+  });
+
   it("does not acknowledge an invalid prepare result as released ownership", async () => {
     const harness = makeHarness({
       prepare: async () => undefined as unknown as LifecyclePrepareResult,
     });
-    await expect(harness.driver.prepareForShutdown()).rejects.toThrow(/Lifecycle release failed/u);
+    await expect(harness.driver.prepareForShutdown()).rejects.toThrow(/Lifecycle quiesce failed/u);
     expect(harness.calls.find((call) => call.method === "lifecycleRecordOp")?.arg).toMatchObject({
       status: "failed",
-      detail: { error: "Lifecycle prepare returned no valid release receipt" },
+      detail: {
+        phase: "quiesce",
+        result: { message: "Lifecycle prepare returned no valid phase receipt" },
+      },
     });
   });
 

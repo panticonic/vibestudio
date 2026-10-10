@@ -1,5 +1,5 @@
 import type { EntityCloneProvenance } from "./runtime/entitySpec.js";
-import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
+import type { AgentExecutionTestPolicy, RpcFailure } from "@vibestudio/rpc";
 
 /** Stable Durable Object identity used by host services. */
 export interface DORef {
@@ -33,18 +33,39 @@ export class AmbiguousDoDispatchError extends Error {
 /** Lifecycle release delivered by the host before an activation disappears. */
 export interface LifecyclePrepareInput {
   epoch: string;
-  /** Preserve durable state for resume, or perform terminal entity release. */
+  /** Stop admission, settle peer-facing obligations, then close owned resources. */
+  phase: "quiesce" | "peer-obligations" | "release" | "cancel";
   mode: "suspend" | "retire";
   reason: string;
-  /** Remaining preparation budget; zero means the caller imposes no deadline. */
   deadlineMs: number;
 }
 
-/** Receipt returned only after the activation's owned resources are released. */
-export interface LifecyclePrepareResult {
-  status: "ready" | "failed";
-  detail?: unknown;
+/** Validate the positional RPC value before a lifecycle phase can advance. */
+export function parseLifecyclePrepareInput(value: unknown): LifecyclePrepareInput {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("Lifecycle prepare requires an input object");
+  const input = value as Record<string, unknown>;
+  const epoch = input["epoch"];
+  const phase = input["phase"];
+  const mode = input["mode"];
+  const reason = input["reason"];
+  const deadlineMs = input["deadlineMs"];
+  if (typeof epoch !== "string" || epoch.length === 0)
+    throw new Error("Lifecycle prepare requires an epoch");
+  if (phase !== "quiesce" && phase !== "peer-obligations" && phase !== "release")
+    throw new Error("Lifecycle prepare requires a valid phase");
+  if (mode !== "suspend" && mode !== "retire")
+    throw new Error("Lifecycle prepare requires a valid mode");
+  if (typeof reason !== "string") throw new Error("Lifecycle prepare requires a reason");
+  if (typeof deadlineMs !== "number" || !Number.isSafeInteger(deadlineMs) || deadlineMs < 0)
+    throw new Error("Lifecycle prepare requires a nonnegative deadline");
+  return { epoch, phase, mode, reason, deadlineMs };
 }
+
+/** Receipt returned only after the activation's owned resources are released. */
+export type LifecyclePrepareResult =
+  | { status: "ready" }
+  | { status: "failed"; failure: RpcFailure };
 
 export interface LifecycleResumeInput {
   epoch: string;

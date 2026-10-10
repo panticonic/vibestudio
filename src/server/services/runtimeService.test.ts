@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 
 import { createTestDO } from "@vibestudio/durable/test-utils";
@@ -2338,7 +2339,8 @@ describe("runtimeService.retireEntity", () => {
 
   it("allows release to join a different child entity transition while its own owner stays serviceable", async () => {
     let f!: Awaited<ReturnType<typeof buildDeps>>;
-    const releaseEntity = vi.fn(async (record: EntityRecord) => {
+    const releaseEntity = vi.fn(async (record: EntityRecord, input: LifecyclePrepareInput) => {
+      if (input.phase !== "peer-obligations") return { status: "ready" as const };
       const child = (await f.service.handler({ caller: serverCaller }, "createEntity", [
         doCreateSpec({ key: "child-during-release", contextId: record.contextId }),
       ])) as RuntimeEntityHandle;
@@ -2355,7 +2357,11 @@ describe("runtimeService.retireEntity", () => {
       status: "retired",
       cleanupComplete: true,
     });
-    expect(releaseEntity).toHaveBeenCalledOnce();
+    expect(releaseEntity.mock.calls.map(([, input]) => input.phase)).toEqual([
+      "quiesce",
+      "peer-obligations",
+      "release",
+    ]);
   });
 
   it.each(["create", "reserve", "activate", "recover"] as const)(
@@ -2496,7 +2502,7 @@ describe("runtimeService.retireEntity", () => {
     const order: string[] = [];
     const { service, instance } = await buildDeps({
       releaseEntity: vi.fn(async (_record, input) => {
-        order.push(`release:${input.mode}`);
+        order.push("release:" + input.phase);
         return { status: "ready" as const };
       }),
       onRetire: vi.fn(async () => {
@@ -2520,7 +2526,15 @@ describe("runtimeService.retireEntity", () => {
     };
 
     await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
-    expect(order).toEqual(["release:retire", "do-commit", "release-seal", "hook"]);
+    expect(order).toEqual([
+      "release:quiesce",
+      "release:peer-obligations",
+      "release:release",
+      "do-commit",
+      "release-seal",
+      "hook",
+    ]);
+    expect(releaseEntity).toHaveBeenCalledTimes(3);
     // cleanup_complete should be 1 on success.
     const rec = instance.entityResolve(handle.id);
     expect(rec?.cleanupComplete).toBe(true);
@@ -2541,7 +2555,11 @@ describe("runtimeService.retireEntity", () => {
       onRetire,
       releaseEntity: vi.fn(async () => ({
         status: "failed" as const,
-        detail: { error: "still busy" },
+        failure: serializeRpcFailure(
+          Object.assign(new AggregateError([new Error("still busy")], "peer remains active"), {
+            code: "PEER_BUSY",
+          })
+        ),
       })),
     });
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
@@ -2551,8 +2569,8 @@ describe("runtimeService.retireEntity", () => {
     await expect(
       service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }])
     ).rejects.toMatchObject({
-      message: expect.stringMatching(/refused terminal lifecycle release.*still busy/u),
-      cause: { error: "still busy" },
+      message: expect.stringMatching(/refused quiesce lifecycle step.*peer remains active/u),
+      cause: expect.objectContaining({ message: "peer remains active", code: "PEER_BUSY" }),
     });
     expect(instance.entityResolve(handle.id)?.status).toBe("active");
     expect(onRetire).not.toHaveBeenCalled();
@@ -4465,8 +4483,8 @@ describe("runtimeService.destroyContext", () => {
 
   it("releases every context peer before sealing or retiring any of them", async () => {
     const order: string[] = [];
-    const releaseEntity = vi.fn(async (record: EntityRecord) => {
-      order.push(`release:${record.id}`);
+    const releaseEntity = vi.fn(async (record: EntityRecord, input) => {
+      order.push(input.phase + ":" + record.id);
       return { status: "ready" as const };
     });
     const sealAndDrainEntityRelays = vi.fn(async (id: string) => {
@@ -4493,6 +4511,12 @@ describe("runtimeService.destroyContext", () => {
     const firstCleanup = order.findIndex((entry) => entry.startsWith("cleanup:"));
     expect(lastRelease).toBeGreaterThanOrEqual(0);
     expect(firstSeal).toBeGreaterThan(lastRelease);
+    const phaseIndexes = ["quiesce", "peer-obligations", "release"].map((phase) =>
+      order.flatMap((entry, index) => (entry.startsWith(phase + ":") ? [index] : []))
+    );
+    for (const indexes of phaseIndexes) expect(indexes).toHaveLength(2);
+    expect(Math.max(...phaseIndexes[0]!)).toBeLessThan(Math.min(...phaseIndexes[1]!));
+    expect(Math.max(...phaseIndexes[1]!)).toBeLessThan(Math.min(...phaseIndexes[2]!));
     expect(firstCleanup).toBeGreaterThan(firstSeal);
   });
 

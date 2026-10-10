@@ -44,6 +44,16 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { EvalDO } from "./EvalDO.js";
 
+async function prepareLifecycle(
+  instance: EvalDO,
+  input: Omit<LifecyclePrepareInput, "phase">
+): Promise<{ status: "ready" }> {
+  await instance.releaseForLifecycle({ ...input, phase: "quiesce" });
+  await instance.releaseForLifecycle({ ...input, phase: "peer-obligations" });
+  return instance.releaseForLifecycle({ ...input, phase: "release" });
+}
+
+
 type RunResult = {
   success: boolean;
   console: string;
@@ -303,6 +313,27 @@ function redeliveryState(sql: {
 }
 
 describe("EvalDO cancellation + forced recovery", () => {
+  it("seals admission at quiesce and reopens only when preparation is cancelled", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const input = {
+      epoch: "cancel-preparation",
+      mode: "retire" as const,
+      reason: "test",
+      deadlineMs: 0,
+    };
+    const assertAdmissionOpen = priv<() => void>(instance, "assertAdmissionOpen");
+
+    await instance.releaseForLifecycle({ ...input, phase: "quiesce" });
+    expect(sql.exec("SELECT value FROM state WHERE key = 'eval_execution_closed'").toArray()).toEqual([
+      { value: input.epoch },
+    ]);
+    expect(() => assertAdmissionOpen.call(instance)).toThrow(/execution namespace is retired/);
+
+    await instance.releaseForLifecycle({ ...input, phase: "cancel" });
+    expect(sql.exec("SELECT value FROM state WHERE key = 'eval_execution_closed'").toArray()).toEqual([]);
+    expect(() => assertAdmissionOpen.call(instance)).not.toThrow();
+  });
+
   it("rejects an incompatible workspace eval engine before executing a cell", async () => {
     const { instance } = await createTestDO(EvalDO);
     (instance as unknown as { env: Record<string, unknown> }).env[
@@ -699,7 +730,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const held = instance.holdKernelLease("kernel-1");
 
     await expect(
-      instance.releaseForLifecycle({
+      prepareLifecycle(instance, {
         epoch: "e1",
         mode: "suspend",
         reason: "test",
@@ -746,7 +777,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     mockOwnedCall(instance, lifecycleCall);
 
     await expect(
-      instance.releaseForLifecycle({
+      prepareLifecycle(instance, {
         epoch: "e-resident",
         mode: "retire",
         reason: "test",
@@ -798,7 +829,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     await started;
 
     await expect(
-      instance.releaseForLifecycle({
+      prepareLifecycle(instance, {
         epoch: "e-active",
         mode: "suspend",
         reason: "test",
@@ -997,7 +1028,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       },
     ]);
 
-    await instance.releaseForLifecycle({
+    await prepareLifecycle(instance, {
       epoch: "retire:test",
       mode: "retire",
       reason: "test",
@@ -2651,7 +2682,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     };
 
     await expect(
-      instance.releaseForLifecycle({
+      prepareLifecycle(instance, {
         epoch: "retire:test",
         mode: "retire",
         reason: "test",
@@ -3350,14 +3381,14 @@ describe("EvalDO cancellation + forced recovery", () => {
       resources.clear();
       priv<() => void>(instance, "afterSchemaReady").call(instance);
       expect([...resources.keys()]).toEqual(["session"]);
-      await instance.releaseForLifecycle({
+      await prepareLifecycle(instance, {
         epoch: "suspend",
         mode: "suspend",
         reason: "test",
         deadlineMs: 0,
       });
       expect(archived).toEqual(["invocation"]);
-      await instance.releaseForLifecycle({
+      await prepareLifecycle(instance, {
         epoch: "retire",
         mode: "retire",
         reason: "test",
@@ -3404,7 +3435,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
     expect(resources.has("owned")).toBe(true);
     await expect(
-      instance.releaseForLifecycle({
+      prepareLifecycle(instance, {
         epoch: "failed-retire",
         mode: "retire",
         reason: "test",
@@ -3413,7 +3444,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).rejects.toThrow("panel lifetime cleanup failed");
     expect(resources.has("owned")).toBe(true);
     fail = false;
-    await instance.releaseForLifecycle({
+    await prepareLifecycle(instance, {
       epoch: "retire",
       mode: "retire",
       reason: "test",
@@ -3551,7 +3582,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect([...resources.keys()]).toEqual(["first"]);
 
     failFirst = false;
-    await instance.releaseForLifecycle({
+    await prepareLifecycle(instance, {
       epoch: "retry-retire",
       mode: "retire",
       reason: "test",
@@ -4132,7 +4163,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
 
     await expect(
-      instance.releaseForLifecycle({
+      prepareLifecycle(instance, {
         epoch: "e-codes",
         mode: "suspend",
         reason: "test",

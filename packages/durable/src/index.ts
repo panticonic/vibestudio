@@ -1,4 +1,14 @@
+import { LifecyclePreparation } from "@vibestudio/shared/lifecyclePreparation";
 import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
+import {
+  parseLifecyclePrepareInput,
+  type LifecyclePrepareInput,
+  type LifecyclePrepareResult,
+} from "@vibestudio/shared/doDispatcher";
+export type {
+  LifecyclePrepareInput,
+  LifecyclePrepareResult,
+} from "@vibestudio/shared/doDispatcher";
 import {
   collectExposableMethods,
   decodeRpcJson,
@@ -124,15 +134,6 @@ export interface DORef {
 export type { SchemaSqlStorage } from "./schema.js";
 export { InvocationContext } from "./invocation-context.js";
 
-export interface LifecyclePrepareInput {
-  epoch: string;
-  /** Release only activation resources, or perform terminal entity release. */
-  mode: "suspend" | "retire";
-  reason: string;
-  /** Remaining preparation budget; zero means the caller imposes no deadline. */
-  deadlineMs: number;
-}
-
 interface RpcInvocationContext {
   verifiedCaller: AttestedCaller | null;
   /**
@@ -150,11 +151,6 @@ interface RpcInvocationContext {
   requestSignal?: AbortSignal;
 }
 
-export interface LifecyclePrepareResult {
-  status: "ready" | "failed";
-  detail?: unknown;
-}
-
 export interface LifecycleResumeInput {
   epoch: string;
   previousGeneration: number | null;
@@ -170,6 +166,7 @@ export interface AlarmSchedule {
 // framework/lifecycle methods are simply never `@rpc`-marked, and the base-proto boundary backstops.)
 
 export abstract class DurableObjectBase {
+  private readonly lifecyclePreparation = new LifecyclePreparation();
   static schemaVersion = 1;
   static eventIntake: readonly EventIntakeRule[] = [];
   static rpcMethods?: ServiceMethodSchemas;
@@ -711,9 +708,13 @@ export abstract class DurableObjectBase {
     return null;
   }
 
+  protected beginLifecycleRelease(_input: LifecyclePrepareInput): void {}
+
   async releaseForLifecycle(_input: LifecyclePrepareInput): Promise<LifecyclePrepareResult> {
     return { status: "ready" };
   }
+
+  protected async cancelLifecyclePreparation(_input: LifecyclePrepareInput): Promise<void> {}
 
   async resumeAfterRestart(_input: LifecycleResumeInput): Promise<void> {}
 
@@ -835,30 +836,23 @@ export abstract class DurableObjectBase {
           const result =
             method === "__lifecycle/prepare"
               ? await (async () => {
-                  const failures: unknown[] = [];
-                  try {
+                  const input = parseLifecyclePrepareInput(args[0]);
+                  this.lifecyclePreparation.advance(input);
+                  if (input.phase === "cancel") {
+                    await this.cancelLifecyclePreparation(input);
+                    this.lifecyclePreparation.cancelled(input);
+                    return { status: "ready" } satisfies LifecyclePrepareResult;
+                  }
+                  if (input.phase === "quiesce") {
+                    this.beginLifecycleRelease(input);
                     await this.drainAlarmRpcs();
-                  } catch (error) {
-                    failures.push(error);
                   }
-                  let released: LifecyclePrepareResult | undefined;
-                  try {
-                    released = await this.releaseForLifecycle(args[0] as LifecyclePrepareInput);
-                  } catch (error) {
-                    failures.push(error);
-                  }
-                  if (failures.length === 1) throw failures[0];
-                  if (failures.length > 1)
-                    throw new AggregateError(
-                      failures,
-                      "Alarm persistence and lifecycle release failed",
-                      {
-                        cause: failures[0],
-                      }
-                    );
-                  return released;
+                  return await this.releaseForLifecycle(input);
                 })()
-              : await this.resumeAfterRestart(args[0] as LifecycleResumeInput);
+              : await (async () => {
+                  await this.resumeAfterRestart(args[0] as LifecycleResumeInput);
+                  this.lifecyclePreparation.resumed();
+                })();
           return jsonResponse({ value: result ?? null });
         });
       }

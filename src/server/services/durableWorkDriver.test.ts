@@ -44,6 +44,7 @@ function handlers(overrides: Partial<DurableWorkHandler> = {}) {
     handler,
     record: {
       "channel-delivery": handler,
+      "channel-observation": handler,
       "workspace-publication": handler,
     } satisfies Record<DurableWorkQueue, DurableWorkHandler>,
   };
@@ -226,6 +227,105 @@ describe("DurableWorkDriver", () => {
     expect(driver.inspect()).toMatchObject({ accepting: true, active: 1 });
 
     release();
+    await vi.advanceTimersByTimeAsync(0);
+    await driver.quiesce();
+  });
+
+  it("claims a same-lane successor only after the prior settlement releases its lane", async () => {
+    const target = owner("same-lane-owner");
+    const lane = "channel-observation\u0000observation-lane";
+    const first = { ...claim("first", 1), payload: { laneKey: "observation-lane" } };
+    const second = { ...claim("second", 2), payload: { laneKey: "observation-lane" } };
+    let claimCount = 0;
+    let driver!: DurableWorkDriver;
+    let successorSawReleasedLane = false;
+    let releaseSettlement!: () => void;
+    const settlementReceipt = new Promise<void>((resolve) => {
+      releaseSettlement = resolve;
+    });
+    const suite = handlers({
+      claim: vi.fn(async () => {
+        claimCount += 1;
+        if (claimCount === 1) return [first];
+        if (claimCount === 2) {
+          successorSawReleasedLane = !driver.inspect().activeLanes.includes(lane);
+          return [second];
+        }
+        return [];
+      }),
+      laneKey: (_owner, work) => String((work.payload as { laneKey: string }).laneKey),
+      settle: vi.fn(async (_owner, request) => {
+        if (request.itemId === "first") {
+          driver.notify({ owner: target, queues: ["channel-observation"] });
+          await settlementReceipt;
+        }
+        return "accepted" as const;
+      }),
+    });
+    driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      concurrency: 2,
+      workerId: "driver-same-lane",
+    });
+
+    driver.start();
+    driver.notify({ owner: target, queues: ["channel-observation"] });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(claimCount).toBe(1);
+    expect(driver.inspect().activeLanes).toContain(lane);
+    releaseSettlement();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(claimCount).toBeGreaterThanOrEqual(2);
+    expect(successorSawReleasedLane).toBe(true);
+    expect(suite.handler.fail).not.toHaveBeenCalled();
+    expect(suite.handler.settle).toHaveBeenCalledWith(
+      target,
+      expect.objectContaining({ itemId: "first" })
+    );
+    await driver.quiesce();
+  });
+
+  it("keeps distinct lanes of one owner queue executable in parallel", async () => {
+    const target = owner("parallel-lanes");
+    const claims = [
+      { ...claim("first", 1), payload: { laneKey: "lane-a" } },
+      { ...claim("second", 1), payload: { laneKey: "lane-b" } },
+    ];
+    const started = new Set<string>();
+    let release!: () => void;
+    const bothStarted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let finish!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const suite = handlers({
+      claim: vi.fn(async () => claims.splice(0)),
+      laneKey: (_owner, work) => String((work.payload as { laneKey: string }).laneKey),
+      execute: vi.fn(async (_owner, work) => {
+        started.add(work.itemId);
+        if (started.size === 2) release();
+        await hold;
+        return { ok: true };
+      }),
+    });
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      concurrency: 2,
+      workerId: "driver-parallel-lanes",
+    });
+
+    driver.start();
+    driver.notify({ owner: target, queues: ["channel-observation"] });
+    await vi.advanceTimersByTimeAsync(0);
+    await bothStarted;
+    expect(started).toEqual(new Set(["first", "second"]));
+    finish();
     await vi.advanceTimersByTimeAsync(0);
     await driver.quiesce();
   });

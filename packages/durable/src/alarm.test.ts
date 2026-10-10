@@ -11,6 +11,13 @@ import { DurableObjectBase, rpc, schemaRpc, type AlarmSchedule } from "./index.j
 import { createTestDO, createTestDirectAuthority, successfulTestRpcFetch } from "./test-utils.js";
 
 class AlarmProbeDO extends DurableObjectBase {
+  admissionOpen = true;
+  protected override beginLifecycleRelease(): void {
+    this.admissionOpen = false;
+  }
+  protected override async cancelLifecyclePreparation(): Promise<void> {
+    this.admissionOpen = true;
+  }
   nextAlarm: AlarmSchedule | null = null;
   releaseDeferred!: () => void;
   deferredOutbound: Promise<unknown> | null = null;
@@ -186,6 +193,35 @@ function assertTestDOCallTypes(
 void assertTestDOCallTypes;
 
 describe("DurableObjectBase alarm dispatch", () => {
+  it("reopens admission only for cancellation of the exact unreleased lifecycle epoch", async () => {
+    const { instance, call, db } = await createTestDO(AlarmProbeDO);
+    const input = {
+      epoch: "owned",
+      mode: "suspend" as const,
+      reason: "replacement",
+      deadlineMs: 0,
+    };
+    try {
+      await call("__lifecycle/prepare", { ...input, phase: "quiesce" });
+      expect(instance.admissionOpen).toBe(false);
+      await expect(
+        call("__lifecycle/prepare", { ...input, epoch: "foreign", phase: "cancel" })
+      ).rejects.toThrow("active preparation epoch");
+      expect(instance.admissionOpen).toBe(false);
+      await call("__lifecycle/prepare", { ...input, phase: "cancel" });
+      expect(instance.admissionOpen).toBe(true);
+      await call("__lifecycle/prepare", { ...input, phase: "cancel" });
+      await call("__lifecycle/prepare", { ...input, epoch: "next", phase: "quiesce" });
+      await call("__lifecycle/prepare", { ...input, epoch: "next", phase: "release" });
+      await expect(
+        call("__lifecycle/prepare", { ...input, epoch: "next", phase: "cancel" })
+      ).rejects.toThrow("released resources");
+      expect(instance.admissionOpen).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
   it("reports both handler and persistence failures while preserving the handler's typed cause", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("Alarm owner unavailable", { status: 503 })
@@ -337,13 +373,15 @@ describe("DurableObjectBase alarm dispatch", () => {
         mode: "suspend",
         reason: "shutdown",
         epoch: "test",
+        phase: "quiesce",
+        deadlineMs: 0,
       });
       const prepareFailure = expect(prepared).rejects.toThrow();
       await draining;
       failWrite();
       await scheduledFailure;
       await prepareFailure;
-      expect(release).toHaveBeenCalledTimes(1);
+      expect(release).not.toHaveBeenCalled();
     } finally {
       failWrite();
       await Promise.allSettled([scheduled, ...(prepared ? [prepared] : [])]);
@@ -507,7 +545,15 @@ describe("DurableObjectBase alarm dispatch", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            args: [{ mode: "suspend", reason: "shutdown", deadlineMs: 0 }],
+            args: [
+              {
+                epoch: "test",
+                phase: "peer-obligations",
+                mode: "suspend",
+                reason: "shutdown",
+                deadlineMs: 0,
+              },
+            ],
             __instanceToken: "token",
             __instanceId: "do:internal/WorkspaceDO:test-key",
             __caller: {

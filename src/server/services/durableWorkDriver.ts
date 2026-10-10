@@ -1,3 +1,4 @@
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import type { DODispatch } from "../doDispatch.js";
@@ -367,7 +368,8 @@ export class DurableWorkDriver {
   private readonly workerId: string;
   private readonly pending = new Map<string, PendingHint>();
   private readonly claiming = new Set<string>();
-  private readonly activeLanes = new Set<string>();
+  private readonly activeLanes = new Map<string, symbol>();
+  private readonly queueMutationChains = new Map<string, Promise<unknown>>();
   private readonly controllers = new Set<AbortController>();
   private readonly runners = new Set<Promise<void>>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -477,7 +479,7 @@ export class DurableWorkDriver {
       accepting: this.accepting,
       active: this.runners.size,
       pendingHints: this.pending.size,
-      activeLanes: [...this.activeLanes].sort(),
+      activeLanes: [...this.activeLanes.keys()].sort(),
       duplicateHints: this.duplicateHints,
       staleSettlements: this.staleSettlements,
       recoveryScans: this.recoveryScans,
@@ -533,15 +535,17 @@ export class DurableWorkDriver {
         owner: this.ownerKey(hint.owner),
       });
       try {
-        claims = await handler.claim(
-          hint.owner,
-          {
-            workerId: this.workerId,
-            trigger,
-            now: Date.now(),
-            limit: this.concurrency - this.runners.size,
-          },
-          claimController.signal
+        claims = await this.serializeQueueMutation(hint.owner, queue, () =>
+          handler.claim(
+            hint.owner,
+            {
+              workerId: this.workerId,
+              trigger,
+              now: Date.now(),
+              limit: this.concurrency - this.runners.size,
+            },
+            claimController.signal
+          )
         );
       } catch (error) {
         if (isRetiredOwnerHint(error)) {
@@ -569,12 +573,14 @@ export class DurableWorkDriver {
         const lane = `${queue}\u0000${handler.laneKey(hint.owner, claim)}`;
         if (this.activeLanes.has(lane)) {
           try {
-            await handler.fail(hint.owner, {
-              workerId: this.workerId,
-              itemId: claim.itemId,
-              generation: claim.generation,
-              error: new Error(`Queue ${queue} granted two simultaneous claims for lane ${lane}`),
-            });
+            await this.serializeQueueMutation(hint.owner, queue, () =>
+              handler.fail(hint.owner, {
+                workerId: this.workerId,
+                itemId: claim.itemId,
+                generation: claim.generation,
+                error: new Error(`Queue ${queue} granted two simultaneous claims for lane ${lane}`),
+              })
+            );
           } catch (error) {
             log.warn(
               `duplicate-lane failure settlement failed for ${queue}:${this.ownerKey(
@@ -585,7 +591,8 @@ export class DurableWorkDriver {
           }
           continue;
         }
-        this.startRunner(hint.owner, queue, claim, lane, trigger);
+        const laneToken = Symbol(`${lane}:${claim.itemId}@${claim.generation}`);
+        this.startRunner(hint.owner, queue, claim, lane, laneToken, trigger);
       }
     }
   }
@@ -595,11 +602,12 @@ export class DurableWorkDriver {
     queue: DurableWorkQueue,
     claim: WorkClaim,
     lane: string,
+    laneToken: symbol,
     trigger: DurableWorkTrigger
   ): void {
     const handler = this.handlers[queue];
     const controller = new AbortController();
-    this.activeLanes.add(lane);
+    this.activeLanes.set(lane, laneToken);
     this.controllers.add(controller);
     let ownsContinuation = true;
     const runner = (async () => {
@@ -624,11 +632,17 @@ export class DurableWorkDriver {
           durationMs: Date.now() - executionStartedAt,
         });
         const settlementStartedAt = Date.now();
-        const disposition = await handler.settle(owner, {
-          workerId: this.workerId,
-          itemId: claim.itemId,
-          generation: claim.generation,
-          outcome,
+        const disposition = await this.serializeQueueMutation(owner, queue, async () => {
+          try {
+            return await handler.settle(owner, {
+              workerId: this.workerId,
+              itemId: claim.itemId,
+              generation: claim.generation,
+              outcome,
+            });
+          } finally {
+            this.releaseLane(lane, laneToken);
+          }
         });
         if (disposition === "stale") {
           this.staleSettlements++;
@@ -665,11 +679,17 @@ export class DurableWorkDriver {
             error
           );
           try {
-            await handler.fail(owner, {
-              workerId: this.workerId,
-              itemId: claim.itemId,
-              generation: claim.generation,
-              error,
+            await this.serializeQueueMutation(owner, queue, async () => {
+              try {
+                return await handler.fail(owner, {
+                  workerId: this.workerId,
+                  itemId: claim.itemId,
+                  generation: claim.generation,
+                  error,
+                });
+              } finally {
+                this.releaseLane(lane, laneToken);
+              }
             });
           } catch (failureError) {
             log.warn(
@@ -684,7 +704,7 @@ export class DurableWorkDriver {
     void runner.finally(() => {
       this.runners.delete(runner);
       this.controllers.delete(controller);
-      this.activeLanes.delete(lane);
+      this.releaseLane(lane, laneToken);
       if (this.accepting && ownsContinuation) {
         this.notify({ owner, queues: [queue] }, "continuation");
         this.kick();
@@ -694,6 +714,18 @@ export class DurableWorkDriver {
 
   private hintKey(owner: DORef, queue: DurableWorkQueue): string {
     return `${owner.source}\u0000${owner.className}\u0000${owner.objectKey}\u0000${queue}`;
+  }
+
+  private serializeQueueMutation<T>(
+    owner: DORef,
+    queue: DurableWorkQueue,
+    operation: () => T | Promise<T>
+  ): Promise<T> {
+    return serializeByKey(this.queueMutationChains, this.hintKey(owner, queue), operation);
+  }
+
+  private releaseLane(lane: string, token: symbol): void {
+    if (this.activeLanes.get(lane) === token) this.activeLanes.delete(lane);
   }
 
   private ownerKey(owner: DORef): string {

@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
+import type { LifecyclePrepareInput } from "@vibestudio/durable";
 import { evalResultReceiptSchema } from "@vibestudio/service-schemas/eval";
 import { EvalDO } from "./EvalDO.js";
+
+async function prepareLifecycle(
+  instance: EvalDO,
+  input: Omit<LifecyclePrepareInput, "phase">
+): Promise<{ status: "ready" }> {
+  await instance.releaseForLifecycle({ ...input, phase: "quiesce" });
+  await instance.releaseForLifecycle({ ...input, phase: "peer-obligations" });
+  return instance.releaseForLifecycle({ ...input, phase: "release" });
+}
 
 async function completedRun() {
   const fixture = await createTestDO(EvalDO, { RPC_FETCH: successfulTestRpcFetch });
@@ -224,7 +234,7 @@ describe("EvalDO canonical result receipts", () => {
     const { instance, db, execute } = await completedRun();
     const receipt = instance.getRunReceipt("receipt-run")!;
     await instance.acknowledgeRunResult(receipt.runId, receipt);
-    await instance.releaseForLifecycle({
+    await prepareLifecycle(instance, {
       epoch: "retire:receipt-owner",
       mode: "retire",
       reason: "entity_retire",
@@ -255,7 +265,7 @@ describe("EvalDO canonical result receipts", () => {
       finish = resolve;
     });
     Object.defineProperty(instance, "cancelRunsForLifecycle", { value: () => pending });
-    const retirement = instance.releaseForLifecycle({
+    const retirement = prepareLifecycle(instance, {
       epoch: "retire:pending-cleanup",
       mode: "retire",
       reason: "entity_retire",
@@ -277,7 +287,7 @@ describe("EvalDO canonical result receipts", () => {
     });
     Object.defineProperty(instance, "forceReset", { value: () => pending });
     const admission = instance.startRun({ runId: "racing-reset", code: "return 99", reset: true });
-    await instance.releaseForLifecycle({
+    await prepareLifecycle(instance, {
       epoch: "retire:reset-gap",
       mode: "retire",
       reason: "entity_retire",

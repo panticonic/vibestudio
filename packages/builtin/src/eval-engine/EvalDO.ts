@@ -1201,55 +1201,88 @@ export class EvalDO extends DurableObjectBase {
     return this.executeRun(runId);
   }
 
-  override async releaseForLifecycle(
-    input: LifecyclePrepareInput,
-  ): Promise<{ status: "ready" }> {
+  protected override beginLifecycleRelease(input: LifecyclePrepareInput): void {
+    if (input.phase !== "quiesce") return;
     // Retirement is terminal for this execution namespace. Persist the seal
-    // before yielding so a concurrent admission cannot escape the drain.
-    if (input.mode === "retire")
-      this.setStateValue("eval_execution_closed", input.epoch);
-    const failures: unknown[] = [];
-    try {
-      await this.cancelRunsForLifecycle();
-    } catch (error) {
-      failures.push(error);
+    // synchronously so a concurrent admission cannot escape the drain.
+    if (input.mode === "retire") this.setStateValue("eval_execution_closed", input.epoch);
+  }
+
+  protected override async cancelLifecyclePreparation(input: LifecyclePrepareInput): Promise<void> {
+    const retiredAt = this.getStateValue("eval_execution_closed");
+    if (retiredAt === input.epoch) this.deleteStateValue("eval_execution_closed");
+  }
+
+  override async releaseForLifecycle(input: LifecyclePrepareInput): Promise<{ status: "ready" }> {
+    if (input.phase === "cancel") {
+      await this.cancelLifecyclePreparation(input);
+      return { status: "ready" };
     }
+    if (input.phase === "quiesce") {
+      // The RPC dispatcher and direct lifecycle callers share this synchronous
+      // retirement seal; no await occurs before admission is fenced.
+      this.beginLifecycleRelease(input);
+      return { status: "ready" };
+    }
+
+    if (input.phase === "peer-obligations") {
+      const failures: unknown[] = [];
+      try {
+        await this.cancelRunsForLifecycle();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (input.mode === "retire") {
+        try {
+          await this.retireOwnedPanels(() => true);
+        } catch (error) {
+          failures.push(error);
+        }
+        try {
+          await this.endResidentChannelMemberships();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length > 0) {
+        const details = failures
+          .map((error) => (error instanceof Error ? error.message : String(error)))
+          .join("; ");
+        throw new AggregateError(
+          failures,
+          `eval lifecycle peer obligations failed: ${details}`,
+          { cause: failures[0] }
+        );
+      }
+      return { status: "ready" };
+    }
+
+    // Peer obligations have already joined execution; now join artifact writes
+    // before clearing their owner lease or releasing the kernel references.
+    const artifacts = await Promise.allSettled([...this.inFlightResultArtifacts]);
+    const artifactFailures = artifacts
+      .filter((artifact): artifact is PromiseRejectedResult => artifact.status === "rejected")
+      .map((artifact) => artifact.reason);
+    if (artifactFailures.length > 0)
+      throw new AggregateError(artifactFailures, "eval result artifact writes did not settle", {
+        cause: artifactFailures[0],
+      });
+
+    const failures: unknown[] = [];
     try {
       await this.clearLifecycleRelease();
     } catch (error) {
       failures.push(error);
     }
-    if (input.mode === "retire") {
-      try {
-        await this.retireOwnedPanels(() => true);
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
-        await this.endResidentChannelMemberships();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
     if (this.kernelLease) this.settleKernelLease(this.kernelLease, "released");
+    this.releaseKernelReferences();
     if (failures.length > 0) {
       const details = failures
-        .map((error) =>
-          error instanceof Error ? error.message : String(error),
-        )
+        .map((error) => (error instanceof Error ? error.message : String(error)))
         .join("; ");
-      throw new AggregateError(
-        failures,
-        `eval lifecycle release failed: ${details}`,
-      );
-    }
-    if (input.mode === "retire") {
-      // These writes are infrastructure-owned and may outlive the guest's
-      // cancellation. Join them before the host excludes the producer and
-      // releases its blob namespace. Admission/receipt roots remain durable
-      // until that canonical retirement boundary reclaims the storage.
-      await Promise.allSettled([...this.inFlightResultArtifacts]);
-      this.releaseKernelReferences();
+      throw new AggregateError(failures, `eval lifecycle release failed: ${details}`, {
+        cause: failures[0],
+      });
     }
     return { status: "ready" };
   }

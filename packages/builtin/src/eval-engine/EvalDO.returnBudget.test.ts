@@ -2,10 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
+import type { LifecyclePrepareInput } from "@vibestudio/durable";
 import { EVAL_RESULT_RETURN_PREVIEW_CHARS } from "@vibestudio/service-schemas/eval";
 import { EvalDO } from "./EvalDO.js";
 
+async function prepareLifecycle(
+  instance: EvalDO,
+  input: Omit<LifecyclePrepareInput, "phase">
+): Promise<{ status: "ready" }> {
+  await instance.releaseForLifecycle({ ...input, phase: "quiesce" });
+  await instance.releaseForLifecycle({ ...input, phase: "peer-obligations" });
+  return instance.releaseForLifecycle({ ...input, phase: "release" });
+}
+
 type Reach = {
+  engine: unknown;
   compactReturnValue(value: unknown, scopeKey: string): unknown;
   materializeResultArtifact(
     runId: string,
@@ -114,7 +125,7 @@ describe("eval return budget", () => {
     });
     expect(JSON.stringify(compact).length).toBeLessThan(EVAL_RESULT_RETURN_PREVIEW_CHARS);
     expect(putRetained).toHaveBeenCalledWith({ base64: data, owner: imageOwner("image", data) });
-    await instance.releaseForLifecycle({
+    await prepareLifecycle(instance, {
       epoch: "retire:test",
       mode: "retire",
       reason: "test",
@@ -154,7 +165,7 @@ describe("eval return budget", () => {
     expect(JSON.stringify(compact)).not.toContain(image.data);
     expect(putRetained).toHaveBeenCalledTimes(1);
     expect(input.screenshots[0]).toBe(image);
-    await instance.releaseForLifecycle({
+    await prepareLifecycle(instance, {
       epoch: "retire:test",
       mode: "retire",
       reason: "test",
@@ -188,11 +199,14 @@ describe("eval return budget", () => {
       },
     });
     let disposed = false;
-    const disposal = instance
-      .releaseForLifecycle({ epoch: "retire:test", mode: "retire", reason: "test", deadlineMs: 0 })
-      .then(() => {
-        disposed = true;
-      });
+    const disposal = prepareLifecycle(instance, {
+      epoch: "retire:test",
+      mode: "retire",
+      reason: "test",
+      deadlineMs: 0,
+    }).then(() => {
+      disposed = true;
+    });
     await vi.waitFor(() =>
       expect(sql.exec("SELECT status FROM runs").toArray()[0]?.["status"]).toBe("cancelled")
     );
@@ -204,6 +218,54 @@ describe("eval return budget", () => {
     expect(releaseRetention).not.toHaveBeenCalled();
     expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([
       { owner: imageOwner("pending-image", "eA==") },
+    ]);
+  });
+
+  it("keeps lifecycle ownership when an artifact write fails to join", async () => {
+    const { instance, sql } = await artifactFixture();
+    sql.exec(
+      "INSERT INTO runs(run_id, args, status, started_at) VALUES ('failed-image', '{}', 'running', 0)"
+    );
+    let failUpload!: (error: Error) => void;
+    const uploadFailure = new Error("retained image upload failed");
+    const pendingUpload = new Promise<{ digest: string; size: number }>((_resolve, reject) => {
+      failUpload = reject;
+    });
+    const clearLifecycleRelease = vi.fn(async () => {});
+    Object.defineProperty(instance, "clearLifecycleRelease", { value: clearLifecycleRelease });
+    Object.defineProperty(instance, "engine", { value: { loaded: true }, writable: true });
+    vi.spyOn(reach(instance), "infrastructureExecution").mockReturnValue({
+      blobstore: { putRetained: () => pendingUpload },
+    });
+
+    const image = reach(instance).materializeResultArtifact("failed-image", {
+      success: true,
+      console: "",
+      returnValue: { screenshot: { data: "eA==", mimeType: "image/png" } },
+    });
+    const imageResult = image.catch((error: unknown) => error);
+    const lifecycle = {
+      epoch: "retire:failed-image",
+      mode: "retire" as const,
+      reason: "test",
+      deadlineMs: 0,
+    };
+    await instance.releaseForLifecycle({ ...lifecycle, phase: "quiesce" });
+    await instance.releaseForLifecycle({ ...lifecycle, phase: "peer-obligations" });
+    const release = instance.releaseForLifecycle({ ...lifecycle, phase: "release" });
+
+    expect(clearLifecycleRelease).not.toHaveBeenCalled();
+    expect(reach(instance).engine).toEqual({ loaded: true });
+    failUpload(uploadFailure);
+    const failure = await release.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).cause).toBe(uploadFailure);
+    expect((failure as AggregateError).errors).toEqual([uploadFailure]);
+    expect(await imageResult).toBe(uploadFailure);
+    expect(clearLifecycleRelease).not.toHaveBeenCalled();
+    expect(reach(instance).engine).toEqual({ loaded: true });
+    expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([
+      { owner: imageOwner("failed-image", "eA==") },
     ]);
   });
 
@@ -231,7 +293,7 @@ describe("eval return budget", () => {
     expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toEqual([
       { owner: imageOwner("failed-image", "eA==") },
     ]);
-    await instance.releaseForLifecycle({
+    await prepareLifecycle(instance, {
       epoch: "retire:test",
       mode: "retire",
       reason: "test",
@@ -276,7 +338,7 @@ describe("eval return budget", () => {
     });
     expect(owners.size).toBe(2);
     expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toHaveLength(2);
-    await instance.releaseForLifecycle({
+    await prepareLifecycle(instance, {
       epoch: "retire:test",
       mode: "retire",
       reason: "test",
@@ -308,7 +370,7 @@ describe("eval return budget", () => {
       })
     ).rejects.toThrow("second upload interrupted");
     expect(sql.exec("SELECT owner FROM run_result_artifacts").toArray()).toHaveLength(2);
-    await instance.releaseForLifecycle({
+    await prepareLifecycle(instance, {
       epoch: "retire:test",
       mode: "retire",
       reason: "test",

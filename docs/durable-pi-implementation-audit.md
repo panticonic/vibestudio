@@ -1912,7 +1912,12 @@ context before canonical retirement: quiesce every owner and drain admitted alar
 RPCs, settle every peer-facing obligation while peer services remain available,
 then close local resources before relay sealing and durable row retirement. Peer
 obligations include terminal publication and unsubscribe; the final release phase
-does not begin until all owners have settled them. Single-entity retirement and
+does not begin until all owners have settled them. Quiescence seals new input,
+but restoration of the same host-bound Session remains available for retained
+peer obligations, invocation inspection, and authority/Eval receipts. A fresh
+activation must restore its durable owner during peer preparation; an empty
+connection cache is not evidence that its obligations are settled. Settlement
+admission seals only at final release. Single-entity retirement and
 planned suspend/restart use the same phase order. This prevents an early resource
 owner from closing a peer-facing service while another entity still uses it. The
 separate transition gap is concurrent create/recover/retire using different

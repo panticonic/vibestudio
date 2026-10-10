@@ -16,6 +16,7 @@ import {
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
 import type {
@@ -1355,7 +1356,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (!current || (current.status === "retired" && current.cleanupComplete)) return null;
     let record: EntityRecord | null = current;
     if (current.status !== "retired") {
-      await prepareRecordForRetirement(current);
+      const epoch = "retire:" + randomUUID();
+      for (const phase of ["quiesce", "peer-obligations", "release"] as const)
+        await prepareRecordForRetirement(current, epoch, phase);
       try {
         await deps.hooks.sealAndDrainEntityRelays?.(id);
         record = await store.retire(id);
@@ -1378,18 +1381,24 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return record;
   }
 
-  async function prepareRecordForRetirement(record: EntityRecord): Promise<void> {
+  async function prepareRecordForRetirement(
+    record: EntityRecord,
+    epoch: string,
+    phase: LifecyclePrepareInput["phase"]
+  ): Promise<void> {
     if (record.status !== "active") return;
     const released = await deps.hooks.releaseEntity(record, {
-      epoch: `retire:${randomUUID()}`,
+      epoch,
+      phase,
       mode: "retire",
       reason: "entity_retire",
       deadlineMs: 0,
     });
     if (released.status === "failed") {
+      const failure = deserializeRpcFailure(released.failure);
       throw new Error(
-        `Entity ${record.id} refused terminal lifecycle release: ${JSON.stringify(released.detail)}`,
-        { cause: released.detail }
+        "Entity " + record.id + " refused " + phase + " lifecycle step: " + failure.message,
+        { cause: failure }
       );
     }
   }
@@ -1421,7 +1430,23 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ).filter((record): record is EntityRecord =>
           Boolean(record && record.status !== "retired")
         );
-        for (const record of current) await prepareRecordForRetirement(record);
+        const epochs = new Map(current.map((record) => [record.id, "retire:" + randomUUID()]));
+        // Every entity crosses each phase barrier before the next phase begins.
+        for (const phase of ["quiesce", "peer-obligations", "release"] as const) {
+          const results = await Promise.allSettled(
+            current.map((record) =>
+              prepareRecordForRetirement(record, epochs.get(record.id)!, phase)
+            )
+          );
+          const failures = results.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : []
+          );
+          if (failures.length === 1) throw failures[0];
+          if (failures.length)
+            throw new AggregateError(failures, "Context " + phase + " lifecycle step failed", {
+              cause: failures[0],
+            });
+        }
 
         const sealed: string[] = [];
         const retired: EntityRecord[] = [];

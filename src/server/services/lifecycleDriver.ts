@@ -1,3 +1,4 @@
+import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { DORef, LifecycleDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
@@ -142,60 +143,71 @@ export class LifecycleDriver {
     reason: string,
     signal?: AbortSignal
   ): Promise<void> {
-    const failures: unknown[] = [];
-    await this.runPool(this.dedupe(targets), async (target) => {
-      if (signal?.aborted) return;
-      let result: unknown;
-      let releaseFailed = false;
-      try {
-        result = await this.deps.doDispatch.dispatchLifecycle(this.toRef(target), "prepare", {
-          epoch,
-          mode: "suspend",
-          reason,
-          deadlineMs: 0,
-        });
-        if (
-          !result ||
-          typeof result !== "object" ||
-          ((result as { status?: unknown }).status !== "ready" &&
-            (result as { status?: unknown }).status !== "failed")
-        ) {
-          throw new Error("Lifecycle prepare returned no valid release receipt", { cause: result });
+    const ordered = this.dedupe(targets);
+    for (const phase of ["quiesce", "peer-obligations", "release"] as const) {
+      const failures: unknown[] = [];
+      await this.runPool(ordered, async (target) => {
+        if (signal?.aborted) return;
+        let result: unknown;
+        let operationFailure: unknown;
+        try {
+          result = await this.deps.doDispatch.dispatchLifecycle(this.toRef(target), "prepare", {
+            epoch,
+            phase,
+            mode: "suspend",
+            reason,
+            deadlineMs: 0,
+          });
+          if (
+            !result ||
+            typeof result !== "object" ||
+            ((result as { status?: unknown }).status !== "ready" &&
+              (result as { status?: unknown }).status !== "failed")
+          )
+            throw new Error("Lifecycle prepare returned no valid phase receipt", { cause: result });
+          if ((result as { status: string }).status === "failed") {
+            const failure = deserializeRpcFailure((result as { failure: unknown }).failure);
+            throw new Error(
+              "Lifecycle " +
+                phase +
+                " refused for " +
+                target.source +
+                ":" +
+                target.className +
+                "/" +
+                target.objectKey +
+                ": " +
+                failure.message,
+              { cause: failure }
+            );
+          }
+        } catch (error) {
+          operationFailure = error;
+          failures.push(error);
         }
-        if ((result as { status: string }).status === "failed") {
-          releaseFailed = true;
-          failures.push(
-            new Error(
-              `Lifecycle release refused for ${target.source}:${target.className}/${target.objectKey}`,
-              { cause: result }
-            )
+        if (signal?.aborted) return;
+        try {
+          await this.recordOp(
+            epoch,
+            target,
+            "prepare",
+            operationFailure === undefined ? "ready" : "failed",
+            {
+              phase,
+              result:
+                operationFailure === undefined ? result : serializeRpcFailure(operationFailure),
+            }
           );
+        } catch (error) {
+          failures.push(error);
         }
-      } catch (original) {
-        releaseFailed = true;
-        failures.push(original);
-        result = { error: original instanceof Error ? original.message : String(original) };
-      }
-      // Crash preemption does not prove release. Keep the original dispatch
-      // joined above, then let the new generation reconstruct durable leases;
-      // never dispatch bookkeeping into the destroyed generation.
-      if (signal?.aborted) return;
-      try {
-        await this.recordOp(epoch, target, "prepare", releaseFailed ? "failed" : "ready", result);
-      } catch (original) {
-        failures.push(original);
-      }
-    });
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures,
-        `Lifecycle release failed for ${failures.length} operation(s)`,
-        {
+      });
+      if (failures.length)
+        throw new AggregateError(failures, "Lifecycle " + phase + " failed", {
           cause: failures[0],
-        }
-      );
+        });
+      signal?.throwIfAborted();
     }
-    signal?.throwIfAborted();
   }
 
   private async resumeTargets(

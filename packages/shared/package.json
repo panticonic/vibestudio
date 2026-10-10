@@ -142,6 +142,7 @@
     "./byteBudgetCache": "./src/byteBudgetCache.ts",
     "./rpcMethods": "./src/rpcMethods.ts",
     "./typedRpcServiceClient": "./src/typedRpcServiceClient.ts",
+    "./lifecyclePreparation": "./src/lifecyclePreparation.ts",
     "./logIds": "./src/logIds.ts"
   },
   "scripts": {

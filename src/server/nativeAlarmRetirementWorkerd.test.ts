@@ -429,7 +429,13 @@ it("cancels and joins native alarm work through its correlated RPC owner", async
     });
     markStage("prepare lifecycle while original alarm remains owned");
     const release = await hostRequest("__lifecycle/prepare", [
-      { mode: "suspend", reason: "shutdown" },
+      {
+        epoch: "retirement-test",
+        phase: "quiesce",
+        mode: "suspend",
+        reason: "shutdown",
+        deadlineMs: 0,
+      },
     ]);
     expect(release).toMatchObject({
       status: 200,
