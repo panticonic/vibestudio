@@ -1812,6 +1812,15 @@ const semanticWireMethods = {
   vcsListFiles: semanticWireMethod(vcsMethods.listFiles, "list files"),
 } satisfies ServiceMethodSchemas;
 
+const semanticMutationWireMethodNames = Object.keys(semanticWireMethods).filter(
+  (method) =>
+    semanticWireMethods[method as keyof typeof semanticWireMethods].access?.sensitivity !== "read"
+);
+const semanticReadWireMethodNames = Object.keys(semanticWireMethods).filter(
+  (method) =>
+    semanticWireMethods[method as keyof typeof semanticWireMethods].access?.sensitivity === "read"
+);
+
 const nonemptyText = z.string().min(1);
 const stateRefSchema = vcsStateNodeRefSchema;
 const workspacePinSchema = z
@@ -2957,7 +2966,15 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
     effect: { kind: "open" },
   },
   {
-    methods: Object.keys(semanticWireMethods),
+    methods: semanticMutationWireMethodNames,
+    capability: "workspace-service:gad.workspace",
+    principals: ["host"],
+    tier: "open",
+    sensitivity: "admin",
+    effect: { kind: "open" },
+  },
+  {
+    methods: semanticReadWireMethodNames,
     capability: "workspace-service:gad.workspace",
     principals: ["host", "code"],
     tier: "open",
@@ -3100,9 +3117,16 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
   },
 ] as const;
 
+type GadAuthorizedMethods<T extends ServiceMethodSchemas> = {
+  [K in keyof T]: T[K] &
+    Pick<MethodSchema, "capability" | "tier" | "directEffect" | "access"> & {
+      authority: { principals: Array<GadAuthorityGroup["principals"][number]> };
+    };
+};
+
 function applyGadAuthority<const T extends ServiceMethodSchemas>(
   methods: T,
-): T {
+): GadAuthorizedMethods<T> {
   const policies = new Map(
     GAD_AUTHORITY_GROUPS.flatMap((group) =>
       group.methods.map((method) => [method, group] as const),
@@ -3144,7 +3168,7 @@ function applyGadAuthority<const T extends ServiceMethodSchemas>(
         },
       ];
     }),
-  ) as T;
+  ) as GadAuthorizedMethods<T>;
 }
 
 export const gadWireMethods = applyGadAuthority(rawGadWireMethods);

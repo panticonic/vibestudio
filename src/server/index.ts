@@ -2,6 +2,7 @@ import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import { drainDependencyContentMaintenance } from "./buildV2/dependencyContentMaintenance.js";
 import { drainBuildStorePublications } from "./buildV2/buildStore.js";
 import { REPORT_POLICY } from "@vibestudio/service-schemas/problemReportBundle";
+import { workspaceMethodPrincipals } from "./workspaceRpcAuthority.js";
 /**
  * vibestudio-server — the standalone Vibestudio server entry point.
  *
@@ -5329,11 +5330,19 @@ async function main() {
               (hostIntrinsic ? ({ kind: "open" } as const) : catalogMethod?.effect) ??
               ({ kind: "open" } as const);
             const methodTier = catalogMethod?.access?.tier ?? "open";
+            const declaredPrincipals = catalogMethod?.access?.principals;
             return matches.map((service) => ({
               capability: `workspace-service:${service.name}`,
               serviceBinding: service.authority.binding ?? "consent",
               methodEffect,
-              principals: service.authority.principals,
+              // A method's static principal list narrows the service-wide
+              // allowlist. Without this intersection, a code principal could
+              // call host-ingress methods through the direct DO route even
+              // when their public façade is host-only.
+              principals: workspaceMethodPrincipals(
+                service.authority.principals,
+                declaredPrincipals
+              ),
               ...(methodCapability ? { methodCapability } : {}),
               ...(catalogMethod?.userlandCapability && build?.metadata.execution?.executionDigest
                 ? {

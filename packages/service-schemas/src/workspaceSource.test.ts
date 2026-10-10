@@ -70,6 +70,27 @@ describe("GAD runtime schema", () => {
     expect(Object.keys(gadMethods)).toEqual([...GAD_RUNTIME_METHOD_NAMES]);
   });
 
+  it("keeps semantic VCS wire methods private to the host ingress", () => {
+    for (const method of [
+      "vcsEdit",
+      "vcsMove",
+      "vcsCopy",
+      "vcsMerge",
+      "vcsRevert",
+      "vcsCommit",
+      "vcsDiscard",
+      "vcsImportSnapshot",
+      "vcsRegisterExternalDelta",
+      "vcsSupersedeExternalDelta",
+      "vcsFinalizeExternalDelta",
+      "vcsPush",
+    ] as const) {
+      expect(gadWireMethods[method].authority?.principals, method).toEqual(["host"]);
+    }
+    expect(gadWireMethods.vcsStatus.authority?.principals).toEqual(["host", "code"]);
+    expect(gadWireMethods.vcsMainState.authority?.principals).toEqual(["host", "code"]);
+  });
+
   it("documents typed args, returns, and sensitivity for every method", () => {
     for (const [name, method] of Object.entries(gadMethods)) {
       expect(method.description, `${name} description`).toBeTruthy();
