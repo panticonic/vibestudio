@@ -2043,6 +2043,15 @@ export function generateWorkerEntry(exposeEntryFile: string, entryFile: string):
   return `import ${JSON.stringify(exposeEntryFile)};
 import * as __vibestudioWorkerEntry from ${JSON.stringify(entryFile)};
 export * from ${JSON.stringify(entryFile)};
+import { WorkerEntrypoint as __VibestudioWorkerEntrypoint } from "cloudflare:workers";
+export class VibestudioExecutable extends __VibestudioWorkerEntrypoint {
+  fetch(request) {
+    const className = decodeURIComponent(new URL(request.url).pathname.slice(1));
+    if (typeof Reflect.get(__vibestudioWorkerEntry, className) !== "function")
+      throw new Error("Prepared executable has no declared class " + className);
+    return new Response(null, { status: 204 });
+  }
+}
 const __vibestudioDefaultExport = Object.prototype.hasOwnProperty.call(__vibestudioWorkerEntry, "default")
   ? Reflect.get(__vibestudioWorkerEntry, "default")
   : { fetch() { return new Response("Vibestudio worker module has no default fetch handler."); } };
@@ -3858,11 +3867,12 @@ async function extractYogaWasm(resolveDir: string): Promise<Buffer> {
  * actual call (which we never reach).
  */
 /**
- * Node built-in modules that workerd's `nodejs_compat` compatibility flag
- * DOES implement (or at least provides a working subset of). These stay
- * external in the worker bundle; workerd satisfies them at runtime.
+ * Modules supplied by workerd, including its entrypoint API and the Node
+ * built-ins supported by `nodejs_compat`. These remain external in every
+ * worker build; they are runtime modules, not package dependencies.
  */
-const WORKER_NODE_BUILTIN_EXTERNALS: readonly string[] = [
+export const WORKER_RUNTIME_EXTERNALS: readonly string[] = [
+  "cloudflare:workers",
   "node:assert",
   "node:async_hooks",
   "node:console",
@@ -4020,7 +4030,7 @@ async function buildWorker(
   }
   plugins.push(
     createDependencyEnvironmentResolvePlugin(nodePaths, [
-      ...WORKER_NODE_BUILTIN_EXTERNALS,
+      ...WORKER_RUNTIME_EXTERNALS,
       ...(terminalWorker ? ["yoga.wasm"] : []),
     ])
   );
@@ -4059,7 +4069,7 @@ async function buildWorker(
       // dead code paths we never reach at runtime.
       // Terminal workers import "yoga.wasm" — workerd provides it as a
       // pre-compiled wasm module binding, so it stays external.
-      external: [...WORKER_NODE_BUILTIN_EXTERNALS, ...(terminalWorker ? ["yoga.wasm"] : [])],
+      external: [...WORKER_RUNTIME_EXTERNALS, ...(terminalWorker ? ["yoga.wasm"] : [])],
       plugins,
       nodePaths,
       tsconfigRaw: { compilerOptions: {} },
@@ -4426,11 +4436,11 @@ async function buildTerminalApp(
       metafile: true,
       logLevel: "warning",
       conditions: [...NODE_CONDITIONS],
-      external: [...WORKER_NODE_BUILTIN_EXTERNALS],
+      external: [...WORKER_RUNTIME_EXTERNALS],
       plugins: [
         createWorkspaceResolvePlugin(graph, sourceRoot, NODE_CONDITIONS),
         createTsExtensionPlugin(sourceRoot),
-        createDependencyEnvironmentResolvePlugin(nodePaths, WORKER_NODE_BUILTIN_EXTERNALS),
+        createDependencyEnvironmentResolvePlugin(nodePaths, WORKER_RUNTIME_EXTERNALS),
       ],
       nodePaths,
       absWorkingDir: resolveDir,
@@ -5002,7 +5012,7 @@ async function buildLibraryBundle(
       write: false,
       external:
         target === "worker"
-          ? [...new Set([...libraryExternals, ...WORKER_NODE_BUILTIN_EXTERNALS])]
+          ? [...new Set([...libraryExternals, ...WORKER_RUNTIME_EXTERNALS])]
           : libraryExternals,
       // Apply the execution target to third-party dependencies too. The
       // workspace resolver below already uses these conditions for local
@@ -5025,7 +5035,7 @@ async function buildLibraryBundle(
         ...(target === "worker" ? [createWorkerNodeStubPlugin()] : []),
         createDependencyEnvironmentResolvePlugin(env.nodePaths, [
           ...libraryExternals,
-          ...(target === "worker" ? WORKER_NODE_BUILTIN_EXTERNALS : NODE_BUILTIN_EXTERNALS),
+          ...(target === "worker" ? WORKER_RUNTIME_EXTERNALS : NODE_BUILTIN_EXTERNALS),
         ]),
       ],
       nodePaths: env.nodePaths,
@@ -5258,7 +5268,7 @@ async function doNpmBuild(
         // runtime can satisfy stay external; the rest (child_process, os, …)
         // are intercepted by createWorkerNodeStubPlugin and replaced with a
         // throwing stub, so the bundle links and only throws if actually used.
-        external: [...externals, ...WORKER_NODE_BUILTIN_EXTERNALS],
+        external: [...externals, ...WORKER_RUNTIME_EXTERNALS],
         plugins: [
           createCryptoShimPlugin({ includeNodePrefix: false, resolveDir: nodeModulesDir }),
           createWorkerNodeStubPlugin(),

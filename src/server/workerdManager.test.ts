@@ -375,7 +375,11 @@ describe("WorkerdManager", () => {
         contextId: "fresh",
       });
       expect(secondProbe).not.toHaveBeenCalled();
-      const code = await reopened.getDoCode("workers/board", "BoardDO");
+      const code = await reopened.getDoCode(
+        "workers/board",
+        "BoardDO",
+        reopened.getDoVersion("workers/board", "BoardDO")!
+      );
       expect(code?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(descriptor(1, "fresh-shape"));
       await reopened.shutdown();
     });
@@ -485,6 +489,12 @@ describe("WorkerdManager", () => {
       const probe = vi
         .spyOn(mgr, "probeDurableObjectSchema")
         .mockResolvedValue(descriptor(1, "fresh-shape"));
+      const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+      vi.mocked(fetch).mockImplementation(async (input, init) =>
+        String(input).endsWith("/_prepare_executable")
+          ? new Response(null, { status: 204 })
+          : ordinaryFetch(input, init)
+      );
       await mgr.prepareWorkerExecutable(build, ["BoardDO"]);
       await mgr.prepareWorkerExecutable(build, ["BoardDO"]);
       expect(probe).toHaveBeenCalledTimes(1);
@@ -501,6 +511,49 @@ describe("WorkerdManager", () => {
       expect(deps.bindRuntimeImage).toHaveBeenCalledTimes(1);
       expect(mgr.getDoVersion("workers/board", "BoardDO", "first")).not.toBeNull();
       await mgr.shutdown();
+    });
+
+    it("keeps the newest prepared publication when an older preparation finishes later", async () => {
+      const deps = createMockDeps();
+      const manager = new WorkerdManager(deps);
+      const source = "workers/board";
+      const first = await deps.bindRuntimeImage(source, "state:first");
+      const second = await deps.bindRuntimeImage(source, "state:second");
+      vi.spyOn(manager, "probeDurableObjectSchema").mockResolvedValue(descriptor(1, "fresh-shape"));
+      let admitFirst!: () => void;
+      const firstAdmitted = new Promise<void>((resolve) => {
+        admitFirst = resolve;
+      });
+      let finishFirst!: () => void;
+      const firstCompletion = new Promise<void>((resolve) => {
+        finishFirst = resolve;
+      });
+      const versions: string[] = [];
+      const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+      vi.mocked(fetch).mockImplementation(async (input, init) => {
+        if (!String(input).endsWith("/_prepare_executable")) return ordinaryFetch(input, init);
+        versions.push(JSON.parse(String(init?.body)).version);
+        if (versions.length === 1) {
+          admitFirst();
+          await firstCompletion;
+        }
+        return new Response(null, { status: 204 });
+      });
+      const older = manager.prepareWorkerExecutable(
+        deps.getBuildByExecution(first.artifact.buildKey, first.artifact.executionDigest)!,
+        ["BoardDO"]
+      );
+      await firstAdmitted;
+      await manager.prepareWorkerExecutable(
+        deps.getBuildByExecution(second.artifact.buildKey, second.artifact.executionDigest)!,
+        ["BoardDO"]
+      );
+      expect((await manager.getDoCode(source, "BoardDO", versions[0]!))?.version).toBe(versions[0]);
+      finishFirst();
+      await older;
+      expect(await manager.getDoCode(source, "BoardDO", versions[0]!)).toBeNull();
+      expect((await manager.getDoCode(source, "BoardDO", versions[1]!))?.version).toBe(versions[1]);
+      await manager.shutdown();
     });
 
     it("shares exact schema admission and retains its evidence without a publication", async () => {
@@ -687,8 +740,18 @@ describe("WorkerdManager", () => {
           descriptor: descriptor(1, "second-shape"),
         },
       ]);
-      const firstCode = await mgr.getDoCode(source, "BoardDO", "a");
-      const secondCode = await mgr.getDoCode(source, "BoardDO", "b");
+      const firstCode = await mgr.getDoCode(
+        source,
+        "BoardDO",
+        mgr.getDoVersion(source, "BoardDO", "a")!,
+        "a"
+      );
+      const secondCode = await mgr.getDoCode(
+        source,
+        "BoardDO",
+        mgr.getDoVersion(source, "BoardDO", "b")!,
+        "b"
+      );
       expect(probe).toHaveBeenCalledTimes(2);
       expect(firstCode?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(descriptor(1, "first-shape"));
       expect(secondCode?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(
@@ -710,7 +773,8 @@ describe("WorkerdManager", () => {
         ])
       ).toThrow(/same immutable execution artifact/);
       expect(
-        (await mgr.getDoCode(source, "BoardDO", "a"))?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]
+        (await mgr.getDoCode(source, "BoardDO", mgr.getDoVersion(source, "BoardDO", "a")!, "a"))
+          ?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]
       ).toEqual(descriptor(1, "first-shape"));
     });
 
@@ -1290,16 +1354,33 @@ describe("WorkerdManager", () => {
 
       await expect(restored.restoreDurableObjectEntity(record)).resolves.toBeUndefined();
       const version = restored.getDoVersion("workers/new-do", "NewDO", "k1");
-      const admittedCode = await restored.getDoCode("workers/new-do", "NewDO", "k1");
+      const admittedCode = await restored.getDoCode(
+        "workers/new-do",
+        "NewDO",
+        restored.getDoVersion("workers/new-do", "NewDO", "k1")!,
+        "k1"
+      );
       record.stateArgs.agentConfig.instructions = "caller mutated instructions";
       expect(restored.getDoVersion("workers/new-do", "NewDO", "k1")).toBe(version);
-      expect(await restored.getDoCode("workers/new-do", "NewDO", "k1")).toEqual(admittedCode);
+      expect(
+        await restored.getDoCode(
+          "workers/new-do",
+          "NewDO",
+          restored.getDoVersion("workers/new-do", "NewDO", "k1")!,
+          "k1"
+        )
+      ).toEqual(admittedCode);
       record.stateArgs.agentConfig.instructions = "admitted instructions";
       await expect(restored.restoreDurableObjectEntity(record)).resolves.toBeUndefined();
       expect(restored.getDoVersion("workers/new-do", "NewDO", "k1")).toBe(version);
       expect(restored.listRuntimeImages().some(({ id }) => id === record.id)).toBe(false);
       expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
-      const code = await restored.getDoCode("workers/new-do", "NewDO", "k1");
+      const code = await restored.getDoCode(
+        "workers/new-do",
+        "NewDO",
+        restored.getDoVersion("workers/new-do", "NewDO", "k1")!,
+        "k1"
+      );
       expect(code).not.toBeNull();
     });
 
@@ -1440,8 +1521,18 @@ describe("WorkerdManager", () => {
       await manager.registerAllDOClasses([
         { source: "workers/agent-worker", className: "AiChatWorker" },
       ]);
-      const first = await manager.getDoCode("workers/agent-worker", "AiChatWorker", "first");
-      const second = await manager.getDoCode("workers/agent-worker", "AiChatWorker", "second");
+      const first = await manager.getDoCode(
+        "workers/agent-worker",
+        "AiChatWorker",
+        manager.getDoVersion("workers/agent-worker", "AiChatWorker", "first")!,
+        "first"
+      );
+      const second = await manager.getDoCode(
+        "workers/agent-worker",
+        "AiChatWorker",
+        manager.getDoVersion("workers/agent-worker", "AiChatWorker", "second")!,
+        "second"
+      );
       expect(first?.egressIdentity).toMatch(/^do-code:/);
       expect(first?.egressIdentity).toBe(second?.egressIdentity);
       expect(first?.version).toBe(second?.version);
@@ -1489,8 +1580,18 @@ describe("WorkerdManager", () => {
           cleanupComplete: false,
         });
       }
-      const first = await manager.getDoCode(source, className, "first");
-      const second = await manager.getDoCode(source, className, "second");
+      const first = await manager.getDoCode(
+        source,
+        className,
+        manager.getDoVersion(source, className, "first")!,
+        "first"
+      );
+      const second = await manager.getDoCode(
+        source,
+        className,
+        manager.getDoVersion(source, className, "second")!,
+        "second"
+      );
       expect(first?.version).toBe(second?.version);
       expect(first?.egressIdentity).toBe(second?.egressIdentity);
       const units = manager as unknown as {
@@ -1506,7 +1607,11 @@ describe("WorkerdManager", () => {
       expect(units.retiredDynamicIsolateIds.size).toBe(1);
       // The class default remains a legitimate code-principal owner when it
       // shares the image; only the state-argument executable unit is obsolete.
-      const serviceCode = await manager.getDoCode(source, className);
+      const serviceCode = await manager.getDoCode(
+        source,
+        className,
+        manager.getDoVersion(source, className)!
+      );
       expect(serviceCode?.egressIdentity).toBe(first!.egressIdentity);
       expect(unregisterEgressCaller).not.toHaveBeenCalledWith(first!.egressIdentity);
     });
@@ -1559,7 +1664,12 @@ describe("WorkerdManager", () => {
         cleanupComplete: false,
       });
 
-      const code = await mgr.getDoCode("workers/new-do", "NewDO", "subagent-object");
+      const code = await mgr.getDoCode(
+        "workers/new-do",
+        "NewDO",
+        mgr.getDoVersion("workers/new-do", "NewDO", "subagent-object")!,
+        "subagent-object"
+      );
       expect(code?.env["WORKER_EFFECTIVE_VERSION"]).toBe(prepared.effectiveVersion);
       expect(code?.env["WORKER_SOURCE_REF"]).toMatch(/^state:[0-9a-f]{64}$/);
       expect(code?.env["STATE_ARGS"]).toEqual({

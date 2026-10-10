@@ -128,9 +128,11 @@ export interface WorkerHostCodeProvider {
   getDoCode(
     source: string,
     className: string,
+    version: string,
     objectKey?: string
   ): Promise<{
     version: string;
+    egressIdentity: string | null;
     compatibilityDate: string;
     compatibilityFlags: string[];
     mainModule: string;
@@ -331,14 +333,15 @@ export class Gateway {
         const segs = (url.slice(prefix.length).split("?")[0] ?? "").split("/");
         const source = decodeURIComponent(segs[0] ?? "");
         const className = decodeURIComponent(segs[1] ?? "");
+        const version = requestUrl.searchParams.get("version");
         const objectKey = requestUrl.searchParams.get("objectKey") ?? undefined;
-        if (!source || !className) {
+        if (!source || !className || !version) {
           res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Missing DO source/class");
+          res.end("Missing DO source/class/version");
           return;
         }
         void host
-          .getDoCode(source, className, objectKey)
+          .getDoCode(source, className, version, objectKey)
           .then((code) => {
             if (!code) {
               res.writeHead(404, { "Content-Type": "text/plain" });

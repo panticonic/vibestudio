@@ -4598,8 +4598,27 @@ async function main() {
                 objectKey: record.key,
               });
             },
-            initializeAgent: createRuntimeAgentInitializer(() =>
-              assertPresent(rpcServerForGateway)
+            initializeAgent: createRuntimeAgentInitializer(
+              () => assertPresent(rpcServerForGateway),
+              async ({ record, channelId, signal }) => {
+                const rpcServer = assertPresent(rpcServerForGateway);
+                const workers = assertPresent(
+                  container.get<ReturnType<typeof createWorkerService>>("workersRpc")
+                );
+                const service = await workers.resolveService(
+                  { caller: rpcServer.verifiedRuntimeCaller(record.id), signal },
+                  "vibestudio.channel.v1",
+                  channelId
+                );
+                if (service.kind !== "durable-object") {
+                  throw new Error("Agent channels must be Durable Object-backed");
+                }
+                return {
+                  source: service.source,
+                  className: service.className,
+                  objectKey: service.objectKey,
+                };
+              }
             ),
             initializeDurableClone: (input) =>
               doDispatch.dispatchLifecycle(input.target, "initializeClone", input),
@@ -6349,7 +6368,7 @@ async function main() {
   };
 
   {
-    let workerServiceDef: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
+    let workerServiceDef: ReturnType<typeof createWorkerService>;
     container.registerManaged({
       name: "workersRpc",
       dependencies: ["workerdWorkspace", "buildSystem", "workerdManager", "doDispatch"],
@@ -6461,6 +6480,7 @@ async function main() {
           restoreDurableObjectStorageBackup: (target, operationId, intent) =>
             workerdManagerInst.restoreDOStorageBackup(target, operationId, intent),
         });
+        return workerServiceDef;
       },
       getServiceDefinition() {
         return workerServiceDef;

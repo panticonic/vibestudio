@@ -1,7 +1,7 @@
 # Channel protocol storage cutover
 
-The current channel owner schema is 124, the workspace source owner schema is
-66, and the native agent owner schema is 4. Agent subclasses inherit the native
+The current channel owner schema is 125, the workspace source owner schema is
+66, and the native agent owner schema is 5. Agent subclasses inherit the native
 owner version. These owners declare no schema upgrade path. Admission checks
 the sealed executable descriptor, stored schema version, and schema fingerprint;
 incompatible storage is refused before mutation. Rebuilding an executable does

@@ -68,10 +68,15 @@ beforeAll(async () => {
   compiledWorkerdPrograms = await buildWorkerdPrograms({ write: false });
 });
 
-const COUNTER_DO = `import { DurableObject } from "cloudflare:workers";
+const COUNTER_DO = `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+let unitConstructors = 0;
+export class VibestudioExecutable extends WorkerEntrypoint {
+  fetch() { return new Response(null, {status:204}); }
+}
 export class CounterDO extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
+    unitConstructors++;
     this.ctx = ctx; this.env = env;
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS c (n INTEGER)");
   }
@@ -88,10 +93,14 @@ export class CounterDO extends DurableObject {
     const parts = url.pathname.split("/").filter(Boolean);
     const userKey = parts[0] ? decodeURIComponent(parts[0]) : "";
     const method = parts.slice(1).join("/") || "get";
+    if (method === "network") {
+      const response = await fetch("http://shared-unit-egress.invalid/probe");
+      return Response.json({ result: await response.json() });
+    }
     if (method === "generation") return Response.json({result:"v1"});
     if (method === "instance") {
       this.localCalls = (this.localCalls || 0) + 1;
-      return Response.json({result:{localCalls:this.localCalls,held:this.held === true,stateArgs:this.env.STATE_ARGS ?? null,key:userKey}});
+      return Response.json({result:{unitConstructors,localCalls:this.localCalls,held:this.held === true,stateArgs:this.env.STATE_ARGS ?? null,key:userKey}});
     }
     if (method === "hold") {
       this.held = true;
@@ -218,7 +227,11 @@ async function listen(server: Server): Promise<number> {
 
 async function createHarness(builds: Record<string, BuildResult>): Promise<Harness> {
   const tokenManager = new TokenManager();
-  const boundBuilds = new Map<string, BuildResult>();
+  const boundBuilds = new Map<string, BuildResult>(
+    Object.values(builds)
+      .filter((build) => build.metadata.execution)
+      .map((build) => [build.buildKey, build])
+  );
   // Construct the manager first (its getServerUrl reads the port lazily via the
   // holder) so the gateway closure below can reference a `const` manager.
   const portHolder = { value: 0 };
@@ -233,7 +246,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-ws-")),
     statePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-state-")),
     getProxyPort: () => 1,
-    getSharedEgressPort: () => Promise.resolve(59999),
+    getSharedEgressPort: () => Promise.resolve(portHolder.value),
     registerEgressCaller: () => {},
     unregisterEgressCaller: () => {},
     egressSecret: "universal-do-host-egress-secret",
@@ -277,6 +290,11 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
 
   const gateway = createServer((req, res) => {
     const url = req.url ?? "";
+    if (req.headers["x-vibestudio-egress-secret"] === "universal-do-host-egress-secret") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ caller: req.headers["x-vibestudio-egress-caller"] }));
+      return;
+    }
     const secret = req.headers["x-vibestudio-loader-secret"];
     if (url.startsWith("/_docode/")) {
       if (secret !== manager.getLoaderSecret()) {
@@ -291,7 +309,14 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
 
       codeFetches.set(objectKey, (codeFetches.get(objectKey) ?? 0) + 1);
       void Promise.resolve()
-        .then(() => manager.getDoCode(source, className, objectKey))
+        .then(() =>
+          manager.getDoCode(
+            source,
+            className,
+            new URL(url, "http://gateway").searchParams.get("version") ?? "",
+            objectKey
+          )
+        )
         .then((code) => {
           if (!code) {
             res.writeHead(404);
@@ -441,6 +466,57 @@ describe("UniversalDO facet host (real workerd)", () => {
     expect(await dispatch(second, "instance")).toMatchObject({ localCalls: 2, held: false });
     expect(await dispatch(first, "instance")).toMatchObject({ localCalls: 1, held: false });
     expect(await dispatch(first, "get")).toMatchObject({ count: 1 });
+    expect([...codeFetches.values()].reduce((sum, value) => sum + value, 0)).toBe(1);
+  }, 30_000);
+
+  it("prepares the actual unit without constructing an object and reuses it on first demand", async () => {
+    const source = "workers/prepared-counter";
+    const build = doBuild(source, "ev-1");
+    const artifact = runtimeArtifact(source, "main");
+    const preparedBuild: BuildResult = {
+      ...build,
+      buildKey: artifact.buildKey,
+      metadata: {
+        ...build.metadata,
+        buildKey: artifact.buildKey,
+        execution: artifact,
+        ev: artifact.sourceState.effectiveVersion,
+        sourceState: artifact.sourceState.state,
+      },
+    };
+    active = await createHarness({ [source]: preparedBuild });
+    const { manager, dispatch, codeFetches } = active;
+    await manager.prepareWorkerExecutable(preparedBuild, ["CounterDO"]);
+    expect(manager.getDoVersion(source, "CounterDO")).toBeNull();
+    const fetchedBeforeDemand = [...codeFetches.values()].reduce((sum, value) => sum + value, 0);
+    await manager.ensureDOClass(source, "CounterDO");
+    expect(
+      await dispatch({ source, className: "CounterDO", objectKey: "first" }, "instance")
+    ).toMatchObject({ unitConstructors: 1, localCalls: 1 });
+    expect([...codeFetches.values()].reduce((sum, value) => sum + value, 0)).toBe(
+      fetchedBeforeDemand
+    );
+    const inspector = manager.getInspectorUrl();
+    expect(inspector).not.toBeNull();
+    const targets = (await fetch(`${inspector}/json/list`).then((response) =>
+      response.json()
+    )) as Array<{ title: string }>;
+    expect(targets.some((target) => target.title.includes("do-code:"))).toBe(true);
+  });
+
+  it("keeps shared executable network egress alive after the first loading object retires", async () => {
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, dispatch, codeFetches } = active;
+    await manager.ensureDOClass("workers/counter", "CounterDO");
+    const first = { source: "workers/counter", className: "CounterDO", objectKey: "network-first" };
+    const second = { ...first, objectKey: "network-second" };
+    const before = await dispatch(first, "network");
+    expect(before).toMatchObject({
+      caller: expect.stringMatching(/^do-code:workers\/counter:CounterDO:/),
+    });
+    expect(await dispatch(second, "network")).toEqual(before);
+    await manager.retireDOEntity(first);
+    expect(await dispatch(second, "network")).toEqual(before);
     expect([...codeFetches.values()].reduce((sum, value) => sum + value, 0)).toBe(1);
   }, 30_000);
 

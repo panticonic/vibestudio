@@ -1022,6 +1022,15 @@ export class RpcServer {
     this.workReadyObserver = observer;
   }
 
+  /** Host-owned initialization uses the same live runtime projection as ingress. */
+  verifiedRuntimeCaller(runtimeId: string): VerifiedCaller {
+    const record = this.deps.entityCache?.resolveActive(runtimeId);
+    if (!record || !["panel", "app", "worker", "do"].includes(record.kind)) {
+      throw createRelayError(`Runtime ${runtimeId} is not active`, "RUNTIME_ENTITY_NOT_ACTIVE");
+    }
+    return this.verifiedCallerFor(runtimeId, record.kind as "panel" | "app" | "worker" | "do");
+  }
+
   private verifiedCallerFor(
     callerId: string,
     callerKind: CallerKind,

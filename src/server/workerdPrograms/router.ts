@@ -8,6 +8,7 @@ interface RouterEnv extends Record<string, RouterBinding> {
   WORKERD_GATEWAY_TOKEN: string;
   WORKER_HOST: Fetcher;
   UNIVERSAL_DO: DurableObjectNamespace;
+  EXECUTABLE_PREPARATION: Fetcher;
 }
 
 function isDurableObjectNamespace(
@@ -60,13 +61,16 @@ const router: ExportedHandler<RouterEnv> = {
       return new Response(null, { status: 204 });
     }
     if (
-      (prefix === "_w" || prefix === "_u") &&
+      (prefix === "_w" || prefix === "_u" || prefix === "_prepare_executable") &&
       request.headers.get("X-Vibestudio-Dispatch-Secret") !== env.WORKERD_DISPATCH_SECRET
     ) {
       return new Response("Forbidden", { status: 403 });
     }
     if (prefix === "_w" || prefix === "_u") {
       strippedHeaders.set(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER, String(Date.now()));
+    }
+    if (prefix === "_prepare_executable") {
+      return env.EXECUTABLE_PREPARATION.fetch(new Request(request, { headers: strippedHeaders }));
     }
     const doLookup = env.WORKERD_DO_BINDINGS;
     // Semantic DO dispatch carries a complete serialized envelope. Own those

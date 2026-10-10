@@ -19,6 +19,8 @@ import {
   generateExposeModuleCode,
   generatePanelExposeEntryCode,
   generateWorkerEntry,
+  createDependencyEnvironmentResolvePlugin,
+  WORKER_RUNTIME_EXTERNALS,
   injectHtmlTransforms,
   resolveEntryPoint,
 } from "./builder.js";
@@ -258,6 +260,91 @@ describe("generateExposeModuleCode", () => {
 });
 
 describe("generateWorkerEntry", () => {
+  it("preserves the runtime entrypoint API through the prepared worker dependency boundary", async () => {
+    const result = await esbuild.build({
+      stdin: {
+        contents: generateWorkerEntry("./exposed.js", "./entry.js"),
+      },
+      bundle: true,
+      platform: "neutral",
+      format: "esm",
+      write: false,
+      external: [...WORKER_RUNTIME_EXTERNALS],
+      plugins: [
+        createDependencyEnvironmentResolvePlugin([], WORKER_RUNTIME_EXTERNALS),
+        {
+          name: "application-fixture",
+          setup(build) {
+            build.onResolve({ filter: /^\.\/(?:entry|exposed)\.js$/ }, ({ path }) => ({
+              path,
+              namespace: "fixture",
+            }));
+            build.onLoad({ filter: /.*/, namespace: "fixture" }, ({ path }) => ({
+              contents:
+                path === "./entry.js" ? "export class ActualAgent {}; export default {};" : "",
+            }));
+          },
+        },
+      ],
+    });
+    expect(result.outputFiles[0]!.text).toContain('from "cloudflare:workers"');
+    expect(result.outputFiles[0]!.text).toContain("VibestudioExecutable");
+  });
+  it("prepares the declared unit without constructing application objects or calling default fetch", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "worker-preparation-"));
+    try {
+      const entry = path.join(directory, "entry.js");
+      const exposed = path.join(directory, "exposed.js");
+      fs.writeFileSync(exposed, "");
+      fs.writeFileSync(
+        entry,
+        `
+        export class ActualAgent { constructor() { throw new Error("constructed user object"); } }
+        export default { fetch() { throw new Error("called user fetch"); } };
+      `
+      );
+      const result = await esbuild.build({
+        stdin: { contents: generateWorkerEntry(exposed, entry), resolveDir: directory },
+        bundle: true,
+        format: "iife",
+        globalName: "prepared",
+        write: false,
+        plugins: [
+          {
+            name: "cloudflare-entrypoint",
+            setup(build) {
+              build.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+                path: "entrypoint",
+                namespace: "fixture",
+              }));
+              build.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({
+                contents: "export class WorkerEntrypoint {}",
+              }));
+            },
+          },
+        ],
+      });
+      const context = {
+        Response,
+        Request,
+        URL,
+        prepared: undefined as
+          | undefined
+          | {
+              VibestudioExecutable: new () => { fetch(request: Request): Response };
+            },
+      };
+      runInNewContext(result.outputFiles[0]!.text, context);
+      const executable = new context.prepared!.VibestudioExecutable();
+      expect(executable.fetch(new Request("http://prepared/ActualAgent")).status).toBe(204);
+      expect(() => executable.fetch(new Request("http://prepared/MissingAgent"))).toThrow(
+        "no declared class"
+      );
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("imports the expose file as a side effect before re-exporting", () => {
     const code = generateWorkerEntry("/tmp/_expose.js", "/src/index.ts");
     const exposeIdx = code.indexOf('import "/tmp/_expose.js"');

@@ -24,6 +24,7 @@ export function registerRpcOperationOwner<T extends object>(owner: T, own: RpcOp
   return owner;
 }
 
+const schemaClients = new WeakMap<RpcWireClient, RpcClient>();
 const wireClients = new WeakMap<object, RpcWireClient>();
 const wireCallers = new WeakMap<object, WireDispatcher>();
 
@@ -80,6 +81,8 @@ export function schemaRpcCaller(wire: WireDispatcher): RpcCaller {
 
 /** One schema facade over the existing transport client and its owned lifecycle. */
 export function schemaRpcClient(wire: RpcWireClient): RpcClient {
+  const existing = schemaClients.get(wire);
+  if (existing) return existing;
   const client: RpcClient = {
     ...wire,
     ...schemaRpcCaller(wire),
@@ -91,6 +94,7 @@ export function schemaRpcClient(wire: RpcWireClient): RpcClient {
     }),
   };
   registerRpcWireClient(wire);
+  schemaClients.set(wire, client);
   wireClients.set(client, wire);
   wireCallers.set(client, wire);
   wireCallers.set(client.stream, wire);

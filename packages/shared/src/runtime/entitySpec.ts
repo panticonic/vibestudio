@@ -416,6 +416,11 @@ export interface RuntimeAgentInitialization {
   replay?: boolean;
 }
 
+/** The admission owner resolves selection before dispatching the agent. */
+export interface RuntimeAgentChannelAdmission extends RuntimeAgentInitialization {
+  channelRef: import("../doDispatcher.js").DORef;
+}
+
 export type RuntimeEntityCreateSpec =
   | (RuntimeEntityCreateCommon & {
       kind: "panel";

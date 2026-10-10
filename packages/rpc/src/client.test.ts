@@ -1,4 +1,4 @@
-import { schemaRpcClient } from "./schemaClient.js";
+import { schemaRpcClient, wireClientFor } from "./schemaClient.js";
 import { dispatchRpcCall } from "@vibestudio/rpc/internal";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { defineContract, withCausalParent, withRpcAbortSignal, withRpcContext } from "./client.js";
@@ -2700,4 +2700,70 @@ it.each(["call", "peer", "stream", "readable"] as const)("owns typed %s before a
   await rejected;
   await expect(observed[0]).rejects.toBe(failure);
   expect(fake.sent).toHaveLength(0);
+});
+
+
+describe("schema client transport identity", () => {
+  const method = {
+    name: "read",
+    async parseArgs(args: []) { return args; },
+    async invoke(args: [], dispatch: (parsed: unknown[]) => Promise<unknown>) {
+      return dispatch(await this.parseArgs(args));
+    },
+  };
+
+  it("reuses one facade while observing the wire's current dispatch and connection state", async () => {
+    const fake = controllableTransport();
+    const wire = createRpcClient({ selfId: "same-wire", transport: fake.transport });
+    const facade = schemaRpcClient(wire);
+    expect(schemaRpcClient(wire)).toBe(facade);
+    expect(wireClientFor(facade)).toBe(wire);
+    const dispatch = vi.fn(async () => "current dispatch");
+    wire.call = dispatch;
+    expect(await facade.call("server", method, [])).toBe("current dispatch");
+    expect(dispatch).toHaveBeenCalledWith("server", "read", [], undefined);
+    fake.transport.status = () => "disconnected";
+    expect(facade.status()).toBe("disconnected");
+  });
+
+  it("keeps causal and cancellation views distinct over the same underlying transport", async () => {
+    const fake = controllableTransport();
+    const wire = createRpcClient({ selfId: "scoped-wire", transport: fake.transport });
+    const facade = schemaRpcClient(wire);
+    const firstParent = { kind: "trajectory-invocation" as const, logId: "channel:first", head: "main", invocationId: "first" };
+    const secondParent = { ...firstParent, logId: "channel:second", invocationId: "second" };
+    const firstSignal = new AbortController().signal;
+    const secondSignal = new AbortController().signal;
+    const first = withRpcAbortSignal(withCausalParent(facade, firstParent), firstSignal);
+    const second = withRpcAbortSignal(withCausalParent(facade, secondParent), secondSignal);
+    expect(first).not.toBe(second);
+    expect(first).not.toBe(facade);
+    expect(schemaRpcClient(wireClientFor(first))).toBe(first);
+    expect(schemaRpcClient(wireClientFor(second))).toBe(second);
+    const dispatch = vi.fn(async () => "scoped dispatch");
+    wire.call = dispatch;
+    await Promise.all([first.call("server", method, []), second.call("server", method, [])]);
+    expect(dispatch.mock.calls).toEqual([
+      ["server", "read", [], { causalParent: firstParent, signal: firstSignal }],
+      ["server", "read", [], { causalParent: secondParent, signal: secondSignal }],
+    ]);
+  });
+
+  it("retains retirement on the old wire and creates a new facade for the restored endpoint", async () => {
+    const oldTransport = controllableTransport();
+    const lifetime = new AbortController();
+    const oldWire = createRpcClient({ selfId: "restored-owner", transport: oldTransport.transport, lifetime: lifetime.signal });
+    const oldFacade = schemaRpcClient(oldWire);
+    lifetime.abort(new Error("owner retired"));
+    expect(schemaRpcClient(oldWire)).toBe(oldFacade);
+    await expect(oldFacade.call("server", method, [])).rejects.toThrow("has been retired");
+    expect(oldTransport.sent).toHaveLength(0);
+    const newTransport = controllableTransport();
+    const newWire = createRpcClient({ selfId: "restored-owner", transport: newTransport.transport });
+    const newFacade = schemaRpcClient(newWire);
+    expect(newFacade).not.toBe(oldFacade);
+    await newFacade.emit("server", "restored", {});
+    expect(newTransport.sent).toHaveLength(1);
+    expect(newFacade.status()).toBe("connected");
+  });
 });

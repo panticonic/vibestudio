@@ -236,15 +236,22 @@ async function createWorkerdHarness(
       const className = decodeURIComponent(segs[1] ?? "");
       const objectKey = new URL(u, "http://fixture").searchParams.get("objectKey") ?? undefined;
 
-      void manager.getDoCode(source, className, objectKey).then((code) => {
-        if (!code) {
-          res.writeHead(404);
-          res.end("nf");
-          return;
-        }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(code));
-      });
+      void manager
+        .getDoCode(
+          source,
+          className,
+          new URL(u, "http://fixture").searchParams.get("version") ?? "",
+          objectKey
+        )
+        .then((code) => {
+          if (!code) {
+            res.writeHead(404);
+            res.end("nf");
+            return;
+          }
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(code));
+        });
       return;
     }
     res.writeHead(404);

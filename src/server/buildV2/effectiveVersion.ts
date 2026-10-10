@@ -246,7 +246,8 @@ export async function persistEvState(state: Omit<PersistedEvState, "version">): 
 // "33": workspace execution metadata seals the complete service admission identity.
 // "34": module registries distinguish owned exports from missing and inherited entries.
 // "35": owned dependency resolution preserves esbuild's guarded optional imports.
-const BUILD_CACHE_VERSION = "35";
+// "36": worker entries expose constructor-free preparation of exact executable units.
+const BUILD_CACHE_VERSION = "36";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the

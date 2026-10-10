@@ -1913,7 +1913,9 @@ describe("RpcServer relay behavior", () => {
     const resolveExactCausalInvocation = vi.fn(async () => ({ initiatingUser: null }));
     const { server, entityCache } = createServer({ resolveExactCausalInvocation });
     const targetId = "do:workers/example:Store:key";
-    entityCache._onActivate(makeRecord(targetId, "do"));
+    const record = makeRecord(targetId, "do");
+    entityCache._onActivate(record);
+    server.setExecutableVersionResolver(() => record.source.effectiveVersion);
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
     const fetchMock = vi.fn().mockResolvedValue(
@@ -2105,7 +2107,9 @@ describe("RpcServer relay behavior", () => {
   it("projects the host-verified account subject into DO caller attribution", async () => {
     const { server, entityCache } = createServer();
     const targetId = "do:workers/workspace-source:GadWorkspaceDO:workspace";
-    entityCache._onActivate(makeRecord(targetId, "do"));
+    const record = makeRecord(targetId, "do");
+    entityCache._onActivate(record);
+    server.setExecutableVersionResolver(() => record.source.effectiveVersion);
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
     const fetchMock = vi.fn().mockResolvedValue(
@@ -2162,7 +2166,13 @@ describe("RpcServer relay behavior", () => {
       handle: "creator",
     });
     const signal = new AbortController().signal;
-    const initialize = createRuntimeAgentInitializer(() => server);
+    const channelRef = {
+      source: "workers/pubsub-channel",
+      className: "PubSubChannel",
+      objectKey: "ch-init",
+    };
+    const resolveEndpoint = vi.fn(async () => channelRef);
+    const initialize = createRuntimeAgentInitializer(() => server, resolveEndpoint);
     await expect(
       initialize({
         record,
@@ -2171,6 +2181,14 @@ describe("RpcServer relay behavior", () => {
         initialization: { channelId: "ch-init", replay: false },
       })
     ).resolves.toEqual({ ok: true, participantId: targetId });
+    expect(resolveEndpoint).toHaveBeenCalledOnce();
+    expect(resolveEndpoint).toHaveBeenCalledWith({
+      record,
+      caller,
+      signal,
+      initialization: { channelId: "ch-init", replay: false },
+      channelId: "ch-init",
+    });
     const envelope = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
     expect(envelope.delivery.caller).toMatchObject({
       callerId: "panel:nav-a",
@@ -2179,7 +2197,7 @@ describe("RpcServer relay behavior", () => {
     });
     expect(envelope.message).toMatchObject({
       method: "subscribeChannel",
-      args: [{ channelId: "ch-init", replay: false, contextId: "ctx-agent-init" }],
+      args: [{ channelId: "ch-init", channelRef, replay: false, contextId: "ctx-agent-init" }],
     });
     expect((envelope.delivery.caller as AttestedCaller).authorization).toMatchObject({
       audience: targetId,
@@ -2222,14 +2240,15 @@ describe("RpcServer relay behavior", () => {
     });
     const stopped = new AbortController();
     stopped.abort(cancellation);
-    expect(() =>
+    await expect(
       initialize({
         record,
         caller,
         signal: stopped.signal,
         initialization: { channelId: "ch-init" },
       })
-    ).toThrow(cancellation);
+    ).rejects.toBe(cancellation);
+    expect(resolveEndpoint).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -7023,6 +7042,55 @@ describe("delegated Durable Object authority lifetime", () => {
       new AbortController().signal
     );
     expect(testServer(server).dispatcher.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("rejects membership RPCs from preparing and retired objects at ingress", async () => {
+    const { server, entityCache } = createServer();
+    const runtimeId = "do:workers/agent-worker:AiChatWorker:membership-owner";
+    const target = "do:workers/pubsub-channel:PubSubChannel:membership-channel";
+    for (const status of ["preparing", "retired"] as const) {
+      entityCache._onActivate({
+        ...makeRecord(runtimeId, "do", { repoPath: "workers/agent-worker" }),
+        status,
+      });
+      const message: InternalRpcRequest = {
+        type: "request",
+        requestId: `membership:${status}`,
+        fromId: runtimeId,
+        method: "join",
+        args: [{ participantId: runtimeId, operationId: "membership-admission" }],
+      };
+      await expect(
+        testServer(server).handleEnvelopeRequest(
+          runtimeId,
+          "do",
+          undefined,
+          envelopeFromMessage({
+            selfId: runtimeId,
+            from: runtimeId,
+            target,
+            callerKind: "do",
+            message,
+          }),
+          message,
+          new AbortController().signal
+        )
+      ).rejects.toMatchObject({ code: "RUNTIME_ENTITY_NOT_ACTIVE" });
+    }
+    expect(testServer(server).dispatcher.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("uses live ingress identity for host-owned runtime initialization", () => {
+    const { server, entityCache } = createServer();
+    const runtimeId = "do:workers/agent-worker:AiChatWorker:host-initialization";
+    expect(() => server.verifiedRuntimeCaller(runtimeId)).toThrow(/not active/);
+    const record = makeRecord(runtimeId, "do", { repoPath: "workers/agent-worker" });
+    entityCache._onActivate(record);
+    const caller = server.verifiedRuntimeCaller(runtimeId);
+    expect(caller.runtime).toEqual({ id: runtimeId, kind: "do" });
+    expect(caller.code?.repoPath).toBe("workers/agent-worker");
+    entityCache._onActivate({ ...record, status: "retired" });
+    expect(() => server.verifiedRuntimeCaller(runtimeId)).toThrow(/not active/);
   });
 
   it("carries a verified account through live system-owned deputies without changing code identity or leaking to later calls", async () => {

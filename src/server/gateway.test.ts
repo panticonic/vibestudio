@@ -26,7 +26,7 @@ describe("Gateway lifecycle", () => {
     const request = async () => {
       const received = once(socket, "data");
       socket.write(
-        "GET /_docode/source/Class HTTP/1.1\r\nHost: localhost\r\nX-Vibestudio-Loader-Secret: fixture-loader\r\n\r\n"
+        "GET /_docode/source/Class?version=fixture-version HTTP/1.1\r\nHost: localhost\r\nX-Vibestudio-Loader-Secret: fixture-loader\r\n\r\n"
       );
       const [data] = await received;
       expect(data.toString()).toContain("200 OK");
@@ -62,6 +62,27 @@ describe("Gateway lifecycle", () => {
 
     expect(gateway.getPort()).toBeNull();
     await gateway.stop();
+  });
+
+  it("selects an exact executable version instead of an object's current image", async () => {
+    const getDoCode = vi.fn(async () => ({ version: "sealed-version" }));
+    gateway = new Gateway({
+      tokenManager: {} as never,
+      getWorkerHost: () => ({ getLoaderSecret: () => "fixture-loader", getDoCode }) as never,
+    });
+    const port = await gateway.start(0);
+    const headers = { "X-Vibestudio-Loader-Secret": "fixture-loader" };
+    const response = await fetch(
+      `http://127.0.0.1:${port}/_docode/source/Class?version=sealed-version&objectKey=owner`,
+      { headers }
+    );
+    expect(response.status).toBe(200);
+    expect(getDoCode).toHaveBeenCalledExactlyOnceWith("source", "Class", "sealed-version", "owner");
+    const missingVersion = await fetch(`http://127.0.0.1:${port}/_docode/source/Class`, {
+      headers,
+    });
+    expect(missingVersion.status).toBe(400);
+    expect(getDoCode).toHaveBeenCalledTimes(1);
   });
 
   it("does not expose raw userland Durable Object transport", async () => {

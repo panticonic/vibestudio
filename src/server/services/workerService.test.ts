@@ -805,15 +805,14 @@ describe("workerService workspace service resolution", () => {
     };
     const activateDurableObject = vi.fn(async () => {});
     const dispatcher = createTestServiceDispatcher();
-    dispatcher.registerService(
-      createWorkerService({
-        ...(deps as object),
-        getCallerContextId: (callerId: string) => (callerId === "panel-test" ? "ctx-poems" : null),
-        loadContextDeclarations: async (contextId: string) =>
-          contextId === "ctx-poems" ? contextDecls : null,
-        activateDurableObject,
-      } as never)
-    );
+    const service = createWorkerService({
+      ...(deps as object),
+      getCallerContextId: (callerId: string) => (callerId === "panel-test" ? "ctx-poems" : null),
+      loadContextDeclarations: async (contextId: string) =>
+        contextId === "ctx-poems" ? contextDecls : null,
+      activateDurableObject,
+    } as never);
+    dispatcher.registerService(service);
     dispatcher.markInitialized();
 
     await expect(
@@ -827,6 +826,19 @@ describe("workerService workspace service resolution", () => {
       targetId: "do:workers/poem-collection-store:PoemStore:mother-poems",
     });
     expect(activateDurableObject).toHaveBeenCalledWith({
+      source: "workers/poem-collection-store",
+      className: "PoemStore",
+      objectKey: "mother-poems",
+      contextId: "ctx-poems",
+      buildRef: "ctx:ctx-poems",
+    });
+    const hostResolution = await service.resolveService(panelCtx, "poems.collection.v1");
+    expect(hostResolution).toMatchObject({
+      source: "workers/poem-collection-store",
+      className: "PoemStore",
+      objectKey: "mother-poems",
+    });
+    expect(activateDurableObject).toHaveBeenLastCalledWith({
       source: "workers/poem-collection-store",
       className: "PoemStore",
       objectKey: "mother-poems",

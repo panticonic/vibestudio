@@ -127,7 +127,13 @@ export function createWorkerService(deps: {
     operationId: string,
     intent: string
   ) => Promise<{ operationId: string }>;
-}): ServiceDefinition {
+}): ServiceDefinition & {
+  resolveService(
+    ctx: ServiceContext,
+    query: string,
+    objectKey?: string | null
+  ): Promise<ResolvedWorkspaceService>;
+} {
   const { buildSystem, workspaceDecls } = deps;
   const resolvedDurableObjectKey = (
     ctx: ServiceContext,
@@ -341,31 +347,7 @@ export function createWorkerService(deps: {
           }),
         ];
       },
-      resolveService: async (ctx, [query, objectKey]) => {
-        const scoped = await resolveWorkspaceServiceForCaller(ctx, query, objectKey);
-        await assertForeignServiceExported(ctx, scoped.service);
-        const service = scoped.service;
-        if (service.kind === "durable-object") {
-          const creatorContextId =
-            service.context === "creator"
-              ? deps.getCallerContextId?.(ctx.caller.runtime.id)
-              : undefined;
-          if (service.context === "creator" && !creatorContextId) {
-            throw new Error(`Workspace service ${service.name} requires a creator runtime context`);
-          }
-          const contextId = creatorContextId ?? scoped.contextId;
-          const buildRef = scoped.buildRef;
-          await deps.activateDurableObject?.({
-            source: service.source,
-            className: service.className,
-            objectKey: service.objectKey,
-            ...(contextId ? { contextId } : {}),
-            ...(service.context === "creator" ? { contextPolicy: "initial" as const } : {}),
-            buildRef,
-          });
-        }
-        return service;
-      },
+      resolveService: (ctx, [query, objectKey]) => resolveService(ctx, query, objectKey),
       resolveDurableObject: async (ctx, [source, className, objectKey]) => {
         const resolvedObjectKey = resolvedDurableObjectKey(ctx, source, className, objectKey);
         const scoped = await resolveDurableObjectForCaller(ctx, source, className);
@@ -441,7 +423,37 @@ export function createWorkerService(deps: {
         );
       },
     }),
+    resolveService,
   };
+
+  async function resolveService(
+    ctx: ServiceContext,
+    query: string,
+    objectKey?: string | null
+  ): Promise<ResolvedWorkspaceService> {
+    const scoped = await resolveWorkspaceServiceForCaller(ctx, query, objectKey);
+    await assertForeignServiceExported(ctx, scoped.service);
+    const service = scoped.service;
+    if (service.kind === "durable-object") {
+      const creatorContextId =
+        service.context === "creator"
+          ? deps.getCallerContextId?.(ctx.caller.runtime.id)
+          : undefined;
+      if (service.context === "creator" && !creatorContextId) {
+        throw new Error(`Workspace service ${service.name} requires a creator runtime context`);
+      }
+      const contextId = creatorContextId ?? scoped.contextId;
+      await deps.activateDurableObject?.({
+        source: service.source,
+        className: service.className,
+        objectKey: service.objectKey,
+        ...(contextId ? { contextId } : {}),
+        ...(service.context === "creator" ? { contextPolicy: "initial" as const } : {}),
+        buildRef: scoped.buildRef,
+      });
+    }
+    return service;
+  }
 
   async function declarationsForCallerContext(
     ctx: ServiceContext

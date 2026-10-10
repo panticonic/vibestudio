@@ -1,4 +1,5 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import { DO_EXECUTABLE_VERSION_HEADER } from "./executableVersion.js";
 
 interface EgressProps {
@@ -41,7 +42,7 @@ type EgressExports = Cloudflare.Exports & {
   EgressGateway(options: { props: EgressProps }): Fetcher;
 };
 
-function egressBinding(ctx: DurableObjectState, id: string): Fetcher {
+function egressBinding(ctx: { exports: Cloudflare.Exports }, id: string): Fetcher {
   const exports = ctx.exports as EgressExports;
   return exports.EgressGateway({ props: { id } });
 }
@@ -64,6 +65,105 @@ function decodeKey(encoded: string): { source: string; className: string; userKe
   };
 }
 
+function executableUnitKey(source: string, className: string, version: string): string {
+  return `do-code:${encodeURIComponent(source)}:${encodeURIComponent(className)}:${encodeURIComponent(version)}`;
+}
+
+function loadExecutable(
+  ctx: { exports: Cloudflare.Exports },
+  env: UniversalDoEnv,
+  args: { source: string; className: string; version: string; userKey?: string }
+): WorkerStub {
+  // The loader owns one immutable executable unit per exact incarnation.
+  // Objects still own separate facets, SQLite storage, and lifecycle; a live
+  // update selects another unit without replacing a sibling's assigned code.
+  const unitKey = executableUnitKey(args.source, args.className, args.version);
+  return env.LOADER.get(unitKey, async () => {
+    const startedAt = performance.now();
+    const identity = `${args.source}:${args.className}`;
+    const codeResponse = await fetchLoader(
+      env.GATEWAY,
+      new Request(
+        `http://gateway/_docode/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
+          `?version=${encodeURIComponent(args.version)}` +
+          (args.userKey ? `&objectKey=${encodeURIComponent(args.userKey)}` : ""),
+        { headers: { "X-Vibestudio-Loader-Secret": env.WORKERD_LOADER_SECRET } }
+      )
+    );
+    if (!codeResponse.ok) {
+      throw new Error(
+        `universal-do: code fetch failed for ${identity}/${args.userKey}@${args.version} ` +
+          `(${codeResponse.status})`
+      );
+    }
+    const fetchedAt = performance.now();
+    const code = (await codeResponse.json()) as DurableObjectCodePayload;
+    if (code.version !== args.version) {
+      throw new Error(
+        `universal-do: executable changed before loading ${identity}/${args.userKey}`
+      );
+    }
+    if (
+      code.egressIdentity !== null &&
+      (typeof code.egressIdentity !== "string" || code.egressIdentity.length === 0)
+    ) {
+      throw new Error(`universal-do: executable ${identity} has no network identity`);
+    }
+    const modules = { ...code.modules };
+    if (code.wasmModules) {
+      for (const [name, encodedModule] of Object.entries(code.wasmModules)) {
+        const binary = atob(encodedModule);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+        modules[name] = { wasm: bytes.buffer };
+      }
+    }
+    console.info(
+      "Durable Object executable loaded",
+      JSON.stringify({
+        source: args.source,
+        className: args.className,
+        objectKey: args.userKey,
+        version: args.version,
+        fetchMs: fetchedAt - startedAt,
+        decodeMs: performance.now() - fetchedAt,
+      })
+    );
+    return {
+      compatibilityDate: code.compatibilityDate,
+      compatibilityFlags: code.compatibilityFlags,
+      mainModule: code.mainModule,
+      modules,
+      env: code.env,
+      globalOutbound: code.egressIdentity === null ? null : egressBinding(ctx, code.egressIdentity),
+    };
+  });
+}
+
+/** Prepares the same immutable unit used by normal object dispatch, without
+ * constructing a user object or invoking its application request handler. */
+export class ExecutablePreparation extends WorkerEntrypoint<UniversalDoEnv> {
+  async fetch(request: Request): Promise<Response> {
+    try {
+      const input = (await request.json()) as {
+        source: string;
+        className: string;
+        version: string;
+      };
+      if (!input.source || !input.className || !input.version)
+        throw new Error("Executable preparation requires a complete immutable identity");
+      const worker = loadExecutable(this.ctx, this.env, input);
+      const receipt = await worker
+        .getEntrypoint("VibestudioExecutable")
+        .fetch(new Request(`http://executable/${encodeURIComponent(input.className)}`));
+      if (!receipt.ok) throw new Error(await receipt.text());
+      return new Response(null, { status: 204 });
+    } catch (error) {
+      return Response.json({ error: serializeRpcFailure(error) }, { status: 500 });
+    }
+  }
+}
+
 export class UniversalDO extends DurableObject<UniversalDoEnv> {
   private loadedFacet: LoadedFacetClass | null = null;
   private loadFacetClass(args: {
@@ -71,7 +171,6 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     className: string;
     userKey: string;
     version: string;
-    loaderHeaders: HeadersInit;
   }): LoadedFacetClass {
     if (this.loadedFacet?.version === args.version) return this.loadedFacet;
     if (this.loadedFacet) {
@@ -79,71 +178,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       this.loadedFacet = null;
     }
 
-    // The loader owns one immutable executable unit per exact incarnation.
-    // Objects still own separate facets, SQLite storage, and lifecycle; a live
-    // update selects another unit without replacing a sibling's assigned code.
-    const unitKey = JSON.stringify([args.source, args.className, args.version]);
-    const worker = this.env.LOADER.get(unitKey, async () => {
-      const startedAt = performance.now();
-      const identity = `${args.source}:${args.className}`;
-      const codeResponse = await fetchLoader(
-        this.env.GATEWAY,
-        new Request(
-          `http://gateway/_docode/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
-            `?objectKey=${encodeURIComponent(args.userKey)}`,
-          { headers: args.loaderHeaders }
-        )
-      );
-      if (!codeResponse.ok) {
-        throw new Error(
-          `universal-do: code fetch failed for ${identity}/${args.userKey}@${args.version} ` +
-            `(${codeResponse.status})`
-        );
-      }
-      const fetchedAt = performance.now();
-      const code = (await codeResponse.json()) as DurableObjectCodePayload;
-      if (code.version !== args.version) {
-        throw new Error(
-          `universal-do: executable changed before loading ${identity}/${args.userKey}`
-        );
-      }
-      if (
-        code.egressIdentity !== null &&
-        (typeof code.egressIdentity !== "string" || code.egressIdentity.length === 0)
-      ) {
-        throw new Error(`universal-do: executable ${identity} has no network identity`);
-      }
-      const modules = { ...code.modules };
-      if (code.wasmModules) {
-        for (const [name, encodedModule] of Object.entries(code.wasmModules)) {
-          const binary = atob(encodedModule);
-          const bytes = new Uint8Array(binary.length);
-          for (let index = 0; index < binary.length; index++)
-            bytes[index] = binary.charCodeAt(index);
-          modules[name] = { wasm: bytes.buffer };
-        }
-      }
-      console.info(
-        "Durable Object executable loaded",
-        JSON.stringify({
-          source: args.source,
-          className: args.className,
-          objectKey: args.userKey,
-          version: args.version,
-          fetchMs: fetchedAt - startedAt,
-          decodeMs: performance.now() - fetchedAt,
-        })
-      );
-      return {
-        compatibilityDate: code.compatibilityDate,
-        compatibilityFlags: code.compatibilityFlags,
-        mainModule: code.mainModule,
-        modules,
-        env: code.env,
-        globalOutbound:
-          code.egressIdentity === null ? null : egressBinding(this.ctx, code.egressIdentity),
-      };
-    });
+    const worker = loadExecutable(this.ctx, this.env, args);
     this.loadedFacet = {
       version: args.version,
       class: worker.getDurableObjectClass(args.className),
@@ -191,7 +226,6 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     }
 
     const identity = `${source}:${className}`;
-    const loaderHeaders = { "X-Vibestudio-Loader-Secret": this.env.WORKERD_LOADER_SECRET };
     const version = request.headers.get(DO_EXECUTABLE_VERSION_HEADER);
     if (!version) return new Response("universal-do: missing executable identity", { status: 400 });
 
@@ -202,7 +236,6 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       className,
       userKey,
       version,
-      loaderHeaders,
     });
 
     // One logical DO per host object means one constant facet name. Keeping it

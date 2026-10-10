@@ -9,6 +9,7 @@
  * - workerd child process management (start, restart, stop)
  */
 
+import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { spawn, type ChildProcess } from "child_process";
 import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import * as crypto from "crypto";
@@ -288,7 +289,7 @@ function recordStateArgs(value: unknown): Record<string, unknown> | undefined {
 }
 
 function runtimeIncarnationVersion(
-  image: RuntimeImageRecord,
+  image: Pick<RuntimeImageRecord, "artifact" | "authority">,
   stateArgs?: Record<string, unknown>
 ): string {
   return crypto
@@ -610,6 +611,17 @@ export class WorkerdManager {
   private readonly loadedDoCodeUnits = new Map<
     string,
     { source: string; className: string; version: string }
+  >();
+  /** Latest prepared exact executable per declared class; demand uses the same unit. */
+  private readonly preparedDoExecutables = new Map<
+    string,
+    { image: RuntimeImageRecord; build: BuildResult; version: string }
+  >();
+  private readonly executablePreparations = new Map<string, Promise<void>>();
+  private readonly latestExecutablePreparation = new Map<string, string>();
+  private readonly preparingDoExecutables = new Map<
+    string,
+    { image: RuntimeImageRecord; build: BuildResult; version: string }
   >();
   private readonly doCodeEgressCallers = new Map<
     string,
@@ -1689,7 +1701,13 @@ export class WorkerdManager {
    * concurrent planned or crash transition.
    */
   private async stopWorkerdIfIdle(): Promise<void> {
-    if (this.instances.size > 0 || this.doServices.size > 0 || this.schemaProbeBuilds.size > 0)
+    if (
+      this.instances.size > 0 ||
+      this.doServices.size > 0 ||
+      this.schemaProbeBuilds.size > 0 ||
+      this.preparedDoExecutables.size > 0 ||
+      this.preparingDoExecutables.size > 0
+    )
       return;
     await this.restartWorkerd({ kind: "stop-if-idle" });
   }
@@ -2056,6 +2074,7 @@ export class WorkerdManager {
   async getDoCode(
     source: string,
     className: string,
+    version: string,
     objectKey?: string
   ): Promise<{
     version: string;
@@ -2071,7 +2090,12 @@ export class WorkerdManager {
     env: Record<string, unknown>;
   } | null> {
     const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
-    if (probe && probe.source === source && probe.className === className) {
+    if (
+      probe &&
+      probe.source === source &&
+      probe.className === className &&
+      `${probe.version}:schema-probe` === version
+    ) {
       return {
         version: `${probe.version}:schema-probe`,
         egressIdentity: null,
@@ -2086,27 +2110,33 @@ export class WorkerdManager {
         },
       };
     }
+    if (isInternalDOSource(source)) return null;
     const serviceKey = doServiceKey(source, className);
     const svc = this.doServices.get(serviceKey);
-    if (!svc || isInternalDOSource(source)) return null;
-
-    const objectBuildKey = objectKey ? doObjectBuildKey(source, className, objectKey) : null;
-    const objectBuild = objectBuildKey ? this.doObjectBuilds.get(objectBuildKey) : undefined;
-    const resolved = objectBuild
-      ? this.getSealedRuntimeImageBuild(objectBuild.imageId)
-      : svc.imageId
-        ? this.getMutableRuntimeImageBuild(svc.imageId)
-        : null;
+    const prepared =
+      this.preparingDoExecutables.get(canonicalJson([source, className, version])) ??
+      this.preparedDoExecutables.get(serviceKey);
+    const serviceImage = svc?.imageId ? this.runtimeImages.get(svc.imageId) : null;
+    const objectEntry = [...this.doObjectBuilds.entries()].find(
+      ([key, binding]) =>
+        key.startsWith(`${serviceKey}/`) &&
+        binding.version === version &&
+        this.sealedDoImages.has(binding.imageId)
+    );
+    const objectBuild = objectEntry?.[1];
+    const resolved =
+      prepared?.version === version
+        ? prepared
+        : serviceImage && runtimeIncarnationVersion(serviceImage) === version
+          ? this.getMutableRuntimeImageBuild(serviceImage.id)
+          : objectBuild
+            ? this.getSealedRuntimeImageBuild(objectBuild.imageId)
+            : null;
     if (!resolved) return null;
     const { image, build: buildResult } = resolved;
-    if (objectBuildKey && objectBuild) {
-      this.doObjectBuilds.set(objectBuildKey, {
-        ...objectBuild,
-        buildKey: image.artifact.buildKey,
-      });
-    } else {
-      svc.buildKey = image.artifact.buildKey;
-    }
+    const stateArgs =
+      runtimeIncarnationVersion(image) === version ? undefined : objectBuild?.stateArgs;
+    if (runtimeIncarnationVersion(image, stateArgs) !== version) return null;
     const modules = workerJavaScriptModules(buildResult);
     // Terminal (Ink) DOs import a pre-compiled `yoga.wasm` module — it must be
     // loaded alongside the JS bundle (the only way to run WASM in workerd).
@@ -2146,11 +2176,8 @@ export class WorkerdManager {
       env["VIBESTUDIO_SCHEMA_DESCRIPTOR"] = JSON.parse(schemaDescriptor.descriptor_json);
     addSharedRuntimeEnv(env, this.deps.getServerAliasUrls?.() ?? []);
     if (this.port) env["WORKERD_URL"] = `http://127.0.0.1:${this.port}`;
-    if (objectBuild?.stateArgs && Object.keys(objectBuild.stateArgs).length > 0) {
-      env["STATE_ARGS"] = objectBuild.stateArgs;
-    }
+    if (stateArgs && Object.keys(stateArgs).length > 0) env["STATE_ARGS"] = stateArgs;
 
-    const version = objectBuild?.version ?? runtimeIncarnationVersion(image);
     this.loadedDoCodeUnits.set(JSON.stringify([source, className, version]), {
       source,
       className,
@@ -2341,6 +2368,8 @@ export class WorkerdManager {
 
     // Auto-generate router worker + the static dynamic-worker host.
     const hasUserlandDOs =
+      this.preparedDoExecutables.size > 0 ||
+      this.preparingDoExecutables.size > 0 ||
       this.schemaProbeBuilds.size > 0 ||
       Array.from(this.doServices.values()).some((svc) => !isInternalDOSource(svc.source));
     const hasAnyService = this.instances.size > 0 || doClassNames.length > 0 || hasUserlandDOs;
@@ -2412,6 +2441,10 @@ export class WorkerdManager {
 
       const routerBindings: object[] = [
         { name: "WORKER_HOST", service: { name: "worker-host" } },
+        {
+          name: "EXECUTABLE_PREPARATION",
+          service: { name: "universal-do", entrypoint: "ExecutablePreparation" },
+        },
         {
           name: "UNIVERSAL_DO",
           durableObjectNamespace: { className: "UniversalDO", serviceName: "universal-do" },
@@ -2716,7 +2749,13 @@ export class WorkerdManager {
     // ── stop-if-idle: a pure stop transition; re-check idleness under the
     // owner (an instance/DO registered while queued wins — no stop).
     if (transition.kind === "stop-if-idle") {
-      if (this.instances.size > 0 || this.doServices.size > 0 || this.schemaProbeBuilds.size > 0)
+      if (
+        this.instances.size > 0 ||
+        this.doServices.size > 0 ||
+        this.schemaProbeBuilds.size > 0 ||
+        this.preparedDoExecutables.size > 0 ||
+        this.preparingDoExecutables.size > 0
+      )
         return;
       transition.state = "stopping";
       if (hadRunningProcess) {
@@ -2813,7 +2852,9 @@ export class WorkerdManager {
     if (
       this.instances.size === 0 &&
       this.doServices.size === 0 &&
-      this.schemaProbeBuilds.size === 0
+      this.schemaProbeBuilds.size === 0 &&
+      this.preparedDoExecutables.size === 0 &&
+      this.preparingDoExecutables.size === 0
     )
       return;
 
@@ -3122,6 +3163,9 @@ export class WorkerdManager {
       const service = this.doServices.get(serviceKey);
       const image = service?.imageId ? this.runtimeImages.get(service.imageId) : null;
       if (image && runtimeIncarnationVersion(image) === version) return true;
+      const prepared = this.preparedDoExecutables.get(serviceKey);
+      if (prepared && prepared.version === version) return true;
+      if (this.preparingDoExecutables.has(canonicalJson([source, className, version]))) return true;
       for (const [key, binding] of this.doObjectBuilds) {
         if (!key.startsWith(`${serviceKey}/`)) continue;
         if (!codeOnly && binding.version === version) return true;
@@ -3719,8 +3763,70 @@ export class WorkerdManager {
       artifact: executionArtifactRefFromBuild(this.deps.workspaceId, build),
       authority: assertPresent(build.metadata.authority),
     };
-    for (const className of new Set(classNames))
-      await this.admitDurableObjectSchema(image, className);
+    if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
+    for (const className of new Set(classNames)) {
+      const key = canonicalJson([image.source, className, runtimeIncarnationVersion(image)]);
+      this.latestExecutablePreparation.set(doServiceKey(image.source, className), key);
+      const pending = this.executablePreparations.get(key);
+      if (pending) {
+        await pending;
+        continue;
+      }
+      const preparation = this.prepareDurableExecutable(image, build, className);
+      this.executablePreparations.set(key, preparation);
+      try {
+        await preparation;
+      } finally {
+        this.executablePreparations.delete(key);
+      }
+    }
+  }
+
+  private async prepareDurableExecutable(
+    image: RuntimeImageBinding,
+    build: BuildResult,
+    className: string
+  ): Promise<void> {
+    await this.admitDurableObjectSchema(image, className);
+    const serviceKey = doServiceKey(image.source, className);
+    const version = runtimeIncarnationVersion(image);
+    const key = canonicalJson([image.source, className, version]);
+    const record = this.persistRuntimeImage(`do-preparation:${serviceKey}:${version}`, image);
+    const prepared = { image: record, build, version };
+    this.preparingDoExecutables.set(key, prepared);
+    if (this.latestExecutablePreparation.get(serviceKey) === key) {
+      const previous = this.preparedDoExecutables.get(serviceKey);
+      this.preparedDoExecutables.set(serviceKey, prepared);
+      if (
+        previous &&
+        previous.image.id !== record.id &&
+        !this.preparingDoExecutables.has(canonicalJson([image.source, className, previous.version]))
+      )
+        this.runtimeImages.delete(previous.image.id);
+    }
+    try {
+      await this.ensureWorkerdRunning();
+      const origin = `http://127.0.0.1:${assertPresent(this.port)}`;
+      const response = await fetch(`${origin}/_prepare_executable`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
+          "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ source: image.source, className, version }),
+        dispatcher: getWorkerdConnectionDispatcher(origin),
+      } as RequestInit);
+      if (response.status !== 204) {
+        const failure = (await response.json()) as { error: unknown };
+        throw deserializeRpcFailure(failure.error);
+      }
+    } finally {
+      this.preparingDoExecutables.delete(key);
+      if (this.preparedDoExecutables.get(serviceKey)?.image.id !== record.id)
+        this.runtimeImages.delete(record.id);
+      this.reconcileDoCodeUnitOwnership();
+    }
   }
 
   /** Admit the schema of the exact executable before its first entity activation. */
@@ -4708,6 +4814,10 @@ export class WorkerdManager {
         failures.push(error);
       }
     };
+    const preparationResults = await Promise.allSettled([...this.executablePreparations.values()]);
+    for (const result of preparationResults) {
+      if (result.status === "rejected") failures.push(result.reason);
+    }
     await attempt(() => this.doMaintenanceRecovery);
     const maintenanceResults = await Promise.allSettled([...this.doMaintenanceChains.values()]);
     for (const result of maintenanceResults) {
@@ -4761,6 +4871,12 @@ export class WorkerdManager {
     }
     this.doServices.clear();
     this.doObjectBuilds.clear();
+    for (const [serviceKey, prepared] of this.preparedDoExecutables) {
+      this.revokeWorkerBearer(`do-service:${serviceKey}`);
+      this.runtimeImages.delete(prepared.image.id);
+    }
+    this.preparedDoExecutables.clear();
+    this.latestExecutablePreparation.clear();
     this.reconcileDoCodeUnitOwnership();
 
     // Clean up config dir
@@ -4879,6 +4995,22 @@ export class WorkerdManager {
     // drop removed. All loader-cache changes; no restart.
     if (doClasses !== null) {
       const newClassNames = new Set(doClasses.map((c) => c.className));
+      for (const key of this.latestExecutablePreparation.keys()) {
+        if (key.startsWith(`${source}:`) && !newClassNames.has(key.slice(source.length + 1)))
+          this.latestExecutablePreparation.delete(key);
+      }
+      for (const [key, prepared] of this.preparedDoExecutables) {
+        if (prepared.image.source !== source || newClassNames.has(key.slice(source.length + 1)))
+          continue;
+        this.preparedDoExecutables.delete(key);
+        this.latestExecutablePreparation.delete(key);
+        if (
+          !this.preparingDoExecutables.has(
+            canonicalJson([source, key.slice(source.length + 1), prepared.version])
+          )
+        )
+          this.runtimeImages.delete(prepared.image.id);
+      }
       for (const [serviceKey, svc] of Array.from(this.doServices.entries())) {
         if (svc.source !== source || newClassNames.has(svc.className)) continue;
         this.revokeWorkerBearer(`do-service:${serviceKey}`);
@@ -4922,5 +5054,10 @@ export class WorkerdManager {
     // the same route-table convergence path.
     this.reconcileDoCodeUnitOwnership();
     this.reconcileManifestRoutesForSource(source, doClasses);
+    if (trigger && completed?.metadata.kind === "worker" && doClasses !== null)
+      await this.prepareWorkerExecutable(
+        completed,
+        doClasses.map(({ className }) => className)
+      );
   }
 }
