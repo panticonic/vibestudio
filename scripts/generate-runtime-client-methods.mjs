@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const outputUrl = new URL(
@@ -8,7 +8,12 @@ const outputUrl = new URL(
 
 // [generated constant, schema module, method-table export, service name]
 const sources = [
-  ["RUNTIME_METHOD_NAMES", "../packages/service-schemas/src/runtime.ts", "runtimeMethods", "runtime"],
+  [
+    "RUNTIME_METHOD_NAMES",
+    "../packages/service-schemas/src/runtime.ts",
+    "runtimeMethods",
+    "runtime",
+  ],
   [
     "WORKSPACE_METHOD_NAMES",
     "../packages/service-schemas/src/workspace.ts",
@@ -123,5 +128,16 @@ const content = `/**
 ${declarations.join("\n\n")}
 `;
 
-await writeFile(outputUrl, content, "utf8");
-console.log(`generated ${fileURLToPath(outputUrl)}`);
+const args = process.argv.slice(2);
+if (args.some((argument) => argument !== "--check"))
+  throw new Error("Usage: generate-runtime-client-methods.mjs [--check]");
+if (args.includes("--check")) {
+  if ((await readFile(outputUrl, "utf8")) !== content)
+    throw new Error(
+      "Runtime client methods are out of date. Run pnpm generate:runtime-client-methods."
+    );
+  console.log(`checked ${fileURLToPath(outputUrl)}`);
+} else {
+  await writeFile(outputUrl, content, "utf8");
+  console.log(`generated ${fileURLToPath(outputUrl)}`);
+}

@@ -172,6 +172,7 @@ export const GIT_INTEROP_METHOD_NAMES = [
   "detachUpstream",
   "setAutoPush",
   "upstreamStatus",
+  "createBranch",
   "pushUpstream",
   "pullUpstream",
   "publishRepo",
