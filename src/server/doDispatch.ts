@@ -35,7 +35,7 @@ import type {
   LifecycleResumeInput,
   LifecycleCloneInput,
 } from "@vibestudio/shared/doDispatcher";
-import { AmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
+import { AmbiguousDoDispatchError, isDoAlarmDispatchResult } from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import {
