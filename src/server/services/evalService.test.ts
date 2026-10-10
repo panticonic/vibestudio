@@ -36,7 +36,7 @@ import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.j
 import { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { createActivityRegistry } from "./activityRegistry.js";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
-import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { workspaceStateEngineMethods } from "@vibestudio/service-schemas/workspaceStateEngine";
 import type { EvalStartInput } from "@vibestudio/service-schemas/eval";
@@ -44,7 +44,8 @@ import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-u
 import { EvalDO } from "../../../packages/builtin/src/eval-engine/EvalDO.js";
 
 function activatedEntity(input: unknown): EntityRecord {
-  const spec = workspaceStateEngineMethods.entityActivate.args.parse([input])[0];
+  const { durableWorkQueues: _durableWorkQueues, ...spec } =
+    workspaceStateEngineMethods.entityActivate.args.parse([input])[0];
   return workspaceStateEngineMethods.entityActivate.returns.parse({
     ...spec,
     id: canonicalEntityId({ ...spec, source: spec.source.repoPath }),
@@ -268,66 +269,58 @@ function createHarness(
   // A real store over the mocked dispatch + cache: entity ops (activate /
   // resolveContext) flow through it to `doDispatch`, so `calls` still captures
   // them — exactly the path the eval service exercises in production.
-  const entityCache = {
-    resolveContext(id: string) {
-      return contexts[id] ?? null;
-    },
-    // Explicit context entries model existing scopes. A missing scope stays
-    // missing until execution admission; lookup/control cannot activate one.
-    resolveActive(id: string) {
-      if (options.retiredEvalEntityIds?.has(id)) return null;
-      if (options.ownerRecord?.id === id) return options.ownerRecord;
-      const contextId = contexts[id];
-      if (contextId == null || !id.startsWith("do:")) return null;
-      if (id.startsWith(`do:${INTERNAL_DO_SOURCE}:EvalDO:`)) {
-        const finite = options.finiteEvalEntityIds?.has(id) === true;
-        return {
-          id,
-          kind: "do",
-          source: {
-            repoPath: INTERNAL_DO_SOURCE,
-            effectiveVersion: EVAL_EXECUTION_IDENTITY.effectiveVersion,
-          },
-          contextId,
-          className: "EvalDO",
-          key: id.slice(id.lastIndexOf(":") + 1),
-          activeBuildKey: EVAL_EXECUTION_IDENTITY.buildKey,
-          activeExecutionDigest: EVAL_EXECUTION_IDENTITY.executionDigest,
-          activeAuthority: EVAL_EXECUTION_IDENTITY.authority,
-          parentId: "session:default",
-          stateArgs: {
-            ownerPrincipalId: "session:default",
-            subKey: finite ? "finite" : "default",
-            agentExecutionAdmission: { v: 1, ownerId: "session:default" },
-            ...(finite ? { lifecycle: "finite" } : {}),
-          },
-          authoritySessionId: "authority:eval-test",
-          createdAt: 0,
-          status: "active",
-          cleanupComplete: true,
-        } as EntityRecord;
-      }
+  const entityCache = new EntityCache();
+  const resolveContext = entityCache.resolveContext.bind(entityCache);
+  entityCache.resolveContext = (id) =>
+    Object.hasOwn(contexts, id) ? (contexts[id] ?? null) : resolveContext(id);
+  const resolveActive = entityCache.resolveActive.bind(entityCache);
+  entityCache.resolveActive = (id) => {
+    if (options.retiredEvalEntityIds?.has(id)) return null;
+    if (options.ownerRecord?.id === id) return options.ownerRecord;
+    const contextId = contexts[id];
+    if (contextId == null || !id.startsWith("do:")) return resolveActive(id);
+    if (id.startsWith(`do:${INTERNAL_DO_SOURCE}:EvalDO:`)) {
+      const finite = options.finiteEvalEntityIds?.has(id) === true;
       return {
         id,
         kind: "do",
-        source: { repoPath: "workers/agent-worker", effectiveVersion: "test" },
+        source: {
+          repoPath: INTERNAL_DO_SOURCE,
+          effectiveVersion: EVAL_EXECUTION_IDENTITY.effectiveVersion,
+        },
         contextId,
-        className: "AiChatWorker",
-        key: id,
-        agentBinding: { entityId: `session:${id}`, contextId, channelId: "chan_1" },
+        className: "EvalDO",
+        key: id.slice(id.lastIndexOf(":") + 1),
+        activeBuildKey: EVAL_EXECUTION_IDENTITY.buildKey,
+        activeExecutionDigest: EVAL_EXECUTION_IDENTITY.executionDigest,
+        activeAuthority: EVAL_EXECUTION_IDENTITY.authority,
+        parentId: "session:default",
+        stateArgs: {
+          ownerPrincipalId: "session:default",
+          subKey: finite ? "finite" : "default",
+          agentExecutionAdmission: { v: 1, ownerId: "session:default" },
+          ...(finite ? { lifecycle: "finite" } : {}),
+        },
         authoritySessionId: "authority:eval-test",
         createdAt: 0,
         status: "active",
         cleanupComplete: true,
-      } as EntityRecord;
-    },
-    // Cache miss for the parent-resolution walk → falls back to entityResolve.
-    resolve() {
-      return null;
-    },
-    _onActivate() {},
-    _onRetire() {},
-  } as unknown as EntityCache;
+      } satisfies EntityRecord;
+    }
+    return {
+      id,
+      kind: "do",
+      source: { repoPath: "workers/agent-worker", effectiveVersion: "test" },
+      contextId,
+      className: "AiChatWorker",
+      key: id,
+      agentBinding: { entityId: `session:${id}`, contextId, channelId: "chan_1" },
+      authoritySessionId: "authority:eval-test",
+      createdAt: 0,
+      status: "active",
+      cleanupComplete: true,
+    } satisfies EntityRecord;
+  };
   const entityStore = new WorkspaceEntityStore({
     doDispatch,
     workspaceId: "ws_1",
@@ -804,6 +797,7 @@ describe("createEvalService", () => {
           activeAuthority: EVAL_EXECUTION_IDENTITY.authority,
           ownerUserId: "usr_test",
           agentBinding: undefined,
+          durableWorkQueues: [],
           // The EvalDO's launch parent IS its owner — bridges the lineage so entities spawned FROM an
           // eval (e.g. headless sub-agents) resolve up through the owner to the owner's panel.
           parentId: "session:default",
@@ -936,13 +930,8 @@ describe("createEvalService", () => {
         throw new Error(`unexpected dispatch ${method}`);
       },
     } as unknown as DODispatch;
-    const entityCache = {
-      resolveContext: (id: string) => records[id]?.contextId ?? null,
-      resolve: (id: string) => records[id] ?? null,
-      resolveActive: (id: string) => records[id] ?? null,
-      _onActivate() {},
-      _onRetire() {},
-    } as unknown as EntityCache;
+    const entityCache = new EntityCache();
+    entityCache.hydrate(Object.values(records));
     const entityStore = new WorkspaceEntityStore({
       doDispatch,
       workspaceId: "ws",
@@ -1023,13 +1012,8 @@ describe("createEvalService", () => {
         throw new Error(`unexpected dispatch ${method}`);
       },
     } as unknown as DODispatch;
-    const entityCache = {
-      resolveContext: (id: string) => (id === agentId ? agent.contextId : null),
-      resolve: (id: string) => (id === agentId ? agent : null),
-      resolveActive: (id: string) => (id === agentId ? agent : null),
-      _onActivate() {},
-      _onRetire() {},
-    } as unknown as EntityCache;
+    const entityCache = new EntityCache();
+    entityCache._onActivate(agent);
     const entityStore = new WorkspaceEntityStore({
       doDispatch,
       workspaceId: "ws",
@@ -1815,32 +1799,25 @@ function createHeldFailHarness(opts: {
     },
   } as unknown as DODispatch;
   const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-  const entityCache = {
-    resolveContext: () => opts.contextId,
-    resolveActive: (id: string) =>
-      id === ownerId
-        ? ({
-            id,
-            kind: "do",
-            source: { repoPath: "workers/agent-worker", effectiveVersion: "test" },
-            contextId: opts.contextId,
-            className: "AiChatWorker",
-            key: "abc",
-            agentBinding: {
-              entityId: "session:agent",
-              contextId: opts.contextId,
-              channelId: "chan_1",
-            },
-            authoritySessionId: "authority:eval-test",
-            createdAt: 0,
-            status: "active",
-            cleanupComplete: true,
-          } as EntityRecord)
-        : null,
-    resolve: () => null,
-    _onActivate() {},
-    _onRetire() {},
-  } as unknown as EntityCache;
+  const entityCache = new EntityCache();
+  const owner: EntityRecord = {
+    id: ownerId,
+    kind: "do",
+    source: { repoPath: "workers/agent-worker", effectiveVersion: "test" },
+    contextId: opts.contextId,
+    className: "AiChatWorker",
+    key: "abc",
+    agentBinding: {
+      entityId: "session:agent",
+      contextId: opts.contextId,
+      channelId: "chan_1",
+    },
+    authoritySessionId: "authority:eval-test",
+    createdAt: 0,
+    status: "active",
+    cleanupComplete: true,
+  };
+  entityCache._onActivate(owner);
   const entityStore = new WorkspaceEntityStore({
     doDispatch,
     workspaceId: "ws_1",
