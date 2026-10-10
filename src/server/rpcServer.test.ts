@@ -1885,7 +1885,6 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
-    server.setExecutableVersionResolver(() => "test-executable");
 
     const fetchError = Object.assign(new TypeError("fetch failed"), {
       cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }),
@@ -1916,7 +1915,6 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
-    server.setExecutableVersionResolver(() => "test-executable");
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -2053,7 +2051,6 @@ describe("RpcServer relay behavior", () => {
       entityCache._onActivate(makeRecord(targetId, "do", { repoPath: "workers/browser-data" }));
       server.setWorkerdUrl("http://127.0.0.1:1111");
       server.setWorkerdGatewayToken("gateway-token");
-      server.setExecutableVersionResolver(() => "test-executable");
       const client = createClient("@workspace-extensions/browser-data");
       client.caller = createVerifiedCaller(client.caller.runtime.id, "extension", extensionCode);
       registerClient(server, client);
@@ -2110,7 +2107,6 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
-    server.setExecutableVersionResolver(() => "test-executable");
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -2141,7 +2137,6 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
-    server.setExecutableVersionResolver(() => "test-executable");
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -2221,7 +2216,6 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
-    server.setExecutableVersionResolver(() => "test-executable");
     let inheritedAuthorizingCaller: ReturnType<typeof createVerifiedCaller> | null = null;
     const fetchMock = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
       const outbound = JSON.parse(String(init.body));
@@ -2340,7 +2334,6 @@ describe("RpcServer relay behavior", () => {
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
-    server.setExecutableVersionResolver(() => "test-executable");
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -2885,7 +2878,6 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer();
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
-    server.setExecutableVersionResolver(() => "test-executable");
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -3065,7 +3057,6 @@ describe("RpcServer relay behavior", () => {
     );
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
-    server.setExecutableVersionResolver(() => "test-executable");
     const fetchMock = vi.fn().mockResolvedValue(new Response("streamed", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 

@@ -186,6 +186,7 @@ writeRuntimeCatalog(
       "packages/browser-data/src/types.ts",
       "packages/browser-data/src/environment.ts",
       "packages/browser-data/src/storage/types.ts",
+      "packages/browser-contracts/src/import.ts",
     ],
     interfaceName: "BrowserDataClient",
     namespace: "browserData",
