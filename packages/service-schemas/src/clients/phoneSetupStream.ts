@@ -1,3 +1,4 @@
+import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import { z } from "zod";
 import { PhoneProvisioningResultSchema } from "../phoneProvisioning.js";
 
@@ -8,7 +9,8 @@ export const PhoneSetupEventSchema = z.discriminatedUnion("type", [
     message: z.string(),
   }),
   z.object({ type: z.literal("paired"), result: PhoneProvisioningResultSchema }),
-  z.object({ type: z.literal("error"), message: z.string() }),
+  // The shared RPC failure decoder validates and reconstructs this graph.
+  z.object({ type: z.literal("error"), failure: z.unknown() }),
 ]);
 export type PhoneSetupEvent = z.infer<typeof PhoneSetupEventSchema>;
 
@@ -34,7 +36,7 @@ export function phoneSetupStream(
               if (error !== abort.signal.reason) throw error;
               return;
             }
-            emit({ type: "error", message: error instanceof Error ? error.message : String(error) });
+            emit({ type: "error", failure: serializeRpcFailure(error) });
           })
           .finally(() => {
             if (!abort.signal.aborted) controller.close();
@@ -62,7 +64,7 @@ export async function consumePhoneSetup(
   function accept(line: string) {
     if (!line.trim()) return;
     const event = PhoneSetupEventSchema.parse(JSON.parse(line));
-    if (event.type === "error") throw new Error(event.message);
+    if (event.type === "error") throw deserializeRpcFailure(event.failure);
     if (event.type === "paired") result = event.result;
     onEvent(event);
   }

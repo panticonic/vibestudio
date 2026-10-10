@@ -1,3 +1,4 @@
+import { deserializeRpcFailure, formatRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 /**
  * CdpBridge — Server-side relay between Playwright CDP clients and the
  * active host provider's Electron webContents.debugger API.
@@ -98,7 +99,7 @@ interface ProviderBridgeMessage {
   action?: string;
   args?: unknown[];
   result?: unknown;
-  error?: string;
+  error?: RpcFailure;
   method?: string;
   params?: unknown;
   sessionId?: string;
@@ -373,7 +374,14 @@ export class CdpBridge {
       const cleanup = () => signal?.removeEventListener("abort", cancel);
       const finishReject = (error: Error) => {
         cleanup();
-        reject(cancelled && signal?.reason instanceof Error ? signal.reason : error);
+        if (cancelled) {
+          const reason = signal?.reason ?? new Error("Host command cancelled");
+          reject(
+            new AggregateError([reason, error], "Host command cancellation failed", {
+              cause: reason,
+            })
+          );
+        } else reject(error);
       };
       this.pendingNavCommands.set(requestId, {
         resolve: (value) => {
@@ -790,7 +798,7 @@ export class CdpBridge {
           this.sendErrorToClient(
             pending.ws,
             pending.clientId,
-            msg.error ?? "CDP provider error",
+            formatRpcFailure(msg.error),
             pending.sessionId
           );
           this.pendingCommands.delete(msg.requestId);
@@ -832,7 +840,7 @@ export class CdpBridge {
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
           if (!this.isMessageFromTargetProvider(pending.targetId, hostConnectionId)) break;
-          pending.reject(new Error(msg.error ?? "Navigation failed"));
+          pending.reject(deserializeRpcFailure(msg.error));
           this.pendingNavCommands.delete(msg.requestId);
         }
         break;
@@ -854,7 +862,7 @@ export class CdpBridge {
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
           if (!this.isPendingCommandProvider(pending, hostConnectionId)) break;
-          pending.reject(new Error(msg.error ?? "Host command failed"));
+          pending.reject(deserializeRpcFailure(msg.error));
           this.pendingNavCommands.delete(msg.requestId);
         }
         break;
@@ -876,7 +884,7 @@ export class CdpBridge {
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
           if (!this.isPendingCommandProvider(pending, hostConnectionId)) break;
-          pending.reject(new Error(msg.error ?? "Host operation failed"));
+          pending.reject(deserializeRpcFailure(msg.error));
           this.pendingNavCommands.delete(msg.requestId);
         }
         break;

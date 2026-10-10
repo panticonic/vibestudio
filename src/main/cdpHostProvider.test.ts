@@ -1,3 +1,4 @@
+import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -234,7 +235,7 @@ describe("CdpHostProvider", () => {
       type: "cdp:error",
       targetId: "panel-1",
       requestId: "input",
-      error: "native surface destroyed",
+      error: expect.objectContaining({ message: "native surface destroyed" }),
     });
     expect(debuggerApi.sendCommand).toHaveBeenCalledTimes(1);
     provider.stop();
@@ -270,7 +271,9 @@ describe("CdpHostProvider", () => {
       type: "cdp:error",
       targetId: "panel-1",
       requestId: "input",
-      error: "CDP automation surface ownership changed: panel-1",
+      error: expect.objectContaining({
+        message: "CDP automation surface ownership changed: panel-1",
+      }),
     });
     provider.stop();
   });
@@ -505,7 +508,7 @@ describe("CdpHostProvider", () => {
       type: "cdp:error",
       targetId: "panel-1",
       requestId: "r1",
-      error: "debugger backend unavailable",
+      error: expect.objectContaining({ message: "debugger backend unavailable" }),
     });
 
     await provider.handleProviderMessageForTest({
@@ -554,7 +557,7 @@ describe("CdpHostProvider", () => {
       type: "cdp:error",
       targetId: "panel-1",
       requestId: "r1",
-      error: "target closed while handling command",
+      error: expect.objectContaining({ message: "target closed while handling command" }),
     });
     expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
       type: "cdp:result",
@@ -1236,6 +1239,41 @@ describe("CdpHostProvider", () => {
       requestId: "h2",
       result: { rebuilt: true },
     });
+  });
+
+  it("preserves custom host failures through the desktop bridge", async () => {
+    const original = Object.assign(new Error("device disconnected"), { code: "DEVICE_LOST" });
+    const cleanup = Object.assign(new Error("cleanup failed"), { code: "EIO" });
+    const { provider, socket } = createHarness("ws://127.0.0.1:1234", {
+      onHostCommand: async () => {
+        throw new AggregateError([original, cleanup], "Host operation failed", { cause: original });
+      },
+    });
+    try {
+      provider.start();
+      socket.emit("open");
+      await provider.handleProviderMessageForTest({
+        type: "host:command",
+        requestId: "failure",
+        targetId: "panel-1",
+        action: "fixture",
+        args: [],
+      });
+      const terminal = socket.sent
+        .map((entry) => JSON.parse(entry))
+        .find((entry) => entry.type === "host:error");
+      expect(terminal).toBeDefined();
+      const failure = deserializeRpcFailure(terminal.error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw failure;
+      expect(failure.errors).toMatchObject([
+        { message: "device disconnected", code: "DEVICE_LOST" },
+        { message: "cleanup failed", code: "EIO" },
+      ]);
+      expect(failure.cause).toBe(failure.errors[0]);
+    } finally {
+      provider.stop();
+    }
   });
 
   it("keeps built-in host commands available when extension commands are configured", async () => {

@@ -1,3 +1,4 @@
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -427,6 +428,79 @@ describe("CdpBridge authentication", () => {
     await expect(operationPromise).resolves.toEqual({ status: 200 });
   });
 
+  it.each(["navigation", "host", "operation"] as const)(
+    "restores %s failure details for its waiting caller",
+    async (kind) => {
+      const harness = await createHarness();
+      const provider = await connectHostProvider(harness, "desktop-host");
+      const work =
+        kind === "operation"
+          ? harness.bridge.sendProviderCommand("desktop-host", "fixture", [])
+          : kind === "host"
+            ? harness.bridge.sendHostCommand("panel:tree/browser-1", "fixture", [])
+            : harness.bridge.sendTargetCommand("panel:tree/browser-1", "caller", "reload", []);
+      const outcome = work.catch((error: unknown) => error);
+      const command = await waitForJson(provider);
+      const original = Object.assign(new Error("device disconnected"), { code: "DEVICE_LOST" });
+      const cleanup = Object.assign(new Error("cleanup failed"), { code: "EIO" });
+      provider.send(
+        JSON.stringify({
+          type:
+            kind === "operation"
+              ? "host:operation-error"
+              : kind === "host"
+                ? "host:error"
+                : "nav:error",
+          targetId: "panel:tree/browser-1",
+          requestId: command["requestId"],
+          error: serializeRpcFailure(
+            new AggregateError([original, cleanup], "Host operation failed", { cause: original })
+          ),
+        })
+      );
+      const failure = await outcome;
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw failure;
+      expect(failure.errors).toMatchObject([
+        { message: "device disconnected", code: "DEVICE_LOST" },
+        { message: "cleanup failed", code: "EIO" },
+      ]);
+      expect(failure.cause).toBe(failure.errors[0]);
+    }
+  );
+
+  it("retains the caller cancellation and remote cleanup failure", async () => {
+    const harness = await createHarness();
+    const provider = await connectHostProvider(harness, "desktop-host");
+    const owner = new AbortController();
+    const work = harness.bridge.sendHostCommand(
+      "panel:tree/browser-1",
+      "fixture",
+      [],
+      owner.signal
+    );
+    const outcome = work.catch((error: unknown) => error);
+    const command = await waitForJson(provider);
+    const cancellation = new Error("caller cancelled");
+    owner.abort(cancellation);
+    expect(await waitForJson(provider)).toMatchObject({ type: "host:cancel" });
+    const cleanup = Object.assign(new Error("native cleanup failed"), { code: "EIO" });
+    provider.send(
+      JSON.stringify({
+        type: "host:error",
+        targetId: "panel:tree/browser-1",
+        requestId: command["requestId"],
+        error: serializeRpcFailure(cleanup),
+      })
+    );
+    const failure = await outcome;
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) throw failure;
+    expect(failure.errors[0]).toBe(cancellation);
+    expect(failure.errors[1]).toMatchObject({ message: "native cleanup failed", code: "EIO" });
+    expect(failure.cause).toBe(cancellation);
+  });
+
   it("lets model-aware navigation resolve after the old target unregisters", async () => {
     const harness = await createHarness();
     const provider = await connectHostProvider(harness, "desktop-host");
@@ -494,10 +568,9 @@ describe("CdpBridge authentication", () => {
     const rejected = expect(work).rejects.toBe(reason);
     provider.send(
       JSON.stringify({
-        type: "host:error",
+        type: "host:result",
         targetId: "panel:tree/browser-1",
         requestId: command["requestId"],
-        error: "native cleanup complete",
       })
     );
     await rejected;

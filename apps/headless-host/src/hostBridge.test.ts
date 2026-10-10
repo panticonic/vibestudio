@@ -1,3 +1,4 @@
+import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
@@ -304,15 +305,106 @@ describe("CdpHostBridgeClient", () => {
     expect(await server.next()).toMatchObject({
       type: "cdp:error",
       requestId: "r1",
-      error: "boom",
+      error: expect.objectContaining({ message: "boom" }),
     });
     server.send({ type: "nav:command", requestId: "r2", targetId: "p", action: "reload" });
     expect(await server.next()).toMatchObject({
       type: "nav:error",
       requestId: "r2",
-      error: "nav-fail",
+      error: expect.objectContaining({ message: "nav-fail" }),
     });
   });
+
+  it.each([
+    ["cdp:command", "cdp:error"],
+    ["nav:command", "nav:error"],
+    ["host:command", "host:error"],
+    ["host:operation", "host:operation-error"],
+  ])("preserves the failure graph for %s", async (command, response) => {
+    const original = Object.assign(new Error("device disconnected"), { code: "DEVICE_LOST" });
+    const cleanup = Object.assign(new Error("cleanup failed"), { code: "EIO" });
+    const failure = new AggregateError([original, cleanup], "Host operation failed", {
+      cause: original,
+    });
+    const fail = async () => {
+      throw failure;
+    };
+    await startClient(
+      handlers({ cdpCommand: fail, navCommand: fail, hostCommand: fail, hostOperation: fail })
+    );
+    server.send({
+      type: command,
+      requestId: "failure",
+      targetId: "p",
+      method: "X",
+      action: "failure",
+      args: [],
+    });
+    const message = await server.next();
+    expect(message).toMatchObject({ type: response, requestId: "failure" });
+    const restored = deserializeRpcFailure(message["error"]);
+    expect(restored).toBeInstanceOf(AggregateError);
+    if (!(restored instanceof AggregateError)) throw restored;
+    expect(restored.errors).toMatchObject([
+      { message: "device disconnected", code: "DEVICE_LOST" },
+      { message: "cleanup failed", code: "EIO" },
+    ]);
+    expect(restored.cause).toBe(restored.errors[0]);
+  });
+
+  it.each([false, true])(
+    "joins host cancellation and retains cleanup failures (%s)",
+    async (failCleanup) => {
+      const cleanup = Object.assign(new Error("cleanup failed"), { code: "EIO" });
+      let admitted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        admitted = resolve;
+      });
+      await startClient(
+        handlers({
+          hostCommand: async (_target, _action, _args, signal) => {
+            return new Promise((_resolve, reject) => {
+              signal.addEventListener(
+                "abort",
+                () =>
+                  reject(
+                    failCleanup
+                      ? new AggregateError(
+                          [signal.reason, cleanup],
+                          "Cancellation cleanup failed",
+                          { cause: signal.reason }
+                        )
+                      : signal.reason
+                  ),
+                { once: true }
+              );
+              admitted();
+            });
+          },
+        })
+      );
+      server.send({
+        type: "host:command",
+        requestId: "cancel",
+        targetId: "p",
+        action: "fixture",
+        args: [],
+      });
+      await started;
+      server.send({ type: "host:cancel", requestId: "cancel" });
+      const terminal = await server.next();
+      expect(terminal).toMatchObject({
+        type: failCleanup ? "host:error" : "host:result",
+        requestId: "cancel",
+      });
+      if (failCleanup) {
+        const restored = deserializeRpcFailure(terminal["error"]);
+        expect(restored).toBeInstanceOf(AggregateError);
+        if (!(restored instanceof AggregateError)) throw restored;
+        expect(restored.errors[1]).toMatchObject({ message: "cleanup failed", code: "EIO" });
+      }
+    }
+  );
 
   it("handles host:command, cdp:detach and register rejection", async () => {
     const h = handlers();

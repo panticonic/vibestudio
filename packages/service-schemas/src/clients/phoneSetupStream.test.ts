@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { RpcBoundaryError } from "@vibestudio/rpc";
 import { consumePhoneSetup, phoneSetupStream } from "./phoneSetupStream";
 const result = {
   providerId: "desktop",
@@ -45,6 +46,26 @@ describe("phone setup progress", () => {
         })
       )
     ).rejects.toThrow("Install failed");
+  });
+  it("preserves aggregate failures, causes, and codes for the waiting caller", async () => {
+    const root = new RpcBoundaryError(
+      "device owner disconnected",
+      "transport",
+      "ENOTCONN"
+    );
+    const cleanup = new RpcBoundaryError("pairing cleanup failed", "application", "EIO");
+    const failure = new AggregateError([root, cleanup], "Phone setup failed", { cause: root });
+    const response = phoneSetupStream(async () => {
+      throw failure;
+    });
+
+    const remote = await consumePhoneSetup(response).catch((error: unknown) => error);
+    expect(remote).toBeInstanceOf(AggregateError);
+    const aggregate = remote as AggregateError;
+    expect(aggregate.message).toBe(failure.message);
+    expect(aggregate.cause).toBe(aggregate.errors[0]);
+    expect(aggregate.errors[0]).toMatchObject({ message: root.message, code: "ENOTCONN" });
+    expect(aggregate.errors[1]).toMatchObject({ message: cleanup.message, code: "EIO" });
   });
   it("aborts the operation when the consumer closes", async () => {
     let signal!: AbortSignal;

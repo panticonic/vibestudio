@@ -1,3 +1,4 @@
+import { serializeRpcFailure, isRpcAbortedBy } from "@vibestudio/rpc";
 /**
  * CdpHostBridgeClient — the host side of the server's CDP bridge protocol
  * (src/server/cdpBridge.ts), a port of Electron's CdpHostProvider transport
@@ -259,7 +260,7 @@ export class CdpHostBridgeClient {
             type: "cdp:error",
             requestId,
             targetId,
-            error: error instanceof Error ? error.message : String(error),
+            error: serializeRpcFailure(error),
           });
         }
         return;
@@ -288,7 +289,7 @@ export class CdpHostBridgeClient {
             type: "nav:error",
             requestId,
             targetId,
-            error: error instanceof Error ? error.message : String(error),
+            error: serializeRpcFailure(error),
           });
         }
         return;
@@ -313,12 +314,15 @@ export class CdpHostBridgeClient {
           );
           this.send({ type: "host:result", requestId, targetId, result });
         } catch (error) {
-          this.send({
-            type: "host:error",
-            requestId,
-            targetId,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          if (owner.signal.aborted && isRpcAbortedBy(error, owner.signal.reason)) {
+            this.send({ type: "host:result", requestId, targetId });
+          } else
+            this.send({
+              type: "host:error",
+              requestId,
+              targetId,
+              error: serializeRpcFailure(error),
+            });
         } finally {
           this.hostCommands.delete(requestId);
         }
@@ -334,7 +338,7 @@ export class CdpHostBridgeClient {
           this.send({
             type: "host:operation-error",
             requestId,
-            error: error instanceof Error ? error.message : String(error),
+            error: serializeRpcFailure(error),
           });
         }
         return;

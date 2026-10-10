@@ -1,3 +1,4 @@
+import { serializeRpcFailure, isRpcAbortedBy } from "@vibestudio/rpc";
 import { DOM_SNAPSHOT_EXPRESSION } from "@vibestudio/shared/panel/domSnapshot";
 import { EventEmitter } from "node:events";
 import { WebSocket } from "ws";
@@ -631,7 +632,7 @@ export class CdpHostProvider {
         type: "nav:error",
         targetId,
         requestId,
-        error: error instanceof Error ? error.message : String(error),
+        error: serializeRpcFailure(error),
       });
     }
   }
@@ -655,12 +656,15 @@ export class CdpHostProvider {
       }
       this.send({ type: "host:result", targetId, requestId, result });
     } catch (error) {
-      this.send({
-        type: "host:error",
-        targetId,
-        requestId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      if (owner.signal.aborted && isRpcAbortedBy(error, owner.signal.reason)) {
+        this.send({ type: "host:result", targetId, requestId });
+      } else
+        this.send({
+          type: "host:error",
+          targetId,
+          requestId,
+          error: serializeRpcFailure(error),
+        });
     } finally {
       this.hostCommands.delete(requestId);
     }
@@ -902,7 +906,7 @@ export class CdpHostProvider {
             type: "cdp:error",
             targetId,
             requestId,
-            error: error instanceof Error ? error.message : String(error),
+            error: serializeRpcFailure(error),
           });
         }
         return;
@@ -923,7 +927,7 @@ export class CdpHostProvider {
         type: "cdp:error",
         targetId,
         requestId,
-        error: error instanceof Error ? error.message : String(error),
+        error: serializeRpcFailure(error),
       });
     }
   }
