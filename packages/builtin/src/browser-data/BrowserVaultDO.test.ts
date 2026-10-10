@@ -244,6 +244,7 @@ function sqliteContext(db: DatabaseSync): DurableObjectContext {
     },
   };
   return {
+    props: {},
     id: { toString: () => "browser-vault-test", name: "browser-vault-test" },
     storage: {
       sql,

@@ -61,7 +61,11 @@ describe("owned workerd HTTP connections", () => {
         const deps = {
           workerdUrl: origin,
           workerdGatewayToken: "test",
-          resolveExecutableVersion: () => "version",
+          resolveExecutableAdmission: () => ({
+            executableVersion: "version",
+            incarnationVersion: "version",
+            props: { stateArgs: null, image: null },
+          }),
         };
         for (let index = 0; index < 6; index++) {
           await expect(postToDurableObject(ref, "read", [], deps)).resolves.toBe("done");
@@ -130,7 +134,11 @@ describe("owned workerd HTTP connections", () => {
           {
             workerdUrl: origin,
             workerdGatewayToken: "test",
-            resolveExecutableVersion: () => "version",
+            resolveExecutableAdmission: () => ({
+              executableVersion: "version",
+              incarnationVersion: "version",
+              props: { stateArgs: null, image: null },
+            }),
           },
           controller.signal
         );

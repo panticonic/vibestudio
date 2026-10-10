@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { canonicalJson } from "@vibestudio/content-addressing";
+import type { RpcFailure } from "@vibestudio/rpc";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -225,6 +226,39 @@ async function createWorkerdHarness(
       );
       return;
     }
+    if (u.startsWith("/_doadmission/")) {
+      if (req.headers["x-vibestudio-loader-secret"] !== manager.getLoaderSecret()) {
+        res.writeHead(403);
+        res.end("forbidden");
+        return;
+      }
+      const requested = new URL(u, "http://gateway");
+      const [source, className] = requested.pathname
+        .slice("/_doadmission/".length)
+        .split("/")
+        .map(decodeURIComponent);
+      const objectKey = requested.searchParams.get("objectKey");
+      const executableVersion = requested.searchParams.get("executableVersion");
+      const incarnationVersion = requested.searchParams.get("incarnationVersion");
+      if (!source || !className || !objectKey || !executableVersion || !incarnationVersion) {
+        res.writeHead(400);
+        res.end("Incomplete admission");
+        return;
+      }
+      const admission = manager.getDoAdmission(source, className, objectKey);
+      if (
+        !admission ||
+        admission.executableVersion !== executableVersion ||
+        admission.incarnationVersion !== incarnationVersion
+      ) {
+        res.writeHead(409);
+        res.end("Admission changed");
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(admission));
+      return;
+    }
     if (u.startsWith("/_docode/")) {
       if (req.headers["x-vibestudio-loader-secret"] !== manager.getLoaderSecret()) {
         res.writeHead(403);
@@ -313,8 +347,8 @@ async function createWorkerdHarness(
       workerdUrl: `http://127.0.0.1:${port}`,
       workerdGatewayToken: manager.getWorkerdGatewayToken(),
       workerdDispatchSecret: manager.getDispatchSecret(),
-      resolveExecutableVersion: (ref) =>
-        manager.getDoVersion(ref.source, ref.className, ref.objectKey),
+      resolveExecutableAdmission: (ref) =>
+        manager.getDoAdmission(ref.source, ref.className, ref.objectKey),
       callerId: "internal-workerd-test",
       callerKind: "server",
       userId: "internal-workerd-test-user",
@@ -334,8 +368,8 @@ function createDODispatch(
   dispatch.setTokenManager(tokenManager);
   dispatch.setGetWorkerdGatewayToken(() => manager.getWorkerdGatewayToken());
   dispatch.setGetDispatchSecret(() => manager.getDispatchSecret());
-  dispatch.setExecutableVersionResolver((ref) =>
-    manager.getDoVersion(ref.source, ref.className, ref.objectKey)
+  dispatch.setExecutableAdmissionResolver((ref) =>
+    manager.getDoAdmission(ref.source, ref.className, ref.objectKey)
   );
   dispatch.setGetWorkerdUrl(() => {
     const port = manager.getPort();
@@ -690,6 +724,13 @@ describe("internal storage DOs under workerd", () => {
 
     const first = doDispatch.dispatchHeld(ref, "heldSqlProbe", "first", 2_000);
     await new Promise((resolve) => setTimeout(resolve, 100));
+    await doDispatch.dispatchLifecycle(ref, "prepare", {
+      epoch: "held-admission",
+      phase: "quiesce",
+      mode: "suspend",
+      reason: "probe",
+      deadlineMs: 0,
+    });
     const admissionStartedAt = Date.now();
     const [ordinary, alarm, prepare, second] = await Promise.all([
       doDispatch.dispatch(ref, "currentBootGeneration"),
@@ -822,14 +863,19 @@ describe("internal storage DOs under workerd", () => {
     // getRun reaches the canonical terminal without relying on a held executeRun response.
     let observed = (await harness.callDurableObject(ref, "getRun", "run-1")) as {
       status: string;
-      result?: { success?: boolean; error?: string };
+      result?: { success?: boolean; error?: RpcFailure };
     };
     for (let attempt = 0; attempt < 20 && observed.status !== "done"; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
       observed = (await harness.callDurableObject(ref, "getRun", "run-1")) as typeof observed;
     }
     expect(observed).toMatchObject({ status: "done", result: { success: false } });
-    expect(observed.result?.error).toContain("no `providers.evalEngine` is declared");
+    expect(observed.result?.error).toMatchObject({
+      name: "Error",
+      errorKind: "application",
+      message: expect.stringContaining("no `providers.evalEngine` is declared"),
+      stack: expect.stringContaining("requireDeclaredProviderSource"),
+    });
     const terminal = observed.result;
     expect(await harness.callDurableObject(ref, "getRun", "nope")).toEqual({ status: "unknown" });
 
@@ -944,11 +990,16 @@ describe("internal storage DOs under workerd", () => {
     );
     const order: string[] = [];
     const egress = new Set<string>();
+    let originEgressRetired = false;
+    const codeEgressAlive = () =>
+      [...egress].some((id) => id.startsWith(`do-code:${probeRef.source}:${probeRef.className}:`));
     let store!: WorkspaceEntityStore;
     let dispatch!: DODispatch;
     let domainEntered!: () => void;
-    const entered = new Promise<void>((resolve) => {
+    let domainFailed!: (error: unknown) => void;
+    const entered = new Promise<void>((resolve, reject) => {
       domainEntered = resolve;
+      domainFailed = reject;
     });
     let completeDomain!: () => void;
     const allowed = new Promise<void>((resolve) => {
@@ -964,24 +1015,29 @@ describe("internal storage DOs under workerd", () => {
       },
       unregisterEgressCaller: (id) => {
         egress.delete(id);
-        if (id === probeId) order.push("egress-withdrawn");
       },
       mainRpc: async (method) => {
-        if (method !== "docs.listServices") throw new Error(`Unexpected domain method ${method}`);
-        expect(await store.resolveRecord(probeId)).toMatchObject({ status: "active" });
-        expect(egress.has(probeId)).toBe(true);
-        const current = store.cache.resolve(probeId)!;
-        expect(authoritySessionIdForCaller(createVerifiedCaller(probeId, "do"), store.cache)).toBe(
-          current.authoritySessionId
-        );
-        order.push("domain-cancellation");
-        domainEntered();
-        await allowed;
-        // A terminal receipt enters the sealed logical receiver while its
-        // prepare call awaits domain cleanup. Relay sealing happens afterwards.
-        await dispatch.dispatch(probeRef, "completeDomainReceipt");
-        order.push("domain-receipt-joined");
-        return [];
+        try {
+          if (method !== "docs.listServices") throw new Error(`Unexpected domain method ${method}`);
+          expect(await store.resolveRecord(probeId)).toMatchObject({ status: "active" });
+          expect(codeEgressAlive()).toBe(true);
+          expect(originEgressRetired).toBe(false);
+          const current = store.cache.resolve(probeId)!;
+          expect(
+            authoritySessionIdForCaller(createVerifiedCaller(probeId, "do"), store.cache)
+          ).toBe(current.authoritySessionId);
+          order.push("domain-cancellation");
+          domainEntered();
+          await allowed;
+          // A terminal receipt enters the sealed logical receiver while its
+          // prepare call awaits domain cleanup. Relay sealing happens afterwards.
+          await dispatch.dispatch(probeRef, "completeDomainReceipt");
+          order.push("domain-receipt-joined");
+          return [];
+        } catch (error) {
+          domainFailed(error);
+          throw error;
+        }
       },
     });
     manager = harness.manager;
@@ -1007,7 +1063,13 @@ describe("internal storage DOs under workerd", () => {
           retireAuthorityOwner: async () => {
             order.push("authority-retired");
           },
-          egressProxy: { dropCaller: async () => {} },
+          egressProxy: {
+            dropCaller: async (id) => {
+              expect(id).toBe(probeId);
+              originEgressRetired = true;
+              order.push("egress-withdrawn");
+            },
+          },
           approvalQueue: { cancelForCaller: () => {} },
           credentialSessionGrantStore: { dropForCaller: () => 0 },
           tokenManager: harness.tokenManager,
@@ -1060,7 +1122,7 @@ describe("internal storage DOs under workerd", () => {
         restartDurableObjectIncarnation: async () => manager!.restartUserlandDOFacet(probeRef),
         releaseEntity: async (_record, input) => {
           const released = await dispatch.dispatchLifecycle(probeRef, "prepare", input);
-          if (released.status === "ready") {
+          if (released.status === "ready" && input.phase === "release") {
             expect(await dispatch.dispatch(probeRef, "domainState")).toBe("released");
             order.push("logical-release-joined");
           }
@@ -1101,7 +1163,8 @@ describe("internal storage DOs under workerd", () => {
         status: "active",
         authoritySessionId: original!.authoritySessionId,
       });
-      expect(egress.has(probeId)).toBe(true);
+      expect(codeEgressAlive()).toBe(true);
+      expect(originEgressRetired).toBe(false);
       completeDomain();
       await observed;
       const record = await store.resolveRecord(created.id);
@@ -1110,7 +1173,11 @@ describe("internal storage DOs under workerd", () => {
         cleanupComplete: true,
         authoritySessionId: original!.authoritySessionId,
       });
-      expect(egress.has(probeId)).toBe(false);
+      expect(originEgressRetired).toBe(true);
+      expect(codeEgressAlive()).toBe(true);
+      expect(() =>
+        authoritySessionIdForCaller(createVerifiedCaller(probeId, "do"), store.cache)
+      ).toThrow("no active authority lifetime");
       expect(order.slice(0, 5)).toEqual([
         "domain-cancellation",
         "domain-receipt-joined",
@@ -1227,11 +1294,11 @@ describe("internal storage DOs under workerd", () => {
         String(currentGeneration)
       );
       await expect(doDispatch.dispatch(probeRef, "lifecycleEvents")).resolves.toMatchObject([
-        {
+        ...["quiesce", "peer-obligations", "release"].map((phase) => ({
           kind: "prepare",
-          input: expect.objectContaining({ reason: "planned" }),
+          input: expect.objectContaining({ reason: "planned", phase }),
           bootGeneration: String(previousGeneration),
-        },
+        })),
         {
           kind: "resume",
           input: expect.objectContaining({

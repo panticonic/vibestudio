@@ -1,6 +1,10 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { serializeRpcFailure } from "@vibestudio/rpc";
-import { DO_EXECUTABLE_VERSION_HEADER } from "./executableVersion.js";
+import {
+  DO_EXECUTABLE_VERSION_HEADER,
+  DO_INCARNATION_VERSION_HEADER,
+  type DoExecutableAdmission,
+} from "./executableVersion.js";
 
 interface EgressProps {
   id: string;
@@ -21,7 +25,8 @@ interface DurableObjectCodePayload extends WorkerLoaderWorkerCode {
 }
 
 interface LoadedFacetClass {
-  version: string;
+  executableVersion: string;
+  incarnationVersion: string;
   class: DurableObjectClass;
 }
 
@@ -74,7 +79,7 @@ function loadExecutable(
   env: UniversalDoEnv,
   args: { source: string; className: string; version: string; userKey?: string }
 ): WorkerStub {
-  // The loader owns one immutable executable unit per exact incarnation.
+  // The loader owns one immutable executable unit per code and authority snapshot.
   // Objects still own separate facets, SQLite storage, and lifecycle; a live
   // update selects another unit without replacing a sibling's assigned code.
   const unitKey = executableUnitKey(args.source, args.className, args.version);
@@ -164,29 +169,129 @@ export class ExecutablePreparation extends WorkerEntrypoint<UniversalDoEnv> {
   }
 }
 
+interface FacetSelection {
+  executableVersion: string;
+  incarnationVersion: string;
+  controller: AbortController;
+  promise: Promise<LoadedFacetClass>;
+}
+
 export class UniversalDO extends DurableObject<UniversalDoEnv> {
   private loadedFacet: LoadedFacetClass | null = null;
+  private facetSelection: FacetSelection | null = null;
+
+  private async cancelFacetSelection(reason: Error): Promise<void> {
+    const selection = this.facetSelection;
+    if (!selection) return;
+    selection.controller.abort(reason);
+    try {
+      await selection.promise;
+    } catch (error) {
+      if (error !== reason) throw error;
+    }
+  }
+
   private loadFacetClass(args: {
     source: string;
     className: string;
     userKey: string;
     version: string;
-  }): LoadedFacetClass {
-    if (this.loadedFacet?.version === args.version) return this.loadedFacet;
-    if (this.loadedFacet) {
-      this.ctx.facets.abort("do", new Error("Runtime image advanced"));
-      this.loadedFacet = null;
-    }
-
-    const worker = loadExecutable(this.ctx, this.env, args);
-    this.loadedFacet = {
-      version: args.version,
-      class: worker.getDurableObjectClass(args.className),
+    incarnationVersion: string;
+  }): Promise<LoadedFacetClass> {
+    if (
+      this.loadedFacet?.incarnationVersion === args.incarnationVersion &&
+      this.loadedFacet.executableVersion === args.version
+    )
+      return Promise.resolve(this.loadedFacet);
+    const previous = this.facetSelection;
+    if (
+      previous?.incarnationVersion === args.incarnationVersion &&
+      previous.executableVersion === args.version
+    )
+      return previous.promise;
+    const advanced = new Error("Runtime image advanced during object admission");
+    previous?.controller.abort(advanced);
+    const controller = new AbortController();
+    const execute = async (): Promise<LoadedFacetClass> => {
+      try {
+        // Join the prior selection before acquiring a replacement. Cancellation
+        // retires its actual fetch; it cannot publish a late class or properties.
+        if (previous) {
+          try {
+            await previous.promise;
+          } catch (error) {
+            if (error !== advanced) throw error;
+          }
+        } else {
+          // Reserve the selection record before asynchronous loader work starts.
+          await Promise.resolve();
+        }
+        controller.signal.throwIfAborted();
+        const response = await fetchLoader(
+          this.env.GATEWAY,
+          new Request(
+            `http://gateway/_doadmission/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
+              `?objectKey=${encodeURIComponent(args.userKey)}` +
+              `&executableVersion=${encodeURIComponent(args.version)}` +
+              `&incarnationVersion=${encodeURIComponent(args.incarnationVersion)}`,
+            {
+              headers: { "X-Vibestudio-Loader-Secret": this.env.WORKERD_LOADER_SECRET },
+              signal: controller.signal,
+            }
+          )
+        );
+        controller.signal.throwIfAborted();
+        if (!response.ok)
+          throw new Error(`universal-do: ${await response.text()} (${response.status})`);
+        const admission = (await response.json()) as DoExecutableAdmission;
+        controller.signal.throwIfAborted();
+        if (
+          admission.executableVersion !== args.version ||
+          admission.incarnationVersion !== args.incarnationVersion
+        )
+          throw new Error("universal-do: object admission changed while loading");
+        if (this.facetSelection !== selection)
+          throw new Error("Runtime image advanced during object admission");
+        if (this.loadedFacet) {
+          this.ctx.facets.abort("do", new Error("Runtime image advanced"));
+          this.loadedFacet = null;
+        }
+        const worker = loadExecutable(this.ctx, this.env, args);
+        this.loadedFacet = {
+          executableVersion: args.version,
+          incarnationVersion: args.incarnationVersion,
+          class: worker.getDurableObjectClass(args.className, { props: admission.props }),
+        };
+        return this.loadedFacet;
+      } catch (error) {
+        // The transport may reconstruct an abort exception across its boundary.
+        // Once this owned selection is cancelled, its authoritative terminal
+        // reason settles the joined read, independent of that representation.
+        controller.signal.throwIfAborted();
+        throw error;
+      } finally {
+        if (this.facetSelection === selection) this.facetSelection = null;
+      }
     };
-    return this.loadedFacet;
+    const selection: FacetSelection = {
+      executableVersion: args.version,
+      incarnationVersion: args.incarnationVersion,
+      controller,
+      promise: execute(),
+    };
+    this.facetSelection = selection;
+    return selection.promise;
   }
 
   async fetch(request: Request): Promise<Response> {
+    try {
+      return await this.fetchImpl(request);
+    } catch (error) {
+      return Response.json({ error: serializeRpcFailure(error) }, { status: 500 });
+    }
+  }
+
+  private async fetchImpl(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
     const encodedKey = parts[0] ? decodeURIComponent(parts[0]) : "";
@@ -202,6 +307,13 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== this.env.WORKERD_LOADER_SECRET) {
         return new Response("Forbidden", { status: 403 });
       }
+      await this.cancelFacetSelection(
+        new Error(
+          parts[1] === "__vibestudio_restart"
+            ? "Runtime entity restarted"
+            : "Runtime entity retired"
+        )
+      );
       this.ctx.facets.abort(
         "do",
         new Error(
@@ -221,6 +333,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       // Abort only the loaded userland object. Its SQLite storage and the
       // universal host stay live, so the next ordinary request constructs a
       // genuinely fresh vessel over the same durable state.
+      await this.cancelFacetSelection(new Error("System-test injected vessel crash"));
       this.ctx.facets.abort("do", new Error("System-test injected vessel crash"));
       return new Response(null, { status: 204 });
     }
@@ -229,13 +342,19 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     const version = request.headers.get(DO_EXECUTABLE_VERSION_HEADER);
     if (!version) return new Response("universal-do: missing executable identity", { status: 400 });
 
-    const activatesFacet = this.loadedFacet?.version !== version;
+    const incarnationVersion = request.headers.get(DO_INCARNATION_VERSION_HEADER);
+    if (!incarnationVersion)
+      return new Response("universal-do: missing object admission", { status: 400 });
+    const activatesFacet =
+      this.loadedFacet?.incarnationVersion !== incarnationVersion ||
+      this.loadedFacet.executableVersion !== version;
     const activationStartedAt = performance.now();
-    const loaded = this.loadFacetClass({
+    const loaded = await this.loadFacetClass({
       source,
       className,
       userKey,
       version,
+      incarnationVersion,
     });
 
     // One logical DO per host object means one constant facet name. Keeping it

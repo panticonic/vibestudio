@@ -85,6 +85,36 @@ describe("Gateway lifecycle", () => {
     expect(getDoCode).toHaveBeenCalledTimes(1);
   });
 
+  it("loads exact object configuration only through the authenticated admission bridge", async () => {
+    const admission = {
+      executableVersion: "sealed-code",
+      incarnationVersion: "sealed-object",
+      props: { stateArgs: { instructions: "界".repeat(128 * 1024) }, image: null },
+    };
+    const getDoAdmission = vi.fn(() => admission);
+    gateway = new Gateway({
+      tokenManager: {} as never,
+      getWorkerHost: () => ({ getLoaderSecret: () => "fixture-loader", getDoAdmission }) as never,
+    });
+    const port = await gateway.start(0);
+    const endpoint = `http://127.0.0.1:${port}/_doadmission/source/Class`;
+    const query = "?objectKey=owner&executableVersion=sealed-code&incarnationVersion=sealed-object";
+    const headers = { "X-Vibestudio-Loader-Secret": "fixture-loader" };
+    const forbidden = await fetch(endpoint + query);
+    expect(forbidden.status).toBe(403);
+    expect(getDoAdmission).not.toHaveBeenCalled();
+    const response = await fetch(endpoint + query, { headers });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(admission);
+    expect(getDoAdmission).toHaveBeenCalledExactlyOnceWith("source", "Class", "owner");
+    const stale = await fetch(endpoint + query.replace("sealed-object", "old-object"), { headers });
+    expect(stale.status).toBe(409);
+    expect(await stale.text()).not.toContain(admission.props.stateArgs.instructions);
+    const missing = await fetch(endpoint + "?objectKey=owner", { headers });
+    expect(missing.status).toBe(400);
+    expect(getDoAdmission).toHaveBeenCalledTimes(2);
+  });
+
   it("does not expose raw userland Durable Object transport", async () => {
     gateway = new Gateway({
       tokenManager: {} as never,

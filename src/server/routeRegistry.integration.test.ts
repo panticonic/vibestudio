@@ -62,7 +62,14 @@ async function startHarness(): Promise<Harness> {
   const gateway = new Gateway({
     workerdPort,
     getWorkerdDispatchSecret: () => "workerd-dispatch-secret",
-    getWorkerHost: () => ({ getDoVersion: () => "route-executable" }) as never,
+    getWorkerHost: () =>
+      ({
+        getDoAdmission: () => ({
+          executableVersion: "route-executable",
+          incarnationVersion: "route-executable",
+          props: { stateArgs: null, image: null },
+        }),
+      }) as never,
     ensureDORoute,
     routeRegistry: registry,
     adminToken: "secret-token",

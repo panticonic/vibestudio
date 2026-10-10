@@ -117,7 +117,7 @@ import {
   type WorkspaceServiceBinding,
 } from "@vibestudio/workspace-contracts/types";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
-import type { DoExecutableVersionResolver } from "./doExecutableDispatch.js";
+import type { DoExecutableAdmissionResolver } from "./doExecutableDispatch.js";
 import type { DurableWorkReadyHint } from "@vibestudio/shared/durableWork";
 import {
   AUTHENTICATION_FRAME_MAX_BYTES,
@@ -506,7 +506,7 @@ export class RpcServer {
   private workerdUrl: string | null = null;
   private workerdGatewayToken: string | null = null;
   private workerdDispatchSecret: string | null = null;
-  private resolveExecutableVersion: DoExecutableVersionResolver | undefined;
+  private resolveExecutableAdmission: DoExecutableAdmissionResolver | undefined;
   private resolveWorkerInstanceNameFn: ((targetId: string) => string | null) | null = null;
 
   private connections = new ConnectionRegistry({
@@ -1693,8 +1693,8 @@ export class RpcServer {
     this.workerdDispatchSecret = secret;
   }
 
-  setExecutableVersionResolver(fn: DoExecutableVersionResolver): void {
-    this.resolveExecutableVersion = fn;
+  setExecutableAdmissionResolver(fn: DoExecutableAdmissionResolver): void {
+    this.resolveExecutableAdmission = fn;
   }
 
   setWorkerInstanceResolver(fn: (targetId: string) => string | null): void {
@@ -4847,7 +4847,7 @@ export class RpcServer {
           {
             workerdUrl,
             workerdGatewayToken,
-            resolveExecutableVersion: this.resolveExecutableVersion,
+            resolveExecutableAdmission: this.resolveExecutableAdmission,
             ...(workerdDispatchSecret ? { workerdDispatchSecret } : {}),
             callerId,
             callerKind,
@@ -4994,7 +4994,7 @@ export class RpcServer {
         {
           workerdUrl: this.workerdUrl,
           workerdGatewayToken: this.workerdGatewayToken,
-          resolveExecutableVersion: this.resolveExecutableVersion,
+          resolveExecutableAdmission: this.resolveExecutableAdmission,
           ...(this.workerdDispatchSecret
             ? { workerdDispatchSecret: this.workerdDispatchSecret }
             : {}),
@@ -5179,7 +5179,7 @@ export class RpcServer {
       await postEventToDurableObject(ref, event, payload, {
         workerdUrl: this.workerdUrl,
         workerdGatewayToken: this.workerdGatewayToken,
-        resolveExecutableVersion: this.resolveExecutableVersion,
+        resolveExecutableAdmission: this.resolveExecutableAdmission,
         ...(this.workerdDispatchSecret
           ? { workerdDispatchSecret: this.workerdDispatchSecret }
           : {}),

@@ -376,8 +376,8 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         return `http://127.0.0.1:${port}`;
       });
       dispatch.setGetDispatchSecret(() => manager.getDispatchSecret());
-      dispatch.setExecutableVersionResolver((ref) =>
-        manager.getDoVersion(ref.source, ref.className, ref.objectKey)
+      dispatch.setExecutableAdmissionResolver((ref) =>
+        manager.getDoAdmission(ref.source, ref.className, ref.objectKey)
       );
       // Typed runtime_restarting failures while a generation transition is in
       // flight, instead of the generic "workerd not running" throw above.

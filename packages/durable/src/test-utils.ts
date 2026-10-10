@@ -50,10 +50,9 @@ type PublicMethodResult<T, Method extends string> = Method extends keyof T
     : unknown
   : unknown;
 type PublicMethodNames<T> = {
-  [Method in keyof T]-?: T[Method] extends (...args: infer _Args) => unknown
-    ? Method
-    : never;
-}[keyof T] & string;
+  [Method in keyof T]-?: T[Method] extends (...args: infer _Args) => unknown ? Method : never;
+}[keyof T] &
+  string;
 type NarrowSchemaMethodNames<Methods> = string extends keyof NonNullable<Methods>
   ? never
   : keyof NonNullable<Methods> & string;
@@ -316,6 +315,7 @@ export async function createTestDO<DOClass extends new (ctx: any, env: any) => o
   const objectKey = (env?.["__objectKey"] as string) ?? "test-key";
 
   const ctx = {
+    props: {},
     id: { toString: () => objectKey, name: objectKey },
     storage: {
       sql: sqlProxy,
@@ -514,10 +514,7 @@ export async function createTestDO<DOClass extends new (ctx: any, env: any) => o
       Partial<Pick<AuthenticatedCaller, "callerPanelId" | "userId">>,
     method: string,
     ...args: unknown[]
-  ) => dispatch(caller, method, args)) as TestDOResult<
-    InstanceType<DOClass>,
-    DOClass
-  >["callAs"];
+  ) => dispatch(caller, method, args)) as TestDOResult<InstanceType<DOClass>, DOClass>["callAs"];
 
   return {
     instance,

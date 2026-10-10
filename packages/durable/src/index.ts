@@ -86,12 +86,16 @@ export { rpc, schemaRpc } from "@vibestudio/rpc";
  * inherited host/channel plumbing from a built-in's typed product surface. */
 export const DURABLE_OBJECT_FRAMEWORK_RPC_METHODS: ReadonlySet<string> = new Set([
   "durableWorkCapabilities",
+  "prepareDurableWorkRelease",
+  "waitDurableWorkRelease",
   "acceptChannelDelivery",
   "acceptChannelInvocation",
   "cancelChannelInvocation",
 ]);
 
 export interface DurableObjectContext {
+  /** workerd per-object properties; static builtin namespaces use an empty object. */
+  props: Record<string, unknown>;
   id: { toString(): string; name?: string };
   storage: {
     sql: SqlStorage;

@@ -49,6 +49,9 @@ export class RetirementProbeDO extends DurableObjectBase {
     input: LifecyclePrepareInput
   ): Promise<LifecyclePrepareResult> {
     if (input.mode !== "retire") throw new Error("Retirement probe requires terminal release");
+    // Capture phases preserve the domain operation; only final resource release
+    // cancels it and joins its authoritative terminal receipt.
+    if (input.phase !== "release") return { status: "ready" };
     // The host callback returns only after the authoritative receiver receipt.
     // No elapsed-time completion or local manufactured cancellation is used.
     const docs = createTypedServiceClient("docs", docsMethods, (service, method, args) =>

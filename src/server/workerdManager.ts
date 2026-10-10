@@ -45,7 +45,7 @@ import {
   type InternalDOBundle,
 } from "./internalDOs/internalDoLoader.js";
 import { encodeUniversalKey } from "./doDispatch.js";
-import { DO_EXECUTABLE_VERSION_HEADER } from "./workerdPrograms/executableVersion.js";
+import { doExecutableHeaders, type DoExecutableAdmission } from "./doExecutableDispatch.js";
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
@@ -274,22 +274,35 @@ interface DOService {
 }
 
 interface DOObjectBuild {
-  /** Selected once with the admitted immutable image and state-argument snapshot. */
-  version: string;
+  /** Code and authority are shared independently of this object configuration. */
+  admission: DoExecutableAdmission;
   buildKey: string;
   imageId: string;
   scopeRef?: string;
-  stateArgs?: Record<string, unknown>;
 }
 
 function recordStateArgs(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? structuredClone(value as Record<string, unknown>)
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 
+function runtimeExecutableVersion(
+  image: Pick<RuntimeImageRecord, "artifact" | "authority">
+): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      canonicalJson({
+        executionDigest: image.artifact.executionDigest,
+        authority: image.authority,
+      })
+    )
+    .digest("hex");
+}
+
 function runtimeIncarnationVersion(
-  image: Pick<RuntimeImageRecord, "artifact" | "authority">,
+  image: RuntimeImageRecord,
   stateArgs?: Record<string, unknown>
 ): string {
   return crypto
@@ -299,9 +312,39 @@ function runtimeIncarnationVersion(
         executionDigest: image.artifact.executionDigest,
         authority: image.authority,
         stateArgs: stateArgs ?? null,
+        image: {
+          effectiveVersion: image.artifact.sourceState.effectiveVersion,
+          sourceRef: workerSourceRef(image, image.source),
+        },
       })
     )
     .digest("hex");
+}
+
+function freezeAdmissionValue<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) freezeAdmissionValue(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function doAdmission(
+  image: RuntimeImageRecord,
+  stateArgs?: Record<string, unknown>
+): DoExecutableAdmission {
+  const ownedStateArgs = stateArgs ? structuredClone(stateArgs) : undefined;
+  return freezeAdmissionValue({
+    executableVersion: runtimeExecutableVersion(image),
+    incarnationVersion: runtimeIncarnationVersion(image, ownedStateArgs),
+    props: {
+      stateArgs: ownedStateArgs ?? null,
+      image: {
+        effectiveVersion: image.artifact.sourceState.effectiveVersion,
+        sourceRef: workerSourceRef(image, image.source),
+      },
+    },
+  });
 }
 
 function doServiceKey(source: string, className: string): string {
@@ -634,6 +677,10 @@ export class WorkerdManager {
   private doServices = new Map<string, DOService>();
   /** Userland DO object-specific code refs — keyed by `${source}:${className}/${objectKey}`. */
   private doObjectBuilds = new Map<string, DOObjectBuild>();
+  private doAdmissions = new WeakMap<
+    RuntimeImageRecord | SchemaProbeBuild,
+    DoExecutableAdmission
+  >();
   /** Session ID — generated once per WorkerdManager lifetime, used for restart detection in bootstrap. */
   private sessionId = crypto.randomUUID();
   private bootGeneration: number;
@@ -1269,9 +1316,8 @@ export class WorkerdManager {
     this.doObjectBuilds.set(doObjectBuildKey(source, className, record.key), {
       imageId: image.id,
       buildKey: image.artifact.buildKey,
-      version: runtimeIncarnationVersion(image, stateArgs),
+      admission: doAdmission(image, stateArgs),
       ...(image.scopeRef ? { scopeRef: image.scopeRef } : {}),
-      ...(stateArgs ? { stateArgs } : {}),
     });
     this.registerDoEgressCaller(source, className, image);
     this.reconcileDoCodeUnitOwnership();
@@ -1983,23 +2029,42 @@ export class WorkerdManager {
   }
 
   /**
-   * Exact runtime incarnation selected by host dispatch, or null if no image
-   * is bound. Carried with the admitted request so the facet host needs no
-   * per-call version lookup. A changed incarnation loads a fresh isolate.
+   * Atomically capture the selected executable and object configuration. Code
+   * units are shared; a changed incarnation replaces only this object facet.
    */
-  getDoVersion(source: string, className: string, objectKey?: string): string | null {
+  getDoAdmission(
+    source: string,
+    className: string,
+    objectKey?: string
+  ): DoExecutableAdmission | null {
     const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
     if (probe && probe.source === source && probe.className === className) {
-      return `${probe.version}:schema-probe`;
+      let admission = this.doAdmissions.get(probe);
+      if (!admission) {
+        const version = `${probe.version}:schema-probe`;
+        admission = freezeAdmissionValue({
+          executableVersion: version,
+          incarnationVersion: version,
+          props: { stateArgs: null, image: null },
+        });
+        this.doAdmissions.set(probe, admission);
+      }
+      return admission;
     }
     if (objectKey) {
-      const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
-      if (objectBuild) return objectBuild.version;
+      const binding = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
+      if (binding) return binding.admission;
     }
-    const svc = this.doServices.get(doServiceKey(source, className));
-    if (!svc || isInternalDOSource(source)) return null;
-    const image = svc.imageId ? this.runtimeImages.get(svc.imageId) : null;
-    return image ? runtimeIncarnationVersion(image) : svc.buildKey;
+    const service = this.doServices.get(doServiceKey(source, className));
+    if (!service || isInternalDOSource(source)) return null;
+    const image = service.imageId ? this.runtimeImages.get(service.imageId) : null;
+    if (!image) throw new Error(`Durable Object ${source}:${className} has no admitted image`);
+    let admission = this.doAdmissions.get(image);
+    if (!admission) {
+      admission = doAdmission(image);
+      this.doAdmissions.set(image, admission);
+    }
+    return admission;
   }
 
   /** Resolve a userland DO method from the exact build bound to this object. */
@@ -2120,23 +2185,21 @@ export class WorkerdManager {
     const objectEntry = [...this.doObjectBuilds.entries()].find(
       ([key, binding]) =>
         key.startsWith(`${serviceKey}/`) &&
-        binding.version === version &&
+        binding.admission.executableVersion === version &&
         this.sealedDoImages.has(binding.imageId)
     );
     const objectBuild = objectEntry?.[1];
     const resolved =
       prepared?.version === version
         ? prepared
-        : serviceImage && runtimeIncarnationVersion(serviceImage) === version
+        : serviceImage && runtimeExecutableVersion(serviceImage) === version
           ? this.getMutableRuntimeImageBuild(serviceImage.id)
           : objectBuild
             ? this.getSealedRuntimeImageBuild(objectBuild.imageId)
             : null;
     if (!resolved) return null;
     const { image, build: buildResult } = resolved;
-    const stateArgs =
-      runtimeIncarnationVersion(image) === version ? undefined : objectBuild?.stateArgs;
-    if (runtimeIncarnationVersion(image, stateArgs) !== version) return null;
+    if (runtimeExecutableVersion(image) !== version) return null;
     const modules = workerJavaScriptModules(buildResult);
     // Terminal (Ink) DOs import a pre-compiled `yoga.wasm` module — it must be
     // loaded alongside the JS bundle (the only way to run WASM in workerd).
@@ -2156,9 +2219,6 @@ export class WorkerdManager {
       WORKER_SOURCE: source,
       WORKER_CLASS_NAME: className,
       WORKER_EXECUTION_DIGEST: image.artifact.executionDigest,
-      WORKER_BUILD_KEY: image.artifact.buildKey,
-      WORKER_EFFECTIVE_VERSION: image.artifact.sourceState.effectiveVersion,
-      WORKER_SOURCE_REF: workerSourceRef(image, source),
       WORKERD_SESSION_ID: this.sessionId,
       WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
       GATEWAY_URL: this.deps.getServerUrl(),
@@ -2176,7 +2236,6 @@ export class WorkerdManager {
       env["VIBESTUDIO_SCHEMA_DESCRIPTOR"] = JSON.parse(schemaDescriptor.descriptor_json);
     addSharedRuntimeEnv(env, this.deps.getServerAliasUrls?.() ?? []);
     if (this.port) env["WORKERD_URL"] = `http://127.0.0.1:${this.port}`;
-    if (stateArgs && Object.keys(stateArgs).length > 0) env["STATE_ARGS"] = stateArgs;
 
     this.loadedDoCodeUnits.set(JSON.stringify([source, className, version]), {
       source,
@@ -2202,7 +2261,7 @@ export class WorkerdManager {
     className: string,
     image: RuntimeImageRecord
   ): string {
-    const identity = `do-code:${source}:${className}:${runtimeIncarnationVersion(image)}`;
+    const identity = `do-code:${source}:${className}:${runtimeExecutableVersion(image)}`;
     const caller = createVerifiedCaller(identity, "worker", {
       callerId: identity,
       callerKind: "worker",
@@ -2215,7 +2274,7 @@ export class WorkerdManager {
     this.doCodeEgressCallers.set(identity, {
       source,
       className,
-      version: runtimeIncarnationVersion(image),
+      version: runtimeExecutableVersion(image),
     });
     return identity;
   }
@@ -3153,39 +3212,28 @@ export class WorkerdManager {
 
   /** Executable-unit ownership follows actual admitted bindings, not object counts. */
   private reconcileDoCodeUnitOwnership(): void {
-    const owns = (
-      source: string,
-      className: string,
-      version: string,
-      codeOnly: boolean
-    ): boolean => {
+    const owns = (source: string, className: string, version: string): boolean => {
       const serviceKey = doServiceKey(source, className);
       const service = this.doServices.get(serviceKey);
       const image = service?.imageId ? this.runtimeImages.get(service.imageId) : null;
-      if (image && runtimeIncarnationVersion(image) === version) return true;
+      if (image && runtimeExecutableVersion(image) === version) return true;
       const prepared = this.preparedDoExecutables.get(serviceKey);
       if (prepared && prepared.version === version) return true;
       if (this.preparingDoExecutables.has(canonicalJson([source, className, version]))) return true;
       for (const [key, binding] of this.doObjectBuilds) {
         if (!key.startsWith(`${serviceKey}/`)) continue;
-        if (!codeOnly && binding.version === version) return true;
-        if (codeOnly) {
-          const objectImage =
-            this.sealedDoImages.get(binding.imageId) ?? this.runtimeImages.get(binding.imageId);
-          if (objectImage && runtimeIncarnationVersion(objectImage) === version) return true;
-        }
+        if (binding.admission.executableVersion === version) return true;
       }
       return false;
     };
     this.retiredDynamicIsolateIds.clear();
     for (const [key, unit] of this.loadedDoCodeUnits) {
-      if (!owns(unit.source, unit.className, unit.version, false))
-        this.retiredDynamicIsolateIds.add(key);
+      if (!owns(unit.source, unit.className, unit.version)) this.retiredDynamicIsolateIds.add(key);
     }
     this.retiredDynamicIsolateGeneration =
       this.retiredDynamicIsolateIds.size > 0 ? this.bootGeneration : null;
     for (const [identity, unit] of this.doCodeEgressCallers) {
-      if (owns(unit.source, unit.className, unit.version, true)) continue;
+      if (owns(unit.source, unit.className, unit.version)) continue;
       this.deps.unregisterEgressCaller(identity);
       this.doCodeEgressCallers.delete(identity);
     }
@@ -3659,12 +3707,11 @@ export class WorkerdManager {
         this.doObjectBuilds.set(doObjectBuildKey(source, className, opts.objectKey), {
           imageId,
           buildKey: image?.artifact.buildKey ?? service.buildKey,
-          version: runtimeIncarnationVersion(
+          admission: doAdmission(
             image ?? assertPresent(this.runtimeImages.get(imageId)),
             stateArgs
           ),
           ...(scopeRef ? { scopeRef } : {}),
-          ...(stateArgs ? { stateArgs } : {}),
         });
       }
       await this.ensureWorkerdRunning();
@@ -3765,7 +3812,7 @@ export class WorkerdManager {
     };
     if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
     for (const className of new Set(classNames)) {
-      const key = canonicalJson([image.source, className, runtimeIncarnationVersion(image)]);
+      const key = canonicalJson([image.source, className, runtimeExecutableVersion(image)]);
       this.latestExecutablePreparation.set(doServiceKey(image.source, className), key);
       const pending = this.executablePreparations.get(key);
       if (pending) {
@@ -3789,7 +3836,7 @@ export class WorkerdManager {
   ): Promise<void> {
     await this.admitDurableObjectSchema(image, className);
     const serviceKey = doServiceKey(image.source, className);
-    const version = runtimeIncarnationVersion(image);
+    const version = runtimeExecutableVersion(image);
     const key = canonicalJson([image.source, className, version]);
     const record = this.persistRuntimeImage(`do-preparation:${serviceKey}:${version}`, image);
     const prepared = { image: record, build, version };
@@ -4012,7 +4059,9 @@ export class WorkerdManager {
           headers: {
             Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
             "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
-            [DO_EXECUTABLE_VERSION_HEADER]: `${executable.version}:schema-probe`,
+            ...doExecutableHeaders(ref, (target) =>
+              this.getDoAdmission(target.source, target.className, target.objectKey)
+            ),
           },
           dispatcher: getWorkerdConnectionDispatcher(
             `http://127.0.0.1:${assertPresent(this.port)}`

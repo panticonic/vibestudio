@@ -7554,8 +7554,8 @@ async function main() {
   });
   rpcServerInstance.setWorkerdGatewayToken(workerdGatewayToken);
   rpcServerInstance.setWorkerdDispatchSecret(workerdManager.getDispatchSecret());
-  rpcServerInstance.setExecutableVersionResolver((ref) =>
-    workerdManager.getDoVersion(ref.source, ref.className, ref.objectKey)
+  rpcServerInstance.setExecutableAdmissionResolver((ref) =>
+    workerdManager.getDoAdmission(ref.source, ref.className, ref.objectKey)
   );
   rpcServerInstance.setWorkerInstanceResolver((targetId) =>
     workerdManager.resolveWorkerInstanceName(targetId)

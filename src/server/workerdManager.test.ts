@@ -378,7 +378,7 @@ describe("WorkerdManager", () => {
       const code = await reopened.getDoCode(
         "workers/board",
         "BoardDO",
-        reopened.getDoVersion("workers/board", "BoardDO")!
+        reopened.getDoAdmission("workers/board", "BoardDO")!.executableVersion
       );
       expect(code?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(descriptor(1, "fresh-shape"));
       await reopened.shutdown();
@@ -498,7 +498,7 @@ describe("WorkerdManager", () => {
       await mgr.prepareWorkerExecutable(build, ["BoardDO"]);
       await mgr.prepareWorkerExecutable(build, ["BoardDO"]);
       expect(probe).toHaveBeenCalledTimes(1);
-      expect(mgr.getDoVersion("workers/board", "BoardDO")).toBeNull();
+      expect(mgr.getDoAdmission("workers/board", "BoardDO")).toBeNull();
       vi.mocked(deps.bindRuntimeImage).mockClear();
       await mgr.ensureDurableObjectEntity({
         source: "workers/board",
@@ -509,7 +509,9 @@ describe("WorkerdManager", () => {
       });
       expect(probe).toHaveBeenCalledTimes(1);
       expect(deps.bindRuntimeImage).toHaveBeenCalledTimes(1);
-      expect(mgr.getDoVersion("workers/board", "BoardDO", "first")).not.toBeNull();
+      expect(
+        mgr.getDoAdmission("workers/board", "BoardDO", "first")?.executableVersion
+      ).not.toBeNull();
       await mgr.shutdown();
     });
 
@@ -743,13 +745,13 @@ describe("WorkerdManager", () => {
       const firstCode = await mgr.getDoCode(
         source,
         "BoardDO",
-        mgr.getDoVersion(source, "BoardDO", "a")!,
+        mgr.getDoAdmission(source, "BoardDO", "a")!.executableVersion,
         "a"
       );
       const secondCode = await mgr.getDoCode(
         source,
         "BoardDO",
-        mgr.getDoVersion(source, "BoardDO", "b")!,
+        mgr.getDoAdmission(source, "BoardDO", "b")!.executableVersion,
         "b"
       );
       expect(probe).toHaveBeenCalledTimes(2);
@@ -759,8 +761,8 @@ describe("WorkerdManager", () => {
       );
       expect(firstCode?.env["WORKER_EXECUTION_DIGEST"]).toBe(first.executionDigest);
       expect(secondCode?.env["WORKER_EXECUTION_DIGEST"]).toBe(second.executionDigest);
-      expect(firstCode?.env["WORKER_BUILD_KEY"]).toBe(first.buildKey);
-      expect(secondCode?.env["WORKER_BUILD_KEY"]).toBe(second.buildKey);
+      expect(firstCode?.env).not.toHaveProperty("WORKER_BUILD_KEY");
+      expect(secondCode?.env).not.toHaveProperty("WORKER_BUILD_KEY");
       expect(firstCode?.egressIdentity).not.toBe(secondCode?.egressIdentity);
       expect(() =>
         mgr.validateAndStageDurableObjectSchemas("conflicting-probe", [
@@ -773,8 +775,14 @@ describe("WorkerdManager", () => {
         ])
       ).toThrow(/same immutable execution artifact/);
       expect(
-        (await mgr.getDoCode(source, "BoardDO", mgr.getDoVersion(source, "BoardDO", "a")!, "a"))
-          ?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]
+        (
+          await mgr.getDoCode(
+            source,
+            "BoardDO",
+            mgr.getDoAdmission(source, "BoardDO", "a")!.executableVersion,
+            "a"
+          )
+        )?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]
       ).toEqual(descriptor(1, "first-shape"));
     });
 
@@ -1353,32 +1361,46 @@ describe("WorkerdManager", () => {
       };
 
       await expect(restored.restoreDurableObjectEntity(record)).resolves.toBeUndefined();
-      const version = restored.getDoVersion("workers/new-do", "NewDO", "k1");
+      const version = restored.getDoAdmission("workers/new-do", "NewDO", "k1")?.executableVersion;
+      const admission = restored.getDoAdmission("workers/new-do", "NewDO", "k1")!;
       const admittedCode = await restored.getDoCode(
         "workers/new-do",
         "NewDO",
-        restored.getDoVersion("workers/new-do", "NewDO", "k1")!,
+        restored.getDoAdmission("workers/new-do", "NewDO", "k1")!.executableVersion,
         "k1"
       );
       record.stateArgs.agentConfig.instructions = "caller mutated instructions";
-      expect(restored.getDoVersion("workers/new-do", "NewDO", "k1")).toBe(version);
+      expect(restored.getDoAdmission("workers/new-do", "NewDO", "k1")).toEqual(admission);
+      expect(() => {
+        (admission.props.stateArgs!["agentConfig"] as { instructions: string }).instructions =
+          "facade mutated instructions";
+      }).toThrow(TypeError);
+      expect(restored.getDoAdmission("workers/new-do", "NewDO", "k1")).toBe(admission);
+      expect(restored.getDoAdmission("workers/new-do", "NewDO", "k1")?.props.stateArgs).toEqual({
+        agentConfig: { instructions: "admitted instructions" },
+      });
+      expect(restored.getDoAdmission("workers/new-do", "NewDO", "k1")?.executableVersion).toBe(
+        version
+      );
       expect(
         await restored.getDoCode(
           "workers/new-do",
           "NewDO",
-          restored.getDoVersion("workers/new-do", "NewDO", "k1")!,
+          restored.getDoAdmission("workers/new-do", "NewDO", "k1")!.executableVersion,
           "k1"
         )
       ).toEqual(admittedCode);
       record.stateArgs.agentConfig.instructions = "admitted instructions";
       await expect(restored.restoreDurableObjectEntity(record)).resolves.toBeUndefined();
-      expect(restored.getDoVersion("workers/new-do", "NewDO", "k1")).toBe(version);
+      expect(restored.getDoAdmission("workers/new-do", "NewDO", "k1")?.executableVersion).toBe(
+        version
+      );
       expect(restored.listRuntimeImages().some(({ id }) => id === record.id)).toBe(false);
       expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
       const code = await restored.getDoCode(
         "workers/new-do",
         "NewDO",
-        restored.getDoVersion("workers/new-do", "NewDO", "k1")!,
+        restored.getDoAdmission("workers/new-do", "NewDO", "k1")!.executableVersion,
         "k1"
       );
       expect(code).not.toBeNull();
@@ -1524,13 +1546,13 @@ describe("WorkerdManager", () => {
       const first = await manager.getDoCode(
         "workers/agent-worker",
         "AiChatWorker",
-        manager.getDoVersion("workers/agent-worker", "AiChatWorker", "first")!,
+        manager.getDoAdmission("workers/agent-worker", "AiChatWorker", "first")!.executableVersion,
         "first"
       );
       const second = await manager.getDoCode(
         "workers/agent-worker",
         "AiChatWorker",
-        manager.getDoVersion("workers/agent-worker", "AiChatWorker", "second")!,
+        manager.getDoAdmission("workers/agent-worker", "AiChatWorker", "second")!.executableVersion,
         "second"
       );
       expect(first?.egressIdentity).toMatch(/^do-code:/);
@@ -1551,7 +1573,7 @@ describe("WorkerdManager", () => {
       expect(registerEgressCaller.mock.calls.every(([id]) => !id.startsWith("do:"))).toBe(true);
     });
 
-    it("retires a shared executable only after its final object binding leaves", async () => {
+    it("retains a shared executable while its class binding remains admitted", async () => {
       const unregisterEgressCaller = vi.fn();
       const manager = new WorkerdManager(createMockDeps({ unregisterEgressCaller }));
       const source = "workers/new-do";
@@ -1583,13 +1605,13 @@ describe("WorkerdManager", () => {
       const first = await manager.getDoCode(
         source,
         className,
-        manager.getDoVersion(source, className, "first")!,
+        manager.getDoAdmission(source, className, "first")!.executableVersion,
         "first"
       );
       const second = await manager.getDoCode(
         source,
         className,
-        manager.getDoVersion(source, className, "second")!,
+        manager.getDoAdmission(source, className, "second")!.executableVersion,
         "second"
       );
       expect(first?.version).toBe(second?.version);
@@ -1604,19 +1626,19 @@ describe("WorkerdManager", () => {
       expect(units.retiredDynamicIsolateIds.size).toBe(0);
       expect(unregisterEgressCaller).not.toHaveBeenCalledWith(first!.egressIdentity);
       await manager.retireDOEntity({ source, className, objectKey: "second" });
-      expect(units.retiredDynamicIsolateIds.size).toBe(1);
-      // The class default remains a legitimate code-principal owner when it
-      // shares the image; only the state-argument executable unit is obsolete.
+      // Object configuration no longer creates separate executable units.
+      // The still-admitted class default owns the same code after both objects retire.
+      expect(units.retiredDynamicIsolateIds.size).toBe(0);
       const serviceCode = await manager.getDoCode(
         source,
         className,
-        manager.getDoVersion(source, className)!
+        manager.getDoAdmission(source, className)!.executableVersion
       );
       expect(serviceCode?.egressIdentity).toBe(first!.egressIdentity);
       expect(unregisterEgressCaller).not.toHaveBeenCalledWith(first!.egressIdentity);
     });
 
-    it("serves object-specific stateArgs in userland DO env", async () => {
+    it("serves object-specific state and source coordinates in the admitted facet props", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
@@ -1667,21 +1689,30 @@ describe("WorkerdManager", () => {
       const code = await mgr.getDoCode(
         "workers/new-do",
         "NewDO",
-        mgr.getDoVersion("workers/new-do", "NewDO", "subagent-object")!,
+        mgr.getDoAdmission("workers/new-do", "NewDO", "subagent-object")!.executableVersion,
         "subagent-object"
       );
-      expect(code?.env["WORKER_EFFECTIVE_VERSION"]).toBe(prepared.effectiveVersion);
-      expect(code?.env["WORKER_SOURCE_REF"]).toMatch(/^state:[0-9a-f]{64}$/);
-      expect(code?.env["STATE_ARGS"]).toEqual({
+      expect(code?.env).not.toHaveProperty("WORKER_EFFECTIVE_VERSION");
+      expect(code?.env).not.toHaveProperty("WORKER_SOURCE_REF");
+      expect(mgr.getDoAdmission("workers/new-do", "NewDO", "subagent-object")?.props.image).toEqual(
+        {
+          effectiveVersion: prepared.effectiveVersion,
+          sourceRef: expect.stringMatching(/^state:[0-9a-f]{64}$/),
+        }
+      );
+      expect(code?.env).not.toHaveProperty("STATE_ARGS");
+      expect(
+        mgr.getDoAdmission("workers/new-do", "NewDO", "subagent-object")?.props.stateArgs
+      ).toEqual({
         subagent: {
           runId: "run-1",
           parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
           parentChannelId: "ch-parent",
         },
       });
-      expect(mgr.getDoVersion("workers/new-do", "NewDO", "subagent-object")).toMatch(
-        /^[a-f0-9]{64}$/
-      );
+      expect(
+        mgr.getDoAdmission("workers/new-do", "NewDO", "subagent-object")?.executableVersion
+      ).toMatch(/^[a-f0-9]{64}$/);
     });
 
     it("honors explicit context refs for runtime-managed DO object images", async () => {
@@ -1706,7 +1737,9 @@ describe("WorkerdManager", () => {
 
       expect(deps.bindRuntimeImage).toHaveBeenCalledTimes(1);
       expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "ctx:ctx-agent");
-      expect(mgr.getDoVersion("workers/new-do", "NewDO", "branch-object")).not.toBeNull();
+      expect(
+        mgr.getDoAdmission("workers/new-do", "NewDO", "branch-object")?.executableVersion
+      ).not.toBeNull();
     });
 
     it("binds bootstrap-style singleton DOs to explicit main instead of synthetic context refs", async () => {

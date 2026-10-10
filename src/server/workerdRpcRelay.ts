@@ -167,7 +167,7 @@ export function doRefUrl(ref: DORef, method: string): string {
 }
 
 export interface DurableObjectRelayDeps {
-  resolveExecutableVersion?: import("./doExecutableDispatch.js").DoExecutableVersionResolver;
+  resolveExecutableAdmission?: import("./doExecutableDispatch.js").DoExecutableAdmissionResolver;
   workerdUrl: string;
   workerdGatewayToken: string;
   workerdDispatchSecret?: string;
@@ -267,7 +267,7 @@ async function fetchEnvelopeFromDO(
     res = await fetch(url, {
       method: "POST",
       headers: {
-        ...doExecutableHeaders(ref, deps.resolveExecutableVersion),
+        ...doExecutableHeaders(ref, deps.resolveExecutableAdmission),
         "Content-Type": "application/json",
         Authorization: `Bearer ${deps.workerdGatewayToken}`,
         ...(deps.workerdDispatchSecret

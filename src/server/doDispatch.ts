@@ -47,7 +47,7 @@ import {
 } from "./workerdRpcRelay.js";
 import { parseDurableWorkReady, type DurableWorkReadyHint } from "@vibestudio/shared/durableWork";
 import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
-import { doExecutableHeaders, type DoExecutableVersionResolver } from "./doExecutableDispatch.js";
+import { doExecutableHeaders, type DoExecutableAdmissionResolver } from "./doExecutableDispatch.js";
 
 /**
  * Typed error code for dispatches attempted while a workerd generation
@@ -79,7 +79,7 @@ export { doRefKey, doRefUrl, encodeUniversalKey } from "./workerdRpcRelay.js";
 // ---------------------------------------------------------------------------
 
 export interface PostToDOWithTokenDeps {
-  resolveExecutableVersion?: DoExecutableVersionResolver;
+  resolveExecutableAdmission?: DoExecutableAdmissionResolver;
   tokenManager: TokenManager;
   workerdUrl: string;
   workerdGatewayToken: string;
@@ -150,7 +150,7 @@ export async function postToDOWithToken(
   };
 
   const headers: Record<string, string> = {
-    ...doExecutableHeaders(ref, deps.resolveExecutableVersion),
+    ...doExecutableHeaders(ref, deps.resolveExecutableAdmission),
     "Content-Type": "application/json",
     Authorization: `Bearer ${deps.workerdGatewayToken}`,
   };
@@ -249,7 +249,7 @@ async function postRpcToDOWithToken(
     message: { type: "request", requestId, fromId: caller.callerId, method, args },
   };
   const headers: Record<string, string> = {
-    ...doExecutableHeaders(ref, deps.resolveExecutableVersion),
+    ...doExecutableHeaders(ref, deps.resolveExecutableAdmission),
     "Content-Type": "application/json",
     Authorization: `Bearer ${deps.workerdGatewayToken}`,
   };
@@ -487,7 +487,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   private tokenManager: TokenManager | null = null;
   private getWorkerdUrl: (() => string) | null = null;
   private getDispatchSecret: (() => string) | null = null;
-  private resolveExecutableVersion: DoExecutableVersionResolver | undefined;
+  private resolveExecutableAdmission: DoExecutableAdmissionResolver | undefined;
   private getWorkerdGatewayToken: (() => string) | null = null;
   private authorityAttester:
     | ((
@@ -552,8 +552,8 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     this.getDispatchSecret = fn;
   }
 
-  setExecutableVersionResolver(fn: DoExecutableVersionResolver): void {
-    this.resolveExecutableVersion = fn;
+  setExecutableAdmissionResolver(fn: DoExecutableAdmissionResolver): void {
+    this.resolveExecutableAdmission = fn;
   }
 
   setGetWorkerdGatewayToken(fn: () => string): void {
@@ -631,7 +631,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   private buildPostDeps(ref: DORef): PostToDOWithTokenDeps {
     return {
-      resolveExecutableVersion: this.resolveExecutableVersion,
+      resolveExecutableAdmission: this.resolveExecutableAdmission,
       tokenManager: assertPresent(this.tokenManager),
       workerdUrl: this.requireWorkerdUrl(),
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),

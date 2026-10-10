@@ -25,7 +25,7 @@ import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/se
 import type { RouteRegistry, LookupResult } from "./routeRegistry.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
-import { doExecutableHeaders, type DoExecutableVersionResolver } from "./doExecutableDispatch.js";
+import { doExecutableHeaders, type DoExecutableAdmissionResolver } from "./doExecutableDispatch.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { bridgeDuplexSockets } from "./socketBridge.js";
@@ -123,7 +123,11 @@ export interface WorkerHostCodeProvider {
     callerId: string;
   } | null>;
   /** Userland DO class version (build ev) for the UniversalDO facet host. */
-  getDoVersion(source: string, className: string, objectKey?: string): string | null;
+  getDoAdmission(
+    source: string,
+    className: string,
+    objectKey?: string
+  ): import("./doExecutableDispatch.js").DoExecutableAdmission | null;
   /** Userland DO class code+env for the UniversalDO facet host. */
   getDoCode(
     source: string,
@@ -311,6 +315,50 @@ export class Gateway {
         return;
       }
 
+      // Configuration belongs to an exact admitted object incarnation, not the shared code unit.
+      if (url.startsWith("/_doadmission/")) {
+        const host = this.deps.getWorkerHost?.();
+        if (!host) {
+          res.writeHead(503, { "Content-Type": "text/plain" });
+          res.end("Worker host unavailable");
+          return;
+        }
+        const provided = req.headers["x-vibestudio-loader-secret"];
+        if (
+          typeof provided !== "string" ||
+          !constantTimeStringEqual(provided, host.getLoaderSecret())
+        ) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Forbidden");
+          return;
+        }
+        const requestUrl = new URL(url, "http://localhost");
+        const segments = requestUrl.pathname.slice("/_doadmission/".length).split("/");
+        const source = decodeURIComponent(segments[0] ?? "");
+        const className = decodeURIComponent(segments[1] ?? "");
+        const objectKey = requestUrl.searchParams.get("objectKey");
+        const executableVersion = requestUrl.searchParams.get("executableVersion");
+        const incarnationVersion = requestUrl.searchParams.get("incarnationVersion");
+        if (!source || !className || !objectKey || !executableVersion || !incarnationVersion) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing DO admission identity");
+          return;
+        }
+        const admission = host.getDoAdmission(source, className, objectKey);
+        if (
+          !admission ||
+          admission.executableVersion !== executableVersion ||
+          admission.incarnationVersion !== incarnationVersion
+        ) {
+          res.writeHead(409, { "Content-Type": "text/plain" });
+          res.end(`Durable Object admission changed: ${source}:${className}/${objectKey}`);
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(admission));
+        return;
+      }
+
       // Executable code is fetched only when an admitted incarnation is absent.
       if (url.startsWith("/_docode/")) {
         const host = this.deps.getWorkerHost?.();
@@ -443,7 +491,7 @@ export class Gateway {
           this.deps.getWorkerdDispatchSecret?.(),
           this.deps.ensureDORoute,
           (ref) =>
-            this.deps.getWorkerHost?.()?.getDoVersion(ref.source, ref.className, ref.objectKey) ??
+            this.deps.getWorkerHost?.()?.getDoAdmission(ref.source, ref.className, ref.objectKey) ??
             null
         ).catch((err: unknown) => {
           log.warn(`Route dispatch error:`, err);
@@ -621,7 +669,7 @@ export class Gateway {
           this.deps.getWorkerdDispatchSecret?.(),
           this.deps.ensureDORoute,
           (ref) =>
-            this.deps.getWorkerHost?.()?.getDoVersion(ref.source, ref.className, ref.objectKey) ??
+            this.deps.getWorkerHost?.()?.getDoAdmission(ref.source, ref.className, ref.objectKey) ??
             null
         ).catch((err: unknown) => {
           log.warn(`Route WS dispatch error:`, err);
@@ -1067,7 +1115,7 @@ async function handleRouteRequest(
   workerdToken: string,
   workerdDispatchSecret?: string | null,
   ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void,
-  resolveExecutableVersion?: DoExecutableVersionResolver
+  resolveExecutableAdmission?: DoExecutableAdmissionResolver
 ): Promise<boolean> {
   const qIdx = url.indexOf("?");
   const pathOnly = qIdx === -1 ? url : url.slice(0, qIdx);
@@ -1132,7 +1180,7 @@ async function handleRouteRequest(
     result.kind === "worker-do" && workerdDispatchSecret
       ? {
           "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret,
-          ...doExecutableHeaders(result, resolveExecutableVersion),
+          ...doExecutableHeaders(result, resolveExecutableAdmission),
         }
       : undefined;
   proxyRequest(req, res, workerdPort, targetPath, workerdToken, undefined, extraHeaders);
@@ -1154,7 +1202,7 @@ async function handleRouteUpgrade(
   workerdToken: string,
   workerdDispatchSecret?: string | null,
   ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void,
-  resolveExecutableVersion?: DoExecutableVersionResolver
+  resolveExecutableAdmission?: DoExecutableAdmissionResolver
 ): Promise<boolean> {
   const qIdx = url.indexOf("?");
   const pathOnly = qIdx === -1 ? url : url.slice(0, qIdx);
@@ -1209,7 +1257,7 @@ async function handleRouteUpgrade(
     result.kind === "worker-do" && workerdDispatchSecret
       ? {
           "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret,
-          ...doExecutableHeaders(result, resolveExecutableVersion),
+          ...doExecutableHeaders(result, resolveExecutableAdmission),
         }
       : undefined;
   proxyUpgrade(req, socket, head, workerdPort, workerdToken, extraHeaders);

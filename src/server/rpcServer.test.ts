@@ -352,6 +352,47 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
     connectionId: "conn-1",
   });
 
+  const server = new RpcServer({
+    tokenManager,
+    dispatcher,
+    workspaceId: "test-workspace",
+    entityCache,
+    connectionGrants,
+    runtimeCoordinator,
+    // WP4 §5.2: connection admission now resolves each caller's owning user via
+    // userSubjectSource (hub-backed in production, "fakeable in tests" per its
+    // contract). Panel lineage callers resolve to their owner; bootstrap
+    // principals (server/electron-main/headless-host) stay subject-less and are
+    // mapped to the synthetic system user by assertBootstrapSubject.
+    userSubjectSource: {
+      resolve: (_callerId: string, callerKind: CallerKind) =>
+        callerKind === "panel" || callerKind === "extension"
+          ? { userId: "user-1", handle: "user1" }
+          : null,
+    },
+    resolveExtensionCodeIdentity: (callerId: string) =>
+      callerId.startsWith("@workspace-extensions/")
+        ? {
+            callerId,
+            callerKind: "extension" as const,
+            repoPath: callerId.slice("@workspace-extensions/".length),
+            effectiveVersion: "ev-test",
+          }
+        : null,
+    ensureUserlandDoReady: async () => undefined,
+    resolveExactCausalInvocation: async () => ({ initiatingUser: null }),
+    ...opts,
+  });
+  server.setExecutableAdmissionResolver((ref) => {
+    const record = entityCache.resolveActive(`do:${ref.source}:${ref.className}:${ref.objectKey}`);
+    return record
+      ? {
+          executableVersion: record.source.effectiveVersion,
+          incarnationVersion: record.source.effectiveVersion,
+          props: { stateArgs: null, image: null },
+        }
+      : null;
+  });
   return {
     tokenManager,
     entityCache,
@@ -361,37 +402,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
       connectionGrants.grant(panelId, "shell:test", {
         subject: { userId: "user-1", handle: "user1" },
       }).token,
-    server: new RpcServer({
-      tokenManager,
-      dispatcher,
-      workspaceId: "test-workspace",
-      entityCache,
-      connectionGrants,
-      runtimeCoordinator,
-      // WP4 §5.2: connection admission now resolves each caller's owning user via
-      // userSubjectSource (hub-backed in production, "fakeable in tests" per its
-      // contract). Panel lineage callers resolve to their owner; bootstrap
-      // principals (server/electron-main/headless-host) stay subject-less and are
-      // mapped to the synthetic system user by assertBootstrapSubject.
-      userSubjectSource: {
-        resolve: (_callerId: string, callerKind: CallerKind) =>
-          callerKind === "panel" || callerKind === "extension"
-            ? { userId: "user-1", handle: "user1" }
-            : null,
-      },
-      resolveExtensionCodeIdentity: (callerId: string) =>
-        callerId.startsWith("@workspace-extensions/")
-          ? {
-              callerId,
-              callerKind: "extension" as const,
-              repoPath: callerId.slice("@workspace-extensions/".length),
-              effectiveVersion: "ev-test",
-            }
-          : null,
-      ensureUserlandDoReady: async () => undefined,
-      resolveExactCausalInvocation: async () => ({ initiatingUser: null }),
-      ...opts,
-    }),
+    server,
   };
 }
 
@@ -1915,7 +1926,11 @@ describe("RpcServer relay behavior", () => {
     const targetId = "do:workers/example:Store:key";
     const record = makeRecord(targetId, "do");
     entityCache._onActivate(record);
-    server.setExecutableVersionResolver(() => record.source.effectiveVersion);
+    server.setExecutableAdmissionResolver(() => ({
+      executableVersion: record.source.effectiveVersion,
+      incarnationVersion: record.source.effectiveVersion,
+      props: { stateArgs: null, image: null },
+    }));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
     const fetchMock = vi.fn().mockResolvedValue(
@@ -2109,7 +2124,11 @@ describe("RpcServer relay behavior", () => {
     const targetId = "do:workers/workspace-source:GadWorkspaceDO:workspace";
     const record = makeRecord(targetId, "do");
     entityCache._onActivate(record);
-    server.setExecutableVersionResolver(() => record.source.effectiveVersion);
+    server.setExecutableAdmissionResolver(() => ({
+      executableVersion: record.source.effectiveVersion,
+      incarnationVersion: record.source.effectiveVersion,
+      props: { stateArgs: null, image: null },
+    }));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
     const fetchMock = vi.fn().mockResolvedValue(
@@ -2140,7 +2159,11 @@ describe("RpcServer relay behavior", () => {
     const { server, entityCache } = createServer();
     const targetId = "do:workers/agent:Agent:initialization";
     const record = makeRecord(targetId, "do", { contextId: "ctx-agent-init" });
-    server.setExecutableVersionResolver(() => record.source.effectiveVersion);
+    server.setExecutableAdmissionResolver(() => ({
+      executableVersion: record.source.effectiveVersion,
+      incarnationVersion: record.source.effectiveVersion,
+      props: { stateArgs: null, image: null },
+    }));
     entityCache._onActivate(record);
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
