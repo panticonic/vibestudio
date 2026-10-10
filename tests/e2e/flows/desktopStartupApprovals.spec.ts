@@ -633,10 +633,10 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
     for (const agent of agentParticipants) {
       const agentId = (agent as { participantId: string }).participantId;
       const debugState = firstPanelId
-        ? await executePanelScript(
-            testApp,
-            firstPanelId,
-            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ gad }) => gad.inspectAgent({ channelId: ${JSON.stringify(channelName)}, participantId: ${JSON.stringify(agentId)}, method: "getDebugState" }))`
+        ? await callTestApi(
+            { app: testApp.app, workspaceId: testApp.workspaceId },
+            "inspectAgentState",
+            [channelName, agentId]
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -1001,10 +1001,10 @@ async function collectStartupAgentCompletion(
     const pendingWork: string[] = [];
     let nativeSettled = observedAgentIds.size > 0;
     for (const agentId of observedAgentIds) {
-      const debugState = await executePanelScript(
-        testApp,
-        firstPanelId,
-        `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ gad }) => gad.inspectAgent({ channelId: ${JSON.stringify(channelName)}, participantId: ${JSON.stringify(agentId)}, method: "getDebugState" }))`
+      const debugState = await callTestApi(
+        { app: testApp.app, workspaceId: testApp.workspaceId },
+        "inspectAgentState",
+        [channelName, agentId]
       );
       const state = (debugState as { result?: unknown } | null)?.result ?? debugState;
       const inspection =

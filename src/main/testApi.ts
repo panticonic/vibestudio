@@ -200,6 +200,9 @@ export interface TestApi {
   /** Call a server RPC through the panel orchestrator's verified path */
   rpcCall(service: string, method: string, args?: unknown[]): Promise<unknown>;
 
+  /** Inspect one agent through the owning host's channel.admin authority. Test mode only. */
+  inspectAgentState(channelId: string, participantId: string): Promise<unknown>;
+
   /** Unload a panel's view (simulate disconnect/crash) */
   unloadPanel(panelId: string): void;
 
@@ -220,6 +223,7 @@ export interface TestWorkspaceOwner {
   panelRegistry: PanelRegistry;
   getPanelView(): PanelView | null;
   getAssetDiagnostics?(): import("@vibestudio/shared/panelInterfaces").PanelAssetDiagnostics | null;
+  inspectAgentState?(channelId: string, participantId: string): Promise<unknown>;
 }
 
 export function setupTestApi(
@@ -259,7 +263,13 @@ export function setupTestApi(
 }
 
 function createWorkspaceTestApi(
-  { panelOrchestrator, panelRegistry, getPanelView, getAssetDiagnostics }: TestWorkspaceOwner,
+  {
+    panelOrchestrator,
+    panelRegistry,
+    getPanelView,
+    getAssetDiagnostics,
+    inspectAgentState,
+  }: TestWorkspaceOwner,
   selectors: Pick<
     TestApi,
     | "forWorkspace"
@@ -788,6 +798,11 @@ function createWorkspaceTestApi(
 
     async rpcCall(service, method, args = []): Promise<unknown> {
       return panelOrchestrator.callServer(service, method, args);
+    },
+
+    inspectAgentState(channelId, participantId): Promise<unknown> {
+      if (!inspectAgentState) throw new Error("Agent inspection is unavailable for this workspace");
+      return inspectAgentState(channelId, participantId);
     },
 
     unloadPanel(panelId): void {

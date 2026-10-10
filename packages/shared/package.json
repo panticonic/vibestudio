@@ -21,6 +21,7 @@
     "./approvalMarkdown": "./src/approvalMarkdown.ts",
     "./approvalPresentation": "./src/approvalPresentation.ts",
     "./approvalVisibility": "./src/approvalVisibility.ts",
+    "./channelTarget": "./src/channelTarget.ts",
     "./approvals": "./src/approvals.ts",
     "./assetModules": "./src/assetModules.ts",
     "./asyncStateArgsValidator": "./src/asyncStateArgsValidator.ts",

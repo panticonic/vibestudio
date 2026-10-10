@@ -1,6 +1,11 @@
 import { RpcBoundaryError } from "@vibestudio/rpc/errors";
 import { CLOSE_TOKEN_REVOKED } from "@vibestudio/rpc/protocol/closeCodes";
 import { problemReportingConversation } from "@vibestudio/shared/problemReportingConversation";
+import {
+  resolveExistingChannelTarget,
+  type ChannelDurableObjectEntity,
+  type ChannelServiceProvider,
+} from "@vibestudio/shared/channelTarget";
 import { createAnonymousStartupCounter } from "./anonymousStartup.js";
 const countAnonymousStartup = createAnonymousStartupCounter();
 import { DisplayCapturePicker } from "./services/displayCapturePicker.js";
@@ -2808,6 +2813,30 @@ app.on("ready", async () => {
     const testOwner = (runtime: DesktopUiWorkspaceRuntime) => ({
       panelOrchestrator: runtime.orchestrator,
       panelRegistry: runtime.registry,
+      inspectAgentState: async (channelId: string, participantId: string) => {
+        if (openNativeControllers.get(runtime.workspaceId) !== runtime)
+          throw new Error("Workspace runtime is no longer active");
+        if (!channelId || !participantId)
+          throw new Error("Agent inspection requires channel and participant IDs");
+        const targetId = await resolveExistingChannelTarget(
+          {
+            listServices: async () =>
+              (await runtime.serverClient.call(
+                "workers",
+                "listServices",
+                []
+              )) as ChannelServiceProvider[],
+            listDurableObjectEntities: async () =>
+              (await runtime.serverClient.call("runtime", "listEntities", [
+                { kind: "do" },
+              ])) as ChannelDurableObjectEntity[],
+          },
+          channelId
+        );
+        return runtime.serverClient.callTarget(targetId, "inspectAgent", [
+          { participantId, method: "getDebugState" },
+        ]);
+      },
       getAssetDiagnostics: () => runtime.getAssetDiagnostics(),
       getPanelView: () => {
         if (openNativeControllers.get(runtime.workspaceId) !== runtime)

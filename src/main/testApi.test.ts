@@ -14,6 +14,7 @@ it("keeps identical panel IDs and RPC reads with their captured workspace owner"
   vi.stubEnv("VIBESTUDIO_TEST_MODE", "1");
   const owner = (label: string): TestWorkspaceOwner => ({
     panelOrchestrator: { callServer: vi.fn(async () => label) } as unknown as PanelOrchestrator,
+    inspectAgentState: async (channelId, participantId) => `${label}:${channelId}:${participantId}`,
     panelRegistry: {
       getRootPanels: () => [{ id: "same-panel", title: label, children: [] }],
     } as unknown as PanelRegistry,
@@ -36,6 +37,8 @@ it("keeps identical panel IDs and RPC reads with their captured workspace owner"
   expect(captured.getPanelTree()[0]?.title).toBe("Personal");
   await expect(captured.rpcCall("workspace", "getInfo")).resolves.toBe("Personal");
   await expect(root.rpcCall("workspace", "getInfo")).resolves.toBe("System");
+  await expect(captured.inspectAgentState("chat", "agent")).resolves.toBe("Personal:chat:agent");
+  await expect(root.inspectAgentState("chat", "agent")).resolves.toBe("System:chat:agent");
   await expect(root.forWorkspace("missing")).rejects.toThrow("unavailable");
 });
 

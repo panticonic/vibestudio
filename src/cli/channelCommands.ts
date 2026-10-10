@@ -1,11 +1,9 @@
 /**
  * `vibestudio channel ...` — messaging surface for humans and agents (plan §6.3).
  *
- * The CLI is a thin device client: it resolves the channel Durable Object
- * (protocol `vibestudio.channel.v1`, objectKey = channelId) via
- * `workers.resolveService` and relays to it with `callTarget`, exactly like
- * `vibestudio vcs log` relays `vcsLog`. The host never imports workspace code;
- * the channel DO holds all semantics.
+ * Existing channels are read from the workspace runtime entity list. Only
+ * `send` resolves an addressed channel through its creator-context service;
+ * calls are relayed to the channel DO with `callTarget`.
  *
  *   channel list                       enumerate the workspace's channels
  *   channel history <id> [--after N]   durable log read (paged, client-capped)
@@ -23,6 +21,13 @@ import {
 } from "@vibestudio/service-schemas/channel";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import {
+  CHANNEL_PROTOCOL,
+  type ChannelDurableObjectEntity,
+  type ChannelServiceProvider,
+  listChannelDurableObjectEntities,
+  resolveExistingChannelTarget,
+} from "@vibestudio/shared/channelTarget";
+import {
   JSON_FLAG,
   type CliCommand,
   type FlagSpec,
@@ -32,56 +37,31 @@ import { CliError, jsonMode, printError, printResult, UsageError } from "./outpu
 import { resolveSessionScope, SCOPE_FLAGS } from "./agent/sessionContext.js";
 import type { RpcClient } from "./rpcClient.js";
 
-const CHANNEL_PROTOCOL = "vibestudio.channel.v1";
-
 interface ResolvedService {
   kind: string;
   targetId?: string;
 }
 
-interface WorkspaceServiceRow {
-  source: string;
-  kind: string;
-  className?: string | null;
-  protocols?: string[];
-}
-
-interface RuntimeEntityRow {
-  id: string;
-  kind: string;
-  source: string;
-  key: string;
-  contextId: string;
-  createdAt: number;
-}
-
-async function channelProvider(client: RpcClient): Promise<WorkspaceServiceRow> {
-  const services = await client.call<WorkspaceServiceRow[]>("workers.listServices", []);
-  const provider = services.find((service) => service.protocols?.includes(CHANNEL_PROTOCOL));
-  if (!provider || provider.kind !== "durable-object" || !provider.className) {
-    throw new CliError(`service ${CHANNEL_PROTOCOL} is not a durable-object service`);
-  }
-  return provider;
-}
-
-export async function channelEntities(client: RpcClient): Promise<RuntimeEntityRow[]> {
-  const provider = await channelProvider(client);
-  const entities = await client.call<RuntimeEntityRow[]>("runtime.listEntities", [{ kind: "do" }]);
-  return entities.filter(
-    (entity) =>
-      entity.kind === "do" &&
-      entity.source === provider.source &&
-      entity.id === `do:${provider.source}:${provider.className}:${entity.key}`
-  );
+export async function channelEntities(client: RpcClient): Promise<ChannelDurableObjectEntity[]> {
+  return listChannelDurableObjectEntities({
+    listServices: () => client.call<ChannelServiceProvider[]>("workers.listServices", []),
+    listDurableObjectEntities: () =>
+      client.call<ChannelDurableObjectEntity[]>("runtime.listEntities", [{ kind: "do" }]),
+  });
 }
 
 /** Resolve an already-existing channel without creating it or requiring the
  * caller to have a creator runtime context. Read-only diagnostics use this
  * route; `send` alone may create a new addressed channel through the service. */
 export async function existingChannelTarget(client: RpcClient, channelId: string): Promise<string> {
-  const entity = (await channelEntities(client)).find((candidate) => candidate.key === channelId);
-  if (!entity) throw new CliError(`channel ${channelId} does not exist in this workspace`);
-  return entity.id;
+  return resolveExistingChannelTarget(
+    {
+      listServices: () => client.call<ChannelServiceProvider[]>("workers.listServices", []),
+      listDurableObjectEntities: () =>
+        client.call<ChannelDurableObjectEntity[]>("runtime.listEntities", [{ kind: "do" }]),
+    },
+    channelId
+  );
 }
 
 /** Resolve a userland DO service to its `do:...` relay target id. */
