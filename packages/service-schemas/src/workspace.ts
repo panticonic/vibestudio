@@ -17,12 +17,16 @@ import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceNode } from "@vibestudio/shared/types";
 
-export const WorkspaceConfigValidationCandidateSchema = z.object({
-  manifest: z.string().describe("Complete candidate meta/vibestudio.yml document."),
-  serviceManifests: z.record(z.string(), z.string()).describe(
-    "Candidate provider package.json documents keyed by exact workspace repository path."
-  ),
-}).strict();
+export const WorkspaceConfigValidationCandidateSchema = z
+  .object({
+    manifest: z.string().describe("Complete candidate meta/vibestudio.yml document."),
+    serviceManifests: z
+      .record(z.string(), z.string())
+      .describe(
+        "Candidate provider package.json documents keyed by exact workspace repository path."
+      ),
+  })
+  .strict();
 
 // ─── Access descriptors ───────────────────────────────────────────────────────
 // Mirrors the blobstore idiom of a shared `*_ACCESS` constant for the pure-read
@@ -342,6 +346,26 @@ export const workspaceMethods = defineServiceMethods({
   // Agent resource loading — read AGENTS.md and skill definitions directly
   // from the workspace source tree. Kept server-side because they touch
   // the filesystem; panels/workers call these over the RPC transport.
+  getAgentResources: {
+    website: {
+      kind: "closed",
+      reason:
+        "The workspace receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
+    description:
+      "Capture workspace instructions and the agent-visible skill catalog together from one exact semantic context snapshot.",
+    args: z.tuple([]),
+    returns: z.object({ workspacePrompt: z.string(), skills: z.array(SkillEntrySchema) }).strict(),
+    authority: { principals: ["host", "user", "code"] },
+    access: READ_ACCESS,
+  },
   getAgentsMd: {
     website: {
       kind: "closed",

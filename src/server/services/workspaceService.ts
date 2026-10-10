@@ -164,6 +164,31 @@ async function requireEnsureContextFolderAccess(
   }
 }
 
+function skillsFromFiles(files: Array<{ path: string; content: string }>) {
+  const entries = files.map(({ path: skillPath, content }) => {
+    const relative = skillPath.replace(/^\/+/, "");
+    const split = splitRepoPath(relative);
+    if (!split || split.repoRelPath !== "SKILL.md") return null;
+    try {
+      normalizeWorkspaceRepoPath(split.repoPath);
+    } catch {
+      return null;
+    }
+    const frontmatter = parseSkillFrontmatter(content);
+    if (frontmatter.agentVisible === false) return null;
+    return {
+      name: frontmatter.name ?? path.posix.basename(split.repoPath),
+      description: frontmatter.description ?? "",
+      dirPath: split.repoPath,
+      skillPath: relative,
+      ...(frontmatter.onboarding !== undefined ? { onboarding: frontmatter.onboarding } : {}),
+    };
+  });
+  return entries
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((left, right) => compareUtf16CodeUnits(left.dirPath, right.dirPath));
+}
+
 export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefinition {
   const activeWorkspaceName = () => deps.activeWorkspaceName ?? deps.getConfig().id;
   const resourceContext = (
@@ -319,6 +344,18 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       // Agent resource loading (filesystem reads from the workspace tree)
       // -----------------------------------------------------------------
 
+      getAgentResources: async (ctx) => {
+        const files = await deps.contextFiles.readManagedFiles(ctx, [
+          "meta/AGENTS.md",
+          "*/SKILL.md",
+          "*/*/SKILL.md",
+        ]);
+        return {
+          workspacePrompt: files.find(({ path }) => path === "/meta/AGENTS.md")?.content ?? "",
+          skills: skillsFromFiles(files),
+        };
+      },
+
       getAgentsMd: async (ctx) => {
         try {
           return await deps.contextFiles.readFile(ctx, "/meta/AGENTS.md");
@@ -334,32 +371,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
           ["*/SKILL.md", "*/*/SKILL.md"],
           resourceContext(ctx, options, "listSkills")
         );
-        const entries = await Promise.all(
-          files.map(async ({ path: skillPath, content }) => {
-            const relative = skillPath.replace(/^\/+/, "");
-            const split = splitRepoPath(relative);
-            if (!split || split.repoRelPath !== "SKILL.md") return null;
-            try {
-              normalizeWorkspaceRepoPath(split.repoPath);
-            } catch {
-              return null;
-            }
-            const frontmatter = parseSkillFrontmatter(content);
-            if (frontmatter.agentVisible === false) return null;
-            return {
-              name: frontmatter.name ?? path.posix.basename(split.repoPath),
-              description: frontmatter.description ?? "",
-              dirPath: split.repoPath,
-              skillPath: relative,
-              ...(frontmatter.onboarding !== undefined
-                ? { onboarding: frontmatter.onboarding }
-                : {}),
-            };
-          })
-        );
-        return entries
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-          .sort((left, right) => compareUtf16CodeUnits(left.dirPath, right.dirPath));
+        return skillsFromFiles(files);
       },
 
       readSkill: async (ctx, [nameOrPath, options]) => {

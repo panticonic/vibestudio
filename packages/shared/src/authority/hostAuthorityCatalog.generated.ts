@@ -9131,6 +9131,17 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "workspace.getAgentResources": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
   "workspace.getAgentsMd": {
     tier: {
       tier: "open",

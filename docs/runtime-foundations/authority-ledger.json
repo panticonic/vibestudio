@@ -37700,6 +37700,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:workspace.getAgentResources",
+      "rpcPlane": "host-service",
+      "owner": "workspace",
+      "method": "getAgentResources",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "workspace.read",
+      "reviewRationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace.getAgentResources"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace.getAgentResources),allOf(capability(user,service:workspace.getAgentResources),workspace-member),allOf(capability(code,service:workspace.getAgentResources),workspace-member))",
+      "r3b": {
+        "review": "exact-context-agent-resource-snapshot",
+        "change": "Capture workspace instructions and agent-visible skill definitions together through one semantic corpus read in the authenticated runtime context. Preserve existing skill visibility and path validation, admit only host, user and code callers with workspace membership, and grant no website access or mutation authority."
+      },
+      "capability": "service:workspace.getAgentResources",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:workspace.getAgentsMd",
       "rpcPlane": "host-service",
       "owner": "workspace",

@@ -679,6 +679,7 @@ Authority principals: `code`, `host`, `user`
 | `workspace.setInitPanels` | Replace the set of panels opened when this workspace starts; approval-gated for userland. |
 | `workspace.setConfigField` | Write an arbitrary field into the workspace config (meta/vibestudio.yml); approval-gated for userland. |
 | `workspace.applyPreparedConfig` | Atomically apply a complete validated workspace configuration only when its base digest, result digest, and changed-path scope match. |
+| `workspace.getAgentResources` | Capture workspace instructions and the agent-visible skill catalog together from one exact semantic context snapshot. |
 | `workspace.getAgentsMd` | Read the workspace-level meta/AGENTS.md, returning an empty string if it is absent. |
 | `workspace.listSkills` | List repo-embedded workspace skills with identity, paths, and optional onboarding declarations parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
 | `workspace.readSkill` | Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |

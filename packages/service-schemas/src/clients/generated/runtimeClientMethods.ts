@@ -52,6 +52,7 @@ export const WORKSPACE_METHOD_NAMES = [
   "setInitPanels",
   "setConfigField",
   "applyPreparedConfig",
+  "getAgentResources",
   "getAgentsMd",
   "listSkills",
   "readSkill",

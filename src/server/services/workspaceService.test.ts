@@ -1,3 +1,4 @@
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 /**
  * Workspace service contract regression tests.
@@ -61,7 +62,7 @@ function recordingRpc(): {
         return undefined;
     }
   };
-  const rpc = { call: callImpl } as unknown as RpcCaller;
+  const rpc = schemaRpcMock({ call: callImpl });
   return { rpc, captured };
 }
 
@@ -421,6 +422,42 @@ describe("workspace service agent resources", () => {
 
   afterAll(() => {
     rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("captures complete agent resources in one semantic corpus read", async () => {
+    const files = [
+      { path: "/meta/AGENTS.md", content: "Instructions at one snapshot" },
+      {
+        path: "/skills/launch/SKILL.md",
+        content: "---\nname: Launch\ndescription: Launch an agent\n---\n",
+      },
+      { path: "/skills/private/SKILL.md", content: "---\nagentVisible: false\n---\n" },
+    ];
+    const readManagedFiles = vi.fn(async () => files);
+    const readFile = vi.fn();
+    const service = createWorkspaceService({
+      workspace: makeWorkspace(),
+      contextFiles: { readManagedFiles, readFile },
+      getConfig: () => makeConfig(),
+      setConfigField: vi.fn(),
+    });
+    expect(await service.handler(panelCtx, "getAgentResources", [])).toEqual({
+      workspacePrompt: "Instructions at one snapshot",
+      skills: [
+        {
+          name: "Launch",
+          description: "Launch an agent",
+          dirPath: "skills/launch",
+          skillPath: "skills/launch/SKILL.md",
+        },
+      ],
+    });
+    expect(readManagedFiles).toHaveBeenCalledExactlyOnceWith(panelCtx, [
+      "meta/AGENTS.md",
+      "*/SKILL.md",
+      "*/*/SKILL.md",
+    ]);
+    expect(readFile).not.toHaveBeenCalled();
   });
 
   // ─── getAgentsMd ───────────────────────────────────────────────────────────
