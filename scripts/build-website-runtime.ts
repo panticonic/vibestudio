@@ -5,7 +5,10 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parse } from "@babel/parser";
 import { API } from "typescript/unstable/sync";
-import { prepareUserlandDependencyProjection } from "./lib/userland-dependency-projection.js";
+import {
+  prepareUserlandDependencyProjection,
+  type UserlandDependencyProjection,
+} from "./lib/userland-dependency-projection.js";
 import { generateDtsBundle } from "dts-bundle-generator";
 import { requireDevelopmentTemplateCheckout } from "../src/dev/developmentTemplateConfig.js";
 import { discoverPackageGraph } from "../src/server/buildV2/packageGraph.js";
@@ -25,44 +28,56 @@ export async function buildWebsiteRuntime(
     options.workspaceRoot ?? requireDevelopmentTemplateCheckout(hostRoot, "base")
   );
   const output = path.resolve(options.outDir ?? path.join(hostRoot, "dist", "website-runtime"));
-  const entry = path.join(workspaceRoot, "packages/runtime/src/panel/index.ts");
   const graph = discoverPackageGraph(workspaceRoot);
-  const hostConfig = JSON.parse(fs.readFileSync(path.join(hostRoot, "tsconfig.json"), "utf8"));
-  const paths: Record<string, string[]> = {};
-  for (const [specifier, targets] of Object.entries(
-    hostConfig.compilerOptions.paths as Record<string, string[]>
-  ))
-    paths[specifier] = targets.map((target) => path.resolve(hostRoot, target));
-  for (const unit of graph.allNodes()) {
-    if (unit.kind === "template") continue;
-    const manifest = JSON.parse(fs.readFileSync(path.join(unit.path, "package.json"), "utf8"));
-    for (const subpath of typeof manifest.exports === "string"
-      ? ["."]
-      : Object.keys(manifest.exports ?? {})) {
-      if (subpath !== "." && !subpath.startsWith("./")) continue;
-      const target = resolveExportSubpath(manifest.exports, subpath, [
-        "browser",
-        "import",
-        "default",
-      ]);
-      if (target)
-        paths[subpath === "." ? unit.name : `${unit.name}/${subpath.slice(2)}`] = [
-          path.resolve(unit.path, target),
-        ];
-    }
-  }
   const cache = path.join(hostRoot, ".cache");
   fs.mkdirSync(cache, { recursive: true });
   const temporary = fs.mkdtempSync(path.join(cache, "website-runtime-"));
-  const projection = await prepareUserlandDependencyProjection({
-    appRoot: hostRoot,
-    workspaceRoot,
-  });
+  const projectedWorkspace = path.join(temporary, "workspace");
+  const entry = path.join(projectedWorkspace, "packages/runtime/src/panel/index.ts");
+  let projection: UserlandDependencyProjection | undefined;
   try {
-    for (const name of Object.keys(projection.dependencies)) {
-      paths[name] ??= [path.join(projection.nodeModulesDir, name)];
-      paths[`${name}/*`] ??= [path.join(projection.nodeModulesDir, name, "*")];
+    const hostConfig = JSON.parse(fs.readFileSync(path.join(hostRoot, "tsconfig.json"), "utf8"));
+    const paths: Record<string, string[]> = {};
+    for (const [specifier, targets] of Object.entries(
+      hostConfig.compilerOptions.paths as Record<string, string[]>
+    ))
+      paths[specifier] = targets.map((target) => path.resolve(hostRoot, target));
+    for (const unit of graph.allNodes()) {
+      if (unit.kind === "template") continue;
+      const manifest = JSON.parse(fs.readFileSync(path.join(unit.path, "package.json"), "utf8"));
+      for (const subpath of typeof manifest.exports === "string"
+        ? ["."]
+        : Object.keys(manifest.exports ?? {})) {
+        if (subpath !== "." && !subpath.startsWith("./")) continue;
+        const target = resolveExportSubpath(manifest.exports, subpath, [
+          "browser",
+          "import",
+          "default",
+        ]);
+        if (target)
+          paths[subpath === "." ? unit.name : `${unit.name}/${subpath.slice(2)}`] = [
+            path.resolve(projectedWorkspace, unit.relativePath, target),
+          ];
+      }
     }
+    projection = await prepareUserlandDependencyProjection({
+      appRoot: hostRoot,
+      workspaceRoot,
+    });
+    // Materialize source beneath its dependency install. Ordinary package
+    // resolution must see export maps and adjacent @types declarations;
+    // aliases to node_modules directories bypass that contract.
+    for (const unit of graph.allNodes()) {
+      if (unit.kind !== "template")
+        fs.cpSync(unit.path, path.join(projectedWorkspace, unit.relativePath), {
+          recursive: true,
+        });
+    }
+    fs.symlinkSync(
+      projection.nodeModulesDir,
+      path.join(temporary, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir"
+    );
     const configPath = path.join(temporary, "tsconfig.json");
     fs.writeFileSync(
       configPath,
@@ -157,7 +172,7 @@ export async function buildWebsiteRuntime(
           target: "es2022",
           module: "esnext",
           moduleResolution: "bundler",
-          lib: ["es2022", "dom", "dom.iterable"],
+          lib: ["es2022", "esnext.disposable", "dom", "dom.iterable"],
           noEmit: true,
           strict: true,
           types: [],
@@ -223,7 +238,7 @@ export async function buildWebsiteRuntime(
 
     // Package the focused React entry independently. Its runtime and React stay
     // external: the application supplies both, so there is only one connection.
-    const reactEntry = path.join(workspaceRoot, "packages/react/src/WorkspaceConnection.tsx");
+    const reactEntry = path.join(projectedWorkspace, "packages/react/src/WorkspaceConnection.tsx");
     const reactOutput = path.join(output, "react");
     const reactResult = await build({
       entryPoints: [reactEntry],
@@ -330,8 +345,11 @@ export async function buildWebsiteRuntime(
       })
     );
   } finally {
-    projection.release();
-    fs.rmSync(temporary, { recursive: true, force: true });
+    try {
+      projection?.release();
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
   }
 }
 
