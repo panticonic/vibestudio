@@ -196,8 +196,7 @@ try {
     paths,
     nativePaths,
     { ...options, ...nativeConfig.compilerOptions },
-    nativeAmbient,
-    preparedProjection.nodeModulesDir
+    nativeAmbient
   );
   for (const configName of configs) {
     const configPath = path.join(temporaryRoot, "workspace", configName);
