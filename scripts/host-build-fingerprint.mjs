@@ -120,6 +120,13 @@ export function computeHostBuildFingerprint({
   };
 }
 
+/** Shared mutable outputs invalidate every complete-build receipt before replacement. */
+export function invalidateHostBuildFingerprints(cwd = process.cwd()) {
+  for (const marker of [HOST_BUILD_FINGERPRINT_PATH, DESKTOP_HOST_BUILD_FINGERPRINT_PATH]) {
+    fs.rmSync(path.resolve(cwd, marker), { force: true });
+  }
+}
+
 export function readHostBuildFingerprint(
   cwd = process.cwd(),
   fingerprintPath = HOST_BUILD_FINGERPRINT_PATH

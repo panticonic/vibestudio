@@ -61,3 +61,20 @@ test("a failed compiler joins admitted siblings before returning its original er
   finish("second");
   await assert.rejects(pending, (error) => error === failure);
 });
+
+
+test("multiple failed compiler realms retain every original failure after joining", async () => {
+  const shared = Object.assign(new Error("Dependency unavailable"), { code: "EDEPENDENCY" });
+  const first = new Error("ESM compilation failed", { cause: shared });
+  const second = new AggregateError([shared], "CJS compilation failed", { cause: shared });
+  await assert.rejects(buildArtifactGroups(
+    [artifact("a"), artifact("b", { format: "cjs" })],
+    async (config) => { throw config.format === "esm" ? first : second; }
+  ), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [first, second]);
+    assert.equal(error.errors[0].cause, error.errors[1].cause);
+    assert.equal(error.errors[1].errors[0], shared);
+    return true;
+  });
+});

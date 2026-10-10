@@ -49,10 +49,10 @@ export async function buildArtifactGroups(configs, build = esbuild.build) {
   const outcomes = await Promise.allSettled(
     groupBuildArtifacts(configs).map(async (group) => build({ ...group, metafile: true }))
   );
-  const results = [];
-  for (const outcome of outcomes) {
-    if (outcome.status === "rejected") throw outcome.reason;
-    results.push(outcome.value);
-  }
-  return results;
+  const failures = outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : []
+  );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "Host compiler realms failed");
+  return outcomes.map((outcome) => outcome.value);
 }

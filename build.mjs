@@ -19,8 +19,8 @@ import { buildInfrastructurePackages } from "./scripts/infrastructure-package-ca
 import { SERVER_WORKER_ENTRIES } from "./scripts/server-runtime-artifacts.mjs";
 import {
   computeHostBuildFingerprint,
+  invalidateHostBuildFingerprints,
   DESKTOP_HOST_BUILD_FINGERPRINT_PATH,
-  HOST_BUILD_FINGERPRINT_PATH,
   readHostBuildFingerprint,
   sameHostBuildFingerprint,
   writeHostBuildFingerprint,
@@ -745,12 +745,10 @@ async function build() {
       console.log("Host artifacts already match the current source snapshot.");
       return;
     }
+    invalidateHostBuildFingerprints();
     cleanHostBuildOutput();
     fs.mkdirSync("dist", { recursive: true });
-    // A build in progress is never a reusable build. In particular, retain no
-    // prior success marker if a source mutation or compilation failure leaves
-    // only a partial set of replacement artifacts.
-    fs.rmSync(HOST_BUILD_FINGERPRINT_PATH, { force: true });
+    // Completion receipts remain absent until every replacement artifact is verified.
 
     // Raw-node support scripts import this generated, dependency-free artifact.
     // Rebuild it from the canonical TypeScript grammar before packaging.
@@ -836,13 +834,18 @@ async function build() {
 }
 
 async function buildInternalDoOnly() {
+  let releaseLock;
   try {
+    releaseLock = await acquireSourcePrerequisiteLock();
     fs.mkdirSync("dist", { recursive: true });
+    invalidateHostBuildFingerprints();
     await esbuild.build(internalDoBundleConfig);
     console.log("Internal Durable Object bundle built successfully!");
   } catch (error) {
     console.error("Internal Durable Object bundle build failed:", error);
     process.exitCode = 1;
+  } finally {
+    releaseLock?.();
   }
 }
 
@@ -922,11 +925,10 @@ async function buildSourceServerPrerequisites() {
       console.log("Source server prerequisites already match the current source snapshot.");
       return;
     }
-    // The marker is the commit point for the whole prerequisite set. Remove it
-    // before touching any output so a failed or interrupted first build cannot
-    // make a partial runtime look reusable on the next launch.
+    // Source and desktop receipts share mutable outputs. Invalidate both before
+    // replacement so neither mode can reuse a partial or differently built set.
     fs.mkdirSync("dist", { recursive: true });
-    fs.rmSync(HOST_BUILD_FINGERPRINT_PATH, { force: true });
+    invalidateHostBuildFingerprints();
     // Source-mode servers import infrastructure packages through their public
     // dist exports, and auto-spawn the compiled headless host. Rebuilding only
     // the internal DO bundle can therefore combine live server source with
