@@ -760,7 +760,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   openExternal: callableEntry(
     "externalOpen",
     "openExternal",
-    'Call `await openExternal(url, options?)` from the initialized panel, plain-worker, or eval runtime to open the system browser. A Durable Object uses its own `this.rpc.call("main", "externalOpen.openExternal", [url, options])`. The call owns the approval prompt and resumes after the user decides.'
+    'Call `await openExternal(url, options?)` from the initialized panel, plain-worker, or eval runtime to open the system browser. A Durable Object can call the same receiver through its public RPC client after importing `mainRpcMethods` from `@vibestudio/service-schemas/mainRpc`: `this.rpc.call("main", mainRpcMethods["externalOpen.openExternal"], [url, options])`. The call owns the approval prompt and resumes after the user decides.'
   ),
   createPanelSlot: valueEntry(
     "Commit a workspace or browser panel slot and promptly return its durable handle without focusing or waiting for activation, build, or application boot. Server reconciliation owns code activation after commit and recovers it across transient failure or restart. Pass a stable operationId when a workflow may retry: the same operation then resolves to the same durable slot. The returned handle can be observed for current lifecycle state.",

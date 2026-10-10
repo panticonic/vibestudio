@@ -3,6 +3,7 @@ import {
   connectWorkspace,
   disconnectWorkspace,
   workspaceConnection,
+  runtime,
   rpc,
   fs,
   contextId,
@@ -317,15 +318,13 @@ make.addEventListener("click", async () => {
       $("lab-download").hidden = true;
     }
     const work = invention;
-    const channel = await rpc.call("main", "runtime.createEntity", [
-      {
-        kind: "do",
-        execution: { surface: "code", source: "workers/pubsub-channel" },
-        className: "PubSubChannel",
-        key: work.channelId,
-        contextId,
-      },
-    ]);
+    const channel = await runtime.createEntity({
+      kind: "do",
+      execution: { surface: "code", source: "workers/pubsub-channel" },
+      className: "PubSubChannel",
+      key: work.channelId,
+      contextId,
+    });
     work.channelTarget = channel.targetId;
     save();
     const agent = await launchAgentIntoChannel(rpc, {

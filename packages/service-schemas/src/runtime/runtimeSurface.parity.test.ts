@@ -75,7 +75,7 @@ describe("runtime surface schemaRef parity", () => {
     expect(openExternal.schemaRef).toBe("externalOpen");
     expect(openExternal.schemaMethod).toBe("openExternal");
     expect(openExternal.description).toContain("initialized panel, plain-worker, or eval runtime");
-    expect(openExternal.description).toContain('this.rpc.call("main", "externalOpen.openExternal"');
+    expect(openExternal.description).toContain('this.rpc.call("main", mainRpcMethods["externalOpen.openExternal"]');
     expect(openExternal.description).toContain("owns the approval prompt");
   });
 

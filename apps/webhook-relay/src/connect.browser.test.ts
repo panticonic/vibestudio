@@ -30,6 +30,14 @@ const connectedRuntime = String.raw`
     window.inventionCalls.push({ target, method, args });
     return { targetId: "do:channel:demo", contextId };
   } };
+  export const runtime = { async createEntity(input) {
+    window.inventionCalls.push({ method: "runtime.createEntity", input });
+    return { targetId: "do:channel:demo", contextId };
+  } };
+  export const services = { docs: { async listSurfaces() {
+    window.inventionCalls.push({ method: "docs.listSurfaces" });
+    return [];
+  } } };
   export const fs = {
     async mkdir() {}, async writeFile(path, text) { files.set(path, text); },
     async readFile(path) { if (!files.has(path)) throw new Error("ENOENT"); return files.get(path); }
@@ -44,7 +52,7 @@ const connectedRuntime = String.raw`
     async send(target, text, options) {
       window.inventionCalls.push({ method: "send", text, options });
       const path = text.match(/projects\/impossible-inventions\/[a-z0-9-]+\/index.html/)[0];
-      files.set(path, '<!doctype html><button id="ask">Consult the moon</button><output></output><script>document.getElementById("ask").onclick=async()=>{await parent.inventionWorkspace.rpc.call("main","docs.listSurfaces",[]);document.querySelector("output").textContent="Connected to the real SDK instance"}<\/script>');
+      files.set(path, '<!doctype html><button id="ask">Consult the moon</button><output></output><script>document.getElementById("ask").onclick=async()=>{await parent.inventionWorkspace.services.docs.listSurfaces();document.querySelector("output").textContent="Connected to the real SDK instance"}<\/script>');
       const complete = () => notify({ kind: "message", payload: { message: { kind: "log", event: { payload: { kind: "message.completed", causality: { messageId: crypto.randomUUID() }, payload: { role: "assistant", blocks: [{ type: "text", content: "Turn the moon dial." }] } } } } } });
       window.finishInvention = complete;
       if (!location.search.includes("hold")) setTimeout(complete, 30);

@@ -4,7 +4,9 @@
 
 Every service below is callable from a paired CLI as
 `vibestudio agent call SERVICE.METHOD 'ARGS_JSON'` (and from `vibestudio eval run`
-code as `services.SERVICE.METHOD(...args)` or `rpc.call("SERVICE.METHOD", args)`).
+code as `services.SERVICE.METHOD(...args)`). For direct RPC, use the public
+descriptor-based `rpc.call(targetId, methodDescriptor, args)` API described in
+the eval guide; service-name strings are not RPC method descriptors.
 
 This file lists methods and descriptions only. For full Zod argument and
 return schemas of a service, ask the live server:

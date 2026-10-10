@@ -51,6 +51,7 @@ import {
 } from "@vibestudio/mobile-iroh";
 import { launchGateView } from "@vibestudio/shared/bootstrapLaunchGate";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
+import { mainRpcMethod } from "@vibestudio/service-schemas/mainRpc";
 import { name as appName } from "./app.json";
 import { createSuccessfulConnectCoalescer, routeIncomingConnectLink } from "./connectLinkRouter";
 import { VibestudioLogo } from "./VibestudioLogo";
@@ -168,11 +169,6 @@ async function pairViaIroh(pairing) {
     }
     throw error;
   }
-}
-
-async function rpc(connection, method, args = []) {
-  // All control-plane RPC now rides the Iroh session (target the server "main").
-  return connection.rpc.call("main", method, args);
 }
 
 async function closeBootstrapConnectionAfterFailure(connection, error) {
@@ -310,7 +306,7 @@ function VibestudioMobileHostBootstrap() {
     const generation = ++launchGateGeneration.current;
     const isCurrent = () => generation === launchGateGeneration.current;
     const launchClient = new HostLaunchClient((service, method, args) =>
-      grant.rpc.call("main", `${service}.${method}`, args)
+      grant.rpc.call("main", mainRpcMethod(`${service}.${method}`), args)
     );
     setBusy(true);
     setApprovals([]);
@@ -378,7 +374,7 @@ function VibestudioMobileHostBootstrap() {
       setStatus(decision === "once" ? "Approving workspace app..." : "Denying workspace app...");
       try {
         const launchClient = new HostLaunchClient((service, method, args) =>
-          launchGrant.rpc.call("main", `${service}.${method}`, args)
+          launchGrant.rpc.call("main", mainRpcMethod(`${service}.${method}`), args)
         );
         await launchClient.resolveApprovals(approvals, decision);
         smokePhase("embedded-host-target-approval-resolved");

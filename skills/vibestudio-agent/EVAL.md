@@ -29,15 +29,19 @@ a later execution by its owning queue/workflow.
 
 | Binding                                  | What it is                                                                                                                                                                                                                          |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rpc.call(method, args)`                 | Raw RPC: `await rpc.call("vcs.status", [{ contextId: ctx.contextId }])`                                                                                                                                                             |
-| `rpc.callTarget(targetId, method, args)` | Call a runtime entity (DO/worker) by target id, e.g. after `workers.resolveService`: `const svc = await rpc.call("workers.resolveService", ["vibestudio.testkit-driver.v1", null]); await rpc.callTarget(svc.targetId, "ping", [])` |
-| `services`                               | Portable dynamic service namespace: `await services.docs.listServices()` ≡ `rpc.call("docs.listServices", [])`. It is the same client exposed by `@workspace/runtime` to panels, workers, and eval.                                 |
+| `rpc.call(targetId, methodDescriptor, args)` | Public typed RPC. Use a canonical descriptor from the receiver's contract, for example `rpc.call("main", mainRpcMethods["vcs.status"], [{ contextId: ctx.contextId }])`; `mainRpcMethods` is exported by `@vibestudio/service-schemas/mainRpc`. |
+| `services`                               | Portable ergonomic service namespace: `await services.docs.listServices()`. It is the same typed service access exposed by `@workspace/runtime` to panels, workers, and eval.                                                                 |
 | `fs`                                     | Context-bound fs service — the session contextId is injected as the first arg: `await fs.readdir("/")`, `await fs.grep("TODO", {})`                                                                                                 |
 | `runtime`                                | Portable typed runtime lifecycle and supervision client for the current workspace context.                                                                                                                                          |
 | `hosts`                                  | Portable owner-scoped attached-host access for development sessions.                                                                                                                                                                |
 | `ctx`                                    | `{contextId, sessionId, workspaceId, serverUrl}`                                                                                                                                                                                    |
 | `scope`                                  | Persistent REPL scope (see below): `scope.results = data` survives across runs                                                                                                                                                      |
 | `help()`                                 | `await help()` lists services + import guidance; `await help("vcs")` describes one service                                                                                                                                          |
+
+For a Durable Object or worker target, use a descriptor from that receiver's
+shared contract with `rpc.call(targetId, methodDescriptor, args)`. Resolve
+manifest-declared services with the runtime's typed service-resolution APIs;
+do not pass method-name strings to the public RPC client.
 
 CLI-owned eval does not inject the agent-only `chat` or `agent` bindings. Use
 `vibestudio channel ...` for conversation operations and pass agent configuration
