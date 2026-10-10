@@ -30,9 +30,9 @@ describe("EvalKernelLeaseCoordinator", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const dispatchHeld = vi.fn().mockReturnValue(held);
+    const dispatchHeldWithSignal = vi.fn().mockReturnValue(held);
     const coordinator = new EvalKernelLeaseCoordinator(
-      { dispatch, dispatchHeld },
+      { dispatch, dispatchHeldWithSignal },
       { idleMs: 123_000, onError: vi.fn() }
     );
 
@@ -40,12 +40,17 @@ describe("EvalKernelLeaseCoordinator", () => {
     await coordinator.touch(ref);
 
     expect(dispatch).toHaveBeenCalledTimes(3);
-    expect(dispatchHeld).toHaveBeenCalledTimes(1);
+    expect(dispatchHeldWithSignal).toHaveBeenCalledTimes(1);
     const first = dispatch.mock.calls[0]![2] as { leaseId: string; idleMs: number };
     const second = dispatch.mock.calls[2]![2] as { leaseId: string; idleMs: number };
     expect(first).toEqual({ leaseId: expect.any(String), idleMs: 123_000 });
     expect(second).toEqual(first);
-    expect(dispatchHeld).toHaveBeenCalledWith(ref, "holdKernelLease", first.leaseId);
+    expect(dispatchHeldWithSignal).toHaveBeenCalledWith(
+      ref,
+      expect.any(AbortSignal),
+      "holdKernelLease",
+      first.leaseId
+    );
 
     release();
     await held;
@@ -70,20 +75,20 @@ describe("EvalKernelLeaseCoordinator", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const dispatchHeld = vi.fn().mockReturnValue(
+    const dispatchHeldWithSignal = vi.fn().mockReturnValue(
       new Promise<void>((resolve) => {
         release = resolve;
       })
     );
     const coordinator = new EvalKernelLeaseCoordinator(
-      { dispatch, dispatchHeld },
+      { dispatch, dispatchHeldWithSignal },
       { onError: vi.fn() }
     );
 
     await Promise.all([coordinator.touch(ref), coordinator.touch(ref), coordinator.touch(ref)]);
 
     expect(dispatch).toHaveBeenCalledTimes(4);
-    expect(dispatchHeld).toHaveBeenCalledTimes(1);
+    expect(dispatchHeldWithSignal).toHaveBeenCalledTimes(1);
     expect(
       new Set(
         dispatch.mock.calls
@@ -113,20 +118,23 @@ describe("EvalKernelLeaseCoordinator", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const dispatchHeld = vi
+    const dispatchHeldWithSignal = vi
       .fn()
       .mockImplementationOnce(() => {
         holderAttached = false;
         return Promise.reject(new Error("workerd restarted"));
       })
       .mockReturnValueOnce(new Promise<void>(() => undefined));
-    const coordinator = new EvalKernelLeaseCoordinator({ dispatch, dispatchHeld }, { onError });
+    const coordinator = new EvalKernelLeaseCoordinator(
+      { dispatch, dispatchHeldWithSignal },
+      { onError }
+    );
 
     await coordinator.touch(ref);
     await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
     await coordinator.touch(ref);
 
-    expect(dispatchHeld).toHaveBeenCalledTimes(2);
+    expect(dispatchHeldWithSignal).toHaveBeenCalledTimes(2);
     const acquiredIds = dispatch.mock.calls
       .filter((call) => call[1] === "acquireKernelLease")
       .map((call) => (call[2] as { leaseId: string }).leaseId);
@@ -152,7 +160,7 @@ describe("EvalKernelLeaseCoordinator", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const holds: Array<{ promise: Promise<void>; release: () => void }> = [];
-    const dispatchHeld = vi.fn(() => {
+    const dispatchHeldWithSignal = vi.fn(() => {
       let release!: () => void;
       const promise = new Promise<void>((resolve) => {
         release = resolve;
@@ -161,7 +169,7 @@ describe("EvalKernelLeaseCoordinator", () => {
       return promise;
     });
     const coordinator = new EvalKernelLeaseCoordinator(
-      { dispatch, dispatchHeld },
+      { dispatch, dispatchHeldWithSignal },
       { onError: vi.fn() }
     );
 
@@ -172,16 +180,16 @@ describe("EvalKernelLeaseCoordinator", () => {
     const replacementLeaseId = activeLeaseId;
 
     expect(replacementLeaseId).not.toBe(firstLeaseId);
-    expect(dispatchHeld).toHaveBeenCalledTimes(2);
+    expect(dispatchHeldWithSignal).toHaveBeenCalledTimes(2);
 
     holds[0]!.release();
     await holds[0]!.promise;
     await coordinator.touch(ref);
-    expect(dispatchHeld).toHaveBeenCalledTimes(2);
+    expect(dispatchHeldWithSignal).toHaveBeenCalledTimes(2);
     holds[1]!.release();
   });
 
-  it("aborts the host transport when the coordinator closes", async () => {
+  it("aborts and joins the held host request when the coordinator closes", async () => {
     let holderAttached = false;
     const dispatch = vi.fn(async (_ref, method: string, input: unknown) => {
       if (method === "acquireKernelLease") {
@@ -195,23 +203,49 @@ describe("EvalKernelLeaseCoordinator", () => {
       throw new Error(`unexpected method ${method}`);
     });
     let observedSignal!: AbortSignal;
+    let markCancellationDelivered!: () => void;
+    const cancellationDelivered = new Promise<void>((resolve) => {
+      markCancellationDelivered = resolve;
+    });
+    let releaseTerminal!: () => void;
+    const terminal = new Promise<void>((resolve) => {
+      releaseTerminal = resolve;
+    });
     const dispatchHeldWithSignal = vi.fn(async (_ref, signal: AbortSignal): Promise<void> => {
       observedSignal = signal;
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
+      signal.addEventListener("abort", markCancellationDelivered, { once: true });
+      await terminal;
     });
     const coordinator = new EvalKernelLeaseCoordinator(
       {
         dispatch,
-        dispatchHeld: vi.fn(),
         dispatchHeldWithSignal,
       },
       { onError: vi.fn() }
     );
 
     await coordinator.touch(ref);
-    await coordinator.close();
+    let closeSettled = false;
+    const closing = coordinator.close().then(
+      () => {
+        closeSettled = true;
+      },
+      (error: unknown) => {
+        closeSettled = true;
+        throw error;
+      }
+    );
+    try {
+      await cancellationDelivered;
+      expect(observedSignal.aborted).toBe(true);
+      expect(closeSettled).toBe(false);
+      releaseTerminal();
+      await closing;
+      expect(closeSettled).toBe(true);
+    } finally {
+      releaseTerminal();
+      await closing;
+    }
 
     expect(dispatchHeldWithSignal).toHaveBeenCalledOnce();
     expect(observedSignal.aborted).toBe(true);
@@ -240,7 +274,7 @@ describe("EvalKernelLeaseCoordinator", () => {
         })
     );
     const coordinator = new EvalKernelLeaseCoordinator(
-      { dispatch, dispatchHeld: vi.fn(), dispatchHeldWithSignal },
+      { dispatch, dispatchHeldWithSignal },
       { onError }
     );
 
@@ -271,7 +305,6 @@ describe("EvalKernelLeaseCoordinator", () => {
     const dispatchHeldWithSignal = vi.fn(async (): Promise<void> => undefined);
     const coordinator = new EvalKernelLeaseCoordinator({
       dispatch,
-      dispatchHeld: vi.fn(),
       dispatchHeldWithSignal,
     });
 

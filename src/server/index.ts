@@ -7814,22 +7814,35 @@ async function main() {
     const alarmDriver =
       container.get<import("./services/alarmDriver.js").AlarmDriver>("alarmDriver");
     const shutdownErrors: unknown[] = [];
+    const shutdownStage = async <T>(stage: string, operation: () => Promise<T>): Promise<T> => {
+      console.info(`[Shutdown] stage started: ${stage}`, { workspaceId });
+      try {
+        const result = await operation();
+        console.info(`[Shutdown] stage completed: ${stage}`, { workspaceId });
+        return result;
+      } catch (error) {
+        console.error(`[Shutdown] stage failed: ${stage}`, { workspaceId, error });
+        throw error;
+      }
+    };
 
     startupBackgroundLifetime.abort(new Error("Server shutdown cancelled startup recovery"));
     stopAuthorityRecoveryOnRestart();
-    await acquisitionCoordinator.quiesceOwnerDelivery();
+    await shutdownStage("acquisition-owner-delivery", () =>
+      acquisitionCoordinator.quiesceOwnerDelivery()
+    );
 
-    await Promise.allSettled([
-      optionalServiceStartup,
-      runtimeRecovery,
-      startupWorkspaceUnitReconcile,
-    ]);
-    await Promise.allSettled([
-      startupExtensionWarming,
-      startupPanelArtifactPreparation,
-      startupElectronArtifactPreparation,
-    ]);
-    await cleanupReaper.stop().catch((error) => {
+    await shutdownStage("startup-runtime-reconciliation", () =>
+      Promise.allSettled([optionalServiceStartup, runtimeRecovery, startupWorkspaceUnitReconcile])
+    );
+    await shutdownStage("startup-artifact-preparation", () =>
+      Promise.allSettled([
+        startupExtensionWarming,
+        startupPanelArtifactPreparation,
+        startupElectronArtifactPreparation,
+      ])
+    );
+    await shutdownStage("cleanup-reaper", () => cleanupReaper.stop()).catch((error) => {
       shutdownErrors.push(error);
       console.error("[Server] Cleanup reaper shutdown failed:", error);
     });
@@ -7857,24 +7870,36 @@ async function main() {
     // runtimes, and system-test drivers unwind while the relay is still alive.
     // Cancellation owns its cleanup until the EvalDO's actual terminal. Elapsed
     // time cannot authorize tearing down transports needed by that cleanup.
-    await closeActiveEvalRuns?.().catch((error) => {
+    await shutdownStage(
+      "active-eval-cancellation",
+      () => closeActiveEvalRuns?.() ?? Promise.resolve()
+    ).catch((error) => {
       shutdownErrors.push(error);
       console.error("[Server] active eval shutdown drain failed:", error);
     });
 
-    await closeEvalAuthorityEvents?.().catch((err) =>
-      console.warn("[Server] eval authority event journal shutdown failed:", err)
-    );
+    await shutdownStage(
+      "eval-authority-event-close",
+      () => closeEvalAuthorityEvents?.() ?? Promise.resolve()
+    ).catch((err) => console.warn("[Server] eval authority event journal shutdown failed:", err));
 
-    await closeEvalKernelLeases?.().catch((err) =>
-      console.warn("[Server] eval kernel lease shutdown failed:", err)
-    );
+    // Start cancellation of the held residency requests now, but join their
+    // terminal responses only after lifecycle prepare releases the matching
+    // EvalDO holders. The receiver owns each original request until that
+    // release; awaiting its response first would deadlock the lifecycle call.
+    const evalKernelLeaseClose = shutdownStage(
+      "eval-kernel-lease-close",
+      () => closeEvalKernelLeases?.() ?? Promise.resolve()
+    ).catch((err) => console.warn("[Server] eval kernel lease shutdown failed:", err));
     // Graceful release is complete only after the activation joins its owned
     // resources and the lifecycle journal acknowledges it.
-    await lifecycleDriver.prepareForShutdown().catch((error) => {
-      shutdownErrors.push(error);
-      console.error("[Server] lifecycle shutdown prepare failed:", error);
-    });
+    await shutdownStage("lifecycle-prepare", () => lifecycleDriver.prepareForShutdown()).catch(
+      (error) => {
+        shutdownErrors.push(error);
+        console.error("[Server] lifecycle shutdown prepare failed:", error);
+      }
+    );
+    await evalKernelLeaseClose;
 
     // These schedulers closed admission above, but their dispatches could only
     // settle after lifecycle release joined the actual activation resources.

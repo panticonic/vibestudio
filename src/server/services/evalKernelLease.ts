@@ -38,8 +38,7 @@ export class EvalKernelLeaseCoordinator implements EvalKernelLease {
   private closed = false;
 
   constructor(
-    private readonly doDispatch: Pick<HeldDoDispatcher, "dispatch" | "dispatchHeld"> &
-      Partial<Pick<HeldDoDispatcher, "dispatchHeldWithSignal">>,
+    private readonly doDispatch: Pick<HeldDoDispatcher, "dispatch" | "dispatchHeldWithSignal">,
     private readonly options: {
       idleMs?: number;
       onError?: (message: string, error: unknown) => void;
@@ -112,14 +111,12 @@ export class EvalKernelLeaseCoordinator implements EvalKernelLease {
       return;
     }
     lease.holding = true;
-    const hold = this.doDispatch.dispatchHeldWithSignal
-      ? this.doDispatch.dispatchHeldWithSignal(
-          ref,
-          lease.abortController.signal,
-          "holdKernelLease",
-          lease.id
-        )
-      : this.doDispatch.dispatchHeld(ref, "holdKernelLease", lease.id);
+    const hold = this.doDispatch.dispatchHeldWithSignal(
+      ref,
+      lease.abortController.signal,
+      "holdKernelLease",
+      lease.id
+    );
     lease.hold = hold;
     void hold
       .catch((error) => {
