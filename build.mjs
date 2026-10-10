@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { buildArtifactGroups } from "./scripts/build-artifact-groups.mjs";
+import { buildArtifactGroups, joinBuildOperations } from "./scripts/build-artifact-groups.mjs";
 import { stageNodeRuntime } from "./scripts/node-runtime-artifacts.mjs";
 import { buildNativeIsolation } from "./scripts/build-native-isolation.mjs";
 import { prepareNativeDependencyFiles } from "./scripts/native-host-dependencies.mjs";
@@ -762,40 +762,33 @@ async function build() {
     // Dependencies: none
     await buildVibestudioPackages();
     buildNativeIsolation();
-    await stageNodeRuntime();
-
-    // ========================================================================
-    // STEP 1: Build standalone headless panel host
-    // ========================================================================
-    // The server auto-spawns this bundle as a child process when no desktop
-    // CDP host is connected; copy it under dist/ so packaged CLIs can find it.
-    // Dependencies: buildVibestudioPackages
-    await buildHeadlessHost();
-
-    // ========================================================================
-    // STEP 2: Build main application
-    // ========================================================================
-    // Compatible entrypoints share one compiler graph; independent compiler realms run concurrently and are joined before returning.
-    // Dependencies: buildVibestudioPackages
-    // Required by: None (final outputs)
-    const workerdPrograms = await buildWorkerdPrograms({ minify: !isDev, logOverride });
-    const initialHostBuilds = await buildArtifactGroups(
-      [
-        mainConfig,
-        adblockWorkerConfig,
-        ...preloadConfigs,
-        browserTransportConfig,
-        internalDoBundleConfig,
-        bootstrapConfig,
-        clientConfig,
-      ],
-      buildHostArtifact
-    );
+    // These phases own separate outputs. Join them before the server compiler
+    // consumes the internal DO bundle and workerd programs.
+    const [, workerdPrograms, initialHostBuilds] = await joinBuildOperations([
+      () => stageNodeRuntime(),
+      () => buildWorkerdPrograms({ minify: !isDev, logOverride }),
+      () =>
+        buildArtifactGroups(
+          [
+            mainConfig,
+            adblockWorkerConfig,
+            ...preloadConfigs,
+            browserTransportConfig,
+            internalDoBundleConfig,
+            bootstrapConfig,
+            clientConfig,
+          ],
+          buildHostArtifact
+        ),
+      () => buildHeadlessHost(),
+    ]);
     assertHostBuildMetafiles(
       initialHostBuilds.filter((result) => result && typeof result === "object")
     );
-    await buildDependencyWorkers();
-    await buildServerArtifacts(["standalone", "electron"], workerdPrograms);
+    await joinBuildOperations([
+      () => buildDependencyWorkers(),
+      () => buildServerArtifacts(["standalone", "electron"], workerdPrograms),
+    ]);
 
     // ========================================================================
     // STEP 3: Copy static assets
@@ -936,14 +929,14 @@ async function buildSourceServerPrerequisites() {
     // infrastructure portion of `pnpm dev` without rebuilding desktop UI.
     await buildVibestudioPackages();
     buildNativeIsolation();
-    await stageNodeRuntime();
-    await buildHeadlessHost();
-    // Injected into every non-Electron/headless panel by PanelHttpServer. It
-    // embeds the RPC WebSocket client, so leaving it stale can make panels use
-    // an older wire protocol even when packages/rpc/dist is current.
-    await esbuild.build(browserTransportConfig);
-    await esbuild.build(internalDoBundleConfig);
-    const programs = await buildWorkerdPrograms({ minify: !isDev, logOverride });
+    const [, programs, prerequisites] = await joinBuildOperations([
+      () => stageNodeRuntime(),
+      () => buildWorkerdPrograms({ minify: !isDev, logOverride }),
+      () =>
+        buildArtifactGroups([browserTransportConfig, internalDoBundleConfig], buildHostArtifact),
+      () => buildHeadlessHost(),
+    ]);
+    assertHostBuildMetafiles(prerequisites);
     await buildServerArtifacts(["standalone"], programs);
 
     // Authority startup identifies the installed host by the exact source

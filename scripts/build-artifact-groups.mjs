@@ -46,13 +46,19 @@ export function groupBuildArtifacts(configs) {
 }
 
 export async function buildArtifactGroups(configs, build = esbuild.build) {
-  const outcomes = await Promise.allSettled(
-    groupBuildArtifacts(configs).map(async (group) => build({ ...group, metafile: true }))
+  return joinBuildOperations(
+    groupBuildArtifacts(configs).map((group) => () => build({ ...group, metafile: true })),
+    "Host compiler realms failed"
   );
+}
+
+/** Independent phases keep ownership until every admitted operation settles. */
+export async function joinBuildOperations(operations, message = "Host build operations failed") {
+  const outcomes = await Promise.allSettled(operations.map(async (operation) => operation()));
   const failures = outcomes.flatMap((outcome) =>
     outcome.status === "rejected" ? [outcome.reason] : []
   );
   if (failures.length === 1) throw failures[0];
-  if (failures.length > 1) throw new AggregateError(failures, "Host compiler realms failed");
+  if (failures.length > 1) throw new AggregateError(failures, message);
   return outcomes.map((outcome) => outcome.value);
 }

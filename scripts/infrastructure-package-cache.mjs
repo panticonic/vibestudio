@@ -149,6 +149,7 @@ function discoverPackages(cwd, api) {
       directory,
       relativeDirectory: path.relative(cwd, directory).split(path.sep).join("/"),
       build: typeof manifest.scripts?.build === "string",
+      buildProfile: manifest.vibestudio?.buildProfile,
       localDependencies,
       sourceDigest: digestParts(
         entries.flatMap((entry) => [entry.path, entry.mode, entry.type, entry.content])
@@ -219,6 +220,53 @@ function executionSelection(dirty, packages) {
   };
   for (const pkg of dirty) visitDependencies(pkg.name);
   return [...selected].sort();
+}
+
+/** Emit in dependency order, sharing one compiler process per contiguous realm.
+ * Custom builders retain their package-manager lifecycle and form graph barriers. */
+export function emitInfrastructurePackages(plan, selectedPackages, run) {
+  const selected = new Set(selectedPackages);
+  const visited = new Set();
+  const ordered = [];
+  const visit = (name) => {
+    if (visited.has(name) || !selected.has(name)) return;
+    visited.add(name);
+    for (const dependency of plan.packages.get(name).localDependencies) visit(dependency);
+    ordered.push(plan.packages.get(name));
+  };
+  for (const name of selectedPackages) visit(name);
+  const sourcePackages = ordered.filter((pkg) => !pkg.build).map((pkg) => pkg.name);
+  let compiler;
+  let projects = [];
+  let custom = [];
+  const flush = () => {
+    if (projects.length) {
+      run(["exec", "node", compiler, "--build", ...projects], { cwd: plan.cwd, stdio: "inherit" });
+      projects = [];
+    }
+    if (custom.length) {
+      run([...sourcePackages, ...custom].flatMap((name) => ["--filter", name]).concat("build"), {
+        cwd: plan.cwd,
+        stdio: "inherit",
+      });
+      custom = [];
+    }
+  };
+  for (const pkg of ordered) {
+    if (!pkg.build) continue;
+    if (pkg.buildProfile === "tsc-output" || pkg.buildProfile === "tsc-build-incremental") {
+      if (!pkg.compiler) throw new Error(`${pkg.name} has no compiler project`);
+      const require = createRequire(path.join(pkg.directory, "package.json"));
+      const entry = path.join(path.dirname(require.resolve("typescript/package.json")), "bin/tsc");
+      if (custom.length || (projects.length && compiler !== entry)) flush();
+      compiler = entry;
+      projects.push(path.join(pkg.relativeDirectory, "tsconfig.build.json"));
+    } else {
+      if (projects.length) flush();
+      custom.push(pkg.name);
+    }
+  }
+  flush();
 }
 
 function readCache(cwd) {
@@ -321,8 +369,7 @@ function buildInfrastructurePackagesLocked({ cwd, run, log, toolchainDigest }) {
       .join(", ")}`
   );
   const selectedPackages = executionSelection(plan.dirty, plan.packages);
-  const args = selectedPackages.flatMap((name) => ["--filter", name]);
-  run([...args, "build"], { cwd, stdio: "inherit" });
+  emitInfrastructurePackages(plan, selectedPackages, run);
   for (const state of plan.dirty) {
     if (!state.compiler?.options.incremental) continue;
     const owned = compilerOutputs(state.compiler);

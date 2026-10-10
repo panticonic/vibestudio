@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "exclude": ["**/*.test.ts", "**/*.spec.ts"],
   "compilerOptions": {
+    "noCheck": true,
     "incremental": true,
     "tsBuildInfoFile": "./tsconfig.build.tsbuildinfo"
   }

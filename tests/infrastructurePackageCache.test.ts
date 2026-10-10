@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildInfrastructurePackages,
+  emitInfrastructurePackages,
   inspectInfrastructurePackageBuilds,
   writeInfrastructurePackageCache,
 } from "../scripts/infrastructure-package-cache.mjs";
@@ -66,6 +67,100 @@ afterEach(() => {
 });
 
 describe("infrastructure package cache", () => {
+  it("batches compatible compiler projects and preserves custom build barriers", () => {
+    const cwd = fixture();
+    write(cwd, "package.json", JSON.stringify({ name: "fixture", type: "module" }));
+    write(cwd, "node_modules/typescript/package.json", JSON.stringify({ name: "typescript" }));
+    write(cwd, "node_modules/typescript/bin/tsc", "compiler");
+    for (const name of ["base", "consumer"]) {
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(cwd, `packages/${name}/package.json`), "utf8")
+      );
+      manifest.vibestudio = { buildProfile: "tsc-output" };
+      write(cwd, `packages/${name}/package.json`, JSON.stringify(manifest));
+      write(
+        cwd,
+        `packages/${name}/tsconfig.build.json`,
+        JSON.stringify({
+          compilerOptions: { rootDir: "src", outDir: "dist", incremental: true, noCheck: true },
+          include: ["src/**/*.ts"],
+        })
+      );
+    }
+    let plan = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" });
+    const commands: string[][] = [];
+    const run = (args: string[]) => {
+      commands.push(args);
+    };
+    emitInfrastructurePackages(
+      plan,
+      ["@vibestudio/base", "@vibestudio/bridge", "@vibestudio/consumer"],
+      run
+    );
+    expect(commands).toHaveLength(1);
+    expect(commands[0]!.slice(-2)).toEqual([
+      "packages/base/tsconfig.build.json",
+      "packages/consumer/tsconfig.build.json",
+    ]);
+
+    write(
+      cwd,
+      "packages/custom/package.json",
+      JSON.stringify({
+        name: "@vibestudio/custom",
+        scripts: { build: "custom" },
+        dependencies: { "@vibestudio/base": "workspace:*" },
+      })
+    );
+    const consumer = JSON.parse(
+      fs.readFileSync(path.join(cwd, "packages/consumer/package.json"), "utf8")
+    );
+    consumer.dependencies["@vibestudio/custom"] = "workspace:*";
+    write(cwd, "packages/consumer/package.json", JSON.stringify(consumer));
+    plan = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" });
+    commands.length = 0;
+    emitInfrastructurePackages(
+      plan,
+      ["@vibestudio/base", "@vibestudio/bridge", "@vibestudio/consumer", "@vibestudio/custom"],
+      run
+    );
+    expect(commands).toHaveLength(3);
+    expect(commands[0]!.at(-1)).toBe("packages/base/tsconfig.build.json");
+    expect(commands[1]).toContain("@vibestudio/custom");
+    expect(commands[2]!.at(-1)).toBe("packages/consumer/tsconfig.build.json");
+
+    write(
+      cwd,
+      "packages/other/package.json",
+      JSON.stringify({
+        name: "@vibestudio/other",
+        scripts: { build: "tsc --project tsconfig.build.json" },
+        vibestudio: { buildProfile: "tsc-output" },
+        dependencies: { "@vibestudio/base": "workspace:*" },
+      })
+    );
+    write(
+      cwd,
+      "packages/other/tsconfig.build.json",
+      JSON.stringify({
+        compilerOptions: { rootDir: "src", outDir: "dist", noCheck: true },
+        include: ["src/**/*.ts"],
+      })
+    );
+    write(cwd, "packages/other/src/index.ts", "export const other = 1;");
+    write(
+      cwd,
+      "packages/other/node_modules/typescript/package.json",
+      JSON.stringify({ name: "typescript" })
+    );
+    write(cwd, "packages/other/node_modules/typescript/bin/tsc", "other compiler");
+    plan = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" });
+    commands.length = 0;
+    emitInfrastructurePackages(plan, ["@vibestudio/base", "@vibestudio/other"], run);
+    expect(commands).toHaveLength(2);
+    expect(commands[0]![2]).not.toBe(commands[1]![2]);
+  });
+
   it("preserves incremental state on source changes and retires removed compiler outputs", () => {
     const cwd = fixture();
     write(cwd, "packages/base/tsconfig.build.json", JSON.stringify({ compilerOptions: {

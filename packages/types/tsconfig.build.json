@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "noCheck": true,
     "incremental": true,
     "tsBuildInfoFile": "./tsconfig.build.tsbuildinfo"
   }
