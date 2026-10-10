@@ -7,7 +7,9 @@
     "declarationMap": true,
     "noEmit": false,
     "noEmitOnError": false,
-    "paths": {}
+    "paths": {},
+    "incremental": true,
+    "tsBuildInfoFile": "./tsconfig.build.tsbuildinfo"
   },
   "include": ["src/**/*"],
   "exclude": ["**/*.test.ts", "**/*.spec.ts"]

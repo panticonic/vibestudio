@@ -66,6 +66,40 @@ afterEach(() => {
 });
 
 describe("infrastructure package cache", () => {
+  it("preserves incremental state on source changes and retires removed compiler outputs", () => {
+    const cwd = fixture();
+    write(cwd, "packages/base/tsconfig.build.json", JSON.stringify({ compilerOptions: {
+      rootDir: "src", outDir: "dist", incremental: true, declaration: true,
+    }, include: ["src/**/*.ts"], exclude: ["**/*.test.ts"] }));
+    write(cwd, "packages/base/src/retired.ts", "export const retired = 1;");
+    write(cwd, "packages/base/dist/retired.js", "old output");
+    write(cwd, "packages/base/dist/retired.d.ts", "old declaration");
+    write(cwd, "packages/base/tsconfig.build.tsbuildinfo", "owned compiler state");
+    writeInfrastructurePackageCache(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }));
+    write(cwd, "packages/base/src/index.test.ts", "a test-only edit");
+    expect(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty).toEqual([]);
+    fs.rmSync(path.join(cwd, "packages/base/src/retired.ts"));
+    write(cwd, "packages/base/src/index.ts", "export const value = 2;");
+    buildInfrastructurePackages({ cwd, toolchainDigest: "toolchain", log: () => {}, run: () => {
+      expect(fs.readFileSync(path.join(cwd, "packages/base/tsconfig.build.tsbuildinfo"), "utf8")).toBe("owned compiler state");
+      write(cwd, "packages/base/dist/index.js", "new output");
+      write(cwd, "packages/base/dist/index.d.ts", "new declaration");
+      write(cwd, "packages/consumer/dist/index.js", "new consumer output");
+    } });
+    expect(fs.existsSync(path.join(cwd, "packages/base/dist/retired.js"))).toBe(false);
+    expect(fs.existsSync(path.join(cwd, "packages/base/dist/retired.d.ts"))).toBe(false);
+    expect(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty).toEqual([]);
+  });
+
+  it("tracks excluded sources when production actually imports them", () => {
+    const cwd = fixture();
+    write(cwd, "packages/base/tsconfig.build.json", JSON.stringify({ compilerOptions: { rootDir: "src", outDir: "dist" }, include: ["src/**/*.ts"], exclude: ["**/*.test.ts"] }));
+    write(cwd, "packages/base/src/index.ts", 'export { value } from "./fixture.test.js";');
+    write(cwd, "packages/base/src/fixture.test.ts", "export const value = 1;");
+    writeInfrastructurePackageCache(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }));
+    write(cwd, "packages/base/src/fixture.test.ts", "export const value = 2;");
+    expect(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty.map((unit) => unit.name)).toEqual(["@vibestudio/base", "@vibestudio/consumer"]);
+  });
   it("serializes independent builders and reuses the preceding exact output", async () => {
     const cwd = fixture();
     const moduleUrl = pathToFileURL(path.resolve("scripts/infrastructure-package-cache.mjs")).href;

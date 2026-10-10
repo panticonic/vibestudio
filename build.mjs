@@ -1,4 +1,5 @@
 import * as esbuild from "esbuild";
+import { buildArtifactGroups } from "./scripts/build-artifact-groups.mjs";
 import { stageNodeRuntime } from "./scripts/node-runtime-artifacts.mjs";
 import { buildNativeIsolation } from "./scripts/build-native-isolation.mjs";
 import { prepareNativeDependencyFiles } from "./scripts/native-host-dependencies.mjs";
@@ -732,6 +733,18 @@ async function build() {
   let releaseLock;
   try {
     releaseLock = await acquireSourcePrerequisiteLock();
+    const expected = computeHostBuildFingerprint();
+    if (
+      sameHostBuildFingerprint(
+        readHostBuildFingerprint(process.cwd(), DESKTOP_HOST_BUILD_FINGERPRINT_PATH),
+        expected
+      )
+    ) {
+      await checkBuildArtifacts();
+      publishHostBuildGeneration(process.cwd(), { ...expected, kind: "desktop" });
+      console.log("Host artifacts already match the current source snapshot.");
+      return;
+    }
     cleanHostBuildOutput();
     fs.mkdirSync("dist", { recursive: true });
     // A build in progress is never a reusable build. In particular, retain no
@@ -764,25 +777,26 @@ async function build() {
     // ========================================================================
     // STEP 2: Build main application
     // ========================================================================
-    // These can run in parallel as they don't depend on each other.
+    // Compatible entrypoints share one compiler graph; compiler realms are joined in order.
     // Dependencies: buildVibestudioPackages
     // Required by: None (final outputs)
-    const workerdProgramsPromise = buildWorkerdPrograms({ minify: !isDev, logOverride });
-    const initialHostBuilds = await Promise.all([
-      buildHostArtifact(mainConfig),
-      buildHostArtifact(adblockWorkerConfig),
-      ...preloadConfigs.map((config) => buildHostArtifact(config)),
-      buildHostArtifact(browserTransportConfig),
-      buildHostArtifact(internalDoBundleConfig),
-      buildHostArtifact(bootstrapConfig),
-      buildHostArtifact(clientConfig),
-      buildDependencyWorkers(),
-      workerdProgramsPromise,
-    ]);
+    const workerdPrograms = await buildWorkerdPrograms({ minify: !isDev, logOverride });
+    const initialHostBuilds = await buildArtifactGroups(
+      [
+        mainConfig,
+        adblockWorkerConfig,
+        ...preloadConfigs,
+        browserTransportConfig,
+        internalDoBundleConfig,
+        bootstrapConfig,
+        clientConfig,
+      ],
+      buildHostArtifact
+    );
     assertHostBuildMetafiles(
       initialHostBuilds.filter((result) => result && typeof result === "object")
     );
-    const workerdPrograms = await workerdProgramsPromise;
+    await buildDependencyWorkers();
     // Inline the build-compiled internal DO and workerd host programs into both
     // server artifacts. Source-mode execution reads the same emitted files.
     const internalDoBundleContent = fs.readFileSync("dist/internal-do.bundle.mjs", "utf8");
@@ -841,24 +855,27 @@ async function build() {
       },
     };
     // Both server bundles consume the internal-DO output captured above.
-    const serverBuilds = await Promise.all([
-      buildHostArtifact(serverElectronWithBundle),
-      buildHostArtifact(serverWithBundle),
-      buildHostArtifact(authorityAnalysisWorkerElectronConfig),
-      buildHostArtifact(authorityAnalysisWorkerConfig),
-      buildHostArtifact(libraryLoweringWorkerElectronConfig),
-      buildHostArtifact(libraryLoweringWorkerConfig),
-      buildHostArtifact(typecheckWorkerElectronConfig),
-      buildHostArtifact(typecheckWorkerConfig),
-      buildHostArtifact(workspaceRpcCatalogWorkerElectronConfig),
-      buildHostArtifact(workspaceRpcCatalogWorkerConfig),
-      buildHostArtifact(immutableTreeWorkerElectronConfig),
-      buildHostArtifact(immutableTreeWorkerConfig),
-      buildHostArtifact(sqliteIntegrityWorkerElectronConfig),
-      buildHostArtifact(sqliteIntegrityWorkerConfig),
-      buildHostArtifact(fsDiskWorkerConfig),
-      buildHostArtifact(dependencyContentMaintenanceConfig),
-    ]);
+    const serverBuilds = await buildArtifactGroups(
+      [
+        serverElectronWithBundle,
+        serverWithBundle,
+        authorityAnalysisWorkerElectronConfig,
+        authorityAnalysisWorkerConfig,
+        libraryLoweringWorkerElectronConfig,
+        libraryLoweringWorkerConfig,
+        typecheckWorkerElectronConfig,
+        typecheckWorkerConfig,
+        workspaceRpcCatalogWorkerElectronConfig,
+        workspaceRpcCatalogWorkerConfig,
+        immutableTreeWorkerElectronConfig,
+        immutableTreeWorkerConfig,
+        sqliteIntegrityWorkerElectronConfig,
+        sqliteIntegrityWorkerConfig,
+        fsDiskWorkerConfig,
+        dependencyContentMaintenanceConfig,
+      ],
+      buildHostArtifact
+    );
     assertHostBuildMetafiles(serverBuilds);
 
     // ========================================================================

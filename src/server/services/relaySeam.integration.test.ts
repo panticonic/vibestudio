@@ -40,7 +40,7 @@ import {
   createWebhookIngressService,
 } from "./webhookIngressService.js";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { WebhookIngressSubscriptionSummary } from "../../../packages/shared/src/webhooks/ingress.js";
+import type { WebhookIngressSubscriptionSummary } from "@vibestudio/shared/webhooks/ingress";
 
 const RELAY_ORIGIN = "https://vibestudio.app";
 const TEST_IDENTITY = createTestIdentity();

@@ -13,7 +13,7 @@ import { mintUnitClearanceGrants } from "./services/unitClearanceGrants.js";
 import { WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { TokenManager } from "../../packages/shared/src/tokenManager.js";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { RpcServer } from "./rpcServer.js";
 import { Gateway } from "./gateway.js";
 import { createLiveCallerGate } from "./services/liveCallerGate.js";

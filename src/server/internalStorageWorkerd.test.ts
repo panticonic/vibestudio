@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import * as esbuild from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { TokenManager } from "../../packages/shared/src/tokenManager.js";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import { DODispatch } from "./doDispatch.js";
 import { INTERNAL_DO_SOURCE, type InternalDOBundle } from "./internalDOs/internalDoLoader.js";

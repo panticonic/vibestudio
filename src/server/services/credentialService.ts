@@ -32,7 +32,7 @@ import type {
   StoreUrlBoundCredentialRequest,
   UrlAudience,
 } from "@vibestudio/credential-client/types";
-import type { EntityRecord, EntityKind } from "../../../packages/shared/src/runtime/entitySpec.js";
+import type { EntityRecord, EntityKind } from "@vibestudio/shared/runtime/entitySpec";
 import {
   findMatchingUrlAudience,
   normalizeCredentialInjection,
@@ -41,10 +41,10 @@ import {
 import {
   verifiedInitiatingUserId,
   type ServiceContext,
-} from "../../../packages/shared/src/serviceDispatcher.js";
-import type { AppCapability } from "../../../packages/shared/src/unitManifest.js";
-import type { ServiceDefinition } from "../../../packages/shared/src/serviceDefinition.js";
-import { defineServiceHandler } from "../../../packages/shared/src/serviceHandlers.js";
+} from "@vibestudio/shared/serviceDispatcher";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   credentialsMethods,
   type AuditParams,

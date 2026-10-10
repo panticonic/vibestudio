@@ -97,7 +97,7 @@
     "format:check": "prettier --check 'src/**/*.{ts,tsx,css,html,json}'",
     "quality:check": "pnpm check:package-dependencies && pnpm check:iroh-cutover && pnpm type-check && pnpm lint && pnpm format:check && pnpm check:host-boundary && pnpm check:no-single-user && pnpm check:unit-authority && pnpm check:workspace-template-release && pnpm check:execution-root-providers && pnpm test:host-build-without-workspace",
     "type-check": "pnpm type-check:host",
-    "type-check:host": "node_modules/typescript/bin/tsc --noEmit && pnpm type-check:workerd-programs",
+    "type-check:host": "tsx scripts/type-check-host.ts",
     "type-check:workerd-programs": "node_modules/typescript/bin/tsc -p src/server/workerdPrograms/tsconfig.json",
     "create:website": "tsx scripts/create-website.ts",
     "build:website-runtime": "tsx scripts/build-website-runtime.ts",

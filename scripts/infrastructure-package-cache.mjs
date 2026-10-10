@@ -3,9 +3,12 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { API } from "typescript/unstable/sync";
+import { compilerInputs, compilerOutputs } from "./lib/compiler-inputs.mjs";
+import { fileDigest } from "./lib/file-digest.mjs";
 import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 
-export const INFRASTRUCTURE_CACHE_VERSION = 1;
+export const INFRASTRUCTURE_CACHE_VERSION = 2;
 export const INFRASTRUCTURE_CACHE_PATH = ".cache/vibestudio-infrastructure-build.json";
 
 const ROOT_INPUTS = [
@@ -13,6 +16,8 @@ const ROOT_INPUTS = [
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   "scripts/infrastructure-package-cache.mjs",
+  "scripts/lib/compiler-inputs.mjs",
+  "scripts/lib/file-digest.mjs",
   "tsconfig.json",
 ];
 const IGNORED_INPUT_DIRECTORIES = new Set([
@@ -59,7 +64,7 @@ function collectTree(root, { ignoreBuildInfo = false } = {}) {
       path: relative.split(path.sep).join("/"),
       mode: stat.mode & 0o777,
       type: "file",
-      content: fs.readFileSync(absolute),
+      content: fileDigest(absolute),
     });
   };
   visit(root, "");
@@ -88,7 +93,7 @@ function outputManifest(packageDirectory) {
     path: entry.path,
     type: entry.type,
     mode: entry.mode,
-    hash: digestParts([entry.content]),
+    hash: entry.type === "file" ? entry.content : digestParts([entry.content]),
   }));
   return entries.length > 0 ? entries : null;
 }
@@ -110,7 +115,7 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function discoverPackages(cwd) {
+function discoverPackages(cwd, api) {
   const packagesRoot = path.join(cwd, "packages");
   const packages = new Map();
   for (const entry of fs.readdirSync(packagesRoot, { withFileTypes: true })) {
@@ -131,13 +136,24 @@ function discoverPackages(cwd) {
         if (name.startsWith("@vibestudio/")) localDependencies.add(name);
       }
     }
+    const config = path.join(directory, "tsconfig.build.json");
+    const compiler = fs.existsSync(config) ? compilerInputs(api, config) : null;
+    const entries = collectTree(directory, { ignoreBuildInfo: true }).filter(
+      (entry) =>
+        !compiler ||
+        !/\.[cm]?tsx?$/.test(entry.path) ||
+        compiler.files.has(path.resolve(directory, entry.path))
+    );
     packages.set(manifest.name, {
       name: manifest.name,
       directory,
       relativeDirectory: path.relative(cwd, directory).split(path.sep).join("/"),
       build: typeof manifest.scripts?.build === "string",
       localDependencies,
-      sourceDigest: treeDigest(directory, { ignoreBuildInfo: true }),
+      sourceDigest: digestParts(
+        entries.flatMap((entry) => [entry.path, entry.mode, entry.type, entry.content])
+      ),
+      compiler,
     });
   }
   return packages;
@@ -215,7 +231,13 @@ function readCache(cwd) {
 }
 
 export function inspectInfrastructurePackageBuilds({ cwd = process.cwd(), toolchainDigest } = {}) {
-  const packages = discoverPackages(cwd);
+  const api = new API({ cwd });
+  let packages;
+  try {
+    packages = discoverPackages(cwd, api);
+  } finally {
+    api.close();
+  }
   const buildPackages = [...packages.values()].filter((pkg) => pkg.build);
   const commonDigest = commonInputDigest(cwd, toolchainDigest);
   const cache = readCache(cwd);
@@ -290,7 +312,8 @@ function buildInfrastructurePackagesLocked({ cwd, run, log, toolchainDigest }) {
   }
 
   for (const state of plan.dirty) {
-    cleanBuildOutputs(state.directory);
+    if (state.reason !== "inputs changed" || !state.compiler?.options.incremental)
+      cleanBuildOutputs(state.directory);
   }
   log(
     `[build] Building ${plan.dirty.length} infrastructure package(s): ${plan.dirty
@@ -300,6 +323,14 @@ function buildInfrastructurePackagesLocked({ cwd, run, log, toolchainDigest }) {
   const selectedPackages = executionSelection(plan.dirty, plan.packages);
   const args = selectedPackages.flatMap((name) => ["--filter", name]);
   run([...args, "build"], { cwd, stdio: "inherit" });
+  for (const state of plan.dirty) {
+    if (!state.compiler?.options.incremental) continue;
+    const owned = compilerOutputs(state.compiler);
+    for (const entry of collectTree(path.join(state.directory, "dist"))) {
+      const output = path.resolve(state.directory, "dist", entry.path);
+      if (!owned.has(output)) fs.rmSync(output);
+    }
+  }
   writeInfrastructurePackageCache(plan);
   return {
     built: plan.dirty.map((state) => state.name),

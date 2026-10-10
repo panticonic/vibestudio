@@ -3,7 +3,7 @@ import gitRuntimeCatalog from "../../../service-schemas/src/runtime/generated/gi
 import {
   PANEL_TREE_METHOD_CATALOG,
   portableExports,
-} from "../../../service-schemas/src/runtime/runtimeSurface.portable.js";
+} from "@vibestudio/service-schemas/runtime/runtimeSurface.portable";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeEvalBindingSurface,

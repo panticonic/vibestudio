@@ -7,14 +7,14 @@ import { Gateway } from "./gateway.js";
 import type {
   ServiceDispatcher,
   ServiceContext,
-} from "../../packages/shared/src/serviceDispatcher.js";
-import { TokenManager } from "../../packages/shared/src/tokenManager.js";
-import { EntityCache } from "../../packages/shared/src/runtime/entityCache.js";
-import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.js";
-import type { UserSubject } from "../../packages/identity/src/types.js";
+} from "@vibestudio/shared/serviceDispatcher";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import type { UserSubject } from "@vibestudio/identity/types";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
-import { createTestServiceDispatcher } from "../../packages/shared/src/serviceDispatcherTestUtils.js";
-import type { ServiceDefinition } from "../../packages/shared/src/serviceDefinition.js";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import {

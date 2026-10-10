@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
-import { TokenManager } from "../../packages/shared/src/tokenManager.js";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
 import {
   WorkerdManager,
   type WorkerdManagerDeps,

@@ -15,11 +15,11 @@ import type {
   WebhookDeliveryEvent,
   WebhookIngressSubscriptionSummary,
   WebhookTarget,
-} from "../../../packages/shared/src/webhooks/ingress.js";
+} from "@vibestudio/shared/webhooks/ingress";
 import {
   WEBHOOK_DEFAULT_MAX_BODY_BYTES,
   WEBHOOK_HARD_MAX_BODY_BYTES,
-} from "../../../packages/shared/src/webhooks/ingress.js";
+} from "@vibestudio/shared/webhooks/ingress";
 import { resolveWebhookDirectMaxBodyBytes } from "./webhookIngressService.js";
 
 const RELAY_BASE_URL = "https://hooks.test";

@@ -2,17 +2,12 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import ignore from "ignore";
+import { updateHashFromFile } from "./lib/file-digest.mjs";
 
 export const HOST_BUILD_FINGERPRINT_PATH = "dist/host-build-fingerprint.json";
 export const DESKTOP_HOST_BUILD_FINGERPRINT_PATH = "dist/desktop-host-build-fingerprint.json";
 
-const INPUT_ROOTS = [
-  "apps",
-  "build-resources",
-  "packages",
-  "skills/vibestudio-agent",
-  "src",
-];
+const INPUT_ROOTS = ["apps", "build-resources", "packages", "skills/vibestudio-agent", "src"];
 
 const INPUT_FILES = [
   ".gitignore",
@@ -37,6 +32,9 @@ const INPUT_FILES = [
   "scripts/host-build-fingerprint.mjs",
   "scripts/host-build-generations.mjs",
   "scripts/infrastructure-package-cache.mjs",
+  "scripts/build-artifact-groups.mjs",
+  "scripts/lib/file-digest.mjs",
+  "scripts/lib/compiler-inputs.mjs",
   "tsconfig.json",
   "tsconfig.workers.json",
 ];
@@ -106,7 +104,7 @@ export function computeHostBuildFingerprint({
     if (stat.isSymbolicLink()) {
       hash.update(`link:${fs.readlinkSync(filePath)}`);
     } else {
-      hash.update(fs.readFileSync(filePath));
+      updateHashFromFile(hash, filePath);
     }
     hash.update("\0");
   }

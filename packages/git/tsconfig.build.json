@@ -6,7 +6,9 @@
     "sourceMap": true,
     "paths": {
       "@vibestudio/types": ["../types/dist/index.d.ts"]
-    }
+    },
+    "incremental": true,
+    "tsBuildInfoFile": "./tsconfig.build.tsbuildinfo"
   },
   "exclude": ["**/*.test.ts", "**/*.spec.ts"]
 }

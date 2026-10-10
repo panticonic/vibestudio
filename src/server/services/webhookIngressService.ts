@@ -30,7 +30,7 @@ import {
   type WebhookIngressSubscriptionSummary,
   type WebhookReplayKey,
   type WebhookTarget,
-} from "../../../packages/shared/src/webhooks/ingress.js";
+} from "@vibestudio/shared/webhooks/ingress";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import type { RelayWebhookFrame, WebhookAck } from "./relayBackhaulClient.js";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";

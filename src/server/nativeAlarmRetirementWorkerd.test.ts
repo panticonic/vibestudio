@@ -9,7 +9,7 @@ import { build } from "esbuild";
 import { WebSocket, WebSocketServer } from "ws";
 import { expect, it, onTestFinished } from "vitest";
 import { decodeRpcJson, encodeRpcJson, type RpcEnvelope } from "@vibestudio/rpc";
-import { createTestDirectAuthority } from "../../packages/durable/src/test-utils.js";
+import { createTestDirectAuthority } from "@vibestudio/durable/test-utils";
 
 import { requireDevelopmentTemplateCheckout } from "../dev/developmentTemplateConfig.js";
 

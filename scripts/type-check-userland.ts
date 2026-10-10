@@ -2,6 +2,12 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { configuredFiles, prepareHostValidation } from "./lib/host-validation.js";
+import {
+  ValidationProjects,
+  type ValidationUnit,
+  type ValidationPaths,
+} from "./lib/validation-projects.js";
 import {
   prepareUserlandDependencyProjection,
   requiresNativeHost,
@@ -10,7 +16,6 @@ import {
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.js";
 import { composeDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateComposition.js";
 import { buildNativeIsolation } from "./build-native-isolation.mjs";
-import { buildInfrastructurePackages } from "./infrastructure-package-cache.mjs";
 import { stageNodeRuntime } from "./node-runtime-artifacts.mjs";
 import { assertTemplateCheckoutHygiene } from "./lib/template-checkout-hygiene.mjs";
 
@@ -47,7 +52,7 @@ if (workspaceArgumentIndex < 0) {
     const name = source.id;
     const composition = composeDevelopmentTemplateCheckouts(
       (name === "base" ? [base] : [base, source]).map(({ id, url }) => ({
-        checkout: checkouts[id],
+        checkout: checkouts[id]!,
         url,
       }))
     );
@@ -76,31 +81,33 @@ if (workspaceArgumentIndex >= 0 && !process.argv[workspaceArgumentIndex + 1]) {
   throw new Error("--workspace-root requires a directory");
 }
 const workspaceRoot = path.resolve(process.argv[workspaceArgumentIndex + 1]!);
-const compiler = path.join(appRoot, "node_modules", "typescript", "bin", "tsc");
-// This checkout command installs workspace-declared dependencies before a host
-// build exists. Prepare the same installed toolchain used by runtime installs.
-buildNativeIsolation(appRoot);
-await stageNodeRuntime(appRoot);
-// Packages built with the `tsc-output` profile publish their types from dist/,
-// so a workspace importing one cannot be type-checked until they are compiled.
-// The build is cached and reuses verified output, so a checkout that is already
-// built pays nothing for this.
-buildInfrastructurePackages({ cwd: appRoot });
-const projection = await prepareUserlandDependencyProjection({
-  appRoot,
-  workspaceRoot,
-  includeDevelopmentDependencies: true,
-  packageRelease,
-});
-const temporaryParent = path.join(appRoot, ".cache");
-fs.mkdirSync(temporaryParent, { recursive: true });
-const temporaryRoot = fs.mkdtempSync(path.join(temporaryParent, "checkout-typecheck-"));
-let failed = false;
-
+const projects = new ValidationProjects(appRoot);
+let projection: UserlandDependencyProjection | undefined;
+let temporaryRoot: string | undefined;
 try {
-  projectCheckoutSource(temporaryRoot, projection.units);
+  // This checkout command installs workspace-declared dependencies before a host
+  // build exists. Prepare the same installed toolchain used by runtime installs.
+  buildNativeIsolation(appRoot);
+  await stageNodeRuntime(appRoot);
+  // Packages built with the `tsc-output` profile publish their types from dist/,
+  // so a workspace importing one cannot be type-checked until they are compiled.
+  // The build is cached and reuses verified output, so a checkout that is already
+  // built pays nothing for this.
+  const host = await prepareHostValidation(appRoot, projects);
+  const preparedProjection = await prepareUserlandDependencyProjection({
+    appRoot,
+    workspaceRoot,
+    includeDevelopmentDependencies: true,
+    packageRelease,
+  });
+  projection = preparedProjection;
+  const temporaryParent = path.join(appRoot, ".cache");
+  fs.mkdirSync(temporaryParent, { recursive: true });
+  temporaryRoot = fs.mkdtempSync(path.join(temporaryParent, "checkout-typecheck-"));
+
+  projectCheckoutSource(temporaryRoot, preparedProjection.units);
   projectNodeModules(temporaryRoot, [
-    projection.nodeModulesDir,
+    preparedProjection.nodeModulesDir,
     path.join(appRoot, "node_modules"),
   ]);
 
@@ -108,37 +115,121 @@ try {
   // workspace target validates only the units it actually contains.
   const configs = ["tsconfig.json"];
   if (process.argv.includes("--host-integration")) configs.push("tsconfig.integration.json");
-  if (projection.units.some((unit) => requiresNativeHost(unit, projection.graph))) {
+  if (preparedProjection.units.some((unit) => requiresNativeHost(unit, preparedProjection.graph))) {
     configs.push("tsconfig.integration.mobile.json");
   }
-  for (const configName of configs) {
-    const projectedConfig = path.join(temporaryRoot, "workspace", configName);
-    try {
-      execFileSync(compiler, ["--project", projectedConfig, "--pretty", "false"], {
-        cwd: temporaryRoot,
-        encoding: "utf8",
-        stdio: "pipe",
-        maxBuffer: 64 * 1024 * 1024,
-      });
-      console.log(`✓ ${path.relative(appRoot, workspaceRoot)}/${configName}`);
-    } catch (error) {
-      failed = true;
-      const result = error as { stdout?: string; stderr?: string };
-      if (result.stdout) process.stderr.write(result.stdout);
-      if (result.stderr) process.stderr.write(result.stderr);
+  const baseConfig = JSON.parse(
+    fs.readFileSync(path.join(temporaryRoot, "workspace", "tsconfig.json"), "utf8")
+  );
+  const baseFiles = configuredFiles(path.join(temporaryRoot, "workspace", "tsconfig.json"));
+  const nativeConfig = JSON.parse(
+    fs.readFileSync(
+      path.join(appRoot, "scripts/config/userland/tsconfig.integration.mobile.json"),
+      "utf8"
+    )
+  );
+  const nativeFiles = configs.includes("tsconfig.integration.mobile.json")
+    ? configuredFiles(path.join(temporaryRoot, "workspace", "tsconfig.integration.mobile.json"))
+    : [];
+  const paths: ValidationPaths = { ...host.paths };
+  for (const unit of preparedProjection.units) {
+    const owner = path.join(temporaryRoot, "workspace", unit.relativePath);
+    const manifest = JSON.parse(fs.readFileSync(path.join(unit.path, "package.json"), "utf8"));
+    const entry = manifest.types ?? manifest.vibestudio?.entry ?? manifest.main;
+    if (entry) paths[unit.name] = [path.resolve(owner, entry)];
+    paths[`@exact-userland/${unit.relativePath}/*`] = [path.join(owner, "*")];
+    for (const [subpath, target] of normalizedExports(manifest.exports)) {
+      paths[subpath === "." ? unit.name : `${unit.name}/${subpath.slice(2)}`] = [
+        path.resolve(owner, target),
+      ];
     }
   }
+  const externalTypes = [
+    path.join(preparedProjection.nodeModulesDir, "@types"),
+    path.join(appRoot, "node_modules/@types"),
+    preparedProjection.nodeModulesDir,
+    path.join(appRoot, "node_modules"),
+  ];
+  const options = { ...baseConfig.compilerOptions, paths, typeRoots: externalTypes };
+  const declarations: ValidationUnit[] = preparedProjection.units.map((unit) => {
+    const root = path.join(temporaryRoot!, "workspace", unit.relativePath);
+    const realmFiles = requiresNativeHost(unit, preparedProjection.graph) ? nativeFiles : baseFiles;
+    return {
+      name: unit.name,
+      root,
+      files: realmFiles.filter((file) => file.startsWith(root + path.sep)),
+    };
+  });
+  // Node and React Native ambient globals have distinct compiler contracts.
+  const desktop = declarations.filter(
+    (unit) => !nativeFiles.some((file) => unit.files.includes(file))
+  );
+  const native = declarations.filter((unit) => !desktop.includes(unit));
+  const production = (units: ValidationUnit[]) =>
+    units.map((unit) => ({
+      ...unit,
+      files: unit.files.filter((file) => !/\.(test|spec)\.[cm]?tsx?$/.test(file)),
+    }));
+  const desktopAmbient = baseFiles.filter((file) => /\.d\.[cm]?ts$/.test(file));
+  const nativeAmbient = nativeFiles.filter((file) => /\.d\.[cm]?ts$/.test(file));
+  const desktopPaths = await projects.contracts(
+    production(desktop),
+    paths,
+    options,
+    desktopAmbient,
+    preparedProjection.nodeModulesDir
+  );
+  const nativePaths = await projects.contracts(
+    production(native),
+    desktopPaths,
+    {
+      ...options,
+      ...nativeConfig.compilerOptions,
+      paths: desktopPaths,
+    },
+    nativeAmbient,
+    preparedProjection.nodeModulesDir
+  );
+  projects.checkUnits(desktop, paths, desktopPaths, options, desktopAmbient);
+  projects.checkUnits(
+    native,
+    paths,
+    nativePaths,
+    { ...options, ...nativeConfig.compilerOptions },
+    nativeAmbient,
+    preparedProjection.nodeModulesDir
+  );
+  for (const configName of configs) {
+    const configPath = path.join(temporaryRoot, "workspace", configName);
+    const selectedFiles = configuredFiles(configPath).filter(
+      (file) => !declarations.some((unit) => unit.files.includes(file))
+    );
+    projects.check(
+      configName,
+      [
+        ...new Set([
+          ...selectedFiles,
+          ...(configName.includes("mobile") ? nativeAmbient : desktopAmbient),
+        ]),
+      ],
+      configName.includes("mobile")
+        ? { ...options, ...nativeConfig.compilerOptions, paths: nativePaths }
+        : { ...options, paths: desktopPaths }
+    );
+  }
 } finally {
-  fs.rmSync(temporaryRoot, { recursive: true, force: true });
-  projection.release();
+  try {
+    if (temporaryRoot) fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  } finally {
+    try {
+      projection?.release();
+    } finally {
+      await projects.close();
+    }
+  }
 }
 
-if (failed) {
-  console.error("Userland typecheck failed.");
-  process.exitCode = 1;
-} else {
-  console.log("✓ Userland typecheck passed using the semantic dependency projection.");
-}
+console.log("✓ Userland typecheck passed using package declaration boundaries.");
 
 function projectCheckoutSource(
   targetRoot: string,
@@ -147,10 +238,14 @@ function projectCheckoutSource(
   const projectedWorkspace = path.join(targetRoot, "workspace");
   fs.mkdirSync(projectedWorkspace, { recursive: true });
   for (const entry of fs.readdirSync(workspaceRoot, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === ".cache") continue;
+    if (["node_modules", ".cache", ".git"].includes(entry.name)) continue;
     const source = path.join(workspaceRoot, entry.name);
     const target = path.join(projectedWorkspace, entry.name);
-    if (entry.isDirectory()) linkDirectory(source, target);
+    if (entry.isDirectory())
+      fs.cpSync(source, target, {
+        recursive: true,
+        filter: (file) => !["node_modules", ".cache", ".git", "dist"].includes(path.basename(file)),
+      });
   }
   // Checkout validation is a host development concern, not workspace source.
   for (const name of fs.readdirSync(path.join(appRoot, "scripts/config/userland"))) {

@@ -780,6 +780,68 @@ interface CollectedAuthorityAcquisition {
   context: AuthorizationContext;
 }
 
+export type AuthorityAcquirer = {
+  request(input: AuthorityAcquisitionRequest): AcquisitionInfo;
+  requestMany?(inputs: readonly AuthorityAcquisitionRequest[]): AcquisitionInfo;
+  canAcquireMany?(inputs: readonly AuthorityAcquisitionRequest[]): boolean;
+  acquire(
+    input: AuthorityAcquisitionRequest,
+    signal?: AbortSignal
+  ): Promise<{
+    state: "decided" | "closed";
+    decision?: import("@vibestudio/shared/approvalContract").AuthorityAcquisitionDecision;
+    info?: AcquisitionInfo;
+  }>;
+  acquireMany?(
+    inputs: readonly AuthorityAcquisitionRequest[],
+    signal?: AbortSignal
+  ): Promise<{
+    state: "decided" | "closed";
+    decision?: import("@vibestudio/shared/approvalContract").AuthorityAcquisitionDecision;
+    info?: AcquisitionInfo;
+  }>;
+  consume(grantId: string): boolean;
+  touch?(grantId: string): boolean;
+  priorInteractiveApprovalCount?(input: {
+    agentBindingId: string;
+    capability: string;
+    resource: ResourceScope;
+  }): number;
+  invalidate(inputs: readonly AuthorityAcquisitionRequest[]): void;
+};
+
+export type OpenReviewLookup = (code: {
+  repoPath: string;
+  effectiveVersion: string;
+}) => { approvalId: string; title: string } | null;
+
+export type AuthorityLifecycleObserver = (event: {
+  executionSession: NonNullable<AuthorizationContext["executionSession"]>;
+  kind: "authority-requested" | "authority-decided";
+  payload: {
+    capability: string;
+    resourceKey: string;
+    tier: "open" | "gated" | "critical";
+    decision?: string;
+    acquisitionId?: string;
+    snapshotDigest?: string;
+  };
+}) => void | Promise<void>;
+
+export type ServiceSuccessObserver = (outcome: {
+  ctx: ServiceContext;
+  service: string;
+  method: string;
+}) => void;
+
+export type ServiceFailureObserver = (failure: {
+  ctx: ServiceContext;
+  service: string;
+  method: string;
+  error: unknown;
+  diagnosticId: string;
+}) => void;
+
 /**
  * Service dispatcher — all services registered via registerService().
  */
@@ -788,35 +850,7 @@ export class ServiceDispatcher {
   private definitions = new Map<string, ServiceDefinition>();
   private readonly methodTiers = new Map<string, MethodTierPolicy>();
   private initialized = false;
-  private authorityAcquirer?: {
-    request(input: AuthorityAcquisitionRequest): AcquisitionInfo;
-    requestMany?(inputs: readonly AuthorityAcquisitionRequest[]): AcquisitionInfo;
-    canAcquireMany?(inputs: readonly AuthorityAcquisitionRequest[]): boolean;
-    acquire(
-      input: AuthorityAcquisitionRequest,
-      signal?: AbortSignal
-    ): Promise<{
-      state: "decided" | "closed";
-      decision?: import("@vibestudio/shared/approvalContract").AuthorityAcquisitionDecision;
-      info?: AcquisitionInfo;
-    }>;
-    acquireMany?(
-      inputs: readonly AuthorityAcquisitionRequest[],
-      signal?: AbortSignal
-    ): Promise<{
-      state: "decided" | "closed";
-      decision?: import("@vibestudio/shared/approvalContract").AuthorityAcquisitionDecision;
-      info?: AcquisitionInfo;
-    }>;
-    consume(grantId: string): boolean;
-    touch?(grantId: string): boolean;
-    priorInteractiveApprovalCount?(input: {
-      agentBindingId: string;
-      capability: string;
-      resource: ResourceScope;
-    }): number;
-    invalidate(inputs: readonly AuthorityAcquisitionRequest[]): void;
-  };
+  private authorityAcquirer?: AuthorityAcquirer;
   /**
    * Is a review covering this exact unit version still open?
    *
@@ -829,33 +863,19 @@ export class ServiceDispatcher {
    * recoverable error and the UI focuses the review that is already waiting
    * (docs/template-install-unit-approval-ux-plan.md U6).
    */
-  private openReviewFor?: (code: {
-    repoPath: string;
-    effectiveVersion: string;
-  }) => { approvalId: string; title: string } | null;
+  private openReviewFor?: OpenReviewLookup;
 
-  private authorityObserver?: (event: {
-    executionSession: NonNullable<AuthorizationContext["executionSession"]>;
-    kind: "authority-requested" | "authority-decided";
-    payload: {
-      capability: string;
-      resourceKey: string;
-      tier: "open" | "gated" | "critical";
-      decision?: string;
-      acquisitionId?: string;
-      snapshotDigest?: string;
-    };
-  }) => void | Promise<void>;
+  private authorityObserver?: AuthorityLifecycleObserver;
 
-  setAuthorityAcquirer(acquirer: NonNullable<ServiceDispatcher["authorityAcquirer"]>): void {
+  setAuthorityAcquirer(acquirer: AuthorityAcquirer): void {
     this.authorityAcquirer = acquirer;
   }
 
-  setAuthorityObserver(observer: NonNullable<ServiceDispatcher["authorityObserver"]>): void {
+  setAuthorityObserver(observer: AuthorityLifecycleObserver): void {
     this.authorityObserver = observer;
   }
 
-  setOpenReviewLookup(lookup: NonNullable<ServiceDispatcher["openReviewFor"]>): void {
+  setOpenReviewLookup(lookup: OpenReviewLookup): void {
     this.openReviewFor = lookup;
   }
 
@@ -1085,22 +1105,12 @@ export class ServiceDispatcher {
   /**
    * Dispatch a service call.
    */
-  private successObserver?: (outcome: {
-    ctx: ServiceContext;
-    service: string;
-    method: string;
-  }) => void;
-  setSuccessObserver(observer: typeof this.successObserver): void {
+  private successObserver?: ServiceSuccessObserver;
+  setSuccessObserver(observer: ServiceSuccessObserver | undefined): void {
     this.successObserver = observer;
   }
-  private failureObserver?: (failure: {
-    ctx: ServiceContext;
-    service: string;
-    method: string;
-    error: unknown;
-    diagnosticId: string;
-  }) => void;
-  setFailureObserver(observer: typeof this.failureObserver): void {
+  private failureObserver?: ServiceFailureObserver;
+  setFailureObserver(observer: ServiceFailureObserver | undefined): void {
     this.failureObserver = observer;
   }
   async dispatch(

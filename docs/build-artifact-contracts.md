@@ -20,3 +20,9 @@ pnpm run check:build-artifacts
 ```
 
 When changing esbuild options, package `"type"`, `external`, `conditions`, or package boundaries, run a full build and this check before testing Electron startup.
+
+Build ownership and reuse live in `build.mjs`, so direct builds and desktop launchers use the same lock and freshness check. A matching source fingerprint reuses artifacts only after their contracts pass. Compatible esbuild entrypoints share an invocation; separate compiler realms run sequentially. Failed builds leave no reusable success marker.
+
+Infrastructure package builds hash their compiler inputs and verify emitted output. Source edits retain incremental compiler state; missing or changed output resets it. Files retired from the compiler program are removed from `dist` after compilation. An excluded test only invalidates production output when production code imports it.
+
+`pnpm type-check:host` and `pnpm type-check:userland` compile package declarations in dependency order and check source and tests against those boundaries. Cycles and private relative imports share a compiler program to preserve type identity. Declaration caches include source, compiler options, dependency declarations, the installed toolchain, and emitted-output receipts. Incremental no-emit state is published after a successful check. These caches live under the host checkout's `.cache`, use the derived-cache lease and quota system, and do not write compiler state into template checkouts. Temporary configurations and unpublished output are removed on failure.

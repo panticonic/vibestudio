@@ -271,10 +271,15 @@ function visitAst(value: unknown, visit: (node: AstNode) => void, seen: Set<obje
  * import-looking text in strings, comments, templates, and regexes is never
  * interpreted as code.
  */
-export function analyzeModuleImports(source: string): ModuleImportReference[] {
+export function analyzeModuleImports(source: string, filename?: string): ModuleImportReference[] {
   const ast = parse(source, {
     sourceType: "unambiguous",
-    plugins: PARSER_PLUGINS,
+    sourceFilename: filename,
+    plugins: PARSER_PLUGINS.map((plugin) =>
+      plugin === "typescript" && filename && /\.d\.[cm]?ts$/.test(filename)
+        ? ["typescript", { dts: true }]
+        : plugin
+    ),
     allowAwaitOutsideFunction: true,
     allowReturnOutsideFunction: true,
     createImportExpressions: true,

@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { analyzeModuleImports, definitelyTypedCoordinate, moduleCoordinate } from "./index.js";
 
 describe("analyzeModuleImports", () => {
+  it("uses declaration grammar for declaration source files", () => {
+    expect(
+      analyzeModuleImports(
+        'import type {Shape} from "shape"; export const value: Shape;',
+        "native.d.mts"
+      )
+    ).toMatchObject([{ specifier: "shape", kind: "type" }]);
+    expect(() => analyzeModuleImports("export const value: number;", "native.mts")).toThrow();
+  });
   it("reports static, exported, dynamic, and CommonJS references with locations", () => {
     const source = [
       'import main, { type Shape, value as renamed } from "alpha";',

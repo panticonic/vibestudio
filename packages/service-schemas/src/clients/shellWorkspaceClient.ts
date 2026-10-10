@@ -25,7 +25,7 @@ export class WorkspaceClient {
       rpc.call("main", `${service}.${method}`, args)
     );
   }
-  getInfo(): ReturnType<typeof this.typed.getInfo> {
+  getInfo(): ReturnType<TypedServiceClient<typeof workspaceMethods>["getInfo"]> {
     return this.typed.getInfo();
   }
   getActive(): Promise<string> {

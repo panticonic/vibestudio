@@ -9,7 +9,7 @@ import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { PanelExecutionReconciler } from "./panelExecutionReconciler.js";
 import { createTestDO } from "@vibestudio/durable/test-utils";
-import { WorkspaceDOTestable } from "../../packages/builtin/src/workspace-state/testFixture.js";
+import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
 
 it.each([
   { source: "about/new", stateArgs: { welcome: true } },
