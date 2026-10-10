@@ -591,6 +591,64 @@ describe("execution-owned native operation evidence", () => {
       { ...health, errors: [{ identity: { ...identity, entityId: "extension:other" }, timestamp: 2, level: "error", message: "foreign" }] })).toThrow("different supervised entity identity");
   });
 
+  it("records the native supervision roster for direct and aliased list calls", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const nativeRpc = (instance as unknown as {
+      rpc: { call: (...args: unknown[]) => Promise<unknown> };
+    }).rpc;
+    const entity = {
+      identity: { kind: "worker", entityId: "worker:one" },
+      release: { kind: "worker", releaseId: "workers/one" },
+      source: "workers/one",
+      status: "running",
+      lastError: null,
+      artifact: { effectiveVersion: "ev-one", buildKey: null, executionDigest: null },
+      facets: { activation: false, release: false, inspector: false },
+    };
+    vi.spyOn(nativeRpc, "call").mockResolvedValue([entity]);
+    const owner = (instance as unknown as {
+      createExecutionContext: (input: { contextId: string }) => {
+        rpc: typeof nativeRpc;
+        operationJournal: ExecutionJournal;
+      };
+    }).createExecutionContext({ contextId: "owner" });
+
+    await owner.rpc.call("main", "runtime.supervision.list", [undefined]);
+    const runtime = {
+      supervision: {
+        list: () => owner.rpc.call("main", "runtime.supervision.list", [undefined]),
+      },
+    };
+    await runtime.supervision.list();
+
+    expect(owner.operationJournal.close().entries).toEqual([
+      {
+        type: "runtime.inventory",
+        receipt: {
+          protocol: "runtime-inventory-observation.v1",
+          entityCount: 1,
+          entities: [{
+            identity: entity.identity,
+            source: entity.source,
+            status: entity.status,
+          }],
+        },
+      },
+      {
+        type: "runtime.inventory",
+        receipt: {
+          protocol: "runtime-inventory-observation.v1",
+          entityCount: 1,
+          entities: [{
+            identity: entity.identity,
+            source: entity.source,
+            status: entity.status,
+          }],
+        },
+      },
+    ]);
+  });
+
   it("marks incomplete evidence without exceeding the wire budget", () => {
     const owner = new ExecutionJournal();
     owner.recordBuildProfile(profile());

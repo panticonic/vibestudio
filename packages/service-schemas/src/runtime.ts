@@ -383,6 +383,24 @@ export const NativeRuntimeHealthObservationSchema = z
   })
   .strict();
 
+/** Native inventory evidence contains only exact host-observed live identities. */
+export const NativeRuntimeInventoryObservationSchema = z
+  .object({
+    protocol: z.literal("runtime-inventory-observation.v1"),
+    entityCount: z.number().int().nonnegative(),
+    entities: z.array(
+      z
+        .object({
+          identity: RuntimeSupervisionEntityKeySchema,
+          source: z.string(),
+          status: z.enum(["starting", "running", "stopped", "error"]),
+        })
+        .strict()
+    ),
+  })
+  .strict()
+  .refine((observation) => observation.entityCount === observation.entities.length);
+
 const RuntimeSupervisionLogOptionsSchema = z
   .object({
     since: z.number().optional(),

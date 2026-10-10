@@ -1,4 +1,8 @@
-import { runtimeMethods, NativeRuntimeHealthObservationSchema } from "@vibestudio/service-schemas/runtime";
+import {
+  runtimeMethods,
+  NativeRuntimeHealthObservationSchema,
+  NativeRuntimeInventoryObservationSchema,
+} from "@vibestudio/service-schemas/runtime";
 import {
   webhookIngressMethods,
   NativeWebhookObservationSchema,
@@ -187,6 +191,20 @@ export class ExecutionJournal {
       logCount: health.logs.length, errorCount: health.errors.length,
       limit, errorLimit, dropped: health.dropped, capacity: health.capacity,
     }) });
+  }
+
+  recordRuntimeInventory(method: string, args: unknown[], result: unknown): void {
+    if (this.closed || method !== "runtime.supervision.list") return;
+    runtimeMethods["supervision.list"].args.parse(args);
+    const entities = runtimeMethods["supervision.list"].returns!.parse(result);
+    this.append({
+      type: "runtime.inventory",
+      receipt: NativeRuntimeInventoryObservationSchema.parse({
+        protocol: "runtime-inventory-observation.v1",
+        entityCount: entities.length,
+        entities: entities.map(({ identity, source, status }) => ({ identity, source, status })),
+      }),
+    });
   }
 
   recordCredentialResolution(method: string, args: unknown[], result: unknown): void {

@@ -271,3 +271,13 @@ history does not substitute release history. App lifecycle and terminal output
 feed that same store, preserving structured build errors. Native eval receipts
 record authoritative default bounds as well as explicit ones. The initial six
 focused host test files pass all 103 tests, and host typechecking passes.
+
+The combined diagnostics rerun `st_6e699bf16e124b0cacf20cd1e80b67bf` passes
+bounded unit logs/errors and GAD integrity. Unit listing then exposed another
+source-spelling assumption: a successful `sup.list()` alias was rejected for
+not containing the literal method path. The native journal now records the
+host-validated supervision roster's identities, sources, and statuses. System
+Testing commit `1545f19` joins that inventory to a representative native health
+read, derives the reported count from the observed rows, and rejects fabricated
+or unrelated inspections. All 50 focused validator tests and 26 journal tests
+pass, along with host typechecking; the prompt remains unchanged.
