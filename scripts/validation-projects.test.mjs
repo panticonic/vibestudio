@@ -5,7 +5,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { tsImport } from "tsx/esm/api";
 const { ValidationProjects } = await tsImport("./lib/validation-projects.ts", import.meta.url);
-const { configuredFiles } = await tsImport("./lib/host-validation.ts", import.meta.url);
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "validation-state-"));
@@ -21,7 +20,7 @@ function states(root) {
     .map((name) => path.join(root, ".cache/typecheck-state", name));
 }
 
-test("the original program retains ambient contracts, tests, and valid incremental state after failure", async () => {
+test("the original program retains ambient contracts, tests, and incremental diagnostics", async () => {
   const {root, config, options, projects} = fixture();
   try {
     fs.writeFileSync(path.join(root, "api.ts"), 'export interface Registry {}\nexport function use<K extends keyof Registry>(key: K): Registry[K] { throw new Error(String(key)); }');
@@ -30,7 +29,7 @@ test("the original program retains ambient contracts, tests, and valid increment
     const source = 'import {use} from "api"; export const result: number = use("shell").open();';
     fs.writeFileSync(consumer, source);
     fs.writeFileSync(config, JSON.stringify({include:["*.ts"], compilerOptions:{...options, paths:{api:["./api.ts"]}}}));
-    const check = () => projects.check("fixture", configuredFiles(config), {}, config);
+    const check = () => projects.check("fixture", config);
     check();
     const [state] = states(root);
     assert.ok(state);
@@ -39,13 +38,23 @@ test("the original program retains ambient contracts, tests, and valid increment
     const saved = fs.readFileSync(state);
     fs.writeFileSync(consumer, source.replace('result: number', 'result: boolean'));
     assert.throws(check);
-    assert.deepEqual(fs.readFileSync(state), saved);
+    assert.notDeepEqual(fs.readFileSync(state), saved);
+    assert.throws(check); // Cached diagnostics must remain a failure.
     assert.deepEqual(fs.readdirSync(path.dirname(state)), ["state.tsbuildinfo"]);
     fs.writeFileSync(consumer, source);
     check();
+    const completed = fs.readFileSync(state);
+    fs.unlinkSync(path.join(root, "node_modules"));
+    assert.throws(check); // A compiler launch failure must preserve prior state.
+    assert.deepEqual(fs.readFileSync(state), completed);
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "dir");
     // Changing the authoritative root set must invalidate the ambient contract.
     fs.writeFileSync(config, JSON.stringify({files:["api.ts", "consumer.test.ts"], compilerOptions:{...options, paths:{api:["./api.ts"]}}}));
     assert.throws(check);
+    fs.writeFileSync(config, JSON.stringify({include:["*.ts"], compilerOptions:{...options, paths:{api:["./api.ts"]}}}));
+    check(); // Restoring ambient roots must invalidate the cached error.
+    fs.writeFileSync(config, JSON.stringify({files:[], compilerOptions:options}));
+    assert.throws(check); // An invalid empty program must not report success.
   } finally {
     await projects.close();
     fs.rmSync(root, {recursive:true, force:true});
@@ -57,7 +66,7 @@ test("compiler option changes retain each original realm's diagnostics", async (
   try {
     fs.writeFileSync(path.join(root, "realm.ts"), 'export const element = document.createElement("div");');
     const write = (lib) => fs.writeFileSync(config, JSON.stringify({files:["realm.ts"], compilerOptions:{...options, lib}}));
-    const check = () => projects.check("realm", configuredFiles(config), {}, config);
+    const check = () => projects.check("realm", config);
     write(["ES2022", "DOM"]);
     check();
     const [state] = states(root);
@@ -65,6 +74,7 @@ test("compiler option changes retain each original realm's diagnostics", async (
     write(["ES2022"]);
     assert.throws(check);
     assert.deepEqual(fs.readFileSync(state), saved);
+    assert.equal(states(root).length, 2);
     write(["ES2022", "DOM"]);
     check();
   } finally {

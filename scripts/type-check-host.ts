@@ -1,6 +1,5 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { configuredFiles } from "./lib/host-validation.js";
 import { ValidationProjects } from "./lib/validation-projects.js";
 import { buildInfrastructurePackages } from "./infrastructure-package-cache.mjs";
 
@@ -14,7 +13,7 @@ try {
     ["workerd programs", "src/server/workerdPrograms/tsconfig.json"],
   ] as const) {
     const config = path.join(appRoot, relative);
-    projects.check(name, configuredFiles(config), {}, config);
+    projects.check(name, config);
   }
 } finally {
   await projects.close();

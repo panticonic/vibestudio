@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { configuredCompilerOptions } from "./host-validation.js";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 
 // Compiler programs retain their authoritative configs and complete ambient
@@ -16,53 +17,50 @@ export class ValidationProjects {
   }
   check(
     name: string,
-    files: string[],
-    compilerOptions: Record<string, unknown>,
-    extendsConfig?: string
+    sourceConfig: string
   ): void {
-    if (!files.length) return;
     const cacheRoot = path.join(this.appRoot, ".cache", "typecheck-state");
-    const checkOptions = compilerOptions;
-    // Disposable source projections can move. Keep prior state available; the
-    // compiler validates the current roots, paths, options, and compiler version.
-    const { paths: _paths, ...identityOptions } = checkOptions;
+    // Compiler options define the diagnostic context. Distinct contexts must
+    // not share cached diagnostics; source versions remain compiler-owned.
+    const inherited = configuredCompilerOptions(sourceConfig);
+    const { configFilePath: _configFilePath, ...scopeOptions } = inherited;
+    const contextOptions: Record<string, unknown> = { ...scopeOptions, noEmit: true, incremental: true };
+    // Source projections use the same layout at disposable physical locations.
+    // Actual compiler options and file paths remain untouched in the program.
+    for (const key of ["rootDir", "outDir", "baseUrl", "pathsBasePath"])
+      if (typeof contextOptions[key] === "string")
+        contextOptions[key] = path.relative(path.dirname(sourceConfig), contextOptions[key] as string);
     const key = createHash("sha256")
-      .update(JSON.stringify({ name, compilerOptions: identityOptions, config: extendsConfig && path.basename(extendsConfig) }))
+      .update(JSON.stringify({ name, compilerOptions: contextOptions, config: path.basename(sourceConfig) }))
       .digest("hex");
     this.leases.push(this.coordinator.acquire(cacheRoot, key));
     const root = path.join(cacheRoot, key);
     fs.mkdirSync(root, { recursive: true });
     const state = path.join(root, "state.tsbuildinfo");
     const id = randomUUID();
-    const config = path.join(root, `${key}-${id}.json`);
     const ownedState = path.join(root, `${key}-${id}.tsbuildinfo`);
     try {
       if (fs.existsSync(state)) fs.copyFileSync(state, ownedState);
-      fs.writeFileSync(
-        config,
-        JSON.stringify({
-          extends: extendsConfig,
-          files,
-          compilerOptions: {
-            ...checkOptions,
-            noEmit: true,
-            incremental: true,
-            tsBuildInfoFile: ownedState,
-          },
-        })
-      );
-      this.compile(config);
-      fs.renameSync(ownedState, state);
+      let failure: unknown;
+      try {
+        this.compile(sourceConfig, ownedState);
+      } catch (error) {
+        // A completed compiler can cache diagnostics as well as successful
+        // checks. Launch failure or cancellation cannot publish owned state.
+        if (typeof (error as {status?: unknown}).status !== "number") throw error;
+        failure = error;
+      }
+      if (fs.existsSync(ownedState)) fs.renameSync(ownedState, state);
+      if (failure) throw failure;
       console.log(`✓ ${name}`);
     } finally {
-      fs.rmSync(config, { force: true });
       fs.rmSync(ownedState, { force: true });
     }
   }
 
-  private compile(config: string): void {
+  private compile(config: string, state: string): void {
     execFileSync(path.join(this.appRoot, "node_modules/typescript/bin/tsc"),
-      ["--project", config, "--pretty", "false"],
+      ["--project", config, "--noEmit", "--incremental", "--tsBuildInfoFile", state, "--pretty", "false"],
       { cwd: this.appRoot, stdio: "inherit" });
   }
 

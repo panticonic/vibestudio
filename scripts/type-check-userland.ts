@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { configuredFiles } from "./lib/host-validation.js";
 import { ValidationProjects } from "./lib/validation-projects.js";
 import { buildInfrastructurePackages } from "./infrastructure-package-cache.mjs";
 import {
@@ -121,11 +120,12 @@ try {
     preparedProjection.nodeModulesDir,
     path.join(appRoot, "node_modules"),
   ];
-  const compositionIdentity = preparedProjection.units.map((unit) => unit.name).sort().join(",");
   for (const configName of configs) {
     const config = path.join(temporaryRoot, "workspace", configName);
-    projects.check(`userland:${compositionIdentity}/${configName}`,
-      configuredFiles(config), { typeRoots }, config);
+    const configuration = JSON.parse(fs.readFileSync(config, "utf8"));
+    configuration.compilerOptions = { ...configuration.compilerOptions, typeRoots };
+    fs.writeFileSync(config, JSON.stringify(configuration));
+    projects.check(`userland:${configName}`, config);
   }
 } finally {
   try {
