@@ -1,3 +1,4 @@
+import { logVerbose } from "@vibestudio/dev-log";
 import { workspaceReleaseResourceRoot } from "../preparedWorkspaceTemplate.js";
 import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
 /**
@@ -1142,8 +1143,9 @@ export async function getOrHydrate(
       const materialized = readVerifiedLocalBuild(key);
       if (materialized && !reportedSharedBuildHits.has(key)) {
         reportedSharedBuildHits.set(key, true);
-        console.info(
-          `[BuildCache] Reused ${source.immutable ? "release" : "shared"} build ${materialized.metadata.name} (${key.slice(0, 12)})`
+        logVerbose(
+          "BuildCache",
+          `Reused ${source.immutable ? "release" : "shared"} build ${materialized.metadata.name} (${key.slice(0, 12)})`
         );
       }
       return materialized;

@@ -1,3 +1,4 @@
+import { logVerbose } from "@vibestudio/dev-log";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -160,7 +161,7 @@ export function seedRootTemplateSnapshotFromCheckout(input: {
         });
         const readAt = performance.now();
         if (readAt - startedAt >= 100) {
-          console.log("[Perf] local root template seed", {
+          logVerbose("Perf", "local root template seed", {
             copyMs: copiedAt - startedAt,
             readMs: readAt - copiedAt,
             totalMs: readAt - startedAt,

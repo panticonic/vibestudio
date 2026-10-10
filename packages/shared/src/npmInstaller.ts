@@ -1,3 +1,4 @@
+import { logVerbose, logWarn } from "@vibestudio/dev-log";
 import {
   DerivedCacheCoordinator,
   derivedCacheDatabasePath,
@@ -182,7 +183,7 @@ async function runNpmInstallInSlot(
       resetInstall = false;
       await new Promise<void>((resolve, reject) => {
         const startedAt = Date.now();
-        console.log(`[npm-install-profile] ${JSON.stringify({ phase, state: "started" })}`);
+        logVerbose("npm-install-profile", JSON.stringify({ phase, state: "started" }));
         let cancellation: unknown;
         let termination: Promise<void> | undefined;
         const terminate = () =>
@@ -254,7 +255,8 @@ async function runNpmInstallInSlot(
                   }
                 : {}),
             };
-            console.log(`[npm-install-profile] ${JSON.stringify(profile)}`);
+            const log = error || cancellation !== undefined ? logWarn : logVerbose;
+            log("npm-install-profile", JSON.stringify(profile));
             if (error) Object.assign(error, { stdout, stderr, npmPhase: phase });
             if (cancellation !== undefined) {
               reject(cancellation);

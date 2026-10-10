@@ -1,3 +1,4 @@
+import { logVerbose } from "@vibestudio/dev-log";
 import { intrinsicContentDescriptor, type ContentDescriptor } from "@vibestudio/content-addressing";
 import type { PreparedWorkspaceTemplate } from "./preparedWorkspaceTemplate.js";
 import * as fs from "node:fs";
@@ -438,7 +439,7 @@ export class WorkspaceRootTemplateBootstrap {
     this.recordHostBuildUnits(this.preparedInitialization);
     const materializedAt = performance.now();
     if (materializedAt - startedAt >= 100) {
-      console.log("[Perf] root template preparation", {
+      logVerbose("Perf", "root template preparation", {
         acquireMs: acquiredAt - startedAt,
         materializeMs: materializedAt - acquiredAt,
         totalMs: materializedAt - startedAt,
@@ -512,9 +513,7 @@ export class WorkspaceRootTemplateBootstrap {
     unitPath: string
   ): { buildKey: string; effectiveVersion: string } | null {
     if (this.installedPackage?.stateHash !== stateHash) return null;
-    const build = this.installedPackage.builds.find((build) => build.source === unitPath);
-    if (!build) throw new Error(`Installed template has no artifact for ${unitPath}`);
-    return build;
+    return this.installedPackage.builds.find((build) => build.source === unitPath) ?? null;
   }
 
   /**

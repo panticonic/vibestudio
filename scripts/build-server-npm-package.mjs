@@ -1,12 +1,11 @@
 #!/usr/bin/env node
+import { joinChildProcess } from "./lib/join-child-process.mjs";
 import {
   prepareInstalledTemplateRelease,
-  joinChildProcess,
   withStandaloneReleaseSession,
   verifyPreparedReleaseUserland,
 } from "./prebuild-release-userland.mjs";
 import spawn from "cross-spawn";
-import { DEVELOPMENT_DIST_ENTRIES } from "./build-artifact-contracts.mjs";
 // Stage the one publishable npm package from a completed `pnpm build`:
 //
 //   dist-packages/server  → @panticonic/vibestudio-server  (slim headless server, no electron)

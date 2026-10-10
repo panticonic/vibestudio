@@ -1,3 +1,4 @@
+import { logVerbose } from "@vibestudio/dev-log";
 import { UnitValidationStore } from "./unitValidationStore.js";
 import type { BuildBundleResult } from "@vibestudio/service-schemas/build";
 import { conditionsForLibraryTarget, conditionsForRuntimeUnit } from "./moduleConditions.js";
@@ -610,7 +611,7 @@ export async function initBuildSystemV2(
   appNodeModules: string | string[],
   rootOptions: BuildSystemRootOptions
 ): Promise<BuildSystemV2> {
-  console.log("[BuildV2] Initializing...");
+  logVerbose("BuildV2", "Initializing...");
   const appNodeModuleRoots = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
   const authorityEnvironmentFlights = new Map<
     string,
@@ -781,8 +782,9 @@ export async function initBuildSystemV2(
           );
           if (persistedLookup.index) {
             const eventLoop = performance.eventLoopUtilization(restoreEventLoopStart);
-            console.log(
-              `[BuildV2] Restored authority baseline for ${stateHash} from durable cache`,
+            logVerbose(
+              "BuildV2",
+              `Restored authority baseline for ${stateHash} from durable cache`,
               {
                 source: persistedLookup.source,
                 reason: persistedLookup.reason,
@@ -1055,7 +1057,7 @@ export async function initBuildSystemV2(
           }
           {
             const eventLoop = performance.eventLoopUtilization(eventLoopStart);
-            console.log("[BuildV2] Authority analysis phases", {
+            logVerbose("BuildV2", "Authority analysis phases", {
               stateHash,
               workspaceId: source.workspaceId,
               consumers: nodes.length,
@@ -1244,13 +1246,14 @@ export async function initBuildSystemV2(
           analysisSignal
         );
         if (persistedLookup.index) {
-          console.log(
-            `[BuildV2] Restored manifest authority index for ${stateHash} from shared cache`,
+          logVerbose(
+            "BuildV2",
+            `Restored manifest authority index for ${stateHash} from shared cache`,
             { source: persistedLookup.source, reason: persistedLookup.reason }
           );
           return persistedLookup.index;
         }
-        console.log("[BuildV2] Manifest authority index cache miss", {
+        logVerbose("BuildV2", "Manifest authority index cache miss", {
           stateHash,
           workspaceId: source.workspaceId,
           reason: persistedLookup.reason,
@@ -1346,8 +1349,9 @@ export async function initBuildSystemV2(
   const tGraph = Date.now();
   const graph = await source.discoverGraph(stateHash);
   const nodeCount = graph.allNodes().length;
-  console.log(
-    `[BuildV2] Discovered ${nodeCount} units in workspace (ensureFresh=${tGraph - tFresh}ms discoverGraph=${Date.now() - tGraph}ms)`
+  logVerbose(
+    "BuildV2",
+    `Discovered ${nodeCount} units in workspace (ensureFresh=${tGraph - tFresh}ms discoverGraph=${Date.now() - tGraph}ms)`
   );
 
   // Step 2: Compute effective versions. Cold-start fast path: if the
@@ -1359,7 +1363,7 @@ export async function initBuildSystemV2(
   if (persisted && persisted.stateHash === stateHash) {
     evMap = persisted.evMap;
     contentHashes = persisted.contentHashes;
-    console.log(`[BuildV2] EV state reused (workspace unchanged at ${stateHash.slice(0, 18)}…)`);
+    logVerbose("BuildV2", `EV state reused (workspace unchanged at ${stateHash.slice(0, 18)}…)`);
   } else {
     const tEv = Date.now();
     const relPaths = graph.allNodes().map((node) => node.relativePath);
@@ -1373,8 +1377,9 @@ export async function initBuildSystemV2(
     evMap = result.evMap;
     contentHashes = result.contentHashes;
     const changeset = diffEvMaps(persisted?.evMap ?? {}, evMap);
-    console.log(
-      `[BuildV2] EV diff: ${changeset.changed.length} changed, ` +
+    logVerbose(
+      "BuildV2",
+      `EV diff: ${changeset.changed.length} changed, ` +
         `${changeset.added.length} added, ${changeset.removed.length} removed (${Date.now() - tEv}ms)`
     );
     await persistEvState({ stateHash, evMap, contentHashes });
@@ -1392,10 +1397,10 @@ export async function initBuildSystemV2(
     source,
   });
   trigger.start();
-  console.log("[BuildV2] State trigger started");
+  logVerbose("BuildV2", "State trigger started");
   const authorityPublicationUnsubscribe = source.onProtectedPublication((event) => {
     if (authorityIndexManager.promotePublished(event.workspaceStateHash, authorityEpoch)) {
-      console.log(`[BuildV2] Promoted authority baseline for ${event.workspaceStateHash}`);
+      logVerbose("BuildV2", `Promoted authority baseline for ${event.workspaceStateHash}`);
     }
   });
 
@@ -1616,12 +1621,14 @@ export async function initBuildSystemV2(
     if (existingFlight) return existingFlight;
 
     const flight = (async (): Promise<RuntimeImageBinding> => {
-      console.log(
-        `[BuildV2] Runtime binding build started for ${node.relativePath} at ${stateHash}`
+      logVerbose(
+        "BuildV2",
+        `Runtime binding build started for ${node.relativePath} at ${stateHash}`
       );
       const build = await buildUnit(node, ev, graphAtState, workspaceRoot, stateHash);
-      console.log(
-        `[BuildV2] Runtime binding build completed for ${node.relativePath} in ` +
+      logVerbose(
+        "BuildV2",
+        `Runtime binding build completed for ${node.relativePath} in ` +
           `${Math.round(performance.now() - bindingStartedAt)}ms`
       );
       const authority = build.metadata.authority;
@@ -2299,7 +2306,7 @@ export async function initBuildSystemV2(
     }
 
     // Build on demand (buildUnit handles cache + coalescing internally)
-    console.log(`[BuildV2] head library ${unitPath}: building ${node.name}`);
+    logVerbose("BuildV2", `head library ${unitPath}: building ${node.name}`);
     let build: BuildResult;
     try {
       build = await buildUnit(node, ev, headGraph, workspaceRoot, headStateHash, buildOptions);
@@ -2314,7 +2321,7 @@ export async function initBuildSystemV2(
       );
       throw error;
     }
-    console.log(`[BuildV2] head library ${unitPath}: build ready ${build.buildKey}`);
+    logVerbose("BuildV2", `head library ${unitPath}: build ready ${build.buildKey}`);
     return options?.library ? libraryBuildResult(build) : build;
   };
 
@@ -3547,7 +3554,7 @@ export async function initBuildSystemV2(
       await Promise.all([authorityAnalysisWorker.close(), typecheckWorker.close(), closeBuilder()]);
       authorityPublicationUnsubscribe();
       setBuildSourceProvider(null);
-      console.log("[BuildV2] Shut down");
+      logVerbose("BuildV2", "Shut down");
     },
   };
   return buildSystem;

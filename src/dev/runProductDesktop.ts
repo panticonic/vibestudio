@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-import { prepareWorkspaceRelease } from "../../scripts/prepare-workspace-release.mjs";
+import {
+  prepareWorkspaceRelease,
+  type WorkspaceReleasePreparation,
+} from "../../scripts/prepare-workspace-release.mjs";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -53,6 +56,10 @@ async function main(): Promise<void> {
   fs.mkdirSync(scratchParent, { recursive: true });
   const temporaryRoot = fs.mkdtempSync(path.join(scratchParent, "launch-"));
   let desktop: DevInstanceSupervisor | undefined;
+  let preparation: WorkspaceReleasePreparation | undefined;
+  let retirementFailed = false;
+  let launchFailure: unknown;
+  let retirementFailure: unknown;
   try {
     const needsInitialWorkspace = !profileHasWorkspace();
     const defaultTemplates =
@@ -80,13 +87,16 @@ async function main(): Promise<void> {
     await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], env);
     await run(process.execPath, ["scripts/ensure-host-build.mjs"], env);
     env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(repoRoot, "desktop");
-    await prepareWorkspaceRelease({
+    preparation = prepareWorkspaceRelease({
+      executable: process.execPath,
+      entry: path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "prepare-workspace-templates.mjs"),
       appRoot: repoRoot,
       output: path.join(temporaryRoot, "workspace-release"),
       scratch: path.join(temporaryRoot, "template-preparation"),
       env,
     });
 
+    await preparation.sourcesReady;
     desktop = new DevInstanceSupervisor({
       sourceRoot: repoRoot,
       command: process.execPath,
@@ -106,18 +116,49 @@ async function main(): Promise<void> {
       stdio: "inherit",
       forwardParentSignals: true,
     });
-    await desktop.start();
-    process.exitCode = await desktop.wait();
+    const started = desktop.start();
+    await Promise.race([started, preparation.completed.then(() => started)]);
+    const foreground = desktop.wait();
+    process.exitCode = await Promise.race([
+      foreground,
+      preparation.completed.then(() => foreground),
+    ]);
+  } catch (error) {
+    retirementFailed = (error as NodeJS.ErrnoException)?.code === "EOWNERSHIP";
+    launchFailure = error;
   } finally {
     try {
       // A failed retirement retains the source inputs for the still-owned
       // process. Deletion retries cannot establish that ownership has ended.
-      await desktop?.stop();
-      fs.rmSync(temporaryRoot, { recursive: true, force: true });
+      const retirement = await Promise.allSettled([desktop?.stop(), preparation?.stop()]);
+      const failure = retirement.find((result) => result.status === "rejected");
+      if (!retirementFailed && !failure) fs.rmSync(temporaryRoot, { recursive: true, force: true });
+      if (failure?.status === "rejected") retirementFailure = failure.reason;
+    } catch (error) {
+      retirementFailure ??= error;
     } finally {
-      await desktop?.close();
+      try {
+        await desktop?.close();
+      } catch (error) {
+        retirementFailure ??= error;
+      }
     }
   }
+  if (retirementFailure) {
+    if (launchFailure && launchFailure !== retirementFailure)
+      throw Object.assign(
+        new AggregateError(
+          [launchFailure, retirementFailure],
+          "Workspace launch and retirement failed"
+        ),
+        {
+          code: (retirementFailure as NodeJS.ErrnoException).code,
+          cause: launchFailure,
+        }
+      );
+    throw retirementFailure;
+  }
+  if (launchFailure) throw launchFailure;
 }
 
 main().catch((error) => {

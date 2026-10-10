@@ -35,13 +35,14 @@ import { drainBuildStorePublications } from "./buildV2/buildStore.js";
 import { blobCasPath, linkReconstructableBlobFile } from "./storage/blobCas.js";
 
 /** Prepare the same immutable release for a source supervisor or a packager.
- * All Git acquisition and compilation is owned here, before workspace launch.
+ * Source publication and compilation are phases of the same owned producer.
  * The output contains source and artifacts, never producer state or grants. */
 export async function prepareWorkspaceTemplates(input: {
   appRoot: string;
   output: string;
   scratch: string;
   signal?: AbortSignal;
+  onSourcesPrepared?: () => void;
 }): Promise<void> {
   const pins = readDefaultWorkspaceTemplates(input.appRoot);
   const sources = JSON.parse(process.env["VIBESTUDIO_WORKSPACE_SOURCES"] ?? "[]") as Array<{
@@ -62,6 +63,31 @@ export async function prepareWorkspaceTemplates(input: {
     buildKey: string;
     builtAt: string;
   }> = [];
+  const prepared: Array<{
+    role: string;
+    workspaceId: string;
+    statePath: string;
+    stateHash: string;
+    sourcePath: string;
+    blobsDir: string;
+    directory: string;
+    record: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate;
+  }> = [];
+  const publishManifest = () => {
+    const manifest = path.join(input.output, "userland-builds/release.json");
+    fs.mkdirSync(path.dirname(manifest), { recursive: true });
+    fs.writeFileSync(
+      `${manifest}.publishing`,
+      JSON.stringify({
+        version: 1,
+        platform: process.platform,
+        arch: process.arch,
+        templates: pins,
+        builds: releaseBuilds,
+      })
+    );
+    fs.renameSync(`${manifest}.publishing`, manifest);
+  };
   try {
     for (const [role, pin] of Object.entries(pins)) {
       input.signal?.throwIfAborted();
@@ -160,6 +186,34 @@ export async function prepareWorkspaceTemplates(input: {
         fs.mkdirSync(path.dirname(destination), { recursive: true });
         fs.copyFileSync(blobPath(blobsDir, blob.digest), destination);
       }
+      const record = preparedWorkspaceTemplateSchema.parse(bootstrap.preparedRecord(blobs, []));
+      fs.writeFileSync(path.join(directory, "template.json"), JSON.stringify(record));
+      prepared.push({
+        role,
+        statePath,
+        workspaceId,
+        stateHash,
+        sourcePath,
+        blobsDir,
+        directory,
+        record,
+      });
+    }
+    publishManifest();
+    input.signal?.throwIfAborted();
+    input.onSourcesPrepared?.();
+    for (const {
+      role,
+      statePath,
+      workspaceId,
+      stateHash,
+      sourcePath,
+      blobsDir,
+      directory,
+      record,
+    } of prepared) {
+      input.signal?.throwIfAborted();
+      setUserDataPath(statePath);
       const preparedBuilds: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate["builds"] =
         [];
       const vcs = new WorkspaceVcs({
@@ -197,14 +251,19 @@ export async function prepareWorkspaceTemplates(input: {
           builds?.shutdown(),
           retireNative().then((stopped) => {
             if (!stopped.launcherExited)
-              throw new Error("Template preparation still owns a native executor");
+              throw Object.assign(new Error("Template preparation still owns a native executor"), {
+                code: "EOWNERSHIP",
+              });
           }),
         ]);
         outcomes.push(...(await Promise.allSettled([drainBuildStorePublications()])));
         for (const outcome of outcomes) {
           if (outcome.status === "rejected") {
             retirementFailed = true;
-            throw outcome.reason;
+            throw Object.assign(
+              outcome.reason instanceof Error ? outcome.reason : new Error(String(outcome.reason)),
+              { code: "EOWNERSHIP" }
+            );
           }
         }
       };
@@ -260,26 +319,13 @@ export async function prepareWorkspaceTemplates(input: {
           input.signal?.removeEventListener("abort", cancelled);
         }
       }
-      const record = preparedWorkspaceTemplateSchema.parse(
-        bootstrap.preparedRecord(blobs, preparedBuilds)
-      );
-      fs.writeFileSync(path.join(directory, "template.json"), JSON.stringify(record));
-      console.log(
-        `[workspace-release] Prepared ${role}: ${record.files.length} files, ${record.builds.length} artifacts`
-      );
+      record.builds = preparedBuilds;
+      const recordPath = path.join(directory, "template.json");
+      fs.writeFileSync(`${recordPath}.publishing`, JSON.stringify(record));
+      fs.renameSync(`${recordPath}.publishing`, recordPath);
+      publishManifest();
     }
     input.signal?.throwIfAborted();
-    fs.mkdirSync(path.join(input.output, "userland-builds"), { recursive: true });
-    fs.writeFileSync(
-      path.join(input.output, "userland-builds/release.json"),
-      JSON.stringify({
-        version: 1,
-        platform: process.platform,
-        arch: process.arch,
-        templates: pins,
-        builds: releaseBuilds,
-      })
-    );
   } finally {
     setUserDataPath(previousUserData);
     if (previousInstance === undefined) delete process.env["VIBESTUDIO_INSTANCE_ROOT"];

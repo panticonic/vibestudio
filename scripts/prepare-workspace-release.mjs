@@ -1,17 +1,16 @@
-import * as path from "node:path";
 import { spawn } from "node:child_process";
+import { joinChildProcess } from "./lib/join-child-process.mjs";
 
-/** Publish source-launch resources through the ordinary template preparer.
- * The launch owner retains output for its generation and owns its retirement.
- * Cancellation reaches the preparer's native owners and is joined before the
- * launch caller may remove either scratch or prepared output.
- * @param {{ appRoot: string, output: string, scratch: string, env: NodeJS.ProcessEnv }} input
+/** One producer owns source publication and exhaustive compilation. Launchers
+ * may proceed at sourcesReady; packagers require completed. Every caller must
+ * stop and join the producer before retiring its source or output directories.
+ * @param {{ appRoot: string, output: string, scratch: string, env: NodeJS.ProcessEnv, executable: string, entry: string }} input
  */
-export async function prepareWorkspaceRelease(input) {
+export function prepareWorkspaceRelease(input) {
   const child = spawn(
-    process.execPath,
+    input.executable,
     [
-      path.join(input.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"], "prepare-workspace-templates.mjs"),
+      input.entry,
       "--app-root",
       input.appRoot,
       "--output",
@@ -19,32 +18,81 @@ export async function prepareWorkspaceRelease(input) {
       "--scratch",
       input.scratch,
     ],
-    { cwd: input.appRoot, env: input.env, stdio: "inherit" }
+    { cwd: input.appRoot, env: input.env, stdio: ["ignore", "pipe", "pipe", "ipc"] }
   );
-  let cancelled = null;
+  let resolveReady, rejectReady;
+  const sourcesReady = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  let ready = false,
+    failure,
+    cancellation,
+    tail = "";
+  for (const [stream, target] of [
+    [child.stdout, process.stdout],
+    [child.stderr, process.stderr],
+  ]) {
+    stream.on("data", (chunk) => {
+      tail = (tail + chunk).slice(-8192);
+      target.write(chunk);
+    });
+  }
+  child.on("message", (message) => {
+    if (message?.kind === "sources-ready" && !ready && !cancellation) {
+      ready = true;
+      input.env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = input.output;
+      resolveReady();
+    } else if (message?.kind === "failed") {
+      failure ??= Object.assign(new Error(message.message), {
+        code: message.code,
+        stack: message.stack,
+      });
+    }
+  });
   const interrupt = () => {
-    cancelled ??= new Error("Workspace release preparation cancelled");
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    cancellation ??= new Error("Workspace release preparation cancelled");
     child.kill("SIGTERM");
   };
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
-  try {
-    await new Promise((resolve, reject) => {
-      let failure;
-      child.once("error", (error) => {
-        failure = error;
-      });
-      child.once("close", (code, signal) => {
-        if (failure) reject(failure);
-        else if (cancelled) reject(cancelled);
-        else if (code !== 0)
-          reject(new Error(`Workspace release preparation exited (${signal ?? code})`));
-        else resolve();
-      });
+  const completed = joinChildProcess(child)
+    .then((result) => {
+      if (failure && failure.code !== "ECANCELLED") throw failure;
+      if (cancellation) throw cancellation;
+      if (failure) throw failure;
+      if (result.error) throw result.error;
+      if (result.code !== 0)
+        throw new Error(
+          `Workspace release preparation exited (${result.signal ?? result.code}): ${tail}`
+        );
+      if (!ready) throw new Error("Workspace release producer exited without publishing sources");
+    })
+    .catch((error) => {
+      rejectReady(error);
+      throw error;
+    })
+    .finally(() => {
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", interrupt);
     });
-    input.env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = input.output;
-  } finally {
-    process.off("SIGINT", interrupt);
-    process.off("SIGTERM", interrupt);
-  }
+  // Readiness and completion have different consumers. Keep failures observable
+  // without an unhandled rejection while a caller is awaiting the other phase.
+  void sourcesReady.catch(() => {});
+  void completed.catch(() => {});
+  return {
+    sourcesReady,
+    completed,
+    async stop() {
+      interrupt();
+      try {
+        await completed;
+      } catch (error) {
+        // Completion reports preparation failure; stop establishes retirement.
+        // Retain state only when the native owner could not acknowledge exit.
+        if (error.code === "EOWNERSHIP") throw error;
+      }
+    },
+  };
 }

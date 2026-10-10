@@ -5,43 +5,8 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
-/** Join the process and its owned streams, including explicit IPC revocation.
- * Node 22 can leave ChildProcess.close unsettled after disconnect(): the
- * process and pipes have closed, but its internal IPC close counter is short.
- * The native owner's exit is its descendant-join receipt. */
-export function joinChildProcess(child) {
-  return new Promise((resolve) => {
-    let terminal = child.exitCode !== null || child.signalCode !== null;
-    let code = child.exitCode,
-      signal = child.signalCode,
-      error;
-    const streams = [child.stdout, child.stderr].filter(Boolean);
-    const finish = () => {
-      if (!terminal || child.connected || streams.some((stream) => !stream.closed)) return;
-      child.off("exit", exited);
-      child.off("error", failed);
-      child.off("disconnect", finish);
-      for (const stream of streams) stream.off("close", finish);
-      resolve({ code, signal, error });
-    };
-    const exited = (exitCode, exitSignal) => {
-      terminal = true;
-      code = exitCode;
-      signal = exitSignal;
-      finish();
-    };
-    const failed = (failure) => {
-      error ??= failure;
-      if (child.pid === undefined) terminal = true;
-      finish();
-    };
-    child.on("exit", exited);
-    child.on("error", failed);
-    child.on("disconnect", finish);
-    for (const stream of streams) stream.on("close", finish);
-    finish();
-  });
-}
+import { joinChildProcess } from "./lib/join-child-process.mjs";
+import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 
 /** Ready-file publication and process exit are the owner's authoritative lifecycle edges. */
 export function awaitHubReady(child, readyFile) {
@@ -83,30 +48,43 @@ export async function exportReleaseBuild(source, destination, expectedKey) {
   const metadata = JSON.parse(await fsp.readFile(path.join(source, "metadata.json"), "utf8"));
   if (metadata.buildKey !== expectedKey) throw new Error("Release build record key mismatch");
   const artifacts = JSON.parse(await fsp.readFile(path.join(source, "artifacts.json"), "utf8"));
-  await fsp.mkdir(destination, { recursive: true });
-  const files = ["metadata.json", "artifacts.json", "executable-modules.json.gz"];
-  for (const artifact of artifacts) {
-    if (
-      !artifact.path ||
-      artifact.path.includes("\\") ||
-      path.posix.isAbsolute(artifact.path) ||
-      artifact.path.split("/").some((part) => !part || part === "." || part === "..")
-    )
-      throw new Error(`Invalid release artifact path: ${artifact.path}`);
-    const bytes = await fsp.readFile(path.join(source, artifact.path));
-    if (
-      bytes.length !== artifact.byteLength ||
-      artifact.integrity !== `sha256-${createHash("sha256").update(bytes).digest("hex")}`
-    )
-      throw new Error(`Release artifact integrity mismatch: ${artifact.path}`);
-    files.push(artifact.path);
-  }
-  for (const file of new Set(files)) {
-    const from = path.join(source, file);
-    if (file === "executable-modules.json.gz" && !fs.existsSync(from)) continue;
-    const to = path.join(destination, file);
-    await fsp.mkdir(path.dirname(to), { recursive: true });
-    await fsp.copyFile(from, to);
+  await fsp.mkdir(path.dirname(destination), { recursive: true });
+  const staging = await fsp.mkdtemp(`${destination}.publishing-`);
+  try {
+    const files = ["metadata.json", "artifacts.json", "executable-modules.json.gz"];
+    for (const artifact of artifacts) {
+      if (
+        !artifact.path ||
+        artifact.path.includes("\\") ||
+        path.posix.isAbsolute(artifact.path) ||
+        artifact.path.split("/").some((part) => !part || part === "." || part === "..")
+      )
+        throw new Error(`Invalid release artifact path: ${artifact.path}`);
+      const bytes = await fsp.readFile(path.join(source, artifact.path));
+      if (
+        bytes.length !== artifact.byteLength ||
+        artifact.integrity !== `sha256-${createHash("sha256").update(bytes).digest("hex")}`
+      )
+        throw new Error(`Release artifact integrity mismatch: ${artifact.path}`);
+      files.push(artifact.path);
+    }
+    for (const file of new Set(files)) {
+      const from = path.join(source, file);
+      if (file === "executable-modules.json.gz" && !fs.existsSync(from)) continue;
+      const to = path.join(staging, file);
+      await fsp.mkdir(path.dirname(to), { recursive: true });
+      await fsp.copyFile(from, to);
+    }
+    try {
+      await fsp.rename(staging, destination);
+    } catch (error) {
+      if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY") throw error;
+      // Build keys identify compilation recipes; artifact digests identify
+      // bytes. Independent executions may embed different diagnostic paths.
+      // Keep the first complete record, as the shared BuildStore does.
+    }
+  } finally {
+    await fsp.rm(staging, { recursive: true, force: true });
   }
 }
 
@@ -366,47 +344,23 @@ export async function prepareInstalledTemplateRelease({
   ])
     delete env[key];
   await fsp.mkdir(env.TMPDIR, { recursive: true });
-  let child, joined, cancellation;
-  const stop = () => {
-    cancellation ??= new Error("Template release preparation cancelled");
-    child?.kill("SIGTERM");
-  };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
+  const preparation = prepareWorkspaceRelease({
+    appRoot,
+    output: resources,
+    scratch: path.join(scratch, "producer"),
+    env,
+    executable,
+    entry,
+  });
+  let retirementFailed = false;
   try {
-    child = spawn(
-      executable,
-      [
-        entry,
-        "--app-root",
-        appRoot,
-        "--output",
-        resources,
-        "--scratch",
-        path.join(scratch, "producer"),
-      ],
-      { env, stdio: ["ignore", "pipe", "pipe"] }
-    );
-    joined = joinChildProcess(child);
-    let tail = "";
-    for (const stream of [child.stdout, child.stderr])
-      stream.on("data", (chunk) => {
-        tail = (tail + chunk).slice(-8192);
-        process.stdout.write(chunk);
-      });
-    const result = await joined;
-    if (cancellation) throw cancellation;
-    if (result.error || result.code !== 0)
-      throw new Error(
-        `Template release preparation failed (${result.signal ?? result.code}): ${tail}`,
-        { cause: result.error }
-      );
+    await preparation.completed;
+  } catch (error) {
+    retirementFailed = error.code === "EOWNERSHIP";
+    throw error;
   } finally {
-    child?.kill("SIGTERM");
-    await joined;
-    await fsp.rm(scratch, { recursive: true, force: true });
-    process.off("SIGINT", stop);
-    process.off("SIGTERM", stop);
+    await preparation.stop();
+    if (!retirementFailed) await fsp.rm(scratch, { recursive: true, force: true });
   }
 }
 

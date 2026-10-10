@@ -263,6 +263,8 @@ async function main() {
   fs.mkdirSync(serverConfig, { recursive: true });
   let events = null;
   let child = null;
+  let preparation;
+  let retirementFailed = false;
   try {
     const hostArtifactRoot = readCurrentHostBuildGeneration(repoRoot, "desktop");
     const templates = await resolveDevelopmentTemplateSet({
@@ -283,12 +285,15 @@ async function main() {
       APPDATA: path.join(tempRoot, "server-appdata"),
       npm_config_cache: process.env.npm_config_cache ?? path.join(tempRoot, "npm-cache"),
     };
-    await prepareWorkspaceRelease({
+    preparation = prepareWorkspaceRelease({
+      executable: process.execPath,
+      entry: path.join(hostArtifactRoot, "prepare-workspace-templates.mjs"),
       appRoot: repoRoot,
       output: path.join(tempRoot, "release"),
       scratch: path.join(tempRoot, "preparation"),
       env,
     });
+    await preparation.completed;
     const serverInvocation = createServerInvocation([
       path.join(hostArtifactRoot, "server.mjs"),
       "--app-root",
@@ -315,10 +320,14 @@ async function main() {
     console.log(
       `[terminal-smoke] ${REMOTE_CLI} ${running.status} build=${String(running.activeBundleKey).slice(0, 12)} approvals=${gate.approvalsResolved}`
     );
+  } catch (error) {
+    retirementFailed = error.code === "EOWNERSHIP";
+    throw error;
   } finally {
     await events?.close();
     if (child) await stopServer(child);
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    await preparation?.stop();
+    if (!retirementFailed) fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 

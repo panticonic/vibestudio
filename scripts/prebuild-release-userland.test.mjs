@@ -1,3 +1,4 @@
+import { joinChildProcess } from "./lib/join-child-process.mjs";
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -9,7 +10,6 @@ import { spawn } from "node:child_process";
 import {
   awaitHubReady,
   exportReleaseBuild,
-  joinChildProcess,
   prepareInstalledTemplateRelease,
 } from "./prebuild-release-userland.mjs";
 const roots = [];
@@ -94,16 +94,39 @@ test("exports only immutable records and verifies every payload before publicati
   );
   await fs.writeFile(path.join(source, "grants.db"), "private mutable authority");
   await fs.writeFile(path.join(source, "metadata.json.tmp.writer"), "incomplete");
-  await exportReleaseBuild(source, destination, key);
+  await Promise.all([
+    exportReleaseBuild(source, destination, key),
+    exportReleaseBuild(source, destination, key),
+  ]);
   assert.deepEqual((await fs.readdir(destination)).sort(), [
     "artifacts.json",
     "bundle.js",
     "metadata.json",
   ]);
+  const publishedBytes = await fs.readFile(path.join(destination, "bundle.js"), "utf8");
+  const repeated = Buffer.from("// another source path\nexport default {};");
+  await fs.writeFile(path.join(source, "bundle.js"), repeated);
+  await fs.writeFile(
+    path.join(source, "artifacts.json"),
+    JSON.stringify([
+      {
+        path: "bundle.js",
+        byteLength: repeated.length,
+        integrity: `sha256-${createHash("sha256").update(repeated).digest("hex")}`,
+      },
+    ])
+  );
+  await exportReleaseBuild(source, destination, key);
+  assert.equal(await fs.readFile(path.join(destination, "bundle.js"), "utf8"), publishedBytes);
   await fs.writeFile(path.join(source, "bundle.js"), "corrupt");
   await assert.rejects(
     exportReleaseBuild(source, path.join(root, "corrupt"), key),
     /integrity mismatch/
+  );
+  await assert.rejects(fs.stat(path.join(root, "corrupt")), { code: "ENOENT" });
+  assert.equal(
+    (await fs.readdir(root)).some((name) => name.includes(".publishing-")),
+    false
   );
   await assert.rejects(
     exportReleaseBuild(source, path.join(root, "other"), "b".repeat(64)),

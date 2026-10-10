@@ -206,7 +206,7 @@ describe("runNpmInstall", () => {
 
   it("retains the failed phase and bounded npm diagnostics before retiring private logs", async () => {
     const fixture = createFakeNpmFixture();
-    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const output = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const restoreEnv = replaceEnv({
       VIBESTUDIO_NPM_INSTALLER_TEST_ERROR: "npm error code E401: authentication required",
       npmLog: "x".repeat(8_000) + " last registry operation",
@@ -225,14 +225,14 @@ describe("runNpmInstall", () => {
     const profiles = output.mock.calls.map(([line]) =>
       JSON.parse(String(line).slice("[npm-install-profile] ".length))
     );
-    expect(profiles[1]).toMatchObject({
+    expect(profiles[0]).toMatchObject({
       phase: "resolve",
       state: "failed",
       code: 1,
       stderr: "npm error code E401: authentication required\n",
     });
-    expect(profiles[1].npmLogTail).toHaveLength(4_000);
-    expect(profiles[1].npmLogTail).toMatch(/ last registry operation$/);
+    expect(profiles[0].npmLogTail).toHaveLength(4_000);
+    expect(profiles[0].npmLogTail).toMatch(/ last registry operation$/);
     const args = readAttempts(fixture.installDir)[0]!;
     expect(fs.existsSync(args[args.indexOf("--logs-dir") + 1]!)).toBe(false);
   });

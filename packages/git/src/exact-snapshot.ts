@@ -282,8 +282,11 @@ export async function readExactGitSnapshot(
     options.reservedPaths ?? "reject"
   );
   const admittedAt = performance.now();
-  if (admittedAt - startedAt >= 100) {
-    console.error("[Perf] exact Git snapshot read", {
+  if (
+    process.env["VIBESTUDIO_LOG_LEVEL"] === "verbose" ||
+    process.env["VIBESTUDIO_LOG_LEVEL"] === "trace"
+  ) {
+    console.debug("[Perf] exact Git snapshot read", {
       headMs: headReadAt - startedAt,
       treeMs: treeReadAt - headReadAt,
       admitAndStoreMs: admittedAt - treeReadAt,

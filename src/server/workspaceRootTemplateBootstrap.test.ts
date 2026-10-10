@@ -192,9 +192,7 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     expect(
       consumer.bootstrap.preparedBuildForContent(`state:${"c".repeat(64)}`, "extensions/templates")
     ).toBeNull();
-    expect(() =>
-      consumer.bootstrap.preparedBuildForContent(expectedState, "workers/missing")
-    ).toThrow("no artifact");
+    expect(consumer.bootstrap.preparedBuildForContent(expectedState, "workers/missing")).toBeNull();
   });
 
   it("records what a designated template shipped, so units need no signature", async () => {

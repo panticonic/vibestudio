@@ -94,13 +94,16 @@ describe("pair-server runner", () => {
     const child = new FakeChild();
     const prepareSourceServer = vi.fn();
     let preparationRoot = "";
-    const prepareRelease = vi.fn(
-      async ({ output, env }: { output: string; env: NodeJS.ProcessEnv }) => {
-        preparationRoot = output;
-        mkdirSync(output, { recursive: true });
-        env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = output;
-      }
-    );
+    const prepareRelease = vi.fn(({ output, env }: { output: string; env: NodeJS.ProcessEnv }) => {
+      preparationRoot = output;
+      mkdirSync(output, { recursive: true });
+      env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = output;
+      return {
+        sourcesReady: Promise.resolve(),
+        completed: Promise.resolve(),
+        stop: vi.fn(async () => {}),
+      };
+    });
     await runPairServer(config, [], {
       prepareSourceServer,
       prepareWorkspaceRelease: prepareRelease,

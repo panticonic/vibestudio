@@ -1,3 +1,4 @@
+import { logVerbose } from "@vibestudio/dev-log";
 /**
  * Effective Version Computer — content-tree subtree hash + bottom-up EV
  * computation.
@@ -616,8 +617,9 @@ function logRootDependencyFingerprint(info: RootDependencyFingerprintInfo): void
   const summary = ordinaryFiles
     .map((f) => `${f.file}=${f.present ? (f.contentHash ?? "?") : "absent"}`)
     .join(" ");
-  console.log(
-    `[BuildV2] root-deps fingerprint ${info.value} (root=${info.root} via ${info.rootSource}): ` +
+  logVerbose(
+    "BuildV2",
+    `root-deps fingerprint ${info.value} (root=${info.root} via ${info.rootSource}): ` +
       `${summary}; ${localPackages.length} local package implementation tree(s); ` +
       `${installedRoots.length} installed dependency realm(s)`
   );

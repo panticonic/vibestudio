@@ -1,3 +1,4 @@
+import { logVerbose, isVerbose } from "@vibestudio/dev-log";
 /**
  * External Dependency Cache — transitive external dep collection + cached installation.
  *
@@ -1270,8 +1271,9 @@ export async function prepareExternalDependencyEnvironment(
         signal,
       });
   if (hostProjection) {
-    console.log(
-      `[externalDeps] Reusing ${Object.keys(externalDeps).length} fingerprinted host dependencies for ${unit.name}`
+    logVerbose(
+      "externalDeps",
+      `Reusing ${Object.keys(externalDeps).length} fingerprinted host dependencies for ${unit.name}`
     );
   }
   return {
@@ -1405,8 +1407,8 @@ async function ensureDepsInstalledOnce(
   };
   const logProfile = (result: "hit" | "installed"): void => {
     const totalMs = Date.now() - profileStartedAt;
-    if (totalMs < 5_000 && process.env["VIBESTUDIO_VERBOSE_BUILD_LOG"] !== "1") return;
-    console.warn("[externalDeps] dependency environment profile", {
+    if (!isVerbose()) return;
+    logVerbose("externalDeps", "dependency environment profile", {
       key: options.key,
       result,
       directDependencies: Object.keys(deps).length,

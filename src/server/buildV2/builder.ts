@@ -1,3 +1,4 @@
+import { logVerbose } from "@vibestudio/dev-log";
 import {
   PANEL_CONDITIONS,
   WEBSITE_CONDITIONS,
@@ -416,8 +417,9 @@ function traceBuildStages(label: string): { enter(stage: string): void; done(): 
   let stage = "queued";
   let stageStarted = started;
   const timer = setInterval(() => {
-    console.warn(
-      `[BuildV2] ${label} still in ${stage} after ` +
+    logVerbose(
+      "BuildV2",
+      `${label} still in ${stage} after ` +
         `${Math.round((Date.now() - stageStarted) / 1000)}s ` +
         `(${Math.round((Date.now() - started) / 1000)}s total; ` +
         `${runningBuilds}/${MAX_CONCURRENT_BUILDS} permits held ` +
@@ -429,15 +431,16 @@ function traceBuildStages(label: string): { enter(stage: string): void; done(): 
   return {
     enter(next: string): void {
       if (isVerboseBuildLogEnabled())
-        console.log(`[BuildV2] ${label} ${stage} -> ${next} (${Date.now() - stageStarted}ms)`);
+        logVerbose("BuildV2", `${label} ${stage} -> ${next} (${Date.now() - stageStarted}ms)`);
       stage = next;
       stageStarted = Date.now();
     },
     done(): void {
       clearInterval(timer);
       if (isVerboseBuildLogEnabled()) {
-        console.log(
-          `[BuildV2] ${label} left ${stage} after ${Math.round((Date.now() - started) / 1000)}s total`
+        logVerbose(
+          "BuildV2",
+          `${label} left ${stage} after ${Math.round((Date.now() - started) / 1000)}s total`
         );
       }
     },
@@ -2251,7 +2254,7 @@ export async function buildUnit(
   // this line is the only place the adoption is visible.
   const inFlight = inFlightBuilds.get(buildKey);
   if (inFlight) {
-    console.log(`[BuildV2] ${node.name}: adopting in-flight build ${buildKey}`);
+    logVerbose("BuildV2", `${node.name}: adopting in-flight build ${buildKey}`);
     return inFlight;
   }
 
@@ -3344,8 +3347,9 @@ async function buildPanel(
       const bundleSizeText = formatBytes(mainBundleBytes ?? 0);
       const largestChunkText = jsChunks.length > 0 ? formatBytes(largestChunkBytes) : "0B";
 
-      console.log(
-        `[BuildV2] ${node.name}: main=${bundleSizeText}, chunks=${jsChunks.length}, largestChunk=${largestChunkText}`
+      logVerbose(
+        "BuildV2",
+        `${node.name}: main=${bundleSizeText}, chunks=${jsChunks.length}, largestChunk=${largestChunkText}`
       );
     }
 
@@ -3403,7 +3407,7 @@ async function buildPanel(
         }
       : undefined;
     if (bundleReport && isVerboseBuildLogEnabled()) {
-      console.log(`[BuildV2] ${node.name}: panel bundle report`, bundleReport);
+      logVerbose("BuildV2", `${node.name}: panel bundle report`, bundleReport);
     }
 
     const artifactEntries: BuildArtifactInput[] = [
@@ -3557,8 +3561,8 @@ async function buildPanel(
     const stored = await buildStore.put(buildKey, { entries: artifactEntries }, metadata);
     const storedAt = Date.now();
     const totalMs = storedAt - profileStartedAt;
-    if (totalMs >= 5_000 || isVerboseBuildLogEnabled()) {
-      console.warn(`[BuildV2] panel build profile ${node.relativePath}`, {
+    if (isVerboseBuildLogEnabled()) {
+      logVerbose("BuildV2", `panel build profile ${node.relativePath}`, {
         environmentMs: environmentReadyAt - profileStartedAt,
         configureMs: compileStartedAt - environmentReadyAt,
         esbuildMs: compileReadyAt - compileStartedAt,
@@ -4082,8 +4086,8 @@ async function buildWorker(
 
     const logProfile = (storedAt: number): void => {
       const totalMs = storedAt - profileStartedAt;
-      if (totalMs < 5_000 && !isVerboseBuildLogEnabled()) return;
-      console.warn(`[BuildV2] worker build profile ${node.relativePath}`, {
+      if (!isVerboseBuildLogEnabled()) return;
+      logVerbose("BuildV2", `worker build profile ${node.relativePath}`, {
         environmentMs: environmentReadyAt - profileStartedAt,
         rpcCatalogMs: rpcCatalogReadyAt - environmentReadyAt,
         configureMs: configureReadyAt - rpcCatalogReadyAt,

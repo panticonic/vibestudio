@@ -406,6 +406,8 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   // re-raised signal and the parent lingers / exits 0 instead of dying by signal).
   const signalForwarders = new Map();
   let shutdownSignal = null;
+  let preparation, preparationFailure;
+  let ending = false;
 
   const deinstallSignalForwarders = () => {
     for (const [sig, handler] of signalForwarders) process.removeListener(sig, handler);
@@ -608,7 +610,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
       }
     });
 
-    childProcess.on("exit", (code, signal) => {
+    childProcess.on("exit", async (code, signal) => {
       if (restarting) return;
       // A clean hub has already drained its children. An abnormal exit may
       // leave descendants in the detached hub group, so reap only that crash
@@ -623,7 +625,15 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
           );
         }
       }
-      cleanupReadyState();
+      ending = true;
+      try {
+        await preparation?.stop();
+        cleanupReadyState();
+      } catch (error) {
+        console.error(error);
+        code = 1;
+      }
+      if (preparationFailure) code = 1;
       deinstallSignalForwarders();
       if (stderrBuffer) stderrLines.push(stderrBuffer);
       if (hooks.onChildExit?.({ code, signal, stderrLines }, control)) return;
@@ -641,20 +651,31 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   if (process.env.VIBESTUDIO_SERVER_ENTRY === "live") {
     try {
       const preparationRoot = ownedCheckpointDir();
-      await (hooks.prepareWorkspaceRelease ?? prepareWorkspaceRelease)({
+      preparation = (hooks.prepareWorkspaceRelease ?? prepareWorkspaceRelease)({
+        executable: process.execPath,
+        entry: path.join(env.VIBESTUDIO_HOST_ARTIFACT_ROOT, "prepare-workspace-templates.mjs"),
         appRoot: options.appRoot ?? repoRoot,
         output: path.join(preparationRoot, "release"),
         scratch: path.join(preparationRoot, "scratch"),
         env,
       });
+      await preparation.sourcesReady;
     } catch (error) {
-      cleanupReadyState();
+      await preparation?.stop();
+      if (error.code !== "EOWNERSHIP") cleanupReadyState();
       throw error;
     }
   }
   try {
     spawnChild();
+    void preparation?.completed.catch((error) => {
+      if (ending) return;
+      preparationFailure = error;
+      console.error(error);
+      signalHubGracefully(child, "SIGTERM");
+    });
   } catch (error) {
+    await preparation?.stop();
     cleanupReadyState();
     throw error;
   }

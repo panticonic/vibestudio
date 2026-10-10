@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-import { prepareWorkspaceRelease } from "../../scripts/prepare-workspace-release.mjs";
+import {
+  prepareWorkspaceRelease,
+  type WorkspaceReleasePreparation,
+} from "../../scripts/prepare-workspace-release.mjs";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
@@ -193,13 +196,15 @@ function run(
 /** Source launches publish the same resources an installed product ships.
  * Preparation owns its native domains and scratch; the supervisor owns the
  * resulting immutable resources for the entire instance generation. */
-async function prepareLaunchTemplates(
+function prepareLaunchTemplates(
   env: NodeJS.ProcessEnv,
   root: string,
   generationId: string
-): Promise<void> {
+): WorkspaceReleasePreparation {
   const output = path.join(root, "workspace-release", generationId);
-  await prepareWorkspaceRelease({
+  return prepareWorkspaceRelease({
+    executable: process.execPath,
+    entry: path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "prepare-workspace-templates.mjs"),
     appRoot: process.cwd(),
     output,
     scratch: path.join(root, "template-preparation", generationId),
@@ -210,7 +215,8 @@ async function prepareLaunchTemplates(
 async function runServer(
   forwarded: string[],
   env: NodeJS.ProcessEnv,
-  instance: DevInstanceRecord
+  instance: DevInstanceRecord,
+  resources: { preparation?: WorkspaceReleasePreparation; supervisor?: DevInstanceSupervisor }
 ): Promise<DevInstanceSupervisor> {
   // credentialStore/environment paths are resolved at module evaluation time.
   // Load the bootstrap only after main() has installed this instance's process
@@ -220,7 +226,8 @@ async function runServer(
   await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
   await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
-  await prepareLaunchTemplates(env, instance.root, instance.generationId);
+  resources.preparation = prepareLaunchTemplates(env, instance.root, instance.generationId);
+  await resources.preparation.sourcesReady;
   const configuredReadyFile = optionValue(forwarded, "--ready-file");
   const readyFile =
     configuredReadyFile ?? path.join(instance.root, "server-auth", "hub-ready.json");
@@ -272,14 +279,17 @@ async function runServer(
       },
     },
   });
-  await supervisor.start();
+  resources.supervisor = supervisor;
+  const started = supervisor.start();
+  await Promise.race([started, resources.preparation.completed.then(() => started)]);
   return supervisor;
 }
 
 async function runDesktop(
   forwarded: string[],
   env: NodeJS.ProcessEnv,
-  instance: DevInstanceRecord
+  instance: DevInstanceRecord,
+  resources: { preparation?: WorkspaceReleasePreparation; supervisor?: DevInstanceSupervisor }
 ): Promise<DevInstanceSupervisor> {
   await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
   // Desktop launches share the repository host artifacts with parallel
@@ -288,7 +298,8 @@ async function runDesktop(
   // shared dist/ while another instance is starting its workspace runtime.
   await run(process.execPath, ["scripts/ensure-host-build.mjs"], { env });
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "desktop");
-  await prepareLaunchTemplates(env, instance.root, instance.generationId);
+  resources.preparation = prepareLaunchTemplates(env, instance.root, instance.generationId);
+  await resources.preparation.sourcesReady;
   const supervisor = new DevInstanceSupervisor({
     sourceRoot: fs.realpathSync(process.cwd()),
     command: process.execPath,
@@ -297,7 +308,9 @@ async function runDesktop(
     stdio: "inherit",
     forwardParentSignals: true,
   });
-  await supervisor.start();
+  resources.supervisor = supervisor;
+  const started = supervisor.start();
+  await Promise.race([started, resources.preparation.completed.then(() => started)]);
   return supervisor;
 }
 
@@ -357,7 +370,13 @@ async function main(): Promise<void> {
     instance.generationId
   );
   let retirementFailed = false;
+  let launchFailure: unknown;
+  let retirementFailure: unknown;
   let supervisor: DevInstanceSupervisor | undefined;
+  const resources: {
+    preparation?: WorkspaceReleasePreparation;
+    supervisor?: DevInstanceSupervisor;
+  } = {};
   try {
     const defaultTemplates =
       (await resolveDevelopmentTemplateSet({
@@ -475,18 +494,27 @@ async function main(): Promise<void> {
     }
     supervisor =
       mode === "server"
-        ? await runServer(launchArgs, env, instance)
-        : await runDesktop(launchArgs, env, instance);
-    process.exitCode = await supervisor.wait();
+        ? await runServer(launchArgs, env, instance, resources)
+        : await runDesktop(launchArgs, env, instance, resources);
+    const foreground = supervisor.wait();
+    process.exitCode = await Promise.race([
+      foreground,
+      resources.preparation!.completed.then(() => foreground),
+    ]);
   } catch (error) {
     retirementFailed = (error as NodeJS.ErrnoException)?.code === "EOWNERSHIP";
-    throw error;
+    launchFailure = error;
   } finally {
     try {
       // Storage belongs to the full process lifetime, including failed
       // startup and relaunch. Never remove source checkpoints before joining
       // every acknowledged native owner.
-      if (!retirementFailed) await supervisor?.stop();
+      const retirement = await Promise.allSettled([
+        resources.supervisor?.stop(),
+        resources.preparation?.stop(),
+      ]);
+      const failure = retirement.find((result) => result.status === "rejected");
+      retirementFailed ||= !!failure;
       if (retirementFailed) {
         // State remains owned until every executor retires. Preserve the exact
         // registry and source checkpoints when that join cannot be established.
@@ -517,10 +545,32 @@ async function main(): Promise<void> {
           unregisterDevInstance(repoRoot, id);
         }
       }
+      if (failure?.status === "rejected") retirementFailure = failure.reason;
+    } catch (error) {
+      retirementFailure ??= error;
     } finally {
-      await supervisor?.close();
+      try {
+        await resources.supervisor?.close();
+      } catch (error) {
+        retirementFailure ??= error;
+      }
     }
   }
+  if (retirementFailure) {
+    if (launchFailure && launchFailure !== retirementFailure)
+      throw Object.assign(
+        new AggregateError(
+          [launchFailure, retirementFailure],
+          "Workspace launch and retirement failed"
+        ),
+        {
+          code: (retirementFailure as NodeJS.ErrnoException).code,
+          cause: launchFailure,
+        }
+      );
+    throw retirementFailure;
+  }
+  if (launchFailure) throw launchFailure;
 }
 
 main().catch((error) => {
