@@ -147,13 +147,20 @@ describe("ServerBrowserImportHostRegistry", () => {
       method: "browserEnvironment.releaseImportSource",
       args: ["device:a", "export:temporary"],
     });
-    const sensitive = await registry.startSensitiveImport(
+    const startingSensitive = registry.startSensitiveImport(
       initiatingContext(),
       "device:a",
       "firefox-source",
       ["passwords"],
       "device-sensitive"
     );
+    // Observe immediately, while endpoint discovery has not yet bound the ID.
+    const admissionObservation = registry.observeSensitiveImport(
+      detachedContext(),
+      "device-sensitive"
+    );
+    const sensitive = await startingSensitive;
+    await expect(admissionObservation).resolves.toMatchObject({ state: "complete" });
     await expect(
       registry.observeSensitiveImport(detachedContext(), "device-sensitive", {
         afterVersion: sensitive.version,

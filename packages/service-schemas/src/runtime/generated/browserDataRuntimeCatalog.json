@@ -71,7 +71,7 @@
     "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface SensitiveBrowserImportRequest extends SensitiveBrowserImportSelection {\n  operationId: string;\n}\n\nexport interface SensitiveBrowserImportStatus {\n  operationId: string;\n  state: \"running\" | \"applying\" | \"application_failed\" | \"complete\" | \"cancelled\" | \"failed\";\n  counts: SensitiveBrowserImportCount[];\n  error?: string;\n  /** Opaque status version; pass it back as `afterVersion` to await the next change. */\n  version: string;\n}\n\nexport interface SensitiveBrowserImportCount {\n  dataType: SensitiveBrowserImportDataType;\n  read: number;\n  stored: number;\n  skipped: number;\n  errors: number;\n}\n\nexport type SensitiveBrowserImportDataType = Extract<\n  BrowserImportDataType,\n  \"cookies\" | \"passwords\" | \"formFill\"\n>;\n```"
   },
   "observeSensitiveImport": {
-    "signature": "browserData.observeSensitiveImport(\n    operationId: string,\n    options?: { afterVersion?: string }\n  ): Promise<SensitiveBrowserImportStatus>",
+    "signature": "browserData.observeSensitiveImport(\n    operationId: string,\n    options?: { afterVersion?: string; signal?: AbortSignal }\n  ): Promise<SensitiveBrowserImportStatus>",
     "argumentNames": [
       "operationId",
       "options"

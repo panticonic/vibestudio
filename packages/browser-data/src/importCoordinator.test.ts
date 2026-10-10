@@ -63,7 +63,7 @@ function store() {
 }
 
 describe("BrowserImportCoordinator", () => {
-  it("observes publication before admission and waits for real changes without cancelling the import", async () => {
+  it("waits for its owning start during admission and observes real changes without cancelling the import", async () => {
     const backing = store();
     let finishStorageRead!: (job: ImportJobSnapshot | null) => void;
     const storageRead = new Promise<ImportJobSnapshot | null>((resolve) => {
@@ -91,8 +91,7 @@ describe("BrowserImportCoordinator", () => {
       connected: true,
       provider: importProvider,
     });
-    const admissionObservation = coordinator.observeJob(identity, "observed-operation");
-    await coordinator.start(
+    const starting = coordinator.start(
       identity,
       {
         hostId: "desktop-a",
@@ -101,8 +100,17 @@ describe("BrowserImportCoordinator", () => {
       },
       "observed-operation"
     );
-    expect((await admissionObservation).job.phase).toBe("discovering");
+    await vi.waitFor(() => expect(backing.value.getJob).toHaveBeenCalledOnce());
+    const admissionObservation = coordinator.observeJob(identity, "observed-operation");
+    let observed = false;
+    void admissionObservation.then(() => {
+      observed = true;
+    });
+    await Promise.resolve();
+    expect(observed).toBe(false);
     finishStorageRead(null);
+    await starting;
+    expect((await admissionObservation).job.jobId).toBe("observed-operation");
     const reading = await coordinator.observeJob(identity, "observed-operation");
     expect(reading.job.phase).toBe("reading");
     const observation = new AbortController();
@@ -122,6 +130,27 @@ describe("BrowserImportCoordinator", () => {
     expect((await coordinator.observeJob(identity, "observed-operation")).job.phase).toBe(
       "complete"
     );
+  });
+
+  it("propagates admission lookup failure to an observer before a job row exists", async () => {
+    const backing = store();
+    let fail!: (error: Error) => void;
+    const lookup = new Promise<ImportJobSnapshot | null>((_resolve, reject) => {
+      fail = reject;
+    });
+    vi.mocked(backing.value.getJob).mockImplementationOnce(() => lookup);
+    const coordinator = new BrowserImportCoordinator(backing.value);
+    const starting = coordinator.start(
+      identity,
+      { hostId: "desktop-a", sourceId: "source-a", dataTypes: ["bookmarks"] },
+      "lookup-failure"
+    );
+    await vi.waitFor(() => expect(backing.value.getJob).toHaveBeenCalledOnce());
+    const observing = coordinator.observeJob(identity, "lookup-failure");
+    const failure = new Error("Import store disconnected");
+    fail(failure);
+    await expect(starting).rejects.toBe(failure);
+    await expect(observing).rejects.toBe(failure);
   });
 
   it("isolates observations by environment and releases missing-job waits on cancellation", async () => {
@@ -211,6 +240,56 @@ describe("BrowserImportCoordinator", () => {
       finish();
       await coordinator.waitForJob(identity, stale.jobId);
     }
+  });
+
+  it("keeps identical job IDs in different environments independent", async () => {
+    const backing = store();
+    // Durable lookups are environment scoped in production.
+    backing.value.getJob = vi.fn(async () => null);
+    const coordinator = new BrowserImportCoordinator(backing.value);
+    const other = { ...identity, workspaceId: "workspace-b", environmentKey: "environment-b" };
+    let finish!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const importProvider = provider();
+    importProvider.openImport = vi.fn(async (_sourceId, _dataTypes, signal) => ({
+      consume: async () => {
+        await reading;
+        signal.throwIfAborted();
+        return { dataTypes: [], warnings: [] };
+      },
+    }));
+    coordinator.registerHost({
+      hostId: "desktop-a",
+      ownerUserId: identity.ownerUserId,
+      displayName: "Laptop",
+      platform: "linux",
+      location: "device",
+      connected: true,
+      provider: importProvider,
+    });
+    const selection = {
+      hostId: "desktop-a",
+      sourceId: "source-a",
+      dataTypes: ["bookmarks" as const],
+    };
+    try {
+      await coordinator.start(identity, selection, "same-id");
+      await coordinator.start(other, selection, "same-id");
+      expect(coordinator.getJob(identity, "same-id")?.phase).toBe("reading");
+      expect(coordinator.getJob(other, "same-id")?.phase).toBe("reading");
+      coordinator.cancel(other, "same-id");
+      expect(coordinator.getJob(identity, "same-id")?.phase).toBe("reading");
+    } finally {
+      finish();
+      await Promise.all([
+        coordinator.waitForJob(identity, "same-id"),
+        coordinator.waitForJob(other, "same-id"),
+      ]);
+    }
+    expect((await coordinator.observeJob(identity, "same-id")).job.phase).toBe("complete");
+    expect((await coordinator.observeJob(other, "same-id")).job.phase).toBe("cancelled");
   });
 
   it("shows hosts only to their verified owner", () => {
@@ -394,10 +473,21 @@ describe("BrowserImportCoordinator", () => {
       });
     await vi.waitFor(() => expect(importProvider.openImport).toHaveBeenCalledOnce());
     expect(accepted).toBe(false);
+    await expect(coordinator.observeJob(identity, "public-operation")).resolves.toMatchObject({
+      job: { phase: "discovering" },
+    });
+    let completed = false;
+    const waiting = coordinator.waitForJob(identity, "public-operation").then((job) => {
+      completed = true;
+      return job;
+    });
+    await Promise.resolve();
+    expect(completed).toBe(false);
 
     releaseOpen();
     const started = await starting;
     expect(accepted).toBe(true);
+    await expect(waiting).resolves.toMatchObject({ phase: "complete" });
     await expect(coordinator.waitForJob(identity, started.jobId)).resolves.toMatchObject({
       phase: "complete",
     });

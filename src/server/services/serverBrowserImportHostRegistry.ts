@@ -19,7 +19,7 @@ import type {
   ImportHostSummary,
   ImportPreviewSummary,
 } from "@vibestudio/browser-data";
-import { ImportHostSummarySchema } from "@vibestudio/browser-data";
+import { BrowserImportAdmissions, ImportHostSummarySchema } from "@vibestudio/browser-data";
 import type { BrowserEnvironmentImportRouter } from "../../main/services/browserEnvironmentService.js";
 import { BrowserImportHostProvider } from "../../main/services/browserImportHostProvider.js";
 import type {
@@ -96,6 +96,7 @@ interface BoundSensitiveImport {
 export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImportRouter {
   private readonly hosts = new Map<string, ScopedHost>();
   private readonly reads = new Map<string, BoundRead>();
+  private readonly admissions = new BrowserImportAdmissions<SensitiveBrowserImportStatus>();
   private readonly sensitiveImports = new Map<string, BoundSensitiveImport>();
   private readonly ledgerDir: string;
 
@@ -219,20 +220,34 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
     const existing = this.sensitiveImports.get(operationId);
     if (existing && existing.environmentKey !== environmentKey) throw invalidReadHandle();
     if (existing && existing.endpoint.summary.hostId !== hostId) throw invalidReadHandle();
-    const endpoint = await this.endpoint(ctx, hostId);
-    const binding = { endpoint, environmentKey, callerKey, applicationContext: ctx };
-    // Bind the verified initiating context before launching: a saved import can
-    // reach application synchronously without opening its original source.
-    this.sensitiveImports.set(operationId, binding);
-    try {
-      return await endpoint.startSensitiveImport(sourceId, dataTypes, operationId);
-    } catch (error) {
-      if (this.sensitiveImports.get(operationId) === binding) {
-        if (existing) this.sensitiveImports.set(operationId, existing);
-        else this.sensitiveImports.delete(operationId);
+    return this.admissions.run(
+      JSON.stringify([callerKey, operationId]),
+      JSON.stringify([environmentKey, hostId, sourceId, dataTypes]),
+      async () => {
+        const endpoint = await this.endpoint(ctx, hostId);
+        // Endpoint discovery can yield to another caller attempting the same ID.
+        const admitted = this.sensitiveImports.get(operationId);
+        if (
+          admitted &&
+          admitted !== existing &&
+          (admitted.environmentKey !== environmentKey || admitted.callerKey !== callerKey)
+        )
+          throw invalidReadHandle();
+        const binding = { endpoint, environmentKey, callerKey, applicationContext: ctx };
+        // Bind the verified initiating context before launching: a saved import can
+        // reach application synchronously without opening its original source.
+        this.sensitiveImports.set(operationId, binding);
+        try {
+          return await endpoint.startSensitiveImport(sourceId, dataTypes, operationId);
+        } catch (error) {
+          if (this.sensitiveImports.get(operationId) === binding) {
+            if (existing) this.sensitiveImports.set(operationId, existing);
+            else this.sensitiveImports.delete(operationId);
+          }
+          throw error;
+        }
       }
-      throw error;
-    }
+    );
   }
 
   async observeSensitiveImport(
@@ -240,6 +255,7 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
     operationId: string,
     options?: { afterVersion?: string }
   ): Promise<SensitiveBrowserImportStatus> {
+    await this.admissions.wait(JSON.stringify([readCallerKey(ctx), operationId]), ctx.signal);
     const entry = this.requireSensitive(ctx, operationId);
     return entry.endpoint.observeSensitiveImport(operationId, {
       ...options,
@@ -251,6 +267,7 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
     ctx: ServiceContext,
     operationId: string
   ): Promise<SensitiveBrowserImportStatus> {
+    await this.admissions.wait(JSON.stringify([readCallerKey(ctx), operationId]), ctx.signal);
     const entry = this.requireSensitive(ctx, operationId);
     return entry.endpoint.cancelSensitiveImport(operationId);
   }
