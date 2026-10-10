@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { envelopeFromMessage } from "@vibestudio/rpc";
+import { decodeRpcJson, encodeRpcJson, envelopeFromMessage } from "@vibestudio/rpc";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import {
@@ -295,7 +295,7 @@ async function rpc<T = unknown>(
         "Content-Type": "application/json",
         Authorization: `Bearer ${shellToken}`,
       },
-      body: JSON.stringify(
+      body: encodeRpcJson(
         envelopeFromMessage({
           from: "extension-image-service-integration",
           target: "main",
@@ -314,7 +314,7 @@ async function rpc<T = unknown>(
   } catch (error) {
     throw new Error(`RPC ${method} did not respond`, { cause: error });
   }
-  const json = (await response.json()) as
+  const json = decodeRpcJson(await response.text()) as
     | { error?: string }
     | { message?: { result?: T; error?: string } }
     | { envelope?: { message?: { result?: T; error?: string } } };

@@ -14,7 +14,7 @@ vibestudio system-test list --category smoke --json
 ```
 
 `doctor` verifies that the test catalog builds, the agent worker is healthy,
-and the one pinned model in the canonical test policy is usable. The server automatically keeps a
+and the configured model policy is usable, including its quota fallback. The server automatically keeps a
 headless renderer available for panel/CDP work; an individual CDP test remains
 the authoritative end-to-end check of that path.
 
@@ -110,8 +110,9 @@ vibestudio system-test rerun st_...
 ```
 
 Rerun includes both failed tests and passing tests that encountered unexpected
-tool failures. Once targeted reruns pass, run the affected category and smoke
-suite to catch regressions.
+tool failures. After an exact test passes, expand coverage only when the changed
+behavior or concrete evidence justifies it. Do not automatically run the
+affected category or smoke suite.
 
 Tests that create or publish workspace source declare a typed harness-owned
 fixture. Setup imports one stable repository identity into a fresh task context

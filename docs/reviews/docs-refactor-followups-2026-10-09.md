@@ -121,7 +121,7 @@ The Base composition typecheck passed after these changes.
    Failed unselected candidates are retired; cleanup debt survives reopening.
    A lost selection acknowledgment reads the committed receipt before cleanup.
    Ordinary clone uses this same pipeline, and all review readers use the selected
-   context. Base commit `e8e135f`; 84 focused bridge/upstream tests passed.
+   context. Base commit `e8e135f`; 86 focused bridge/upstream/index tests passed.
 3. SetupHub now admits all observations before its first snapshot and coalesces
    invalidations during a read. Credential and provider configuration changes use
    native file notifications, including other-process replacement and deletion.
@@ -160,3 +160,83 @@ that workflow. A GitHub connection with repository-publish access is required
 before promotion can proceed; Git's working push credentials do not supply
 that application authority. No receipt or pin was fabricated, and no legacy
 reader was added to accommodate the old releases.
+
+## Cancellation and notification follow-up
+
+The canonical RPC response remains the owner of its terminal result after a
+correlated cancellation is delivered. Cancellation signals the receiver; it
+does not authorize discarding the original response, revoking its authority
+parent, or suppressing its cleanup error. Both host and workspace durable bases
+now attach alarm persistence to each invocation, preserving typed errors and
+diagnostic identifiers when cleanup runs concurrently. Lifecycle release still
+runs when alarm persistence fails. Channel adoption checks cancellation between
+pages and batches while retaining its committed cursor. Base commit `d1992b8`
+passed 49 runtime tests, 125 channel tests, and all eight composition typechecks.
+
+Scheduled notification validation now follows the native Missions notify action:
+exact launch identity, launching conversation, mission and run identifiers,
+message text, and canonical `automation.notify:<runId>` item identity. Watch
+notifications retain their agent-message contract. These are distinct delivery
+behaviors, so one validator cannot assume that both create an agent turn. System
+Testing commit `baf51a1` passed all 45 focused notification validator tests.
+
+The native workerd regression now follows the activation's ownership contract.
+A cancelled alarm signals its RPC owner while the activation retains its
+durable model work. Shutdown closes both scheduler admissions, performs
+lifecycle suspension with the RPC transports still available, then joins the
+schedulers before transport teardown. The prior ordering waited for an alarm
+whose model resource could only be closed by that later suspension. Host commit
+`60351b457` passes the exact
+native regression with the original `Harness is closed` terminal and
+model peer closure both joined. Another 127 focused host durable, RPC, dispatch,
+scheduler, and lifecycle tests pass, along with host and workerd typechecks.
+
+The real desktop approval regression subsequently identified the same ordering
+dependency in eval kernel closure. A warm kernel's held RPC settles during
+EvalDO lifecycle release, so shutdown now starts coordinator closure before
+preparation and joins it afterward. The coordinator requires the current
+signal-aware dispatcher; only old-shaped mocks needed its removed fallback.
+Shutdown stages now report their owning workspace and actual pending boundary.
+All 92 focused EvalDO cancellation, receipt, and kernel tests pass, as do host
+and workerd typechecks. The exact desktop network approval case then passes
+its same-turn resume assertions and full cleanup. The mobile panel selection
+case also passes with its cleanup ledger complete.
+
+Read-only channel inspection now resolves an existing canonical durable object
+from its owning workspace's selected channel provider. The CLI and test host
+share this lookup; diagnostics cannot create a channel or demand its creator
+context. Host commit `53fcf7ecf` passes six focused CLI and TestAPI tests and the
+real desktop approval case. Ordinary channel send retains the creation contract.
+
+The authoring investigation distinguished retained extension logs from hub
+logs: extension stdout and `ctx.log` records belong to the extension diagnostic
+resource and are persisted under runtime diagnostics. The retained records
+showed ordinary metadata progress, followed by a UI assertion triggering
+cleanup; the last read at bridge closure was not proof of a stranded RPC.
+Host commit `71976bcd4` traces dispatch and physical activation boundaries while
+preserving original error messages, codes, and diagnostic IDs. All 105 focused
+extension runtime, lifecycle, and exact-source tests pass; normal commit gates
+also pass.
+
+Base commit `78612fa` removes unnecessary service package expansion from
+authoring observation. Runtime declarations come directly from the same exact
+protected-main manifest; independent repository directories are listed
+concurrently at that state. Publication inspection retains the package reads
+that actually establish dependency closure. All 18 distinct focused authoring,
+inspection, publication, and observation tests pass, including a deferred
+sibling-read regression, and Base composition and integration typechecks pass.
+The desktop authoring test now waits for the actual publication form within
+its existing 120-second readiness budget and uses the current radio-card and
+missing-account controls. The exact authoring case passes in capture 112 with
+normal cleanup complete: metadata resolves, Private
+visibility is selected, Existing and New destination choices work, and a
+workspace with no connected GitHub account keeps repository loading and release
+review disabled. No account was connected and no release was published.
+
+The headless panel integration passes and retires its owned scratch state.
+Extension smoke initially exposed an unmigrated HTTP test client: plain
+`JSON.stringify` changed its native byte argument into a numeric-key object.
+The helper now uses the shared RPC encoder and decoder, and the exact image
+extension smoke passes with its owned server and scratch paths retired. The
+production HTTP, process, and CLI RPC boundaries already use that codec; no
+binary compatibility wrapper was added.
