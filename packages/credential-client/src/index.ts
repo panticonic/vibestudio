@@ -54,6 +54,8 @@ export {
 } from "./credentialStatus.js";
 
 export interface CredentialClient {
+  openWebSocketScope(input: { url: string; credentialId: string }): Promise<{ scopeId: string }>;
+  closeWebSocketScope(scopeId: string): Promise<void>;
   store(input: StoreUrlBoundCredentialRequest): Promise<StoredCredentialSummary>;
   connect(input: ConnectCredentialRequest): Promise<StoredCredentialSummary>;
   configureClient(input: ConfigureClientRequest): Promise<ClientConfigStatus>;

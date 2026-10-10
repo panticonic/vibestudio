@@ -2,6 +2,7 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { DeriveCredentialParamsSchema } from "@vibestudio/service-schemas/credentials";
 import { describe, expect, it, vi } from "vitest";
 import { createCredentialService } from "./credentialService.js";
+import { credentialServiceEgressProxyFixture } from "./credentialService.testFixtures.js";
 import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
 import { WebsitePublicationJournal } from "./websitePublicationJournal.js";
 
@@ -42,7 +43,7 @@ function createDerivationFixture(token: string) {
   }));
   const service = createCredentialService({
     credentialStore: credentialStore as never,
-    egressProxy: { forwardGitHttp: vi.fn(), forwardProxyFetch },
+    egressProxy: credentialServiceEgressProxyFixture({ forwardProxyFetch }),
   });
   const params = {
     publication,
@@ -193,7 +194,7 @@ describe("credentialService website publication grant", () => {
     }));
     const service = createCredentialService({
       workspaceId: "workspace-1",
-      egressProxy: { forwardGitHttp: vi.fn(), forwardProxyFetch },
+      egressProxy: credentialServiceEgressProxyFixture({ forwardProxyFetch }),
     });
 
     await expect(

@@ -158,7 +158,10 @@ export interface CredentialServiceDeps {
       oauthCallbackMode?: OAuthCallbackMode;
     } | null;
   };
-  egressProxy?: Pick<EgressProxy, "forwardProxyFetch" | "forwardGitHttp">;
+  egressProxy?: Pick<
+    EgressProxy,
+    "forwardProxyFetch" | "forwardGitHttp" | "openWebSocketScope" | "closeWebSocketScope"
+  >;
   /**
    * Serves a host-authorized local checkout for one declared canonical remote.
    * Present only when the host declared mirrors; see localGitMirrors.ts.
@@ -1678,6 +1681,15 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       },
       deriveCredential: (ctx, [input]) => deriveCredential(ctx, input),
       proxyFetch: (ctx, [input]) => proxyFetch(ctx, input),
+      openWebSocketScope: (ctx, [input]) => {
+        if (!egressProxy) throw new Error("Egress proxy is unavailable");
+        return egressProxy.openWebSocketScope(ctx.caller, input);
+      },
+      closeWebSocketScope: async (ctx, [input]) => {
+        if (!egressProxy) throw new Error("Egress proxy is unavailable");
+        await egressProxy.closeWebSocketScope(ctx.caller, input.scopeId);
+        return null;
+      },
       publishFetch: (ctx, [input, publication]) => {
         assertPublicationGrant(ctx, publication);
         return proxyFetch(ctx, input, "publish");

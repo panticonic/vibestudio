@@ -1195,6 +1195,45 @@ export type CredentialProxyFetchResponse = z.infer<typeof CredentialProxyFetchRe
 export type CredentialAuditParams = AuditParams;
 
 export const credentialsMethods = defineServiceMethods({
+  openWebSocketScope: {
+    website: {
+      kind: "eligible",
+      rationale:
+        "Credential use remains authorized at the exact destination under the originating caller.",
+    },
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.proxy",
+      rationale: "Ownership does not authorize credential use",
+    },
+    description:
+      "Own one credentialed WebSocket request under the authenticated originating invocation. Opening does not grant credential use; close cancels and joins pending authorization and transport.",
+    agentFacing: false,
+    args: z.tuple([z.object({ url: z.string().url(), credentialId: z.string().min(1) }).strict()]),
+    returns: z.object({ scopeId: z.string().min(1) }).strict(),
+    access: PROXY_ACCESS,
+  },
+  closeWebSocketScope: {
+    website: {
+      kind: "eligible",
+      rationale: "The originating caller releases its owned credentialed transport.",
+    },
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.proxy",
+      rationale: "Release the originating caller owned transport",
+    },
+    description:
+      "Cancel and join an owned WebSocket scope, including an upgrade still awaiting credential approval. A close before upgrade prevents later admission.",
+    agentFacing: false,
+    args: z.tuple([z.object({ scopeId: z.string().min(1) }).strict()]),
+    returns: z.null(),
+    access: PROXY_ACCESS,
+  },
   observeChanges: {
     website: {
       kind: "closed",

@@ -1,6 +1,7 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
 import { createCredentialService } from "./credentialService.js";
+import { credentialServiceEgressProxyFixture } from "./credentialService.testFixtures.js";
 
 const caller = createVerifiedCaller("worker:test", "worker");
 
@@ -20,7 +21,10 @@ describe("credentialService logical Git credential boundary", () => {
     const forwardGitHttp = vi.fn(async ({ url }: { url: string }) => response(url));
     const service = createCredentialService({
       workspaceId: "workspace-1",
-      egressProxy: { forwardGitHttp, forwardProxyFetch: vi.fn() },
+      egressProxy: credentialServiceEgressProxyFixture({
+        forwardGitHttp,
+        forwardProxyFetch: vi.fn(),
+      }),
     });
     const remoteUrl = "https://git.example.test/acme/repo.git";
 
@@ -42,7 +46,10 @@ describe("credentialService logical Git credential boundary", () => {
     const forwardGitHttp = vi.fn();
     const service = createCredentialService({
       workspaceId: "workspace-1",
-      egressProxy: { forwardGitHttp, forwardProxyFetch: vi.fn() },
+      egressProxy: credentialServiceEgressProxyFixture({
+        forwardGitHttp,
+        forwardProxyFetch: vi.fn(),
+      }),
     });
 
     await expect(
@@ -63,7 +70,10 @@ describe("credentialService logical Git credential boundary", () => {
     const forwardGitHttp = vi.fn(async ({ url }: { url: string }) => response(url));
     const service = createCredentialService({
       workspaceId: "workspace-1",
-      egressProxy: { forwardGitHttp, forwardProxyFetch: vi.fn() },
+      egressProxy: credentialServiceEgressProxyFixture({
+        forwardGitHttp,
+        forwardProxyFetch: vi.fn(),
+      }),
     });
 
     await service.handler({ caller }, "proxyGitHttp", [

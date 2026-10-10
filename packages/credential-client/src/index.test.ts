@@ -3,6 +3,20 @@ import { describe, expect, it, vi } from "vitest";
 import { createCredentialClient } from "@vibestudio/service-schemas/clients/credentialClient";
 
 describe("credential client HTTP mediation", () => {
+  it("opens and closes one exact credentialed WebSocket ownership scope", async () => {
+    const call = vi.fn(async (_target, method) =>
+      method === "credentials.openWebSocketScope" ? { scopeId: "owned-scope" } : null
+    );
+    const client = createCredentialClient(schemaRpcCaller({ call, stream: vi.fn() }));
+    const input = { url: "wss://provider.test/model", credentialId: "selected" };
+    const scope = await client.openWebSocketScope(input);
+    await client.closeWebSocketScope(scope.scopeId);
+    expect(call.mock.calls).toEqual([
+      ["main", "credentials.openWebSocketScope", [input], undefined],
+      ["main", "credentials.closeWebSocketScope", [{ scopeId: "owned-scope" }], undefined],
+    ]);
+  });
+
   it("serializes FormData with the same multipart boundary sent in Content-Type", async () => {
     const stream = vi.fn(async (_target, _method, args) => {
       const request = args[0] as { headers: Record<string, string>; bodyBase64: string };

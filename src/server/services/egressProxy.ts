@@ -71,7 +71,10 @@ import {
 } from "./networkDestination.js";
 
 import { EgressListener } from "./egressListener.js";
-import { EGRESS_CREDENTIAL_HEADER } from "@vibestudio/shared/runtime/egressCredential";
+import {
+  EGRESS_CREDENTIAL_HEADER,
+  EGRESS_WEBSOCKET_SCOPE_HEADER,
+} from "@vibestudio/shared/runtime/egressCredential";
 
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   "connection",
@@ -95,6 +98,7 @@ const INTERNAL_EGRESS_HEADERS = new Set([
   EGRESS_CALLER_HEADER,
   EGRESS_SECRET_HEADER,
   EGRESS_CREDENTIAL_HEADER,
+  EGRESS_WEBSOCKET_SCOPE_HEADER,
   CDP_INTERNAL_GRANT_HEADER,
   "x-forwarded-proto",
 ]);
@@ -284,11 +288,66 @@ interface CircuitState {
 }
 
 export class EgressProxy {
+  private readonly webSocketScopes = new Map<
+    string,
+    {
+      caller: VerifiedCaller;
+      url: string;
+      credentialId: string;
+      controller: AbortController;
+      claimed: boolean;
+      completion: Promise<void> | null;
+      closing?: Promise<void>;
+    }
+  >();
+
+  openWebSocketScope(
+    caller: VerifiedCaller,
+    input: { url: string; credentialId: string }
+  ): { scopeId: string } {
+    if (this.stopped) throw new Error("Egress proxy stopped");
+    const url = websocketPolicyUrlFor(new URL(input.url));
+    if (!url || url.username || url.password || url.hash || !caller.code?.executionDigest)
+      throw new Error(
+        "Credentialed WebSocket requires an exact originating executable and destination"
+      );
+    const scopeId = randomBytes(32).toString("base64url");
+    this.webSocketScopes.set(scopeId, {
+      caller,
+      url: url.href,
+      credentialId: input.credentialId,
+      controller: new AbortController(),
+      claimed: false,
+      completion: null,
+    });
+    return { scopeId };
+  }
+
+  async closeWebSocketScope(caller: VerifiedCaller, scopeId: string): Promise<void> {
+    const scope = this.webSocketScopes.get(scopeId);
+    if (!scope) return;
+    if (scope.caller.runtime.id !== caller.runtime.id)
+      throw new Error("Credentialed WebSocket belongs to a different originating owner");
+    if (!scope.closing) {
+      scope.controller.abort(
+        Object.assign(new Error("Credentialed WebSocket scope closed"), { code: "ECANCELLED" })
+      );
+      scope.closing = Promise.resolve(scope.completion).then(() => {
+        this.webSocketScopes.delete(scopeId);
+      });
+    }
+    await scope.closing;
+  }
+
   private server: EgressListener | null = null;
   private readonly operations = new Map<string, Set<AbortController>>();
   private stopped = false;
 
   private beginOperation(callerId: string) {
+    let complete!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
     const controller = new AbortController();
     let entries = this.operations.get(callerId);
     if (!entries) this.operations.set(callerId, (entries = new Set()));
@@ -301,11 +360,13 @@ export class EgressProxy {
       if (entries.size === 0 && this.operations.get(callerId) === entries) {
         this.operations.delete(callerId);
       }
+      complete();
     };
     if (this.stopped) controller.abort(new Error("Egress proxy stopped"));
     return {
       signal: controller.signal,
-      abort: () => controller.abort(new Error("Egress connection closed")),
+      completion,
+      abort: (reason: unknown = new Error("Egress connection closed")) => controller.abort(reason),
       hold: (socket: Duplex | ServerResponse) => {
         if (held.has(socket)) return;
         held.add(socket);
@@ -470,6 +531,7 @@ export class EgressProxy {
     const attributed = [...this.attributedServers.values()];
     this.attributedServers.clear();
     await Promise.all([
+      ...[...this.webSocketScopes].map(([id, scope]) => this.closeWebSocketScope(scope.caller, id)),
       this.stopShared(),
       ...(server ? [server.close()] : []),
       ...attributed.map((listener) => listener.close()),
@@ -477,6 +539,11 @@ export class EgressProxy {
   }
 
   async dropCaller(callerId: string): Promise<void> {
+    await Promise.all(
+      [...this.webSocketScopes]
+        .filter(([, scope]) => scope.caller.runtime.id === callerId)
+        .map(([id, scope]) => this.closeWebSocketScope(scope.caller, id))
+    );
     this.abortOperations(callerId);
     const entry = this.attributedServers.get(callerId);
     this.attributedServers.delete(callerId);
@@ -2300,7 +2367,36 @@ export class EgressProxy {
     head: Buffer,
     caller: VerifiedCaller | null
   ): Promise<void> {
+    const scopeId = this.readHeader(req, EGRESS_WEBSOCKET_SCOPE_HEADER);
+    if (this.readHeader(req, EGRESS_CREDENTIAL_HEADER) && !scopeId) {
+      this.rejectUpgrade(socket, 403, "Credentialed WebSocket requires its originating scope");
+      return;
+    }
+    const scope = scopeId ? this.webSocketScopes.get(scopeId) : undefined;
+    if (
+      scopeId &&
+      (!scope ||
+        scope.controller.signal.aborted ||
+        scope.claimed ||
+        !caller?.code ||
+        caller.code.executionDigest !== scope.caller.code?.executionDigest ||
+        caller.code.repoPath !== scope.caller.code?.repoPath)
+    ) {
+      this.rejectUpgrade(
+        socket,
+        403,
+        "Credentialed WebSocket scope is not admitted for this executable"
+      );
+      return;
+    }
+    if (scope) caller = scope.caller;
     const operation = this.beginOperation(caller?.runtime.id ?? "unattributed");
+    if (scope) {
+      scope.claimed = true;
+      scope.completion = operation.completion;
+    }
+    const abortScope = () => operation.abort(scope!.controller.signal.reason);
+    scope?.controller.signal.addEventListener("abort", abortScope, { once: true });
     operation.hold(socket);
     try {
       // An HTTP upgrade hands ownership of the raw downstream socket to this
@@ -2348,6 +2444,18 @@ export class EgressProxy {
           target: diagnosticWebSocketTarget(targetUrl),
         });
         this.rejectUpgrade(socket, 400, "WebSocket egress target URL is invalid");
+        return;
+      }
+      if (
+        scope &&
+        (scope.url !== policyUrl.href ||
+          this.readHeader(req, EGRESS_CREDENTIAL_HEADER) !== scope.credentialId)
+      ) {
+        this.rejectUpgrade(
+          socket,
+          403,
+          "Credentialed WebSocket changed its admitted destination or credential"
+        );
         return;
       }
 
@@ -2398,6 +2506,9 @@ export class EgressProxy {
       }
     } finally {
       operation.finish();
+      void operation.completion.then(() =>
+        scope?.controller.signal.removeEventListener("abort", abortScope)
+      );
     }
   }
 

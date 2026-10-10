@@ -3,11 +3,16 @@ import { WebSocketServer } from "ws";
 import { describe, expect, it, vi } from "vitest";
 import type { Credential } from "@vibestudio/credential-client/types";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { EGRESS_CREDENTIAL_HEADER } from "@vibestudio/shared/runtime/egressCredential";
+import {
+  EGRESS_CREDENTIAL_HEADER,
+  EGRESS_WEBSOCKET_SCOPE_HEADER,
+} from "@vibestudio/shared/runtime/egressCredential";
+import { createApprovalQueue } from "./approvalQueue.js";
 import { EgressProxy } from "./egressProxy.js";
 
-async function fixture() {
+async function fixture(options: { approvalQueue?: ReturnType<typeof createApprovalQueue> } = {}) {
   const observed: IncomingHttpHeaders[] = [];
+  const authorizedCallerIds: string[] = [];
   const server = createServer((req, res) => {
     observed.push(req.headers);
     res.end("ok");
@@ -63,6 +68,15 @@ async function fixture() {
     executionDigest: "a".repeat(64),
     requested: [],
   });
+  const originatingCaller = createVerifiedCaller(
+    "do:workers/agent-worker:AiChatWorker:headless-test",
+    "do",
+    caller.code
+  );
+  const differentCodeCaller = createVerifiedCaller("worker:other", "worker", {
+    ...caller.code!,
+    executionDigest: "b".repeat(64),
+  });
   const proxy = new EgressProxy({
     credentialStore: {
       loadUrlBound: (id) => credentials.get(id) ?? null,
@@ -71,21 +85,38 @@ async function fixture() {
     auditLog: { async append() {} },
     // Real network policy denies loopback. This fixture authorizes its exact
     // listener while retaining the actual credential authorization/injection.
-    authorizeInternalRequest: ({ targetUrl }) => (targetUrl.origin === origin ? {} : null),
+    ...(options.approvalQueue ? { approvalQueue: options.approvalQueue } : {}),
+    authorizeInternalRequest: ({ caller: authorizedCaller, targetUrl }) => {
+      authorizedCallerIds.push(authorizedCaller.runtime.id);
+      return targetUrl.origin === origin ? {} : null;
+    },
   });
-  proxy.setCallerResolver((id) => (id === caller.runtime.id ? caller : null));
+  proxy.setCallerResolver((id) => {
+    if (id === caller.runtime.id) return caller;
+    if (id === differentCodeCaller.runtime.id) return differentCodeCaller;
+    return null;
+  });
   const port = await proxy.startShared("fixture-secret");
 
-  const send = (websocket: boolean, selection?: string | string[], secret = "fixture-secret") =>
+  const send = (
+    websocket: boolean,
+    selection?: string | string[],
+    secret = "fixture-secret",
+    extra: { callerId?: string; scopeId?: string; path?: string } = {}
+  ) =>
     new Promise<{ status: number; body: string }>((resolve, reject) => {
       const req = request({
         host: "127.0.0.1",
         port,
-        path: `${websocket ? "ws" : "http"}://127.0.0.1:${address.port}/model/responses`,
+        path:
+          extra.path ?? `${websocket ? "ws" : "http"}://127.0.0.1:${address.port}/model/responses`,
         headers: {
-          "X-Vibestudio-Egress-Caller": caller.runtime.id,
+          "X-Vibestudio-Egress-Caller": extra.callerId ?? caller.runtime.id,
           "X-Vibestudio-Egress-Secret": secret,
           ...(selection === undefined ? {} : { [EGRESS_CREDENTIAL_HEADER]: selection }),
+          ...(extra.scopeId === undefined
+            ? {}
+            : { [EGRESS_WEBSOCKET_SCOPE_HEADER]: extra.scopeId }),
           ...(websocket
             ? {
                 Connection: "Upgrade",
@@ -116,7 +147,17 @@ async function fixture() {
     });
   return {
     observed,
+    authorizedCallerIds,
+    caller,
+    originatingCaller,
     credentials,
+    proxy,
+    websocketUrl(path = "/model/responses") {
+      return `ws://127.0.0.1:${address.port}${path}`;
+    },
+    openScope(url: string, credentialId = "selected") {
+      return proxy.openWebSocketScope(originatingCaller, { url, credentialId });
+    },
     send,
     async close() {
       await proxy.stop();
@@ -131,11 +172,166 @@ async function fixture() {
   };
 }
 
+describe("credentialed WebSocket scopes", () => {
+  it("rejects a selected credential upgrade without an originating owner scope", async () => {
+    const f = await fixture();
+    try {
+      expect((await f.send(true, "selected")).status).toBe(403);
+      expect(f.observed).toEqual([]);
+      expect(f.authorizedCallerIds).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("retains the authenticated originating owner instead of the shared code caller", async () => {
+    const f = await fixture();
+    try {
+      const { scopeId } = f.openScope(f.websocketUrl());
+      const status = await f.send(true, "selected", "fixture-secret", { scopeId });
+
+      expect(status.status).toBe(101);
+      expect(f.authorizedCallerIds).toEqual([f.originatingCaller.runtime.id]);
+      expect(f.authorizedCallerIds).not.toContain(f.caller.runtime.id);
+      expect(f.observed).toHaveLength(1);
+      expect(f.observed[0]?.authorization).toBe("Bearer selected-token");
+      expect(f.observed[0]).not.toHaveProperty(EGRESS_WEBSOCKET_SCOPE_HEADER);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each([
+    {
+      label: "a different executable",
+      request: (f: Awaited<ReturnType<typeof fixture>>, scopeId: string) =>
+        f.send(true, "selected", "fixture-secret", {
+          callerId: "worker:other",
+          scopeId,
+        }),
+    },
+    {
+      label: "a different destination",
+      request: (f: Awaited<ReturnType<typeof fixture>>, scopeId: string) =>
+        f.send(true, "selected", "fixture-secret", {
+          path: f.websocketUrl("/model/other"),
+          scopeId,
+        }),
+    },
+    {
+      label: "a different credential",
+      request: (f: Awaited<ReturnType<typeof fixture>>, scopeId: string) =>
+        f.send(true, "other", "fixture-secret", { scopeId }),
+    },
+  ])("rejects a scope claimed with $label", async ({ request: sendScoped }) => {
+    const f = await fixture();
+    try {
+      const { scopeId } = f.openScope(f.websocketUrl());
+      expect((await sendScoped(f, scopeId)).status).toBe(403);
+      expect(f.observed).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("prevents a canceled scope from being admitted when its upgrade arrives later", async () => {
+    const f = await fixture();
+    try {
+      const { scopeId } = f.openScope(f.websocketUrl());
+      await f.proxy.closeWebSocketScope(f.originatingCaller, scopeId);
+      expect((await f.send(true, "selected", "fixture-secret", { scopeId })).status).toBe(403);
+      expect(f.observed).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("retires one origin's unopened scopes while leaving a sibling's scope usable", async () => {
+    const f = await fixture();
+    try {
+      const sibling = createVerifiedCaller(
+        "do:workers/agent-worker:AiChatWorker:sibling",
+        "do",
+        f.caller.code
+      );
+      const retired = f.openScope(f.websocketUrl()).scopeId;
+      const surviving = f.proxy.openWebSocketScope(sibling, {
+        url: f.websocketUrl(),
+        credentialId: "selected",
+      }).scopeId;
+      await f.proxy.dropCaller(f.originatingCaller.runtime.id);
+      expect((await f.send(true, "selected", "fixture-secret", { scopeId: retired })).status).toBe(
+        403
+      );
+      expect(
+        (await f.send(true, "selected", "fixture-secret", { scopeId: surviving })).status
+      ).toBe(101);
+      expect(f.authorizedCallerIds).toEqual([sibling.runtime.id]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("refuses another origin closing an owned scope and rejects malformed admission", async () => {
+    const f = await fixture();
+    try {
+      const { scopeId } = f.openScope(f.websocketUrl());
+      await expect(f.proxy.closeWebSocketScope(f.caller, scopeId)).rejects.toThrow(
+        "different originating owner"
+      );
+      expect(() => f.openScope("file:///model")).toThrow(
+        "exact originating executable and destination"
+      );
+      expect((await f.send(true, "selected", "fixture-secret", { scopeId })).status).toBe(101);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("cancels and joins a pending credential approval when its scope closes", async () => {
+    const approvalQueue = createApprovalQueue({
+      eventService: { emitProjected: vi.fn() } as never,
+      scopeAccess: {
+        isMember: (userId) => userId === "user-1",
+        isAdmin: () => false,
+      },
+    });
+    const f = await fixture({ approvalQueue });
+    try {
+      const selected = f.credentials.get("selected");
+      if (!selected) throw new Error("Missing fixture credential");
+      selected.grants = [];
+
+      const { scopeId } = f.openScope(f.websocketUrl());
+      const request = f.send(true, "selected", "fixture-secret", { scopeId }).then(
+        (response) => ({ response }),
+        (error: unknown) => ({ error })
+      );
+      await vi.waitFor(() => expect(approvalQueue.listPending()).toHaveLength(1));
+
+      await f.proxy.closeWebSocketScope(f.originatingCaller, scopeId);
+
+      expect(await request).toMatchObject({ error: { code: "ECONNRESET" } });
+      expect(approvalQueue.listPending()).toEqual([]);
+      expect(f.observed).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+});
+
 describe.each([false, true])("host egress exact credential (WebSocket=%s)", (websocket) => {
   it("uses the selected credential among multiple matches and strips the selector", async () => {
     const f = await fixture();
     try {
-      expect((await f.send(websocket, "selected")).status).toBe(websocket ? 101 : 200);
+      const scopeId = websocket ? f.openScope(f.websocketUrl()).scopeId : undefined;
+      expect(
+        (
+          await f.send(websocket, "selected", "fixture-secret", {
+            ...(scopeId ? { scopeId } : {}),
+          })
+        ).status
+      ).toBe(websocket ? 101 : 200);
       expect(f.observed).toHaveLength(1);
       expect(f.observed[0]?.authorization).toBe("Bearer selected-token");
       expect(f.observed[0]).not.toHaveProperty(EGRESS_CREDENTIAL_HEADER);
@@ -164,7 +360,14 @@ describe.each([false, true])("host egress exact credential (WebSocket=%s)", (web
           }));
         }
         if (failure === "ungranted") selected.grants = [];
-        expect((await f.send(websocket, "selected")).status).toBe(403);
+        const scopeId = websocket ? f.openScope(f.websocketUrl()).scopeId : undefined;
+        expect(
+          (
+            await f.send(websocket, "selected", "fixture-secret", {
+              ...(scopeId ? { scopeId } : {}),
+            })
+          ).status
+        ).toBe(403);
         expect(f.observed).toEqual([]);
       } finally {
         warn.mockRestore();
@@ -174,12 +377,14 @@ describe.each([false, true])("host egress exact credential (WebSocket=%s)", (web
   );
 
   it.each(["", ["selected", "other"], ["selected", "selected"]])(
-    "refuses an empty or ambiguous selector: %j",
+    "refuses malformed or unscoped selectors: %j",
     async (selection) => {
       const f = await fixture();
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
-        expect((await f.send(websocket, selection)).status).toBe(400);
+        expect((await f.send(websocket, selection)).status).toBe(
+          websocket && selection !== "" ? 403 : 400
+        );
         expect(f.observed).toEqual([]);
       } finally {
         warn.mockRestore();
@@ -192,7 +397,14 @@ describe.each([false, true])("host egress exact credential (WebSocket=%s)", (web
     const f = await fixture();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      expect((await f.send(websocket, "selected", "wrong-secret")).status).toBe(403);
+      const scopeId = websocket ? f.openScope(f.websocketUrl()).scopeId : undefined;
+      expect(
+        (
+          await f.send(websocket, "selected", "wrong-secret", {
+            ...(scopeId ? { scopeId } : {}),
+          })
+        ).status
+      ).toBe(403);
       expect(f.observed).toEqual([]);
     } finally {
       warn.mockRestore();

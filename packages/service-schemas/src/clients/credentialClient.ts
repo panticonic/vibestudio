@@ -12,6 +12,12 @@ import type {
 } from "@vibestudio/credential-client";
 export function createCredentialClient(rpc: RpcCaller): CredentialClient {
   return {
+    openWebSocketScope(input) {
+      return rpc.call("main", mainRpcMethods["credentials.openWebSocketScope"], [input]);
+    },
+    async closeWebSocketScope(scopeId) {
+      await rpc.call("main", mainRpcMethods["credentials.closeWebSocketScope"], [{ scopeId }]);
+    },
     store(input) {
       return rpc.call("main", mainRpcMethods["credentials.storeCredential"], [input]);
     },
