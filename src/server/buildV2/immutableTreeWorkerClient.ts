@@ -1,6 +1,7 @@
 import { resolveHostWorkerEntry } from "../hostWorkerEntry.js";
 import type { Worker } from "node:worker_threads";
 import { createMeasuredWorker } from "../workerPerformance.js";
+import { deserializeBuildWorkerFailure, type BuildWorkerFailure } from "./workerFailure.js";
 
 declare global {
   var __VIBESTUDIO_IMMUTABLE_TREE_WORKER_ENTRY__: string | undefined;
@@ -51,19 +52,12 @@ export class ImmutableTreeWorkerClient {
     worker.unref();
     worker.on(
       "message",
-      (message: {
-        id: number;
-        result?: boolean;
-        error?: { name?: string; message: string; stack?: string };
-      }) => {
+      (message: { id: number; result?: boolean; failure?: BuildWorkerFailure }) => {
         const pending = this.pending.get(message.id);
         if (!pending) return;
         this.pending.delete(message.id);
-        if (message.error) {
-          const error = new Error(message.error.message);
-          error.name = message.error.name ?? "Error";
-          error.stack = message.error.stack;
-          pending.reject(error);
+        if (message.failure) {
+          pending.reject(deserializeBuildWorkerFailure(message.failure));
         } else if (message.result) pending.resolve();
         else pending.reject(new Error("Immutable tree worker returned no result"));
       }

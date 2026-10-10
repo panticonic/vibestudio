@@ -11,6 +11,7 @@ import {
   type CachedAuthorityFacts,
 } from "./authorityAnalysisCache.js";
 import type { AuthorityDependencyIndex } from "./authorityDependencyIndex.js";
+import { serializeBuildWorkerFailure } from "./workerFailure.js";
 
 type Request =
   | { id: number; kind: "compiler-snapshot"; input: CreateAuthorityCompilerSnapshotInput }
@@ -90,10 +91,7 @@ port.on("message", (request: Request) => {
       (error: unknown) =>
         port.postMessage({
           id: request.id,
-          error:
-            error instanceof Error
-              ? { name: error.name, message: error.message, stack: error.stack }
-              : { name: "Error", message: String(error) },
+          failure: serializeBuildWorkerFailure(error),
         })
     )
   );

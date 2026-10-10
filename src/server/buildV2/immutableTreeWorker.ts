@@ -3,6 +3,7 @@ import {
   materializeImmutableTree,
   materializePackageResources,
 } from "./immutableTreeMaterializer.js";
+import { serializeBuildWorkerFailure } from "./workerFailure.js";
 
 interface Request {
   id: number;
@@ -25,10 +26,7 @@ port.on("message", (request: Request) => {
     } catch (error) {
       port.postMessage({
         id: request.id,
-        error:
-          error instanceof Error
-            ? { name: error.name, message: error.message, stack: error.stack }
-            : { name: "Error", message: String(error) },
+        failure: serializeBuildWorkerFailure(error),
       });
     }
   });

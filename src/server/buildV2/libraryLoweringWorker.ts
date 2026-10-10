@@ -4,6 +4,7 @@ import { transformSync, types as babelTypes, type PluginObj } from "@babel/core"
 // contract is enforced at the transform call below.
 // @ts-expect-error missing upstream declarations
 import transformModulesCommonJs from "@babel/plugin-transform-modules-commonjs";
+import { serializeBuildWorkerFailure } from "./workerFailure.js";
 
 type Request = { id: number; source: string };
 
@@ -46,10 +47,7 @@ if (port) {
       } catch (error) {
         port.postMessage({
           id: request.id,
-          error:
-            error instanceof Error
-              ? { name: error.name, message: error.message, stack: error.stack }
-              : { name: "Error", message: String(error) },
+          failure: serializeBuildWorkerFailure(error),
         });
       }
     });

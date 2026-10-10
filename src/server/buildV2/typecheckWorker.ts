@@ -10,6 +10,7 @@ import {
   type TypecheckAuthorityInput,
   type TypecheckUnitDep,
 } from "./typecheckFold.js";
+import { serializeBuildWorkerFailure } from "./workerFailure.js";
 
 export interface TypecheckEnvironmentServiceWire {
   binding: ExactWorkspaceServiceBinding;
@@ -76,10 +77,7 @@ if (port) {
       } catch (error) {
         port.postMessage({
           id: request.id,
-          error:
-            error instanceof Error
-              ? { name: error.name, message: error.message, stack: error.stack }
-              : { name: "Error", message: String(error) },
+          failure: serializeBuildWorkerFailure(error),
         });
       }
     });

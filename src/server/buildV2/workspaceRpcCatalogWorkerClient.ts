@@ -3,7 +3,7 @@ import type { Worker } from "node:worker_threads";
 import { createMeasuredWorker } from "../workerPerformance.js";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { WorkspaceRpcMethodDoc, WorkspaceRpcSchemaMetadata } from "./workspaceRpcCatalog.js";
-import { BuildDiagnosticsError, type BuildDiagnostic } from "./diagnostics.js";
+import { deserializeBuildWorkerFailure, type BuildWorkerFailure } from "./workerFailure.js";
 
 declare global {
   var __VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__: string | undefined;
@@ -57,21 +57,12 @@ export class WorkspaceRpcCatalogWorkerClient {
     worker.unref();
     worker.on(
       "message",
-      (message: {
-        id: number;
-        result?: WorkspaceRpcMethodDoc[];
-        error?: { name?: string; message: string; stack?: string; diagnostics?: BuildDiagnostic[] };
-      }) => {
+      (message: { id: number; result?: WorkspaceRpcMethodDoc[]; failure?: BuildWorkerFailure }) => {
         const pending = this.pending.get(message.id);
         if (!pending) return;
         this.pending.delete(message.id);
-        if (message.error) {
-          const error = message.error.diagnostics
-            ? new BuildDiagnosticsError(message.error.message, message.error.diagnostics)
-            : new Error(message.error.message);
-          error.name = message.error.name ?? "Error";
-          error.stack = message.error.stack;
-          pending.reject(error);
+        if (message.failure) {
+          pending.reject(deserializeBuildWorkerFailure(message.failure));
         } else {
           pending.resolve(message.result ?? []);
         }

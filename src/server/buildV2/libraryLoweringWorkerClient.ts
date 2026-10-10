@@ -1,6 +1,7 @@
 import { resolveHostWorkerEntry } from "../hostWorkerEntry.js";
 import type { Worker } from "node:worker_threads";
 import { createMeasuredWorker } from "../workerPerformance.js";
+import { deserializeBuildWorkerFailure, type BuildWorkerFailure } from "./workerFailure.js";
 
 declare global {
   var __VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__: string | undefined;
@@ -43,19 +44,12 @@ export class LibraryLoweringWorkerClient {
     worker.unref();
     worker.on(
       "message",
-      (message: {
-        id: number;
-        result?: string;
-        error?: { name?: string; message: string; stack?: string };
-      }) => {
+      (message: { id: number; result?: string; failure?: BuildWorkerFailure }) => {
         const pending = this.pending.get(message.id);
         if (!pending) return;
         this.pending.delete(message.id);
-        if (message.error) {
-          const error = new Error(message.error.message);
-          error.name = message.error.name ?? "Error";
-          error.stack = message.error.stack;
-          pending.reject(error);
+        if (message.failure) {
+          pending.reject(deserializeBuildWorkerFailure(message.failure));
         } else if (typeof message.result === "string") pending.resolve(message.result);
         else pending.reject(new Error("Library lowering worker returned no output"));
       }

@@ -13,6 +13,7 @@ import type {
   CachedAuthorityFacts,
 } from "./authorityAnalysisCache.js";
 import type { AuthorityDependencyIndex } from "./authorityDependencyIndex.js";
+import { deserializeBuildWorkerFailure, type BuildWorkerFailure } from "./workerFailure.js";
 
 declare global {
   var __VIBESTUDIO_AUTHORITY_WORKER_ENTRY__: string | undefined;
@@ -41,21 +42,14 @@ export class AuthorityAnalysisWorkerClient {
     worker.unref();
     worker.on(
       "message",
-      (message: {
-        id: number;
-        result?: unknown;
-        error?: { name?: string; message: string; stack?: string };
-      }) => {
+      (message: { id: number; result?: unknown; failure?: BuildWorkerFailure }) => {
         const pending = this.pending.get(message.id);
         if (!pending) return;
         this.pending.delete(message.id);
         // Key off the presence of `error`, not the truthiness of `result`: a
         // legitimately falsy result is a successful response, not an empty one.
-        if (message.error) {
-          const error = new Error(message.error.message);
-          error.name = message.error.name ?? "Error";
-          error.stack = message.error.stack;
-          pending.reject(error);
+        if (message.failure) {
+          pending.reject(deserializeBuildWorkerFailure(message.failure));
         } else pending.resolve(message.result);
       }
     );

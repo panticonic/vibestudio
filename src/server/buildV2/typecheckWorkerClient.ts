@@ -4,6 +4,7 @@ import { createMeasuredWorker } from "../workerPerformance.js";
 import type { BuildDiagnostic } from "./diagnostics.js";
 import type { TypecheckAuthorityInput, TypecheckUnitDep } from "./typecheckFold.js";
 import type { TypecheckEnvironmentServiceWire, TypecheckWorkerRequest } from "./typecheckWorker.js";
+import { deserializeBuildWorkerFailure, type BuildWorkerFailure } from "./workerFailure.js";
 
 declare global {
   var __VIBESTUDIO_TYPECHECK_WORKER_ENTRY__: string | undefined;
@@ -81,19 +82,12 @@ export class TypecheckWorkerClient {
     worker.unref();
     worker.on(
       "message",
-      (message: {
-        id: number;
-        result?: BuildDiagnostic[];
-        error?: { name?: string; message: string; stack?: string };
-      }) => {
+      (message: { id: number; result?: BuildDiagnostic[]; failure?: BuildWorkerFailure }) => {
         const pending = this.pending.get(message.id);
         if (!pending) return;
         this.pending.delete(message.id);
-        if (message.error) {
-          const error = new Error(message.error.message);
-          error.name = message.error.name ?? "Error";
-          error.stack = message.error.stack;
-          pending.reject(error);
+        if (message.failure) {
+          pending.reject(deserializeBuildWorkerFailure(message.failure));
         } else if (message.result) pending.resolve(message.result);
         else pending.reject(new Error("Typecheck worker returned no diagnostics"));
       }
