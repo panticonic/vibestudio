@@ -793,8 +793,10 @@ describe("RpcServer relay behavior", () => {
   it("routes canonical worker handles through their loader instance name", async () => {
     const { server } = createServer();
     server.setWorkerdUrl("http://127.0.0.1:8787");
-    server.setWorkerInstanceResolver((targetId) =>
-      targetId === "worker:workers/runtime-fixture:key-with-source" ? "key-with-source" : null
+    server.setWorkerAdmissionResolver((targetId) =>
+      targetId === "worker:workers/runtime-fixture:key-with-source"
+        ? { name: "key-with-source", version: "lifetime:1" }
+        : null
     );
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -816,7 +818,10 @@ describe("RpcServer relay behavior", () => {
     ).resolves.toBe("ok");
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8787/key-with-source/__rpc",
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Vibestudio-Worker-Version": "lifetime:1" }),
+      })
     );
     await expect(
       testServer(server).relayCall(
@@ -829,10 +834,47 @@ describe("RpcServer relay behavior", () => {
     ).rejects.toThrow("Worker not found: worker:workers/runtime-fixture:retired");
   });
 
+  it("preserves original cold selection failures across the HTTP worker relay", async () => {
+    const { server } = createServer();
+    server.setWorkerdUrl("http://127.0.0.1:8787");
+    server.setWorkerAdmissionResolver(() => ({ name: "worker-instance", version: "lifetime:1" }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            id: 0,
+            name: "Error",
+            message: "Worker admission changed before code selection",
+            stack: "original selection stack",
+            code: "WORKER_ADMISSION_CHANGED",
+            errorKind: "application",
+            cause: { id: 1, name: "Error", message: "original cause", errorKind: "application" },
+          },
+        }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    await expect(
+      testServer(server).relayCall(
+        "panel:nav-a",
+        "panel",
+        "worker:workers/runtime-fixture:key",
+        "probe",
+        []
+      )
+    ).rejects.toMatchObject({
+      message: "Worker admission changed before code selection",
+      stack: "original selection stack",
+      code: "WORKER_ADMISSION_CHANGED",
+      errorKind: "application",
+      cause: { message: "original cause" },
+    });
+  });
+
   it("preserves structured worker failures across the host relay", async () => {
     const { server } = createServer();
     server.setWorkerdUrl("http://127.0.0.1:8787");
-    server.setWorkerInstanceResolver(() => "worker-instance");
+    server.setWorkerAdmissionResolver(() => ({ name: "worker-instance", version: "lifetime:1" }));
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({

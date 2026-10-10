@@ -332,6 +332,7 @@ function createHarness(
     doDispatch,
     workspaceId: "ws_1",
     entityCache,
+    resolveDurableWorkQueues: () => [],
     materializeExecution: async () => undefined,
   });
   const executionSessions = new AgentExecutionSessionRegistry();
@@ -946,6 +947,7 @@ describe("createEvalService", () => {
       doDispatch,
       workspaceId: "ws",
       entityCache,
+      resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
     });
     const service = createEvalService({
@@ -1032,6 +1034,7 @@ describe("createEvalService", () => {
       doDispatch,
       workspaceId: "ws",
       entityCache,
+      resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
     });
     const service = createEvalService({
@@ -1842,6 +1845,7 @@ function createHeldFailHarness(opts: {
     doDispatch,
     workspaceId: "ws_1",
     entityCache,
+    resolveDurableWorkQueues: () => [],
     materializeExecution: async () => undefined,
   });
   const recoverUnresponsiveSandbox = vi.fn(async () => {

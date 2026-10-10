@@ -27,6 +27,7 @@ it.each([
     const [seed] = instance.initializePanels([initialPanel]);
     const activate = vi.fn(async (spec: RuntimeCodePanelEntityCreateSpec) => {
       const active = instance.entityAdvanceExecution({
+        durableWorkQueues: [],
         kind: "panel",
         source: { repoPath: spec.execution.source, effectiveVersion: "seed-ev" },
         key: spec.key!,

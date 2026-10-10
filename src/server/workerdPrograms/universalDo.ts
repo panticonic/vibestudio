@@ -374,13 +374,6 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       completed = true;
       return response;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("(503)")) {
-        return new Response("universal-do: code warming", {
-          status: 503,
-          headers: { "Retry-After": "1" },
-        });
-      }
       console.error(
         "Durable Object facet request failed",
         identity,

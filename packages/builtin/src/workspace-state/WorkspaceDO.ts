@@ -27,6 +27,7 @@ import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import {
   IdentityCollisionError,
   canonicalEntityId,
+  type EntityActivationCommand,
   type EntityActivationInput,
   type EntityKind,
   type EntityRecord,
@@ -175,7 +176,7 @@ export interface LifecycleOp extends LifecycleKey {
   updatedAt: number;
 }
 
-export type EntityActivateInput = EntityActivationInput;
+export type EntityActivateInput = EntityActivationCommand;
 
 export interface SlotCreateInput {
   slotId: string;
@@ -656,6 +657,7 @@ export class WorkspaceDO extends DurableObjectBase {
       throw new Error("entity activeAuthority requires an activeExecutionDigest");
     }
     return this.ctx.storage.transactionSync(() => {
+      this.publishDurableWorkOwner(input);
       const id = canonicalEntityId({
         kind: input.kind,
         source: input.source.repoPath,
@@ -883,7 +885,11 @@ export class WorkspaceDO extends DurableObjectBase {
    */
   @schemaRpc()
   entityAdvanceExecution(input: EntityActivateInput): EntityRecord {
-    return this.ctx.storage.transactionSync(() => this.advanceEntityExecution(input));
+    return this.ctx.storage.transactionSync(() => {
+      const record = this.advanceEntityExecution(input);
+      this.publishDurableWorkOwner(input);
+      return record;
+    });
   }
 
   /**
@@ -894,12 +900,16 @@ export class WorkspaceDO extends DurableObjectBase {
   entityAdvanceExecutions(inputs: EntityActivateInput[]): EntityRecord[] {
     if (inputs.length === 0) return [];
     return this.ctx.storage.transactionSync(() =>
-      inputs.map((input) => this.advanceEntityExecution(input))
+      inputs.map((input) => {
+        const record = this.advanceEntityExecution(input);
+        this.publishDurableWorkOwner(input);
+        return record;
+      })
     );
   }
 
   @schemaRpc()
-  entityPrepareExecution(input: EntityActivateInput): EntityRecord {
+  entityPrepareExecution(input: EntityActivationInput): EntityRecord {
     return this.ctx.storage.transactionSync(() => {
       const id = canonicalEntityId({
         kind: input.kind,
@@ -929,7 +939,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   private advanceEntityExecution(
-    input: EntityActivateInput,
+    input: EntityActivationInput,
     status: "active" | "preparing" = "active"
   ): EntityRecord {
     const nextBuildKey = validateActiveBuildKey(input.activeBuildKey);
@@ -1278,36 +1288,35 @@ export class WorkspaceDO extends DurableObjectBase {
   // do alarms (server-driven; see do_alarms table comment)
   // ─────────────────────────────────────────────────────────────
 
-  /** One-time lifecycle registration. This must precede admitting queue work. */
-  @schemaRpc()
-  durableWorkOwnerRegister(input: LifecycleKey & { queues: DurableWorkQueue[] }): void {
-    this.assertLifecycleKey(input);
-    const allowed = new Set<string>(DURABLE_WORK_QUEUES);
-    const queues = [...new Set(input.queues)].sort();
-    if (queues.length === 0 || queues.some((queue) => !allowed.has(queue))) {
-      throw new Error("durableWorkOwnerRegister: invalid queues");
+  private publishDurableWorkOwner(input: EntityActivateInput): void {
+    const queues = [...new Set(input.durableWorkQueues)].sort();
+    if (queues.some((queue) => !DURABLE_WORK_QUEUES.includes(queue))) {
+      throw new Error("Entity publication contains an unknown durable work queue");
     }
-    const entityId = canonicalEntityId({
-      kind: "do",
-      source: input.source,
-      className: input.className,
-      key: input.objectKey,
-    });
-    const entity = this.readEntityRow(entityId);
-    if (!entity || entity.status !== "active") {
-      throw new Error(
-        `durableWorkOwnerRegister: Durable Object ${input.source}:${input.className}:${input.objectKey} is not active`
+    if (input.kind !== "do") {
+      if (queues.length > 0) throw new Error("Only Durable Objects may own durable work queues");
+      return;
+    }
+    if (!input.className) throw new Error("Durable work publication requires a class");
+    if (queues.length > 0 && !input.activeExecutionDigest) {
+      throw new Error("Durable work publication requires a sealed executable");
+    }
+    if (queues.length === 0) {
+      this.sql.exec(
+        `DELETE FROM durable_work_owners WHERE source = ? AND class_name = ? AND object_key = ?`,
+        input.source.repoPath,
+        input.className,
+        input.key
       );
+      return;
     }
     this.sql.exec(
-      `INSERT INTO durable_work_owners (
-         source, class_name, object_key, queues_json, registered_at
-       ) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(source, class_name, object_key) DO UPDATE SET
-         queues_json = excluded.queues_json`,
-      input.source,
+      `INSERT INTO durable_work_owners (source, class_name, object_key, queues_json, registered_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(source, class_name, object_key) DO UPDATE SET queues_json = excluded.queues_json`,
+      input.source.repoPath,
       input.className,
-      input.objectKey,
+      input.key,
       JSON.stringify(queues),
       Date.now()
     );
@@ -1355,14 +1364,24 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  alarmSourceRegister(
-    key: LifecycleKey & StorageIncarnation & { executionDigest: string }
-  ): { incarnation: string; entity: EntityRecord } {
+  alarmSourceRegister(key: LifecycleKey & StorageIncarnation & { executionDigest: string }): {
+    incarnation: string;
+    entity: EntityRecord;
+  } {
     this.assertLifecycleKey(key);
-    const entity = this.entityResolveActive(canonicalEntityId({
-      kind: "do", source: key.source, className: key.className, key: key.objectKey,
-    }));
-    if (!entity || entity.status !== "active" || entity.activeExecutionDigest !== key.executionDigest)
+    const entity = this.entityResolveActive(
+      canonicalEntityId({
+        kind: "do",
+        source: key.source,
+        className: key.className,
+        key: key.objectKey,
+      })
+    );
+    if (
+      !entity ||
+      entity.status !== "active" ||
+      entity.activeExecutionDigest !== key.executionDigest
+    )
       throw new Error("Wake source does not match its active execution image");
     return this.ctx.storage.transactionSync(() => {
       const incarnation = this.wakePublications().register(key, key);
@@ -3542,7 +3561,7 @@ export class WorkspaceDO extends DurableObjectBase {
   private assertIdentityMatches(
     id: string,
     existing: DbEntityRow,
-    input: EntityActivateInput
+    input: EntityActivationInput
   ): void {
     this.assertStableIdentityMatches(id, existing, input);
     if (existing.source_effective_version !== input.source.effectiveVersion) {
@@ -3557,7 +3576,7 @@ export class WorkspaceDO extends DurableObjectBase {
   private assertStableIdentityMatches(
     id: string,
     existing: DbEntityRow,
-    input: EntityActivateInput
+    input: EntityActivationInput
   ): void {
     const checks: Array<{ field: string; existing: unknown; attempted: unknown }> = [
       {

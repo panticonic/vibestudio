@@ -9,6 +9,7 @@
  * - workerd child process management (start, restart, stop)
  */
 
+import type { WorkerExecutableAdmission } from "./workerExecutableDispatch.js";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { spawn, type ChildProcess } from "child_process";
 import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
@@ -434,10 +435,9 @@ export interface WorkerInstance {
   runtimeImageId: string;
   /** Head/state this instance follows. The loader never resolves it. */
   scopeRef?: string;
-  /** Monotonic version bumped on every create/update. The dynamic worker host
-   *  keys its loader cache on `${name}@${codeVersion}`, so any change to code,
-   *  env, bindings, ref, or stateArgs forces a fresh isolate (old ones idle out).
-   *  This is what lets worker update/rebuild take effect with no workerd restart. */
+  /** Non-reusable identity of this worker lifetime, independent of its public name. */
+  admissionLifetime: string;
+  /** Every code/env/binding/ref/state update advances this lifetime's selection. */
   codeVersion: number;
   status: "building" | "starting" | "running" | "stopped" | "error";
 }
@@ -693,7 +693,7 @@ export class WorkerdManager {
   >();
   /** Per-manager secret required by the generated router for direct DO dispatch. */
   private readonly dispatchSecret = crypto.randomBytes(32).toString("hex");
-  /** Per-process secret gating the loopback `/_workercode` + `/_workerversion`
+  /** Per-process secret gating the loopback `/_workercode`
    *  endpoints. Bound only into the static worker-host service, so worker code +
    *  per-instance env (RPC tokens, STATE_ARGS) are unreachable with ordinary
    *  panel/worker credentials. */
@@ -1415,6 +1415,7 @@ export class WorkerdManager {
       stateArgs,
       runtimeImageId: targetId,
       scopeRef,
+      admissionLifetime: crypto.randomUUID(),
       codeVersion: 1,
       status: "building",
       // Launch parent (from the verified caller) → PARENT_* env (built later from
@@ -1501,9 +1502,9 @@ export class WorkerdManager {
   }
 
   /** Resolve a canonical runtime worker id to the loader's opaque instance name. */
-  resolveWorkerInstanceName(targetId: string): string | null {
+  resolveWorkerAdmission(targetId: string): WorkerExecutableAdmission | null {
     for (const instance of this.instances.values()) {
-      if (instance.runtimeImageId === targetId) return instance.name;
+      if (instance.runtimeImageId === targetId) return this.getWorkerAdmission(instance.name);
     }
     return null;
   }
@@ -1550,7 +1551,7 @@ export class WorkerdManager {
       this.runtimeImages.delete(foundInstance.runtimeImageId);
 
       // No restart: the worker host is static and loads code on demand, so a
-      // destroyed worker simply stops being addressable (its `/_workerversion`
+      // destroyed worker simply stops being addressable (its exact loader admission
       // 404s and its cached isolate idles out). Only stop workerd when nothing
       // is left to serve.
       await attempt(() => this.stopWorkerdIfIdle());
@@ -1921,7 +1922,7 @@ export class WorkerdManager {
     return this.dispatchSecret;
   }
 
-  /** Secret gating `/_workercode` + `/_workerversion`. The gateway validates
+  /** Secret gating `/_workercode`. The gateway validates
    *  the inbound `X-Vibestudio-Loader-Secret` header against this. */
   getLoaderSecret(): string {
     return this.loaderSecret;
@@ -1932,13 +1933,22 @@ export class WorkerdManager {
     return this.egressSecret;
   }
 
-  /**
-   * Current loader-cache version for a worker instance, or null if no such
-   * instance exists. Served by `GET /_workerversion/{name}`; the host keys its
-   * loader id on `${name}@${version}` so update/rebuild forces a fresh isolate.
-   */
-  getWorkerVersion(name: string): number | null {
-    return this.instances.get(name)?.codeVersion ?? null;
+  /** Resolve authoritative mutable code before selecting an immutable lifetime/configuration. */
+  getWorkerAdmission(name: string): WorkerExecutableAdmission | null {
+    const instance = this.instances.get(name);
+    if (!instance) return null;
+    this.selectWorkerImage(instance);
+    return { name, version: `${instance.admissionLifetime}:${instance.codeVersion}` };
+  }
+
+  private selectWorkerImage(instance: WorkerInstance) {
+    return this.getMutableRuntimeImageBuild(instance.runtimeImageId, (record) => {
+      instance.buildKey = record.artifact.buildKey;
+      instance.executionDigest = record.artifact.executionDigest;
+      instance.effectiveVersion = record.artifact.sourceState.effectiveVersion;
+      this.advanceWorkerCodeVersion(instance, record.generation);
+      this.registerEgressCaller(instance);
+    });
   }
 
   /**
@@ -1946,7 +1956,10 @@ export class WorkerdManager {
    * Carries only data — capability bindings (globalOutbound) are attached by the
    * host at load time. Returns null if no such instance exists.
    */
-  async getWorkerCode(name: string): Promise<{
+  async getWorkerCode(
+    name: string,
+    version: string
+  ): Promise<{
     compatibilityDate: string;
     compatibilityFlags: string[];
     mainModule: string;
@@ -1957,16 +1970,11 @@ export class WorkerdManager {
     const instance = this.instances.get(name);
     if (!instance) return null;
 
-    const { image, build: buildResult } = this.getMutableRuntimeImageBuild(
-      instance.runtimeImageId,
-      (record) => {
-        instance.buildKey = record.artifact.buildKey;
-        instance.executionDigest = record.artifact.executionDigest;
-        instance.effectiveVersion = record.artifact.sourceState.effectiveVersion;
-        this.advanceWorkerCodeVersion(instance, record.generation);
-        this.registerEgressCaller(instance);
-      }
-    );
+    const { image, build: buildResult } = this.selectWorkerImage(instance);
+    if (`${instance.admissionLifetime}:${instance.codeVersion}` !== version)
+      throw Object.assign(new Error("Worker admission changed before code selection"), {
+        code: "WORKER_ADMISSION_CHANGED",
+      });
     instance.buildKey = image.artifact.buildKey;
     instance.executionDigest = image.artifact.executionDigest;
     instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;

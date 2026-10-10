@@ -63,6 +63,7 @@ const internalSlotCreateInputSchema = SlotCreateInputSchema.extend({
 }).strict();
 const entityActivationSchema = z
   .object({
+    durableWorkQueues: z.array(z.enum(DURABLE_WORK_QUEUES)),
     kind: entityKindSchema,
     source: entitySourceSchema,
     activeBuildKey: z.string().min(1).optional(),
@@ -108,14 +109,14 @@ const entityCloneProvenanceSchema = z
     sourceExecutionDigest: z.string().min(1),
   })
   .strict();
-const entityReservationSchema = entityActivationSchema.extend({
+const entityReservationSchema = entityActivationSchema.omit({ durableWorkQueues: true }).extend({
   cloneProvenance: entityCloneProvenanceSchema.optional(),
   lifecycleOwner: z
     .object({ contextId: z.string().min(1), entityId: z.string().min(1) })
     .strict()
     .optional(),
 });
-const entityRecordSchema = entityActivationSchema.extend({
+const entityRecordSchema = entityActivationSchema.omit({ durableWorkQueues: true }).extend({
   cloneProvenance: entityCloneProvenanceSchema.optional(),
   id: z.string().min(1),
   authoritySessionId: z.string().min(1),
@@ -349,7 +350,7 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     } as const,
     ...internal("write"),
     description: "Seal a reserved incarnation without admitting ordinary execution.",
-    args: z.tuple([entityActivationSchema]),
+    args: z.tuple([entityActivationSchema.omit({ durableWorkQueues: true })]),
     returns: entityRecordSchema,
   },
   entityAdvanceExecution: {
@@ -506,15 +507,6 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     } as const,
     ...internal("write"),
     args: z.tuple([LifecycleKeySchema]),
-    returns: z.void(),
-  },
-  durableWorkOwnerRegister: {
-    website: {
-      kind: "closed",
-      reason: "Storage and lifecycle engine entry points are internal implementation authority.",
-    } as const,
-    ...internal("write"),
-    args: z.tuple([LifecycleKeySchema.extend({ queues: z.array(durableWorkQueueSchema).min(1) })]),
     returns: z.void(),
   },
   durableWorkOwnerList: {

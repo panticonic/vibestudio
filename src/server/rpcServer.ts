@@ -1,3 +1,7 @@
+import {
+  workerExecutableHeaders,
+  type WorkerExecutableAdmission,
+} from "./workerExecutableDispatch.js";
 import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
 import { rpcCallerAbortedError, serializeRpcFailure } from "@vibestudio/rpc";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
@@ -507,7 +511,9 @@ export class RpcServer {
   private workerdGatewayToken: string | null = null;
   private workerdDispatchSecret: string | null = null;
   private resolveExecutableAdmission: DoExecutableAdmissionResolver | undefined;
-  private resolveWorkerInstanceNameFn: ((targetId: string) => string | null) | null = null;
+  private resolveWorkerAdmissionFn:
+    | ((targetId: string) => WorkerExecutableAdmission | null)
+    | null = null;
 
   private connections = new ConnectionRegistry({
     onConnectionsChangedListenerError: (error) => {
@@ -1697,8 +1703,8 @@ export class RpcServer {
     this.resolveExecutableAdmission = fn;
   }
 
-  setWorkerInstanceResolver(fn: (targetId: string) => string | null): void {
-    this.resolveWorkerInstanceNameFn = fn;
+  setWorkerAdmissionResolver(fn: (targetId: string) => WorkerExecutableAdmission | null): void {
+    this.resolveWorkerAdmissionFn = fn;
   }
 
   /**
@@ -5031,8 +5037,8 @@ export class RpcServer {
     args: unknown[],
     meta?: RelayCallMeta
   ): Promise<unknown> {
-    const workerName = this.resolveWorkerInstanceNameFn?.(targetId) ?? null;
-    if (!workerName) throw new Error(`Worker not found: ${targetId}`);
+    const workerAdmission = this.resolveWorkerAdmissionFn?.(targetId) ?? null;
+    if (!workerAdmission) throw new Error(`Worker not found: ${targetId}`);
     if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
     const caller = { callerId, callerKind };
@@ -5053,12 +5059,13 @@ export class RpcServer {
       },
     });
 
-    const url = `${this.workerdUrl}/${encodeURIComponent(workerName)}/__rpc`;
+    const url = `${this.workerdUrl}/${encodeURIComponent(workerAdmission.name)}/__rpc`;
     const { getWorkerdConnectionDispatcher } = await import("./workerdRpcRelay.js");
     const res = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...workerExecutableHeaders(workerAdmission),
         ...(this.workerdGatewayToken
           ? { Authorization: `Bearer ${this.workerdGatewayToken}` }
           : {}),
@@ -5079,7 +5086,7 @@ export class RpcServer {
           }`
         );
       }
-      throw new Error(`Worker relay to ${targetId} failed (${res.status}): ${text}`);
+      throw workerRelayFailure(targetId, res.status, text);
     }
 
     const responseEnvelope = decodeRpcJson(await res.text()) as RpcEnvelope | undefined;
@@ -5197,8 +5204,8 @@ export class RpcServer {
 
     // Worker?
     if (targetId.startsWith("worker:")) {
-      const workerName = this.resolveWorkerInstanceNameFn?.(targetId) ?? null;
-      if (!workerName) throw new Error(`Worker not found: ${targetId}`);
+      const workerAdmission = this.resolveWorkerAdmissionFn?.(targetId) ?? null;
+      if (!workerAdmission) throw new Error(`Worker not found: ${targetId}`);
       if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
       const eventEnvelope = envelopeFromMessage({
@@ -5209,11 +5216,12 @@ export class RpcServer {
         message: { type: "event", fromId, event, payload },
       });
       const { getWorkerdConnectionDispatcher } = await import("./workerdRpcRelay.js");
-      const url = `${this.workerdUrl}/${encodeURIComponent(workerName)}/__rpc`;
+      const url = `${this.workerdUrl}/${encodeURIComponent(workerAdmission.name)}/__rpc`;
       const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...workerExecutableHeaders(workerAdmission),
           ...(this.workerdGatewayToken
             ? { Authorization: `Bearer ${this.workerdGatewayToken}` }
             : {}),
@@ -5232,7 +5240,7 @@ export class RpcServer {
             }`
           );
         }
-        throw new Error(`Event relay to ${targetId} failed (${res.status}): ${text}`);
+        throw workerRelayFailure(targetId, res.status, text);
       }
       return;
     }
@@ -6052,4 +6060,16 @@ export class RpcServer {
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) throw new AggregateError(failures, "Caller retirement failed");
   }
+}
+
+function workerRelayFailure(targetId: string, status: number, text: string): Error {
+  let body: { error?: import("@vibestudio/rpc").RpcFailure };
+  try {
+    body = decodeRpcJson(text) as typeof body;
+  } catch (cause) {
+    return new Error(`Worker relay to ${targetId} failed (${status}): ${text}`, { cause });
+  }
+  return body.error
+    ? deserializeRpcFailure(body.error)
+    : new Error(`Worker relay to ${targetId} failed (${status}): ${text}`);
 }

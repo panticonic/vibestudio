@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:ad027bc602247efa9e51a1f4803759ddf3cdcc76129746a92a834906a0065e5d",
+  "censusDigest": "sha256:676d980f3eeff0b865cf65b7c451379fa75806b3f8291de6f06c0cc833905914",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -84,10 +84,6 @@
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:durableWorkOwnerList": {
       "review": "host-only-bounded-durable-owner-scan",
       "change": "Adds the host recovery driver's bounded read of registered durable-work owners; owner-local state remains readiness authority."
-    },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:durableWorkOwnerRegister": {
-      "review": "host-only-durable-owner-registration",
-      "change": "Adds idempotent host registration of an exact active Durable Object and its enumerated work queues for recovery scanning."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListExecutionRoots": {
       "review": "host-only-sealed-entity-execution-root-census",

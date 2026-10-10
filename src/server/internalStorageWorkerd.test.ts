@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { canonicalJson } from "@vibestudio/content-addressing";
-import type { RpcFailure } from "@vibestudio/rpc";
+import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -36,7 +36,10 @@ import {
   sealAndDrainDurableObjectRelays,
   releaseDurableObjectRelaySeal,
 } from "./workerdRpcRelay.js";
-import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
+import type {
+  EntityActivationCommand,
+  RuntimeEntityHandle,
+} from "@vibestudio/shared/runtime/entitySpec";
 import {
   executionArtifactDigest,
   executionSourceClosureDigest,
@@ -202,11 +205,11 @@ async function createWorkerdHarness(
         message: { requestId: string; method: string; args: unknown[] };
       };
       let result: unknown;
-      let error: string | undefined;
+      let error: RpcFailure | undefined;
       try {
         result = await mainRpc(envelope.message.method, envelope.message.args, envelope.target);
       } catch (cause) {
-        error = cause instanceof Error ? cause.message : String(cause);
+        error = serializeRpcFailure(cause);
       }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
@@ -218,9 +221,7 @@ async function createWorkerdHarness(
           message: {
             type: "response",
             requestId: envelope.message.requestId,
-            ...(error === undefined
-              ? { result }
-              : { error: { message: error, errorKind: "internal" } }),
+            ...(error === undefined ? { result } : { error }),
           },
         })
       );
@@ -911,7 +912,8 @@ describe("internal storage DOs under workerd", () => {
       source: { repoPath: "panels/example", effectiveVersion: "v1" },
       contextId: "ctx-1",
       key: "entry-1",
-    };
+      durableWorkQueues: [],
+    } satisfies EntityActivationCommand;
     const record = (await harness.callDurableObject(ref, "entityActivate", activateInput)) as {
       id: string;
       kind: string;
@@ -1050,6 +1052,7 @@ describe("internal storage DOs under workerd", () => {
       doDispatch: dispatch,
       workspaceId: "workspace-retirement",
       entityCache: new EntityCache(),
+      resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
     });
     const cleanup = createEntityRetirementCleanup({
@@ -1361,7 +1364,8 @@ describe("internal storage DOs under workerd", () => {
         contextId: "ctx-alarm-probe",
         className: probeRef.className,
         key: probeRef.objectKey,
-      });
+        durableWorkQueues: [],
+      } satisfies EntityActivationCommand);
       // Register an already-due alarm directly in WorkspaceDO, then start the
       // driver: it should drain the due alarm and fire `__alarm` → probe.alarm().
       await doDispatch.dispatch(workspaceRef, "alarmSet", {

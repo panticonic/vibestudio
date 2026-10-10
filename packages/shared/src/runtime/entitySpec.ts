@@ -347,6 +347,11 @@ export interface EntityActivationInput {
   ownerUserId?: string;
 }
 
+/** Host-sealed activation command; queue ownership commits with executable publication. */
+export interface EntityActivationCommand extends EntityActivationInput {
+  durableWorkQueues: import("../durableWork.js").DurableWorkQueue[];
+}
+
 /**
  * Durable input for reserving a code-backed entity before its executable image
  * is ready.

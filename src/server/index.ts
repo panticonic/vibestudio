@@ -796,6 +796,15 @@ async function main() {
       entityCache,
       executionPublicationPort: executionPublicationJournal,
       materializeExecution: (record) => durableObjectExecutionReadiness.materialize(record),
+      resolveDurableWorkQueues: (input) => {
+        if (input.kind !== "do") return [];
+        if (!input.className || !input.activeExecutionDigest) {
+          throw new Error("Durable work publication requires an exact sealed class and executable");
+        }
+        return assertPresent(
+          container.get<import("./workerdManager.js").WorkerdManager>("workerdManager")
+        ).getDurableWorkQueues(input.source.repoPath, input.className, input.activeExecutionDigest);
+      },
     }));
   const connectionGrants = new ConnectionGrantService({ entityCache });
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
@@ -4490,13 +4499,17 @@ async function main() {
                       `Durable Object ${targetId} cannot reattach build ${existingBuildKey} without its matching active entity record`
                     );
                   }
-                  await durableObjectExecutionReadiness.materialize(active);
+                  const ready = await durableObjectExecutionReadiness.ensureReady({
+                    source,
+                    className: spec.className,
+                    objectKey: key,
+                  });
                   prepared = {
                     targetId,
-                    effectiveVersion: active.source.effectiveVersion,
-                    buildKey: active.activeBuildKey,
-                    executionDigest: active.activeExecutionDigest,
-                    authority: active.activeAuthority,
+                    effectiveVersion: ready.source.effectiveVersion,
+                    buildKey: ready.activeBuildKey!,
+                    executionDigest: ready.activeExecutionDigest!,
+                    authority: ready.activeAuthority!,
                   };
                 } else {
                   prepared = await workerdManager.ensureDurableObjectEntity({
@@ -4622,31 +4635,6 @@ async function main() {
             ),
             initializeDurableClone: (input) =>
               doDispatch.dispatchLifecycle(input.target, "initializeClone", input),
-            onDurableObjectActivated: async (record) => {
-              if (!record.className) return;
-              const owner = {
-                source: record.source.repoPath,
-                className: record.className,
-                objectKey: record.key,
-              };
-              if (!record.activeExecutionDigest)
-                throw new Error(`Durable work owner ${record.id} has no sealed execution`);
-              const queues = workerdManager.getDurableWorkQueues(
-                owner.source,
-                owner.className,
-                record.activeExecutionDigest
-              );
-              if (queues.length === 0) return;
-              await doDispatch.dispatch(
-                {
-                  source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
-                  className: "WorkspaceDO",
-                  objectKey: workspaceId,
-                },
-                "durableWorkOwnerRegister",
-                { ...owner, queues }
-              );
-            },
             // Server-internal DO-storage primitives for cloneContext/destroyContext.
             // cloneDO/destroyDO are NOT exposed to userland — only the runtime
             // service (here) drives them, behind the context-boundary gate.
@@ -6270,7 +6258,6 @@ async function main() {
   // entity cache — without a record its principal kind is unknown and every
   // call 403s. Service resolution activates on demand (workersRpc below);
   // Server-dispatched semantic control-plane objects activate explicitly.
-  const durableWorkRegistrationCache = new Map<string, string>();
   const activateDurableObjectEntity = async (
     doDispatch: import("./doDispatch.js").DODispatch,
     workerdManagerInst: import("./workerdManager.js").WorkerdManager,
@@ -6285,62 +6272,26 @@ async function main() {
   ): Promise<void> => {
     const { source, className, objectKey, buildRef } = ref;
     const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
-    const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-    const workspaceDORef: import("@vibestudio/shared/doDispatcher").DORef = {
-      source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
-      objectKey: workspaceId,
-    };
-    const registerDurableWorkOwner = async (record: EntityRecord): Promise<void> => {
-      if (!record.activeExecutionDigest)
-        throw new Error(`Durable work owner ${record.id} has no sealed execution`);
-      if (durableWorkRegistrationCache.get(targetId) === record.activeExecutionDigest) return;
-      const owner = { source, className, objectKey };
-      const queues = workerdManagerInst.getDurableWorkQueues(
-        source,
-        className,
-        record.activeExecutionDigest
-      );
-      if (queues.length > 0) {
-        await doDispatch.dispatch(workspaceDORef, "durableWorkOwnerRegister", {
-          ...owner,
-          queues,
-        });
-      }
-      durableWorkRegistrationCache.set(targetId, record.activeExecutionDigest);
-    };
-    const active = entityCache.resolveActive(targetId);
-    if (active?.activeBuildKey && active.activeExecutionDigest && active.activeAuthority) {
-      if (ref.contextId && ref.contextPolicy !== "initial" && active.contextId !== ref.contextId) {
+    const assertRequestedContext = (record: EntityRecord): void => {
+      if (ref.contextId && ref.contextPolicy !== "initial" && record.contextId !== ref.contextId) {
         throw new Error(
-          `Durable Object ${targetId} is already active in context ${active.contextId}; cannot resolve it from context ${ref.contextId}`
+          `Durable Object ${targetId} is active in context ${record.contextId}; cannot resolve it from context ${ref.contextId}`
         );
       }
-      await durableObjectExecutionReadiness.materialize(active);
-      await registerDurableWorkOwner(active);
-      return;
-    }
-    const existing = (await doDispatch.dispatch(
-      workspaceDORef,
-      "entityResolve",
-      targetId
-    )) as EntityRecord | null;
+    };
+    const store = ensureEntityStore(doDispatch);
+    const existing = await store.resolveInvocationRecord(targetId);
     if (existing?.status === "active") {
-      if (
-        ref.contextId &&
-        ref.contextPolicy !== "initial" &&
-        existing.contextId !== ref.contextId
-      ) {
-        throw new Error(
-          `Durable Object ${targetId} is already registered in context ${existing.contextId}; cannot resolve it from context ${ref.contextId}`
-        );
-      }
       if (existing.activeBuildKey && existing.activeExecutionDigest && existing.activeAuthority) {
-        entityCache._onActivate(existing);
-        await durableObjectExecutionReadiness.materialize(existing);
-        await registerDurableWorkOwner(existing);
+        const ready = await durableObjectExecutionReadiness.ensureReady({
+          source,
+          className,
+          objectKey,
+        });
+        assertRequestedContext(ready);
         return;
       }
+      assertRequestedContext(existing);
     }
     const contextId = declaredWorkspaceServiceContextId(
       existing?.contextId,
@@ -6360,11 +6311,10 @@ async function main() {
       existing,
       SYSTEM_SUBJECT.userId
     );
-    const store = ensureEntityStore(doDispatch);
     const record = existing
       ? await store.advanceExecution(activation)
       : await store.activate(activation);
-    await registerDurableWorkOwner(record);
+    assertRequestedContext(record);
   };
 
   {
@@ -6639,7 +6589,11 @@ async function main() {
       }
       await getEntityStore().advanceExecutions(advances);
       for (const record of unchanged) {
-        await durableObjectExecutionReadiness.materialize(record);
+        await durableObjectExecutionReadiness.ensureReady({
+          source: record.source.repoPath,
+          className: record.className!,
+          objectKey: record.key,
+        });
       }
       await manager.reconcileMutableSourceBuild(source, doClasses, trigger, buildKey);
     },
@@ -7557,8 +7511,8 @@ async function main() {
   rpcServerInstance.setExecutableAdmissionResolver((ref) =>
     workerdManager.getDoAdmission(ref.source, ref.className, ref.objectKey)
   );
-  rpcServerInstance.setWorkerInstanceResolver((targetId) =>
-    workerdManager.resolveWorkerInstanceName(targetId)
+  rpcServerInstance.setWorkerAdmissionResolver((targetId) =>
+    workerdManager.resolveWorkerAdmission(targetId)
   );
   dispatcher.markInitialized();
 

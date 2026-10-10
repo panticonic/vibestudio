@@ -28,6 +28,38 @@ const REF = {
 };
 
 describe("DurableObjectExecutionReadiness", () => {
+  it("reattaches published executions without repeating materialization and recovers after replacement or restart", async () => {
+    let published = RECORD;
+    let bootGeneration = 1;
+    const restoreExactExecution = vi.fn(async () => {});
+    const readiness = new DurableObjectExecutionReadiness({
+      resolveEntity: async () => published,
+      restoreExactExecution,
+      getBootGeneration: () => bootGeneration,
+    });
+
+    await readiness.materialize(published);
+    expect(await readiness.ensureReady(REF)).toBe(published);
+    expect(await readiness.ensureReady(REF)).toBe(published);
+    expect(restoreExactExecution).toHaveBeenCalledOnce();
+
+    published = Object.freeze({ ...RECORD, activeExecutionDigest: "f".repeat(64) });
+    await readiness.materialize(published);
+    expect(await readiness.ensureReady(REF)).toBe(published);
+    expect(restoreExactExecution).toHaveBeenCalledTimes(2);
+    expect(restoreExactExecution).toHaveBeenLastCalledWith(published);
+
+    bootGeneration += 1;
+    expect(await readiness.ensureReady(REF)).toBe(published);
+    expect(restoreExactExecution).toHaveBeenCalledTimes(3);
+
+    published = Object.freeze({ ...published, status: "retired" });
+    await expect(readiness.ensureReady(REF)).rejects.toMatchObject({
+      code: "DURABLE_OBJECT_RETIRED",
+    });
+    expect(restoreExactExecution).toHaveBeenCalledTimes(3);
+  });
+
   it("requires the owner publication witness and refreshes on exact image advancement", async () => {
     let published = RECORD;
     const restoreExactExecution = vi.fn(async () => {});

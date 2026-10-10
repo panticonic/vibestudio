@@ -1,3 +1,8 @@
+import { serializeRpcFailure } from "@vibestudio/rpc";
+import {
+  workerExecutableHeaders,
+  type WorkerExecutableAdmission,
+} from "./workerExecutableDispatch.js";
 /**
  * Gateway — Single-port HTTP/WS router for Vibestudio server.
  *
@@ -113,8 +118,11 @@ export interface AppArtifactHandler {
  *  STATE_ARGS), so they are gated by the workerd-only `loaderSecret`. */
 export interface WorkerHostCodeProvider {
   getLoaderSecret(): string;
-  getWorkerVersion(name: string): number | null;
-  getWorkerCode(name: string): Promise<{
+  getWorkerAdmission(name: string): WorkerExecutableAdmission | null;
+  getWorkerCode(
+    name: string,
+    version: string
+  ): Promise<{
     compatibilityDate: string;
     compatibilityFlags: string[];
     mainModule: string;
@@ -168,7 +176,7 @@ export interface GatewayDeps {
   /** Internal secret stamped onto gateway-authorized DO dispatches. */
   getWorkerdDispatchSecret?: () => string | null | undefined;
   /** Dynamic worker-code provider for the loopback worker-host loader endpoints
-   *  (`/_workercode/{name}`, `/_workerversion/{name}`). The workerd manager
+   *  (`/_workercode/{name}?version=...`). The workerd manager
    *  satisfies this; absent until workerd is wired. */
   getWorkerHost?: () => WorkerHostCodeProvider | null | undefined;
   /** Called by /healthz to produce the JSON body */
@@ -241,15 +249,14 @@ export class Gateway {
         return;
       }
 
-      // /_workerversion/{name} and /_workercode/{name} → dynamic worker host
-      // loader endpoints. Loopback-only, gated by the workerd-only loader
-      // secret (NOT panel/worker credentials): they expose bundles + per-worker
-      // env including RPC tokens.
-      if (url.startsWith("/_workerversion/") || url.startsWith("/_workercode/")) {
+      // Cold exact code selection only; regular dispatch already carries its admission.
+      if (url.startsWith("/_workercode/")) {
         const host = this.deps.getWorkerHost?.();
         if (!host) {
-          res.writeHead(503, { "Content-Type": "text/plain" });
-          res.end("Worker host unavailable");
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ error: serializeRpcFailure(new Error("Worker host unavailable")) })
+          );
           return;
         }
         const provided = req.headers["x-vibestudio-loader-secret"];
@@ -257,60 +264,45 @@ export class Gateway {
           typeof provided !== "string" ||
           !constantTimeStringEqual(provided, host.getLoaderSecret())
         ) {
-          res.writeHead(403, { "Content-Type": "text/plain" });
-          res.end("Forbidden");
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: serializeRpcFailure(new Error("Forbidden")) }));
           return;
         }
-        const isVersion = url.startsWith("/_workerversion/");
-        const prefix = isVersion ? "/_workerversion/" : "/_workercode/";
-        const rawName = url.slice(prefix.length).split("?")[0] ?? "";
-        const name = decodeURIComponent(rawName);
-        if (!name) {
-          res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Missing worker name");
-          return;
-        }
-        if (isVersion) {
-          const version = host.getWorkerVersion(name);
-          if (version === null) {
-            res.writeHead(404, { "Content-Type": "text/plain" });
-            res.end("Worker not found");
-            return;
-          }
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ version }));
+        const selection = new URL(url, "http://gateway");
+        const name = decodeURIComponent(selection.pathname.slice("/_workercode/".length));
+        const version = selection.searchParams.get("version");
+        if (!name || !version) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ error: serializeRpcFailure(new Error("Missing worker admission")) })
+          );
           return;
         }
         void host
-          .getWorkerCode(name)
+          .getWorkerCode(name, version)
           .then((code) => {
             if (!code) {
-              res.writeHead(404, { "Content-Type": "text/plain" });
-              res.end("Worker not found");
+              res.writeHead(404, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({ error: serializeRpcFailure(new Error("Worker not found")) })
+              );
               return;
             }
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify(code));
           })
-          .catch((err: unknown) => {
-            const code = (err as { code?: unknown })?.code;
-            if (code === "RUNTIME_IMAGE_WARMING") {
-              res.writeHead(503, {
-                "Content-Type": "text/plain",
-                "Retry-After": "1",
-              });
-              res.end("Worker code warming");
-              return;
-            }
-            if (code === "RUNTIME_IMAGE_UNAVAILABLE") {
-              res.writeHead(410, { "Content-Type": "text/plain" });
-              res.end(
-                `Worker code unavailable: ${err instanceof Error ? err.message : String(err)}`
-              );
-              return;
-            }
-            res.writeHead(500, { "Content-Type": "text/plain" });
-            res.end(`Worker code error: ${err instanceof Error ? err.message : String(err)}`);
+          .catch((error: unknown) => {
+            const code = (error as { code?: unknown })?.code;
+            const status =
+              code === "WORKER_ADMISSION_CHANGED"
+                ? 409
+                : code === "RUNTIME_IMAGE_WARMING"
+                  ? 503
+                  : code === "RUNTIME_IMAGE_UNAVAILABLE"
+                    ? 410
+                    : 500;
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: serializeRpcFailure(error) }));
           });
         return;
       }
@@ -492,7 +484,8 @@ export class Gateway {
           this.deps.ensureDORoute,
           (ref) =>
             this.deps.getWorkerHost?.()?.getDoAdmission(ref.source, ref.className, ref.objectKey) ??
-            null
+            null,
+          (name) => this.deps.getWorkerHost?.()?.getWorkerAdmission(name) ?? null
         ).catch((err: unknown) => {
           log.warn(`Route dispatch error:`, err);
           if (!res.headersSent && !res.writableEnded) {
@@ -670,7 +663,8 @@ export class Gateway {
           this.deps.ensureDORoute,
           (ref) =>
             this.deps.getWorkerHost?.()?.getDoAdmission(ref.source, ref.className, ref.objectKey) ??
-            null
+            null,
+          (name) => this.deps.getWorkerHost?.()?.getWorkerAdmission(name) ?? null
         ).catch((err: unknown) => {
           log.warn(`Route WS dispatch error:`, err);
           if (!socket.destroyed) {
@@ -1115,7 +1109,8 @@ async function handleRouteRequest(
   workerdToken: string,
   workerdDispatchSecret?: string | null,
   ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void,
-  resolveExecutableAdmission?: DoExecutableAdmissionResolver
+  resolveExecutableAdmission?: DoExecutableAdmissionResolver,
+  resolveWorkerAdmission?: (name: string) => WorkerExecutableAdmission | null
 ): Promise<boolean> {
   const qIdx = url.indexOf("?");
   const pathOnly = qIdx === -1 ? url : url.slice(0, qIdx);
@@ -1156,16 +1151,33 @@ async function handleRouteRequest(
   }
 
   // worker-do / worker-regular → reverse proxy to workerd with rewritten path.
-  if (result.kind === "worker-do" && !workerdDispatchSecret) {
-    res.writeHead(503, { "Content-Type": "text/plain" });
-    res.end("DO dispatch unavailable");
-    return true;
-  }
-  if (result.kind === "worker-do" && ensureDORoute) {
+  let extraHeaders: Record<string, string>;
+  if (result.kind === "worker-do") {
+    if (!workerdDispatchSecret) {
+      res.writeHead(503, { "Content-Type": "text/plain" });
+      res.end("DO dispatch unavailable");
+      return true;
+    }
+    if (ensureDORoute) {
+      try {
+        await ensureDORoute(result.source, result.className, result.objectKey);
+      } catch (err) {
+        writeDoRouteEnsureHttpError(res, err);
+        return true;
+      }
+    }
+    extraHeaders = {
+      "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret,
+      ...doExecutableHeaders(result, resolveExecutableAdmission),
+    };
+  } else {
     try {
-      await ensureDORoute(result.source, result.className, result.objectKey);
-    } catch (err) {
-      writeDoRouteEnsureHttpError(res, err);
+      extraHeaders = workerExecutableHeaders(
+        requireWorkerAdmission(result.targetInstanceName, resolveWorkerAdmission)
+      );
+    } catch (error) {
+      res.writeHead(workerAdmissionFailureStatus(error), { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: serializeRpcFailure(error) }));
       return true;
     }
   }
@@ -1176,13 +1188,6 @@ async function handleRouteRequest(
     return true;
   }
   const targetPath = buildWorkerTargetPath(result, url);
-  const extraHeaders =
-    result.kind === "worker-do" && workerdDispatchSecret
-      ? {
-          "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret,
-          ...doExecutableHeaders(result, resolveExecutableAdmission),
-        }
-      : undefined;
   proxyRequest(req, res, workerdPort, targetPath, workerdToken, undefined, extraHeaders);
   return true;
 }
@@ -1202,7 +1207,8 @@ async function handleRouteUpgrade(
   workerdToken: string,
   workerdDispatchSecret?: string | null,
   ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void,
-  resolveExecutableAdmission?: DoExecutableAdmissionResolver
+  resolveExecutableAdmission?: DoExecutableAdmissionResolver,
+  resolveWorkerAdmission?: (name: string) => WorkerExecutableAdmission | null
 ): Promise<boolean> {
   const qIdx = url.indexOf("?");
   const pathOnly = qIdx === -1 ? url : url.slice(0, qIdx);
@@ -1233,16 +1239,36 @@ async function handleRouteUpgrade(
     return true;
   }
 
-  if (result.kind === "worker-do" && !workerdDispatchSecret) {
-    socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
-    socket.destroy();
-    return true;
-  }
-  if (result.kind === "worker-do" && ensureDORoute) {
+  let extraHeaders: Record<string, string>;
+  if (result.kind === "worker-do") {
+    if (!workerdDispatchSecret) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return true;
+    }
+    if (ensureDORoute) {
+      try {
+        await ensureDORoute(result.source, result.className, result.objectKey);
+      } catch (err) {
+        writeDoRouteEnsureUpgradeError(socket, err);
+        return true;
+      }
+    }
+    extraHeaders = {
+      "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret,
+      ...doExecutableHeaders(result, resolveExecutableAdmission),
+    };
+  } else {
     try {
-      await ensureDORoute(result.source, result.className, result.objectKey);
-    } catch (err) {
-      writeDoRouteEnsureUpgradeError(socket, err);
+      extraHeaders = workerExecutableHeaders(
+        requireWorkerAdmission(result.targetInstanceName, resolveWorkerAdmission)
+      );
+    } catch (error) {
+      const status = workerAdmissionFailureStatus(error);
+      const body = JSON.stringify({ error: serializeRpcFailure(error) });
+      socket.end(
+        `HTTP/1.1 ${status} ${status === 503 ? "Service Unavailable" : status === 410 ? "Gone" : status === 404 ? "Not Found" : "Internal Server Error"}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+      );
       return true;
     }
   }
@@ -1253,13 +1279,27 @@ async function handleRouteUpgrade(
   }
   // Rewrite req.url so the upstream (workerd) sees the rewritten path.
   req.url = buildWorkerTargetPath(result, url);
-  const extraHeaders =
-    result.kind === "worker-do" && workerdDispatchSecret
-      ? {
-          "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret,
-          ...doExecutableHeaders(result, resolveExecutableAdmission),
-        }
-      : undefined;
   proxyUpgrade(req, socket, head, workerdPort, workerdToken, extraHeaders);
   return true;
+}
+
+function requireWorkerAdmission(
+  name: string,
+  resolve?: (name: string) => WorkerExecutableAdmission | null
+): WorkerExecutableAdmission {
+  const admission = resolve?.(name);
+  if (!admission)
+    throw Object.assign(new Error(`Worker not found: ${name}`), { code: "WORKER_NOT_FOUND" });
+  return admission;
+}
+
+function workerAdmissionFailureStatus(error: unknown): number {
+  const code = (error as { code?: unknown })?.code;
+  return code === "RUNTIME_IMAGE_WARMING"
+    ? 503
+    : code === "RUNTIME_IMAGE_UNAVAILABLE"
+      ? 410
+      : code === "WORKER_NOT_FOUND"
+        ? 404
+        : 500;
 }

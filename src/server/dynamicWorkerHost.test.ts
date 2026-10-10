@@ -1,3 +1,5 @@
+import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
+import { workerExecutableHeaders } from "./workerExecutableDispatch.js";
 /**
  * Integration test for the Phase 1 dynamic worker host — exercises the REAL
  * workerd binary end-to-end:
@@ -69,9 +71,12 @@ beforeAll(async () => {
   compiledWorkerdPrograms = await buildWorkerdPrograms({ write: false });
 });
 
-const WORKER_BUNDLE = `export default {
+const WORKER_BUNDLE = `let snapshotCalls = 0; export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname.endsWith("/snapshot")) {
+      return Response.json({feature:env.FEATURE ?? null,args:env.STATE_ARGS ?? null,calls:++snapshotCalls});
+    }
     if (url.pathname.endsWith("/__rpc")) {
       const body = await request.json();
       return new Response(JSON.stringify({ result: { echo: body.method, workerId: env.WORKER_ID } }), {
@@ -120,6 +125,7 @@ function workerBuild(bundle = WORKER_BUNDLE, ev = "ev-1"): BuildResult {
 
 interface Harness {
   manager: WorkerdManager;
+  codeFetches: string[];
   gateway: Server;
   egress: Server;
   egressHits: Array<{ caller: string | undefined; secret: string | undefined; path: string }>;
@@ -135,7 +141,11 @@ async function listen(server: Server): Promise<number> {
   });
 }
 
-async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness> {
+async function createHarness(
+  buildRef?: { value: BuildResult },
+  onCode?: (name: string, version: string) => Promise<void>
+): Promise<Harness> {
+  const codeFetches: string[] = [];
   const tokenManager = new TokenManager();
   const currentBuild = buildRef ?? { value: workerBuild() };
   const egressHits: Harness["egressHits"] = [];
@@ -194,35 +204,39 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
   const gateway = createServer((req, res) => {
     const url = req.url ?? "";
     const secret = req.headers["x-vibestudio-loader-secret"];
-    if (url.startsWith("/_workerversion/") || url.startsWith("/_workercode/")) {
+    if (url.startsWith("/_workercode/")) {
       if (secret !== manager.getLoaderSecret()) {
         res.writeHead(403);
-        res.end("forbidden");
+        res.end(JSON.stringify({ error: serializeRpcFailure(new Error("Forbidden")) }));
         return;
       }
-      const isVersion = url.startsWith("/_workerversion/");
-      const name = decodeURIComponent(
-        url.slice((isVersion ? "/_workerversion/" : "/_workercode/").length).split("?")[0] ?? ""
-      );
-      if (isVersion) {
-        const version = manager.getWorkerVersion(name);
-        if (version === null) {
-          res.writeHead(404);
-          res.end("not found");
-          return;
-        }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ version }));
+      const selection = new URL(url, "http://gateway");
+      const name = decodeURIComponent(selection.pathname.slice("/_workercode/".length));
+      const version = selection.searchParams.get("version");
+      if (!name || !version) {
+        res.writeHead(400);
+        res.end(
+          JSON.stringify({ error: serializeRpcFailure(new Error("Missing worker admission")) })
+        );
         return;
       }
-      void manager.getWorkerCode(name).then((code) => {
+      codeFetches.push(version);
+      void (async () => {
+        await onCode?.(name, version);
+        const code = await manager.getWorkerCode(name, version);
         if (!code) {
           res.writeHead(404);
-          res.end("not found");
+          res.end(JSON.stringify({ error: serializeRpcFailure(new Error("Worker not found")) }));
           return;
         }
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(code));
+      })().catch((error: unknown) => {
+        res.writeHead(
+          (error as { code?: string }).code === "WORKER_ADMISSION_CHANGED" ? 409 : 500,
+          { "content-type": "application/json" }
+        );
+        res.end(JSON.stringify({ error: serializeRpcFailure(error) }));
       });
       return;
     }
@@ -234,16 +248,19 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
   const workerdCall = async (path: string, init: RequestInit = {}): Promise<Response> => {
     const port = manager.getPort();
     if (!port) throw new Error("workerd not running");
+    const admission = manager.getWorkerAdmission(decodeURIComponent(path.split("/")[1] ?? ""));
+    if (!admission) return new Response("Worker not found", { status: 404 });
     return fetch(`http://127.0.0.1:${port}${path}`, {
       ...init,
       headers: {
         Authorization: "Bearer test-gateway-token",
+        ...workerExecutableHeaders(admission),
         ...(init.headers ?? {}),
       },
     });
   };
 
-  return { manager, gateway, egress, egressHits, workerdCall };
+  return { manager, gateway, egress, egressHits, workerdCall, codeFetches };
 }
 
 let active: Harness | null = null;
@@ -258,6 +275,105 @@ afterEach(async () => {
 });
 
 describe("dynamic worker host (real workerd)", () => {
+  it("selects once per admission while preserving env updates and same-name recreation", async () => {
+    active = await createHarness();
+    const { manager, workerdCall, codeFetches } = active;
+    await manager.startWorker({
+      source: "workers/echo",
+      contextId: "ctx-1",
+      key: "echo",
+      env: { FEATURE: "first" },
+      stateArgs: { value: 1 },
+    });
+    await manager.startWorker({ source: "workers/echo", contextId: "ctx-2", key: "keep" });
+    const original = manager.getWorkerAdmission("echo")!;
+    expect(await (await workerdCall("/echo/snapshot")).json()).toEqual({
+      feature: "first",
+      args: { value: 1 },
+      calls: 1,
+    });
+    expect(await (await workerdCall("/echo/snapshot")).json()).toEqual({
+      feature: "first",
+      args: { value: 1 },
+      calls: 2,
+    });
+    expect(codeFetches).toEqual([original.version]);
+    await manager.updateInstance("echo", { env: { FEATURE: "updated" } });
+    const updated = manager.getWorkerAdmission("echo")!;
+    expect(updated.version).not.toBe(original.version);
+    expect(await (await workerdCall("/echo/snapshot")).json()).toEqual({
+      feature: "updated",
+      args: { value: 1 },
+      calls: 1,
+    });
+    await manager.stopWorker("worker:workers/echo:echo");
+    await manager.startWorker({
+      source: "workers/echo",
+      contextId: "ctx-1",
+      key: "echo",
+      env: { FEATURE: "recreated" },
+    });
+    const recreated = manager.getWorkerAdmission("echo")!;
+    expect(recreated.version).not.toBe(original.version);
+    expect(recreated.version).not.toBe(updated.version);
+    expect(await (await workerdCall("/echo/snapshot")).json()).toEqual({
+      feature: "recreated",
+      args: null,
+      calls: 1,
+    });
+    expect(codeFetches).toEqual([original.version, updated.version, recreated.version]);
+  }, 30_000);
+
+  it("rejects a changed cold selection without caching replacement code under the old admission", async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = true;
+    active = await createHarness(undefined, async (name) => {
+      if (name === "echo" && held) {
+        enter();
+        await gate;
+      }
+    });
+    const { manager, workerdCall } = active;
+    await manager.startWorker({
+      source: "workers/echo",
+      contextId: "ctx-1",
+      key: "echo",
+      env: { FEATURE: "old" },
+    });
+    const pending = workerdCall("/echo/snapshot");
+    await entered;
+    const sibling = workerdCall("/echo/snapshot");
+    try {
+      await manager.updateInstance("echo", { env: { FEATURE: "new" } });
+      held = false;
+      release();
+      for (const failureResponse of await Promise.all([pending, sibling])) {
+        expect(failureResponse.status).toBe(500);
+        const failure = (await failureResponse.json()) as { error: RpcFailure };
+        expect(failure.error).toMatchObject({
+          code: "WORKER_ADMISSION_CHANGED",
+          message: "Worker admission changed before code selection",
+          errorKind: "application",
+        });
+      }
+      expect(await (await workerdCall("/echo/snapshot")).json()).toEqual({
+        feature: "new",
+        args: null,
+        calls: 1,
+      });
+    } finally {
+      release();
+      await Promise.allSettled([pending, sibling]);
+    }
+  }, 30_000);
+
   it("loads a worker dynamically and dispatches RPC with no restart", async () => {
     active = await createHarness();
     const { manager, workerdCall } = active;
@@ -315,7 +431,7 @@ describe("dynamic worker host (real workerd)", () => {
 
     await manager.stopWorker("worker:workers/echo:echo");
     expect(manager.getBootGeneration()).toBe(boot);
-    expect(manager.getWorkerVersion("echo")).toBeNull();
+    expect(manager.getWorkerAdmission("echo")).toBeNull();
 
     const res = await workerdCall("/echo/__rpc", {
       method: "POST",

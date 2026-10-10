@@ -1,11 +1,9 @@
-import { serializeRpcFailure, formatRpcFailure } from "@vibestudio/rpc";
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import { writeHttpBytes } from "../httpStreamWrite.js";
 import * as codec from "@vibestudio/rpc/protocol/streamCodec";
 import {
   BRIDGE_STREAM_CHUNK_BYTES,
   decodeRpcJson,
-  rpcErrorDataOf,
-  rpcDiagnosticIdOf,
   stampEnvelopeCaller,
   type RpcCausalParent,
   type RpcEnvelope,
@@ -202,7 +200,11 @@ export class StreamingRelay {
     }
 
     if (!isLocalWorkspaceTarget(envelope, this.deps.workspaceId)) {
-      writeJson(res, 403, { error: WORKSPACE_RPC_NOT_ADMITTED, errorCode: "EACCES" });
+      writeJson(res, 403, {
+        error: serializeRpcFailure(
+          Object.assign(new Error(WORKSPACE_RPC_NOT_ADMITTED), { code: "EACCES" })
+        ),
+      });
       return;
     }
     envelope = stampEnvelopeCaller(envelope, {
@@ -218,8 +220,7 @@ export class StreamingRelay {
       verifiedCaller = this.deps.verifiedCaller(admission.caller, request);
     } catch (error) {
       writeJson(res, 403, {
-        error: formatRpcFailure(error),
-        errorCode: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
+        error: serializeRpcFailure(error),
       });
       return;
     }
@@ -230,8 +231,7 @@ export class StreamingRelay {
       causalParent = causal.parent;
     } catch (error) {
       writeJson(res, 403, {
-        error: formatRpcFailure(error),
-        errorCode: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
+        error: serializeRpcFailure(error),
       });
       return;
     }
@@ -239,7 +239,11 @@ export class StreamingRelay {
     if (targetId && targetId !== "main" && targetId !== "server") {
       const authorization = this.deps.authorizeRelay(callerId, callerKind, targetId, method);
       if (!authorization.ok) {
-        writeJson(res, 403, { error: authorization.reason, errorCode: "EACCES" });
+        writeJson(res, 403, {
+          error: serializeRpcFailure(
+            Object.assign(new Error(authorization.reason), { code: "EACCES" })
+          ),
+        });
         return;
       }
       const abortController = new AbortController();
@@ -317,10 +321,7 @@ export class StreamingRelay {
       await this.deps.dispatcher.assertAuthority(context, "credentials", "proxyFetch", args);
     } catch (error) {
       writeJson(res, 403, {
-        error: formatRpcFailure(error),
-        errorCode: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-        ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-        ...(rpcDiagnosticIdOf(error) ? { diagnosticId: rpcDiagnosticIdOf(error) } : {}),
+        error: serializeRpcFailure(error),
       });
       releaseAbort();
       return;

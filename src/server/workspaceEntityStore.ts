@@ -63,6 +63,9 @@ export interface WorkspaceEntityStoreDeps {
   workspaceId: string;
   entityCache: EntityCache;
   executionPublicationPort?: ExecutionPublicationPort;
+  resolveDurableWorkQueues: (
+    input: EntityActivationInput
+  ) => import("@vibestudio/shared/durableWork").DurableWorkQueue[];
   /** Materialize derived runtime state only after the durable row and cache mirror exist. */
   materializeExecution: (record: EntityRecord) => Promise<void>;
 }
@@ -259,8 +262,12 @@ export class WorkspaceEntityStore {
    * Activate (or refresh) a WorkspaceDO entity and mirror it into the hot cache.
    * The ONLY sanctioned way to activate a WorkspaceDO-backed entity.
    */
+  private activationCommand(input: EntityActivationInput) {
+    return { ...input, durableWorkQueues: this.deps.resolveDurableWorkQueues(input) };
+  }
+
   private async activateCommitted(input: EntityActivateInput): Promise<EntityRecord> {
-    const record = await this.receiver.entityActivate(input);
+    const record = await this.receiver.entityActivate(this.activationCommand(input));
     this.publishRecord(record, this.entityId(input));
     return record;
   }
@@ -285,7 +292,7 @@ export class WorkspaceEntityStore {
 
   /** Complete a reserved executable entity, or atomically advance an active one. */
   private async advanceExecutionCommitted(input: EntityActivateInput): Promise<EntityRecord> {
-    const record = await this.receiver.entityAdvanceExecution(input);
+    const record = await this.receiver.entityAdvanceExecution(this.activationCommand(input));
     this.publishRecord(record, this.entityId(input));
     return record;
   }
@@ -293,7 +300,9 @@ export class WorkspaceEntityStore {
   /** Atomically publish one execution incarnation to a set of durable identities. */
   private async advanceExecutionsCommitted(inputs: EntityActivateInput[]): Promise<EntityRecord[]> {
     if (inputs.length === 0) return [];
-    const records = await this.receiver.entityAdvanceExecutions(inputs);
+    const records = await this.receiver.entityAdvanceExecutions(
+      inputs.map((input) => this.activationCommand(input))
+    );
     const expected = new Set(inputs.map((input) => this.entityId(input)));
     if (
       records.length !== expected.size ||

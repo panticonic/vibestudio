@@ -9,10 +9,13 @@
 import { describe, it, expect, beforeAll, afterAll, vi, type Mock } from "vitest";
 import {
   createServer,
+  request,
   type Server as HttpServer,
   type IncomingMessage,
   type ServerResponse,
 } from "http";
+import type { WorkerExecutableAdmission } from "./workerExecutableDispatch.js";
+import type { RpcFailure } from "@vibestudio/rpc";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { Gateway } from "./gateway.js";
 import { RouteRegistry } from "./routeRegistry.js";
@@ -27,6 +30,8 @@ interface Harness {
   /** Record of paths workerd received (for rewrite-assertion). */
   workerdPaths: string[];
   workerdDispatchSecrets: Array<string | undefined>;
+  workerAdmissions: Array<string | undefined>;
+  workerAdmission: Mock<(name: string) => WorkerExecutableAdmission | null>;
   ensureDORoute: Mock<(source: string, className: string, objectKey: string) => Promise<void>>;
   events: string[];
 }
@@ -38,7 +43,12 @@ async function startHarness(): Promise<Harness> {
   // Fake workerd — records the path it was called with and echoes it back.
   const workerdPaths: string[] = [];
   const workerdDispatchSecrets: Array<string | undefined> = [];
+  const workerAdmissions: Array<string | undefined> = [];
   const events: string[] = [];
+  const workerAdmission = vi.fn<(name: string) => WorkerExecutableAdmission | null>((name) => ({
+    name,
+    version: "worker-lifetime:1",
+  }));
   const ensureDORoute = vi.fn<
     (source: string, className: string, objectKey: string) => Promise<void>
   >(async (source, className, objectKey) => {
@@ -47,6 +57,8 @@ async function startHarness(): Promise<Harness> {
   const workerdServer = createServer((req: IncomingMessage, res: ServerResponse) => {
     workerdPaths.push(req.url ?? "(unknown)");
     events.push(`proxy:${req.url ?? "(unknown)"}`);
+    const workerAdmission = req.headers["x-vibestudio-worker-version"];
+    workerAdmissions.push(Array.isArray(workerAdmission) ? workerAdmission[0] : workerAdmission);
     const dispatchSecret = req.headers["x-vibestudio-dispatch-secret"];
     workerdDispatchSecrets.push(Array.isArray(dispatchSecret) ? dispatchSecret[0] : dispatchSecret);
     res.writeHead(200, { "Content-Type": "text/plain" });
@@ -64,6 +76,7 @@ async function startHarness(): Promise<Harness> {
     getWorkerdDispatchSecret: () => "workerd-dispatch-secret",
     getWorkerHost: () =>
       ({
+        getWorkerAdmission: workerAdmission,
         getDoAdmission: () => ({
           executableVersion: "route-executable",
           incarnationVersion: "route-executable",
@@ -86,6 +99,8 @@ async function startHarness(): Promise<Harness> {
     workerdServer,
     workerdPaths,
     workerdDispatchSecrets,
+    workerAdmissions,
+    workerAdmission,
     ensureDORoute,
     events,
   };
@@ -233,6 +248,72 @@ describe("RouteRegistry × Gateway integration", () => {
     expect(h.workerdPaths.length).toBe(before);
   });
 
+  it.each([
+    ["RUNTIME_IMAGE_WARMING", 503],
+    ["RUNTIME_IMAGE_UNAVAILABLE", 410],
+    ["WORKER_NOT_FOUND", 404],
+  ] as const)(
+    "preserves %s regular admission failures through HTTP and WebSocket ingress",
+    async (code, status) => {
+      const name = `regular-${status}`;
+      h.registry.registerWorkerRoutes("workers/regular-errors", name, [
+        { source: "workers/regular-errors", path: `/${status}`, worker: true, websocket: true },
+      ]);
+      h.workerAdmission.mockImplementation(() => {
+        if (code === "WORKER_NOT_FOUND") return null;
+        throw Object.assign(
+          new Error("original worker admission failure", {
+            cause: new Error("original source cause"),
+          }),
+          { code }
+        );
+      });
+      const url = `http://127.0.0.1:${h.gatewayPort}/_r/w/workers/regular-errors/${status}`;
+      const before = h.workerdPaths.length;
+      try {
+        const response = await fetch(url);
+        expect(response.status).toBe(status);
+        const failure = (await response.json()) as { error: RpcFailure };
+        expect(failure.error.code).toBe(code);
+        if (code !== "WORKER_NOT_FOUND")
+          expect(failure.error).toMatchObject({
+            message: "original worker admission failure",
+            cause: { message: "original source cause" },
+          });
+        const upgrade = await new Promise<{
+          status: number | undefined;
+          body: { error: RpcFailure };
+        }>((resolve, reject) => {
+          const req = request(
+            url,
+            { headers: { Connection: "Upgrade", Upgrade: "websocket" } },
+            (res) => {
+              let body = "";
+              res.setEncoding("utf8");
+              res.on("data", (chunk) => {
+                body += chunk;
+              });
+              res.on("end", () => resolve({ status: res.statusCode, body: JSON.parse(body) }));
+              res.on("error", reject);
+            }
+          );
+          req.on("error", reject);
+          req.end();
+        });
+        expect(upgrade.status).toBe(status);
+        expect(upgrade.body.error.code).toBe(code);
+        if (code !== "WORKER_NOT_FOUND")
+          expect(upgrade.body.error).toMatchObject({
+            message: "original worker admission failure",
+            cause: { message: "original source cause" },
+          });
+        expect(h.workerdPaths.length).toBe(before);
+      } finally {
+        h.workerAdmission.mockImplementation((name) => ({ name, version: "worker-lifetime:1" }));
+      }
+    }
+  );
+
   it("rewrites regular-worker routes to /<instance>/<path>", async () => {
     h.registry.registerWorkerRoutes("workers/regular-test", "regular-test", [
       {
@@ -249,6 +330,7 @@ describe("RouteRegistry × Gateway integration", () => {
     expect(status).toBe(200);
     const seen = h.workerdPaths[h.workerdPaths.length - 1]!;
     expect(seen).toBe("/regular-test/hello");
+    expect(h.workerAdmissions.at(-1)).toBe("worker-lifetime:1");
     expect(h.workerdDispatchSecrets[h.workerdDispatchSecrets.length - 1]).toBeUndefined();
     expect(h.workerdPaths.length).toBe(before + 1);
   });

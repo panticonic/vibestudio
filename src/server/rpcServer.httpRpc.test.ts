@@ -510,8 +510,7 @@ describe("RpcServer HTTP POST /rpc", () => {
 
       expect(result.status).toBe(200);
       expect(result.body).toMatchObject({
-        error: expect.stringContaining("does not exist"),
-        errorCode: "EACCES",
+        error: { message: expect.stringContaining("does not exist"), code: "EACCES" },
       });
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
       expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent, {
@@ -1143,7 +1142,12 @@ describe("RpcServer HTTP POST /rpc", () => {
 
       // HTTP 200, error in body (RPC convention)
       expect(status).toBe(200);
-      expect(body["error"]).toBe("token expired");
+      expect(body["error"]).toMatchObject({
+        name: "Error",
+        message: "token expired",
+        errorKind: "internal",
+        stack: expect.stringContaining("token expired"),
+      });
     });
   });
 
@@ -1156,7 +1160,9 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [{}],
       });
 
-      expect(body["error"]).toContain("no authority branch admits the user origin");
+      expect(body["error"]).toMatchObject({
+        message: expect.stringContaining("no authority branch admits the user origin"),
+      });
       expect(setup.dispatched).toHaveLength(0);
     });
 
@@ -1175,7 +1181,9 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [],
       });
 
-      expect(body["error"]).toContain("Invalid method format");
+      expect(body["error"]).toMatchObject({
+        message: expect.stringContaining("Invalid method format"),
+      });
     });
 
     it("rejects unknown service", async () => {
@@ -1184,7 +1192,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [],
       });
 
-      expect(body["error"]).toContain("Unknown service");
+      expect(body["error"]).toMatchObject({ message: expect.stringContaining("Unknown service") });
     });
   });
 
@@ -1226,8 +1234,12 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [],
       });
 
-      expect(body["error"]).toContain("Target not reachable");
-      expect(body["error"]).not.toContain("cannot relay to unrelated panel");
+      expect(body["error"]).toMatchObject({
+        message: expect.stringContaining("Target not reachable"),
+      });
+      expect(body["error"]).not.toMatchObject({
+        message: expect.stringContaining("cannot relay to unrelated panel"),
+      });
     });
 
     it("allows authenticated HTTP callers to relay to a panel target", async () => {
@@ -1238,8 +1250,12 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [],
       });
 
-      expect(body["error"]).toContain("Target not reachable");
-      expect(body["error"]).not.toContain("cannot relay to unrelated panel");
+      expect(body["error"]).toMatchObject({
+        message: expect.stringContaining("Target not reachable"),
+      });
+      expect(body["error"]).not.toMatchObject({
+        message: expect.stringContaining("cannot relay to unrelated panel"),
+      });
     });
 
     it("allows authenticated HTTP callers to relay to a shell target", async () => {
@@ -1250,8 +1266,12 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [],
       });
 
-      expect(body["error"]).toContain("Target not reachable");
-      expect(body["error"]).not.toContain("cannot relay to unrelated panel");
+      expect(body["error"]).toMatchObject({
+        message: expect.stringContaining("Target not reachable"),
+      });
+      expect(body["error"]).not.toMatchObject({
+        message: expect.stringContaining("cannot relay to unrelated panel"),
+      });
     });
 
     it("rejects an HTTP caller that forges host identity to relay extension control RPC", async () => {
@@ -1278,11 +1298,13 @@ describe("RpcServer HTTP POST /rpc", () => {
 
       expect(res.status).toBe(200);
       const envelope = (await res.json()) as {
-        message?: { error?: string; errorCode?: string };
+        message?: { error?: import("@vibestudio/rpc").RpcFailure };
       };
       expect(envelope.message).toMatchObject({
-        errorCode: "EACCES",
-        error: expect.stringContaining("cannot directly relay host-control method"),
+        error: {
+          code: "EACCES",
+          message: expect.stringContaining("cannot directly relay host-control method"),
+        },
       });
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
     });
@@ -1290,8 +1312,8 @@ describe("RpcServer HTTP POST /rpc", () => {
     it("propagates readOnly metadata when relaying HTTP calls to workers", async () => {
       setup.server.setWorkerdUrl("http://127.0.0.1:8787");
       setup.server.setWorkerdGatewayToken("gateway-token");
-      setup.server.setWorkerInstanceResolver((targetId) =>
-        targetId === "worker:docs" ? "docs" : null
+      setup.server.setWorkerAdmissionResolver((targetId) =>
+        targetId === "worker:docs" ? { name: "docs", version: "lifetime:1" } : null
       );
       const realFetch = globalThis.fetch.bind(globalThis);
       const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1382,8 +1404,10 @@ describe("RpcServer HTTP POST /rpc", () => {
 
       expect(res.status).toBe(403);
       await expect(res.json()).resolves.toMatchObject({
-        errorCode: "EACCES",
-        error: expect.stringContaining("cannot directly relay host-control method"),
+        error: {
+          code: "EACCES",
+          message: expect.stringContaining("cannot directly relay host-control method"),
+        },
       });
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
     });
@@ -1433,8 +1457,7 @@ describe("RpcServer HTTP POST /rpc", () => {
 
       expect(res.status).toBe(403);
       await expect(res.json()).resolves.toMatchObject({
-        errorCode: "EACCES",
-        error: expect.stringContaining("does not exist"),
+        error: { code: "EACCES", message: expect.stringContaining("does not exist") },
       });
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
       expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent, {
@@ -1524,8 +1547,10 @@ describe("RpcServer HTTP POST /rpc", () => {
           ),
         });
         expect(res.status).toBe(403);
-        const body = (await res.json()) as { error?: string };
-        expect(body.error).toContain("Blocked in read-only mode");
+        const body = (await res.json()) as { error?: import("@vibestudio/rpc").RpcFailure };
+        expect(body.error).toMatchObject({
+          message: expect.stringContaining("Blocked in read-only mode"),
+        });
         expect(stubEgress.forwardProxyFetchStream).not.toHaveBeenCalled();
       } finally {
         await gw.stop();
@@ -1948,8 +1973,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         expect(frames.map((frame) => frame.type)).toEqual([FRAME_ERROR]);
         expect(parseErrorFrame(frames[0]!.payload)).toMatchObject({
           status: 502,
-          message: "client_not_authorized",
-          code: "client_not_authorized",
+          error: { message: "client_not_authorized", code: "client_not_authorized", name: "Error" },
         });
       } finally {
         await gw.stop();

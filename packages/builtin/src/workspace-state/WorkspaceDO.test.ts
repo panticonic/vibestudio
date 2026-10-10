@@ -51,6 +51,7 @@ async function createPreEngineDatabase() {
 
 function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityReserve"]>[0]> = {}) {
   return {
+    durableWorkQueues: [],
     kind: "panel" as const,
     source: { repoPath: SOURCE, effectiveVersion: VERSION },
     contextId: "ctx-1",
@@ -70,6 +71,7 @@ function preparedPanelInput(overrides: Partial<Parameters<WorkspaceDO["entityAct
 
 function doInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]> = {}) {
   return {
+    durableWorkQueues: [],
     kind: "do" as const,
     source: { repoPath: SOURCE, effectiveVersion: VERSION },
     contextId: "ctx-1",
@@ -420,6 +422,7 @@ describe("WorkspaceDO.entityActivate", () => {
       instance.entityAdvanceExecution({
         ...input,
         source: { repoPath: "workers/example", effectiveVersion: "ev-worker" },
+        durableWorkQueues: [],
         activeBuildKey: "b".repeat(64),
         activeExecutionDigest: "a".repeat(64),
         activeAuthority: ACTIVE_AUTHORITY,
@@ -635,6 +638,7 @@ describe("WorkspaceDO.entityActivate", () => {
     const { instance: isolated, sql } = await createTestDO(WorkspaceDOTestable);
     const sessionId = canonicalEntityId({ kind: "session", key: "external" });
     const session = isolated.entityActivate({
+      durableWorkQueues: [],
       kind: "session",
       source: { repoPath: "external-agent", effectiveVersion: "" },
       contextId: "ctx-agent",
@@ -783,6 +787,7 @@ describe("WorkspaceDO.entityActivate", () => {
     instance.entityActivate(panelInput({ key: "p1" }));
     expect(() =>
       instance.entityActivate({
+        durableWorkQueues: [],
         kind: "panel",
         source: { repoPath: "panels/other", effectiveVersion: VERSION },
         contextId: "ctx-1",
@@ -1270,10 +1275,14 @@ describe("WorkspaceDO slot operations", () => {
     expect(navigated.currentHistory.entity_id).toBe(entryB.id);
     expect(instance.slotHistoryRelative("snapshot-slot", -1)?.entity_id).toBe(entryA.id);
 
-    instance.slotPatchCurrentStateArgs("snapshot-slot", { step: "updated" }, {
-      entryKey: navigated.slot.current_entry_key!,
-      activeBuildKey: navigated.entity.activeBuildKey ?? null,
-    });
+    instance.slotPatchCurrentStateArgs(
+      "snapshot-slot",
+      { step: "updated" },
+      {
+        entryKey: navigated.slot.current_entry_key!,
+        activeBuildKey: navigated.entity.activeBuildKey ?? null,
+      }
+    );
     const updated = instance.panelTreeDetail("snapshot-slot");
     expect(updated).not.toBeNull();
     if (!updated) throw new Error("expected updated detail");
@@ -1717,29 +1726,56 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("admits its exact execution and wake identity together without mutating a refused image", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    const entity = instance.entityActivate(doInput({
-      activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY,
-    }));
+    const entity = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
     const input = { ...key, incarnation: crypto.randomUUID(), generation: 1 };
-    expect(() => instance.alarmSourceRegister({ ...input, executionDigest: "c".repeat(64) }))
-      .toThrow("does not match its active execution image");
+    expect(() =>
+      instance.alarmSourceRegister({ ...input, executionDigest: "c".repeat(64) })
+    ).toThrow("does not match its active execution image");
     expect(instance.alarmSourceList()).toEqual([]);
     expect(instance.lifecycleListLeases()).toEqual([]);
     const admission = instance.alarmSourceRegister({ ...input, executionDigest: "a".repeat(64) });
     expect(admission).toEqual({ incarnation: input.incarnation, entity });
     expect(instance.lifecycleListLeases()).toEqual([
-      { ...key, detail: { owner: "pi" }, createdAt: expect.any(Number), refreshedAt: expect.any(Number) },
+      {
+        ...key,
+        detail: { owner: "pi" },
+        createdAt: expect.any(Number),
+        refreshedAt: expect.any(Number),
+      },
     ]);
-    expect(() => instance.alarmSourceRegister({
-      ...input, generation: 2, incarnation: crypto.randomUUID(), executionDigest: "c".repeat(64),
-    })).toThrow("does not match its active execution image");
-    expect(instance.alarmSourcePublish({ ...key, incarnation: admission.incarnation, revision: 0, wakeAt: null }))
-      .toBe("accepted");
+    expect(() =>
+      instance.alarmSourceRegister({
+        ...input,
+        generation: 2,
+        incarnation: crypto.randomUUID(),
+        executionDigest: "c".repeat(64),
+      })
+    ).toThrow("does not match its active execution image");
+    expect(
+      instance.alarmSourcePublish({
+        ...key,
+        incarnation: admission.incarnation,
+        revision: 0,
+        wakeAt: null,
+      })
+    ).toBe("accepted");
   });
 
   it("acknowledges only captured host wakes while later events survive source null publication", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
     const { incarnation } = instance.alarmSourceRegister({
       ...key,
       executionDigest: "a".repeat(64),
@@ -1783,7 +1819,13 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("failed dispatch rearming retains host debt and invalid acknowledgement rolls back the claim", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
     const { incarnation } = instance.alarmSourceRegister({
       ...key,
       executionDigest: "a".repeat(64),
@@ -1826,7 +1868,13 @@ describe("WorkspaceDO lifecycle registry", () => {
   it("a SQL failure after receipt-wake acknowledgement rolls back both debt and scheduling for exact retry", async () => {
     const { instance: owner, sql } = await createTestDO(WorkspaceDOTestable);
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    owner.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    owner.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
     owner.alarmAdoptWorker("driver-1");
     const { incarnation } = owner.alarmSourceRegister({
       ...key,
@@ -1856,7 +1904,13 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("ordinary clears preserve host wakes, but entity retirement releases them", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    const entity = instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    const entity = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
     const { incarnation } = instance.alarmSourceRegister({
       ...key,
       executionDigest: "a".repeat(64),
@@ -1873,7 +1927,13 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("an event first arriving during a pass survives its distant next schedule and host adoption", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
     const { incarnation } = instance.alarmSourceRegister({
       ...key,
       executionDigest: "a".repeat(64),
@@ -1917,7 +1977,13 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("recovers registered sources with no delivered schedule once per host generation and excludes retired owners", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    const entity = instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    const entity = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
     const { incarnation } = instance.alarmSourceRegister({
       ...key,
       executionDigest: "a".repeat(64),
@@ -1962,21 +2028,65 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("registers work capability only for an active owner and removes it on retirement", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    expect(() => instance.durableWorkOwnerRegister({ ...key, queues: ["channel-delivery"] })).toThrow(
-      /is not active/u
+    const entity = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        durableWorkQueues: ["workspace-publication", "channel-delivery", "channel-delivery"],
+      })
     );
-
-    const entity = instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
-    instance.durableWorkOwnerRegister({
-      ...key,
-      queues: ["workspace-publication", "channel-delivery", "channel-delivery"],
-    });
     expect(instance.durableWorkOwnerList()).toEqual([
       { owner: key, queues: ["channel-delivery", "workspace-publication"] },
     ]);
 
     instance.entityRetire(entity.id);
     expect(instance.durableWorkOwnerList()).toEqual([]);
+  });
+
+  it("publishes queue ownership atomically across preparation, image changes, and reactivation", () => {
+    const input = doInput({
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+      durableWorkQueues: ["channel-delivery"],
+    });
+    instance.entityReserve(doInput());
+    instance.entityPrepareExecution(input);
+    expect(instance.durableWorkOwnerList()).toEqual([]);
+    const active = instance.entityAdvanceExecution(input);
+    expect(instance.durableWorkOwnerList()).toEqual([
+      {
+        owner: { source: SOURCE, className: "MyDO", objectKey: "k1" },
+        queues: ["channel-delivery"],
+      },
+    ]);
+    expect(() =>
+      instance.entityActivate({
+        ...input,
+        contextId: "foreign",
+        durableWorkQueues: ["workspace-publication"],
+      })
+    ).toThrow();
+    expect(instance.durableWorkOwnerList()[0]?.queues).toEqual(["channel-delivery"]);
+    expect(() =>
+      instance.entityAdvanceExecutions([
+        { ...input, durableWorkQueues: [] },
+        { ...input, key: "unknown-owner" },
+      ])
+    ).toThrow(/unknown entity/);
+    expect(instance.durableWorkOwnerList()[0]?.queues).toEqual(["channel-delivery"]);
+    instance.entityAdvanceExecutions([
+      { ...input, activeExecutionDigest: "f".repeat(64), durableWorkQueues: [] },
+    ]);
+    expect(instance.durableWorkOwnerList()).toEqual([]);
+    const restored = instance.entityAdvanceExecution(input);
+    instance.entityRetire(active.id);
+    expect(instance.durableWorkOwnerList()).toEqual([]);
+    instance.entityCleanupComplete(active.id, restored.authoritySessionId!);
+    const reactivated = instance.entityActivate(input);
+    expect(reactivated.authoritySessionId).not.toBe(active.authoritySessionId);
+    expect(instance.durableWorkOwnerList()[0]?.queues).toEqual(["channel-delivery"]);
   });
 
   it("claims due alarms durably and acknowledges the exact generation", () => {
@@ -2166,7 +2276,13 @@ describe("WorkspaceDO lifecycle registry", () => {
   });
 
   it("clears a DO lease when the matching entity is retired", () => {
-    const rec = instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    const rec = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
     instance.lifecycleLeaseUpsert(key);
 
@@ -2176,7 +2292,13 @@ describe("WorkspaceDO lifecycle registry", () => {
   });
 
   it("clears a DO alarm on retirement and rejects late scheduling", () => {
-    const rec = instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    const rec = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
     instance.alarmSet({ ...key, wakeAt: 1_000 });
 
@@ -2214,7 +2336,13 @@ describe("WorkspaceDO lifecycle registry", () => {
     const first = await createTestDO(WorkspaceDOTestable);
     first.instance.alarmAdoptWorker("driver-1");
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    const rec = first.instance.entityActivate(doInput({ activeBuildKey: "b".repeat(64), activeExecutionDigest: "a".repeat(64), activeAuthority: ACTIVE_AUTHORITY }));
+    const rec = first.instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
     first.instance.entityRetire(rec.id);
 
     // Model a crash-era stale row without passing through the guarded ingress.

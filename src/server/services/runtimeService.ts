@@ -100,9 +100,6 @@ export interface RuntimeEntityHooks {
     args: RuntimePreparationInput<S>
   ) => Promise<PreparedFor<S["execution"]>>;
 
-  /** Called after the entity row is active but before activation is returned
-   * to its creator, so durable-work capability registration precedes work. */
-  onDurableObjectActivated?: (record: EntityRecord) => Promise<void>;
   /** Establish an agent's initial relationship using its verified creator's authority. */
   initializeAgent?: (input: {
     record: EntityRecord;
@@ -1047,7 +1044,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         });
       }
     }
-    if (record.kind === "do") await deps.hooks.onDurableObjectActivated?.(record);
     return entityHandle(record, prepared.target.id);
   }
 
@@ -1328,9 +1324,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     mark("publication");
     if (createsRuntime) inheritTaskAuthority(record.id, actors, contextId);
-    if (record.kind === "do") {
-      await deps.hooks.onDurableObjectActivated?.(record);
-    }
     if (spec.kind === "session" && spec.title) {
       await deps.setEntityTitle?.(record.id, spec.title, { explicit: true });
     }
@@ -1740,7 +1733,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ownerUserId: record.ownerUserId,
       executionAuthority: record.executionAuthority,
     });
-    await deps.hooks.onDurableObjectActivated?.(advanced);
     await deps.hooks.restartDurableObjectIncarnation(advanced);
     return {
       entityId: advanced.id,

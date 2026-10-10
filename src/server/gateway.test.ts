@@ -17,6 +17,7 @@ describe("Gateway lifecycle", () => {
       getWorkerHost: () =>
         ({
           getLoaderSecret: () => "fixture-loader",
+          getWorkerAdmission: (name: string) => ({ name, version: "fixture-lifetime:1" }),
           getDoCode: async () => ({ version: "fixture-version" }),
         }) as never,
     });
@@ -68,7 +69,12 @@ describe("Gateway lifecycle", () => {
     const getDoCode = vi.fn(async () => ({ version: "sealed-version" }));
     gateway = new Gateway({
       tokenManager: {} as never,
-      getWorkerHost: () => ({ getLoaderSecret: () => "fixture-loader", getDoCode }) as never,
+      getWorkerHost: () =>
+        ({
+          getLoaderSecret: () => "fixture-loader",
+          getWorkerAdmission: (name: string) => ({ name, version: "fixture-lifetime:1" }),
+          getDoCode,
+        }) as never,
     });
     const port = await gateway.start(0);
     const headers = { "X-Vibestudio-Loader-Secret": "fixture-loader" };
@@ -94,7 +100,12 @@ describe("Gateway lifecycle", () => {
     const getDoAdmission = vi.fn(() => admission);
     gateway = new Gateway({
       tokenManager: {} as never,
-      getWorkerHost: () => ({ getLoaderSecret: () => "fixture-loader", getDoAdmission }) as never,
+      getWorkerHost: () =>
+        ({
+          getLoaderSecret: () => "fixture-loader",
+          getWorkerAdmission: (name: string) => ({ name, version: "fixture-lifetime:1" }),
+          getDoAdmission,
+        }) as never,
     });
     const port = await gateway.start(0);
     const endpoint = `http://127.0.0.1:${port}/_doadmission/source/Class`;

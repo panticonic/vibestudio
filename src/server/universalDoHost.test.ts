@@ -100,6 +100,7 @@ export class CounterDO extends DurableObject {
       return Response.json({ result: await response.json() });
     }
     if (method === "generation") return Response.json({result:"v1"});
+    if (method === "failure") throw new Error("Original provider failure (503)");
     if (method === "instance") {
       this.localCalls = (this.localCalls || 0) + 1;
       return Response.json({result:{unitConstructors,localCalls:this.localCalls,held:this.held === true,stateArgs:this.ctx.props.stateArgs,hasStateArgsEnv:Object.hasOwn(this.env,"STATE_ARGS"),key:userKey}});
@@ -527,6 +528,15 @@ function sourceOwner(reservation: EntityRecord): EntityRecord {
 }
 
 describe("UniversalDO facet host (real workerd)", () => {
+  it("preserves application failures containing HTTP status text", async () => {
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, dispatch } = active;
+    await manager.ensureDOClass("workers/counter", "CounterDO");
+    const ref = { source: "workers/counter", className: "CounterDO", objectKey: "failure" };
+    await expect(dispatch(ref, "failure")).rejects.toThrow("dispatch failed 500");
+    await expect(dispatch(ref, "failure")).rejects.toThrow("Original provider failure (503)");
+    expect(await dispatch(ref, "get")).toMatchObject({ count: 0 });
+  });
   it("shares executable code while isolating SQLite, fields and retirement cancellation", async () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager, dispatch, codeFetches } = active;

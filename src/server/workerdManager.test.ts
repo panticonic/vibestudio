@@ -1067,8 +1067,10 @@ describe("WorkerdManager", () => {
         startArgs({ source: "workers/runtime-fixture", key: "instance:with spaces" })
       );
 
-      expect(mgr.resolveWorkerInstanceName(handle.targetId)).toBe("instance_with_spaces");
-      expect(mgr.resolveWorkerInstanceName("worker:workers/runtime-fixture:missing")).toBeNull();
+      expect(mgr.resolveWorkerAdmission(handle.targetId)).toMatchObject({
+        name: "instance_with_spaces",
+      });
+      expect(mgr.resolveWorkerAdmission("worker:workers/runtime-fixture:missing")).toBeNull();
     });
 
     it("injects parent handle metadata into the worker runtime env", async () => {
@@ -1087,7 +1089,7 @@ describe("WorkerdManager", () => {
 
       // Workers load dynamically — parent metadata travels in the per-instance env
       // served by `/_workercode`, not the workerd config.
-      const code = await mgr.getWorkerCode("hello");
+      const code = await mgr.getWorkerCode("hello", mgr.getWorkerAdmission("hello")!.version);
       expect(code?.env["PARENT_ID"]).toBe("panel-parent");
       expect(code?.env["PARENT_ENTITY_ID"]).toBe("panel:parent-entity");
       expect(code?.env["PARENT_KIND"]).toBe("panel");
@@ -1101,7 +1103,7 @@ describe("WorkerdManager", () => {
 
       await mgr.startWorker(startArgs({ env: { NON_SECRET_PROBE: "configured" } }));
 
-      const code = await mgr.getWorkerCode("hello");
+      const code = await mgr.getWorkerCode("hello", mgr.getWorkerAdmission("hello")!.version);
       expect(code?.env["NON_SECRET_PROBE"]).toBe("configured");
     });
 
@@ -1992,7 +1994,7 @@ describe("WorkerdManager", () => {
       const mgr = new WorkerdManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "main" }));
-      const before = mgr.getWorkerVersion("hello");
+      const before = mgr.getWorkerAdmission("hello")?.version;
       await mgr.reconcileMutableSourceBuild(
         "workers/runtime-fixture",
         null,
@@ -2017,7 +2019,9 @@ describe("WorkerdManager", () => {
       // No restart — the worker host reloads on its next request because the
       // loader-cache version bumped. The instance stays "running" throughout.
       expect(statusOf(mgr, "hello")?.status).toBe("running");
-      expect(mgr.getWorkerVersion("hello")).toBe((before ?? 0) + 1);
+      expect(mgr.getWorkerAdmission("hello")?.version).toBe(
+        `${before!.split(":")[0]}:${Number(before!.split(":")[1]) + 1}`
+      );
     });
 
     it("keeps rebuild codeVersion strictly above prior env-only updates", async () => {
@@ -2026,7 +2030,7 @@ describe("WorkerdManager", () => {
 
       await mgr.startWorker(startArgs({ ref: "main" }));
       await mgr.updateInstance("hello", { env: { FEATURE: "enabled" } });
-      const beforeRebuild = mgr.getWorkerVersion("hello");
+      const beforeRebuild = mgr.getWorkerAdmission("hello")?.version;
 
       await mgr.reconcileMutableSourceBuild(
         "workers/runtime-fixture",
@@ -2049,7 +2053,9 @@ describe("WorkerdManager", () => {
         "build:workers/runtime-fixture:main"
       );
 
-      expect(mgr.getWorkerVersion("hello")).toBe((beforeRebuild ?? 0) + 1);
+      expect(mgr.getWorkerAdmission("hello")?.version).toBe(
+        `${beforeRebuild!.split(":")[0]}:${Number(beforeRebuild!.split(":")[1]) + 1}`
+      );
     });
 
     it("marks failed runtime image rebinds terminal after the warm attempt fails", async () => {
@@ -2071,11 +2077,11 @@ describe("WorkerdManager", () => {
 
       await mgr.startWorker(startArgs());
 
-      await expect(mgr.getWorkerCode("hello")).rejects.toMatchObject({
+      await expect(mgr.getWorkerCode("hello", "selected-version")).rejects.toMatchObject({
         code: "RUNTIME_IMAGE_WARMING",
       });
       await vi.waitFor(() => expect(bindRuntimeImage).toHaveBeenCalledTimes(2));
-      await expect(mgr.getWorkerCode("hello")).rejects.toMatchObject({
+      await expect(mgr.getWorkerCode("hello", "selected-version")).rejects.toMatchObject({
         code: "RUNTIME_IMAGE_UNAVAILABLE",
         message: expect.stringContaining("Unknown vcs ref: ctx:deleted"),
       });

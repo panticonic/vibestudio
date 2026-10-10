@@ -285,7 +285,6 @@ describe("gatewayFetchService — panel-origin path allowlist", () => {
       "/_w/do/x",
       "/_u/do/x",
       "/_workercode/my-worker",
-      "/_workerversion/my-worker",
       "/_docode/src/Class",
       "/_doversion/src/Class",
     ]) {

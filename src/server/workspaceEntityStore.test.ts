@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { DODispatch } from "./doDispatch.js";
-import { WorkspaceEntityStore } from "./workspaceEntityStore.js";
+import { WorkspaceEntityStore, type WorkspaceEntityStoreDeps } from "./workspaceEntityStore.js";
 
 const RECORD: EntityRecord = {
   id: "do:vibestudio/internal:EvalDO:abc",
@@ -19,7 +19,8 @@ const RECORD: EntityRecord = {
 function makeStore(
   handlers: Record<string, (...args: unknown[]) => unknown>,
   materializeExecution: (record: EntityRecord) => Promise<void> = async () => undefined,
-  entityCache = new EntityCache()
+  entityCache = new EntityCache(),
+  resolveDurableWorkQueues: WorkspaceEntityStoreDeps["resolveDurableWorkQueues"] = () => []
 ) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const doDispatch = {
@@ -34,12 +35,38 @@ function makeStore(
     doDispatch,
     workspaceId: "ws_1",
     entityCache,
+    resolveDurableWorkQueues,
     materializeExecution,
   });
   return { store, entityCache, calls };
 }
 
 describe("WorkspaceEntityStore", () => {
+  it("publishes exact sealed queue declarations in the entity command without a second registration call", async () => {
+    const input = {
+      kind: "do" as const,
+      source: RECORD.source,
+      contextId: RECORD.contextId,
+      className: "EvalDO",
+      key: RECORD.key,
+      activeExecutionDigest: "e".repeat(64),
+    };
+    const queues = vi.fn<WorkspaceEntityStoreDeps["resolveDurableWorkQueues"]>(() => [
+      "channel-delivery",
+    ]);
+    const { store, calls } = makeStore(
+      { entityActivate: () => RECORD },
+      undefined,
+      undefined,
+      queues
+    );
+    await store.activate(input);
+    expect(queues).toHaveBeenCalledExactlyOnceWith(input);
+    expect(calls).toEqual([
+      { method: "entityActivate", args: [{ ...input, durableWorkQueues: ["channel-delivery"] }] },
+    ]);
+  });
+
   it("commits cleanup against the exact captured retired authority lifetime", async () => {
     const { store, calls } = makeStore({ entityCleanupComplete: () => undefined });
     await store.cleanupComplete(RECORD.id, "retired-lifetime");
@@ -56,6 +83,7 @@ describe("WorkspaceEntityStore", () => {
       doDispatch: { dispatch } as unknown as DODispatch,
       workspaceId: "ws_1",
       entityCache: new EntityCache(),
+      resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
       executionPublicationPort: {
         reserve() {
@@ -186,6 +214,7 @@ describe("WorkspaceEntityStore", () => {
         method: "entityActivate",
         args: [
           {
+            durableWorkQueues: [],
             kind: "do",
             source: RECORD.source,
             contextId: RECORD.contextId,
@@ -611,6 +640,7 @@ describe("WorkspaceEntityStore", () => {
       doDispatch: { dispatch } as unknown as DODispatch,
       workspaceId: "ws_1",
       entityCache,
+      resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
       executionPublicationPort: {
         reserve() {
@@ -654,6 +684,7 @@ describe("WorkspaceEntityStore", () => {
       doDispatch: { dispatch: async () => RECORD } as unknown as DODispatch,
       workspaceId: "ws_1",
       entityCache,
+      resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
       executionPublicationPort: {
         reserve() {

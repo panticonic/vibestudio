@@ -97,7 +97,6 @@ function makeDODispatch(instance: WorkspaceDO): {
 interface BuildDepsOptions {
   initializeAgent?: RuntimeEntityHooks["initializeAgent"];
   initializeDurableClone?: RuntimeEntityHooks["initializeDurableClone"];
-  onDurableObjectActivated?: RuntimeEntityHooks["onDurableObjectActivated"];
   prepareResourceBindings?: Parameters<typeof createRuntimeService>[0]["prepareResourceBindings"];
   approvalDecision?: Awaited<ReturnType<ApprovalQueue["request"]>>;
   prepareDurableObject?: (args: {
@@ -223,6 +222,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     doDispatch: dispatch,
     workspaceId: "workspace-main",
     entityCache,
+    resolveDurableWorkQueues: () => [],
     materializeExecution: async () => undefined,
   });
   const taskAuthorities = new TaskAuthorityRegistry();
@@ -237,7 +237,6 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     hooks: {
       initializeDurableClone,
       initializeAgent: opts.initializeAgent,
-      onDurableObjectActivated: opts.onDurableObjectActivated,
       recoverExactExecution,
       restartDurableObjectIncarnation,
       prepare: (async ({ spec, key, contextId, existingBuildKey, parent }) => {
@@ -2801,6 +2800,7 @@ describe("runtimeService singleton DO + cross-panel sharing", () => {
     });
     // Persist a host panel row.
     instance.entityActivate({
+      durableWorkQueues: [],
       kind: "panel",
       source: { repoPath: "panels/host", effectiveVersion: "v1" },
       contextId: "ctx-host",
@@ -3365,13 +3365,10 @@ describe("runtimeService.cloneContext", () => {
       admitted();
       await held;
     });
-    const onDurableObjectActivated = vi.fn(async () => {});
     const { service, instance, entityCache } = await buildDeps({
       initializeDurableClone,
-      onDurableObjectActivated,
     });
     await seedDO(service, "ctx-preparation", "source");
-    onDurableObjectActivated.mockClear();
     const operation = service.handler({ caller: serverCaller }, "cloneContext", [
       { sourceContextId: "ctx-preparation", targetKey: "preparation-owned" },
     ]);
@@ -3388,11 +3385,9 @@ describe("runtimeService.cloneContext", () => {
     expect(entityCache.resolve(id)?.status).toBe("preparing");
     expect(entityCache.listExecutionOwners().map((record) => record.id)).toContain(id);
     expect(entityCache.listActive().some((record) => record.id === id)).toBe(false);
-    expect(onDurableObjectActivated).not.toHaveBeenCalled();
     release();
     await operation;
     expect(instance.entityResolve(id)?.status).toBe("active");
-    expect(onDurableObjectActivated).toHaveBeenCalledOnce();
   });
 
   it("retires only its failed preparation and preserves the original initializer error", async () => {
