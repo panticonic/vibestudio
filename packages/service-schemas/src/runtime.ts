@@ -383,23 +383,17 @@ export const NativeRuntimeHealthObservationSchema = z
   })
   .strict();
 
-/** Native inventory evidence contains only exact host-observed live identities. */
-export const NativeRuntimeInventoryObservationSchema = z
+/** Native unit evidence contains only exact host-observed live identities. */
+export const NativeRuntimeUnitObservationSchema = z
   .object({
-    protocol: z.literal("runtime-inventory-observation.v1"),
-    entityCount: z.number().int().nonnegative(),
+    protocol: z.literal("runtime-unit-observation.v1"),
+    method: z.enum(["runtime.supervision.list", "runtime.supervision.describe"]),
     entities: z.array(
-      z
-        .object({
-          identity: RuntimeSupervisionEntityKeySchema,
-          source: z.string(),
-          status: z.enum(["starting", "running", "stopped", "error"]),
-        })
-        .strict()
+      RuntimeSupervisionDescriptionSchema.pick({ identity: true, source: true, status: true })
     ),
   })
-  .strict()
-  .refine((observation) => observation.entityCount === observation.entities.length);
+  .strict();
+export type NativeRuntimeUnitObservation = z.infer<typeof NativeRuntimeUnitObservationSchema>;
 
 const RuntimeSupervisionLogOptionsSchema = z
   .object({

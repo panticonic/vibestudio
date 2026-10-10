@@ -1,7 +1,7 @@
 import {
   runtimeMethods,
   NativeRuntimeHealthObservationSchema,
-  NativeRuntimeInventoryObservationSchema,
+  NativeRuntimeUnitObservationSchema,
 } from "@vibestudio/service-schemas/runtime";
 import {
   webhookIngressMethods,
@@ -193,14 +193,18 @@ export class ExecutionJournal {
     }) });
   }
 
-  recordRuntimeInventory(method: string, result: unknown): void {
-    if (this.closed || method !== "runtime.supervision.list") return;
-    const entities = runtimeMethods["supervision.list"].returns!.parse(result);
+  recordRuntimeUnits(method: string, result: unknown): void {
+    if (this.closed || !["runtime.supervision.list", "runtime.supervision.describe"].includes(method))
+      return;
+    const entities =
+      method === "runtime.supervision.list"
+        ? runtimeMethods["supervision.list"].returns!.parse(result)
+        : runtimeMethods["supervision.describe"].returns!.parse(result);
     this.append({
-      type: "runtime.inventory",
-      receipt: NativeRuntimeInventoryObservationSchema.parse({
-        protocol: "runtime-inventory-observation.v1",
-        entityCount: entities.length,
+      type: "runtime.units",
+      receipt: NativeRuntimeUnitObservationSchema.parse({
+        protocol: "runtime-unit-observation.v1",
+        method,
         entities: entities.map(({ identity, source, status }) => ({ identity, source, status })),
       }),
     });

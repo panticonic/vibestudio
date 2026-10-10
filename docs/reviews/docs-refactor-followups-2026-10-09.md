@@ -275,9 +275,12 @@ focused host test files pass all 103 tests, and host typechecking passes.
 The combined diagnostics rerun `st_6e699bf16e124b0cacf20cd1e80b67bf` passes
 bounded unit logs/errors and GAD integrity. Unit listing then exposed another
 source-spelling assumption: a successful `sup.list()` alias was rejected for
-not containing the literal method path. The native journal now records the
-host-validated supervision roster's identities, sources, and statuses. System
-Testing commit `1545f19` joins that inventory to a representative native health
-read, derives the reported count from the observed rows, and rejects fabricated
-or unrelated inspections. All 50 focused validator tests and 26 journal tests
-pass, along with host typechecking; the prompt remains unchanged.
+not containing the literal method path. The native journal now records list
+and describe reads in one unit-observation format, using the canonical
+description schema's identities, sources, and statuses. System Testing commit
+`934fa1c` joins a list roster to either a representative describe read or a
+health read, preserving the original inspection contract. Counts come from the
+observed rows; fabricated and unrelated inspections remain invalid. The
+recorder consumes successful host calls without redundantly validating omitted
+optional arguments. All 51 focused validator tests and 27 journal tests pass,
+along with host typechecking; the prompt remains unchanged.

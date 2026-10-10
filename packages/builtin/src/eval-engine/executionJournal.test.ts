@@ -617,16 +617,19 @@ describe("execution-owned native operation evidence", () => {
     const runtime = {
       supervision: {
         list: () => owner.rpc.call("main", "runtime.supervision.list", []),
+        describe: (target: unknown) =>
+          owner.rpc.call("main", "runtime.supervision.describe", [target]),
       },
     };
     await runtime.supervision.list();
+    await runtime.supervision.describe(entity.identity);
 
     expect(owner.operationJournal.close().entries).toEqual([
       {
-        type: "runtime.inventory",
+        type: "runtime.units",
         receipt: {
-          protocol: "runtime-inventory-observation.v1",
-          entityCount: 1,
+          protocol: "runtime-unit-observation.v1",
+          method: "runtime.supervision.list",
           entities: [{
             identity: entity.identity,
             source: entity.source,
@@ -635,10 +638,22 @@ describe("execution-owned native operation evidence", () => {
         },
       },
       {
-        type: "runtime.inventory",
+        type: "runtime.units",
         receipt: {
-          protocol: "runtime-inventory-observation.v1",
-          entityCount: 1,
+          protocol: "runtime-unit-observation.v1",
+          method: "runtime.supervision.list",
+          entities: [{
+            identity: entity.identity,
+            source: entity.source,
+            status: entity.status,
+          }],
+        },
+      },
+      {
+        type: "runtime.units",
+        receipt: {
+          protocol: "runtime-unit-observation.v1",
+          method: "runtime.supervision.describe",
           entities: [{
             identity: entity.identity,
             source: entity.source,
@@ -649,10 +664,11 @@ describe("execution-owned native operation evidence", () => {
     ]);
   });
 
-  it("validates only successful list results for the canonical runtime inventory method", () => {
+  it("validates successful unit results for canonical methods only", () => {
     const owner = new ExecutionJournal();
-    expect(() => owner.recordRuntimeInventory("runtime.supervision.list", {})).toThrow();
-    expect(() => owner.recordRuntimeInventory("runtime.supervision.describe", {})).not.toThrow();
+    expect(() => owner.recordRuntimeUnits("runtime.supervision.list", {})).toThrow();
+    expect(() => owner.recordRuntimeUnits("runtime.supervision.describe", {})).toThrow();
+    expect(() => owner.recordRuntimeUnits("runtime.supervision.health", {})).not.toThrow();
     expect(owner.entries).toEqual([]);
   });
 

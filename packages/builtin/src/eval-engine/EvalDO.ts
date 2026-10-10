@@ -826,7 +826,7 @@ export class EvalDO extends DurableObjectBase {
           operationJournal.recordWebhookOperation(method, args, result);
           operationJournal.recordPermissionInventory(method, args, result);
           operationJournal.recordCredentialResolution(method, args, result);
-          operationJournal.recordRuntimeInventory(method, result);
+          operationJournal.recordRuntimeUnits(method, result);
           operationJournal.recordRuntimeHealth(method, args, result);
           operationJournal.recordNotificationLifecycle(method, args, result);
         }
