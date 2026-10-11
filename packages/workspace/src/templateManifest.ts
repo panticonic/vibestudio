@@ -1,4 +1,7 @@
-import { WorkspaceAppCompatibilitySchema } from "@vibestudio/workspace-contracts/appCompatibility";
+import {
+  WORKSPACE_APP_COMPATIBILITY_FIELDS,
+  WorkspaceAppCompatibilitySchema,
+} from "@vibestudio/workspace-contracts/appCompatibility";
 import {
   mergeTemplateManifests,
   MERGED_RECORD_SETTINGS,
@@ -176,8 +179,9 @@ export function authoredTemplateManifest(
   const inherited = mergeTemplateManifests(inheritedLayers).document;
   const document = templateManifestDocument(manifest);
   const same = (a: unknown, b: unknown) => canonicalTemplateYaml(a) === canonicalTemplateYaml(b);
+  const compatibilityFields = new Set<string>(WORKSPACE_APP_COMPATIBILITY_FIELDS);
   for (const [key, value] of Object.entries(document)) {
-    if (key === "template" || key === "systemEpoch") continue;
+    if (key === "template" || compatibilityFields.has(key)) continue;
     const baseline = inherited[key];
     if (same(value, baseline)) {
       delete document[key];

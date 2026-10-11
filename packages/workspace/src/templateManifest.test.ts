@@ -6,9 +6,51 @@ import {
   rootRuntimeFromTemplateManifest,
   templateRepositories,
   authoredTemplateManifest,
+  templateManifestDocument,
 } from "./templateManifest.js";
 
 describe("current template manifest", () => {
+  it("preserves the authored compatibility envelope when runtime settings are inherited", () => {
+    const url = "https://example.test/base.git";
+    const installation = {
+      sources: [
+        {
+          pin: { url, ref: "refs/heads/main", commit: "a".repeat(40) },
+          manifest: canonicalTemplateYaml({
+            systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+            minimumAppVersion: "0.1.84",
+          }),
+        },
+      ],
+    };
+    const desiredWithMinimum = (minimumAppVersion: string) =>
+      parseTemplateManifestContent(
+        canonicalTemplateYaml({
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+          minimumAppVersion,
+          template: { dependencies: [{ url }] },
+        }),
+        WORKSPACE_SYSTEM_EPOCH
+      );
+
+    for (const minimumAppVersion of ["0.1.84", "0.1.90"]) {
+      const authored = authoredTemplateManifest(
+        desiredWithMinimum(minimumAppVersion),
+        installation
+      );
+      expect(authored.top.systemEpoch).toBe(WORKSPACE_SYSTEM_EPOCH);
+      expect(authored.top.minimumAppVersion).toBe(minimumAppVersion);
+      expect(templateManifestDocument(authored)).toMatchObject({
+        systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        minimumAppVersion,
+      });
+    }
+
+    expect(() => authoredTemplateManifest(desiredWithMinimum("0.1.80"), installation)).toThrow(
+      /cannot reproduce the desired workspace settings/
+    );
+  });
+
   it("exports dependency differences and refuses to silently restore removed settings", () => {
     const url = "https://example.test/base.git";
     const dependency = canonicalTemplateYaml({

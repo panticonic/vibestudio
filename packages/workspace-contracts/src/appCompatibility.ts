@@ -5,11 +5,18 @@ export const AppVersionSchema = z
   .string()
   .refine((value) => semver.valid(value) === value, "must be an exact SemVer version");
 
+const workspaceAppCompatibilityShape = {
+  systemEpoch: z.number().int().nonnegative(),
+  minimumAppVersion: AppVersionSchema.optional(),
+} satisfies z.ZodRawShape;
+
+/** Keys in the authored compatibility envelope, separate from inherited runtime settings. */
+export const WORKSPACE_APP_COMPATIBILITY_FIELDS = Object.freeze(
+  Object.keys(workspaceAppCompatibilityShape) as Array<keyof typeof workspaceAppCompatibilityShape>
+);
+
 export const WorkspaceAppCompatibilitySchema = z
-  .object({
-    systemEpoch: z.number().int().nonnegative(),
-    minimumAppVersion: AppVersionSchema.optional(),
-  })
+  .object(workspaceAppCompatibilityShape)
   .superRefine((value, ctx) => {
     const minimum = value.minimumAppVersion ? semver.parse(value.minimumAppVersion) : null;
     if (minimum && minimum.major !== value.systemEpoch)
