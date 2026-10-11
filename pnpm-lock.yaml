@@ -26,6 +26,9 @@ overrides:
   '@number0/iroh-win32-arm64-msvc': https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-arm64-msvc-1.1.0-cancel.2.tgz
 
 patchedDependencies:
+  '@number0/iroh@1.1.0':
+    hash: f8bdab8d108785e6ada1648a3d01879be77802317a4429b3bcf5e9ae785a87c6
+    path: patches/@number0__iroh@1.1.0.patch
   '@react-native-firebase/messaging@23.8.8':
     hash: 0bae9da8492dfa88b73e36505b1e0c197aa0456317fb58f53904c7ff1df9167e
     path: patches/@react-native-firebase__messaging@23.8.8.patch
@@ -87,7 +90,7 @@ importers:
         version: 0.6.0
       '@number0/iroh':
         specifier: 1.1.0
-        version: 1.1.0
+        version: 1.1.0(patch_hash=f8bdab8d108785e6ada1648a3d01879be77802317a4429b3bcf5e9ae785a87c6)
       '@panticonic/builtin':
         specifier: workspace:*
         version: link:packages/builtin
@@ -933,7 +936,7 @@ importers:
     dependencies:
       '@number0/iroh':
         specifier: 1.1.0
-        version: 1.1.0
+        version: 1.1.0(patch_hash=f8bdab8d108785e6ada1648a3d01879be77802317a4429b3bcf5e9ae785a87c6)
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -11843,7 +11846,7 @@ snapshots:
   '@number0/iroh-linux-x64-musl@1.1.0':
     optional: true
 
-  '@number0/iroh@1.1.0':
+  '@number0/iroh@1.1.0(patch_hash=f8bdab8d108785e6ada1648a3d01879be77802317a4429b3bcf5e9ae785a87c6)':
     optionalDependencies:
       '@number0/iroh-android-arm-eabi': 1.1.0
       '@number0/iroh-android-arm64': 1.1.0

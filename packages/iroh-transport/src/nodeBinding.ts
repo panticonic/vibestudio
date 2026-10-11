@@ -15,10 +15,8 @@ let cachedBinding: IrohNodeBinding | null = null;
 
 export function loadIrohNodeBinding(): IrohNodeBinding {
   if (cachedBinding) return cachedBinding;
-  // The exact upstream 1.1.0 tarball declares a stale `iroh-js/index.js` main
-  // while publishing the generated binding at its package root. Resolve the
-  // immutable package coordinate and load that published entry directly; do
-  // not rewrite the third-party manifest in node_modules or in packaged apps.
+  // Resolve through the owning host's require so the native addon stays beside
+  // the package in installed and packaged runtimes.
   const binding = runtimeRequire(resolveIrohNodeBinding()) as Partial<IrohNodeBinding>;
   if (
     typeof binding.Endpoint !== "function" ||
@@ -32,5 +30,5 @@ export function loadIrohNodeBinding(): IrohNodeBinding {
 }
 
 export function resolveIrohNodeBinding(): string {
-  return path.join(path.dirname(runtimeRequire.resolve("@number0/iroh/package.json")), "index.js");
+  return runtimeRequire.resolve("@number0/iroh");
 }

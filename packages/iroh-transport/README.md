@@ -16,14 +16,14 @@ pnpm --filter @vibestudio/iroh-transport typecheck
 pnpm --filter @vibestudio/iroh-transport test
 ```
 
-## Upstream packaging warning
+## Upstream package entry points
 
-`@number0/iroh@1.1.0` publishes `index.js` and `index.d.ts` at the package root, while its manifest
-declares `iroh-js/index.js` and `iroh-js/index.d.ts`. Node currently falls back to the root entry
-with a deprecation warning, and strict static resolvers reject the package. The Node adapter uses
-the repository's normal host-native `createRequire` loading seam, which is also the intended
-packaging boundary for native externals. Packaged-product tests must prove that every retained
-artifact copies and loads the matching native package; the warning is not hidden or patched.
+`@number0/iroh@1.1.0` publishes its JavaScript and declarations at the package root but declares
+missing `iroh-js/` entry points. The root pins a pnpm patch that points `main` and `types` at those
+published root files, so development installs and vendored npm packages resolve the same contract.
+The Node adapter uses the host's `createRequire` to resolve and load that package physically beside
+its native addon; it remains external to static bundles. Packaging checks verify those declared
+targets exist in npm's actual published file list.
 
 The binding exposes no per-attempt cancel method. The single endpoint-generation owner therefore
 cancels a timed-out dial by closing the whole current endpoint generation, awaiting native

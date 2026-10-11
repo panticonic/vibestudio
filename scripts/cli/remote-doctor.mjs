@@ -115,9 +115,7 @@ export function inspectWorkspaceIsolation(deps = {}) {
 
 function loadBinding(loader = require) {
   const entry =
-    typeof loader.resolve === "function"
-      ? path.join(path.dirname(loader.resolve("@number0/iroh/package.json")), "index.js")
-      : "@number0/iroh";
+    typeof loader.resolve === "function" ? loader.resolve("@number0/iroh") : "@number0/iroh";
   const binding = loader(entry);
   if (
     typeof binding.Endpoint?.builder !== "function" ||

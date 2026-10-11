@@ -122,60 +122,109 @@ async function prepareServerTemplateRelease(root) {
       stream.on("data", (chunk) => process.stdout.write(chunk));
     try {
       const result = await joined;
-      await stopping;
-      if (cancellation) throw cancellation;
-      if (result.error || result.code !== 0)
-        throw new Error(`Staged dependency installation failed (${result.signal ?? result.code})`, {
-          cause: result.error,
-        });
+      const failures = [];
+      if (result.error) {
+        failures.push(
+          new Error(`Staged dependency installation failed (${result.signal ?? result.code})`, {
+            cause: result.error,
+          })
+        );
+      }
+      if (cancellation) failures.push(cancellation);
+      const expectedOwnedKill =
+        cancellation && process.platform !== "win32" && result.signal === "SIGKILL";
+      if (!expectedOwnedKill && (result.code !== 0 || result.signal)) {
+        failures.push(
+          new Error(`Staged dependency installation failed (${result.signal ?? result.code})`)
+        );
+      }
+      if (stopping) {
+        try {
+          await stopping;
+        } catch (stopError) {
+          failures.push(stopError);
+        }
+      }
+      throwFailures(failures, "Staged dependency installation did not complete cleanly");
     } finally {
       process.off("SIGINT", stop);
       process.off("SIGTERM", stop);
     }
   };
+  return withOwnedCleanup(
+    async () => {
+      // Publish only the selected host runtime. Retained legacy and prior-version
+      // trees stay in the source checkout for live processes, never in this package.
+      const runtimeTarget = nodeRuntimeTarget();
+      const selectedRuntime = await assertSelectedNodeRuntimeArtifacts(repoRoot, runtimeTarget);
+      const targetName = nodeRuntimeTargetName(runtimeTarget);
+      const packageRuntimeRoot = path.join(root, "dist", "node");
+      const releaseRoot = path.join(packageRuntimeRoot, "releases", targetName);
+      mkdirp(releaseRoot);
+      fs.cpSync(selectedRuntime.root, path.join(releaseRoot, path.basename(selectedRuntime.root)), {
+        recursive: true,
+        errorOnExist: true,
+        force: false,
+        verbatimSymlinks: true,
+      });
+      copyFile(
+        path.relative(repoRoot, nodeRuntimeSelectionPath(repoRoot, runtimeTarget)),
+        path.join(packageRuntimeRoot, "selected", `${targetName}.json`)
+      );
+      await run(process.platform === "win32" ? "npm.cmd" : "npm", [
+        "install",
+        "--omit=dev",
+        "--no-audit",
+        "--no-fund",
+      ]);
+      await prepareInstalledTemplateRelease({
+        appRoot: root,
+        resources: root,
+        executable: process.execPath,
+        entry: path.join(root, "dist/prepare-workspace-templates.mjs"),
+        scratchParent: outRoot,
+      });
+      await withStandaloneReleaseSession(
+        root,
+        process.execPath,
+        outRoot,
+        verifyPreparedReleaseUserland
+      );
+    },
+    [
+      () => rmrf(path.join(root, "node_modules")),
+      () => rmrf(path.join(root, "dist/node")),
+      () => fs.rmSync(path.join(root, "package-lock.json"), { force: true }),
+    ],
+    "Server template release preparation and cleanup failed"
+  );
+}
+
+/** Run every owned cleanup and retain the operation failure as the primary cause. */
+export async function withOwnedCleanup(operation, cleanupTasks, message) {
+  let value;
+  let operationFailed = false;
+  let operationError;
   try {
-    // Publish only the selected host runtime. Retained legacy and prior-version
-    // trees stay in the source checkout for live processes, never in this package.
-    const runtimeTarget = nodeRuntimeTarget();
-    const selectedRuntime = await assertSelectedNodeRuntimeArtifacts(repoRoot, runtimeTarget);
-    const targetName = nodeRuntimeTargetName(runtimeTarget);
-    const packageRuntimeRoot = path.join(root, "dist", "node");
-    const releaseRoot = path.join(packageRuntimeRoot, "releases", targetName);
-    mkdirp(releaseRoot);
-    fs.cpSync(selectedRuntime.root, path.join(releaseRoot, path.basename(selectedRuntime.root)), {
-      recursive: true,
-      errorOnExist: true,
-      force: false,
-      verbatimSymlinks: true,
-    });
-    copyFile(
-      path.relative(repoRoot, nodeRuntimeSelectionPath(repoRoot, runtimeTarget)),
-      path.join(packageRuntimeRoot, "selected", `${targetName}.json`)
-    );
-    await run(process.platform === "win32" ? "npm.cmd" : "npm", [
-      "install",
-      "--omit=dev",
-      "--no-audit",
-      "--no-fund",
-    ]);
-    await prepareInstalledTemplateRelease({
-      appRoot: root,
-      resources: root,
-      executable: process.execPath,
-      entry: path.join(root, "dist/prepare-workspace-templates.mjs"),
-      scratchParent: outRoot,
-    });
-    await withStandaloneReleaseSession(
-      root,
-      process.execPath,
-      outRoot,
-      verifyPreparedReleaseUserland
-    );
-  } finally {
-    rmrf(path.join(root, "node_modules"));
-    rmrf(path.join(root, "dist/node"));
-    fs.rmSync(path.join(root, "package-lock.json"), { force: true });
+    value = await operation();
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
   }
+  const cleanupResults = await Promise.allSettled(
+    cleanupTasks.map((cleanup) => Promise.resolve().then(cleanup))
+  );
+  const failures = operationFailed ? [operationError] : [];
+  for (const result of cleanupResults) {
+    if (result.status === "rejected") failures.push(result.reason);
+  }
+  throwFailures(failures, message);
+  return value;
+}
+
+function throwFailures(failures, message) {
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, message, { cause: failures[0] });
 }
 
 function assertBuilt() {
@@ -458,6 +507,11 @@ export function stagePublishedPackage(source, destination) {
       stdio: ["ignore", "pipe", "pipe"],
     })
   );
+  assertPublishedManifestTargets(
+    readJson(path.join(source, "package.json")),
+    publication.files,
+    source
+  );
   for (const { path: relative } of publication.files) {
     const file = path.resolve(source, relative);
     if (path.relative(source, file).startsWith("..") || path.isAbsolute(relative)) {
@@ -467,6 +521,77 @@ export function stagePublishedPackage(source, destination) {
     const target = path.join(destination, relative);
     mkdirp(path.dirname(target));
     fs.copyFileSync(file, target);
+  }
+}
+
+/** Check the package's public entry points against npm's resolved publication
+ * list. This deliberately uses npm pack's result instead of reimplementing the
+ * `files`/ignore rules, whose semantics are part of npm's publication boundary. */
+export function assertPublishedManifestTargets(manifest, publishedFiles, packageRoot) {
+  const files = new Set(publishedFiles.map(({ path: file }) => file.replaceAll("\\", "/")));
+  const targets = new Map();
+  const collectExportTargets = (value) => {
+    if (typeof value === "string") targets.set(value, "export");
+    else if (Array.isArray(value)) value.forEach(collectExportTargets);
+    else if (value && typeof value === "object") Object.values(value).forEach(collectExportTargets);
+  };
+  collectExportTargets(manifest.exports);
+  for (const field of ["main", "module", "types", "typings"]) {
+    if (typeof manifest[field] === "string")
+      targets.set(manifest[field], field === "types" || field === "typings" ? "types" : "node");
+  }
+  if (typeof manifest.bin === "string") targets.set(manifest.bin, "bin");
+  else if (manifest.bin && typeof manifest.bin === "object")
+    Object.values(manifest.bin).forEach((target) => targets.set(target, "bin"));
+
+  const missing = [];
+  for (const [target, kind] of targets) {
+    if (
+      typeof target !== "string" ||
+      (kind === "export" && !target.startsWith("./")) ||
+      target.startsWith("/")
+    ) {
+      missing.push(target);
+      continue;
+    }
+    const normalized = target.replace(/^\.\//u, "").replaceAll("\\", "/");
+    if (kind === "node" && packageRoot) {
+      try {
+        const resolved = createRequire(path.join(packageRoot, "package.json")).resolve(
+          path.resolve(packageRoot, target)
+        );
+        const relative = path.relative(packageRoot, resolved).split(path.sep).join("/");
+        if (files.has(relative)) continue;
+        missing.push(target);
+        continue;
+      } catch {
+        missing.push(target);
+        continue;
+      }
+    }
+    if (normalized.split("/").includes("..")) {
+      missing.push(target);
+      continue;
+    }
+    const wildcard = normalized.indexOf("*");
+    const matches =
+      wildcard < 0
+        ? files.has(normalized)
+        : [...files].some((file) => {
+            const prefix = normalized.slice(0, wildcard);
+            const suffix = normalized.slice(wildcard + 1);
+            return (
+              file.startsWith(prefix) &&
+              file.endsWith(suffix) &&
+              file.length > prefix.length + suffix.length
+            );
+          });
+    if (!matches) missing.push(target);
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `Published package ${manifest.name ?? "(unnamed)"} omits declared entry points: ${missing.join(", ")}`
+    );
   }
 }
 

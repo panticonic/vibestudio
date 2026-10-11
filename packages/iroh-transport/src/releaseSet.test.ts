@@ -65,12 +65,11 @@ describe("pinned Iroh release set", () => {
     }
   });
 
-  it("records the upstream npm entry defect until a corrected release set replaces it", () => {
-    expect(bindingManifest.main).toBe("iroh-js/index.js");
-    expect(bindingManifest.types).toBe("iroh-js/index.d.ts");
-    expect(existsSync(path.join(bindingPackageRoot, bindingManifest.main!))).toBe(false);
-    expect(existsSync(path.join(bindingPackageRoot, bindingManifest.types!))).toBe(false);
-    expect(existsSync(path.join(bindingPackageRoot, "index.js"))).toBe(true);
-    expect(existsSync(path.join(bindingPackageRoot, "index.d.ts"))).toBe(true);
+  it("resolves the patched entry points to the files published by upstream", () => {
+    expect(bindingManifest.main).toBe("./index.js");
+    expect(bindingManifest.types).toBe("./index.d.ts");
+    expect(existsSync(path.join(bindingPackageRoot, bindingManifest.main!))).toBe(true);
+    expect(existsSync(path.join(bindingPackageRoot, bindingManifest.types!))).toBe(true);
+    expect(require.resolve("@number0/iroh")).toBe(path.join(bindingPackageRoot, "index.js"));
   });
 });

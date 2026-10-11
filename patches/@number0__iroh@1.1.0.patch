@@ -1,0 +1,15 @@
+diff --git a/package.json b/package.json
+index 682292d1706340163f5e833168c376d53bd8b68d..9f141380676d4a9a2b55adecba01d30dccb98f96 100644
+--- a/package.json
++++ b/package.json
+@@ -14,8 +14,8 @@
+   ],
+   "version": "1.1.0",
+   "type": "commonjs",
+-  "main": "iroh-js/index.js",
+-  "types": "iroh-js/index.d.ts",
++  "main": "./index.js",
++  "types": "./index.d.ts",
+   "engines": {
+     "node": ">= 20.3.0"
+   },

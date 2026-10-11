@@ -902,18 +902,14 @@ checks, and the retired-transport absence guard also pass. These are local
 Linux results, not substitutes for the retained cross-platform and physical
 device matrix.
 
-`@number0/iroh@1.1.0` publishes root
-`index.js` and `index.d.ts` files, but its manifest declares nonexistent
-`iroh-js/index.js` and `iroh-js/index.d.ts` entries. Node falls back with a
-deprecation warning; strict static resolvers reject the package. A registry
-check on 2026-08-28 found no release newer than `1.1.0`, so the plan's one-newer-
-aligned-set evaluation cannot yet be run. Vibestudio's existing host-native
-external loader now resolves the immutable package coordinate to the published
-root entry in both ESM tests and bundled CJS, while deliberately keeping native
-code outside static bundles. Staged server/app npm packages build without the
-fallback warning, both publish dry-runs pass, and packaged import/executable
-smokes prove the native binary is copied and loadable on the current target. No
-manifest rewrite or package fork is introduced. The other retained OS/ABI
+`@number0/iroh@1.1.0` publishes root `index.js` and `index.d.ts` files, while its
+manifest points to missing `iroh-js/` entries. Vibestudio pins a pnpm patch that
+corrects `main` and `types` to the published root files. The native loader still
+resolves through the owning host's `createRequire`, keeping the native addon
+beside the installed package and outside static bundles. The npm staging gate
+checks declared entry points against npm's actual published file list. A
+registry check on 2026-08-28 found no release newer than `1.1.0`, so the plan's
+one-newer-aligned-set evaluation cannot yet be run. The other retained OS/ABI
 package loads remain release gates.
 
 The binding exposes no per-attempt cancel method, so cancellation belongs to

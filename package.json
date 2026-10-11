@@ -185,7 +185,8 @@
       "@react-native-firebase/messaging@23.8.8": "patches/@react-native-firebase__messaging@23.8.8.patch",
       "isomorphic-git@1.36.3": "patches/isomorphic-git@1.36.3.patch",
       "app-builder-lib@26.15.3": "patches/app-builder-lib@26.15.3.patch",
-      "@vitest/browser@3.2.7": "patches/@vitest__browser@3.2.7.patch"
+      "@vitest/browser@3.2.7": "patches/@vitest__browser@3.2.7.patch",
+      "@number0/iroh@1.1.0": "patches/@number0__iroh@1.1.0.patch"
     }
   },
   "devDependencies": {
