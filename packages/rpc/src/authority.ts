@@ -479,6 +479,13 @@ export interface NativeInvocationIdentity {
     | { readonly kind: "tool"; readonly assistantEntryId: number; readonly callId: string }
     | { readonly kind: "direct-tool"; readonly directEntryId: number; readonly callId: string }
     | {
+        readonly kind: "nested-tool";
+        readonly parentTaskId: number;
+        readonly parentCallId: string;
+        readonly key: string;
+        readonly callId: string;
+      }
+    | {
         readonly kind: "model";
         readonly purpose: "generation" | "compaction";
         readonly attempt: number;

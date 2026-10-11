@@ -63,6 +63,9 @@ export interface WorkspaceEntityStoreDeps {
   workspaceId: string;
   entityCache: EntityCache;
   executionPublicationPort?: ExecutionPublicationPort;
+  resolveNativeOwner: (
+    input: EntityActivationInput
+  ) => { incarnation: string; generation: number } | null;
   resolveDurableWorkQueues: (
     input: EntityActivationInput
   ) => import("@vibestudio/shared/durableWork").DurableWorkQueue[];
@@ -263,7 +266,11 @@ export class WorkspaceEntityStore {
    * The ONLY sanctioned way to activate a WorkspaceDO-backed entity.
    */
   private activationCommand(input: EntityActivationInput) {
-    return { ...input, durableWorkQueues: this.deps.resolveDurableWorkQueues(input) };
+    return {
+      ...input,
+      nativeOwner: this.deps.resolveNativeOwner(input),
+      durableWorkQueues: this.deps.resolveDurableWorkQueues(input),
+    };
   }
 
   private async activateCommitted(input: EntityActivateInput): Promise<EntityRecord> {

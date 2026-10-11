@@ -152,7 +152,7 @@ describe("DODispatch", () => {
     dispatch.setExecutableAdmissionResolver(() => ({
       executableVersion: "test-executable",
       incarnationVersion: "test-executable",
-      props: { stateArgs: null, image: null },
+      props: { nativeOwner: null, stateArgs: null, image: null },
     }));
     dispatch.setAuthorityAttester(() => testAttestation());
     dispatch.setAuthorityParentRunner(async (_receiverRuntimeId, _authorization, invoke) =>
@@ -198,7 +198,7 @@ describe("DODispatch", () => {
       guarded.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
       guarded.setTokenManager(new TokenManager());
       guarded.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
@@ -268,7 +268,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       await expect(dispatch.dispatch(makeRef(), "ping")).rejects.toThrow(
@@ -290,7 +290,7 @@ describe("DODispatch", () => {
       guarded.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
       guarded.setTokenManager(new TokenManager());
       guarded.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
@@ -337,7 +337,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
       const ref = makeRef();
       const targetId = `do:${ref.source}:${ref.className}:${ref.objectKey}`;
@@ -382,7 +382,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
       dispatch.setWorkReadyObserver(observer);
 
@@ -457,7 +457,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       let settled = false;
@@ -553,7 +553,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       let settled = false;
@@ -609,7 +609,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       await expect(dispatch.dispatchAlarm(makeRef())).rejects.toThrow("Invalid __alarm result");
@@ -629,7 +629,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       await expect(dispatch.dispatchAlarm(makeRef())).resolves.toEqual({ nextAlarm: null });
@@ -661,7 +661,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       const pending = dispatch.dispatchAlarm(makeRef());
@@ -738,7 +738,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       const pending = dispatch.dispatchAlarm(makeRef(), controller.signal);
@@ -778,7 +778,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
       dispatch.setAuthorityAttester(() => authorization);
       dispatch.setAuthorityParentRunner(async (receiverRuntimeId, scopedAuthorization, invoke) => {
@@ -828,7 +828,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       const ref = makeRef();
@@ -869,7 +869,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       const ref = makeRef();
@@ -905,7 +905,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       const ref = makeRef();
@@ -969,7 +969,7 @@ describe("DODispatch", () => {
       dispatch.setExecutableAdmissionResolver(() => ({
         executableVersion: "test-executable",
         incarnationVersion: "test-executable",
-        props: { stateArgs: null, image: null },
+        props: { nativeOwner: null, stateArgs: null, image: null },
       }));
 
       await expect(dispatch.dispatch(makeRef(), "resolve")).rejects.toMatchObject({

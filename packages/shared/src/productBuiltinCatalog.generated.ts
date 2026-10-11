@@ -1379,40 +1379,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
-      alarmSourceRegister: {
-        website: {
-          kind: "closed",
-          reason:
-            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
-        },
-        capability: "workspace.runtime-state.manage",
-        tier: "open",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host", "code"],
-        presentation: {
-          title: "Manage running apps and tasks",
-          action: "manage apps, panels, and scheduled tasks that are currently running",
-          description: "Start, stop, or check on apps and tasks running in your workspace",
-          group: "workspace",
-          authorityCategory: {
-            domain: "automation",
-            verb: "manage",
-          },
-        },
-        effect: {
-          kind: "host-capability",
-          website: {
-            kind: "closed",
-            reason:
-              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
-          },
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
       alarmSourcePublish: {
         website: {
           kind: "closed",
@@ -2080,40 +2046,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
             kind: "closed",
             reason:
               "Storage and lifecycle engine entry points are internal implementation authority.",
-          },
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      alarmSourceRegister: {
-        website: {
-          kind: "closed",
-          reason:
-            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
-        },
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: {
-          title: "Manage running apps and tasks",
-          action: "manage apps, panels, and scheduled tasks that are currently running",
-          description: "Start, stop, or check on apps and tasks running in your workspace",
-          group: "workspace",
-          authorityCategory: {
-            domain: "automation",
-            verb: "manage",
-          },
-        },
-        effect: {
-          kind: "host-capability",
-          website: {
-            kind: "closed",
-            reason:
-              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
           },
           capability: "workspace.runtime-state.manage",
           resource: {

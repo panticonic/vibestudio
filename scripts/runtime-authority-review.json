@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:676d980f3eeff0b865cf65b7c451379fa75806b3f8291de6f06c0cc833905914",
+  "censusDigest": "sha256:d77c33d05340fbf63a7a3d01a83ce8365c2af41f8607bfba586bf1236cf85eb8",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -72,10 +72,6 @@
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourcePublish": {
       "review": "exact-native-source-schedule-publication",
       "change": "Accepts schedules only for the authenticated registered source incarnation and increasing publication generation. Null source schedules do not erase independent host wake hints."
-    },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceRegister": {
-      "review": "host-bound-native-source-registration",
-      "change": "Registers the actual active entity's source identity in its existing host-owned wake record. Registration does not restore execution authority from database contents or caller-supplied identity."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceRequest": {
       "review": "host-owned-native-source-checkup-hint",
@@ -393,6 +389,10 @@
       "review": "website-eligible-proxy-dispatch",
       "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
     },
+    "host:credentials.closeWebSocketScope": {
+      "review": "originating-caller-owned-credential-websocket-release",
+      "change": "Adds caller-owned release of the exact credentialed WebSocket scope. Closing cancels and joins pending authorization and transport work; it grants no credential-use authority, which remains bound to the exact credential, destination, caller, and executable at upgrade."
+    },
     "host:credentials.completeCapture": {
       "review": "website-eligible-proxy-dispatch",
       "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
@@ -424,6 +424,10 @@
     "host:credentials.listStoredCredentials": {
       "review": "website-eligible-proxy-dispatch",
       "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
+    },
+    "host:credentials.openWebSocketScope": {
+      "review": "originating-caller-owned-credential-websocket-scope",
+      "change": "Adds one caller-owned scope for a credentialed WebSocket request. Opening does not authorize credential use; the eventual upgrade still requires exact credential, destination, caller, and executable authorization, and scope closure cancels and joins pending work."
     },
     "host:credentials.proxyFetch": {
       "review": "website-eligible-proxy-dispatch",
@@ -924,6 +928,14 @@
     "host:panelRuntime.getAttempt": {
       "review": "exact-panel-attempt-resolution-read",
       "change": "Adds an open, read-only resolution of one opaque attempt reference. The receiver returns bounded lifecycle identity and state without panel mutation or authority acquisition."
+    },
+    "host:presence.markPanelActive": {
+      "review": "write-classified-panel-presence-mutation",
+      "change": "Classifies marking one panel active as a write. Existing panel.presence.update capability, gated presence.control tier, and caller principals remain unchanged."
+    },
+    "host:presence.markPanelsOwned": {
+      "review": "write-classified-panel-ownership-mutation",
+      "change": "Classifies claiming panel ownership as a write. Existing panel.presence.update capability, gated presence.control tier, and caller principals remain unchanged."
     },
     "host:permissions.listPendingRequests": {
       "review": "bounded-waiting-authority-request-read",
@@ -1636,10 +1648,6 @@
     "host:workspace-state.alarmSourcePublish": {
       "review": "authenticated-native-source-schedule-relay",
       "change": "Publishes only the authenticated caller's registered native source incarnation and generation to the canonical Workspace receiver. Preserves independent host hints and refuses stale schedules."
-    },
-    "host:workspace-state.alarmSourceRegister": {
-      "review": "authenticated-active-native-source-registration",
-      "change": "Resolves the current active caller's exact entity identity before registering its native wake source. Restored storage and inbound payloads cannot manufacture a current execution owner."
     },
     "host:workspace-state.panel.updateTitle#capability:context.boundary": {
       "review": "receiver-owned-context-boundary-principals",

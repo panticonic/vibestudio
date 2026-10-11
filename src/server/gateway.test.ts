@@ -95,7 +95,11 @@ describe("Gateway lifecycle", () => {
     const admission = {
       executableVersion: "sealed-code",
       incarnationVersion: "sealed-object",
-      props: { stateArgs: { instructions: "界".repeat(128 * 1024) }, image: null },
+      props: {
+        nativeOwner: null,
+        stateArgs: { instructions: "界".repeat(128 * 1024) },
+        image: null,
+      },
     };
     const getDoAdmission = vi.fn(() => admission);
     gateway = new Gateway({

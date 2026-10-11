@@ -182,9 +182,12 @@ export class DurableObjectExecutionReadiness {
         for (const child of Object.values(value)) requireFrozen(child);
       };
       requireFrozen(record);
-      identity = [record.activeExecutionDigest, canonicalJson(record.activeAuthority)].join(
-        "\u0000"
-      );
+      identity = [
+        record.activeExecutionDigest,
+        canonicalJson(record.activeAuthority),
+        record.authoritySessionId,
+        canonicalJson(record.nativeOwner ?? null),
+      ].join("\u0000");
       this.publicationKeys.set(record, identity);
     }
     return `${identity}\u0000${this.deps.getBootGeneration?.() ?? 0}`;
@@ -194,6 +197,8 @@ export class DurableObjectExecutionReadiness {
     return [
       record.activeExecutionDigest,
       canonicalJson(record.activeAuthority),
+      record.authoritySessionId,
+      canonicalJson(record.nativeOwner ?? null),
       this.deps.getBootGeneration?.() ?? 0,
     ].join("\u0000");
   }

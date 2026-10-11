@@ -65,6 +65,18 @@ export class WakePublicationStore {
     });
   }
 
+  /** Capability removal and retirement erase scheduling, preserving claim counters. */
+  unregister(key: WakeOwnerKey): void {
+    this.storage.transactionSync(() => {
+      this.storage.sql.exec(
+        "DELETE FROM state WHERE key = ?",
+        `alarm-source:${JSON.stringify([key.source, key.className, key.objectKey])}`
+      );
+      this.forgetRequest(key);
+      this.clearAlarm(key);
+    });
+  }
+
   /** A clear retains its revision. Equal replays repair a lost derived row without releasing a live claim. */
   publish(key: WakeOwnerKey, publication: WakePublication): "accepted" | "duplicate" | "stale" {
     this.assertActive(key);

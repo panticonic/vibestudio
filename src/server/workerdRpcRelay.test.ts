@@ -78,7 +78,7 @@ describe("workerdRpcRelay", () => {
   const resolveExecutableAdmission = () => ({
     executableVersion: "version",
     incarnationVersion: "version",
-    props: { stateArgs: null, image: null },
+    props: { nativeOwner: null, stateArgs: null, image: null },
   });
 
   it("POSTs an envelope to __rpc, stamps the dispatch secret, and unwraps the result", async () => {

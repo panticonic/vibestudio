@@ -282,6 +282,7 @@ beforeEach(() => {
           className,
           version: 1,
           freshSchemaFingerprint: `fixture:${className}`,
+          nativeOwner: false,
           durableWorkQueues: [],
         });
       }
@@ -353,6 +354,7 @@ describe("WorkerdManager", () => {
       className: "BoardDO",
       version,
       freshSchemaFingerprint: fingerprint,
+      nativeOwner: false,
       durableWorkQueues: [],
     });
 
@@ -908,6 +910,44 @@ describe("WorkerdManager", () => {
       generation: current.generation + 1,
     });
     await reopened.shutdown();
+  });
+
+  it("retains the replacement fence until incarnation publication succeeds and replays a lost acknowledgement without rotating storage again", async () => {
+    const deps = createMockDeps();
+    const ref = { source: "workers/agent", className: "Agent", objectKey: "publication-debt" };
+    const published: Array<{ incarnation: string; generation: number }> = [];
+    let failReply = true;
+    const manager = new WorkerdManager({
+      ...deps,
+      republishStorageOwner: async (target) => {
+        expect(target).toEqual(ref);
+        published.push(manager.durableObjectStorageIncarnation(target));
+        if (failReply) throw new Error("original publication reply failure");
+      },
+    });
+    try {
+      const before = manager.durableObjectStorageIncarnation(ref);
+      await expect(manager.resetDOStorage(ref, "replace native storage")).rejects.toThrow(
+        "original publication reply failure"
+      );
+      const internals = manager as unknown as {
+        readOpenDurableObjectMaintenance(): Array<{ operationId: string; step: string }>;
+      };
+      const [debt] = internals.readOpenDurableObjectMaintenance();
+      expect(debt?.step).toBe("replaced");
+      expect(published).toEqual([
+        { incarnation: debt!.operationId, generation: before.generation + 1 },
+      ]);
+      failReply = false;
+      await expect(manager.resetDOStorage(ref, "join retained publication")).resolves.toEqual({
+        operationId: debt!.operationId,
+      });
+      expect(published[1]).toEqual(published[0]);
+      expect(internals.readOpenDurableObjectMaintenance()).toEqual([]);
+      expect(manager.durableObjectStorageIncarnation(ref)).toEqual(published[0]);
+    } finally {
+      await manager.shutdown();
+    }
   });
 
   it("resumes after replacement failure and retains only the five newest backups", async () => {

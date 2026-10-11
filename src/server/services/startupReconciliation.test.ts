@@ -72,6 +72,7 @@ describe("runStartupReconciliation", () => {
   it("hydrates active entities, GCs expired retired rows, and marks incomplete cleanups complete", async () => {
     // Seed: one active panel entity.
     workspaceDO.entityActivate({
+      nativeOwner: null,
       durableWorkQueues: [],
       kind: "panel",
       source: { repoPath: "panels/chat", effectiveVersion: "v1" },
@@ -81,6 +82,7 @@ describe("runStartupReconciliation", () => {
 
     // Seed: a retired entity from BEFORE the grace window (will be GC'd).
     const expiredRetired = workspaceDO.entityActivate({
+      nativeOwner: null,
       durableWorkQueues: [],
       kind: "panel",
       source: { repoPath: "panels/old", effectiveVersion: "v1" },
@@ -98,6 +100,7 @@ describe("runStartupReconciliation", () => {
 
     // Seed: a recently-retired entity (still within grace; survives).
     const recentRetired = workspaceDO.entityActivate({
+      nativeOwner: null,
       durableWorkQueues: [],
       kind: "panel",
       source: { repoPath: "panels/recent", effectiveVersion: "v1" },
@@ -110,6 +113,7 @@ describe("runStartupReconciliation", () => {
 
     // Seed: a retired entity with cleanup_complete=0 (simulates crash mid-cleanup).
     const incompleteCleanup = workspaceDO.entityActivate({
+      nativeOwner: null,
       durableWorkQueues: [],
       kind: "panel",
       source: { repoPath: "panels/crash", effectiveVersion: "v1" },
@@ -156,6 +160,7 @@ describe("runStartupReconciliation", () => {
 
   it("retains incomplete canonical cleanup when the shared resource owner fails after restart", async () => {
     const record = workspaceDO.entityActivate({
+      nativeOwner: null,
       durableWorkQueues: [],
       kind: "panel",
       source: { repoPath: "panels/failed", effectiveVersion: "one" },
@@ -184,6 +189,7 @@ describe("runStartupReconciliation", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(record.id), failure);
     expect(() =>
       workspaceDO.entityActivate({
+        nativeOwner: null,
         durableWorkQueues: [],
         kind: "panel",
         source: record.source,
@@ -210,6 +216,7 @@ describe("runStartupReconciliation", () => {
       entityCache,
     });
     const concurrent = workspaceDO.entityActivate({
+      nativeOwner: null,
       durableWorkQueues: [],
       kind: "panel",
       source: { repoPath: "panels/concurrent", effectiveVersion: "v1" },
@@ -263,6 +270,7 @@ describe("runStartupReconciliation", () => {
 
   it("restores active runtime images before lifecycle recovery", async () => {
     workspaceDO.entityActivate({
+      nativeOwner: null,
       durableWorkQueues: [],
       kind: "do",
       source: { repoPath: "workers/agent-worker", effectiveVersion: "v1" },

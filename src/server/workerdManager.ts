@@ -136,11 +136,12 @@ export interface DurableObjectPublishedSchemaDescriptor {
   version: number;
   freshSchemaFingerprint: string;
   durableWorkQueues: readonly DurableWorkQueue[];
+  nativeOwner: boolean;
 }
 
 type DurableObjectRuntimeSchemaDescriptor = DurableObjectPublishedSchemaDescriptor;
 
-const SCHEMA_PROBE_CACHE_VERSION = 2;
+const SCHEMA_PROBE_CACHE_VERSION = 3;
 
 interface SchemaProbeBuild {
   source: string;
@@ -312,7 +313,8 @@ function runtimeExecutableVersion(
 
 function runtimeIncarnationVersion(
   image: RuntimeImageRecord,
-  stateArgs?: Record<string, unknown>
+  stateArgs?: Record<string, unknown>,
+  nativeOwner: import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission | null = null
 ): string {
   return crypto
     .createHash("sha256")
@@ -321,6 +323,7 @@ function runtimeIncarnationVersion(
         executionDigest: image.artifact.executionDigest,
         authority: image.authority,
         stateArgs: stateArgs ?? null,
+        nativeOwner,
         image: {
           effectiveVersion: image.artifact.sourceState.effectiveVersion,
           sourceRef: workerSourceRef(image, image.source),
@@ -340,13 +343,15 @@ function freezeAdmissionValue<T>(value: T): T {
 
 function doAdmission(
   image: RuntimeImageRecord,
-  stateArgs?: Record<string, unknown>
+  stateArgs?: Record<string, unknown>,
+  nativeOwner: import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission | null = null
 ): DoExecutableAdmission {
   const ownedStateArgs = stateArgs ? structuredClone(stateArgs) : undefined;
   return freezeAdmissionValue({
     executableVersion: runtimeExecutableVersion(image),
-    incarnationVersion: runtimeIncarnationVersion(image, ownedStateArgs),
+    incarnationVersion: runtimeIncarnationVersion(image, ownedStateArgs, nativeOwner),
     props: {
+      nativeOwner: nativeOwner ? structuredClone(nativeOwner) : null,
       stateArgs: ownedStateArgs ?? null,
       image: {
         effectiveVersion: image.artifact.sourceState.effectiveVersion,
@@ -485,6 +490,7 @@ export interface WorkerdManagerDeps {
   /** State directory — used for DO storage (localDisk). */
   statePath: string;
   executionPublicationPort?: ExecutionPublicationPort;
+  republishStorageOwner?: (ref: DORef) => Promise<void>;
   /** Route registry for `/_r/` dispatch — optional; when absent, route
    *  registration is a no-op and routes in package manifests have no effect. */
   routeRegistry?: RouteRegistry;
@@ -1325,7 +1331,7 @@ export class WorkerdManager {
     this.doObjectBuilds.set(doObjectBuildKey(source, className, record.key), {
       imageId: image.id,
       buildKey: image.artifact.buildKey,
-      admission: doAdmission(image, stateArgs),
+      admission: doAdmission(image, stateArgs, this.nativeOwnerAdmission(record)),
       ...(image.scopeRef ? { scopeRef: image.scopeRef } : {}),
     });
     this.registerDoEgressCaller(source, className, image);
@@ -2062,7 +2068,7 @@ export class WorkerdManager {
         admission = freezeAdmissionValue({
           executableVersion: version,
           incarnationVersion: version,
-          props: { stateArgs: null, image: null },
+          props: { nativeOwner: null, stateArgs: null, image: null },
         });
         this.doAdmissions.set(probe, admission);
       }
@@ -3999,6 +4005,55 @@ export class WorkerdManager {
     }
   }
 
+  private nativeOwnerAdmission(
+    record: EntityRecord
+  ): import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission | null {
+    const capable = this.hasNativeOwner(
+      record.source.repoPath,
+      record.className!,
+      record.activeExecutionDigest!
+    );
+    if (!capable) {
+      if (record.nativeOwner) throw new Error("Non-native executable retains native ownership");
+      return null;
+    }
+    if (record.status !== "active") return null;
+    if (!record.nativeOwner || !record.authoritySessionId)
+      throw new Error("Native executable has no activation witness");
+    const canonical = this.durableObjectStorageIncarnation({
+      source: record.source.repoPath,
+      className: record.className!,
+      objectKey: record.key,
+    });
+    if (canonicalJson(canonical) !== canonicalJson(record.nativeOwner))
+      throw new Error("Native activation witness does not match storage incarnation");
+    return {
+      ...canonical,
+      runtimeId: record.id,
+      contextId: record.contextId,
+      authoritySessionId: record.authoritySessionId,
+      executionDigest: record.activeExecutionDigest!,
+      effectiveVersion: record.source.effectiveVersion,
+    };
+  }
+
+  hasNativeOwner(source: string, className: string, executionDigest: string): boolean {
+    if (isInternalDOSource(source)) return false;
+    const row = this.doSchemaDescriptorDb
+      .prepare(
+        "SELECT descriptor_json FROM do_schema_descriptors WHERE source = ? AND execution_digest = ? AND class_name = ?"
+      )
+      .get(source, executionDigest, className) as { descriptor_json: string } | undefined;
+    if (!row)
+      throw new RuntimeImageUnavailableError(
+        "Native ownership requires an admitted executable descriptor"
+      );
+    const descriptor = JSON.parse(row.descriptor_json) as DurableObjectPublishedSchemaDescriptor;
+    if (typeof descriptor.nativeOwner !== "boolean")
+      throw new Error("Executable descriptor has no native resource capability");
+    return descriptor.nativeOwner;
+  }
+
   /** Immutable queue ownership evidence, already admitted with this executable.
    * This accessor performs no owner RPC or activation of a disposable object. */
   getDurableWorkQueues(
@@ -4123,7 +4178,8 @@ export class WorkerdManager {
         !Number.isSafeInteger(descriptor.version) ||
         descriptor.version < 1 ||
         typeof descriptor.freshSchemaFingerprint !== "string" ||
-        !descriptor.freshSchemaFingerprint
+        !descriptor.freshSchemaFingerprint ||
+        typeof descriptor.nativeOwner !== "boolean"
       ) {
         throw new Error(
           `${source}:${className} returned a malformed schema descriptor: ${JSON.stringify(descriptor)}`
@@ -4531,7 +4587,21 @@ export class WorkerdManager {
         this.acceptDurableObjectStorageReplacement(row);
         row.step = "replaced";
       }
-      if (row.step === "replaced") this.completeDurableObjectMaintenance(row.operationId);
+      if (row.step === "replaced") {
+        if (!isInternalDOSource(ref.source)) {
+          if (this.deps.republishStorageOwner) await this.deps.republishStorageOwner(ref);
+          else {
+            const binding = this.doObjectBuilds.get(
+              doObjectBuildKey(ref.source, ref.className, ref.objectKey)
+            );
+            if (binding?.admission.props.nativeOwner)
+              throw new Error("Native storage replacement has no publication owner");
+          }
+        }
+        this.updateDurableObjectMaintenance(row.operationId, "published");
+        row.step = "published";
+      }
+      if (row.step === "published") this.completeDurableObjectMaintenance(row.operationId);
     } finally {
       const stillOpen = this.doMaintenanceDb
         .prepare(`SELECT 1 AS open FROM do_maintenance WHERE operation_id = ? AND status = 'open'`)

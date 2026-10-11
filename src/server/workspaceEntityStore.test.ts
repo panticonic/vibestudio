@@ -35,6 +35,7 @@ function makeStore(
     doDispatch,
     workspaceId: "ws_1",
     entityCache,
+    resolveNativeOwner: () => null,
     resolveDurableWorkQueues,
     materializeExecution,
   });
@@ -63,8 +64,41 @@ describe("WorkspaceEntityStore", () => {
     await store.activate(input);
     expect(queues).toHaveBeenCalledExactlyOnceWith(input);
     expect(calls).toEqual([
-      { method: "entityActivate", args: [{ ...input, durableWorkQueues: ["channel-delivery"] }] },
+      {
+        method: "entityActivate",
+        args: [{ ...input, nativeOwner: null, durableWorkQueues: ["channel-delivery"] }],
+      },
     ]);
+  });
+
+  it("seals native incarnation ownership in the same activation command", async () => {
+    const incarnation = { incarnation: "native-storage", generation: 1 };
+    const dispatch = vi.fn(async (_ref, _method, input) => ({
+      ...RECORD,
+      nativeOwner: input.nativeOwner,
+    }));
+    const store = new WorkspaceEntityStore({
+      doDispatch: { dispatch } as unknown as DODispatch,
+      workspaceId: "ws_1",
+      entityCache: new EntityCache(),
+      resolveNativeOwner: () => incarnation,
+      resolveDurableWorkQueues: () => [],
+      materializeExecution: async () => undefined,
+    });
+    const input = {
+      kind: "do" as const,
+      source: RECORD.source,
+      contextId: RECORD.contextId,
+      className: "EvalDO",
+      key: RECORD.key,
+    };
+    const result = await store.activate(input);
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.anything(), "entityActivate", {
+      ...input,
+      nativeOwner: incarnation,
+      durableWorkQueues: [],
+    });
+    expect(result.nativeOwner).toEqual(incarnation);
   });
 
   it("commits cleanup against the exact captured retired authority lifetime", async () => {
@@ -83,6 +117,7 @@ describe("WorkspaceEntityStore", () => {
       doDispatch: { dispatch } as unknown as DODispatch,
       workspaceId: "ws_1",
       entityCache: new EntityCache(),
+      resolveNativeOwner: () => null,
       resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
       executionPublicationPort: {
@@ -214,6 +249,7 @@ describe("WorkspaceEntityStore", () => {
         method: "entityActivate",
         args: [
           {
+            nativeOwner: null,
             durableWorkQueues: [],
             kind: "do",
             source: RECORD.source,
@@ -640,6 +676,7 @@ describe("WorkspaceEntityStore", () => {
       doDispatch: { dispatch } as unknown as DODispatch,
       workspaceId: "ws_1",
       entityCache,
+      resolveNativeOwner: () => null,
       resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
       executionPublicationPort: {
@@ -684,6 +721,7 @@ describe("WorkspaceEntityStore", () => {
       doDispatch: { dispatch: async () => RECORD } as unknown as DODispatch,
       workspaceId: "ws_1",
       entityCache,
+      resolveNativeOwner: () => null,
       resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
       executionPublicationPort: {

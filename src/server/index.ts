@@ -796,6 +796,25 @@ async function main() {
       entityCache,
       executionPublicationPort: executionPublicationJournal,
       materializeExecution: (record) => durableObjectExecutionReadiness.materialize(record),
+      resolveNativeOwner: (input) => {
+        if (input.kind !== "do") return null;
+        if (!input.className || !input.activeExecutionDigest)
+          throw new Error("Native publication requires an exact executable");
+        const manager = assertPresent(
+          container.get<import("./workerdManager.js").WorkerdManager>("workerdManager")
+        );
+        return manager.hasNativeOwner(
+          input.source.repoPath,
+          input.className,
+          input.activeExecutionDigest
+        )
+          ? manager.durableObjectStorageIncarnation({
+              source: input.source.repoPath,
+              className: input.className,
+              objectKey: input.key,
+            })
+          : null;
+      },
       resolveDurableWorkQueues: (input) => {
         if (input.kind !== "do") return [];
         if (!input.className || !input.activeExecutionDigest) {
@@ -6549,6 +6568,34 @@ async function main() {
     },
     ensureUserlandDoPrepared: (ref, witness) =>
       durableObjectExecutionReadiness.ensurePrepared(ref, witness),
+    republishStorageOwner: async (ref) => {
+      const id = canonicalEntityId({
+        kind: "do",
+        source: ref.source,
+        className: ref.className,
+        key: ref.objectKey,
+      });
+      const store = ensureEntityStore(
+        assertPresent(container.get<import("./doDispatch.js").DODispatch>("doDispatch"))
+      );
+      const record = await store.resolveInvocationRecord(id);
+      if (!record || record.status !== "active") return;
+      await store.activate({
+        kind: record.kind,
+        source: record.source,
+        activeBuildKey: record.activeBuildKey,
+        activeExecutionDigest: record.activeExecutionDigest,
+        activeAuthority: record.activeAuthority,
+        executionAuthority: record.executionAuthority,
+        contextId: record.contextId,
+        className: record.className,
+        key: record.key,
+        stateArgs: record.stateArgs,
+        agentBinding: record.agentBinding,
+        parentId: record.parentId,
+        ownerUserId: record.ownerUserId,
+      });
+    },
     onManagerStarted: (manager) => {
       workerdManagerForGateway = manager;
     },

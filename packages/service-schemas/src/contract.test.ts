@@ -503,6 +503,7 @@ describe("service schema contracts", () => {
           file !== "problemReportBundle.ts" &&
           file !== "usageAnalytics.ts" &&
           file !== "nativeInvocation.ts" &&
+          file !== "agenticMessageTypes.ts" &&
           file !== "rpcCausality.ts" &&
           file !== "rpcFailure.ts" &&
           file !== "governanceQuery.ts" &&

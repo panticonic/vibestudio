@@ -2438,6 +2438,17 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "credentials.closeWebSocketScope": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.proxy",
+      rationale: "Release the originating caller owned transport",
+    },
+    capability: null,
+    presentation: null,
+  },
   "credentials.completeCapture": {
     tier: {
       tier: "gated",
@@ -2605,6 +2616,17 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "secret",
       family: "credentials.read",
       rationale: "Secret-free setup revision; credential contents and use remain separately gated",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "credentials.openWebSocketScope": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.proxy",
+      rationale: "Ownership does not authorize credential use",
     },
     capability: null,
     presentation: null,
@@ -2821,7 +2843,7 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "untrusted-execution",
       family: "developmentClientExecutor.control",
       rationale:
-        "Selected desktop terminates one pending launch with a bounded diagnostic and no widened authority",
+        "Selected desktop terminates one pending launch with its complete failure graph and no widened authority",
     },
     capability: null,
     presentation: null,
@@ -8478,27 +8500,6 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
-  "workspace-state.alarmSourceRegister": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "supervision",
-      family: "workspace-state.supervision",
-      rationale:
-        "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage running apps and tasks",
-      action: "manage apps, panels, and scheduled tasks that are currently running",
-      description: "Start, stop, or check on apps and tasks running in your workspace",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
   "workspace-state.entity.resolve": {
     tier: {
       tier: "open",
@@ -9380,8 +9381,10 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "browserEnvironment.startImportRead": ["service:browserEnvironment.startImportRead"],
   "chromiumFetch.openBrowser": ["credential.use"],
   "corsApproval.authorize": ["network.response.read"],
+  "credentials.closeWebSocketScope": ["credential.use"],
   "credentials.deleteClientConfig": ["account-providers.delete"],
   "credentials.deriveCredential": ["credential.use"],
+  "credentials.openWebSocketScope": ["credential.use"],
   "credentials.proxyFetch": ["credential.use"],
   "credentials.proxyGitHttp": ["credential.use"],
   "credentials.publishFetch": ["credential.use"],

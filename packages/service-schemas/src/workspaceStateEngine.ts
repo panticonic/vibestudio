@@ -64,6 +64,10 @@ const internalSlotCreateInputSchema = SlotCreateInputSchema.extend({
 const entityActivationSchema = z
   .object({
     durableWorkQueues: z.array(z.enum(DURABLE_WORK_QUEUES)),
+    nativeOwner: z
+      .object({ incarnation: z.string().min(1), generation: z.number().int().positive() })
+      .strict()
+      .nullable(),
     kind: entityKindSchema,
     source: entitySourceSchema,
     activeBuildKey: z.string().min(1).optional(),
@@ -109,23 +113,31 @@ const entityCloneProvenanceSchema = z
     sourceExecutionDigest: z.string().min(1),
   })
   .strict();
-const entityReservationSchema = entityActivationSchema.omit({ durableWorkQueues: true }).extend({
-  cloneProvenance: entityCloneProvenanceSchema.optional(),
-  lifecycleOwner: z
-    .object({ contextId: z.string().min(1), entityId: z.string().min(1) })
-    .strict()
-    .optional(),
-});
-const entityRecordSchema = entityActivationSchema.omit({ durableWorkQueues: true }).extend({
-  cloneProvenance: entityCloneProvenanceSchema.optional(),
-  id: z.string().min(1),
-  authoritySessionId: z.string().min(1),
-  createdAt: z.number().int().nonnegative(),
-  status: z.enum(["preparing", "active", "retired"]),
-  retiredAt: z.number().int().nonnegative().optional(),
-  cleanupComplete: z.boolean(),
-  error: z.string().optional(),
-});
+const entityReservationSchema = entityActivationSchema
+  .omit({ durableWorkQueues: true, nativeOwner: true })
+  .extend({
+    cloneProvenance: entityCloneProvenanceSchema.optional(),
+    lifecycleOwner: z
+      .object({ contextId: z.string().min(1), entityId: z.string().min(1) })
+      .strict()
+      .optional(),
+  });
+const entityRecordSchema = entityActivationSchema
+  .omit({ durableWorkQueues: true, nativeOwner: true })
+  .extend({
+    nativeOwner: z
+      .object({ incarnation: z.string().min(1), generation: z.number().int().positive() })
+      .strict()
+      .optional(),
+    cloneProvenance: entityCloneProvenanceSchema.optional(),
+    id: z.string().min(1),
+    authoritySessionId: z.string().min(1),
+    createdAt: z.number().int().nonnegative(),
+    status: z.enum(["preparing", "active", "retired"]),
+    retiredAt: z.number().int().nonnegative().optional(),
+    cleanupComplete: z.boolean(),
+    error: z.string().optional(),
+  });
 const runtimeResourceBindingSchema = z
   .object({
     resource: z.object({ kind: z.string().min(1), id: z.string().min(1) }).strict(),
@@ -350,7 +362,7 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     } as const,
     ...internal("write"),
     description: "Seal a reserved incarnation without admitting ordinary execution.",
-    args: z.tuple([entityActivationSchema.omit({ durableWorkQueues: true })]),
+    args: z.tuple([entityActivationSchema.omit({ durableWorkQueues: true, nativeOwner: true })]),
     returns: entityRecordSchema,
   },
   entityAdvanceExecution: {
@@ -517,17 +529,6 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     ...internal("read"),
     args: z.tuple([]),
     returns: z.array(durableWorkReadyHintSchema),
-  },
-  alarmSourceRegister: {
-    ...workspaceStateMethods.alarmSourceRegister,
-    ...internal("write"),
-    args: z.tuple([
-      LifecycleKeySchema.extend({
-        executionDigest: z.string().regex(/^[a-f0-9]{64}$/),
-        incarnation: z.string().min(1),
-        generation: z.number().int().positive(),
-      }),
-    ]),
   },
   alarmSourcePublish: { ...workspaceStateMethods.alarmSourcePublish },
   alarmSourceRequest: {

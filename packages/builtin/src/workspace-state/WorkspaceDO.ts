@@ -2,12 +2,7 @@ import type {
   ContextCloneDefinition,
   ContextCloneCompletion,
 } from "@vibestudio/shared/runtime/contextEdges";
-import {
-  WakePublicationStore,
-  type WakePublication,
-  type WakeRequest,
-  type StorageIncarnation,
-} from "@vibestudio/durable";
+import { WakePublicationStore, type WakePublication, type WakeRequest } from "@vibestudio/durable";
 /**
  * WorkspaceDO — durable workspace state store.
  *
@@ -83,6 +78,7 @@ interface DbEntityRow {
   class_name: string | null;
   key: string;
   state_args: string | null;
+  native_owner: string | null;
   /** NULL means a self binding when agent_channel_id is present. */
   agent_entity_id: string | null;
   agent_channel_id: string | null;
@@ -281,6 +277,7 @@ const WORKSPACE_ENTITY_COLUMNS = [
   "class_name",
   "key",
   "state_args",
+  "native_owner",
   "agent_entity_id",
   "agent_channel_id",
   "parent_id",
@@ -339,7 +336,7 @@ function assertWorkspaceAlarmColumns(sql: SchemaSqlStorage, label: string): void
 export class WorkspaceDO extends DurableObjectBase {
   static override readonly durableWorkQueues = [] as const;
   static override rpcMethods = workspaceStateEngineMethods;
-  static override schemaVersion = 38;
+  static override schemaVersion = 39;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -368,6 +365,7 @@ export class WorkspaceDO extends DurableObjectBase {
         class_name TEXT,
         key TEXT NOT NULL,
         state_args TEXT,
+        native_owner TEXT,
         agent_entity_id TEXT REFERENCES entities(id),
         agent_channel_id TEXT,
         parent_id TEXT,
@@ -621,7 +619,10 @@ export class WorkspaceDO extends DurableObjectBase {
 
   protected override validateSchema(): void {
     super.validateSchema();
-    assertWorkspaceEntityColumns(this.sql, `${this.constructor.name} v37`);
+    assertWorkspaceEntityColumns(
+      this.sql,
+      `${this.constructor.name} v${WorkspaceDO.schemaVersion}`
+    );
     assertWorkspaceEntityStatuses(
       this.sql,
       ["preparing", "active", "retired"],
@@ -731,7 +732,8 @@ export class WorkspaceDO extends DurableObjectBase {
           });
         }
         if (existing.status === "active") {
-          return this.rowToEntity(existing);
+          this.publishNativeOwner(input, id);
+          return this.rowToEntity(this.readEntityRow(id)!);
         }
         // Preparing -> active preserves its reserved lifetime; completed
         // retirement -> active creates a new authority owner over retained data.
@@ -742,8 +744,10 @@ export class WorkspaceDO extends DurableObjectBase {
           authoritySessionId,
           id
         );
+        this.publishNativeOwner(input, id);
         return this.rowToEntity({
           ...existing,
+          native_owner: input.nativeOwner === null ? null : JSON.stringify(input.nativeOwner),
           agent_entity_id: existing.agent_entity_id,
           agent_channel_id: existing.agent_channel_id,
           authority_session_id: authoritySessionId,
@@ -787,7 +791,8 @@ export class WorkspaceDO extends DurableObjectBase {
       );
       const row = this.readEntityRow(id);
       if (!row) throw new Error(`entityActivate: failed to read row after insert: ${id}`);
-      return this.rowToEntity(row);
+      this.publishNativeOwner(input, id);
+      return this.rowToEntity(this.readEntityRow(id)!);
     });
   }
 
@@ -888,7 +893,8 @@ export class WorkspaceDO extends DurableObjectBase {
     return this.ctx.storage.transactionSync(() => {
       const record = this.advanceEntityExecution(input);
       this.publishDurableWorkOwner(input);
-      return record;
+      this.publishNativeOwner(input, record.id);
+      return this.rowToEntity(this.readEntityRow(record.id)!);
     });
   }
 
@@ -903,7 +909,8 @@ export class WorkspaceDO extends DurableObjectBase {
       inputs.map((input) => {
         const record = this.advanceEntityExecution(input);
         this.publishDurableWorkOwner(input);
-        return record;
+        this.publishNativeOwner(input, record.id);
+        return this.rowToEntity(this.readEntityRow(record.id)!);
       })
     );
   }
@@ -1135,6 +1142,8 @@ export class WorkspaceDO extends DurableObjectBase {
     };
     this.lifecycleLeaseClear(key);
     this.alarmClear(key);
+    this.wakePublications().unregister(key);
+    this.sql.exec("UPDATE entities SET native_owner = NULL WHERE id = ?", row.id);
     this.sql.exec(
       `DELETE FROM durable_work_owners
         WHERE source = ? AND class_name = ? AND object_key = ?`,
@@ -1288,6 +1297,32 @@ export class WorkspaceDO extends DurableObjectBase {
   // do alarms (server-driven; see do_alarms table comment)
   // ─────────────────────────────────────────────────────────────
 
+  /** Native resources belong to the active entity lifetime, including dormant connections. */
+  private publishNativeOwner(input: EntityActivateInput, id: string): void {
+    if (
+      input.nativeOwner !== null &&
+      (input.kind !== "do" || !input.className || !input.activeExecutionDigest)
+    )
+      throw new Error("Native ownership requires an exact sealed Durable Object");
+    if (input.kind !== "do" || !input.className) return;
+    const key = { source: input.source.repoPath, className: input.className, objectKey: input.key };
+    if (input.nativeOwner === null) {
+      const previous = this.readEntityRow(id);
+      if (previous?.native_owner) {
+        this.wakePublications().unregister(key);
+        this.lifecycleLeaseClear(key);
+      }
+    } else {
+      this.wakePublications().register(key, input.nativeOwner);
+      this.lifecycleLeaseUpsert({ ...key, detail: { owner: "pi" } });
+    }
+    this.sql.exec(
+      "UPDATE entities SET native_owner = ? WHERE id = ?",
+      input.nativeOwner === null ? null : JSON.stringify(input.nativeOwner),
+      id
+    );
+  }
+
   private publishDurableWorkOwner(input: EntityActivateInput): void {
     const queues = [...new Set(input.durableWorkQueues)].sort();
     if (queues.some((queue) => !DURABLE_WORK_QUEUES.includes(queue))) {
@@ -1360,33 +1395,6 @@ export class WorkspaceDO extends DurableObjectBase {
       );
       if (!entity || entity.status !== "active")
         throw new Error("Wake source is not an active Durable Object");
-    });
-  }
-
-  @schemaRpc()
-  alarmSourceRegister(key: LifecycleKey & StorageIncarnation & { executionDigest: string }): {
-    incarnation: string;
-    entity: EntityRecord;
-  } {
-    this.assertLifecycleKey(key);
-    const entity = this.entityResolveActive(
-      canonicalEntityId({
-        kind: "do",
-        source: key.source,
-        className: key.className,
-        key: key.objectKey,
-      })
-    );
-    if (
-      !entity ||
-      entity.status !== "active" ||
-      entity.activeExecutionDigest !== key.executionDigest
-    )
-      throw new Error("Wake source does not match its active execution image");
-    return this.ctx.storage.transactionSync(() => {
-      const incarnation = this.wakePublications().register(key, key);
-      this.lifecycleLeaseUpsert({ ...key, detail: { owner: "pi" } });
-      return { incarnation, entity };
     });
   }
 
@@ -3537,6 +3545,7 @@ export class WorkspaceDO extends DurableObjectBase {
       status: row.status,
       cleanupComplete: row.cleanup_complete === 1,
     };
+    if (row.native_owner) record.nativeOwner = JSON.parse(row.native_owner);
     if (row.clone_provenance) record.cloneProvenance = JSON.parse(row.clone_provenance);
     if (row.class_name) record.className = row.class_name;
     if (row.state_args !== null) record.stateArgs = JSON.parse(row.state_args);

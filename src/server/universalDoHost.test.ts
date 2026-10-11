@@ -85,7 +85,7 @@ export class CounterDO extends DurableObject {
   async fetch(request) {
     if (this.env.VIBESTUDIO_SCHEMA_PROBE === true) {
       return Response.json({
-        className: "CounterDO", version: 1, durableWorkQueues: [],
+        className: "CounterDO", version: 1, nativeOwner: false, durableWorkQueues: [],
         freshSchemaFingerprint: JSON.stringify([...this.ctx.storage.sql.exec(
           "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name = 'c' ORDER BY type, name"
         )]),
@@ -145,7 +145,7 @@ export class SchemaProbeDO extends DurableObject {
       "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name IN ('cards', 'cards_title') ORDER BY type, name"
     )]);
     const descriptor = {
-      className: "SchemaProbeDO", version: 1, freshSchemaFingerprint: shape, durableWorkQueues: [],
+      className: "SchemaProbeDO", version: 1, freshSchemaFingerprint: shape, nativeOwner: false, durableWorkQueues: [],
     };
     if (this.env.VIBESTUDIO_SCHEMA_PROBE === true) {
       let outboundSucceeded = false;

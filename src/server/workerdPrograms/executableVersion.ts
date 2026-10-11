@@ -3,6 +3,9 @@ export interface DoExecutableAdmission {
   readonly executableVersion: string;
   readonly incarnationVersion: string;
   readonly props: {
+    readonly nativeOwner:
+      | import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission
+      | null;
     readonly stateArgs: Readonly<Record<string, unknown>> | null;
     readonly image: { readonly effectiveVersion: string; readonly sourceRef: string } | null;
   };

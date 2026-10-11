@@ -35,6 +35,17 @@ export const nativeInvocationSourceSchema = z
     operation: z.discriminatedUnion("kind", [
       z
         .object({
+          kind: z.literal("nested-tool"),
+          parentTaskId: recordId,
+          parentCallId: identity,
+          key: identity,
+          callId: identity,
+          name: identity,
+          argumentsDigest: digest,
+        })
+        .strict(),
+      z
+        .object({
           kind: z.literal("direct-tool"),
           directEntryId: recordId,
           callId: identity,
@@ -75,6 +86,15 @@ export const nativeInvocationIdentitySchema = z
       .strict(),
     operation: z.discriminatedUnion("kind", [
       z
+        .object({
+          kind: z.literal("nested-tool"),
+          parentTaskId: recordId,
+          parentCallId: identity,
+          key: identity,
+          callId: identity,
+        })
+        .strict(),
+      z
         .object({ kind: z.literal("direct-tool"), directEntryId: recordId, callId: identity })
         .strict(),
       z.object({ kind: z.literal("tool"), assistantEntryId: recordId, callId: identity }).strict(),
@@ -98,24 +118,32 @@ export function nativeInvocationIdentity(source: NativeInvocationSource): Native
     },
     task: { conversationId: source.task.conversationId, taskId: source.task.taskId },
     operation:
-      source.operation.kind === "tool"
+      source.operation.kind === "nested-tool"
         ? {
-            kind: "tool",
-            assistantEntryId: source.operation.assistantEntryId,
+            kind: "nested-tool",
+            parentTaskId: source.operation.parentTaskId,
+            parentCallId: source.operation.parentCallId,
+            key: source.operation.key,
             callId: source.operation.callId,
           }
-        : source.operation.kind === "direct-tool"
+        : source.operation.kind === "tool"
           ? {
-              kind: "direct-tool",
-              directEntryId: source.operation.directEntryId,
+              kind: "tool",
+              assistantEntryId: source.operation.assistantEntryId,
               callId: source.operation.callId,
             }
-          : {
-              kind: "model",
-              purpose: source.operation.purpose,
-              attempt: source.operation.attempt,
-              cutoff: source.operation.cutoff,
-            },
+          : source.operation.kind === "direct-tool"
+            ? {
+                kind: "direct-tool",
+                directEntryId: source.operation.directEntryId,
+                callId: source.operation.callId,
+              }
+            : {
+                kind: "model",
+                purpose: source.operation.purpose,
+                attempt: source.operation.attempt,
+                cutoff: source.operation.cutoff,
+              },
   };
 }
 
@@ -161,10 +189,18 @@ export function nativeInvocationId(source: NativeInvocationIdentity): string {
     source.owner.authoritySessionId,
     source.task.conversationId,
     source.task.taskId,
-    source.operation.kind === "tool"
-      ? ["tool", source.operation.assistantEntryId, source.operation.callId]
-      : source.operation.kind === "direct-tool"
-        ? ["direct-tool", source.operation.directEntryId, source.operation.callId]
-        : ["model", source.operation.purpose, source.operation.attempt, source.operation.cutoff],
+    source.operation.kind === "nested-tool"
+      ? [
+          "nested-tool",
+          source.operation.parentTaskId,
+          source.operation.parentCallId,
+          source.operation.key,
+          source.operation.callId,
+        ]
+      : source.operation.kind === "tool"
+        ? ["tool", source.operation.assistantEntryId, source.operation.callId]
+        : source.operation.kind === "direct-tool"
+          ? ["direct-tool", source.operation.directEntryId, source.operation.callId]
+          : ["model", source.operation.purpose, source.operation.attempt, source.operation.cutoff],
   ])}`;
 }

@@ -792,3 +792,55 @@ admission. Registered sources with undelivered first schedules receive recovery
 opportunities during worker-generation adoption. Exact artifact schema evidence
 is keyed by execution digest. These decisions close the remaining boundary
 questions; their shipping integration and product preservation are still gates.
+
+## Native owner activation and storage replacement
+
+A sealed executable declares whether it owns a native Pi session. Entity
+activation publishes its canonical host storage incarnation, wake source, and
+native resource obligation in the same WorkspaceDO transaction. Object props
+carry the exact entity, authority lifetime, executable, and storage generation
+witness; opening a native session requires no registration RPC. The obligation
+belongs to the active entity lifetime, including dormant connections. Ordinary
+connection release preserves it; retirement and capability removal erase it.
+Lifecycle epoch receipts separately prove release of actual live resources.
+
+Storage maintenance retains its target relay fence through replacement and
+publication: `replaced -> published -> complete`. Publication updates the
+entity witness, scheduling identity, and object props before admission reopens.
+A lost publication reply resumes the same incarnation without repeating file
+replacement or rotating its generation. Restoring older data can rebind its
+native storage receipt only to the same execution lifetime with an authoritative
+strictly newer storage generation; it cannot authorize a different owner.
+
+Native execution clones start with fresh session storage. Their runnable tasks,
+model/tool receipts, and channel ownership are execution-lifetime resources;
+copying SQLite bytes would duplicate effects and source authority. Transcript
+transfer remains the existing semantic conversation operation. This capability
+rule also applies to native owners without an agent-channel binding. Ordinary
+DOs retain snapshot cloning, and external agent relationship clones retain their
+existing fresh-storage contract.
+
+WorkspaceDO schema 39 adds the native ownership column. This pre-release
+contract requires fresh workspace state; older schemas are rejected without a
+compatibility path.
+
+## Upstream native tool and failure contracts
+
+The reviewed upstream library closure through `96abe9a5ad45005cae34ed1c52d42f71fc88bedc`
+uses tagged model, direct, and nested tool tasks. Native tool implementations
+return `output`; provider messages retain their existing `content` fields.
+Nested invocation attribution comes from the actual parent task, call, and
+canonical nested-call record. Its structured terminal result is captured during
+its owning commit, before the parent's scoped record can retire.
+
+A storage failure closes the session and rejects pending callers with the
+original failure as the cause. Product admissions do not retry a closed session.
+Explicit entity lifecycle operations join native session, backend, and provider
+closure before recovering a retained obligation. Recovery tests reopen real
+persisted storage; an in-memory fake is not unsealed to simulate recovery.
+
+An unavailable definition before external intent returns the ordinary unavailable
+tool result. An invocation that already owns effects keeps its cleanup obligation;
+its waiting cancellation caller receives the unavailable cleanup failure, and
+restoring the exact definition allows cleanup to finish. No legacy task-input
+reader, tool-result alias, or automatic orphan terminal is retained.

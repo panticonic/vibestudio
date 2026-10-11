@@ -573,10 +573,6 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         assertOwnLifecycleKey(_ctx.caller, input, "clear a lifecycle lease for");
         await receiver.lifecycleLeaseClear(input);
       },
-      alarmSourceRegister: async (ctx, [input]) => {
-        assertOwnLifecycleKey(ctx.caller, input, "register a wake source for");
-        return receiver.alarmSourceRegister({ ...input, ...deps.storageIncarnation(input) });
-      },
       alarmSourcePublish: async (ctx, [input]) => {
         assertOwnLifecycleKey(ctx.caller, input, "publish a wake for");
         if (input.incarnation !== deps.storageIncarnation(input).incarnation) return "stale";

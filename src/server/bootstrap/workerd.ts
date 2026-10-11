@@ -62,6 +62,7 @@ export interface WorkerdBootstrapDeps {
   /** Restore the exact active entity incarnation before any userland DO call. */
   ensureUserlandDoReady(ref: DORef): Promise<void>;
   ensureUserlandDoPrepared(ref: DORef, witness: LifecycleCloneInput): Promise<void>;
+  republishStorageOwner?: (ref: DORef) => Promise<void>;
   onManagerStarted(manager: WorkerdManager): void;
   /** Sole owner of source-build publication into durable and derived runtime state. */
   publishSourceBuild(
@@ -278,6 +279,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         statePath: deps.statePath,
         getInternalDoEnv: deps.getInternalDoEnv,
         executionPublicationPort: deps.executionPublicationPort,
+        republishStorageOwner: deps.republishStorageOwner,
         routeRegistry: deps.routeRegistry,
         getProxyPort: async (caller) => {
           await deps.egressProxy.dropCaller(caller.runtime.id);

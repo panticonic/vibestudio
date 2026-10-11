@@ -51,6 +51,7 @@ async function createPreEngineDatabase() {
 
 function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityReserve"]>[0]> = {}) {
   return {
+    nativeOwner: null,
     durableWorkQueues: [],
     kind: "panel" as const,
     source: { repoPath: SOURCE, effectiveVersion: VERSION },
@@ -71,6 +72,7 @@ function preparedPanelInput(overrides: Partial<Parameters<WorkspaceDO["entityAct
 
 function doInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]> = {}) {
   return {
+    nativeOwner: null,
     durableWorkQueues: [],
     kind: "do" as const,
     source: { repoPath: SOURCE, effectiveVersion: VERSION },
@@ -422,6 +424,7 @@ describe("WorkspaceDO.entityActivate", () => {
       instance.entityAdvanceExecution({
         ...input,
         source: { repoPath: "workers/example", effectiveVersion: "ev-worker" },
+        nativeOwner: null,
         durableWorkQueues: [],
         activeBuildKey: "b".repeat(64),
         activeExecutionDigest: "a".repeat(64),
@@ -638,6 +641,7 @@ describe("WorkspaceDO.entityActivate", () => {
     const { instance: isolated, sql } = await createTestDO(WorkspaceDOTestable);
     const sessionId = canonicalEntityId({ kind: "session", key: "external" });
     const session = isolated.entityActivate({
+      nativeOwner: null,
       durableWorkQueues: [],
       kind: "session",
       source: { repoPath: "external-agent", effectiveVersion: "" },
@@ -787,6 +791,7 @@ describe("WorkspaceDO.entityActivate", () => {
     instance.entityActivate(panelInput({ key: "p1" }));
     expect(() =>
       instance.entityActivate({
+        nativeOwner: null,
         durableWorkQueues: [],
         kind: "panel",
         source: { repoPath: "panels/other", effectiveVersion: VERSION },
@@ -1724,23 +1729,22 @@ describe("WorkspaceDO lifecycle registry", () => {
     instance.alarmAdoptWorker("driver-1");
   });
 
-  it("admits its exact execution and wake identity together without mutating a refused image", () => {
+  it("publishes native ownership atomically with activation and rolls back an invalid incarnation", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    const entity = instance.entityActivate(
-      doInput({
-        activeBuildKey: "b".repeat(64),
-        activeExecutionDigest: "a".repeat(64),
-        activeAuthority: ACTIVE_AUTHORITY,
-      })
-    );
-    const input = { ...key, incarnation: crypto.randomUUID(), generation: 1 };
+    const identity = { incarnation: crypto.randomUUID(), generation: 1 };
+    const input = doInput({
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+      nativeOwner: identity,
+    });
     expect(() =>
-      instance.alarmSourceRegister({ ...input, executionDigest: "c".repeat(64) })
-    ).toThrow("does not match its active execution image");
+      instance.entityActivate({ ...input, nativeOwner: { ...identity, generation: 0 } })
+    ).toThrow("Invalid storage incarnation");
     expect(instance.alarmSourceList()).toEqual([]);
     expect(instance.lifecycleListLeases()).toEqual([]);
-    const admission = instance.alarmSourceRegister({ ...input, executionDigest: "a".repeat(64) });
-    expect(admission).toEqual({ incarnation: input.incarnation, entity });
+    const entity = instance.entityActivate(input);
+    expect(entity.nativeOwner).toEqual(identity);
     expect(instance.lifecycleListLeases()).toEqual([
       {
         ...key,
@@ -1750,21 +1754,24 @@ describe("WorkspaceDO lifecycle registry", () => {
       },
     ]);
     expect(() =>
-      instance.alarmSourceRegister({
+      instance.entityActivate({
         ...input,
-        generation: 2,
-        incarnation: crypto.randomUUID(),
-        executionDigest: "c".repeat(64),
+        nativeOwner: { incarnation: crypto.randomUUID(), generation: 1 },
       })
-    ).toThrow("does not match its active execution image");
+    ).toThrow("Storage generation identity conflicts");
+    expect(instance.entityResolveActive(entity.id)?.nativeOwner).toEqual(identity);
     expect(
       instance.alarmSourcePublish({
         ...key,
-        incarnation: admission.incarnation,
+        incarnation: identity.incarnation,
         revision: 0,
         wakeAt: null,
       })
     ).toBe("accepted");
+    instance.entityActivate({ ...input, nativeOwner: null });
+    expect(instance.alarmSourceList()).toEqual([]);
+    expect(instance.lifecycleListLeases()).toEqual([]);
+    expect(instance.entityResolveActive(entity.id)).not.toHaveProperty("nativeOwner");
   });
 
   it("acknowledges only captured host wakes while later events survive source null publication", () => {
@@ -1776,12 +1783,15 @@ describe("WorkspaceDO lifecycle registry", () => {
         activeAuthority: ACTIVE_AUTHORITY,
       })
     );
-    const { incarnation } = instance.alarmSourceRegister({
-      ...key,
-      executionDigest: "a".repeat(64),
-      incarnation: crypto.randomUUID(),
-      generation: 1,
-    });
+    const incarnation = crypto.randomUUID();
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
     instance.alarmSourceRequest({ ...key, incarnation });
     const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
     expect(first!.wakeRequest).toEqual({ incarnation, generation: 1 });
@@ -1826,12 +1836,15 @@ describe("WorkspaceDO lifecycle registry", () => {
         activeAuthority: ACTIVE_AUTHORITY,
       })
     );
-    const { incarnation } = instance.alarmSourceRegister({
-      ...key,
-      executionDigest: "a".repeat(64),
-      incarnation: crypto.randomUUID(),
-      generation: 1,
-    });
+    const incarnation = crypto.randomUUID();
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
     instance.alarmSourceRequest({ ...key, incarnation });
     const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
     instance.alarmSet({
@@ -1876,12 +1889,15 @@ describe("WorkspaceDO lifecycle registry", () => {
       })
     );
     owner.alarmAdoptWorker("driver-1");
-    const { incarnation } = owner.alarmSourceRegister({
-      ...key,
-      executionDigest: "a".repeat(64),
-      incarnation: crypto.randomUUID(),
-      generation: 1,
-    });
+    const incarnation = crypto.randomUUID();
+    owner.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
     owner.alarmSourceRequest({ ...key, incarnation });
     const [claim] = owner.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
     const completion = {
@@ -1911,12 +1927,15 @@ describe("WorkspaceDO lifecycle registry", () => {
         activeAuthority: ACTIVE_AUTHORITY,
       })
     );
-    const { incarnation } = instance.alarmSourceRegister({
-      ...key,
-      executionDigest: "a".repeat(64),
-      incarnation: crypto.randomUUID(),
-      generation: 1,
-    });
+    const incarnation = crypto.randomUUID();
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
     instance.alarmSourceRequest({ ...key, incarnation });
     instance.alarmClear(key);
     expect(instance.alarmNextWakeAt(1)).toBe(0);
@@ -1934,12 +1953,15 @@ describe("WorkspaceDO lifecycle registry", () => {
         activeAuthority: ACTIVE_AUTHORITY,
       })
     );
-    const { incarnation } = instance.alarmSourceRegister({
-      ...key,
-      executionDigest: "a".repeat(64),
-      incarnation: crypto.randomUUID(),
-      generation: 1,
-    });
+    const incarnation = crypto.randomUUID();
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
     instance.alarmSourcePublish({ ...key, incarnation, revision: 1, wakeAt: 0 });
     const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
     expect(first).not.toHaveProperty("wakeRequest");
@@ -1984,12 +2006,15 @@ describe("WorkspaceDO lifecycle registry", () => {
         activeAuthority: ACTIVE_AUTHORITY,
       })
     );
-    const { incarnation } = instance.alarmSourceRegister({
-      ...key,
-      executionDigest: "a".repeat(64),
-      incarnation: crypto.randomUUID(),
-      generation: 1,
-    });
+    const incarnation = crypto.randomUUID();
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
     expect(instance.alarmListScheduled()).toEqual([]);
     instance.alarmAdoptWorker("driver-2");
     expect(instance.alarmListScheduled()).toEqual([key]);

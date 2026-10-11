@@ -55,7 +55,7 @@
     "check:runtime-client-methods": "node --import tsx scripts/generate-runtime-client-methods.mjs --check",
     "check:runtime-docs": "pnpm check:runtime-client-methods && node scripts/generate-runtime-docs.mjs --check",
     "generate:host-authority": "node scripts/generate-host-authority-catalog.mjs",
-    "generate:unit-authority": "node scripts/generate-host-authority-catalog.mjs && node scripts/check-explicit-authority-manifests.mjs && node --import tsx scripts/generate-runtime-foundation-ledgers.mjs",
+    "generate:unit-authority": "node scripts/generate-host-authority-catalog.mjs && node --import tsx scripts/check-explicit-authority-manifests.mjs && node --import tsx scripts/generate-runtime-foundation-ledgers.mjs",
     "authority:audit-evidence": "node --import tsx scripts/generate-unit-authority-manifests.mjs --check",
     "authority:apply-suggestions": "node --import tsx scripts/generate-unit-authority-manifests.mjs --apply",
     "generate:runtime-foundations": "node --import tsx scripts/generate-runtime-foundation-ledgers.mjs",

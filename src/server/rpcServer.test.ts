@@ -389,7 +389,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
       ? {
           executableVersion: record.source.effectiveVersion,
           incarnationVersion: record.source.effectiveVersion,
-          props: { stateArgs: null, image: null },
+          props: { nativeOwner: null, stateArgs: null, image: null },
         }
       : null;
   });
@@ -1971,7 +1971,7 @@ describe("RpcServer relay behavior", () => {
     server.setExecutableAdmissionResolver(() => ({
       executableVersion: record.source.effectiveVersion,
       incarnationVersion: record.source.effectiveVersion,
-      props: { stateArgs: null, image: null },
+      props: { nativeOwner: null, stateArgs: null, image: null },
     }));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
@@ -2169,7 +2169,7 @@ describe("RpcServer relay behavior", () => {
     server.setExecutableAdmissionResolver(() => ({
       executableVersion: record.source.effectiveVersion,
       incarnationVersion: record.source.effectiveVersion,
-      props: { stateArgs: null, image: null },
+      props: { nativeOwner: null, stateArgs: null, image: null },
     }));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
@@ -2204,7 +2204,7 @@ describe("RpcServer relay behavior", () => {
     server.setExecutableAdmissionResolver(() => ({
       executableVersion: record.source.effectiveVersion,
       incarnationVersion: record.source.effectiveVersion,
-      props: { stateArgs: null, image: null },
+      props: { nativeOwner: null, stateArgs: null, image: null },
     }));
     entityCache._onActivate(record);
     server.setWorkerdUrl("http://127.0.0.1:1111");

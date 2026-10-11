@@ -191,6 +191,10 @@ export const SlotHistoryRowSchema = z.object({
 });
 
 export const EntityRecordSchema = z.object({
+  nativeOwner: z
+    .object({ incarnation: z.string().min(1), generation: z.number().int().positive() })
+    .strict()
+    .optional(),
   id: z.string(),
   authoritySessionId: z.string().min(1),
   kind: z.enum(["panel", "app", "worker", "do", "session", "shell", "server"]),
@@ -1116,29 +1120,6 @@ export const workspaceStateMethods = defineServiceMethods({
     authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
     access: { sensitivity: "destructive" },
     returns: z.void(),
-  },
-  alarmSourceRegister: {
-    website: {
-      kind: "closed",
-      reason:
-        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
-    } as const,
-    agentFacing: false,
-    capability: "workspace.runtime-state.manage",
-    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "supervision",
-      family: "workspace-state.supervision",
-      rationale:
-        "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
-    },
-    args: z.tuple([LifecycleKeySchema.extend({ executionDigest: z.string().regex(/^[a-f0-9]{64}$/) })]),
-    description: "Admit the exact active execution, release lease, and durable wake source together.",
-    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
-    access: { sensitivity: "write" },
-    returns: z.object({ incarnation: z.string().min(1), entity: EntityRecordSchema }).strict(),
   },
   alarmSourcePublish: {
     website: {

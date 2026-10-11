@@ -257,7 +257,19 @@ export interface EntityCloneProvenance {
   sourceExecutionDigest: string;
 }
 
+export interface NativeOwnerAdmission {
+  runtimeId: string;
+  contextId: string;
+  authoritySessionId: string;
+  incarnation: string;
+  generation: number;
+  executionDigest: string;
+  effectiveVersion: string;
+}
+
 export interface EntityRecord {
+  /** Present only for a sealed native-session owner. */
+  nativeOwner?: { incarnation: string; generation: number };
   cloneProvenance?: EntityCloneProvenance;
   /** Host-owned scope for arbitrary execution launched by this entity. */
   executionAuthority?: import("@vibestudio/rpc").ExecutionAuthorityOrigin;
@@ -349,6 +361,7 @@ export interface EntityActivationInput {
 
 /** Host-sealed activation command; queue ownership commits with executable publication. */
 export interface EntityActivationCommand extends EntityActivationInput {
+  nativeOwner: { incarnation: string; generation: number } | null;
   durableWorkQueues: import("../durableWork.js").DurableWorkQueue[];
 }
 

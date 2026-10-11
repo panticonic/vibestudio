@@ -46,6 +46,8 @@ describe("workspace state entity source identity", () => {
     expect(
       workspaceStateEngineMethods.entityActivate.args.parse([
         {
+          nativeOwner: null,
+          durableWorkQueues: [],
           kind: "session",
           source: { repoPath: "agent-cli", effectiveVersion: "" },
           contextId: "ctx-system-tests",
@@ -54,6 +56,8 @@ describe("workspace state entity source identity", () => {
       ])
     ).toEqual([
       {
+        nativeOwner: null,
+        durableWorkQueues: [],
         kind: "session",
         source: { repoPath: "agent-cli", effectiveVersion: "" },
         contextId: "ctx-system-tests",
@@ -66,14 +70,14 @@ describe("workspace state entity source identity", () => {
     expect(
       workspaceStateEngineMethods.slotCreate.args.parse([
         {
-          slotId: "panel:root",
+          slotId: "panel:tree/root/test",
           parentSlotId: null,
           ownerUserId: "user-verified",
         },
       ])
     ).toEqual([
       {
-        slotId: "panel:root",
+        slotId: "panel:tree/root/test",
         parentSlotId: null,
         ownerUserId: "user-verified",
       },

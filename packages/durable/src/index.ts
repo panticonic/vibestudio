@@ -397,7 +397,8 @@ export abstract class DurableObjectBase {
     if (descriptor)
       validateDurableObjectExecutableCapabilities(
         descriptor,
-        (this.constructor as typeof DurableObjectBase).durableWorkQueues
+        (this.constructor as typeof DurableObjectBase).durableWorkQueues,
+        false
       );
     await installDurableObjectSchema({
       className: this.runtimeClassName,
@@ -423,7 +424,8 @@ export abstract class DurableObjectBase {
     return Response.json(
       durableObjectExecutableDescriptor(
         definition,
-        (this.constructor as typeof DurableObjectBase).durableWorkQueues
+        (this.constructor as typeof DurableObjectBase).durableWorkQueues,
+        false
       )
     );
   }

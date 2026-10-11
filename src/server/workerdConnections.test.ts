@@ -352,7 +352,7 @@ describe("owned workerd HTTP connections", () => {
           resolveExecutableAdmission: () => ({
             executableVersion: "version",
             incarnationVersion: "version",
-            props: { stateArgs: null, image: null },
+            props: { nativeOwner: null, stateArgs: null, image: null },
           }),
         };
         await Promise.all(
@@ -395,7 +395,7 @@ describe("owned workerd HTTP connections", () => {
           resolveExecutableAdmission: () => ({
             executableVersion: "version",
             incarnationVersion: "version",
-            props: { stateArgs: null, image: null },
+            props: { nativeOwner: null, stateArgs: null, image: null },
           }),
         };
         const eof = await streamFromDurableObject(
@@ -481,7 +481,7 @@ describe("owned workerd HTTP connections", () => {
             resolveExecutableAdmission: () => ({
               executableVersion: "version",
               incarnationVersion: "version",
-              props: { stateArgs: null, image: null },
+              props: { nativeOwner: null, stateArgs: null, image: null },
             }),
           },
           controller.signal

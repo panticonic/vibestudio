@@ -912,6 +912,7 @@ describe("internal storage DOs under workerd", () => {
       source: { repoPath: "panels/example", effectiveVersion: "v1" },
       contextId: "ctx-1",
       key: "entry-1",
+      nativeOwner: null,
       durableWorkQueues: [],
     } satisfies EntityActivationCommand;
     const record = (await harness.callDurableObject(ref, "entityActivate", activateInput)) as {
@@ -1052,6 +1053,7 @@ describe("internal storage DOs under workerd", () => {
       doDispatch: dispatch,
       workspaceId: "workspace-retirement",
       entityCache: new EntityCache(),
+      resolveNativeOwner: () => null,
       resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
     });
@@ -1364,6 +1366,7 @@ describe("internal storage DOs under workerd", () => {
         contextId: "ctx-alarm-probe",
         className: probeRef.className,
         key: probeRef.objectKey,
+        nativeOwner: null,
         durableWorkQueues: [],
       } satisfies EntityActivationCommand);
       // Register an already-due alarm directly in WorkspaceDO, then start the

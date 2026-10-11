@@ -44,8 +44,11 @@ import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-u
 import { EvalDO } from "../../../packages/builtin/src/eval-engine/EvalDO.js";
 
 function activatedEntity(input: unknown): EntityRecord {
-  const { durableWorkQueues: _durableWorkQueues, ...spec } =
-    workspaceStateEngineMethods.entityActivate.args.parse([input])[0];
+  const {
+    durableWorkQueues: _durableWorkQueues,
+    nativeOwner: _nativeOwner,
+    ...spec
+  } = workspaceStateEngineMethods.entityActivate.args.parse([input])[0];
   return workspaceStateEngineMethods.entityActivate.returns.parse({
     ...spec,
     id: canonicalEntityId({ ...spec, source: spec.source.repoPath }),
@@ -325,6 +328,7 @@ function createHarness(
     doDispatch,
     workspaceId: "ws_1",
     entityCache,
+    resolveNativeOwner: () => null,
     resolveDurableWorkQueues: () => [],
     materializeExecution: async () => undefined,
   });
@@ -797,6 +801,7 @@ describe("createEvalService", () => {
           activeAuthority: EVAL_EXECUTION_IDENTITY.authority,
           ownerUserId: "usr_test",
           agentBinding: undefined,
+          nativeOwner: null,
           durableWorkQueues: [],
           // The EvalDO's launch parent IS its owner — bridges the lineage so entities spawned FROM an
           // eval (e.g. headless sub-agents) resolve up through the owner to the owner's panel.
@@ -936,6 +941,7 @@ describe("createEvalService", () => {
       doDispatch,
       workspaceId: "ws",
       entityCache,
+      resolveNativeOwner: () => null,
       resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
     });
@@ -1018,6 +1024,7 @@ describe("createEvalService", () => {
       doDispatch,
       workspaceId: "ws",
       entityCache,
+      resolveNativeOwner: () => null,
       resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
     });
@@ -1822,6 +1829,7 @@ function createHeldFailHarness(opts: {
     doDispatch,
     workspaceId: "ws_1",
     entityCache,
+    resolveNativeOwner: () => null,
     resolveDurableWorkQueues: () => [],
     materializeExecution: async () => undefined,
   });

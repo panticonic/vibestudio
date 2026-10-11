@@ -95,6 +95,9 @@ function makeDODispatch(instance: WorkspaceDO): {
 }
 
 interface BuildDepsOptions {
+  resolveNativeOwner?: (
+    input: import("@vibestudio/shared/runtime/entitySpec").EntityActivationInput
+  ) => { incarnation: string; generation: number } | null;
   initializeAgent?: RuntimeEntityHooks["initializeAgent"];
   initializeDurableClone?: RuntimeEntityHooks["initializeDurableClone"];
   prepareResourceBindings?: Parameters<typeof createRuntimeService>[0]["prepareResourceBindings"];
@@ -222,6 +225,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     doDispatch: dispatch,
     workspaceId: "workspace-main",
     entityCache,
+    resolveNativeOwner: opts.resolveNativeOwner ?? (() => null),
     resolveDurableWorkQueues: () => [],
     materializeExecution: async () => undefined,
   });
@@ -2800,6 +2804,7 @@ describe("runtimeService singleton DO + cross-panel sharing", () => {
     });
     // Persist a host panel row.
     instance.entityActivate({
+      nativeOwner: null,
       durableWorkQueues: [],
       kind: "panel",
       source: { repoPath: "panels/host", effectiveVersion: "v1" },
@@ -3935,6 +3940,52 @@ describe("runtimeService.cloneContext", () => {
     expect(result.entities[0]!.sourceId).toBe(ch.id);
     // Only the channel's storage was cloned (the agent was not in `include`).
     expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts an unbound native execution clone fresh while ordinary DOs preserve their storage snapshots", async () => {
+    const { service, instance, cloneDurableStorage } = await buildDeps({
+      resolveNativeOwner: (input) =>
+        input.className === "AgentDO"
+          ? { incarnation: `storage:${input.key}`, generation: 1 }
+          : null,
+    });
+    const native = await seedDO(service, "ctx-native-clone", "native");
+    expect(instance.entityResolve(native.id)?.agentBinding).toBeUndefined();
+    const ordinary = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/counter" },
+        className: "CounterDO",
+        key: "counter",
+        contextId: "ctx-native-clone",
+      },
+    ])) as { id: string };
+    const result = (await service.handler({ caller: serverCaller }, "cloneContext", [
+      { sourceContextId: "ctx-native-clone" },
+    ])) as CloneResult;
+    const nativeClone = result.entities.find((entity) => entity.sourceId === native.id)!;
+    const ordinaryClone = result.entities.find((entity) => entity.sourceId === ordinary.id)!;
+    expect(instance.entityResolve(nativeClone.newId)?.cloneProvenance?.storage).toBe("fresh");
+    expect(instance.entityResolve(ordinaryClone.newId)?.cloneProvenance?.storage).toBe("snapshot");
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromKey: "native",
+        toKey: nativeClone.newKey,
+        reservation: expect.objectContaining({
+          cloneProvenance: expect.objectContaining({ storage: "fresh" }),
+        }),
+      })
+    );
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromKey: "counter",
+        toKey: ordinaryClone.newKey,
+        reservation: expect.objectContaining({
+          cloneProvenance: expect.objectContaining({ storage: "snapshot" }),
+        }),
+      })
+    );
   });
 
   it("marks only the verified source caller for a cooperative storage snapshot", async () => {

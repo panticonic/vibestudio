@@ -58,6 +58,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         class_name TEXT,
         key TEXT NOT NULL,
         state_args TEXT,
+        native_owner TEXT,
         agent_entity_id TEXT REFERENCES entities(id),
         agent_channel_id TEXT,
         parent_id TEXT,

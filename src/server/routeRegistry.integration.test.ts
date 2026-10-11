@@ -80,7 +80,7 @@ async function startHarness(): Promise<Harness> {
         getDoAdmission: () => ({
           executableVersion: "route-executable",
           incarnationVersion: "route-executable",
-          props: { stateArgs: null, image: null },
+          props: { nativeOwner: null, stateArgs: null, image: null },
         }),
       }) as never,
     ensureDORoute,

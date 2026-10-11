@@ -2818,6 +2818,40 @@
           }
         }
       },
+      "closeWebSocketScope": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "when": "the request selects a stored credential the caller is not already allowed to use",
+              "capability": "credential.use",
+              "tier": "gated",
+              "operation": {
+                "kind": "credential",
+                "verb": "Use credential"
+              },
+              "grantScopes": [
+                "once",
+                "session",
+                "version"
+              ],
+              "reason": "Injecting a stored credential into an outbound request requires authorization for that exact credential and use context."
+            }
+          ]
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "secret",
+          "family": "credentials.proxy",
+          "rationale": "Release the originating caller owned transport"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "completeCapture": {
         "authority": {
           "inherits": true
@@ -3150,6 +3184,40 @@
           "residency": "secret",
           "family": "credentials.read",
           "rationale": "Secret-free setup revision; credential contents and use remain separately gated"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "openWebSocketScope": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "when": "the request selects a stored credential the caller is not already allowed to use",
+              "capability": "credential.use",
+              "tier": "gated",
+              "operation": {
+                "kind": "credential",
+                "verb": "Use credential"
+              },
+              "grantScopes": [
+                "once",
+                "session",
+                "version"
+              ],
+              "reason": "Injecting a stored credential into an outbound request requires authorization for that exact credential and use context."
+            }
+          ]
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "secret",
+          "family": "credentials.proxy",
+          "rationale": "Ownership does not authorize credential use"
         },
         "capability": null,
         "presentation": null
@@ -3607,7 +3675,7 @@
           "session": "family",
           "residency": "untrusted-execution",
           "family": "developmentClientExecutor.control",
-          "rationale": "Selected desktop terminates one pending launch with a bounded diagnostic and no widened authority"
+          "rationale": "Selected desktop terminates one pending launch with its complete failure graph and no widened authority"
         },
         "capability": null,
         "presentation": null
@@ -12212,7 +12280,9 @@
         "authority": {
           "inherits": true
         },
-        "access": null,
+        "access": {
+          "sensitivity": "write"
+        },
         "tier": {
           "tier": "gated",
           "session": "family",
@@ -12236,7 +12306,9 @@
         "authority": {
           "inherits": true
         },
-        "access": null,
+        "access": {
+          "sensitivity": "write"
+        },
         "tier": {
           "tier": "gated",
           "session": "family",
@@ -20708,35 +20780,6 @@
         }
       },
       "alarmSourcePublish": {
-        "authority": {
-          "principals": [
-            "host",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "supervision",
-          "family": "workspace-state.supervision",
-          "rationale": "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call"
-        },
-        "capability": "workspace.runtime-state.manage",
-        "presentation": {
-          "title": "Manage running apps and tasks",
-          "action": "manage apps, panels, and scheduled tasks that are currently running",
-          "description": "Start, stop, or check on apps and tasks running in your workspace",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        }
-      },
-      "alarmSourceRegister": {
         "authority": {
           "principals": [
             "host",

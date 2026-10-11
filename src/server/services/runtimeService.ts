@@ -1975,7 +1975,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         throw new Error(`Clone source ${source.id} has no sealed incarnation ownership`);
       }
       return {
-        storage: source.kind === "do" && !source.agentBinding ? "snapshot" : "fresh",
+        // Native session state contains execution ownership and channel/task
+        // provenance. Conversation transfer owns its semantic copy; raw file
+        // snapshots are reserved for independently cloneable ordinary DOs.
+        storage:
+          source.kind === "do" && !source.nativeOwner && !source.agentBinding
+            ? "snapshot"
+            : "fresh",
         operationContextId: rootTarget,
         sourceEntityId: source.id,
         sourceContextId: source.contextId,

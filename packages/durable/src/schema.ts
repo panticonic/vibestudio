@@ -23,6 +23,7 @@ export interface DurableObjectSchemaDescriptor {
 /** Storage schema and immutable class capabilities admitted from one executable. */
 export interface DurableObjectExecutableDescriptor extends DurableObjectSchemaDescriptor {
   readonly durableWorkQueues: readonly DurableWorkQueue[];
+  readonly nativeOwner: boolean;
 }
 
 export type DurableObjectSchemaIncompatibleReason =
@@ -197,21 +198,25 @@ export function durableObjectSchemaDescriptor(
 
 export function durableObjectExecutableDescriptor(
   definition: DurableObjectSchemaDefinition,
-  queues: readonly DurableWorkQueue[]
+  queues: readonly DurableWorkQueue[],
+  nativeOwner: boolean
 ): DurableObjectExecutableDescriptor {
   return {
     ...durableObjectSchemaDescriptor(definition),
     durableWorkQueues: parseDurableWorkReady(queues),
+    nativeOwner,
   };
 }
 
 export function validateDurableObjectExecutableCapabilities(
   descriptor: DurableObjectExecutableDescriptor,
-  queues: readonly DurableWorkQueue[]
+  queues: readonly DurableWorkQueue[],
+  nativeOwner: boolean
 ): void {
   if (
+    descriptor.nativeOwner !== nativeOwner ||
     JSON.stringify(parseDurableWorkReady(descriptor.durableWorkQueues)) !==
-    JSON.stringify(parseDurableWorkReady(queues))
+      JSON.stringify(parseDurableWorkReady(queues))
   ) {
     throw new Error("Durable work descriptor does not match the admitted runtime image");
   }
@@ -404,7 +409,10 @@ export async function installDurableObjectSchema(
   });
 }
 
-function validateTargetFingerprint(definition: DurableObjectSchemaDefinition, shape?: string): void {
+function validateTargetFingerprint(
+  definition: DurableObjectSchemaDefinition,
+  shape?: string
+): void {
   if (
     definition.expectedFingerprint !== undefined &&
     (shape ?? normalizedShape(definition.storage.sql, definition.schemaTables)) !==

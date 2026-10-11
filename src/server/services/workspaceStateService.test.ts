@@ -468,55 +468,24 @@ describe("workspaceStateService — topology authority", () => {
     ]);
   });
 
-  it("binds wake registration and publication to the authenticated Durable Object identity", async () => {
+  it("binds wake publication to the authenticated Durable Object identity", async () => {
     const own = { source: "workers/agent", className: "Agent", objectKey: "own" };
     const foreign = { ...own, objectKey: "foreign" };
-    const registration = { ...own, executionDigest: "a".repeat(64) };
-    const admission = {
-      incarnation: "incarnation",
-      entity: EntityRecordSchema.parse({
-        id: "do:workers/agent:Agent:own",
-        authoritySessionId: "authority",
-        kind: "do",
-        source: { repoPath: own.source, effectiveVersion: "version" },
-        contextId: "context",
-        className: own.className,
-        key: own.objectKey,
-        activeExecutionDigest: registration.executionDigest,
-        createdAt: 1,
-        status: "active",
-        cleanupComplete: false,
-      }),
-    };
-    const { svc, calls } = makeService({
-      dispatchReturns: { alarmSourceRegister: admission, alarmSourcePublish: "accepted" },
-    });
-    await expect(
-      svc.handler(makeDoCtx(own) as never, "alarmSourceRegister", [registration])
-    ).resolves.toEqual(admission);
+    const { svc, calls } = makeService({ dispatchReturns: { alarmSourcePublish: "accepted" } });
     const publication = { ...own, incarnation: "incarnation", revision: 1, wakeAt: null };
     await expect(
       svc.handler(makeDoCtx(own) as never, "alarmSourcePublish", [publication])
     ).resolves.toBe("accepted");
     await expect(
-      svc.handler(makeDoCtx(own) as never, "alarmSourceRegister", [{ ...registration, ...foreign }])
-    ).rejects.toThrow(/cannot register/);
-    await expect(
       svc.handler(makeDoCtx(own) as never, "alarmSourcePublish", [{ ...publication, ...foreign }])
     ).rejects.toThrow(/cannot publish/);
-    expect(calls).toEqual([
-      {
-        method: "alarmSourceRegister",
-        args: [{ ...registration, incarnation: "incarnation", generation: 1 }],
-      },
-      { method: "alarmSourcePublish", args: [publication] },
-    ]);
+    expect(calls).toEqual([{ method: "alarmSourcePublish", args: [publication] }]);
     await expect(
       svc.handler(makeDoCtx(own) as never, "alarmSourcePublish", [
         { ...publication, incarnation: "retired-incarnation" },
       ])
     ).resolves.toBe("stale");
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
   });
 
   it("allows a Durable Object to manage only its own alarm key", async () => {
