@@ -1,5 +1,6 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readDarwinProcessGroupSnapshot } from "./darwinProcessObserver.mjs";
 function parseOwnedProcessIdentity(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw ownershipError("Owned process identity must be an object");
@@ -41,16 +42,20 @@ function captureOwnedProcessIdentity(pid) {
     };
   }
   if (process.platform === "darwin") {
-    const stat = darwinStat(pid);
-    if (stat.processGroupId !== pid) {
+    const snapshot = darwinSnapshot(pid, pid);
+    const leader = snapshot.leader;
+    if (!leader) {
+      throw Object.assign(new Error("Process " + pid + " does not exist"), { code: "ESRCH" });
+    }
+    if (leader.pgid !== pid) {
       throw new Error(`Owned process ${pid} is not its detached process-group leader`);
     }
     return {
       version: 1,
       platform: "darwin",
       pid,
-      processGroupId: stat.processGroupId,
-      startCoordinate: stat.startCoordinate,
+      processGroupId: leader.pgid,
+      startCoordinate: leader.startCoordinate,
     };
   }
   throw Object.assign(new Error("Durable process ownership is unavailable on this platform"), {
@@ -79,7 +84,7 @@ function observeOwnedProcessGroupReceipt(value) {
   const snapshot =
     identity.platform === "linux"
       ? linuxProcessGroupSnapshot(identity.processGroupId, identity.pid)
-      : darwinProcessGroupSnapshot(identity.processGroupId, identity.pid);
+      : darwinSnapshot(identity.processGroupId, identity.pid);
   const leader = snapshot.leader;
   if (
     leader &&
@@ -254,49 +259,11 @@ function linuxProcessGroupSnapshot(processGroupId, leaderPid) {
   }
   return { members, leader, activeMemberCount, truncated, commandBasenameTruncated };
 }
-function darwinProcessGroupSnapshot(processGroupId, leaderPid) {
-  const result = spawnSync("ps", ["-axo", "pid=,ppid=,pgid=,uid=,stat=,lstart=,comm="], {
-    encoding: "utf8",
-  });
-  if (result.status !== 0) throw ownershipError("Cannot inspect exact process-group members");
-  const members = [];
-  let leader = null;
-  let activeMemberCount = 0;
-  let truncated = false;
-  let commandBasenameTruncated = false;
-  for (const line of result.stdout.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const prefix = trimmed.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)(?:\s|$)/u);
-    if (!prefix) continue;
-    const pid = Number(prefix[1]);
-    const pgid = Number(prefix[3]);
-    if (pgid !== processGroupId && pid !== leaderPid) continue;
-    const match = trimmed.match(
-      /^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+\s+\S+\s+\d+\s+\S+\s+\d{4})\s+(.+)$/u
-    );
-    if (!match) throw new Error("Owned process-group member has a malformed ps record");
-    const boundedCommand = boundedBasename(match[7]);
-    commandBasenameTruncated ||= boundedCommand.truncated;
-    const member = {
-      pid,
-      ppid: Number(match[2]),
-      pgid,
-      uid: Number(match[4]),
-      state: match[5][0],
-      startCoordinate: match[6],
-      command: boundedCommand.value,
-    };
-    if (pid === leaderPid) leader = member;
-    if (pgid !== processGroupId) continue;
-    if (member.state !== "Z" && member.state !== "X") activeMemberCount += 1;
-    if (members.length === 64) {
-      truncated = true;
-      continue;
-    }
-    members.push(member);
-  }
-  return { members, leader, activeMemberCount, truncated, commandBasenameTruncated };
+function darwinSnapshot(processGroupId, leaderPid) {
+  return {
+    ...readDarwinProcessGroupSnapshot(processGroupId, leaderPid),
+    commandBasenameTruncated: false,
+  };
 }
 function boundedBasename(command) {
   const value = command.split(/[\\/]/u).at(-1) || command;
@@ -330,21 +297,6 @@ function linuxStat(pid) {
     throw new Error(`Process ${pid} has an incomplete /proc group record`);
   }
   return { processGroupId, startCoordinate, state: fields[0] };
-}
-function darwinStat(pid) {
-  const result = spawnSync(
-    "ps",
-    ["-o", "pid=", "-o", "pgid=", "-o", "stat=", "-o", "lstart=", "-p", String(pid)],
-    { encoding: "utf8" }
-  );
-  if (result.status !== 0 || !result.stdout.trim()) {
-    throw Object.assign(new Error(`Process ${pid} does not exist`), { code: "ESRCH" });
-  }
-  const match = result.stdout.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/u);
-  if (!match || Number(match[1]) !== pid) {
-    throw new Error(`Process ${pid} has a malformed ps identity`);
-  }
-  return { processGroupId: Number(match[2]), startCoordinate: match[4], state: match[3][0] };
 }
 export {
   captureOwnedProcessIdentity,

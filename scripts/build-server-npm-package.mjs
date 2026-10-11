@@ -48,6 +48,10 @@ import {
 } from "./node-runtime-artifacts.mjs";
 
 import { assertNativeIsolationArtifacts } from "./native-isolation-artifacts.mjs";
+import {
+  assertDarwinProcessObserverArtifacts,
+  darwinProcessObserverPath,
+} from "./owned-process-group-observer.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const outRoot = path.join(repoRoot, "dist-packages");
@@ -230,9 +234,23 @@ function throwFailures(failures, message) {
 
 function assertBuilt() {
   const required = [...SERVER_RUNTIME_ARTIFACTS, "dist/main.cjs", "dist/cli/client.mjs"];
+  for (const arch of ["arm64", "x64"]) {
+    const observer = path.relative(repoRoot, darwinProcessObserverPath(repoRoot, arch));
+    required.push(observer, `${observer}.source.json`);
+  }
   const missing = required.filter((p) => !fs.existsSync(path.join(repoRoot, p)));
   if (missing.length) {
-    throw new Error(`Run \`pnpm build\` first — missing: ${missing.join(", ")}`);
+    throw new Error(
+      `Run \`pnpm build\` and download the matching source-attested Darwin process observer CI artifact first — missing: ${missing.join(", ")}`
+    );
+  }
+  try {
+    assertDarwinProcessObserverArtifacts(repoRoot);
+  } catch (cause) {
+    throw new Error(
+      "The prepared Darwin process observer inputs do not match this source checkout; download the matching source-attested CI artifact",
+      { cause }
+    );
   }
 }
 
@@ -257,6 +275,7 @@ export async function stageServer(nativeArtifacts) {
   for (const artifact of SERVER_RUNTIME_ARTIFACTS) {
     copyFile(artifact, path.join(root, artifact));
   }
+  stageDarwinProcessObserverArtifacts(root, repoRoot);
   stageNativeIsolationArtifacts(root, nativeArtifacts);
   copyTree(path.join(repoRoot, "dist/cli"), path.join(root, "dist/cli"), defaultSkip);
   copyTree(
@@ -712,5 +731,29 @@ export function stageNativeIsolationArtifacts(root, artifacts) {
     mkdirp(path.dirname(destination));
     fs.copyFileSync(source, destination);
     if (!artifact.endsWith(".json") && !artifact.endsWith(".exe")) fs.chmodSync(destination, 0o755);
+  }
+}
+
+export function stageDarwinProcessObserverArtifacts(root, appRoot = repoRoot) {
+  assertDarwinProcessObserverArtifacts(appRoot, {
+    source: path.join(appRoot, "native", "owned-process-group", "darwin.c"),
+  });
+  for (const arch of ["arm64", "x64"]) {
+    const source = darwinProcessObserverPath(appRoot, arch);
+    const artifact = path.relative(appRoot, source);
+    const destination = path.join(root, artifact);
+    mkdirp(path.dirname(destination));
+    fs.copyFileSync(source, destination);
+    fs.chmodSync(destination, 0o755);
+    fs.copyFileSync(`${source}.source.json`, `${destination}.source.json`);
+  }
+  assertDarwinProcessObserverArtifacts(root, {
+    source: path.join(appRoot, "native", "owned-process-group", "darwin.c"),
+  });
+  for (const arch of ["arm64", "x64"]) {
+    const staged = darwinProcessObserverPath(root, arch);
+    if ((fs.statSync(staged).mode & 0o111) !== 0o111) {
+      throw new Error(`Staged Darwin process observer is missing executable mode: ${staged}`);
+    }
   }
 }

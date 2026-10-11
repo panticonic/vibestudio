@@ -526,8 +526,14 @@ export function createDesktopWorkspaceRuntime(deps: {
         [...renderers].map((contents) => recoverRenderer(contents, kind, workspaceId, signal))
       );
       if (closed || epoch !== semanticRecoveryEpoch) return;
-      const failure = results.find((result) => result.status === "rejected");
-      if (failure?.status === "rejected") throw failure.reason;
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(failures, "Workspace renderer recovery failed", {
+          cause: failures[0],
+        });
     });
     if (closed || epoch !== semanticRecoveryEpoch) return;
     recoveryPending = false;
@@ -973,6 +979,7 @@ export function createDesktopWorkspaceRuntime(deps: {
   return {
     ...controller,
     eventService,
+    getConnectionStatus: () => latestConnection.status,
     serverClient: connection.serverClient,
     dispatcher,
     container,

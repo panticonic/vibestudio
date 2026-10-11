@@ -431,13 +431,16 @@ ports, ready files, CLI credentials, and sessions. The checkout-scoped lock
 prevents two launchers from competing for one instance, while different
 instances run concurrently. Stopping one never targets another hub.
 
-MXC executor payloads come from the pinned `@microsoft/mxc-sdk` 0.8.0 package. Workspace cleanup also runs through MXC; no Rust toolchain or app-owned native helper is required. Source builds stage the executor for the current process architecture; release packaging consumes the tested CI artifacts separately, so a local host build cannot replace another platform's release binary. Before staging the headless server npm package or installers, download the native artifacts from a successful CI run:
+MXC executor payloads come from the pinned `@microsoft/mxc-sdk` 0.8.0 package. Workspace cleanup also runs through MXC; no Rust toolchain is required. Source builds stage the executor for the current process architecture; release packaging consumes the tested CI artifacts separately, so a local host build cannot replace another platform's release binary. The headless server npm package also carries both source-attested Darwin process-group observers. Download the native artifacts from a successful CI run before staging the npm package or installers:
+
+Source builds on macOS use the Xcode Command Line Tools to compile the process observer against the macOS SDK. Installed desktop and npm distributions carry the tested binaries and require no compiler.
 
 ```bash
 gh run download RUN_ID --pattern 'native-isolation-*' --dir native/isolation/artifacts
+gh run download RUN_ID --name "darwin-process-observers-ci-COMMIT_SHA" --dir dist/native-process-observer
 ```
 
-The headless server npm package requires the complete Linux x64/ARM64, Apple Silicon macOS, and Windows x64 matrix. An Electron installer requires its requested target. Packaging rejects missing, stale, wrong-architecture or checksum-mismatched MXC inputs and restores executable permissions after artifact transfer. Build manifests describe the pre-signing input bytes; platform signing remains a separate installer step. Windows on ARM uses an x64 Node/Electron process under Windows 11 emulation; a native Windows ARM64 process is unsupported by the current workerd dependency.
+The headless server npm package requires the complete Linux x64/ARM64, Darwin arm64/x64 observer, Apple Silicon macOS, and Windows x64 inputs. The observer artifact must come from the exact host commit being staged; its manifest binds both target binaries to the committed C source and their binary digests. An Electron installer requires its requested MXC target. Packaging rejects missing, stale, wrong-architecture or checksum-mismatched native inputs and restores executable permissions after artifact transfer. Build manifests describe the pre-signing input bytes; platform signing remains a separate installer step. Windows on ARM uses an x64 Node/Electron process under Windows 11 emulation; a native Windows ARM64 process is unsupported by the current workerd dependency.
 
 The supported MXC release targets are Linux x64/ARM64, Apple Silicon macOS, and Windows x64. Native macOS/Windows enforcement and packaged-app conformance must pass on their respective systems before release. See [native isolation CI](docs/native-isolation-ci.md) for the acceptance matrix, standard-user checks, installer gates, and Windows 11 runner setup.
 

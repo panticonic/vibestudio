@@ -8,6 +8,9 @@ const PRESERVED_DIST_ENTRIES = new Set([
   "node",
   // The sandbox launcher is likewise staged atomically by its own publisher.
   "mxc",
+  // The libproc observer is compiled during native preparation and may be
+  // called by already-running hosts while a later host generation is built.
+  "native-process-observer",
   // An app bake is an explicit, separately produced packaging input.
   "baked-app",
   // Full and source-prerequisite builds share this lock.

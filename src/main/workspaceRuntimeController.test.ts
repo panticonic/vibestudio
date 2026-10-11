@@ -380,7 +380,9 @@ async function connectionSnapshot(owner: ReturnType<typeof fixture>) {
     const snapshot = await reader.read();
     const record = JSON.parse(new TextDecoder().decode(snapshot.value));
     expect(record).toMatchObject({ kind: "snapshot", event: "server-connection-changed" });
-    return record.payload as { status: string; isRemote: boolean };
+    const payload = record.payload as { status: string; isRemote: boolean };
+    expect(owner.runtime.getConnectionStatus()).toBe(payload.status);
+    return payload;
   } finally {
     await reader.cancel();
   }
@@ -866,8 +868,38 @@ describe("workspace runtime ownership", () => {
     const status = owner.serverClient.onConnectionStatusChange.mock.calls[0]![0];
     status("disconnected");
     const failure = new Error("Renderer watch replay failed");
-    edges.rendererRecovery.mockRejectedValue(failure);
+    edges.rendererRecovery.mockRejectedValueOnce(failure);
     await expect(owner.runtime.recover("resubscribe")).rejects.toBe(failure);
+    expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
+    await owner.runtime.close();
+  });
+
+  it("joins every renderer replay and retains all independent recovery failures", async () => {
+    const owner = fixture("personal", true);
+    await owner.runtime.start();
+    const status = owner.serverClient.onConnectionStatusChange.mock.calls[0]![0];
+    status("disconnected");
+    const panelFailure = new Error("Panel replay failed");
+    const chromeFailure = new Error("Chrome replay failed");
+    const chrome = deferred<void>();
+    edges.rendererRecovery.mockRejectedValueOnce(panelFailure).mockReturnValueOnce(chrome.promise);
+    let settled = false;
+    const recovery = owner.runtime.recover("resubscribe");
+    void recovery.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    await vi.waitFor(() => expect(edges.rendererRecovery).toHaveBeenCalledTimes(2));
+    expect(settled).toBe(false);
+    chrome.reject(chromeFailure);
+    await expect(recovery).rejects.toMatchObject({
+      errors: [panelFailure, chromeFailure],
+      cause: panelFailure,
+    });
     expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
     await owner.runtime.close();
   });

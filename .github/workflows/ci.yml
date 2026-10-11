@@ -232,6 +232,22 @@ jobs:
         id: production-build
         run: pnpm build
 
+      - name: Prepare both Darwin process-group observers
+        if: ${{ matrix.target == 'darwin-arm64' && !matrix.additional }}
+        run: pnpm prepare:darwin-process-observers
+
+      - name: Upload immutable Darwin process observer candidate
+        if: ${{ matrix.target == 'darwin-arm64' && !matrix.additional }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: darwin-process-observers-ci-${{ github.sha }}
+          path: |
+            dist/native-process-observer/darwin-arm64/**
+            dist/native-process-observer/darwin-x64/**
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
       - name: Report Windows long-path operating system policy
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

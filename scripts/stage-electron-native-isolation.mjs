@@ -27,6 +27,11 @@ import {
   nativeIsolationBinaryDigest,
   assertNativeIsolationArtifacts,
 } from "./native-isolation-artifacts.mjs";
+import {
+  assertDarwinProcessObserver,
+  darwinProcessObserverDigest,
+  darwinProcessObserverPath,
+} from "./owned-process-group-observer.mjs";
 
 /** electron-builder's requested architecture is independent of its build host. */
 function electronNativeArtifacts(context) {
@@ -79,6 +84,19 @@ export default async function stageElectronNativeIsolation(context) {
 export async function assertPackagedNativeIsolation(resources, context) {
   const target = nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch]);
   const installedRoot = path.join(resources, "app.asar.unpacked");
+  if (context.electronPlatformName === "darwin") {
+    const appRoot = context.packager.projectDir;
+    const sourceObserver = darwinProcessObserverPath(appRoot, Arch[context.arch]);
+    const installedObserver = path.join(resources, "..", "MacOS", "owned-process-group-observer");
+    assertDarwinProcessObserver(installedObserver, {
+      expectedArch: Arch[context.arch] === "x64" ? "x86_64" : Arch[context.arch],
+    });
+    if (
+      darwinProcessObserverDigest(installedObserver) !== darwinProcessObserverDigest(sourceObserver)
+    ) {
+      throw new Error("Packaged Darwin process observer differs from the prepared native artifact");
+    }
+  }
   await assertSelectedNodeRuntimeArtifacts(installedRoot, target);
   const nodeRoot = path.join(installedRoot, "dist", "node");
   const selectedPlatforms = readdirSync(path.join(nodeRoot, "releases"));
@@ -90,7 +108,10 @@ export async function assertPackagedNativeIsolation(resources, context) {
   if (selectedVersions.length !== 1 || selectedVersions[0] !== nodeRuntimeIdentity(target))
     throw new Error("Packaged application contains an unselected Node runtime release");
   const selectedManifests = readdirSync(path.join(nodeRoot, "selected"));
-  if (selectedManifests.length !== 1 || selectedManifests[0] !== `${nodeRuntimeTargetName(target)}.json`)
+  if (
+    selectedManifests.length !== 1 ||
+    selectedManifests[0] !== `${nodeRuntimeTargetName(target)}.json`
+  )
     throw new Error("Packaged application contains an unselected Node runtime selector");
   if (context.electronPlatformName === "win32") {
     const require = createRequire(path.join(context.packager.projectDir, "package.json"));

@@ -4,6 +4,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { prepareWindowsWorkerdMetadata } from "./workerd-windows-metadata.mjs";
+import {
+  assertDarwinProcessObserver,
+  darwinProcessObserverPath,
+  prepareDarwinProcessObserver,
+} from "./owned-process-group-observer.mjs";
 import { spawnPnpmSync } from "./cli/lib/package-manager.mjs";
 
 const dependencyContracts = [
@@ -55,9 +60,11 @@ export function prepareNativeDependencyFiles({
   cwd = process.cwd(),
   platform = process.platform,
   arch = process.arch,
+  prepareObserver = prepareDarwinProcessObserver,
 } = {}) {
   prepareWindowsWorkerdMetadata({ cwd, platform, arch });
   if (platform !== "darwin") return;
+  prepareObserver({ cwd, arch });
   const require = createRequire(path.join(cwd, "package.json"));
   const root = path.dirname(require.resolve("node-pty/package.json"));
   for (const relative of ["build/Release", "build/Debug", `prebuilds/${platform}-${arch}`]) {
@@ -103,7 +110,18 @@ export function inspectHostNativeDependencies({
 /** Verify every contract, returning how many were confirmed. */
 export function assertHostNativeDependencies(options = {}) {
   const failures = inspectHostNativeDependencies(options).filter((result) => !result.ok);
-  if (failures.length === 0) return dependencyContracts.length;
+  if (failures.length === 0) {
+    if ((options.platform ?? process.platform) === "darwin") {
+      const cwd = options.cwd ?? process.cwd();
+      const arch = options.arch ?? process.arch;
+      assertDarwinProcessObserver(darwinProcessObserverPath(cwd, arch), {
+        run: options.run ?? spawnSync,
+        expectedArch: arch === "x64" ? "x86_64" : arch,
+      });
+      return dependencyContracts.length + 1;
+    }
+    return dependencyContracts.length;
+  }
   throw new Error(
     `Host native dependencies are unavailable:\n${failures
       .map((failure) => `- ${failure.packageName}: ${failure.error}`)

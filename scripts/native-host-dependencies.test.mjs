@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  statSync,
+  rmSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
@@ -8,6 +16,11 @@ import {
   inspectHostNativeDependencies,
   prepareNativeDependencyFiles,
 } from "./native-host-dependencies.mjs";
+import {
+  assertDarwinProcessObserverArtifacts,
+  darwinProcessObserverPath,
+  prepareDarwinProcessObserver,
+} from "./owned-process-group-observer.mjs";
 
 test("PTY probe requires output and successful exit in either order despite retained helper handles", () => {
   let smoke;
@@ -70,13 +83,30 @@ test(
       const payload = "#!/bin/sh\nprintf 'helper-ready'\n";
       writeFileSync(helper, payload, { mode: 0o664 });
       assert.equal(spawnSync(helper).error?.code, "EACCES");
-      prepareNativeDependencyFiles({ cwd, platform: "darwin", arch: "arm64" });
+      let observerPrepared = 0;
+      prepareNativeDependencyFiles({
+        cwd,
+        platform: "darwin",
+        arch: "arm64",
+        prepareObserver: ({ cwd: observerCwd, arch }) => {
+          assert.equal(observerCwd, cwd);
+          assert.equal(arch, "arm64");
+          observerPrepared++;
+        },
+      });
+      assert.equal(observerPrepared, 1);
       assert.equal(readFileSync(helper, "utf8"), payload);
       assert.equal(statSync(helper).mode & 0o777, 0o755);
       const child = spawnSync(helper, { encoding: "utf8" });
       assert.equal(child.status, 0);
       assert.equal(child.stdout, "helper-ready");
-      prepareNativeDependencyFiles({ cwd, platform: "darwin", arch: "arm64" });
+      prepareNativeDependencyFiles({
+        cwd,
+        platform: "darwin",
+        arch: "arm64",
+        prepareObserver: () => observerPrepared++,
+      });
+      assert.equal(observerPrepared, 2);
       assert.equal(readFileSync(helper, "utf8"), payload);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
@@ -102,6 +132,70 @@ test("installs Windows workerd long-path metadata beside the unchanged dependenc
     assert.throws(
       () => prepareNativeDependencyFiles({ cwd, platform: "win32", arch: "arm64" }),
       /Unsupported Windows workerd architecture/
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("Darwin process observer preparation is content-bound and atomically reusable", () => {
+  const cwd = mkdtempSync(path.join(os.tmpdir(), "darwin-process-observer-"));
+  const source = path.join(cwd, "observer.c");
+  writeFileSync(source, "int main(void) { return 0; }\n");
+  let compilations = 0;
+  let forceCompiledArch;
+  const run = (executable, args) => {
+    if (executable === "xcrun") return { status: 0, stdout: "/toolchain/clang\n" };
+    if (args[0] === "--version") return { status: 0, stdout: "1\n" };
+    compilations++;
+    const compiledArch = forceCompiledArch ?? args[args.indexOf("-arch") + 1];
+    const output = args[args.indexOf("-o") + 1];
+    const binary = Buffer.alloc(8);
+    binary.writeUInt32LE(0xfeedfacf, 0);
+    binary.writeUInt32LE(compiledArch === "arm64" ? 0x0100000c : 0x01000007, 4);
+    writeFileSync(output, binary, { mode: 0o700 });
+    return { status: 0, stdout: "", stderr: "" };
+  };
+  try {
+    const expected = darwinProcessObserverPath(cwd, "arm64");
+    assert.equal(prepareDarwinProcessObserver({ cwd, arch: "arm64", source, run }), expected);
+    assert.equal(statSync(expected).mode & 0o777, 0o755);
+    const receipt = JSON.parse(readFileSync(expected + ".source.json", "utf8"));
+    assert.equal(receipt.version, 2);
+    assert.equal(receipt.targetArch, "arm64");
+    assert.equal(receipt.binaryDigest.length, 64);
+    assert.equal(compilations, 1);
+    chmodSync(expected, 0o644);
+    assert.equal(prepareDarwinProcessObserver({ cwd, arch: "arm64", source, run }), expected);
+    assert.equal(statSync(expected).mode & 0o777, 0o755);
+    assert.equal(compilations, 1);
+    const x64Output = prepareDarwinProcessObserver({ cwd, arch: "x64", source, run });
+    assert.equal(x64Output, darwinProcessObserverPath(cwd, "x64"));
+    assertDarwinProcessObserverArtifacts(cwd, { source });
+    assert.equal(compilations, 2);
+
+    writeFileSync(x64Output, "tampered observer", { mode: 0o755 });
+    assert.throws(() => assertDarwinProcessObserverArtifacts(cwd, { source }), /source receipt/u);
+    prepareDarwinProcessObserver({ cwd, arch: "x64", source, run });
+    assert.equal(compilations, 3);
+    assertDarwinProcessObserverArtifacts(cwd, { source });
+
+    prepareDarwinProcessObserver({ cwd, arch: "arm64", source, run });
+    assert.equal(compilations, 3);
+
+    writeFileSync(source, "int main(void) { return 1; }\n");
+    prepareDarwinProcessObserver({ cwd, arch: "arm64", source, run });
+    assert.equal(compilations, 4);
+    assert.throws(() => assertDarwinProcessObserverArtifacts(cwd, { source }), /source receipt/u);
+    prepareDarwinProcessObserver({ cwd, arch: "x64", source, run });
+    assert.equal(compilations, 5);
+    assertDarwinProcessObserverArtifacts(cwd, { source });
+
+    forceCompiledArch = "x86_64";
+    writeFileSync(source, "int main(void) { return 2; }\n");
+    assert.throws(
+      () => prepareDarwinProcessObserver({ cwd, arch: "arm64", source, run }),
+      /architecture mismatch/u
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });

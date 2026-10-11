@@ -247,6 +247,10 @@ import {
   recordPanelInitializationFailure,
 } from "./panelInitializationFailure.js";
 
+// Native ownership receipts resolve their installed observer from this
+// explicit application identity, including in packaged Electron main.
+process.env["VIBESTUDIO_APP_ROOT"] ??= getAppRoot();
+
 // =============================================================================
 // Early Diagnostics (enabled via VIBESTUDIO_DEBUG_PATHS=1)
 // =============================================================================
@@ -2855,7 +2859,7 @@ app.on("ready", async () => {
           transfers: runtime.getAssetDiagnostics(),
         })),
       resolveWorkspace: async (id) => testOwner(await ensureDesktopWorkspace(id)),
-      getServerConnectionStatus: () => conn.serverClient.getConnectionStatus(),
+      getServerConnectionStatus: () => workspaceController.getConnectionStatus(),
       listWorkspaces: () =>
         createTypedServiceClient(
           "hubControl",
