@@ -13,12 +13,14 @@ class FakeSocket implements WsLike {
   onclose: ((event: { code?: number; reason?: string }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
   sent: string[] = [];
+  closedWith: [number | undefined, string | undefined] | null = null;
 
   send(data: string): void {
     this.sent.push(data);
   }
 
   close(code?: number, reason?: string): void {
+    this.closedWith = [code, reason];
     this.readyState = 3;
     this.onclose?.({ code, reason });
   }
@@ -134,6 +136,48 @@ describe("wsClientTransport", () => {
 
     sockets[0]?.authenticate();
     await connected;
+  });
+
+  it("retires a logical session permanently when the server closes it", async () => {
+    const { sockets, transport } = createTransportHarness();
+    const statuses: string[] = [];
+    const recoveries: string[] = [];
+    transport.onStatusChange?.((status) => {
+      statuses.push(status);
+    });
+    transport.onRecovery?.("cold-recover", () => {
+      recoveries.push("cold-recover");
+    });
+    const connected = transport.connectAndWait();
+    await flushAsyncWork();
+    sockets[0]?.open();
+    sockets[0]?.authenticate();
+    await connected;
+
+    sockets[0]?.onmessage?.({
+      data: JSON.stringify({ type: "ws:session-closed", code: 1001, reason: "Server closing" }),
+    });
+
+    expect(transport.isClosed()).toBe(true);
+    expect(transport.status?.()).toBe("disconnected");
+    expect(statuses.at(-1)).toBe("disconnected");
+    expect(recoveries).toEqual(["cold-recover"]);
+    expect(sockets[0]?.closedWith).toEqual([1000, "RPC session retired"]);
+    await expect(
+      transport.send({
+        from: "panel:nav-test",
+        target: "main",
+        delivery: { caller: { callerId: "panel:nav-test", callerKind: "panel" } },
+        provenance: [{ callerId: "panel:nav-test", callerKind: "panel" }],
+        message: {
+          type: "request",
+          requestId: "after-close",
+          fromId: "panel:nav-test",
+          method: "x",
+          args: [],
+        },
+      })
+    ).rejects.toMatchObject({ code: "CONNECTION_LOST" });
   });
 
   it("uses refreshed connection metadata consistently for admission and authentication", async () => {

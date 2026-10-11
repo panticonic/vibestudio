@@ -61,6 +61,23 @@ test("result validation failures propagate after every compiler realm settles", 
   assert.equal(validated, true);
 });
 
+test("asynchronous result validation failures reject with the original error", async () => {
+  const validationFailure = new Error("asynchronous host input rejection");
+  let validationSettled = false;
+  const pending = buildArtifactGroups(
+    [artifact("a")],
+    async () => {
+      await Promise.resolve();
+      validationSettled = true;
+      throw validationFailure;
+    },
+    async () => "result"
+  );
+
+  await assert.rejects(pending, (error) => error === validationFailure);
+  assert.equal(validationSettled, true);
+});
+
 test("a failed compiler joins admitted siblings before returning its original error", async () => {
   const failure = new Error("compiler failure");
   let finish;

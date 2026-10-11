@@ -80,7 +80,10 @@ export interface MainAdvanceApprovalCandidate {
  * never needs a gate context.
  */
 export type RefAdvanceGateContext =
-  | { kind: "workspace-initialization" }
+  | {
+      kind: "workspace-initialization";
+      getCandidateWorkspaceState: () => Promise<string>;
+    }
   | {
       kind: "caller";
       caller: VerifiedCaller;
@@ -89,10 +92,9 @@ export type RefAdvanceGateContext =
       /** DO identity the write was dispatched through, for "requested by X via
        *  Y" prompt copy (§4). Never authoritative. */
       via?: string;
-      /** Composed candidate workspace view (a caller-driven advance passes its
-       *  shared candidate view so one approval covers the whole batch). When
-       *  absent the gate composes one itself from the batch entries. */
-      candidateWorkspaceState?: string;
+      /** Lazy producer for the composed candidate view. The approval gate
+       * requests it only when candidate validation/review needs that state. */
+      getCandidateWorkspaceState: () => Promise<string>;
       epochTransition?: true;
     };
 
@@ -112,12 +114,6 @@ export function createMainRefAdvanceGate(deps: {
   /** Lazy mirroring hook (ContentProjectionStore.ensureStateMirrored) so historical states
    *  minted inside the store resolve to full trees before diffing. */
   ensureStateMirrored(stateHash: string): Promise<void>;
-  /** Compose the candidate workspace content view with one atomic batch of repo
-   *  overrides (`stateHash: null` removes the repo). This is a protected-ref
-   *  effect input, never a semantic revision or ancestry authority. */
-  workspaceViewWithReposAt(
-    overrides: Array<{ repoPath: string; stateHash: string | null }>
-  ): Promise<string>;
   /** Reject candidate workspace-wide invariants before prompting or advancing refs. */
   validateCandidateWorkspaceState?(
     stateHash: string,
@@ -150,6 +146,9 @@ export function createMainRefAdvanceGate(deps: {
       // context is a programming error, never an implicit allow.
       throw new Error(`Protected main update carries no gate context`);
     }
+    if (typeof context.getCandidateWorkspaceState !== "function") {
+      throw new Error("Protected main update lacks its candidate workspace producer");
+    }
     if (context.kind === "workspace-initialization") {
       // There is no workspace yet and nobody to ask, so this publication does not
       // prompt. It is not a silent trust path either: the units it lands are
@@ -162,19 +161,14 @@ export function createMainRefAdvanceGate(deps: {
     // ONE candidate workspace view for the whole batch: current mains ⊕ entries
     // (deletes remove the repo). The shared view hash is the dedup key that
     // coalesces a multi-repo batch into one prompt, exactly as group push does.
-    const candidateView =
-      context.candidateWorkspaceState ??
-      (await observePublicationStage(
-        "compose-candidate-view",
-        {
-          repoPaths: batch.entries.map((entry) => entry.repoPath),
-          publicationId: batch.publication.publicationId,
-        },
-        () =>
-          deps.workspaceViewWithReposAt(
-            batch.entries.map((entry) => ({ repoPath: entry.repoPath, stateHash: entry.next }))
-          )
-      ));
+    const candidateView = await observePublicationStage(
+      "compose-candidate-view",
+      {
+        repoPaths: batch.entries.map((entry) => entry.repoPath),
+        publicationId: batch.publication.publicationId,
+      },
+      () => context.getCandidateWorkspaceState()
+    );
     // Seed validation from the advancing repository paths. The build system
     // resolves each seed to its unit and reverse dependency closure; this
     // keeps publication validation on the same topology as state-triggered

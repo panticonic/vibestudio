@@ -386,6 +386,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private activationTails = new Map<string, Promise<void>>();
   private lastDeclared: UnitDeclaration[] = [];
   private readonly shutdownSignal = new AbortController();
+  private shutdownFlight: Promise<void> | null = null;
 
   constructor(private readonly deps: ExtensionHostDeps) {
     this.registry = new UnitRegistry<RegistryEntry>({
@@ -803,10 +804,14 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     }
   }
 
-  async shutdown(): Promise<void> {
+  shutdown(): Promise<void> {
+    if (this.shutdownFlight) return this.shutdownFlight;
     this.shutdownSignal.abort(new Error("Extension host shut down before declaration readiness"));
-    await Promise.allSettled(this.activationTails.values());
-    await this.processes.shutdown();
+    this.shutdownFlight = (async () => {
+      await Promise.allSettled(this.activationTails.values());
+      await this.processes.shutdown();
+    })();
+    return this.shutdownFlight;
   }
 
   async unitChangeApprovalForCommit(

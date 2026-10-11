@@ -60,7 +60,7 @@ export async function buildArtifactGroups(
   // BuildResult retains each compiler realm's full metafile. Validate while
   // this helper owns the joined results, then release them before the caller
   // starts the next compiler phase.
-  validateResults(results);
+  await validateResults(results);
 }
 
 /** Independent phases keep ownership until every admitted operation settles. */

@@ -17,5 +17,6 @@ export type {
   WsRoutedEventErrorMessage,
   WsRoutedResponseErrorMessage,
   WsStreamBodyAckMessage,
+  WsSessionClosedMessage,
   WsServerMessage,
 } from "@vibestudio/rpc/protocol/wsProtocol";

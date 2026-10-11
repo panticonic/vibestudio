@@ -1105,6 +1105,36 @@ describe("ExtensionHost reconcileDeclared", () => {
     initial.resolve();
   });
 
+  it("makes concurrent shutdown callers join the same process cleanup", async () => {
+    const { host } = makeHost();
+    const processShutdown = declarationCompletion();
+    const stop = vi.spyOn(host.processes, "shutdown").mockReturnValue(processShutdown.promise);
+
+    const first = host.shutdown();
+    const second = host.shutdown();
+    expect(second).toBe(first);
+    await Promise.resolve();
+    expect(stop).toHaveBeenCalledOnce();
+
+    processShutdown.resolve();
+    await expect(first).resolves.toBeUndefined();
+  });
+
+  it("retains a failed shutdown flight instead of retrying process cleanup", async () => {
+    const { host } = makeHost();
+    const failure = new Error("native extension cleanup failed");
+    const stop = vi.spyOn(host.processes, "shutdown").mockRejectedValue(failure);
+
+    const first = host.shutdown();
+    await expect(first).rejects.toBe(failure);
+    const second = host.shutdown();
+
+    expect(second).toBe(first);
+    await expect(second).rejects.toBe(failure);
+    expect(stop).toHaveBeenCalledOnce();
+    ownedHosts.delete(host);
+  });
+
   it("fences an active target behind the current declaration classification after startup", async () => {
     const initial = declarationCompletion();
     initial.resolve();

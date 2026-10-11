@@ -5760,6 +5760,11 @@ export class RpcServer {
     };
 
     const fail = (error: unknown): void => {
+      // The control loop and stream loop observe the same physical connection.
+      // Either can fail first when it closes; only the first failure owns the
+      // terminal transition and native close. A second close can reject with
+      // ConnectionLost(LocallyClosed) from inside this detached catch handler.
+      if (stopped) return;
       const reason = error instanceof Error ? error.message : String(error);
       closeAll(reason);
       connection.close(0x200n, new TextEncoder().encode(reason));

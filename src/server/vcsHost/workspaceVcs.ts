@@ -305,8 +305,6 @@ export type CallerPublicationGateContext = {
   caller: VerifiedCaller;
   signal?: AbortSignal;
   via?: string;
-  /** Host-composed exact candidate view, added by publishMain before gating. */
-  candidateWorkspaceState?: string;
   epochTransition?: true;
 };
 
@@ -1081,23 +1079,35 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const changedPaths = [...new Set([...currentByPath.keys(), ...targetByPath.keys()])]
       .filter((repoPath) => currentByPath.get(repoPath) !== targetByPath.get(repoPath))
       .sort(compareUtf16CodeUnits);
-    const candidateWorkspaceState = await this.repositories.workspaceViewWithReposAt(
-      changedPaths.map((repoPath) => ({
-        repoPath,
-        stateHash: targetByPath.get(repoPath) ?? null,
-      }))
-    );
-    const candidateStateCompletedAt = performance.now();
+    let candidateWorkspaceState: Promise<string> | undefined;
+    let candidateStateMs = 0;
     const publishedEventId = String(effect.payload["publishedEventId"] ?? "");
     if (!publishedEventId) throw new Error("publication effect lacks its published event identity");
     // BuildV2 seals execution identity while the ref gate validates this
     // candidate. Register the already-committed semantic event before the gate
     // asks for a build, rather than teaching the build store to accept an
     // anonymous content hash.
-    this.semanticStateByContent.set(candidateWorkspaceState, {
-      kind: "event",
-      eventId: publishedEventId,
-    });
+    const getCandidateWorkspaceState = (): Promise<string> => {
+      candidateWorkspaceState ??= (async () => {
+        const candidateStartedAt = performance.now();
+        try {
+          const stateHash = await this.repositories.workspaceViewWithReposAt(
+            changedPaths.map((repoPath) => ({
+              repoPath,
+              stateHash: targetByPath.get(repoPath) ?? null,
+            }))
+          );
+          this.semanticStateByContent.set(stateHash, {
+            kind: "event",
+            eventId: publishedEventId,
+          });
+          return stateHash;
+        } finally {
+          candidateStateMs = performance.now() - candidateStartedAt;
+        }
+      })();
+      return candidateWorkspaceState;
+    };
     const hostRefsBasisDigest = hostRefBasisDigest(
       current.map(({ repoPath, contentRoot }) => ({ repoPath, contentRoot }))
     );
@@ -1113,8 +1123,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         publishedEventId: String(effect.payload["publishedEventId"] ?? ""),
         hostRefsBasisDigest,
       },
-      gateContext:
-        gateContext.kind === "caller" ? { ...gateContext, candidateWorkspaceState } : gateContext,
+      gateContext: { ...gateContext, getCandidateWorkspaceState },
     });
     const refsCompletedAt = performance.now();
     const publication = this.deps.refs.readAppliedPublication(effect.effectId);
@@ -1125,8 +1134,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         repositories: repositories.length,
         changedRepositories: changedPaths.length,
         contentRootsMs: contentRootsCompletedAt - profileStartedAt,
-        candidateStateMs: candidateStateCompletedAt - contentRootsCompletedAt,
-        updateRefsMs: refsCompletedAt - candidateStateCompletedAt,
+        candidateStateMs,
+        updateRefsMs: refsCompletedAt - contentRootsCompletedAt - candidateStateMs,
         receiptMs: profileCompletedAt - refsCompletedAt,
         totalMs: profileCompletedAt - profileStartedAt,
       });

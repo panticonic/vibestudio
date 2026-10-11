@@ -166,4 +166,64 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
     ]);
     await pipe.close();
   });
+
+  it("closes concurrent peer connections through one terminal owner each", async () => {
+    const server = new RpcServer({
+      tokenManager: new TokenManager(),
+      dispatcher: {
+        dispatch: vi.fn(),
+        assertAuthority: vi.fn().mockResolvedValue(undefined),
+        getPolicy: vi.fn(() => ({ allowed: ["shell"] })),
+        getMethodPolicy: vi.fn(() => undefined),
+      } as unknown as ServiceDispatcher,
+      workspaceId: "test-workspace",
+      entityCache: new EntityCache(),
+      runtimeCoordinator: new PanelRuntimeCoordinator(),
+      userSubjectSource: { resolve: () => ({ userId: "usr_root", handle: "root" }) },
+      resolveExtensionCodeIdentity: () => null,
+      ensureUserlandDoReady: async () => undefined,
+      resolveExactCausalInvocation: async () => ({ initiatingUser: null }),
+      redeemPairingCredential: async () => ({
+        callerId: "electron-main",
+        callerKind: "shell" as const,
+        subject: { userId: "usr_root", handle: "root" },
+      }),
+    });
+    const serverEndpoint = await bind();
+    const clients: Array<{
+      connection: NodePhysicalConnection;
+      pipe: ReturnType<typeof createIrohClientPipe>;
+    }> = [];
+    try {
+      const connect = async () => {
+        const clientEndpoint = await bind();
+        const incomingPromise = serverEndpoint.acceptNext();
+        const clientConnectionPromise = clientEndpoint.connect(serverEndpoint.addr(), [
+          ...VIBESTUDIO_IROH_ALPN,
+        ]);
+        const incoming = await incomingPromise;
+        if (!incoming) throw new Error("server endpoint closed before connection");
+        const accepting = await incoming.accept();
+        const [serverNative, clientNative] = await Promise.all([
+          accepting.connect(),
+          clientConnectionPromise,
+        ]);
+        configureNodeConnection(serverNative);
+        configureNodeConnection(clientNative);
+
+        const connection = new NodePhysicalConnection(serverNative);
+        const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
+        clients.push({ connection, pipe });
+        await Promise.all([server.attachIrohConnection(connection), pipe.ready()]);
+      };
+
+      await Promise.all([connect(), connect()]);
+      const serverClosed = clients.map(({ connection }) => connection.closed());
+      await Promise.all(clients.map(({ pipe }) => pipe.close()));
+      await Promise.all(serverClosed);
+    } finally {
+      await Promise.all(clients.map(({ pipe }) => pipe.close()));
+      await server.stop();
+    }
+  });
 });

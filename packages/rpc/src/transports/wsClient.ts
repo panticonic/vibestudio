@@ -487,6 +487,26 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         } else acknowledgement.resolve();
         return;
       }
+      case "ws:session-closed": {
+        closed = true;
+        authenticated = false;
+        supportsStreamRequestBodies = false;
+        clearReconnectTimer();
+        admissionAbortController?.abort();
+        firstConnectReject?.(connectionLostError(msg.reason || `RPC session closed (${msg.code})`));
+        firstConnectReject = null;
+        firstConnectResolve = null;
+        failNativeStreams(connectionLostError("RPC session closed during streaming RPC"));
+        setStatus("disconnected");
+        // The server retired the authenticated inbox: routed calls cannot be
+        // replayed, so use the existing cold-recovery contract to reject them.
+        emitRecovery("cold-recover");
+        // Peer-provided WebSocket close codes/reasons may be reserved or exceed
+        // the protocol's reason limit. The RPC frame already carries the
+        // diagnostic; close locally with a legal bounded pair.
+        socket?.close(1000, "RPC session retired");
+        return;
+      }
     }
   };
 

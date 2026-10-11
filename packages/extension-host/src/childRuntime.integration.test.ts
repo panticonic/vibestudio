@@ -96,6 +96,189 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
     root = null;
   });
 
+  it("settles pending host RPC after logical session retirement before correlated shutdown", async () => {
+    root = tempDir();
+    const childRuntimePath = path.join(root, "childRuntime.mjs");
+    fs.writeFileSync(childRuntimePath, childRuntimeBundle);
+    const extensionDir = path.join(root, "extension");
+    fs.mkdirSync(extensionDir, { recursive: true });
+    fs.writeFileSync(path.join(extensionDir, "package.json"), '{"type":"module"}');
+    const bundlePath = path.join(extensionDir, "bundle.js");
+    fs.writeFileSync(
+      bundlePath,
+      [
+        "let settleHostCall;",
+        "const hostCallSettled = new Promise(resolve => { settleHostCall = resolve; });",
+        "export async function activate(ctx) {",
+        "  return { hold() { return ctx.rpc.call('main', { name: 'heldOperation', async parseArgs(args) { return args; }, async invoke(args, dispatch) { return dispatch(args); } }, []).finally(settleHostCall); }, async deactivate() { await hostCallSettled; } };",
+        "}",
+      ].join("\n")
+    );
+    const commandEnv = {
+      VIBESTUDIO_EXTENSION_NAME: "@workspace-extensions/session-close-test",
+      VIBESTUDIO_EXTENSION_VERSION: "0.0.0",
+      VIBESTUDIO_EXTENSION_BUNDLE_PATH: bundlePath,
+      VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
+      VIBESTUDIO_EXTENSION_RPC_TOKEN: "test-token",
+    };
+    if (mode === "native-workspace") {
+      const appRoot = fs.realpathSync.native(fileURLToPath(new URL("../../../", import.meta.url)));
+      const runtimeRoot = path.join(root, "runtime");
+      fs.mkdirSync(runtimeRoot);
+      const runtime = prepareNativeRuntime({ appRoot, runtimeRoot });
+      const installedWorkspaceRuntime = fileURLToPath(
+        new URL("../../process-adapter/dist/isolation", import.meta.url)
+      );
+      for (const file of ["workspaceChild.js", "control.js"])
+        fs.copyFileSync(path.join(installedWorkspaceRuntime, file), path.join(runtimeRoot, file));
+      const home = path.join(root, "storage");
+      fs.mkdirSync(path.join(home, "tmp"), { recursive: true });
+      sandbox = await WorkspaceRuntime.start(
+        {
+          version: 1,
+          owner: {
+            workspaceId: "extension-session-close-fixture",
+            contextId: null,
+            runtimeId: "native-workspace",
+            incarnation: "fixture",
+            executionDigest: "fixture",
+          },
+          privateRoot: root,
+          executable: runtime.executable,
+          args: [],
+          cwd: home,
+          home,
+          environment: { PATH: path.dirname(runtime.executable), ...runtime.environment },
+          read: [...runtime.readPaths, childRuntimePath, extensionDir],
+          write: [home],
+          sockets: [],
+        },
+        {
+          ...getNativeExecutionInstallation(appRoot),
+          workspaceEntry: path.join(runtimeRoot, "workspaceChild.js"),
+        }
+      );
+      proc = sandbox.fork(childRuntimePath, commandEnv);
+    } else {
+      proc = createNodeProcessAdapter(childRuntimePath, commandEnv);
+    }
+
+    const extensionName = commandEnv.VIBESTUDIO_EXTENSION_NAME;
+    let resolveHeldRequest!: () => void;
+    const heldRequest = new Promise<void>((resolve) => {
+      resolveHeldRequest = resolve;
+    });
+    const reportReady = waitForMessage<void>((resolve, reject) => {
+      const receive = (raw: unknown) => {
+        if (typeof raw !== "string") return;
+        try {
+          const message = decodeRpcJson(raw) as WsClientMessage;
+          if (message.type === "ws:auth") {
+            void proc!.postMessage(
+              encodeRpcJson({
+                type: "ws:auth-result",
+                success: true,
+                contractVersion: RPC_CONTRACT_VERSION,
+              } satisfies WsServerMessage)
+            );
+            return;
+          }
+          if (message.type !== "ws:rpc") return;
+          const rpc = message.envelope.message as RpcMessage;
+          if (rpc.type !== "request") return;
+          if (rpc.method === "heldOperation") {
+            resolveHeldRequest();
+            return;
+          }
+          if (rpc.method === "runtime.supervision.reportHealth") {
+            void proc!.postMessage(
+              encodeRpcJson({
+                type: "ws:rpc",
+                envelope: makeEnvelope("main", extensionName, "server", {
+                  type: "response",
+                  requestId: rpc.requestId,
+                  result: null,
+                }),
+              } satisfies WsServerMessage)
+            );
+            return;
+          }
+          if (rpc.method === "runtime.supervision.reportReady") {
+            void proc!.postMessage(
+              encodeRpcJson({
+                type: "ws:rpc",
+                envelope: makeEnvelope("main", extensionName, "server", {
+                  type: "response",
+                  requestId: rpc.requestId,
+                  result: null,
+                }),
+              } satisfies WsServerMessage)
+            );
+            resolve();
+          }
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+      proc!.on("message", receive);
+    });
+    await reportReady;
+
+    const invocationId = randomUUID();
+    await proc!.postMessage(
+      encodeRpcJson({
+        type: "ws:rpc",
+        envelope: makeEnvelope("main", extensionName, "server", {
+          type: "request",
+          requestId: invocationId,
+          fromId: "main",
+          method: "extension.invoke",
+          args: [
+            "hold",
+            [],
+            {
+              requestId: invocationId,
+              extensionName,
+              method: "hold",
+              caller: { callerId: "server", callerKind: "server" },
+            },
+          ],
+        }),
+      } satisfies WsServerMessage)
+    );
+    await heldRequest;
+
+    await proc!.postMessage(
+      encodeRpcJson({
+        type: "ws:session-closed",
+        code: 1001,
+        reason: "Server shutting down",
+      } satisfies WsServerMessage)
+    );
+    const shutdownId = randomUUID();
+    const child = proc!;
+    const exited = new Promise<void>((resolve) => child.on("exit", () => resolve()));
+    const shutdownResult = waitForMessage<Record<string, unknown>>((resolve) => {
+      const receive = (message: unknown) => {
+        if (
+          message &&
+          typeof message === "object" &&
+          "type" in message &&
+          message.type === "shutdown-result" &&
+          "requestId" in message &&
+          message.requestId === shutdownId
+        ) {
+          resolve(message as Record<string, unknown>);
+        }
+      };
+      proc!.on("message", receive);
+    });
+    await proc!.postMessage({ type: "shutdown", requestId: shutdownId });
+    await expect(shutdownResult).resolves.toMatchObject({ ok: true, requestId: shutdownId });
+    await exited;
+    proc = null;
+  });
+
   it("authenticates over process IPC, reports ready, and handles invoke without a network listener", async () => {
     root = tempDir();
     const childRuntimePath = path.join(root, "childRuntime.mjs");
@@ -1016,12 +1199,12 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
     expect(firstReceipt).toMatchObject({ ok: false });
     const firstFailure = deserializeRpcFailure(firstReceipt["error"]);
     expect(firstFailure).toMatchObject({
-        message: "Owned release failed",
-        cause: { message: "Original provider release failed" },
-        errors: [
-          { message: "Original provider release failed" },
-          { message: "Independent cleanup failed" },
-        ],
+      message: "Owned release failed",
+      cause: { message: "Original provider release failed" },
+      errors: [
+        { message: "Original provider release failed" },
+        { message: "Independent cleanup failed" },
+      ],
     });
     expect((firstFailure as AggregateError).errors[0]).toBe(firstFailure.cause);
     expect(exited).toBe(false);

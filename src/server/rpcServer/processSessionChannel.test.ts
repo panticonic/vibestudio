@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { ProcessAdapter } from "@vibestudio/process-adapter";
 import { envelopeFromMessage } from "@vibestudio/rpc";
+import { encodeRpcJson } from "@vibestudio/rpc";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { ProcessSessionChannel } from "./processSessionChannel.js";
 
@@ -78,6 +79,25 @@ describe("process RPC session retirement", () => {
     expect(receive).not.toHaveBeenCalled();
     expect(closed).toHaveBeenCalledTimes(1);
   });
+
+  it("notifies the child over the RPC protocol before retiring its logical session", () => {
+    const { proc, channel } = fixture();
+
+    channel.close(1001, "Server shutting down");
+
+    expect(proc.postMessage.mock.calls).toEqual([
+      [
+        encodeRpcJson({
+          type: "ws:session-closed",
+          code: 1001,
+          reason: "Server shutting down",
+        }),
+      ],
+      [{ type: "shutdown", reason: "Server shutting down" }],
+    ]);
+    expect(channel.readyState).not.toBe(channel.OPEN);
+  });
+
   it("retires despite a full delivery buffer and tolerates late send errors", () => {
     const { proc, channel } = fixture();
     const closed = vi.fn();

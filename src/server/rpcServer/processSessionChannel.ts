@@ -130,6 +130,17 @@ export class ProcessSessionChannel implements RpcSessionChannel {
   }
   close(code = 1000, reason = "RPC process session closed"): void {
     if (!this.open) return;
+    try {
+      const raw = encodeRpcJson({
+        type: "ws:session-closed",
+        code,
+        reason: reason.slice(0, 512),
+      });
+      const delivery = this.process.postMessage(raw);
+      if (delivery) void delivery.catch(this.failed);
+    } catch (error) {
+      this.events.emit("transportError", error);
+    }
     this.finish(code, reason);
     // Authority is already retired even if the guest ignores shutdown.
     try {

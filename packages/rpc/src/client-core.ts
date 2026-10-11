@@ -1606,7 +1606,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
   // gone → no inbox to replay from); reject the remaining routed pendings then.
   // On `resubscribe` the inbox replay settles them, so leave them alone.
   const unsubscribeRecovery = config.onRecovery?.((kind) => {
-    if (!retired) publishExposures();
+    if (!retired && config.transport.status?.() === "connected") publishExposures();
     if (kind === "cold-recover") {
       rejectPendingRequests(
         (target, destination) => !isServerTarget(target, destination),

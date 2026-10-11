@@ -2859,8 +2859,6 @@ async function main() {
       approvalGate: mainAdvanceGate,
       ensureStateMirrored: (stateHash) =>
         workspaceVcs.contentProjection.ensureStateMirrored(stateHash),
-      workspaceViewWithReposAt: (overrides) =>
-        workspaceVcs.repositories.workspaceViewWithReposAt(overrides),
       onWorkspaceInitialized: () => {
         // The one ungated publication owes a review. Record the root template
         // it landed so the review can head with where the code came from —
@@ -8112,6 +8110,16 @@ async function main() {
         .catch((err) => console.warn("[Server] Iroh ingress close failed:", err));
       irohIngress = null;
     }
+
+    // Extension child cancellation and drain use the authenticated process RPC
+    // route. Close that owner before global quiescence retires its route; the
+    // service-container stop below joins this same shutdown flight.
+    await shutdownStage("extension-host-drain", async () => {
+      await extensionHostForGateway?.shutdown();
+    }).catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] Extension host shutdown failed:", error);
+    });
 
     // At this point the owned eval/lifecycle work has had its chance to
     // release normally. Abort any remaining inbound RPC/stream work before

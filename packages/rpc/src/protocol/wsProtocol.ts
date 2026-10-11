@@ -154,10 +154,18 @@ export interface WsStreamBodyAckMessage {
   error?: RpcFailure;
 }
 
+/** The authenticated logical session has been retired and cannot reconnect. */
+export interface WsSessionClosedMessage {
+  type: "ws:session-closed";
+  code: number;
+  reason: string;
+}
+
 export type WsServerMessage =
   | WsAuthResultMessage
   | WsRpcResponseMessage
   | WsRoutedMessage
   | WsRoutedEventErrorMessage
   | WsRoutedResponseErrorMessage
-  | WsStreamBodyAckMessage;
+  | WsStreamBodyAckMessage
+  | WsSessionClosedMessage;

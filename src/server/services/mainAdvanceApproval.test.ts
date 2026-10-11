@@ -534,6 +534,18 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     return mirrored.stateHash;
   }
 
+  function callerContext(
+    extra: Partial<Extract<RefAdvanceGateContext, { kind: "caller" }>> = {},
+    caller = panelCaller()
+  ): RefAdvanceGateContext {
+    return {
+      kind: "caller",
+      caller,
+      getCandidateWorkspaceState: async () => "state:composed-fallback",
+      ...extra,
+    };
+  }
+
   function refGateDeps(blobsDir: string) {
     const approvals: MainAdvanceApprovalCandidate[] = [];
     const semanticAdvances: SemanticAdvanceApprovalCandidate[] = [];
@@ -566,7 +578,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       ensureStateMirrored: async (stateHash) => {
         if (stateHash === EMPTY_STATE_HASH) await mirrorWorktreeTree(blobsDir, []);
       },
-      workspaceViewWithReposAt: async () => "state:composed-fallback",
       onWorkspaceInitialized: () => {
         initializations.push(true);
       },
@@ -628,7 +639,12 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     const { gate, approvals } = refGateDeps(blobsDir);
     const next = await stageTree(blobsDir, [{ path: "a.txt", body: "a\n" }]);
 
-    await gate(batch([{ next }], { kind: "workspace-initialization" }));
+    await gate(
+      batch([{ next }], {
+        kind: "workspace-initialization",
+        getCandidateWorkspaceState: async () => "state:unused-candidate",
+      })
+    );
     expect(approvals).toHaveLength(0);
   });
 
@@ -637,9 +653,30 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     const { gate, initializations } = refGateDeps(blobsDir);
     const next = await stageTree(blobsDir, [{ path: "a.txt", body: "a\n" }]);
 
-    await gate(batch([{ next }], { kind: "workspace-initialization" }));
+    await gate(
+      batch([{ next }], {
+        kind: "workspace-initialization",
+        getCandidateWorkspaceState: async () => "state:unused-candidate",
+      })
+    );
 
     expect(initializations).toEqual([true]);
+  });
+
+  it("does not request a candidate view for workspace initialization", async () => {
+    const blobsDir = path.join(tempStatePath(), "blobs");
+    const { gate, initializations } = refGateDeps(blobsDir);
+    const getCandidateWorkspaceState = vi.fn(async () => "state:unused-candidate");
+
+    await gate(
+      batch([{ next: "state:initial" }], {
+        kind: "workspace-initialization",
+        getCandidateWorkspaceState,
+      })
+    );
+
+    expect(initializations).toEqual([true]);
+    expect(getCandidateWorkspaceState).not.toHaveBeenCalled();
   });
 
   it("fails closed for the former generic system authority", async () => {
@@ -664,16 +701,17 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
         approveRepoDeletion: async () => undefined,
       },
       ensureStateMirrored: async () => undefined,
-      workspaceViewWithReposAt: async () => "state:future-workspace",
       validateCandidateWorkspaceState: ordinaryValidator,
       validateEpochTransitionCandidate: transitionValidator,
     });
     await transitionGate(
-      batch([], {
-        kind: "caller",
-        caller: panelCaller(),
-        epochTransition: true,
-      })
+      batch(
+        [],
+        callerContext({
+          epochTransition: true,
+          getCandidateWorkspaceState: async () => "state:future-workspace",
+        })
+      )
     );
 
     expect(transitionValidator).toHaveBeenCalledWith(
@@ -689,7 +727,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     const blobsDir = path.join(tempStatePath(), "blobs");
     const { gate, semanticAdvances } = refGateDeps(blobsDir);
 
-    await gate(batch([], { kind: "caller", caller: panelCaller(), via: "agent:one" }));
+    await gate(batch([], callerContext({ via: "agent:one" })));
 
     expect(semanticAdvances).toEqual([
       {
@@ -714,10 +752,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       { path: "changed.txt", body: "v2\n" },
       { path: "added.txt", body: "hi\n" },
     ]);
-    const context: RefAdvanceGateContext = {
-      kind: "caller",
-      caller: panelCaller(),
-    };
+    const context = callerContext();
 
     await gate(batch([{ old: oldState, next }], context));
 
@@ -731,7 +766,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       "panels/x/removed.txt",
     ]);
     expect(candidate.repoPaths).toEqual(["panels/x"]);
-    // No candidate view supplied → the gate composes one itself.
+    // The protected effect supplies the exact candidate view lazily.
     expect(candidate.stateHash).toBe("state:composed-fallback");
   });
 
@@ -752,7 +787,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
         approveRepoDeletion: vi.fn(),
       },
       ensureStateMirrored: vi.fn(async () => undefined),
-      workspaceViewWithReposAt: vi.fn(async () => "state:candidate"),
       beginCandidateReview,
       failCandidateReview,
       validateCandidateWorkspaceState,
@@ -760,10 +794,12 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
 
     await expect(
       gate(
-        batch([{ repoPath: "meta", old: null, next }], {
-          kind: "caller",
-          caller: panelCaller(),
-        })
+        batch(
+          [{ repoPath: "meta", old: null, next }],
+          callerContext({
+            getCandidateWorkspaceState: async () => "state:candidate",
+          })
+        )
       )
     ).rejects.toThrow("workspace-source coordinates changed");
     expect(validateCandidateWorkspaceState).toHaveBeenCalledWith(
@@ -796,31 +832,28 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       { path: "b/c.txt", body: "c\n" },
     ]);
 
-    await gate(
-      batch([{ old: null, next }], {
-        kind: "caller",
-        caller: panelCaller(),
-      } satisfies RefAdvanceGateContext)
-    );
+    await gate(batch([{ old: null, next }], callerContext()));
 
     expect(approvals).toHaveLength(1);
     expect([...approvals[0]!.changedPaths].sort()).toEqual(["panels/x/a.txt", "panels/x/b/c.txt"]);
   });
 
-  it("passes a supplied candidate workspace view through (batches share one)", async () => {
+  it("requests a supplied candidate workspace view lazily (batches share one)", async () => {
     const blobsDir = path.join(tempStatePath(), "blobs");
     const { gate, approvals } = refGateDeps(blobsDir);
     const next = await stageTree(blobsDir, [{ path: "a.txt", body: "a\n" }]);
+    const getCandidateWorkspaceState = vi.fn(async () => "state:group-candidate");
 
     await gate(
       batch([{ next }], {
         kind: "caller",
         caller: panelCaller(),
-        candidateWorkspaceState: "state:group-candidate",
+        getCandidateWorkspaceState,
       } satisfies RefAdvanceGateContext)
     );
 
     expect(approvals[0]!.stateHash).toBe("state:group-candidate");
+    expect(getCandidateWorkspaceState).toHaveBeenCalledTimes(1);
   });
 
   it("routes a delete entry (next null) to the severe repo-deletion capability", async () => {
@@ -831,12 +864,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       { path: "b.txt", body: "b\n" },
     ]);
 
-    await gate(
-      batch([{ repoPath: "panels/old", old: oldState, next: null }], {
-        kind: "caller",
-        caller: panelCaller(),
-      } satisfies RefAdvanceGateContext)
-    );
+    await gate(batch([{ repoPath: "panels/old", old: oldState, next: null }], callerContext()));
 
     expect(approvals).toHaveLength(0);
     expect(deletions).toEqual([{ repoPath: "panels/old", fileCount: 2, stateHash: oldState }]);
@@ -856,10 +884,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     const after = await stageTree(blobsDir, [{ path: "vibestudio.yml", body: "id: w\n" }]);
 
     await gate(
-      batch([{ repoPath: "meta", old: before, next: after }], {
-        kind: "caller",
-        caller: extensionCaller(),
-      } satisfies RefAdvanceGateContext)
+      batch([{ repoPath: "meta", old: before, next: after }], callerContext({}, extensionCaller()))
     );
 
     expect(deletions).toEqual([]);
@@ -875,12 +900,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     const { gate, approvals, restores } = refGateDeps(blobsDir);
     const next = await stageTree(blobsDir, [{ path: "a.txt", body: "a\n" }]);
 
-    await gate(
-      batch([{ repoPath: "panels/old", old: null, next }], {
-        kind: "caller",
-        caller: panelCaller(),
-      } satisfies RefAdvanceGateContext)
-    );
+    await gate(batch([{ repoPath: "panels/old", old: null, next }], callerContext()));
 
     expect(restores).toHaveLength(0);
     expect(approvals).toHaveLength(1);
@@ -900,11 +920,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
           { repoPath: "panels/keep", old: null, next: advNext },
           { repoPath: "panels/drop", old: delOld, next: null },
         ],
-        {
-          kind: "caller",
-          caller: panelCaller(),
-          candidateWorkspaceState: "state:batch-view",
-        } satisfies RefAdvanceGateContext
+        callerContext({ getCandidateWorkspaceState: async () => "state:batch-view" })
       )
     );
 
@@ -925,11 +941,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
           { repoPath: "panels/task-board", next: panel },
           { repoPath: "workers/task-board-store", next: worker },
         ],
-        {
-          kind: "caller",
-          caller: panelCaller(),
-          candidateWorkspaceState: "state:task-board-publication",
-        } satisfies RefAdvanceGateContext
+        callerContext({ getCandidateWorkspaceState: async () => "state:task-board-publication" })
       )
     );
 
@@ -947,14 +959,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
 
   describe("diff-review payload (§5.1)", () => {
     const HEX64 = /^[0-9a-f]{64}$/;
-    const callerContext = (
-      extra: Partial<Extract<RefAdvanceGateContext, { kind: "caller" }>> = {}
-    ): RefAdvanceGateContext => ({
-      kind: "caller",
-      caller: panelCaller(),
-      ...extra,
-    });
-
     it("attaches per-entry kinds/hashes and accurate line counts for an advance", async () => {
       const blobsDir = path.join(tempStatePath(), "blobs");
       const { gate, approvals } = refGateDeps(blobsDir);

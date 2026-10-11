@@ -23,6 +23,7 @@ import {
   rpcErrorDataOf,
   rpcErrorKindOf,
   type EnvelopeRpcTransport,
+  type RpcConnectionStatus,
   type RpcEnvelope,
   type StreamingMethodFrame,
 } from "@vibestudio/rpc";
@@ -584,7 +585,15 @@ async function connectRuntimeBridge(): Promise<RpcWireClient> {
   if (!process.send || !process.connected)
     throw new Error("Extension requires its launcher's IPC channel");
   const listeners = new Set<(envelope: RpcEnvelope) => void>();
+  const statusListeners = new Set<(status: RpcConnectionStatus) => void>();
+  const bridgeLifetime = new AbortController();
   let connected = true;
+  const retireTransport = (): void => {
+    if (!connected) return;
+    connected = false;
+    for (const listener of statusListeners) listener("disconnected");
+    bridgeLifetime.abort(new Error("Extension process RPC session closed"));
+  };
   const send = (message: WsClientMessage): Promise<void> =>
     new Promise((resolve, reject) => {
       if (!connected || !process.connected || !process.send) {
@@ -617,12 +626,16 @@ async function connectRuntimeBridge(): Promise<RpcWireClient> {
     },
     status: () => (connected ? "connected" : "disconnected"),
     ready: () => Promise.resolve(),
-    onStatusChange: () => () => {},
+    onStatusChange(handler) {
+      statusListeners.add(handler);
+      return () => statusListeners.delete(handler);
+    },
   };
   const bridge = createInternalRpcClient({
     selfId: extensionName,
     callerKind: "extension",
     transport,
+    lifetime: bridgeLifetime.signal,
     authorityAcquisition: "wait",
     invocationSignal: () => invocationStore.getStore()?.signal,
   });
@@ -662,6 +675,8 @@ async function connectRuntimeBridge(): Promise<RpcWireClient> {
       const envelope = message.envelope;
       if (!envelope?.message) return;
       for (const listener of listeners) listener(envelope);
+    } else if (message.type === "ws:session-closed") {
+      retireTransport();
     } else if (message.type === "ws:routed-response-error") {
       // The server could not deliver our routed request. Synthesize a rejecting
       // response so the pending call settles instead of hanging (silent-drop class).
@@ -684,7 +699,7 @@ async function connectRuntimeBridge(): Promise<RpcWireClient> {
   };
   process.on("message", receive);
   process.once("disconnect", () => {
-    connected = false;
+    retireTransport();
     process.off("message", receive);
     rejectAuth(new Error("Extension process RPC disconnected"));
     void lifetimeCleanup().then(

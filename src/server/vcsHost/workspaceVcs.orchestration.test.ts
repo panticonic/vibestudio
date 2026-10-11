@@ -2435,16 +2435,17 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       publishedEventId: "event:one",
     });
     const firstGateContext = updateMains.mock.calls[0]?.[0].gateContext as
-      | { kind?: string; candidateWorkspaceState?: string }
+      | { kind?: string; getCandidateWorkspaceState?: () => Promise<string> }
       | undefined;
     expect(firstGateContext).toMatchObject({
       kind: "caller",
-      candidateWorkspaceState: expect.stringMatching(/^state:[0-9a-f]{64}$/),
+      getCandidateWorkspaceState: expect.any(Function),
     });
-    if (firstGateContext?.kind !== "caller" || !firstGateContext.candidateWorkspaceState) {
-      throw new Error("publication did not carry its exact candidate workspace state");
+    if (firstGateContext?.kind !== "caller" || !firstGateContext.getCandidateWorkspaceState) {
+      throw new Error("publication did not carry its lazy candidate workspace producer");
     }
-    expect(vcs.executionStateForContent(firstGateContext.candidateWorkspaceState)).toEqual({
+    const candidateWorkspaceState = await firstGateContext.getCandidateWorkspaceState();
+    expect(vcs.executionStateForContent(candidateWorkspaceState)).toEqual({
       kind: "event",
       eventId: "event:one",
     });
