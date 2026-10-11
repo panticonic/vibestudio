@@ -181,395 +181,96 @@ jobs:
           shasum -a 256 ./*.dmg > SHA256SUMS-macos
           test "$(wc -l < SHA256SUMS-macos)" -eq 1
 
-  native-inputs:
-    name: Prepare native release inputs (${{ matrix.target }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-22.04
-            target: linux-x64
-          - runner: ubuntu-22.04-arm
-            target: linux-arm64
-          - runner: macos-14
-            target: darwin-arm64
-    runs-on: ${{ matrix.runner }}
+  native-input-linux-x64:
+    name: Prepare native release input (linux-x64)
+    uses: ./.github/workflows/native-input.yml
+    with:
+      runner: ubuntu-22.04
+      target: linux-x64
     permissions:
       contents: read
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Prepare MXC executor payload
-        run: node scripts/build-native-isolation.mjs
-
-      - name: Prepare both Darwin process-group observers
-        if: ${{ matrix.target == 'darwin-arm64' }}
-        run: pnpm prepare:darwin-process-observers
-
-      - name: Upload prepared native release input for this workflow revision
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-isolation-${{ matrix.target }}
-          path: dist/mxc/${{ matrix.target }}/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload source-attested Darwin process observer candidate
-        if: ${{ matrix.target == 'darwin-arm64' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: darwin-process-observers-ci-${{ github.sha }}
-          path: |
-            dist/native-process-observer/darwin-arm64/**
-            dist/native-process-observer/darwin-x64/**
-          if-no-files-found: error
-          include-hidden-files: true
-          retention-days: 30
-
-  native-isolation:
-    name: Native workspace execution (${{ matrix.target }}, ${{ matrix.runner }})
-    # Consume the exact prepared executors; verification is independent of packaging.
-    needs: native-inputs
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-22.04
-            target: linux-x64
-          - runner: ubuntu-22.04-arm
-            target: linux-arm64
-          - runner: macos-26
-            target: darwin-arm64
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+  native-input-linux-arm64:
+    name: Prepare native release input (linux-arm64)
+    uses: ./.github/workflows/native-input.yml
+    with:
+      runner: ubuntu-22.04-arm
+      target: linux-arm64
     permissions:
       contents: read
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install test dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Download prepared native release input
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: native-isolation-${{ matrix.target }}
-          path: native/isolation/artifacts/native-isolation-${{ matrix.target }}
-
-      - name: Download source-attested Darwin process observers
-        if: ${{ runner.os == 'macOS' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: darwin-process-observers-ci-${{ github.sha }}
-          path: dist/native-process-observer
-
-      - name: Prepare and exercise native dependencies
-        run: pnpm check:native-host-dependencies --repair
-
-      - name: Install bubblewrap
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
-
-      - name: Build production application and headless host
-        id: production-build
-        run: pnpm build
-
-      - name: Use prepared native release input
-        env:
-          NATIVE_TARGET: ${{ matrix.target }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { assertNativeIsolationArtifacts, nativeIsolationTarget } from "./scripts/native-isolation-artifacts.mjs";
-          const [platform, arch] = process.env.NATIVE_TARGET.split("-");
-          assertNativeIsolationArtifacts(process.cwd(), undefined, [nativeIsolationTarget(platform, arch)]);
-          NODE
-          cp native/isolation/artifacts/native-isolation-${{ matrix.target }}/* dist/mxc/${{ matrix.target }}/
-          if [ "${{ matrix.target }}" = "darwin-arm64" ]; then
-            chmod 0755 dist/mxc/${{ matrix.target }}/mxc-exec-mac
-          else
-            chmod 0755 dist/mxc/${{ matrix.target }}/lxc-exec
-          fi
-
-      - name: Check native execution and platform permissions
-        id: native-check
-        run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts --reporter=default --reporter=json --outputFile=.cache/native-acceptance.json
-
-      # Publish diagnostics before the independent, slower desktop/package work.
-      - name: Upload native acceptance report
-        if: ${{ !cancelled() && (steps.native-check.outcome == 'success' || steps.native-check.outcome == 'failure') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-acceptance-${{ matrix.target }}-${{ matrix.runner }}
-          path: .cache/native-acceptance.json
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Diagnose macOS sandbox denials
-        if: ${{ failure() && runner.os == 'macOS' && steps.native-check.outcome == 'failure' }}
-        run: sudo log show --last 3m --style compact --predicate 'eventMessage CONTAINS "Sandbox" AND eventMessage CONTAINS "deny"' | tail -100
-
-      - name: Checkout Base template for desktop integration
-        id: desktop_template_base
-        if: ${{ !cancelled() && runner.os == 'macOS' && steps.production-build.outcome == 'success' }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: panticonic/vibestudio-base
-          ref: ${{ inputs.base-ref || 'main' }}
-          path: vibestudio-templates/base
-          persist-credentials: false
-
-      - name: Acquire complete template source set for desktop integration
-        id: desktop_templates
-        if: ${{ !cancelled() && steps.desktop_template_base.outcome == 'success' }}
-        shell: bash
-        run: pnpm dev:templates setup "$GITHUB_WORKSPACE/vibestudio-templates"
-
-      # Native, desktop and installed acceptance report independently. A failed
-      # native assertion still fails this required job and cannot publish a release.
-      - name: Desktop pairing, approvals, panels, relaunch, and recovery
-        id: desktop_smoke
-        if: ${{ !cancelled() && steps.desktop_templates.outcome == 'success' }}
-        shell: bash
-        run: |
-          # Retain transport metadata for intermittent native HTTP disconnects.
-          # No packet payloads, headers, or credentials are captured.
-          mkdir -p test-results/desktop-pairing-smoke
-          sudo tcpdump -i lo0 -n -l -tttt 'tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0' > test-results/desktop-pairing-smoke/transport-diagnostics.log 2>&1 &
-          capture_pid=$!
-          trap 'sudo kill -TERM "$capture_pid"; wait "$capture_pid" || true' EXIT
-          node scripts/desktop-pairing-smoke.mjs --template-checkouts "$GITHUB_WORKSPACE/vibestudio-templates"
-
-      - name: Retain native HTTP connection evidence
-        if: ${{ !cancelled() && (steps.desktop_smoke.outcome == 'success' || steps.desktop_smoke.outcome == 'failure') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-http-connections-${{ matrix.target }}-${{ matrix.runner }}
-          path: test-results/desktop-pairing-smoke/transport-diagnostics.log
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Retain desktop onboarding failure evidence
-        if: ${{ !cancelled() && steps.desktop_smoke.outcome == 'failure' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-onboarding-diagnostics-${{ matrix.target }}-${{ matrix.runner }}
-          path: |
-            test-results/desktop-pairing-smoke/*diagnostics-*.json
-            test-results/desktop-pairing-smoke/desktop-*.png
-          if-no-files-found: warn
-          retention-days: 3
-
-  application-candidates:
-    name: Package application candidate (${{ matrix.target }}) and verify native execution
-    # Native inputs are required; unrelated verification must not delay candidates.
-    needs: native-inputs
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            target: darwin-arm64
-            package: mac
-          - runner: ${{ inputs.windows-runner || 'windows-2025' }}
-            target: win32-x64
-            package: windows
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+  native-input-darwin-arm64:
+    name: Prepare native release input (darwin-arm64)
+    uses: ./.github/workflows/native-input.yml
+    with:
+      runner: macos-14
+      target: darwin-arm64
     permissions:
       contents: read
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+  native-isolation-linux-x64:
+    name: Verify native workspace execution (linux-x64)
+    needs: native-input-linux-x64
+    uses: ./.github/workflows/native-verification.yml
+    with:
+      runner: ubuntu-22.04
+      target: linux-x64
+      base-ref: ${{ inputs.base-ref || 'main' }}
+    permissions:
+      contents: read
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+  native-isolation-linux-arm64:
+    name: Verify native workspace execution (linux-arm64)
+    needs: native-input-linux-arm64
+    uses: ./.github/workflows/native-verification.yml
+    with:
+      runner: ubuntu-22.04-arm
+      target: linux-arm64
+      base-ref: ${{ inputs.base-ref || 'main' }}
+    permissions:
+      contents: read
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+  native-isolation-darwin-arm64:
+    name: Verify native workspace execution (darwin-arm64)
+    needs: native-input-darwin-arm64
+    uses: ./.github/workflows/native-verification.yml
+    with:
+      runner: macos-26
+      target: darwin-arm64
+      base-ref: ${{ inputs.base-ref || 'main' }}
+    permissions:
+      contents: read
 
-      - name: Install test dependencies
-        run: pnpm install --frozen-lockfile
+  application-candidate-mac:
+    name: Package macOS application candidate and verify native execution
+    needs: native-input-darwin-arm64
+    uses: ./.github/workflows/application-candidate.yml
+    with:
+      runner: macos-14
+      target: darwin-arm64
+      package: mac
+      base-ref: ${{ inputs.base-ref || 'main' }}
+    permissions:
+      contents: read
 
-      - name: Download prepared Darwin native release input
-        if: ${{ matrix.target == 'darwin-arm64' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: native-isolation-darwin-arm64
-          path: native/isolation/artifacts/native-isolation-darwin-arm64
-
-      - name: Download source-attested Darwin process observers
-        if: ${{ matrix.target == 'darwin-arm64' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: darwin-process-observers-ci-${{ github.sha }}
-          path: dist/native-process-observer
-
-      - name: Prepare and exercise native dependencies
-        run: pnpm check:native-host-dependencies --repair
-
-      - name: Build production application and headless host
-        run: pnpm build
-
-      - name: Use prepared Darwin native release input
-        if: ${{ matrix.target == 'darwin-arm64' }}
-        env:
-          NATIVE_TARGET: darwin-arm64
-        run: |
-          node --input-type=module <<'NODE'
-          import { assertNativeIsolationArtifacts, nativeIsolationTarget } from "./scripts/native-isolation-artifacts.mjs";
-          const [platform, arch] = process.env.NATIVE_TARGET.split("-");
-          assertNativeIsolationArtifacts(process.cwd(), undefined, [nativeIsolationTarget(platform, arch)]);
-          NODE
-          cp native/isolation/artifacts/native-isolation-darwin-arm64/* dist/mxc/darwin-arm64/
-          chmod 0755 dist/mxc/darwin-arm64/mxc-exec-mac
-
-      - name: Report Windows long-path operating system policy
-        if: ${{ runner.os == 'Windows' }}
-        shell: pwsh
-        run: |
-          $value = Get-ItemPropertyValue -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -ErrorAction SilentlyContinue
-          Write-Host "Windows LongPathsEnabled=$value (1 is required for long workspace database paths; CI does not change this policy)"
-
-      - name: Check native execution and platform permissions
-        id: native-check
-        run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts --reporter=default --reporter=json --outputFile=.cache/native-acceptance.json
-
-      - name: Upload native acceptance report
-        if: ${{ !cancelled() && (steps.native-check.outcome == 'success' || steps.native-check.outcome == 'failure') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-acceptance-${{ matrix.target }}-${{ matrix.runner }}
-          path: .cache/native-acceptance.json
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Diagnose macOS sandbox denials
-        if: ${{ failure() && runner.os == 'macOS' && steps.native-check.outcome == 'failure' }}
-        run: sudo log show --last 3m --style compact --predicate 'eventMessage CONTAINS "Sandbox" AND eventMessage CONTAINS "deny"' | tail -100
-
-      - name: Check Windows host execution as a standard user
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.native-check.outcome == 'success' }}
-        shell: pwsh
-        run: ./scripts/test-native-standard-user.ps1
-
-      # Capture the production candidate before template bootstrap can replace
-      # shared dist outputs with development artifacts for the desktop smoke.
-      - name: Package the application
-        id: package
-        if: ${{ !cancelled() && steps.native-check.outcome == 'success' }}
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm exec electron-builder --dir --publish never
-
-      - name: Archive installed application layout
-        id: archive
-        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
-        shell: bash
-        run: |
-          if [ "${{ matrix.package }}" = "mac" ]; then
-            tar -cf packaged-app.tar -C release/mac-arm64 Vibestudio.app
-          else
-            tar -cf packaged-app.tar -C release/win-unpacked .
-          fi
-
-      - name: Upload application for independent acceptance
-        if: ${{ !cancelled() && steps.archive.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: packaged-app-${{ matrix.target }}
-          path: packaged-app.tar
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Checkout Base template for desktop integration
-        id: desktop-template-base
-        if: ${{ !cancelled() && matrix.target == 'darwin-arm64' && steps.native-check.outcome == 'success' }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: panticonic/vibestudio-base
-          ref: ${{ inputs.base-ref || 'main' }}
-          path: vibestudio-templates/base
-          persist-credentials: false
-
-      - name: Acquire complete template source set for desktop integration
-        id: desktop-templates
-        if: ${{ !cancelled() && steps.desktop-template-base.outcome == 'success' }}
-        shell: bash
-        run: pnpm dev:templates setup "$GITHUB_WORKSPACE/vibestudio-templates"
-
-      - name: Desktop pairing, approvals, panels, relaunch, and recovery
-        id: desktop-smoke
-        if: ${{ !cancelled() && steps.desktop-templates.outcome == 'success' }}
-        shell: bash
-        run: |
-          mkdir -p test-results/desktop-pairing-smoke
-          sudo tcpdump -i lo0 -n -l -tttt 'tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0' > test-results/desktop-pairing-smoke/transport-diagnostics.log 2>&1 &
-          capture_pid=$!
-          trap 'sudo kill -TERM "$capture_pid"; wait "$capture_pid" || true' EXIT
-          node scripts/desktop-pairing-smoke.mjs --template-checkouts "$GITHUB_WORKSPACE/vibestudio-templates"
-
-      - name: Retain native HTTP connection evidence
-        if: ${{ !cancelled() && (steps.desktop-smoke.outcome == 'success' || steps.desktop-smoke.outcome == 'failure') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-http-connections-${{ matrix.target }}-${{ matrix.runner }}
-          path: test-results/desktop-pairing-smoke/transport-diagnostics.log
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Retain desktop onboarding failure evidence
-        if: ${{ !cancelled() && steps.desktop-smoke.outcome == 'failure' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-onboarding-diagnostics-${{ matrix.target }}-${{ matrix.runner }}
-          path: |
-            test-results/desktop-pairing-smoke/*diagnostics-*.json
-            test-results/desktop-pairing-smoke/desktop-*.png
-          if-no-files-found: warn
-          retention-days: 3
+  application-candidate-windows:
+    name: Package Windows application candidate and verify native execution
+    uses: ./.github/workflows/application-candidate.yml
+    with:
+      runner: ${{ inputs.windows-runner || 'windows-2025' }}
+      target: win32-x64
+      package: windows
+      base-ref: ${{ inputs.base-ref || 'main' }}
+    permissions:
+      contents: read
 
   npm-server-preflight:
     name: Staged headless server npm candidate
-    # The universal candidate consumes inputs, not the other native tests' results.
-    needs: native-inputs
+    # The universal candidate consumes all three prepared inputs, not native test results.
+    needs:
+      - native-input-linux-x64
+      - native-input-linux-arm64
+      - native-input-darwin-arm64
     runs-on: ubuntu-24.04
     env:
       VIBESTUDIO_TEMPLATE_CHECKOUTS: ${{ github.workspace }}/vibestudio-templates
@@ -675,65 +376,38 @@ jobs:
         if: ${{ always() }}
         run: rm -rf -- "$RUNNER_TEMP/vibestudio-npm-server-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
-  packaged-acceptance:
-    name: Installed application (${{ matrix.target }}, ${{ matrix.runner }})
-    # Install the packaged candidate; other required checks join at release-quality.
-    needs: application-candidates
-    # Exercise available platform candidates even if another platform failed.
-    # Missing artifacts still fail acceptance; the native gate remains required.
+  packaged-acceptance-macos-14:
+    name: Installed application (darwin-arm64, macos-14)
+    needs: application-candidate-mac
     if: ${{ !cancelled() }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            target: darwin-arm64
-            app: Vibestudio.app
-          - runner: macos-26
-            target: darwin-arm64
-            app: Vibestudio.app
-          - runner: ${{ inputs.windows-runner || 'windows-2025' }}
-            target: win32-x64
-            app: Vibestudio.exe
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    uses: ./.github/workflows/packaged-acceptance.yml
+    with:
+      runner: macos-14
+      target: darwin-arm64
+      app: Vibestudio.app
     permissions:
       contents: read
-    steps:
-      - name: Checkout test harness
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - name: Install test dependencies (no application build)
-        run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Download application built in another job
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: packaged-app-${{ matrix.target }}
-          path: candidate
-      - name: Extract application
-        shell: bash
-        run: |
-          mkdir installed
-          tar -xf candidate/packaged-app.tar -C installed
-      - name: Launch installed desktop and workspace containment smoke
-        id: installed-smoke
-        run: node scripts/packaged-isolation-smoke.mjs --app "installed/${{ matrix.app }}" --out-dir test-results/packaged-isolation
-      - name: Diagnose installed macOS sandbox denials
-        if: ${{ failure() && runner.os == 'macOS' && steps.installed-smoke.outcome == 'failure' }}
-        run: sudo log show --last 3m --style compact --predicate 'eventMessage CONTAINS "Sandbox" AND eventMessage CONTAINS "deny"' | tail -100
-      - name: Upload acceptance diagnostics
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: packaged-acceptance-${{ matrix.runner }}
-          path: test-results/packaged-isolation
-          if-no-files-found: warn
-          retention-days: 7
+
+  packaged-acceptance-macos-26:
+    name: Installed application (darwin-arm64, macos-26)
+    needs: application-candidate-mac
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/packaged-acceptance.yml
+    with:
+      runner: macos-26
+      target: darwin-arm64
+      app: Vibestudio.app
+    permissions:
+      contents: read
+
+  packaged-acceptance-windows:
+    name: Installed application (win32-x64, configured Windows runner)
+    needs: application-candidate-windows
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/packaged-acceptance.yml
+    with:
+      runner: ${{ inputs.windows-runner || 'windows-2025' }}
+      target: win32-x64
+      app: Vibestudio.exe
+    permissions:
+      contents: read

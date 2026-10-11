@@ -19,7 +19,9 @@ final publication gate. Document dependency edges that constrain the critical
 path so future changes do not accidentally serialize independent work.
 
 Use bounded concurrency appropriate to CPU, memory, external quotas, and
-resource ownership. Give concurrent agents disjoint edit ownership; coordinate
+resource ownership. Justify serialization with a concrete shared resource or
+dependency, and keep its exclusive scope as small as correctness permits.
+Give concurrent agents disjoint edit ownership; coordinate
 shared files, commits, and generated outputs. Join all admitted work and retain
 every failure before reporting completion or retiring shared resources.
 Parallelism must not duplicate builds, bypass validation, or introduce a second

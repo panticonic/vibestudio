@@ -7,10 +7,18 @@ import { parse } from "yaml";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-async function readCiJobs() {
-  const source = await fs.readFile(path.join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+async function readWorkflow(fileName) {
+  const source = await fs.readFile(
+    path.join(repositoryRoot, ".github/workflows", fileName),
+    "utf8"
+  );
   const workflow = parse(source, { uniqueKeys: true });
-  assert.ok(workflow && typeof workflow.jobs === "object", "CI workflow must declare jobs");
+  assert.ok(workflow && typeof workflow.jobs === "object", `${fileName} must declare jobs`);
+  return workflow;
+}
+
+async function readCiJobs() {
+  const workflow = await readWorkflow("ci.yml");
   return workflow.jobs;
 }
 
@@ -37,30 +45,156 @@ function transitiveDependencies(jobs, name, visiting = new Set()) {
 
 test("native verification and release candidates share prepared inputs without serializing", async () => {
   const jobs = await readCiJobs();
+  const producerJobs = [
+    "native-input-linux-x64",
+    "native-input-linux-arm64",
+    "native-input-darwin-arm64",
+  ];
 
-  assert.deepEqual(dependenciesOf(jobs["native-inputs"]), []);
-  assert.deepEqual(dependenciesOf(jobs["native-isolation"]), ["native-inputs"]);
-  assert.deepEqual(dependenciesOf(jobs["application-candidates"]), ["native-inputs"]);
-  assert.deepEqual(dependenciesOf(jobs["npm-server-preflight"]), ["native-inputs"]);
-  assert.deepEqual(dependenciesOf(jobs["packaged-acceptance"]), ["application-candidates"]);
+  for (const [producer, target, runner] of [
+    ["native-input-linux-x64", "linux-x64", "ubuntu-22.04"],
+    ["native-input-linux-arm64", "linux-arm64", "ubuntu-22.04-arm"],
+    ["native-input-darwin-arm64", "darwin-arm64", "macos-14"],
+  ]) {
+    assert.deepEqual(dependenciesOf(jobs[producer]), []);
+    assert.equal(jobs[producer].uses, "./.github/workflows/native-input.yml");
+    assert.equal(jobs[producer].with.target, target);
+    assert.equal(jobs[producer].with.runner, runner);
+  }
 
-  for (const candidate of ["application-candidates", "npm-server-preflight"]) {
-    const ancestors = transitiveDependencies(jobs, candidate);
-    assert.ok(ancestors.has("native-inputs"), `${candidate} must consume prepared native inputs`);
+  for (const [verifier, producer, target, runner] of [
+    ["native-isolation-linux-x64", "native-input-linux-x64", "linux-x64", "ubuntu-22.04"],
+    ["native-isolation-linux-arm64", "native-input-linux-arm64", "linux-arm64", "ubuntu-22.04-arm"],
+    ["native-isolation-darwin-arm64", "native-input-darwin-arm64", "darwin-arm64", "macos-26"],
+  ]) {
+    assert.deepEqual(dependenciesOf(jobs[verifier]), [producer]);
+    assert.equal(jobs[verifier].uses, "./.github/workflows/native-verification.yml");
+    assert.equal(jobs[verifier].with.target, target);
+    assert.equal(jobs[verifier].with.runner, runner);
+  }
+
+  assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), [
+    "native-input-darwin-arm64",
+  ]);
+  assert.equal(
+    jobs["application-candidate-mac"].uses,
+    "./.github/workflows/application-candidate.yml"
+  );
+  assert.equal(jobs["application-candidate-mac"].with.target, "darwin-arm64");
+  assert.equal(jobs["application-candidate-mac"].with.package, "mac");
+  assert.deepEqual(dependenciesOf(jobs["application-candidate-windows"]), []);
+  assert.equal(
+    jobs["application-candidate-windows"].uses,
+    "./.github/workflows/application-candidate.yml"
+  );
+  assert.equal(jobs["application-candidate-windows"].with.target, "win32-x64");
+  assert.equal(jobs["application-candidate-windows"].with.package, "windows");
+  assert.deepEqual(dependenciesOf(jobs["npm-server-preflight"]), producerJobs);
+  const npmDownloads = jobs["npm-server-preflight"].steps
+    .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
+    .map((step) => step.with.name)
+    .filter(
+      (name) =>
+        name?.startsWith("native-isolation-") || name?.startsWith("darwin-process-observers-")
+    );
+  assert.deepEqual(npmDownloads, [
+    "native-isolation-linux-x64",
+    "native-isolation-linux-arm64",
+    "native-isolation-darwin-arm64",
+    "darwin-process-observers-ci-${{ github.sha }}",
+  ]);
+  const acceptanceJobs = [
+    [
+      "packaged-acceptance-macos-14",
+      "application-candidate-mac",
+      "macos-14",
+      "darwin-arm64",
+      "Vibestudio.app",
+    ],
+    [
+      "packaged-acceptance-macos-26",
+      "application-candidate-mac",
+      "macos-26",
+      "darwin-arm64",
+      "Vibestudio.app",
+    ],
+    [
+      "packaged-acceptance-windows",
+      "application-candidate-windows",
+      "${{ inputs.windows-runner || 'windows-2025' }}",
+      "win32-x64",
+      "Vibestudio.exe",
+    ],
+  ];
+  for (const [jobName, candidate, runner, target, app] of acceptanceJobs) {
+    assert.deepEqual(dependenciesOf(jobs[jobName]), [candidate]);
+    assert.equal(jobs[jobName].uses, "./.github/workflows/packaged-acceptance.yml");
+    assert.match(jobs[jobName].if, /!cancelled\(\)/);
+    assert.deepEqual(jobs[jobName].with, { runner, target, app });
+    const ancestors = transitiveDependencies(jobs, jobName);
     assert.ok(
-      !ancestors.has("native-isolation"),
-      `${candidate} must not wait for the independent native verification matrix`
+      !ancestors.has("application-candidate-mac") || candidate === "application-candidate-mac"
+    );
+    assert.ok(
+      !ancestors.has("application-candidate-windows") ||
+        candidate === "application-candidate-windows"
+    );
+  }
+
+  const acceptanceWorkflow = await readWorkflow("packaged-acceptance.yml");
+  const acceptanceSteps = acceptanceWorkflow.jobs.acceptance.steps;
+  const downloadStep = acceptanceSteps.find(
+    (step) => step.name === "Download application built in another job"
+  );
+  assert.ok(downloadStep, "acceptance must download the installed candidate artifact");
+  assert.equal(downloadStep.with.name, "packaged-app-${{ inputs.target }}");
+  assert.equal(downloadStep.with["if-no-artifact-found"], "error");
+  assert.equal(downloadStep["continue-on-error"], undefined);
+  assert.equal(
+    downloadStep.if,
+    undefined,
+    "candidate download must not be skipped after a producer failure"
+  );
+  assert.ok(
+    acceptanceSteps.some(
+      (step) => step.name === "Launch installed desktop and workspace containment smoke"
+    ),
+    "each platform candidate must run the installed-app acceptance smoke"
+  );
+
+  for (const candidate of [
+    "native-isolation-linux-x64",
+    "native-isolation-linux-arm64",
+    "application-candidate-mac",
+    "application-candidate-windows",
+    "npm-server-preflight",
+    ...acceptanceJobs.map(([name]) => name),
+  ]) {
+    const ancestors = transitiveDependencies(jobs, candidate);
+    assert.ok(
+      ![
+        "native-isolation-linux-x64",
+        "native-isolation-linux-arm64",
+        "native-isolation-darwin-arm64",
+      ].some((verification) => ancestors.has(verification)),
+      `${candidate} must not wait for an independent native verification job`
     );
   }
   assert.ok(
-    transitiveDependencies(jobs, "packaged-acceptance").has("native-inputs"),
-    "installed application acceptance must remain downstream of the native-backed candidate"
+    producerJobs.every((producer) =>
+      transitiveDependencies(jobs, "npm-server-preflight").has(producer)
+    ),
+    "the universal npm candidate must consume all prepared platform inputs"
   );
+  assert.ok(producerJobs.includes("native-input-darwin-arm64"));
+  const releaseJobs = (await readWorkflow("release.yml")).jobs;
+  assert.equal(releaseJobs["release-quality"].uses, "./.github/workflows/ci.yml");
+  assert.deepEqual(dependenciesOf(releaseJobs["github-release"]), ["release-quality"]);
 });
 
 test("application packaging captures production outputs before desktop template bootstrap", async () => {
-  const jobs = await readCiJobs();
-  const steps = jobs["application-candidates"].steps;
+  const reusable = await readWorkflow("application-candidate.yml");
+  const steps = reusable.jobs.candidate.steps;
   const indexOf = (name) => {
     const index = steps.findIndex((step) => step.name === name);
     assert.notEqual(index, -1, `application-candidates must include step: ${name}`);
@@ -77,7 +211,8 @@ test("application packaging captures production outputs before desktop template 
     "the candidate archive must be complete before desktop template bootstrap changes shared outputs"
   );
   assert.ok(
-    indexOf("Upload application for independent acceptance") < indexOf("Desktop pairing, approvals, panels, relaunch, and recovery"),
+    indexOf("Upload application for independent acceptance") <
+      indexOf("Desktop pairing, approvals, panels, relaunch, and recovery"),
     "independent installed-app acceptance must receive the production candidate before desktop smoke"
   );
   assert.match(
