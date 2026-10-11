@@ -61,11 +61,61 @@ export function joinedFailure(failures: readonly unknown[], message: string): un
 }
 
 export interface BuildSlotLease {
+  readonly priority: BuildPriority;
   release(): void;
 }
 
+export type BuildPriority = "interactive" | "background" | "speculative";
+export type BuildPriorityPromotion = (priority: BuildPriority) => void;
+
+/** Keeps the strongest demand attached to one shared build flight. */
+export class BuildPriorityOwner {
+  private queuedPromotion?: BuildPriorityPromotion;
+
+  constructor(private currentPriority: BuildPriority) {}
+
+  get priority(): BuildPriority {
+    return this.currentPriority;
+  }
+
+  promote(priority: BuildPriority): void {
+    if (priorityRank(priority) >= priorityRank(this.currentPriority)) return;
+    this.currentPriority = priority;
+    this.queuedPromotion?.(priority);
+  }
+
+  bindQueuedPromotion(promote: BuildPriorityPromotion): void {
+    this.queuedPromotion = promote;
+    promote(this.currentPriority);
+  }
+
+  clearQueuedPromotion(): void {
+    this.queuedPromotion = undefined;
+  }
+}
+
+/** One shared build promise whose queued admission follows its strongest caller. */
+export class BuildFlight<T> {
+  readonly priority: BuildPriorityOwner;
+  readonly promise: Promise<T>;
+
+  constructor(priority: BuildPriority, run: (owner: BuildPriorityOwner) => Promise<T>) {
+    this.priority = new BuildPriorityOwner(priority);
+    this.promise = Promise.resolve().then(() => run(this.priority));
+  }
+
+  adopt(priority: BuildPriority): Promise<T> {
+    this.priority.promote(priority);
+    return this.promise;
+  }
+}
+
+function priorityRank(priority: BuildPriority): number {
+  return priority === "interactive" ? 0 : priority === "background" ? 1 : 2;
+}
+
 interface Waiter {
-  priority: "interactive" | "background" | "speculative";
+  priority: BuildPriority;
   resolve(lease: BuildSlotLease): void;
   reject(reason: unknown): void;
   signal?: AbortSignal;
@@ -96,10 +146,17 @@ export class BuildSlotQueue {
       speculative: number,
       capacity: number
     ) => boolean,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    bindPromotion?: (promote: BuildPriorityPromotion) => void
   ): Promise<BuildSlotLease> {
-    if (this.isClosed) return Promise.reject(this.closeReason);
-    if (signal?.aborted) return Promise.reject(signal.reason);
+    if (this.isClosed) {
+      bindPromotion?.(() => {});
+      return Promise.reject(this.closeReason);
+    }
+    if (signal?.aborted) {
+      bindPromotion?.(() => {});
+      return Promise.reject(signal.reason);
+    }
     this.canAdmit = canAdmit;
     if (
       canAdmit(
@@ -110,10 +167,24 @@ export class BuildSlotQueue {
         this.capacity
       )
     ) {
+      bindPromotion?.(() => {});
       return Promise.resolve(this.grant(priority));
     }
     return new Promise<BuildSlotLease>((resolve, reject) => {
       const waiter: Waiter = { priority, resolve, reject, ...(signal ? { signal } : {}) };
+      const promote = (next: BuildPriority) => {
+        if (priorityRank(next) >= priorityRank(waiter.priority)) return;
+        const index = this.waiters.indexOf(waiter);
+        if (index < 0) return;
+        this.waiters.splice(index, 1);
+        waiter.priority = next;
+        const insertionPoint = this.waiters.findIndex(
+          (entry) => priorityRank(entry.priority) > priorityRank(next)
+        );
+        if (insertionPoint >= 0) this.waiters.splice(insertionPoint, 0, waiter);
+        else this.waiters.push(waiter);
+        this.admitWaiters(canAdmit);
+      };
       if (signal) {
         waiter.onAbort = () => {
           const index = this.waiters.indexOf(waiter);
@@ -131,6 +202,7 @@ export class BuildSlotQueue {
       );
       if (insertionPoint >= 0) this.waiters.splice(insertionPoint, 0, waiter);
       else this.waiters.push(waiter);
+      bindPromotion?.(promote);
     });
   }
 
@@ -151,6 +223,7 @@ export class BuildSlotQueue {
     if (priority === "speculative") this.runningSpeculative++;
     let released = false;
     return {
+      priority,
       release: () => {
         if (released) return;
         released = true;

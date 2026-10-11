@@ -1,4 +1,10 @@
-import type { RpcErrorData, RpcErrorKind, RpcFailure, RpcFailureReference } from "./types.js";
+import type {
+  RpcErrorData,
+  RpcErrorKind,
+  RpcFailure,
+  RpcFailureReference,
+  RpcSystemError,
+} from "./types.js";
 import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
 
 /** True only for a structured authority decision made by the user. */
@@ -138,7 +144,8 @@ export class RemoteRpcError extends Error {
     message: string,
     public readonly errorKind: RpcErrorKind,
     public readonly code?: string,
-    public readonly errorData?: RpcErrorData
+    public readonly errorData?: RpcErrorData,
+    public readonly systemError?: RpcSystemError
   ) {
     super(message);
     this.name = "RemoteRpcError";
@@ -149,6 +156,43 @@ export class RemoteRpcError extends Error {
 export function rpcErrorDataOf(error: unknown): RpcErrorData | undefined {
   if (error === null || typeof error !== "object" || !("errorData" in error)) return undefined;
   return (error as { errorData?: RpcErrorData }).errorData;
+}
+
+function parseRpcSystemError(value: unknown): RpcSystemError | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const fields = value as Record<string, unknown>;
+  if (Object.keys(fields).some((key) => key !== "sqlite")) return undefined;
+  const sqlite = fields["sqlite"];
+  if (sqlite === null || typeof sqlite !== "object" || Array.isArray(sqlite)) return undefined;
+  const diagnostics = sqlite as Record<string, unknown>;
+  if (
+    Object.keys(diagnostics).some((key) => key !== "errcode" && key !== "errstr") ||
+    !Number.isSafeInteger(diagnostics["errcode"]) ||
+    typeof diagnostics["errstr"] !== "string"
+  )
+    return undefined;
+  return {
+    sqlite: {
+      errcode: diagnostics["errcode"] as number,
+      errstr: diagnostics["errstr"] as string,
+    },
+  };
+}
+
+/** Extract only the typed platform-owned diagnostics supported by this wire contract. */
+function rpcSystemErrorOf(error: unknown): RpcSystemError | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const fields = error as {
+    systemError?: unknown;
+    code?: unknown;
+    errcode?: unknown;
+    errstr?: unknown;
+  };
+  if (fields.systemError !== undefined) return parseRpcSystemError(fields.systemError);
+  if (fields.code !== "ERR_SQLITE_ERROR") return undefined;
+  return parseRpcSystemError({
+    sqlite: { errcode: fields.errcode, errstr: fields.errstr },
+  });
 }
 
 /** Preserve an explicit domain category, otherwise use the boundary's fallback. */
@@ -197,7 +241,8 @@ export class RemoteRpcAggregateError extends AggregateError {
     message: string,
     public readonly errorKind: RpcErrorKind,
     public readonly code?: string,
-    public readonly errorData?: RpcErrorData
+    public readonly errorData?: RpcErrorData,
+    public readonly systemError?: RpcSystemError
   ) {
     super(errors, message);
   }
@@ -230,6 +275,7 @@ export function serializeRpcFailure(
       cause?: unknown;
       errors?: unknown;
     };
+    const systemError = rpcSystemErrorOf(value);
     return {
       id,
       message: typeof fields.message === "string" ? fields.message : String(value),
@@ -238,6 +284,7 @@ export function serializeRpcFailure(
       ...(typeof fields.stack === "string" ? { stack: fields.stack } : {}),
       ...(typeof fields.code === "string" ? { code: fields.code } : {}),
       ...(rpcErrorDataOf(value) !== undefined ? { errorData: rpcErrorDataOf(value) } : {}),
+      ...(systemError ? { systemError } : {}),
       ...(rpcDiagnosticIdOf(value) ? { diagnosticId: rpcDiagnosticIdOf(value) } : {}),
       ...("cause" in value ? { cause: visit(fields.cause) } : {}),
       ...(Array.isArray(fields.errors) ? { errors: fields.errors.map(visit) } : {}),
@@ -279,10 +326,25 @@ export function deserializeRpcFailure(failure: unknown): RemoteRpcError | Remote
       return invalid(`invalid or repeated id ${node.id}`);
     if (node.errors !== undefined && !Array.isArray(node.errors))
       return invalid("errors must be an array");
+    if (node.systemError !== undefined && !parseRpcSystemError(node.systemError))
+      return invalid("systemError must contain typed SQLite diagnostics");
     const error =
       node.errors !== undefined
-        ? new RemoteRpcAggregateError([], node.message, node.errorKind, node.code, node.errorData)
-        : new RemoteRpcError(node.message, node.errorKind, node.code, node.errorData);
+        ? new RemoteRpcAggregateError(
+            [],
+            node.message,
+            node.errorKind,
+            node.code,
+            node.errorData,
+            node.systemError
+          )
+        : new RemoteRpcError(
+            node.message,
+            node.errorKind,
+            node.code,
+            node.errorData,
+            node.systemError
+          );
     if (node.id !== undefined) restored.set(node.id, error);
     if (node.name !== undefined) error.name = node.name;
     if (node.stack !== undefined) error.stack = node.stack;
@@ -307,11 +369,17 @@ export function formatRpcFailure(error: unknown): string {
     if (value === null || typeof value !== "object") return String(value);
     if (seen.has(value)) return "";
     seen.add(value);
-    const fields = value as { message?: unknown; cause?: unknown; errors?: unknown };
+    const fields = value as {
+      message?: unknown;
+      cause?: unknown;
+      errors?: unknown;
+    };
     const message = typeof fields.message === "string" ? fields.message : String(value);
+    const sqlite = rpcSystemErrorOf(value)?.sqlite;
     const details = [
       ...(Array.isArray(fields.errors) ? fields.errors.map(visit) : []),
       ...("cause" in value ? [visit(fields.cause)] : []),
+      ...(sqlite ? [`SQLite errcode=${sqlite.errcode}, errstr=${sqlite.errstr}`] : []),
     ].filter(Boolean);
     return details.length === 0 ? message : `${message}: ${details.join("; ")}`;
   };

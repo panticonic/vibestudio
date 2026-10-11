@@ -2,8 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
+import {
+  closeDerivedCacheCoordinators,
+  derivedCacheCoordinator,
+  derivedCacheDatabasePath,
+} from "@vibestudio/shared/derivedCache";
 const cache = vi.hoisted(() => ({ root: "" }));
 vi.mock("@vibestudio/env-paths", () => ({ getSharedDerivedDataPath: () => cache.root }));
 import {
@@ -346,6 +351,45 @@ it("preserves the original hardlink failure with bounded filesystem evidence", a
   expect((caught as Error).message).toMatch(/sourceLinks=\d+/u);
   expect((caught as Error).message).toContain("sameDevice=true");
   expect((caught as Error).message).not.toContain(root);
+});
+
+it("retains SQLite transaction diagnostics across parallel deduplication workers", async () => {
+  const tree = path.join(root, "locked-tree");
+  await fs.promises.mkdir(tree);
+  for (const name of ["first.js", "second.js"])
+    await fs.promises.writeFile(path.join(tree, name), `payload ${name}`);
+
+  const coordinatorRoot = path.join(cache.root, "dependency-files");
+  const coordinator = derivedCacheCoordinator(coordinatorRoot);
+  // Keep the real busy-handler and transaction path, with a short test-only wait.
+  (coordinator as unknown as { db: DatabaseSync }).db.exec("PRAGMA busy_timeout = 25");
+  const blocker = new DatabaseSync(derivedCacheDatabasePath(coordinatorRoot));
+  blocker.exec("BEGIN IMMEDIATE");
+  let caught: unknown;
+  try {
+    await deduplicateDependencyContent(tree);
+  } catch (error) {
+    caught = error;
+  } finally {
+    blocker.exec("ROLLBACK");
+    blocker.close();
+  }
+
+  expect(caught).toBeInstanceOf(AggregateError);
+  const errors = (caught as AggregateError).errors as Array<Error & { cause?: unknown }>;
+  expect(errors).toHaveLength(2);
+  for (const error of errors) {
+    expect(error).toMatchObject({
+      name: "DependencyContentCoordinatorError",
+      code: "ERR_SQLITE_ERROR",
+      cause: {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 5,
+        errstr: "database is locked",
+      },
+    });
+    expect(error.message).toContain("acquiring a digest lease");
+  }
 });
 
 it("keeps a linked replica live when pruning overlaps publication", async () => {

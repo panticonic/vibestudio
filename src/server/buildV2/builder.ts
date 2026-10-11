@@ -18,8 +18,8 @@ import type { RunNativeWorkspaceJob } from "../nativeWorkspaceJob.js";
  *   - Extension (Node target): ESM, no splitting
  *
  * Build options are manifest-derived, not caller-supplied.
- * Concurrency: one internally parallel build lane by default, with interactive
- * work ordered ahead of background preparation.
+ * Concurrency: three build lanes by default, with interactive work ordered
+ * ahead of background preparation and an operator override for batch throughput.
  * Coalescing: dedup concurrent builds of the same build key.
  *
  * Source files are materialized from the requested GAD state, so builds always
@@ -36,7 +36,14 @@ import { builtinModules, createRequire } from "module";
 import { pathToFileURL } from "url";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import { resolveNativeTypeScriptServerPath } from "../appRoot.js";
-import { BuildSlotQueue, BuilderLifetime, joinedFailure } from "./builderLifetime.js";
+import {
+  BuildFlight,
+  BuildSlotQueue,
+  BuilderLifetime,
+  joinedFailure,
+  type BuildPriority,
+  type BuildPriorityOwner,
+} from "./builderLifetime.js";
 import { profileEsbuildBuild } from "./compilerProfile.js";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { BuildDiagnosticsError, BuildRequestError, diagnosticsFromError } from "./diagnostics.js";
@@ -461,8 +468,6 @@ function sourcePathForNode(node: GraphNode, sourceRoot: string): string {
 let runningBuilds = 0;
 let runningNonInteractiveBuilds = 0;
 let runningSpeculativeBuilds = 0;
-type BuildPriority = "interactive" | "background" | "speculative";
-
 /**
  * Speculative preparation must not occupy every build lane. Required
  * background work still belongs to workspace startup and may use a free lane;
@@ -555,28 +560,39 @@ const buildSlotHeld = new AsyncLocalStorage<true>();
 
 async function withBuildSlot<T>(
   run: () => Promise<T>,
-  priority: BuildPriority = "interactive"
+  priority: BuildPriority = "interactive",
+  priorityOwner?: BuildPriorityOwner
 ): Promise<T> {
   builderLifetime.assertOpen();
   if (buildSlotHeld.getStore()) return run();
   const queue = buildSlotQueue;
   if (!queue) throw new Error("Build scheduler is not initialized");
-  const lease = await queue.acquire(priority, hasBuildSlotCapacity, buildSignal);
+  let lease: Awaited<ReturnType<BuildSlotQueue["acquire"]>>;
+  try {
+    lease = await queue.acquire(
+      priorityOwner?.priority ?? priority,
+      hasBuildSlotCapacity,
+      buildSignal,
+      priorityOwner ? (promote) => priorityOwner.bindQueuedPromotion(promote) : undefined
+    );
+  } finally {
+    priorityOwner?.clearQueuedPromotion();
+  }
   runningBuilds++;
-  if (priority !== "interactive") runningNonInteractiveBuilds++;
-  if (priority === "speculative") runningSpeculativeBuilds++;
+  if (lease.priority !== "interactive") runningNonInteractiveBuilds++;
+  if (lease.priority === "speculative") runningSpeculativeBuilds++;
   try {
     return await buildSlotHeld.run(true, run);
   } finally {
     runningBuilds--;
-    if (priority !== "interactive") runningNonInteractiveBuilds--;
-    if (priority === "speculative") runningSpeculativeBuilds--;
+    if (lease.priority !== "interactive") runningNonInteractiveBuilds--;
+    if (lease.priority === "speculative") runningSpeculativeBuilds--;
     lease.release();
   }
 }
 
 // Build coalescing: dedup concurrent builds of the same key
-const inFlightBuilds = new Map<string, Promise<BuildResult>>();
+const inFlightBuilds = new Map<string, BuildFlight<BuildResult>>();
 const inFlightLibraryBuilds = new Map<string, Promise<BuildResult>>();
 
 // ---------------------------------------------------------------------------
@@ -593,25 +609,25 @@ const inFlightLibraryBuilds = new Map<string, Promise<BuildResult>>();
  * exports-based dist/ paths to their TypeScript source equivalents.
  */
 
-function parseGraphImport(
-  importPath: string,
+export function createGraphImportResolver(
   graph: PackageGraph
-): { packageName: string; subpath: string } | null {
+): (importPath: string) => { packageName: string; subpath: string } | null {
   const names = graph
     .allNodes()
     .map((node) => node.name)
     .sort((a, b) => b.length - a.length);
 
-  for (const name of names) {
-    if (importPath === name) {
-      return { packageName: name, subpath: "." };
+  return (importPath) => {
+    for (const name of names) {
+      if (importPath === name) {
+        return { packageName: name, subpath: "." };
+      }
+      if (importPath.startsWith(`${name}/`)) {
+        return { packageName: name, subpath: `./${importPath.slice(name.length + 1)}` };
+      }
     }
-    if (importPath.startsWith(`${name}/`)) {
-      return { packageName: name, subpath: `./${importPath.slice(name.length + 1)}` };
-    }
-  }
-
-  return null;
+    return null;
+  };
 }
 
 function createWorkspaceResolvePlugin(
@@ -620,6 +636,7 @@ function createWorkspaceResolvePlugin(
   conditions: readonly string[] = PANEL_CONDITIONS,
   externalSpecifiers: readonly string[] = []
 ): esbuild.Plugin {
+  const resolveGraphImport = createGraphImportResolver(graph);
   // esbuild applies the top-level `external` option in its DEFAULT resolver,
   // which runs AFTER plugins — so a workspace specifier this plugin resolves to
   // source would be bundled even when listed in `external`. Honor the externals
@@ -635,7 +652,7 @@ function createWorkspaceResolvePlugin(
       // @workspace/* aliases and template-provided @vibestudio/* source packages.
       build.onResolve({ filter: /^[^./]|^@/ }, (args) => {
         if (externalSet.has(args.path)) return { path: args.path, external: true };
-        const parsed = parseGraphImport(args.path, graph);
+        const parsed = resolveGraphImport(args.path);
         if (!parsed) return null;
 
         const node = graph.tryGet(parsed.packageName);
@@ -2111,21 +2128,35 @@ export async function buildUnit(
   // Check for in-flight build (coalescing). An adopted promise is worth saying
   // out loud: if the original never settles, every adopter inherits that, and
   // this line is the only place the adoption is visible.
+  const requestedPriority = options?.priority ?? "interactive";
   const inFlight = inFlightBuilds.get(buildKey);
   if (inFlight) {
     logVerbose("BuildV2", `${node.name}: adopting in-flight build ${buildKey}`);
-    return inFlight;
+    return inFlight.adopt(requestedPriority);
   }
 
-  const buildPromise = withBuilderWorkers(() =>
-    doBuild(node, ev, buildKey, graph, workspaceRoot, sourcemap, stateRef, provider, options)
+  const flight = new BuildFlight<BuildResult>(requestedPriority, (priority) =>
+    withBuilderWorkers(() =>
+      doBuild(
+        node,
+        ev,
+        buildKey,
+        graph,
+        workspaceRoot,
+        sourcemap,
+        stateRef,
+        provider,
+        options,
+        priority
+      )
+    )
   );
-  inFlightBuilds.set(buildKey, buildPromise);
+  inFlightBuilds.set(buildKey, flight);
 
   try {
-    return await buildPromise;
+    return await flight.promise;
   } finally {
-    inFlightBuilds.delete(buildKey);
+    if (inFlightBuilds.get(buildKey) === flight) inFlightBuilds.delete(buildKey);
   }
 }
 
@@ -2179,12 +2210,13 @@ async function doBuild(
   sourcemap: boolean,
   stateRef: string,
   provider: BuildProvider | null,
-  options?: BuildUnitOptions
+  options?: BuildUnitOptions,
+  priorityOwner?: BuildPriorityOwner
 ): Promise<BuildResult> {
   const trace = traceBuildStages(`${node.name}@${buildKey.slice(0, 12)}`);
   trace.enter("semaphore");
   try {
-    return await withBuildSlot(async () => {
+    const runBuild = async () => {
       // Materialize sources for the unit + its transitive internal deps at the
       // immutable workspace state. The provider caches per-state checkouts; no
       // per-build temp dir, no cleanup.
@@ -2306,7 +2338,8 @@ async function doBuild(
           authority
         );
       }
-    }, options?.priority ?? "interactive");
+    };
+    return await withBuildSlot(runBuild, options?.priority ?? "interactive", priorityOwner);
   } finally {
     trace.done();
   }
@@ -5093,17 +5126,17 @@ export async function buildNpmLibrary(
 
   // Check in-flight builds (coalescing)
   const inFlight = inFlightBuilds.get(buildKey);
-  if (inFlight) return inFlight;
+  if (inFlight) return inFlight.promise;
 
-  const buildPromise = withBuilderWorkers(() =>
-    doNpmBuild(specifier, version, externals, buildKey)
+  const flight = new BuildFlight<BuildResult>("interactive", () =>
+    withBuilderWorkers(() => doNpmBuild(specifier, version, externals, buildKey))
   );
-  inFlightBuilds.set(buildKey, buildPromise);
+  inFlightBuilds.set(buildKey, flight);
 
   try {
-    return await buildPromise;
+    return await flight.promise;
   } finally {
-    inFlightBuilds.delete(buildKey);
+    if (inFlightBuilds.get(buildKey) === flight) inFlightBuilds.delete(buildKey);
   }
 }
 

@@ -110,6 +110,44 @@ export interface ProtectedRefStoreDeps {
   now?: () => number;
 }
 
+// Tree roots are independent immutable reads. Keep enough lookups in flight to
+// overlap storage latency without turning a large multi-repository publication
+// into an unbounded fan-out against the content store.
+const TREE_COMPLETENESS_CONCURRENCY = 4;
+
+async function assertAllTreesComplete(
+  roots: readonly string[],
+  assertTreeComplete: (contentRoot: string) => Promise<void>
+): Promise<void> {
+  let next = 0;
+  const failures: Array<{ error: unknown } | undefined> = new Array(roots.length);
+  const workers = Array.from(
+    { length: Math.min(TREE_COMPLETENESS_CONCURRENCY, roots.length) },
+    async () => {
+      while (next < roots.length) {
+        const index = next++;
+        const root = roots[index]!;
+        try {
+          await assertTreeComplete(root);
+        } catch (error) {
+          failures[index] = { error };
+        }
+      }
+    }
+  );
+  await Promise.all(workers);
+  const failedRoots = failures.filter((failure) => failure !== undefined);
+  if (failedRoots.length === 1) throw failedRoots[0]!.error;
+  if (failedRoots.length > 1) {
+    const errors = failedRoots.map(({ error }) => error);
+    throw new AggregateError(
+      errors,
+      `Protected-main publication could not verify ${failedRoots.length} content trees`,
+      { cause: errors[0] }
+    );
+  }
+}
+
 export interface ProtectedRefStore {
   readMainSemanticState(): { kind: "event"; eventId: string } | null;
   readMain(repoPath: string): MainRefRecord | null;
@@ -587,19 +625,14 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
         if (conflicts.length > 0) throw new RefBatchConflictError(conflicts);
         if (deps.assertTreeComplete) {
           const completenessStartedAt = performance.now();
-          let completenessRoots = 0;
-          for (const entry of entries) {
-            if (entry.next !== null) {
-              await deps.assertTreeComplete(entry.next);
-              completenessRoots += 1;
-            }
-          }
+          const roots = entries.flatMap((entry) => (entry.next === null ? [] : [entry.next]));
+          await assertAllTreesComplete(roots, deps.assertTreeComplete);
           const completenessCompletedAt = performance.now();
           if (completenessCompletedAt - completenessStartedAt >= 100) {
             console.info("[VcsProfile] protected ref tree completeness", {
               publicationId: input.evidence.publicationId,
               entries: entries.length,
-              roots: completenessRoots,
+              roots: roots.length,
               assertTreeCompleteMs: completenessCompletedAt - completenessStartedAt,
             });
           }

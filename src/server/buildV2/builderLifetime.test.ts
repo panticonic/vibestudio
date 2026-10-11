@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { BuildSlotQueue, BuilderLifetime } from "./builderLifetime.js";
+import {
+  BuildFlight,
+  BuildPriorityOwner,
+  BuildSlotQueue,
+  BuilderLifetime,
+} from "./builderLifetime.js";
 import { hasBuildSlotCapacity } from "./builder.js";
 
 describe("builder lifetime ownership", () => {
@@ -30,6 +35,81 @@ describe("builder lifetime ownership", () => {
     active.release();
     const next = await queue.acquire("interactive", hasBuildSlotCapacity);
     next.release();
+  });
+
+  it("promotes the same queued build admission when stronger demand joins", async () => {
+    const queue = new BuildSlotQueue(1);
+    const active = await queue.acquire("interactive", hasBuildSlotCapacity);
+    let bindAdmission!: () => void;
+    const admissionBound = new Promise<void>((resolve) => {
+      bindAdmission = resolve;
+    });
+    const flight = new BuildFlight("speculative", async (owner) => {
+      const lease = await queue.acquire(
+        owner.priority,
+        hasBuildSlotCapacity,
+        undefined,
+        (promote) => {
+          owner.bindQueuedPromotion(promote);
+          bindAdmission();
+        }
+      );
+      return lease;
+    });
+    const otherBackground = queue.acquire("background", hasBuildSlotCapacity);
+
+    await admissionBound;
+    expect(queue.queuedCount).toBe(2);
+    const adopted = flight.adopt("interactive");
+    expect(adopted).toBe(flight.promise);
+    active.release();
+
+    const promotedLease = await flight.promise;
+    expect(promotedLease.priority).toBe("interactive");
+    expect(queue.queuedCount).toBe(1);
+    promotedLease.release();
+    const backgroundLease = await otherBackground;
+    backgroundLease.release();
+    expect(queue.queuedCount).toBe(0);
+  });
+
+  it("runs one build operation for multiple callers of a flight", async () => {
+    let calls = 0;
+    const flight = new BuildFlight("background", async () => {
+      calls += 1;
+      return "built";
+    });
+    const first = flight.promise;
+    const second = flight.adopt("interactive");
+
+    expect(second).toBe(first);
+    await expect(second).resolves.toBe("built");
+    expect(calls).toBe(1);
+  });
+
+  it("does not change the priority of work that already owns a build slot", async () => {
+    const queue = new BuildSlotQueue(1);
+    const owner = new BuildPriorityOwner("speculative");
+    const lease = await queue.acquire(owner.priority, hasBuildSlotCapacity, undefined, (promote) =>
+      owner.bindQueuedPromotion(promote)
+    );
+
+    owner.promote("interactive");
+
+    expect(owner.priority).toBe("interactive");
+    expect(lease.priority).toBe("speculative");
+    lease.release();
+  });
+
+  it("keeps a build's strongest requested priority without demoting it", () => {
+    const owner = new BuildPriorityOwner("speculative");
+
+    owner.promote("background");
+    expect(owner.priority).toBe("background");
+    owner.promote("speculative");
+    expect(owner.priority).toBe("background");
+    owner.promote("interactive");
+    expect(owner.priority).toBe("interactive");
   });
 
   it("rejects explicit undefined close reasons and remains closed", async () => {

@@ -60,4 +60,49 @@ describe("RPC failure contract", () => {
     expect(remote.errors[1]).toBe(remote);
     expect(formatRpcFailure(remote)).toBe("Owned cleanup failed: independent failure");
   });
+
+  it("retains allowlisted SQLite diagnostics across failure graph hops", () => {
+    const sqliteFailure = Object.assign(new Error("database is locked"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 5,
+      errstr: "database is locked",
+    });
+    const failure = new AggregateError([sqliteFailure], "Dependency maintenance failed", {
+      cause: sqliteFailure,
+    });
+    const hop = (error: unknown) =>
+      deserializeRpcFailure(JSON.parse(JSON.stringify(serializeRpcFailure(error))));
+    const remote = hop(hop(failure)) as AggregateError;
+    const child = remote.errors[0] as Error & {
+      code?: string;
+      errorKind?: string;
+      errorData?: unknown;
+      systemError?: { sqlite?: { errcode: number; errstr: string } };
+    };
+
+    expect(remote.cause).toBe(child);
+    expect(child).toMatchObject({
+      message: "database is locked",
+      code: "ERR_SQLITE_ERROR",
+      systemError: { sqlite: { errcode: 5, errstr: "database is locked" } },
+    });
+    expect(formatRpcFailure(remote)).toContain("SQLite errcode=5, errstr=database is locked");
+    expect(formatRpcFailure(sqliteFailure)).toContain(
+      "SQLite errcode=5, errstr=database is locked"
+    );
+
+    // A plain structural copy stands in for a RemoteRpcError from another bundle/realm.
+    const otherRealmCopy = Object.assign(new Error(child.message), {
+      name: "RemoteRpcError",
+      errorKind: child.errorKind,
+      code: child.code,
+      errorData: { owner: "maintenance" },
+      systemError: child.systemError,
+    });
+    const relayed = hop(otherRealmCopy);
+    expect(relayed).toMatchObject({
+      systemError: { sqlite: { errcode: 5, errstr: "database is locked" } },
+      errorData: { owner: "maintenance" },
+    });
+  });
 });

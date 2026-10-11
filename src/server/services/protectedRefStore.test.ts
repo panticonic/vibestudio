@@ -63,6 +63,90 @@ describe("ProtectedRefStore", () => {
     expect(persisted.mainEventId).toBe("event:after:completion");
   });
 
+  it("checks every immutable tree before the gate with bounded concurrency", async () => {
+    const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "protected-main-tree-checks-"));
+    roots.push(statePath);
+    const entries = Array.from({ length: 9 }, (_, index) => ({
+      repoPath: `packages/tree-${index}`,
+      expectedOld: null,
+      next: A,
+    }));
+    let active = 0;
+    let maximumActive = 0;
+    const checked: string[] = [];
+    const gate = vi.fn(async () => undefined);
+    const store = createProtectedRefStore({
+      statePath,
+      gate,
+      assertTreeComplete: async (root) => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        checked.push(root);
+        active -= 1;
+      },
+    });
+
+    await store.updateMains({
+      entries,
+      evidence: {
+        publicationId: "publication:tree-checks",
+        previousEventId: "event:before:tree-checks",
+        publishedEventId: "event:after:tree-checks",
+        hostRefsBasisDigest: EMPTY_BASIS,
+      },
+    });
+
+    expect(maximumActive).toBeGreaterThan(1);
+    expect(maximumActive).toBeLessThanOrEqual(4);
+    expect(checked).toHaveLength(entries.length);
+    expect(gate).toHaveBeenCalledOnce();
+  });
+
+  it("joins all tree checks and aborts publication with every validation failure", async () => {
+    const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "protected-main-tree-failure-"));
+    roots.push(statePath);
+    const entries = Array.from({ length: 8 }, (_, index) => ({
+      repoPath: `packages/tree-${index}`,
+      expectedOld: null,
+      next: `state:${String(index).repeat(64)}`,
+    }));
+    const gate = vi.fn(async () => undefined);
+    const checked: string[] = [];
+    const store = createProtectedRefStore({
+      statePath,
+      gate,
+      assertTreeComplete: async (root) => {
+        checked.push(root);
+        if (root === entries[2]!.next) throw new Error("missing tree two");
+        if (root === entries[5]!.next) throw new Error("missing tree five");
+      },
+    });
+
+    let failure: unknown;
+    try {
+      await store.updateMains({
+        entries,
+        evidence: {
+          publicationId: "publication:tree-failure",
+          previousEventId: "event:before:tree-failure",
+          publishedEventId: "event:after:tree-failure",
+          hostRefsBasisDigest: EMPTY_BASIS,
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors.map((error) => (error as Error).message)).toEqual([
+      "missing tree two",
+      "missing tree five",
+    ]);
+    expect(checked).toHaveLength(entries.length);
+    expect(gate).not.toHaveBeenCalled();
+    expect(store.listMains()).toHaveLength(0);
+  });
+
   it("prepares gate side effects before publishing refs and rolls them back on failure", async () => {
     const { statePath } = await makeStore();
     const prepared = vi.fn();

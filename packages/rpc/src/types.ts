@@ -81,6 +81,11 @@ export type RpcErrorKind =
  */
 export type RpcErrorData = unknown;
 
+/** Allowlisted operating-system diagnostics preserved separately from domain error data. */
+export interface RpcSystemError {
+  sqlite: { errcode: number; errstr: string };
+}
+
 /** One failure representation for unary responses, stream frames and relays.
  * References preserve shared causes and cycles without duplicating or losing
  * members of an aggregate. Domain errorData belongs to its original node. */
@@ -92,6 +97,7 @@ export interface RpcFailure {
   errorKind: RpcErrorKind;
   code?: string;
   errorData?: RpcErrorData;
+  systemError?: RpcSystemError;
   diagnosticId?: string;
   cause?: RpcFailure | RpcFailureReference;
   errors?: Array<RpcFailure | RpcFailureReference>;

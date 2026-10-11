@@ -42,6 +42,21 @@ function contentLeaseKey(mode: number, digest: string): string {
   return `${(mode & 0o7777).toString(8).padStart(4, "0")}-${digest}`;
 }
 
+function withCoordinatorOperation<T>(operation: string, run: () => T): T {
+  try {
+    return run();
+  } catch (cause) {
+    const contextual = new Error(`Dependency content coordinator ${operation} failed`, { cause });
+    contextual.name = "DependencyContentCoordinatorError";
+    if (cause && typeof cause === "object" && "code" in cause) {
+      const code = (cause as { code?: unknown }).code;
+      if (typeof code === "string")
+        Object.defineProperty(contextual, "code", { value: code, enumerable: true });
+    }
+    throw contextual;
+  }
+}
+
 function contentHardlinkLimit(platform = process.platform): number {
   // NTFS permits at most 1,024 names for one file. Keep other platforms on
   // their existing behavior rather than imposing NTFS's lower limit there.
@@ -254,22 +269,24 @@ function linkAvailableReplica(
 ): string | null {
   const coordinator = derivedCacheCoordinator(coordinatorRoot);
   let selected: string | null = null;
-  coordinator.withMutation(() => {
-    for (const candidate of contentReplicaPaths(storeRoot, digest)) {
-      let stat: fs.Stats;
-      try {
-        stat = fs.lstatSync(candidate);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw error;
+  withCoordinatorOperation("selecting a reusable replica", () =>
+    coordinator.withMutation(() => {
+      for (const candidate of contentReplicaPaths(storeRoot, digest)) {
+        let stat: fs.Stats;
+        try {
+          stat = fs.lstatSync(candidate);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+        if (!verifiedContentMatches(candidate, stat) || stat.nlink >= contentHardlinkLimit())
+          continue;
+        linkWithDiagnosticsSync(candidate, replacement);
+        selected = candidate;
+        return;
       }
-      if (!verifiedContentMatches(candidate, stat) || stat.nlink >= contentHardlinkLimit())
-        continue;
-      linkWithDiagnosticsSync(candidate, replacement);
-      selected = candidate;
-      return;
-    }
-  });
+    })
+  );
   return selected;
 }
 
@@ -287,24 +304,26 @@ async function ensurePrimaryReplica(
   await fs.promises.mkdir(path.dirname(target), { recursive: true });
   const coordinator = derivedCacheCoordinator(coordinatorRoot);
   let requiresCopy = false;
-  coordinator.withMutation(() => {
-    if (fs.existsSync(target)) return;
-    const sourceStat = fs.lstatSync(sourcePath);
-    if (sourceStat.nlink >= contentHardlinkLimit()) {
-      requiresCopy = true;
-      return;
-    }
-    try {
-      fs.linkSync(sourcePath, target);
-      rememberVerifiedContent(target, fs.lstatSync(target));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EXDEV") {
+  withCoordinatorOperation("publishing the primary replica", () =>
+    coordinator.withMutation(() => {
+      if (fs.existsSync(target)) return;
+      const sourceStat = fs.lstatSync(sourcePath);
+      if (sourceStat.nlink >= contentHardlinkLimit()) {
         requiresCopy = true;
         return;
       }
-      throw error;
-    }
-  });
+      try {
+        fs.linkSync(sourcePath, target);
+        rememberVerifiedContent(target, fs.lstatSync(target));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EXDEV") {
+          requiresCopy = true;
+          return;
+        }
+        throw error;
+      }
+    })
+  );
   if (fs.existsSync(target)) {
     const stat = await verifyContentReplica(target, digest, expectedSize, mode);
     if (!stat) throw new Error("Dependency content replica disappeared after publication");
@@ -316,11 +335,13 @@ async function ensurePrimaryReplica(
   let primaryFailure: unknown;
   let hasPrimaryFailure = false;
   try {
-    coordinator.withMutation(() => {
-      if (fs.existsSync(target)) return;
-      fs.renameSync(staged, target);
-      rememberVerifiedContent(target, fs.lstatSync(target));
-    });
+    withCoordinatorOperation("publishing a copied primary replica", () =>
+      coordinator.withMutation(() => {
+        if (fs.existsSync(target)) return;
+        fs.renameSync(staged, target);
+        rememberVerifiedContent(target, fs.lstatSync(target));
+      })
+    );
   } catch (error) {
     primaryFailure = error;
     hasPrimaryFailure = true;
@@ -352,7 +373,9 @@ async function replaceWithContentLink(
   const storeRoot = contentStoreRoot(sourceStat.mode);
   const coordinatorRoot = contentCoordinatorRoot();
   const coordinator = derivedCacheCoordinator(coordinatorRoot);
-  const lease = coordinator.acquire(coordinatorRoot, contentLeaseKey(sourceStat.mode, digest));
+  const lease = withCoordinatorOperation("acquiring a digest lease", () =>
+    coordinator.acquire(coordinatorRoot, contentLeaseKey(sourceStat.mode, digest))
+  );
 
   const replacement = path.join(
     path.dirname(filePath),
@@ -386,30 +409,32 @@ async function replaceWithContentLink(
         sourceStat.size,
         sourceStat.mode
       );
-      coordinator.withMutation(() => {
-        // Another process may have opened a replica while this copy was being
-        // verified. Only use replicas this process has already verified.
-        for (const candidate of contentReplicaPaths(storeRoot, digest)) {
-          let stat: fs.Stats;
-          try {
-            stat = fs.lstatSync(candidate);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-            throw error;
+      withCoordinatorOperation("allocating a replica", () =>
+        coordinator.withMutation(() => {
+          // Another process may have opened a replica while this copy was being
+          // verified. Only use replicas this process has already verified.
+          for (const candidate of contentReplicaPaths(storeRoot, digest)) {
+            let stat: fs.Stats;
+            try {
+              stat = fs.lstatSync(candidate);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+              throw error;
+            }
+            if (!verifiedContentMatches(candidate, stat) || stat.nlink >= contentHardlinkLimit())
+              continue;
+            linkWithDiagnosticsSync(candidate, replacement);
+            return;
           }
-          if (!verifiedContentMatches(candidate, stat) || stat.nlink >= contentHardlinkLimit())
-            continue;
-          linkWithDiagnosticsSync(candidate, replacement);
-          return;
-        }
-        const replica = nextContentReplica(storeRoot, digest);
-        const target = contentReplicaPath(storeRoot, digest, replica);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.renameSync(staged!, target);
-        const stat = fs.lstatSync(target);
-        rememberVerifiedContent(target, stat);
-        linkWithDiagnosticsSync(target, replacement);
-      });
+          const replica = nextContentReplica(storeRoot, digest);
+          const target = contentReplicaPath(storeRoot, digest, replica);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.renameSync(staged!, target);
+          const stat = fs.lstatSync(target);
+          rememberVerifiedContent(target, stat);
+          linkWithDiagnosticsSync(target, replacement);
+        })
+      );
     }
     if (!alreadyCanonical) await fs.promises.rename(replacement, filePath);
   } catch (error) {
@@ -430,7 +455,7 @@ async function replaceWithContentLink(
     }
   }
   try {
-    lease.release();
+    withCoordinatorOperation("releasing a digest lease", () => lease.release());
   } catch (releaseFailure) {
     cleanupFailures.push(releaseFailure);
   }
@@ -540,19 +565,21 @@ async function pruneContentFiles(storeRoot: string): Promise<DependencyContentPr
   for (const storedPath of await regularFiles(storeRoot)) {
     const digest = digestFromStoredPath(storeRoot, storedPath);
     if (!digest) continue;
-    const removal = coordinator.withMutation(() => {
-      if (coordinator.hasLease(coordinatorRoot, contentLeaseKey(mode, digest))) return null;
-      let stat: fs.Stats;
-      try {
-        stat = fs.lstatSync(storedPath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-        throw error;
-      }
-      if (!stat.isFile() || stat.nlink !== 1) return null;
-      fs.unlinkSync(storedPath);
-      return { bytes: (stat.blocks ?? 0) * 512 || stat.size };
-    });
+    const removal = withCoordinatorOperation("pruning an unreferenced replica", () =>
+      coordinator.withMutation(() => {
+        if (coordinator.hasLease(coordinatorRoot, contentLeaseKey(mode, digest))) return null;
+        let stat: fs.Stats;
+        try {
+          stat = fs.lstatSync(storedPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          throw error;
+        }
+        if (!stat.isFile() || stat.nlink !== 1) return null;
+        fs.unlinkSync(storedPath);
+        return { bytes: (stat.blocks ?? 0) * 512 || stat.size };
+      })
+    );
     if (removal) {
       result.files += 1;
       result.bytes += removal.bytes;

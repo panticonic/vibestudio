@@ -38,13 +38,18 @@ content-addressed artifacts without rebuilding them. Both paths are exercised
 through isolated developer instances rather than by deleting or reusing a
 person's normal instance.
 
-Build V2 uses two build lanes by default. An individual esbuild and TypeScript
-fold already uses the machine in parallel, so machine-wide concurrency makes
-each fold slower; a bounded pair still lets the selected shell and initial panel
-advance together. Work waiting for a lane is explicitly classified:
-interactive requests precede background preparation.
-`VIBESTUDIO_MAX_CONCURRENT_BUILDS` remains an operator override for
-throughput-oriented batch environments.
+Interactive Build V2 defaults to three concurrent build lanes. A unit build
+already uses parallel esbuild, TypeScript, package-resolution, and hashing work;
+the default therefore caps admitted unit builds and limits aggregate CPU and
+memory exposure while allowing interactive requests, required startup work, and
+speculative preparation to make progress.
+The scheduler prioritizes interactive requests over background preparation.
+`VIBESTUDIO_MAX_CONCURRENT_BUILDS` is an existing process-local operator override
+for throughput-oriented batch work. Operators can raise it when the runner has
+CPU and memory capacity for more independent builds; it does not create duplicate
+work for identical in-flight build keys, which Build V2 coalesces. Choose a batch
+limit for the runner’s aggregate resources rather than treating one value as a
+universal optimum.
 
 Source maps are also an explicit unit cost. Extensions retain maps because they
 run as host-side code, while panel, app, and worker manifests opt in with
@@ -82,10 +87,11 @@ because four Base dependencies were absent from Host. Publishing the complete
 startup closure reduced dependency preparation to 2 ms and the chat build to
 1.85 s in the same smoke. With two lanes, the paired shell and panel reached the
 initial-panel readiness boundary in 4.25–4.56 s in the sampled cold runs,
-compared with 4.80–5.18 s through one lane. These measurements are diagnostic,
-not fixed budgets; the enforced guarantees are that canonical startup performs
-no package-manager install, cold preparation occurs before readiness, and the
-next launch becomes verified artifact reuse.
+compared with 4.80–5.18 s through one lane. That sample used the then-current
+two-lane configuration; it does not describe the present default. These
+measurements are diagnostic, not fixed budgets; the enforced guarantees are
+that canonical startup performs no package-manager install, cold preparation
+occurs before readiness, and the next launch becomes verified artifact reuse.
 
 Host-owned template tests use the same semantic package graph and dependency
 projection. Source-only Host SDK imports resolve from their package export maps,
