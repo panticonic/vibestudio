@@ -413,9 +413,13 @@ describe("dependency-environment resolver", () => {
       fs.writeFileSync(path.join(source, "helper.ts"), "export const helper: number = 7;");
       fs.writeFileSync(path.join(source, "theme.css"), ".component { color: red; }");
       fs.writeFileSync(path.join(source, "icon.svg"), "<svg>owned</svg>");
+      let pluginEndInputs: string[] = [];
       const frameworkPlugin: esbuild.Plugin = {
         name: "framework-virtual-source",
         setup(build) {
+          build.onEnd((result) => {
+            pluginEndInputs = Object.keys(result.metafile?.inputs ?? {});
+          });
           build.onResolve({ filter: /\.component$/ }, (args) => ({
             path: args.path,
             namespace: "component-source",
@@ -433,7 +437,9 @@ describe("dependency-environment resolver", () => {
         bundle: true,
         format: "esm",
         platform: "browser",
+        sourcemap: "linked",
         outdir: path.join(root, "out"),
+        metafile: true,
         write: false,
         logLevel: "silent",
         loader: { ".svg": "text" },
@@ -442,6 +448,48 @@ describe("dependency-environment resolver", () => {
       expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("7");
       expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("<svg>owned</svg>");
       expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("color: red");
+      const metafile = result.metafile;
+      expect(metafile).toBeDefined();
+      const inputPaths = Object.keys(metafile!.inputs);
+      expect(inputPaths).toContain(`component-source:${entry}`);
+      expect(inputPaths).toContain(path.join(source, "helper.ts"));
+      expect(JSON.stringify(metafile)).not.toContain("vibestudio-prepared-");
+      expect(pluginEndInputs).toContain(`component-source:${entry}`);
+      expect(pluginEndInputs).not.toContain(`vibestudio-prepared-plugin:component-source:${entry}`);
+      const entryMetadata = Object.values(metafile!.outputs).find(
+        (output) => output.entryPoint !== undefined
+      );
+      expect(entryMetadata?.entryPoint).toBe(`component-source:${entry}`);
+      expect(Object.keys(entryMetadata?.inputs ?? {})).toContain(`component-source:${entry}`);
+      const mapFile = result.outputFiles.find((file) => file.path.endsWith(".map"));
+      expect(mapFile).toBeDefined();
+      const inMemorySourceMap = JSON.parse(mapFile!.text) as { sourcesContent?: string[] };
+      expect(inMemorySourceMap.sourcesContent).toContain("export const helper: number = 7;");
+
+      const diskOutDir = path.join(root, "written-out");
+      const written = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        sourcemap: "linked",
+        outdir: diskOutDir,
+        metafile: true,
+        logLevel: "silent",
+        loader: { ".svg": "text" },
+        plugins: composePreparedDependencyPlugins([frameworkPlugin], [], [source]),
+      });
+      const writtenMap = Object.keys(written.metafile!.outputs).find((outputPath) =>
+        outputPath.endsWith(".map")
+      );
+      expect(writtenMap).toBeDefined();
+      const writtenMapPath = path.isAbsolute(writtenMap!)
+        ? writtenMap!
+        : path.resolve(process.cwd(), writtenMap!);
+      const writtenSourceMap = JSON.parse(fs.readFileSync(writtenMapPath, "utf8")) as {
+        sourcesContent?: string[];
+      };
+      expect(writtenSourceMap.sourcesContent).toContain("export const helper: number = 7;");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

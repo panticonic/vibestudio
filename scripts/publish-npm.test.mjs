@@ -1,6 +1,38 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
-import { runWithOwnedCleanup, spawnResultFailure } from "./publish-npm.mjs";
+import { runWithOwnedCleanup, spawnResultFailure, validateStagedPackage } from "./publish-npm.mjs";
+
+void test("published versions still validate the staged manifest and only skip publication", () => {
+  const rootPackage = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url)));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "publish-npm-staged-candidate-"));
+  try {
+    fs.writeFileSync(
+      path.join(directory, "package.json"),
+      JSON.stringify({
+        name: "@panticonic/vibestudio-server",
+        version: rootPackage.version,
+        publishConfig: { access: "public" },
+      })
+    );
+    const candidate = validateStagedPackage({
+      name: "@panticonic/vibestudio-server",
+      dir: directory,
+    });
+    const registryVersions = new Map([[candidate.pkg.name, candidate.version]]);
+    const publishQueue = [candidate].filter(
+      (entry) => registryVersions.get(entry.pkg.name) !== entry.version
+    );
+
+    assert.equal(candidate.pkg.dir, directory);
+    assert.equal(candidate.version, rootPackage.version);
+    assert.deepEqual(publishQueue, []);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 void test("owned cleanup preserves the operation error as primary", async () => {
   const operationFailure = Object.assign(new Error("install failed"), { code: "EINSTALL" });

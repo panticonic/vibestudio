@@ -184,21 +184,22 @@ describe("buildUnit app builds", () => {
               target: "electron",
               renderer: "index.ts",
               capabilities: [],
-              startupModules: ["./App"],
+              startupModules: ["./components/App"],
             },
           },
         })
       );
       fs.writeFileSync(
         path.join(appDir, "index.ts"),
-        'void import("./App"); void import("./Overlay");\n'
+        'void import("./components/App"); void import("./Overlay");\n'
       );
+      fs.mkdirSync(path.join(appDir, "components"), { recursive: true });
       fs.writeFileSync(
-        path.join(appDir, "App.ts"),
+        path.join(appDir, "components", "App.tsx"),
         'import { marker } from "./startup-heavy"; globalThis.name = marker;\n'
       );
       fs.writeFileSync(
-        path.join(appDir, "startup-heavy.ts"),
+        path.join(appDir, "components", "startup-heavy.ts"),
         'export const marker = "declared-startup-marker";\n'
       );
       fs.writeFileSync(

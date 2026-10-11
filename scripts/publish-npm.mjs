@@ -131,31 +131,33 @@ async function main() {
   if (!options.skipStage) run("node", ["scripts/build-server-npm-package.mjs"], { cwd: repoRoot });
 
   const manifests = [validateStagedPackage(serverPackage)];
-  const publishQueue = manifests.filter((entry) => {
+  const registryVersions = new Map();
+  for (const entry of manifests) {
     const existing = npmView(entry.pkg.name, entry.version);
     if (existing === entry.version) {
       console.log(
         `[publish-npm] ${entry.pkg.name}@${entry.version} is already published; skipping.`
       );
-      return false;
-    }
-    if (existing) {
+    } else if (existing) {
       console.log(
         `[publish-npm] ${entry.pkg.name} exists, but ${entry.version} is not published yet.`
       );
     }
-    return true;
-  });
+    registryVersions.set(entry.pkg.name, existing);
+  }
+  const publishQueue = manifests.filter(
+    (entry) => registryVersions.get(entry.pkg.name) !== entry.version
+  );
 
   if (!options.skipDryRun) {
-    for (const entry of publishQueue) {
+    for (const entry of manifests) {
       console.log(`\n[publish-npm] Dry-run ${entry.pkg.name}@${entry.version}`);
       run("npm", publishArgs({ dryRun: true, tag: options.tag }), { cwd: entry.pkg.dir });
     }
   }
 
   if (options.installSmoke) {
-    for (const entry of publishQueue) {
+    for (const entry of manifests) {
       await runStagedInstallSmoke(entry);
     }
   }
@@ -280,7 +282,7 @@ function publishArgs({ dryRun, tag }) {
   return args;
 }
 
-function validateStagedPackage(pkg) {
+export function validateStagedPackage(pkg) {
   const manifestPath = path.join(pkg.dir, "package.json");
   if (!fs.existsSync(manifestPath)) {
     throw new Error(`Missing staged package: ${manifestPath}`);

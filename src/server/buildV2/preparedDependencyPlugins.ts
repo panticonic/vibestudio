@@ -99,7 +99,81 @@ export function composePreparedDependencyPlugins(
   const packageRoots = new Set<string>();
   const dependencySearchRoots = new Set<string>();
   const locations = new Map<string, Location>();
+  const metadataPaths = new Map<string, string>();
   const namespaceKey = (namespace: string, file: string) => `${namespace}\0${file}`;
+
+  const rememberLocation = (namespace: string, file: string, location: Location): void => {
+    locations.set(namespaceKey(namespace, file), location);
+    if (!isOwnedNamespace(namespace)) return;
+    const original = originalNamespace(namespace);
+    const canonicalPath =
+      original === "file" ? location.physicalPath : `${original ?? namespace}:${file}`;
+    const identity = `${namespace}:${file}`;
+    metadataPaths.set(identity, canonicalPath);
+    metadataPaths.set(identity.replaceAll("\\", "/"), canonicalPath);
+  };
+
+  const canonicalMetadataPath = (value: string): string =>
+    metadataPaths.get(value) ?? metadataPaths.get(value.replaceAll("\\", "/")) ?? value;
+
+  const normalizeMetafile = (metafile: esbuild.Metafile): void => {
+    const normalizedInputs: esbuild.Metafile["inputs"] = {};
+    for (const [inputPath, input] of Object.entries(metafile.inputs)) {
+      const normalizedPath = canonicalMetadataPath(inputPath);
+      const imports = input.imports.map((item) => ({
+        ...item,
+        path: canonicalMetadataPath(item.path),
+      }));
+      const existing = normalizedInputs[normalizedPath];
+      normalizedInputs[normalizedPath] = existing
+        ? {
+            ...existing,
+            bytes: Math.max(existing.bytes, input.bytes),
+            imports: [
+              ...existing.imports,
+              ...imports.filter(
+                (item) =>
+                  !existing.imports.some(
+                    (previous) =>
+                      previous.path === item.path &&
+                      previous.kind === item.kind &&
+                      previous.external === item.external &&
+                      previous.original === item.original &&
+                      JSON.stringify(previous.with) === JSON.stringify(item.with)
+                  )
+              ),
+            ],
+          }
+        : { ...input, imports };
+    }
+    metafile.inputs = normalizedInputs;
+
+    const normalizedOutputs: esbuild.Metafile["outputs"] = {};
+    for (const [outputPath, output] of Object.entries(metafile.outputs)) {
+      const normalizedModuleInputs: esbuild.Metafile["outputs"][string]["inputs"] = {};
+      for (const [inputPath, input] of Object.entries(output.inputs)) {
+        const normalizedPath = canonicalMetadataPath(inputPath);
+        const existing = normalizedModuleInputs[normalizedPath];
+        normalizedModuleInputs[normalizedPath] = existing
+          ? { bytesInOutput: existing.bytesInOutput + input.bytesInOutput }
+          : input;
+      }
+      normalizedOutputs[outputPath] = {
+        ...output,
+        ...(output.entryPoint ? { entryPoint: canonicalMetadataPath(output.entryPoint) } : {}),
+        inputs: normalizedModuleInputs,
+        imports: output.imports.map((item) => ({
+          ...item,
+          path: canonicalMetadataPath(item.path),
+        })),
+      };
+    }
+    metafile.outputs = normalizedOutputs;
+  };
+
+  const normalizeBuildResult = (result: esbuild.BuildResult): void => {
+    if (result.metafile) normalizeMetafile(result.metafile);
+  };
 
   const locationFor = (namespace: string, file: string, resolveDir?: string): Location => {
     const normalizedFile = file.startsWith(`${namespace}:`)
@@ -281,7 +355,7 @@ export function composePreparedDependencyPlugins(
                       : (adapted.resolveDir ?? path.dirname(physicalPath));
                   const locationKey = namespaceKey(nextNamespace, resultPath);
                   if (!locations.has(locationKey)) {
-                    locations.set(locationKey, { physicalPath, resolveDir });
+                    rememberLocation(nextNamespace, resultPath, { physicalPath, resolveDir });
                   }
                   return { ...result, namespace: nextNamespace };
                 });
@@ -334,6 +408,18 @@ export function composePreparedDependencyPlugins(
                   return preserved;
                 });
               }
+            };
+          }
+          if (property === "onEnd") {
+            return (
+              callback: (
+                result: esbuild.BuildResult
+              ) => esbuild.OnEndResult | null | void | Promise<esbuild.OnEndResult | null | void>
+            ) => {
+              build.onEnd(async (result) => {
+                normalizeBuildResult(result);
+                return callback(result);
+              });
             };
           }
           const value = Reflect.get(target, property, receiver) as unknown;
@@ -416,7 +502,7 @@ export function composePreparedDependencyPlugins(
 
         if (args.kind === "entry-point") {
           if (!entryPath || !allowedPath(entryPath)) return null;
-          locations.set(namespaceKey(OWNED_FILE_NAMESPACE, entryPath), {
+          rememberLocation(OWNED_FILE_NAMESPACE, entryPath, {
             physicalPath: entryPath,
             resolveDir: path.dirname(entryPath),
           });
@@ -456,7 +542,7 @@ export function composePreparedDependencyPlugins(
           };
         }
         const namespace = OWNED_FILE_NAMESPACE;
-        locations.set(namespaceKey(namespace, resolved.path), {
+        rememberLocation(namespace, resolved.path, {
           physicalPath: resolved.path,
           resolveDir: path.dirname(resolved.path),
         });
@@ -476,6 +562,7 @@ export function composePreparedDependencyPlugins(
           };
         }
       });
+      build.onEnd(normalizeBuildResult);
     },
   };
   return [...isolatedPlugins, resolver];
