@@ -15,7 +15,7 @@ import {
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 
 /** Ready-file publication and process exit are the owner's authoritative lifecycle edges. */
-export function awaitHubReady(child, readyFile) {
+export function awaitHubReady(child, readyFile, signal) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (error, ready) => {
@@ -24,12 +24,14 @@ export function awaitHubReady(child, readyFile) {
       watcher.close();
       child.off("exit", closed);
       child.off("error", failed);
+      signal?.removeEventListener("abort", canceled);
       if (error) reject(error);
       else resolve(ready);
     };
     const closed = (code, signal) =>
       finish(new Error(`Release build server exited (${signal ?? code})`));
     const failed = (error) => finish(error);
+    const canceled = () => finish(signal?.reason ?? new Error("Release server startup cancelled"));
     const check = () => {
       if (settled) return;
       try {
@@ -40,9 +42,11 @@ export function awaitHubReady(child, readyFile) {
     };
     const watcher = fs.watch(path.dirname(readyFile), check);
     watcher.on("error", failed);
+    signal?.addEventListener("abort", canceled, { once: true });
     child.once("exit", closed);
     child.once("error", failed);
-    if (child.exitCode !== null || child.signalCode !== null)
+    if (signal?.aborted) canceled();
+    else if (child.exitCode !== null || child.signalCode !== null)
       closed(child.exitCode, child.signalCode);
     else check();
   });
@@ -256,18 +260,52 @@ async function withReleaseConsumerSession(
   let serverError;
   let stopping = false;
   let stopFailure;
+  let stopDelivery;
+  let ownerRevocationRequested = false;
   let tail = "";
   let operationFailure;
   const cancellation = new AbortController();
+  const revokeAfterStopDeliveryFailure = (error) => {
+    stopFailure ??= error;
+    if (!server?.connected) return;
+    try {
+      server.disconnect();
+      ownerRevocationRequested = true;
+    } catch (disconnectError) {
+      stopFailure = new AggregateError(
+        [stopFailure, disconnectError],
+        "Could not deliver parent-owned stop or revoke its process lease",
+        { cause: stopFailure }
+      );
+    }
+  };
   const stop = () => {
     stopping = true;
-    if (server?.connected) {
-      try {
-        server.disconnect();
-      } catch (error) {
-        stopFailure ??= error;
-      }
+    if (
+      server &&
+      server.exitCode === null &&
+      server.signalCode === null &&
+      server.connected &&
+      !stopDelivery
+    ) {
+      // The existing parent-owned stop message asks the service owner to run
+      // its ordered shutdown while the IPC ownership lease remains connected.
+      stopDelivery = new Promise((resolve) => {
+        const failed = (error) => {
+          revokeAfterStopDeliveryFailure(error);
+          resolve();
+        };
+        try {
+          server.send({ type: "vibestudio:parent-owned-stop" }, (error) => {
+            if (error) failed(error);
+            else resolve();
+          });
+        } catch (error) {
+          failed(error);
+        }
+      });
     }
+    return stopDelivery ?? Promise.resolve();
   };
   const interrupt = (signal) => {
     cancellation.abort(new Error(`Release operation cancelled by ${signal}`));
@@ -293,6 +331,7 @@ async function withReleaseConsumerSession(
           "HTTPS_PROXY",
           "NO_PROXY",
           "NODE_EXTRA_CA_CERTS",
+          "VIBESTUDIO_MAX_CONCURRENT_BUILDS",
         ])
           if (process.env[key] !== undefined) inherited[key] = process.env[key];
         // Release coordinates come from the installed pointer; configuration,
@@ -347,7 +386,7 @@ async function withReleaseConsumerSession(
           stream.on("data", (chunk) => {
             tail = (tail + chunk).slice(-8192);
           });
-        const ready = await awaitHubReady(server, readyFile);
+        const ready = await awaitHubReady(server, readyFile, cancellation.signal);
         const cli = async (args) => {
           cancellation.signal.throwIfAborted();
           if (serverError) throw serverError;
@@ -412,15 +451,15 @@ async function withReleaseConsumerSession(
       const failures = [];
       await runOwnedCleanupSteps(
         [
-          async () => stop(),
           async () => {
+            await stop();
             if (stopFailure) throw stopFailure;
           },
           async () => {
             if (!closed) return;
             const result = await closed;
             if (result.error) throw result.error;
-            if (result.signal)
+            if (result.signal && !(ownerRevocationRequested && result.signal === "SIGKILL"))
               throw new Error(`Release build server was terminated by ${result.signal}: ${tail}`);
             if (result.code !== 0)
               throw new Error(`Release build server exited (${result.code}): ${tail}`);

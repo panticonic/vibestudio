@@ -3370,7 +3370,11 @@ async function startHubGateway(input: {
   return { server, port };
 }
 
-export async function runHubServer(input: { args: HubServerArgs; appRoot: string }): Promise<void> {
+export async function runHubServer(input: {
+  args: HubServerArgs;
+  appRoot: string;
+  registerShutdown?: (handler: () => void) => boolean;
+}): Promise<void> {
   const args = input.args;
   const appRoot = input.appRoot;
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
@@ -3569,20 +3573,6 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     });
   }, 10_000);
   revocationCleanupTimer.unref();
-  console.log("vibestudio-server hub ready:");
-  console.log(`  Gateway:     ${connectUrl} (loopback)`);
-  console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
-  if (startupInvite && !args.readyFile) {
-    console.log(`  Root Pair URL: ${startupInvite?.pairUrl ?? "unavailable"}`);
-  } else if (!startupInvite) {
-    console.log("  Identity:    root already bootstrapped (add users via invite)");
-  }
-
-  if (args.readyFile) {
-    readyPublished = true;
-    publishReady();
-  }
-
   const workspaceChildren = (): ChildProcess[] => [...activeState.workspaceChildren];
 
   async function shutdown(): Promise<void> {
@@ -3631,4 +3621,22 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   };
   process.on("SIGTERM", () => onShutdownSignal("SIGTERM"));
   process.on("SIGINT", () => onShutdownSignal("SIGINT"));
+  const stoppedBeforeReady = input.registerShutdown?.(() => onShutdownSignal("SIGTERM"));
+  if (stoppedBeforeReady || state.shuttingDown) return;
+
+  // The parent-owned stop handler is live before readiness is published. A
+  // stop requested during bootstrap is delivered as soon as ordered cleanup
+  // exists, and consumers never observe a ready server without that owner.
+  console.log("vibestudio-server hub ready:");
+  console.log(`  Gateway:     ${connectUrl} (loopback)`);
+  console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
+  if (startupInvite && !args.readyFile) {
+    console.log(`  Root Pair URL: ${startupInvite?.pairUrl ?? "unavailable"}`);
+  } else if (!startupInvite) {
+    console.log("  Identity:    root already bootstrapped (add users via invite)");
+  }
+  if (args.readyFile) {
+    readyPublished = true;
+    publishReady();
+  }
 }

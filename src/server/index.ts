@@ -18,7 +18,22 @@ import { serializeRpcFailure } from "@vibestudio/rpc";
  */
 
 import { bindProcessLifetimeToParent } from "../../scripts/owned-process-tree.mjs";
-if (process.send) bindProcessLifetimeToParent();
+let parentStopRequested = false;
+let parentShutdownHandler: (() => void) | undefined;
+const requestParentShutdown = (): void => {
+  if (parentShutdownHandler) parentShutdownHandler();
+  else parentStopRequested = true;
+};
+const registerParentShutdown = (handler: () => void): boolean => {
+  parentShutdownHandler = handler;
+  if (parentStopRequested) {
+    parentStopRequested = false;
+    handler();
+    return true;
+  }
+  return false;
+};
+if (process.send) bindProcessLifetimeToParent(requestParentShutdown);
 
 import {
   createOpenUnitReviewLookup,
@@ -395,7 +410,7 @@ async function main() {
       );
     }
     const { runHubServer } = await import("./hubServer.js");
-    await runHubServer({ args, appRoot });
+    await runHubServer({ args, appRoot, registerShutdown: registerParentShutdown });
     return;
   }
 
@@ -7916,58 +7931,9 @@ async function main() {
   // Report ready
   // ===========================================================================
 
-  settleWorkspaceReadyForPeers(true);
-
   const workerdMgr = container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
 
-  {
-    // Write admin token to a well-known file for scripting
-    const tokenFilePath = layout.adminTokenFile;
-    try {
-      fs.writeFileSync(tokenFilePath, adminToken, { mode: 0o600 });
-    } catch (err) {
-      console.warn("[Server] Failed to write admin token file:", err);
-    }
-
-    console.log("vibestudio-server ready:");
-    console.log(`  Workspace:   ${workspaceName}`);
-    console.log(`  Gateway:     ${gatewayHttpUrl(gatewayPort)} (loopback)`);
-    console.log(`  Workerd:     (via gateway /_w/)`);
-    console.log(`  RPC:         ${gatewayWsUrl(gatewayPort)}/rpc`);
-    const sourceLabel =
-      tokenSource === "env"
-        ? " (from VIBESTUDIO_ADMIN_TOKEN)"
-        : tokenSource === "persisted"
-          ? " (persisted)"
-          : " (newly generated)";
-    console.log(`  Token file:  ${tokenFilePath}${sourceLabel}`);
-    if (tokenSource !== "env") {
-      console.log(`  Persisted:   ${getAdminTokenPath()}`);
-    }
-    if (args.readyFile) {
-      const pairing = irohIngress ? await waitForIrohReach() : null;
-      const readyPayload = {
-        workspaceName,
-        workspaceId,
-        workspaceDir: workspacePath,
-        gatewayUrl: gatewayHttpUrl(gatewayPort),
-        rpcUrl: `${gatewayWsUrl(gatewayPort)}/rpc`,
-        workerdUrl: `${gatewayHttpUrl(gatewayPort)}/_w/`,
-        adminToken,
-        pairing,
-        serverId: deviceAuthStore.getServerId(),
-        serverBootId,
-        tokenFilePath,
-        gatewayPort,
-        workerdPort: workerdMgr?.getPort() ?? 0,
-        pid: process.pid,
-        version: serverVersion,
-      };
-      writeFileAtomicSync(args.readyFile, `${JSON.stringify(readyPayload, null, 2)}\n`, {
-        mode: 0o600,
-      });
-    }
-  }
+  const tokenFilePath = layout.adminTokenFile;
 
   // ===========================================================================
   // Graceful shutdown — container.stopAll() handles everything
@@ -8185,6 +8151,55 @@ async function main() {
   }
 
   requestShutdown = () => void shutdown();
+  const stoppedBeforeReady = process.send ? registerParentShutdown(requestShutdown) : false;
+  if (stoppedBeforeReady || isShuttingDown) return;
+  const pairing = args.readyFile && irohIngress ? await waitForIrohReach() : null;
+  if (isShuttingDown) return;
+
+  // Readiness guarantees the parent-owned stop callback has been installed.
+  try {
+    fs.writeFileSync(tokenFilePath, adminToken, { mode: 0o600 });
+  } catch (err) {
+    console.warn("[Server] Failed to write admin token file:", err);
+  }
+  console.log("vibestudio-server ready:");
+  console.log(`  Workspace:   ${workspaceName}`);
+  console.log(`  Gateway:     ${gatewayHttpUrl(gatewayPort)} (loopback)`);
+  console.log(`  Workerd:     (via gateway /_w/)`);
+  console.log(`  RPC:         ${gatewayWsUrl(gatewayPort)}/rpc`);
+  const sourceLabel =
+    tokenSource === "env"
+      ? " (from VIBESTUDIO_ADMIN_TOKEN)"
+      : tokenSource === "persisted"
+        ? " (persisted)"
+        : " (newly generated)";
+  console.log(`  Token file:  ${tokenFilePath}${sourceLabel}`);
+  if (tokenSource !== "env") {
+    console.log(`  Persisted:   ${getAdminTokenPath()}`);
+  }
+  settleWorkspaceReadyForPeers(true);
+  if (args.readyFile) {
+    const readyPayload = {
+      workspaceName,
+      workspaceId,
+      workspaceDir: workspacePath,
+      gatewayUrl: gatewayHttpUrl(gatewayPort),
+      rpcUrl: `${gatewayWsUrl(gatewayPort)}/rpc`,
+      workerdUrl: `${gatewayHttpUrl(gatewayPort)}/_w/`,
+      adminToken,
+      pairing,
+      serverId: deviceAuthStore.getServerId(),
+      serverBootId,
+      tokenFilePath,
+      gatewayPort,
+      workerdPort: workerdMgr?.getPort() ?? 0,
+      pid: process.pid,
+      version: serverVersion,
+    };
+    writeFileAtomicSync(args.readyFile, `${JSON.stringify(readyPayload, null, 2)}\n`, {
+      mode: 0o600,
+    });
+  }
 
   process.on("SIGTERM", () => void shutdown());
   process.on("SIGINT", () => void shutdown());

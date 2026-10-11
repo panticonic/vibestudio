@@ -11,9 +11,13 @@ const POLL_MS = 100;
 
 /** A detached native service cannot outlive the IPC owner that launched it.
  * Install before bootstrap. Owner loss revokes the whole execution tree,
- * including descendants that started their own process groups. It is a
- * lifecycle edge, not an idle timer or a graceful-drain deadline. */
-export function bindProcessLifetimeToParent() {
+ * including descendants that started their own process groups. An explicit
+ * parent-owned-stop message may request an owner-provided graceful shutdown;
+ * losing the IPC lease itself always revokes the execution tree. */
+export function bindProcessLifetimeToParent(onStop) {
+  if (onStop !== undefined && typeof onStop !== "function") {
+    throw new TypeError("Parent-owned stop handler must be a function");
+  }
   if (!process.send || !process.connected)
     throw new Error("Parent-owned process requires a live inherited IPC channel");
   const onDisconnect = () => {
@@ -61,7 +65,9 @@ export function bindProcessLifetimeToParent() {
     signalGroup(process.pid, "SIGKILL");
   };
   const onMessage = (message) => {
-    if (message?.type === "vibestudio:parent-owned-stop" && process.connected) process.disconnect();
+    if (message?.type !== "vibestudio:parent-owned-stop" || !process.connected) return;
+    if (onStop) onStop();
+    else process.disconnect();
   };
   process.once("disconnect", onDisconnect);
   process.on("message", onMessage);

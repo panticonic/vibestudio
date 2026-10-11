@@ -341,16 +341,22 @@ it("preserves the original hardlink failure with bounded filesystem evidence", a
     caught = error;
   }
 
-  expect(caught).toMatchObject({
+  expect(caught).toBeInstanceOf(Error);
+  const coordinatorFailure = caught as Error & { cause?: unknown };
+  expect(coordinatorFailure).toMatchObject({
+    name: "DependencyContentCoordinatorError",
+    message: "Dependency content coordinator selecting a reusable replica failed",
+  });
+  const linkError = coordinatorFailure.cause as Error & { cause?: unknown };
+  expect(linkError).toMatchObject({
     name: "DependencyContentLinkError",
     cause: linkFailure,
   });
-  expect(caught).toBeInstanceOf(Error);
-  expect((caught as Error).message).toContain("code=UNKNOWN");
-  expect((caught as Error).message).toContain("errno=-4094");
-  expect((caught as Error).message).toMatch(/sourceLinks=\d+/u);
-  expect((caught as Error).message).toContain("sameDevice=true");
-  expect((caught as Error).message).not.toContain(root);
+  expect(linkError.message).toContain("code=UNKNOWN");
+  expect(linkError.message).toContain("errno=-4094");
+  expect(linkError.message).toMatch(/sourceLinks=\d+/u);
+  expect(linkError.message).toContain("sameDevice=true");
+  expect(linkError.message).not.toContain(root);
 });
 
 it("retains SQLite transaction diagnostics across parallel deduplication workers", async () => {
@@ -454,14 +460,18 @@ it("retains primary link and temporary-link cleanup failures", async () => {
   }
 
   expect(caught).toBeInstanceOf(AggregateError);
-  expect((caught as AggregateError).errors).toEqual([
-    expect.objectContaining({
-      name: "DependencyContentLinkError",
-      cause: primaryLinkFailure,
-    }),
-    cleanupFailure,
-  ]);
-  expect((caught as Error & { cause?: unknown }).cause).toBe((caught as AggregateError).errors[0]);
+  const errors = (caught as AggregateError).errors as Array<Error & { cause?: unknown }>;
+  expect(errors).toHaveLength(2);
+  expect(errors[0]).toMatchObject({
+    name: "DependencyContentCoordinatorError",
+    message: "Dependency content coordinator selecting a reusable replica failed",
+  });
+  expect(errors[0]!.cause).toMatchObject({
+    name: "DependencyContentLinkError",
+    cause: primaryLinkFailure,
+  });
+  expect(errors[1]).toBe(cleanupFailure);
+  expect((caught as Error & { cause?: unknown }).cause).toBe(errors[0]);
 });
 
 it("joins all hash workers and aggregates independent failures", async () => {
@@ -542,6 +552,14 @@ it("joins all hash workers and aggregates independent failures", async () => {
     caught = error;
   }
   expect(caught).toBeInstanceOf(AggregateError);
-  expect((caught as AggregateError).errors).toEqual(failures);
-  expect((caught as Error & { cause?: unknown }).cause).toBe(failures[0]);
+  const workerErrors = (caught as AggregateError).errors as Array<Error & { cause?: unknown }>;
+  expect(workerErrors).toHaveLength(failures.length);
+  expect(workerErrors.map((error) => error.cause)).toEqual(failures);
+  for (const error of workerErrors) {
+    expect(error).toMatchObject({
+      name: "DependencyContentCoordinatorError",
+      message: "Dependency content coordinator publishing the primary replica failed",
+    });
+  }
+  expect((caught as Error & { cause?: unknown }).cause).toBe(workerErrors[0]);
 });

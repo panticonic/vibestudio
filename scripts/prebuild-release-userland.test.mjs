@@ -63,6 +63,18 @@ test("ready admission propagates the original process failure without a deadline
   assert.equal(child.listenerCount("exit"), 0);
 });
 
+test("ready admission preserves the exact explicit cancellation reason", async () => {
+  const root = await fixture();
+  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
+  const controller = new AbortController();
+  const reason = new Error("release startup cancelled by its owner");
+  const ready = awaitHubReady(child, path.join(root, "ready.json"), controller.signal);
+  const assertion = assert.rejects(ready, (failure) => failure === reason);
+  controller.abort(reason);
+  await assertion;
+  assert.equal(child.listenerCount("exit"), 0);
+});
+
 test("a terminal server exit settles readiness even when no ready file was published", async () => {
   const root = await fixture();
   const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
@@ -89,6 +101,59 @@ test("joins an IPC-owned process and its streams after explicit owner revocation
   assert.equal(child.stdout.closed, true);
   assert.equal(child.stderr.closed, true);
   assert.equal(child.connected, false);
+});
+
+test("a parent stop queued before lifecycle readiness keeps its IPC lease for graceful shutdown", async () => {
+  const child = spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `const { bindProcessLifetimeToParent } = await import(${JSON.stringify(new URL("./owned-process-tree.mjs", import.meta.url).href)});
+       let stopRequested = false;
+       let stopHandler;
+       bindProcessLifetimeToParent(() => {
+         if (stopHandler) stopHandler();
+         else stopRequested = true;
+       });
+       process.on("message", message => {
+         if (message?.type !== "install-lifecycle") return;
+         stopHandler = () => {
+           process.send({ type: "graceful", connected: process.connected });
+           setTimeout(() => process.exit(0), 10);
+         };
+         if (stopRequested) stopHandler();
+       });
+       process.send({ type: "ready" });
+       setInterval(() => {}, 1000);`,
+    ],
+    { stdio: ["ignore", "ignore", "pipe", "ipc"] }
+  );
+  const joined = joinChildProcess(child);
+  child.stderr.resume();
+  try {
+    const ready = new Promise((resolve, reject) => {
+      child.once("message", resolve);
+      child.once("error", reject);
+    });
+    await ready;
+    await new Promise((resolve, reject) =>
+      child.send({ type: "vibestudio:parent-owned-stop" }, (error) =>
+        error ? reject(error) : resolve()
+      )
+    );
+    assert.equal(child.connected, true);
+    const stopped = new Promise((resolve, reject) => {
+      child.once("message", resolve);
+      child.once("error", reject);
+    });
+    child.send({ type: "install-lifecycle" });
+    assert.deepEqual(await stopped, { type: "graceful", connected: true });
+    assert.deepEqual(await joined, { code: 0, signal: null, error: undefined });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await joined;
+  }
 });
 
 test("joins a failed spawn without requiring an exit event for a nonexistent process", async () => {
@@ -145,7 +210,7 @@ test("installed session joins its server and listeners after operation and shutd
     `import fs from "node:fs";
      const readyArg = process.argv.indexOf("--ready-file");
      fs.writeFileSync(process.argv[readyArg + 1], ${JSON.stringify(JSON.stringify(ready))});
-     process.on("disconnect", () => process.exit(7));
+     process.on("message", message => { if (message?.type === "vibestudio:parent-owned-stop") process.exit(7); });
      setInterval(() => {}, 1000);`
   );
   await fs.writeFile(cliEntry, "console.log(JSON.stringify({ system: {}, base: {} }));");
@@ -159,6 +224,7 @@ test("installed session joins its server and listeners after operation and shutd
     }),
     (error) => {
       assert.ok(error instanceof AggregateError);
+      assert.equal(error.errors[0], error.cause);
       assert.equal(error.cause.cause, operationFailure);
       assert.match(error.errors[1].message, /server exited \(7\)/u);
       return true;
@@ -166,6 +232,78 @@ test("installed session joins its server and listeners after operation and shutd
   );
   assert.equal(process.listenerCount("SIGINT"), baselineSigint);
   assert.equal(process.listenerCount("SIGTERM"), baselineSigterm);
+  assert.deepEqual(await fs.readdir(scratchParent), []);
+});
+
+test("installed verification carries the supported build concurrency into server and CLI", async () => {
+  const root = await fixture();
+  const appRoot = path.join(root, "app");
+  const scratchParent = path.join(root, "scratch");
+  const serverEntry = path.join(appRoot, "dist/server.mjs");
+  const cliEntry = path.join(appRoot, "dist/cli/client.mjs");
+  await fs.mkdir(scratchParent, { recursive: true });
+  await fs.mkdir(path.dirname(serverEntry), { recursive: true });
+  await fs.mkdir(path.dirname(cliEntry), { recursive: true });
+  const pairing = {
+    endpointId: "1".repeat(64),
+    relays: DEFAULT_IROH_RELAYS,
+    v: PAIRING_PROTOCOL_VERSION,
+    code: Buffer.alloc(16, 7).toString("base64url"),
+  };
+  const ready = {
+    mode: "hub",
+    gatewayUrl: "https://example.test",
+    rootInvite: {
+      ...pairing,
+      deepLink: createConnectDeepLink(pairing),
+      pairUrl: createConnectPairUrl(pairing),
+      expiresInMs: 60_000,
+      expiresAt: 60_000,
+      serverId: `srv_${"s".repeat(24)}`,
+      serverBootId: `boot_${"b".repeat(24)}`,
+    },
+    serverId: `srv_${"s".repeat(24)}`,
+    serverBootId: `boot_${"b".repeat(24)}`,
+    gatewayPort: 1234,
+    pid: process.pid,
+    version: "test",
+    buildId: "a".repeat(64),
+    workspaces: [],
+  };
+  await fs.writeFile(
+    serverEntry,
+    `import fs from "node:fs";
+     const readyArg = process.argv.indexOf("--ready-file");
+     fs.writeFileSync(process.argv[readyArg + 1], ${JSON.stringify(JSON.stringify(ready))});
+     fs.writeFileSync(process.env.VIBESTUDIO_INSTANCE_ROOT + "/build-concurrency", process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing");
+     process.on("message", message => { if (message?.type === "vibestudio:parent-owned-stop") process.exit(0); });
+     setInterval(() => {}, 1000);`
+  );
+  await fs.writeFile(
+    cliEntry,
+    `console.log(JSON.stringify({ concurrency: process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing" }));`
+  );
+
+  const priorConcurrency = process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS;
+  process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS = "6";
+  try {
+    await withStandaloneReleaseSession(
+      appRoot,
+      process.execPath,
+      scratchParent,
+      async ({ cli, env }) => {
+        assert.equal(env.VIBESTUDIO_MAX_CONCURRENT_BUILDS, "6");
+        assert.equal(
+          await fs.readFile(path.join(env.VIBESTUDIO_INSTANCE_ROOT, "build-concurrency"), "utf8"),
+          "6"
+        );
+        assert.deepEqual(await cli(["environment"]), { concurrency: "6" });
+      }
+    );
+  } finally {
+    if (priorConcurrency === undefined) delete process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS;
+    else process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS = priorConcurrency;
+  }
   assert.deepEqual(await fs.readdir(scratchParent), []);
 });
 
