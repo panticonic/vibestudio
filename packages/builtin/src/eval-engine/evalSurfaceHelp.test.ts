@@ -11,6 +11,7 @@ import {
   evalBindingMethodNames,
   describeEvalBindingIndex,
   describeEvalMethod,
+  createEvalHelp,
   EVAL_RUNTIME_METHOD_NOTES,
   evalRuntimeServiceName,
   invalidHelpArgumentResponse,
@@ -85,7 +86,7 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(evalRuntimeServiceName("git")).toBe("gitInterop");
     expect(evalRuntimeServiceName("vcs")).toBe("vcs");
     expect(out!.methods["importProject"]).toBe(gitRuntimeCatalog.importProject);
-    expect(out!.note).toContain('rpc.call("main", "gitInterop.…"');
+    expect(out!.note).toContain('rpc.call("main", mainRpcMethods["gitInterop.<method>"]');
   });
 
   it("documents the runtime-only blobstore byte helpers without inventing wire methods", () => {
@@ -145,10 +146,34 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(createDesc).toContain("implemented by the worker under test");
     expect(createDesc).toContain("immutable instance identity");
     expect(createDesc).toContain("fresh key after each code change");
-    expect(createDesc).toContain('rpc.call("main", `workers.listSources`, [])');
+    expect(createDesc).toContain('rpc.call("main", mainRpcMethods["workers.listSources"], [])');
+    expect(createDesc).toContain("@vibestudio/service-schemas/mainRpc");
+    expect(createDesc).toContain('mainRpcMethods["runtime.createEntity"]');
     const retireDesc = (out!.methods["retireEntity"] as { description: string }).description;
     expect(retireDesc).toContain("runtime.retireEntity");
     expect(retireDesc).toContain("runtime.listEntities");
+  });
+
+  it("emits each help result while preserving each structured return value", async () => {
+    const descriptions = new Map([
+      ["rpc", { name: "rpc", methods: ["call"] }],
+      ["workers.createDurableObject", { name: "workers.createDurableObject", args: ["source"] }],
+    ]);
+    const emitted: string[] = [];
+    const help = createEvalHelp(
+      async (name) => descriptions.get(name ?? "rpc"),
+      (text) => emitted.push(text)
+    );
+
+    const first = await help("rpc");
+    const second = await help("workers.createDurableObject");
+
+    expect(first).toBe(descriptions.get("rpc"));
+    expect(second).toBe(descriptions.get("workers.createDurableObject"));
+    expect(emitted).toEqual([
+      JSON.stringify(descriptions.get("rpc"), null, 2),
+      JSON.stringify(descriptions.get("workers.createDurableObject"), null, 2),
+    ]);
   });
 
   it("documents immutable worker keys and awaited cleanup on the ergonomic surface", () => {
@@ -174,7 +199,7 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     const out = describeEvalBindingSurface("fs", ["readFile", "open", "mktemp"], fsService);
     expect(Object.keys(out!.methods)).toEqual(["mktemp", "open", "readFile"]);
     expect(out!.surface).toBe("injected-runtime");
-    expect(out!.note).toContain('rpc.call("main", "fs.…"');
+    expect(out!.note).toContain('rpc.call("main", mainRpcMethods["fs.<method>"]');
     expect(out!.note).toContain("`services.fs`");
   });
 
@@ -196,6 +221,7 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(describeEvalBindingIndex(detailed)).toEqual({
       name: "vcs",
       surface: "injected-runtime-index",
+      description: portableExports["vcs"]?.description,
       note: detailed.note,
       methods: [
         { name: "edit", description: "Author an exact semantic edit." },
@@ -204,15 +230,32 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
       next: 'Call help("vcs.<method>") for that method\'s exact arguments, return schema, and typed errors.',
     });
   });
+
+  it("preserves the canonical rpc binding contract in its live index", () => {
+    const described = describeEvalBindingSurface("rpc", ["call"], {})!;
+    const index = describeEvalBindingIndex(described);
+
+    expect(index.description).toBe(portableExports["rpc"]?.description);
+    expect(index.description).toContain("method argument is never a method-name string");
+    expect(index.methods.map(({ name }) => name)).toEqual(["call"]);
+  });
 });
 
 describe("describeEvalMethod", () => {
   it("preserves numeric argument validation in compact help", () => {
     const method = describeEvalMethod("inventory.list", {
-      argsSchema: { type: "array", items: [{ type: "object", properties: {
-        limit: { type: "integer", minimum: 1, maximum: 50 },
-        ratio: { type: "number", minimum: 10, exclusiveMinimum: 2 },
-      } }] },
+      argsSchema: {
+        type: "array",
+        items: [
+          {
+            type: "object",
+            properties: {
+              limit: { type: "integer", minimum: 1, maximum: 50 },
+              ratio: { type: "number", minimum: 10, exclusiveMinimum: 2 },
+            },
+          },
+        ],
+      },
     });
     expect(method.parameters?.[0]?.type).toContain("limit?: integer (>= 1, <= 50)");
     expect(method.parameters?.[0]?.type).toContain("ratio?: number (>= 10, > 2)");
@@ -483,10 +526,7 @@ describe("canonical injected runtime help", () => {
   });
 
   it("projects declared option fields from canonical runtime method metadata", () => {
-    const navigate = describeEvalMethod(
-      "panelTree.navigate",
-      PANEL_TREE_METHOD_CATALOG.navigate
-    );
+    const navigate = describeEvalMethod("panelTree.navigate", PANEL_TREE_METHOD_CATALOG.navigate);
     expect(navigate.parameters?.[2]?.type).toContain("contextId?: string");
     expect(navigate.parameters?.[2]?.type).toContain("env?: Record<string, string>");
     expect(navigate.parameters?.[2]?.type).toContain("stateArgs?: Record<string, unknown>");
@@ -565,58 +605,97 @@ describe("named live help lookup", () => {
   it("discovers grouped live methods and resolves their namespace and exact contract", async () => {
     const binding = { createEntity() {}, supervision: { logs() {}, health() {} } };
     expect(evalBindingMethodNames(binding)).toEqual([
-      "createEntity", "supervision.health", "supervision.logs",
+      "createEntity",
+      "supervision.health",
+      "supervision.logs",
     ]);
     const d = deps();
     d.bindings["runtime"] = binding;
-    d.describeBinding.mockResolvedValue({ methods: {
-      "createEntity": {},
-      "supervision.logs": { description: "Exact incarnation logs", argsSchema: { type: "array", items: [{ type: "string" }] } },
-      "supervision.health": { description: "Exact incarnation health" },
-    } });
+    d.describeBinding.mockResolvedValue({
+      methods: {
+        createEntity: {},
+        "supervision.logs": {
+          description: "Exact incarnation logs",
+          argsSchema: { type: "array", items: [{ type: "string" }] },
+        },
+        "supervision.health": { description: "Exact incarnation health" },
+      },
+    });
     expect(await describeEvalHelpName("runtime.supervision", d)).toMatchObject({
-      name: "runtime.supervision", methods: [
+      name: "runtime.supervision",
+      methods: [
         { name: "logs", description: "Exact incarnation logs" },
         { name: "health", description: "Exact incarnation health" },
       ],
     });
     expect(await describeEvalHelpName("runtime.supervision.logs", d)).toMatchObject({
-      name: "runtime.supervision.logs", call: "await runtime.supervision.logs(input)",
+      name: "runtime.supervision.logs",
+      call: "await runtime.supervision.logs(input)",
       parameters: [{ name: "input", type: "string" }],
     });
     expect(d.docs.describe).not.toHaveBeenCalled();
   });
   function deps() {
     return {
-      bindings: {} as Record<string, unknown>, runtimeModuleName: "@workspace/runtime",
+      bindings: {} as Record<string, unknown>,
+      runtimeModuleName: "@workspace/runtime",
       describeBinding: vi.fn(async () => null as unknown),
-      docs: { describe: vi.fn(async () => null as unknown), describeService: vi.fn(async () => null as unknown) },
+      docs: {
+        describe: vi.fn(async () => null as unknown),
+        describeService: vi.fn(async () => null as unknown),
+      },
     };
   }
   it("resolves qualified plain service methods through their exact canonical catalog entry", async () => {
     const d = deps();
     const entry = {
-      id: "service:authority.preflight", qualifiedName: "authority.preflight", parent: "service:authority",
-      argsSchema: { type: "array", items: [{ type: "object", properties: { service: { type: "string" }, method: { type: "string" }, args: { type: "array", items: {} } }, required: ["service", "method", "args"] }] },
+      id: "service:authority.preflight",
+      qualifiedName: "authority.preflight",
+      parent: "service:authority",
+      argsSchema: {
+        type: "array",
+        items: [
+          {
+            type: "object",
+            properties: {
+              service: { type: "string" },
+              method: { type: "string" },
+              args: { type: "array", items: {} },
+            },
+            required: ["service", "method", "args"],
+          },
+        ],
+      },
     };
     d.docs.describe.mockResolvedValue(entry);
     expect(await describeEvalHelpName("authority.preflight", d)).toMatchObject({
-      name: "services.authority.preflight", call: "await services.authority.preflight(input)",
-      parameters: [{ name: "input", type: "{ service: string; method: string; args: (unknown)[] }" }],
+      name: "services.authority.preflight",
+      call: "await services.authority.preflight(input)",
+      parameters: [
+        { name: "input", type: "{ service: string; method: string; args: (unknown)[] }" },
+      ],
     });
     expect(d.docs.describe).toHaveBeenCalledWith("service:authority.preflight");
     expect(d.docs.describeService).not.toHaveBeenCalled();
   });
   it("keeps hidden raw methods out of an injected ergonomic binding", async () => {
-    const d = deps(); d.bindings["fs"] = { open() {} };
+    const d = deps();
+    d.bindings["fs"] = { open() {} };
     d.describeBinding.mockResolvedValue({ methods: { open: { description: "FileHandle" } } });
-    expect(await describeEvalHelpName("fs.handleClose", d)).toMatchObject({ error: "Unknown method handleClose on fs", knownMethods: ["open"] });
+    expect(await describeEvalHelpName("fs.handleClose", d)).toMatchObject({
+      error: "Unknown method handleClose on fs",
+      knownMethods: ["open"],
+    });
     expect(d.docs.describe).not.toHaveBeenCalled();
   });
   it("preserves normal service indexes and truthful unknown methods", async () => {
-    const d = deps(); const service = { name: "authority", methods: { preflight: {} } };
+    const d = deps();
+    const service = { name: "authority", methods: { preflight: {} } };
     d.docs.describeService.mockResolvedValue(service);
     expect(await describeEvalHelpName("authority", d)).toBe(service);
-    expect(await describeEvalHelpName("authority.invented", d)).toMatchObject({ name: "authority.invented", error: expect.stringContaining("No injected") });
+    expect(await describeEvalHelpName("authority.invented", d)).toMatchObject({
+      name: "authority.invented",
+      error: expect.stringContaining("No injected"),
+    });
   });
 });

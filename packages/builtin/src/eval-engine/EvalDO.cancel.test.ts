@@ -293,13 +293,15 @@ describe("EvalDO cancellation + forced recovery", () => {
     const assertAdmissionOpen = priv<() => void>(instance, "assertAdmissionOpen");
 
     await instance.releaseForLifecycle({ ...input, phase: "quiesce" });
-    expect(sql.exec("SELECT value FROM state WHERE key = 'eval_execution_closed'").toArray()).toEqual([
-      { value: input.epoch },
-    ]);
+    expect(
+      sql.exec("SELECT value FROM state WHERE key = 'eval_execution_closed'").toArray()
+    ).toEqual([{ value: input.epoch }]);
     expect(() => assertAdmissionOpen.call(instance)).toThrow(/execution namespace is retired/);
 
     await instance.releaseForLifecycle({ ...input, phase: "cancel" });
-    expect(sql.exec("SELECT value FROM state WHERE key = 'eval_execution_closed'").toArray()).toEqual([]);
+    expect(
+      sql.exec("SELECT value FROM state WHERE key = 'eval_execution_closed'").toArray()
+    ).toEqual([]);
     expect(() => assertAdmissionOpen.call(instance)).not.toThrow();
   });
 
@@ -3399,6 +3401,7 @@ describe("EvalDO cancellation + forced recovery", () => {
             bindings: Record<string, unknown>;
             moduleMap: Record<string, unknown>;
             require: (id: string) => unknown;
+            onConsole: (text: string) => void;
           }
         ) => {
           expect(opts.moduleMap["node:async_hooks"]).toBeUndefined();
@@ -3417,7 +3420,11 @@ describe("EvalDO cancellation + forced recovery", () => {
             },
           });
           await rpcBinding.call("do:peer", testProbeRpcMethods.ping, []);
-          return { success: true, consoleOutput: "", returnValue: undefined };
+          const help = opts.bindings["help"] as (name: string) => Promise<unknown>;
+          await help("rpc");
+          opts.onConsole("normal guest output");
+          await help("scope");
+          return { success: true, consoleOutput: "normal guest output", returnValue: undefined };
         },
       })
     );
@@ -3425,7 +3432,7 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     const controller = new AbortController();
     const runLocked = priv<RunLockedFn>(instance, "runLocked").bind(instance);
-    await runLocked(
+    const result = await runLocked(
       {
         code: "x",
         contextId: "ctx",
@@ -3441,8 +3448,13 @@ describe("EvalDO cancellation + forced recovery", () => {
       "run-sig"
     );
 
-    // Both outbound calls carried the SAME run signal in their options.
-    expect(seenOptions).toHaveLength(2);
+    expect(result.console).toContain('"name": "rpc"');
+    expect(result.console).toContain("requires an `RpcMethod` descriptor object");
+    expect(result.console).toContain("normal guest output");
+    expect(result.console).toContain('"name": "scope"');
+
+    // Business calls and help discovery share the same run cancellation and causal ownership.
+    expect(seenOptions.filter(({ method }) => !method.startsWith("docs."))).toHaveLength(2);
     for (const { options } of seenOptions) {
       expect((options as { signal?: AbortSignal }).signal?.aborted).toBe(false);
       expect((options as RpcCallOptions).causalParent).toEqual({

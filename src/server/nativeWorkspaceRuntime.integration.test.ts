@@ -269,7 +269,7 @@ process.env.NODE_ENV;
           assert.throws(() => fs.readFileSync(${JSON.stringify(path.join(dependency, "index.d.ts"))}));
           assert.throws(() => fs.writeFileSync(${JSON.stringify(path.join(admitted, "typed-dependency", "index.d.ts"))}, 'mutated'));
         }
-        const fileIdentity = file => path.join(fs.realpathSync(path.dirname(file)), path.basename(file));
+        const fileIdentity = file => path.join(fs.realpathSync.native(path.dirname(file)), path.basename(file));
         const service = new TypeCheckService({panelPath: ${JSON.stringify(sourceRoot)}, nodeModulesPaths: [${JSON.stringify(admitted)}], workspaceContext: {
           monorepoRoot: ${JSON.stringify(sourceRoot)}, packages: new Map(Object.entries(${JSON.stringify(resources.workspacePackages)}).map(([name, dir]) => [name, {
             name, dir, packageJson: JSON.parse(fs.readFileSync(dir + '/package.json', 'utf8')),
@@ -278,7 +278,7 @@ process.env.NODE_ENV;
         try {
           service.updateFile('index.ts', ${JSON.stringify(source)});
           const result = service.check();
-          const expectedRootFile = path.join(fs.realpathSync(${JSON.stringify(path.join(statePath, "scratch", "home"))}), "index.ts");
+          const expectedRootFile = fileIdentity(${JSON.stringify(path.join(statePath, "scratch", "home", "index.ts"))});
           const rootFileCandidates = result.diagnostics
             .filter(diagnostic => diagnostic.code === 2322)
             .map(diagnostic => ({
@@ -416,12 +416,38 @@ it("materializes independent dependency realms for workspace package owners", as
         const expectedTypeScriptImports = ${JSON.stringify(canonicalTypeScriptManifest.imports)};
         const engineTypeScriptManifest = JSON.parse(require('node:fs').readFileSync(path.join(enginePackageRoot, 'package.json'), 'utf8'));
         assert.deepEqual(engineTypeScriptManifest.imports, expectedTypeScriptImports, JSON.stringify({ enginePath, enginePackageRoot, expectedTypeScriptImports, actualImports: engineTypeScriptManifest.imports }));
+        const typeScriptModulePath = path.join(enginePackageRoot, 'dist', 'api', 'sync', 'api.js');
+        const typeScriptModuleRequire = createRequire(typeScriptModulePath);
+        const packageAncestry = [];
+        let packageDirectory = path.dirname(typeScriptModulePath);
+        while (true) {
+          const manifestPath = path.join(packageDirectory, 'package.json');
+          if (require('node:fs').existsSync(manifestPath)) {
+            const manifest = JSON.parse(require('node:fs').readFileSync(manifestPath, 'utf8'));
+            packageAncestry.push({
+              path: manifestPath,
+              name: manifest.name,
+              enumImport: manifest.imports?.['#enums/*'],
+            });
+          }
+          if (path.resolve(packageDirectory) === path.resolve(enginePackageRoot)) break;
+          const parentDirectory = path.dirname(packageDirectory);
+          if (parentDirectory === packageDirectory) break;
+          packageDirectory = parentDirectory;
+        }
+        let resolvedPrivateEnum;
+        let privateEnumResolutionError;
+        try {
+          resolvedPrivateEnum = typeScriptModuleRequire.resolve('#enums/completionItemKind');
+        } catch (error) {
+          privateEnumResolutionError = String(error);
+        }
         let engine;
         try {
           engine = await import(pathToFileURL(enginePath));
         } catch (error) {
           const resolvedTypeScriptEntry = require.resolve('typescript', { paths: [${JSON.stringify(resources.workspacePackages["@vibestudio/typecheck"]!)}] });
-          throw new Error(JSON.stringify({ enginePath, enginePackageRoot, resolvedTypeScriptEntry, expectedTypeScriptImports, actualImports: engineTypeScriptManifest.imports, cause: String(error) }), { cause: error });
+          throw new Error(JSON.stringify({ enginePath, enginePackageRoot, resolvedTypeScriptEntry, typeScriptModulePath, packageAncestry, resolvedPrivateEnum, privateEnumResolutionError, nodeVersion: process.version, nodeExecArgv: process.execArgv, expectedTypeScriptImports, actualImports: engineTypeScriptManifest.imports, cause: String(error) }), { cause: error });
         }
         const transform = require(${JSON.stringify(resources.workspacePackages["@vibestudio/svelte-type-source"]!)});
         assert.equal(engine.hasProject, true);

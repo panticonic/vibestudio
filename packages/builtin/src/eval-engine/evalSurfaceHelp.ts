@@ -75,8 +75,9 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
   },
   "runtime.createEntity": {
     description:
-      "Prefer workers.create(source, options) for regular workers. The raw equivalent is " +
-      'rpc.call("main", `runtime.createEntity`, [{ kind: "worker", source, key, contextId, env, stateArgs }]). ' +
+      "Prefer workers.create(source, options) for regular workers. Import mainRpcMethods from " +
+      "@vibestudio/service-schemas/mainRpc; the raw equivalent is " +
+      'rpc.call("main", mainRpcMethods["runtime.createEntity"], [{ kind: "worker", source, key, contextId, env, stateArgs }]). ' +
       "`key` names an immutable instance identity: it cannot silently switch to a different code " +
       "build. For disposable edit-and-run probes, generate a fresh key after each code change and " +
       "always retire the returned handle in finally; for a stable key, retire the old instance " +
@@ -88,12 +89,13 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
       "probe implemented by the worker under test through its endpoint/RPC. Launchable sources and " +
       "their real manifest entry points " +
       "are listed with workers.listSources() (raw: " +
-      'rpc.call("main", `workers.listSources`, [])).',
+      'rpc.call("main", mainRpcMethods["workers.listSources"], [])).',
   },
   "runtime.retireEntity": {
     description:
-      "Prefer workers.destroy(entityOrId) for regular workers and caller-created Durable Objects. The raw equivalent is " +
-      'rpc.call("main", `runtime.retireEntity`, [{ id }]), passing the entity id returned by ' +
+      "Prefer workers.destroy(entityOrId) for regular workers and caller-created Durable Objects. " +
+      "Import mainRpcMethods from @vibestudio/service-schemas/mainRpc; the raw equivalent is " +
+      'rpc.call("main", mainRpcMethods["runtime.retireEntity"], [{ id }]), passing the entity id returned by ' +
       "runtime.createEntity. Resolving a Durable Object or shared service does not transfer ownership; create owned disposable objects with workers.createDurableObject. Verify retirement with runtime.listEntities.",
   },
   "workers.create": {
@@ -147,12 +149,16 @@ export interface InjectedSurfaceDescription {
   name: string;
   surface: "injected-runtime";
   note: string;
+  description?: string;
+  signature?: string;
   methods: Record<string, unknown>;
 }
 
 export interface InjectedSurfaceIndexDescription {
   name: string;
   surface: "injected-runtime-index";
+  description?: string;
+  signature?: string;
   note: string;
   methods: Array<{ name: string; description: string }>;
   next: string;
@@ -415,10 +421,17 @@ export function describeEvalBindingSurface(
   return {
     name,
     surface: "injected-runtime",
+    ...(portableExports[name]?.description
+      ? { description: portableExports[name].description }
+      : {}),
+    ...(portableExports[name]?.kind === "value" && portableExports[name].signature
+      ? { signature: portableExports[name].signature }
+      : {}),
     note:
       `Methods on the injected \`${name}\` binding — what eval code calls directly. The raw ` +
       `\`${serviceName}\` RPC service (via \`services.${serviceName}\` or ` +
-      `\`rpc.call("main", "${serviceName}.…", [...])\`) may differ. Low-level wire methods ` +
+      `\`rpc.call("main", mainRpcMethods["${serviceName}.<method>"], [...])\`) may differ. ` +
+      `Import mainRpcMethods from \`@vibestudio/service-schemas/mainRpc\`. Low-level wire methods ` +
       `are intentionally hidden behind these wrappers.`,
     methods,
   };
@@ -436,6 +449,8 @@ export function describeEvalBindingIndex(
   return {
     name: description.name,
     surface: "injected-runtime-index",
+    ...(description.description ? { description: description.description } : {}),
+    ...(description.signature ? { signature: description.signature } : {}),
     note: description.note,
     methods: Object.entries(description.methods).map(([name, method]) => ({
       name,
@@ -447,6 +462,25 @@ export function describeEvalBindingIndex(
           : "Runtime method.",
     })),
     next: `Call help("${description.name}.<method>") for that method's exact arguments, return schema, and typed errors.`,
+  };
+}
+
+/**
+ * Create the interactive eval help function. Help is both display-oriented and
+ * composable: each request is written to the captured output stream, while its
+ * structured description remains the function's resolved value.
+ */
+export function createEvalHelp(
+  describe: (name?: string) => Promise<unknown>,
+  emit: (text: string) => void
+): (name?: unknown) => Promise<unknown> {
+  return async (name?: unknown) => {
+    const result =
+      name !== undefined && typeof name !== "string"
+        ? invalidHelpArgumentResponse(name)
+        : await describe(name);
+    emit(JSON.stringify(result, null, 2) ?? String(result));
+    return result;
   };
 }
 
@@ -563,6 +597,6 @@ export async function describeEvalHelpName(
   }
   // Not a rich runtime binding — a plain RPC service. It is reachable as
   // `services.${serviceName}.<method>(...)` (dynamic proxy) or, always, via
-  // `rpc.call("main", "${serviceName}.<method>", [...])`.
+  // `rpc.call("main", mainRpcMethods["${serviceName}.<method>"], [...])`.
   return (await deps.docs.describeService(serviceName)) ?? unknownHelpNameResponse(serviceName);
 }

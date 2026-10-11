@@ -75,7 +75,7 @@ import {
   evalBindingMethodNames,
   EVAL_RUNTIME_METHOD_NOTES,
   evalRuntimeServiceName,
-  invalidHelpArgumentResponse,
+  createEvalHelp,
 } from "./evalSurfaceHelp.js";
 import { createEvalNodeCompat } from "./evalNodeCompat.js";
 import { freezeModuleNamespace } from "./moduleNamespace.js";
@@ -3153,22 +3153,22 @@ export class EvalDO extends DurableObjectBase {
       // surface (what `import {…} from "@workspace/runtime"` gives), the eval-only
       // ambient globals (do NOT import these), available raw services, and where to look next.
       // `help("<service>")` → that service's methods.
-      help: async (serviceName?: string) => {
-        if (serviceName !== undefined && typeof serviceName !== "string") {
-          return invalidHelpArgumentResponse(serviceName);
-        }
-        if (serviceName === "services") return describeHelpOverview();
-        if (serviceName) {
-          return describeEvalHelpName(serviceName, {
-            bindings,
-            runtimeModuleName,
-            docs: execution.docs,
-            describeBinding: (name, binding) =>
-              this.describeInjectedSurface(name, binding, execution.docs),
-          });
-        }
-        return describeHelpOverview();
-      },
+      help: createEvalHelp(
+        async (serviceName?: string) => {
+          if (serviceName === "services") return describeHelpOverview();
+          if (serviceName) {
+            return describeEvalHelpName(serviceName, {
+              bindings,
+              runtimeModuleName,
+              docs: execution.docs,
+              describeBinding: (name, binding) =>
+                this.describeInjectedSurface(name, binding, execution.docs),
+            });
+          }
+          return describeHelpOverview();
+        },
+        (text) => emitConsole(text)
+      ),
     };
 
     // Owner bindings — pure forwarding to the owning agent DO. Present only when
@@ -3293,6 +3293,14 @@ export class EvalDO extends DurableObjectBase {
         text: this.windowText(text, 12_000, "$lastLargeConsole"),
       });
     };
+    const emitConsole = (formatted: string) => {
+      const chunk = `${consoleOutput ? "\n" : ""}${formatted}`;
+      consoleOutput += chunk;
+      liveConsoleBuffer += chunk;
+      if (liveConsoleBuffer.length >= 4_096) flushLiveConsole();
+      else if (runId && !liveConsoleTimer) liveConsoleTimer = setTimeout(flushLiveConsole, 25);
+      streamer?.push(formatted);
+    };
     scopeManager.enterEval();
     try {
       const result = await this.activeEvalExecution.run(execution, () =>
@@ -3325,15 +3333,7 @@ export class EvalDO extends DurableObjectBase {
           ...(deadlineAt !== null && deadlineAt !== undefined && args.timeoutMs !== undefined
             ? { deadline: { atMs: deadlineAt, timeoutMs: args.timeoutMs } }
             : {}),
-          onConsole: (formatted: string) => {
-            const chunk = `${consoleOutput ? "\n" : ""}${formatted}`;
-            consoleOutput += chunk;
-            liveConsoleBuffer += chunk;
-            if (liveConsoleBuffer.length >= 4_096) flushLiveConsole();
-            else if (runId && !liveConsoleTimer)
-              liveConsoleTimer = setTimeout(flushLiveConsole, 25);
-            streamer?.push(formatted);
-          },
+          onConsole: emitConsole,
         })
       );
       // Live progress is incidental. The terminal result below is canonical and
@@ -3341,7 +3341,7 @@ export class EvalDO extends DurableObjectBase {
       // hold this durable run open.
       streamer?.close();
       flushLiveConsole();
-      const consoleText = result.consoleOutput || consoleOutput;
+      const consoleText = consoleOutput || result.consoleOutput;
       // Recoverable large output: the harness windows console/error/return for
       // the model, losing the tail. Keep one bounded spill per output kind in
       // stable slots that small follow-up inspectors do not overwrite.
