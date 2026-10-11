@@ -38,6 +38,7 @@ export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   ...Object.values(NATIVE_WORKSPACE_ENTRIES).map((filename) => `dist/${filename}`),
   "dist/browserTransport.js",
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
+  "dist/dependency-content-maintenance.cjs",
   "dist/internal-do.bundle.mjs",
   "dist/sql-wasm.wasm",
   "dist/host-build-fingerprint.json",
@@ -45,15 +46,7 @@ export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
 
 /** Complete compiled closure consumed by checkout server launches. */
 export const SOURCE_SERVER_PREREQUISITE_ARTIFACTS = Object.freeze([
-  "dist/server.mjs",
-  "dist/prepare-workspace-templates.mjs",
-  ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
-  "dist/browserTransport.js",
-  "dist/fs-disk-worker.cjs",
-  ...Object.values(NATIVE_WORKSPACE_ENTRIES).map((filename) => `dist/${filename}`),
-  "dist/dependency-content-maintenance.cjs",
-  "dist/internal-do.bundle.mjs",
-  "dist/host-build-fingerprint.json",
+  ...STANDALONE_SERVER_RUNTIME_ARTIFACTS,
   "dist/headless-host",
   "dist/workerd-programs",
 ]);

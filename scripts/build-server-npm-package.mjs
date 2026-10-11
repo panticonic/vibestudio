@@ -36,6 +36,7 @@ import process from "node:process";
 import { createRequire } from "node:module";
 import semver from "semver";
 import { fileURLToPath } from "node:url";
+import { formatRpcFailure } from "@vibestudio/rpc";
 import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
 import { STANDALONE_SERVER_RUNTIME_ARTIFACTS } from "./server-runtime-artifacts.mjs";
@@ -60,8 +61,8 @@ export const SERVER_RUNTIME_ARTIFACTS = STANDALONE_SERVER_RUNTIME_ARTIFACTS;
 // side effects beyond the cheap top-level reads above.
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   main().catch((err) => {
-    console.error(err);
-    process.exit(1);
+    console.error(formatRpcFailure(err));
+    process.exitCode = 1;
   });
 }
 
