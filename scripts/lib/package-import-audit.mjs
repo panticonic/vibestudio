@@ -7,6 +7,10 @@ const { analyzeModuleImports, moduleCoordinate } = await tsImport(
   "../../packages/module-imports/src/index.ts",
   import.meta.url
 );
+const { SVELTE_COMPILER_OPTIONS } = await tsImport(
+  "../../src/server/buildV2/adapters/svelte.ts",
+  import.meta.url
+);
 
 export const SOURCE_EXTENSIONS = [
   ".ts",
@@ -17,6 +21,7 @@ export const SOURCE_EXTENSIONS = [
   ".jsx",
   ".mjs",
   ".cjs",
+  ".svelte",
   ".css",
 ];
 
@@ -165,6 +170,27 @@ function cssReferences(source) {
   }));
 }
 
+async function svelteReferences(source, filename) {
+  const { compile, parse } = await import("svelte/compiler");
+  const ast = parse(source, { filename });
+  const compiled = compile(source, { ...SVELTE_COMPILER_OPTIONS, filename });
+  const references = analyzeModuleImports(compiled.js.code, filename);
+
+  for (const script of [ast.instance, ast.module]) {
+    const content = script?.content;
+    if (!content || typeof content.start !== "number" || typeof content.end !== "number") {
+      continue;
+    }
+    references.push(
+      ...analyzeModuleImports(source.slice(content.start, content.end), filename).filter(
+        (reference) => reference.kind === "type"
+      )
+    );
+  }
+
+  return references;
+}
+
 function typesPackageName(dependency) {
   if (!dependency.startsWith("@")) return `@types/${dependency}`;
   const [scope, name] = dependency.slice(1).split("/");
@@ -265,7 +291,9 @@ export async function collectPackageManifestImportFindings(
     try {
       references = file.endsWith(".css")
         ? cssReferences(source)
-        : analyzeModuleImports(source, file, { jsxRuntime });
+        : file.endsWith(".svelte")
+          ? await svelteReferences(source, file)
+          : analyzeModuleImports(source, file, { jsxRuntime });
     } catch (error) {
       throw new Error(`Could not analyze production imports in ${file}`, { cause: error });
     }

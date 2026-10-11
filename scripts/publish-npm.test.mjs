@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { runWithOwnedCleanup, spawnResultFailure, validateStagedPackage } from "./publish-npm.mjs";
 
-void test("published versions still validate the staged manifest and only skip publication", () => {
+void test("rejects a stale staged candidate before publication", () => {
   const rootPackage = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url)));
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "publish-npm-staged-candidate-"));
   try {
@@ -21,14 +21,16 @@ void test("published versions still validate the staged manifest and only skip p
       name: "@panticonic/vibestudio-server",
       dir: directory,
     });
-    const registryVersions = new Map([[candidate.pkg.name, candidate.version]]);
-    const publishQueue = [candidate].filter(
-      (entry) => registryVersions.get(entry.pkg.name) !== entry.version
-    );
-
     assert.equal(candidate.pkg.dir, directory);
     assert.equal(candidate.version, rootPackage.version);
-    assert.deepEqual(publishQueue, []);
+    fs.writeFileSync(
+      path.join(directory, "package.json"),
+      JSON.stringify({ ...candidate.manifest, version: "0.0.0-stale" })
+    );
+    assert.throws(
+      () => validateStagedPackage(candidate.pkg),
+      /version is 0\.0\.0-stale; expected root version/u
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

@@ -162,6 +162,55 @@ describe("collectPackageManifestImportFindings", () => {
     }
   });
 
+  it("checks emitted Svelte runtime imports and preserves type-only script imports", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-svelte-import-audit-"));
+    const pkg = path.join(root, "fixture");
+    fs.mkdirSync(path.join(pkg, "src"), { recursive: true });
+    const manifestPath = path.join(pkg, "package.json");
+    try {
+      const manifest = {
+        name: "@workspace/svelte-fixture",
+        exports: { ".": "./src/App.svelte" },
+        dependencies: {} as Record<string, string>,
+        devDependencies: { "@scope/types": "^1.0.0" },
+      };
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      fs.writeFileSync(
+        path.join(pkg, "src", "App.svelte"),
+        [
+          '<script lang="ts">',
+          '  import type { Shape } from "@scope/types";',
+          '  import { makeValue } from "@scope/runtime";',
+          "  const value: Shape = makeValue();",
+          "</script>",
+          "<div>{value.label}</div>",
+        ].join("\n")
+      );
+
+      await expect(collectPackageManifestImportFindings(pkg, root)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ dependency: "svelte", typeOnly: false }),
+          expect.objectContaining({ dependency: "@scope/runtime", typeOnly: false }),
+        ])
+      );
+      expect(await collectPackageManifestImportFindings(pkg, root)).toEqual(
+        expect.not.arrayContaining([expect.objectContaining({ dependency: "@scope/types" })])
+      );
+
+      manifest.dependencies = { svelte: "^5.56.9" };
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      await expect(collectPackageManifestImportFindings(pkg, root)).resolves.toEqual([
+        expect.objectContaining({ dependency: "@scope/runtime", typeOnly: false }),
+      ]);
+
+      manifest.dependencies["@scope/runtime"] = "^1.0.0";
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      await expect(collectPackageManifestImportFindings(pkg, root)).resolves.toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps relative imports inside the nearest owning package boundary", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-nested-package-audit-"));
     const outer = path.join(root, "outer");

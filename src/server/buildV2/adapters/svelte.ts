@@ -2,6 +2,8 @@ import type * as esbuild from "esbuild";
 import { SVELTE_FRAMEWORK_MODULE } from "../platformModules.js";
 import type { FrameworkAdapter } from "./types.js";
 
+export const SVELTE_COMPILER_OPTIONS = { css: "injected" } as const;
+
 export const svelteAdapter: FrameworkAdapter = {
   id: "svelte",
 
@@ -15,9 +17,7 @@ export const svelteAdapter: FrameworkAdapter = {
     const { default: sveltePlugin } = await import("esbuild-svelte");
     return [
       sveltePlugin({
-        compilerOptions: {
-          css: "injected",
-        },
+        compilerOptions: SVELTE_COMPILER_OPTIONS,
       }),
     ];
   },
