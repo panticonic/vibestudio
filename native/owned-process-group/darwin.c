@@ -133,15 +133,15 @@ static void confirm_terminal_membership(
   for (size_t index = 0; index < second_count; index++) {
     pid_t pid = second_pids[index];
     if (pid <= 0) continue;
+    struct proc_bsdinfo current;
+    if (!read_process(pid, &current)) continue;
+    if (current.pbi_pgid != (uint32_t)group_id) continue;
     const struct proc_bsdinfo *previous = find_process(records, record_count, pid);
     if (previous == NULL) {
       free(second_pids);
       fputs("process-group membership changed while confirming terminal state\n", stderr);
       exit(2);
     }
-    struct proc_bsdinfo current;
-    if (!read_process(pid, &current)) continue;
-    if (current.pbi_pgid != (uint32_t)group_id) continue;
     if (!same_birth(previous, &current) || current.pbi_status != SZOMB) {
       free(second_pids);
       fputs("process-group member changed while confirming terminal state\n", stderr);

@@ -12,6 +12,7 @@ import {
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   inspectHostNativeDependencies,
   prepareNativeDependencyFiles,
@@ -21,6 +22,37 @@ import {
   darwinProcessObserverPath,
   prepareDarwinProcessObserver,
 } from "./owned-process-group-observer.mjs";
+
+test(
+  "Darwin terminal confirmation ignores members that disappear or leave the group after enumeration",
+  { skip: process.platform !== "darwin" },
+  () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const source = path.join(root, "native/owned-process-group/terminal-membership.test.c");
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "darwin-terminal-membership-"));
+    const executable = path.join(cwd, "terminal-membership-test");
+    try {
+      const compiled = spawnSync(
+        "xcrun",
+        ["--sdk", "macosx", "clang", "-std=c11", source, "-o", executable],
+        { encoding: "utf8" }
+      );
+      assert.equal(compiled.error, undefined, compiled.stderr);
+      assert.equal(compiled.status, 0, compiled.stderr);
+
+      for (const scenario of ["gone", "moved"]) {
+        const result = spawnSync(executable, [scenario], { encoding: "utf8" });
+        assert.equal(result.error, undefined, result.stderr);
+        assert.equal(result.status, 0, `${scenario}: ${result.stderr}`);
+      }
+      const unknownLiveMember = spawnSync(executable, ["live"], { encoding: "utf8" });
+      assert.equal(unknownLiveMember.status, 2);
+      assert.match(unknownLiveMember.stderr, /membership changed/u);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }
+);
 
 test("PTY probe requires output and successful exit in either order despite retained helper handles", () => {
   let smoke;
