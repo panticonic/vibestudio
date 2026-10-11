@@ -27,7 +27,7 @@ import {
 export type DORef = DORefParam;
 
 /** Each workerd endpoint owns its transport pool and its generation retirement. */
-const workerdConnectionDispatchers = new Map<string, Pool>();
+const workerdConnectionDispatchers = new Map<string, Dispatcher>();
 type WorkerdHttpObservation = ReturnType<typeof createWorkerdHttpObservation>;
 const responseObservations = new WeakMap<Response, WorkerdHttpObservation>();
 
@@ -65,6 +65,7 @@ type WorkerdHttpObservationState = {
 };
 
 const workerdHttpObservation = new AsyncLocalStorage<WorkerdHttpObservationState>();
+const workerdRequestBodies = new WeakMap<object, WorkerdHttpObservationState>();
 const workerdRequestObservations = new WeakMap<object, WorkerdHttpObservationState>();
 const workerdRequestSockets = new WeakMap<object, object>();
 type WorkerdSocketProtocolFacts = {
@@ -118,7 +119,14 @@ function responseHeaderValue(headers: unknown, name: string): string | undefined
 channel("undici:request:create").subscribe((event: unknown) => {
   if (!event || typeof event !== "object") return;
   const detail = event as { request?: unknown };
-  const state = workerdHttpObservation.getStore();
+  const requestBody =
+    detail.request && typeof detail.request === "object"
+      ? (detail.request as { body?: unknown }).body
+      : undefined;
+  const state =
+    requestBody && typeof requestBody === "object"
+      ? workerdRequestBodies.get(requestBody)
+      : undefined;
   if (state && detail.request && typeof detail.request === "object") {
     workerdRequestObservations.set(detail.request, state);
     const exchange = exchangeFor(detail.request);
@@ -307,19 +315,35 @@ export function getWorkerdConnectionDispatcher(endpoint: string): Dispatcher {
   const origin = new URL(endpoint).origin;
   let dispatcher = workerdConnectionDispatchers.get(origin);
   if (!dispatcher) {
-    dispatcher = new Pool(origin, {
+    const pool = new Pool(origin, {
       // Semantic invocation lifetime is controlled by its owner and signal.
       headersTimeout: 0,
       bodyTimeout: 0,
-      // Reuse connections with one request in flight per socket. Undici treats
-      // POSTs as non-idempotent and reports a failed admitted request; it does
-      // not replay it. Concurrent calls (including cancellation) get other
-      // sockets rather than queueing behind an active response stream.
-      pipelining: 1,
+      // A socket belongs to one RPC through its terminal response-body event.
+      // Undici's p=0 sends Connection: close and retires that socket after EOF
+      // (or cancellation), so a later invocation never trusts an idle socket
+      // after workerd may have sent FIN. The origin Pool still owns all active
+      // sockets and can retire them together with the provider generation.
+      // Calls remain concurrent; POST failures are surfaced without replay.
+      pipelining: 0,
     });
+    dispatcher = withWorkerdHttpObservation(pool);
     workerdConnectionDispatchers.set(origin, dispatcher);
   }
   return dispatcher;
+}
+
+/** Bind each pooled request body to the observation active when it was queued.
+ * Undici may later dispatch it while running the async context of the socket's
+ * original request, so diagnostic-channel listeners cannot rely on ALS alone. */
+export function withWorkerdHttpObservation(dispatcher: Dispatcher): Dispatcher {
+  return dispatcher.compose((dispatch) => (options, handler) => {
+    const state = workerdHttpObservation.getStore();
+    if (state && options.body && typeof options.body === "object") {
+      workerdRequestBodies.set(options.body, state);
+    }
+    return dispatch(options, handler);
+  });
 }
 
 /** Retiring one process must never sever another workspace's active requests. */

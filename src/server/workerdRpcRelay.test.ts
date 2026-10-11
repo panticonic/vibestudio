@@ -75,6 +75,12 @@ describe("workerdRpcRelay", () => {
     );
   }
 
+  const resolveExecutableAdmission = () => ({
+    executableVersion: "version",
+    incarnationVersion: "version",
+    props: { stateArgs: null, image: null },
+  });
+
   it("POSTs an envelope to __rpc, stamps the dispatch secret, and unwraps the result", async () => {
     const fetchMock = vi.fn().mockResolvedValue(responseEnvelope({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
@@ -86,6 +92,7 @@ describe("workerdRpcRelay", () => {
         {
           workerdUrl: "http://127.0.0.1:8787",
           workerdGatewayToken: "gateway-token",
+          resolveExecutableAdmission,
           workerdDispatchSecret: "dispatch-secret",
           idempotencyKey: "idem-1",
           readOnly: true,
@@ -124,6 +131,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
         onWorkReady,
       }
     );
@@ -168,6 +176,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
       },
       controller.signal
     ).then((result) => {
@@ -248,6 +257,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
         onWorkReady,
       },
       controller.signal
@@ -294,6 +304,7 @@ describe("workerdRpcRelay", () => {
         {
           workerdUrl: "http://127.0.0.1:8787",
           workerdGatewayToken: "gateway-token",
+          resolveExecutableAdmission,
         }
       )
     ).rejects.toMatchObject({
@@ -332,6 +343,7 @@ describe("workerdRpcRelay", () => {
         {
           workerdUrl: "http://127.0.0.1:8787",
           workerdGatewayToken: "gateway-token",
+          resolveExecutableAdmission,
         }
       )
     ).rejects.toMatchObject({ name: "RemoteRpcError", errorData });
@@ -362,6 +374,7 @@ describe("workerdRpcRelay", () => {
         {
           workerdUrl: "http://127.0.0.1:8787",
           workerdGatewayToken: "gateway-token",
+          resolveExecutableAdmission,
         }
       )
     ).rejects.toMatchObject({
@@ -394,6 +407,7 @@ describe("workerdRpcRelay", () => {
     const admitted = postToDurableObject(ref, "first", [], {
       workerdUrl: "http://127.0.0.1:8787",
       workerdGatewayToken: "gateway-token",
+      resolveExecutableAdmission,
     });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const drained = sealAndDrainDurableObjectRelays(targetId, "test-retirement");
@@ -402,6 +416,7 @@ describe("workerdRpcRelay", () => {
       postToDurableObject(ref, "late", [], {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
       })
     ).rejects.toMatchObject({ code: "DO_NOT_CREATED" });
     let drainSettled = false;
@@ -420,6 +435,7 @@ describe("workerdRpcRelay", () => {
       postToDurableObject(ref, "after-reactivation", [], {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
       })
     ).resolves.toEqual({ reopened: true });
   });
@@ -436,6 +452,7 @@ describe("workerdRpcRelay", () => {
       postToDurableObject(ref, "late", [], {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
       })
     ).rejects.toMatchObject({
       name: "RemoteRpcError",
@@ -456,6 +473,7 @@ describe("workerdRpcRelay", () => {
       postToDurableObject(ref, "still-sealed", [], {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
       })
     ).rejects.toMatchObject({ code: "DO_NOT_CREATED" });
     releaseDurableObjectRelaySeal(targetId, "retirement");
@@ -482,6 +500,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
       }
     );
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
@@ -524,6 +543,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
       },
       new AbortController().signal
     );
@@ -567,6 +587,7 @@ describe("workerdRpcRelay", () => {
         {
           workerdUrl: "http://127.0.0.1:8787",
           workerdGatewayToken: "gateway-token",
+          resolveExecutableAdmission,
         },
         new AbortController().signal
       )
@@ -608,6 +629,7 @@ describe("workerdRpcRelay", () => {
       postToDurableObject(ref, "ping", [], {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
       })
     ).rejects.toThrow(
       `DO RPC fetch to ${url} failed: fetch failed (cause: Error: other side closed code=UND_ERR_SOCKET localAddress=127.0.0.1 localPort=9000 remoteAddress=127.0.0.1 remotePort=8787 bytesWritten=512 bytesRead=0)`
@@ -625,6 +647,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
         callerId: "panel:parent-entity",
         callerKind: "panel",
         callerPanelId: "parent-slot",
@@ -662,6 +685,7 @@ describe("workerdRpcRelay", () => {
       {
         workerdUrl: "http://127.0.0.1:8787",
         workerdGatewayToken: "gateway-token",
+        resolveExecutableAdmission,
         callerId: "panel:nav-a",
         callerKind: "panel",
         causalParent,

@@ -1,11 +1,14 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { once } from "node:events";
+import { Pool } from "undici";
 import { describe, expect, it, vi } from "vitest";
 import {
   createWorkerdHttpObservation,
   destroyWorkerdConnections,
   getWorkerdConnectionDispatcher,
   postToDurableObject,
+  streamFromDurableObject,
+  withWorkerdHttpObservation,
 } from "./workerdRpcRelay.js";
 
 const ref = { source: "workers/test", className: "TestDO", objectKey: "connections" };
@@ -46,6 +49,53 @@ function reply(res: ServerResponse, request: { message: { requestId: string } })
 }
 
 describe("owned workerd HTTP connections", () => {
+  it("does not attach an unobserved bodyless request to a reused request context", async () => {
+    await withServer(
+      (req, res) => {
+        req.resume();
+        req.on("end", () => {
+          if (req.url === "/health") req.socket.destroy();
+          else res.end("ok");
+        });
+      },
+      async (origin) => {
+        const pool = new Pool(origin, {
+          connections: 1,
+          pipelining: 1,
+          headersTimeout: 0,
+          bodyTimeout: 0,
+        });
+        const dispatcher = withWorkerdHttpObservation(pool);
+        const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const observation = createWorkerdHttpObservation({
+            source: ref.source,
+            className: ref.className,
+            method: "read",
+            requestId: "observed-read",
+          });
+          const response = await observation.fetch(() =>
+            fetch(`${origin}/rpc`, {
+              method: "POST",
+              body: "observed request",
+              dispatcher,
+            } as RequestInit)
+          );
+          await observation.readText(response);
+
+          await expect(fetch(`${origin}/health`, { dispatcher } as RequestInit)).rejects.toThrow();
+
+          expect(
+            warning.mock.calls.filter(([label]) => label === "[WorkerdHttp] request failed")
+          ).toHaveLength(0);
+        } finally {
+          warning.mockRestore();
+          await dispatcher.destroy();
+        }
+      }
+    );
+  });
+
   it("attributes concurrent socket failures to the request that owned each socket", async () => {
     await withServer(
       (req, res) => {
@@ -172,9 +222,10 @@ describe("owned workerd HTTP connections", () => {
     );
   });
 
-  it("reuses sockets for repeated calls and never replays an ambiguously delivered POST", async () => {
+  it("keeps an explicit keep-alive pool for reuse and no-replay diagnostics", async () => {
     const sockets = new Set<IncomingMessage["socket"]>();
     const deliveries: string[] = [];
+    const remotePortsByMethod = new Map<string, number[]>();
     await withServer(
       (req, res) => {
         sockets.add(req.socket);
@@ -185,6 +236,110 @@ describe("owned workerd HTTP connections", () => {
         });
         req.on("end", () => {
           const request = JSON.parse(body) as { message: { requestId: string; method: string } };
+          deliveries.push(request.message.method);
+          const ports = remotePortsByMethod.get(request.message.method) ?? [];
+          const remotePort = req.socket.remotePort;
+          if (remotePort === undefined) throw new Error("Request socket has no remote port");
+          ports.push(remotePort);
+          remotePortsByMethod.set(request.message.method, ports);
+          if (request.message.method === "commit-and-disconnect") req.socket.destroy();
+          else reply(res, request);
+        });
+      },
+      async (origin) => {
+        const pool = new Pool(origin, {
+          connections: 1,
+          pipelining: 1,
+          headersTimeout: 0,
+          bodyTimeout: 0,
+        });
+        const dispatcher = withWorkerdHttpObservation(pool);
+        const call = (method: string, requestId: string) => {
+          const observation = createWorkerdHttpObservation({
+            source: ref.source,
+            className: ref.className,
+            method,
+            requestId,
+          });
+          return observation
+            .fetch(() =>
+              fetch(`${origin}/__rpc`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  message: { type: "request", requestId, method },
+                }),
+                dispatcher,
+              } as RequestInit)
+            )
+            .then((response) => observation.readText(response));
+        };
+        const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          for (let index = 0; index < 6; index++) {
+            await expect(call("read", `read-${index}`)).resolves.toContain('"result":"done"');
+          }
+          expect(sockets.size).toBeLessThan(6);
+          const firstSocket = remotePortsByMethod.get("read")?.[0];
+          expect(firstSocket).toEqual(expect.any(Number));
+          expect(remotePortsByMethod.get("read")).toEqual(Array<number>(6).fill(firstSocket!));
+          await expect(call("commit-and-disconnect", "ambiguous-post")).rejects.toThrow();
+          expect(deliveries.filter((method) => method === "commit-and-disconnect")).toHaveLength(1);
+          const failureLog = warning.mock.calls.find(
+            ([label]) => label === "[WorkerdHttp] request failed"
+          );
+          const failureEvidence = JSON.parse(String(failureLog?.[1])) as {
+            exchanges: Array<{
+              socketPreviousResponseStatus?: number;
+              socketPreviousResponseConnection?: string;
+              socketPreviousResponseKeepAlive?: string;
+              socketPreviousResponseAgeMs?: number;
+              socketPreviousResponseBodyAgeMs?: number;
+            }>;
+          };
+          expect(failureEvidence.exchanges).toEqual([
+            expect.objectContaining({
+              socketPreviousResponseStatus: 200,
+              socketPreviousResponseConnection: "keep-alive",
+              socketPreviousResponseKeepAlive: "timeout=9",
+              socketPreviousResponseAgeMs: expect.any(Number),
+              socketPreviousResponseBodyAgeMs: expect.any(Number),
+            }),
+          ]);
+          await expect(call("next-call", "next-call")).resolves.toContain('"result":"done"');
+          expect(remotePortsByMethod.get("commit-and-disconnect")).toEqual([firstSocket]);
+          expect(remotePortsByMethod.get("next-call")?.[0]).not.toBe(firstSocket);
+        } finally {
+          warning.mockRestore();
+          await dispatcher.destroy();
+        }
+        expect(deliveries).toEqual([
+          ...Array<string>(6).fill("read"),
+          "commit-and-disconnect",
+          "next-call",
+        ]);
+      }
+    );
+  });
+
+  it("gives each unary RPC a close-after-body socket without serializing calls", async () => {
+    const sockets = new Set<IncomingMessage["socket"]>();
+    const terminal: Promise<void>[] = [];
+    const deliveries: string[] = [];
+    await withServer(
+      (req, res) => {
+        sockets.add(req.socket);
+        expect(req.headers.connection?.toLowerCase()).toBe("close");
+        terminal.push(once(req.socket, "close").then(() => undefined));
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          const request = JSON.parse(body) as {
+            message: { method: string; requestId: string };
+          };
           deliveries.push(request.message.method);
           if (request.message.method === "commit-and-disconnect") req.socket.destroy();
           else reply(res, request);
@@ -200,48 +355,75 @@ describe("owned workerd HTTP connections", () => {
             props: { stateArgs: null, image: null },
           }),
         };
-        for (let index = 0; index < 6; index++) {
-          await expect(postToDurableObject(ref, "read", [], deps)).resolves.toBe("done");
-        }
-        expect(sockets.size).toBeLessThan(6);
-        const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-        try {
-          await expect(postToDurableObject(ref, "commit-and-disconnect", [], deps)).rejects.toThrow(
-            /fetch/
-          );
-          const failureLog = warning.mock.calls.find(
-            ([label]) => label === "[WorkerdHttp] request failed"
-          );
-          const failureEvidence = JSON.parse(String(failureLog?.[1])) as Record<string, unknown>;
-          expect(failureEvidence).toMatchObject({
-            source: ref.source,
-            className: ref.className,
-            method: "commit-and-disconnect",
-            requestId: expect.any(String),
-            exchanges: [
-              expect.objectContaining({
-                localPort: expect.any(Number),
-                remotePort: expect.any(Number),
-                socketPreviousResponseStatus: 200,
-                socketPreviousResponseConnection: "keep-alive",
-                socketPreviousResponseKeepAlive: "timeout=9",
-                socketPreviousResponseAgeMs: expect.any(Number),
-                socketPreviousResponseBodyAgeMs: expect.any(Number),
-              }),
-            ],
-          });
-          expect(failureEvidence).not.toHaveProperty("url");
-          expect(failureEvidence).not.toHaveProperty("headers");
-          expect(failureEvidence).not.toHaveProperty("body");
-        } finally {
-          warning.mockRestore();
-        }
+        await Promise.all(
+          Array.from({ length: 6 }, (_, index) =>
+            expect(postToDurableObject(ref, "read", [index], deps)).resolves.toBe("done")
+          )
+        );
+        expect(sockets.size).toBe(6);
+        await expect(postToDurableObject(ref, "commit-and-disconnect", [], deps)).rejects.toThrow();
+        expect(deliveries.filter((method) => method === "commit-and-disconnect")).toHaveLength(1);
         await expect(postToDurableObject(ref, "next-call", [], deps)).resolves.toBe("done");
-        expect(deliveries).toEqual([
-          ...Array<string>(6).fill("read"),
-          "commit-and-disconnect",
-          "next-call",
-        ]);
+        expect(sockets.size).toBe(8);
+        await Promise.all(terminal);
+      }
+    );
+  });
+
+  it("holds a stream socket through EOF and closes it when the consumer cancels", async () => {
+    const sockets = new Set<IncomingMessage["socket"]>();
+    const socketOrder: IncomingMessage["socket"][] = [];
+    const terminal: Promise<void>[] = [];
+    const responses: ServerResponse[] = [];
+    await withServer(
+      (req, res) => {
+        sockets.add(req.socket);
+        socketOrder.push(req.socket);
+        expect(req.headers.connection?.toLowerCase()).toBe("close");
+        terminal.push(once(req.socket, "close").then(() => undefined));
+        req.resume();
+        req.on("end", () => {
+          res.setHeader("Content-Type", "application/x-ndjson");
+          res.write("event: data\n\n");
+          responses.push(res);
+        });
+      },
+      async (origin) => {
+        const deps = {
+          workerdUrl: origin,
+          workerdGatewayToken: "test",
+          resolveExecutableAdmission: () => ({
+            executableVersion: "version",
+            incarnationVersion: "version",
+            props: { stateArgs: null, image: null },
+          }),
+        };
+        const eof = await streamFromDurableObject(
+          ref,
+          "updates",
+          [],
+          deps,
+          new AbortController().signal
+        );
+        expect(sockets.size).toBe(1);
+        expect(socketOrder[0]?.destroyed).toBe(false);
+        responses[0]!.end();
+        await expect(eof.text()).resolves.toBe("event: data\n\n");
+        await terminal[0];
+        expect(socketOrder[0]?.destroyed).toBe(true);
+
+        const cancelled = await streamFromDurableObject(
+          ref,
+          "updates",
+          [],
+          deps,
+          new AbortController().signal
+        );
+        expect(sockets.size).toBe(2);
+        expect(socketOrder[1]?.destroyed).toBe(false);
+        await cancelled.body!.cancel("consumer stopped");
+        await terminal[1];
+        expect(socketOrder[1]?.destroyed).toBe(true);
       }
     );
   });
