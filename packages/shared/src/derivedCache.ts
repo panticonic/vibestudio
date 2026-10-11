@@ -264,6 +264,29 @@ export class DerivedCacheCoordinator {
     };
   }
 
+  /**
+   * Serialize a short synchronous mutation with every other process using this
+   * coordinator database. The callback must not yield; it is intended for
+   * filesystem decisions whose final check and mutation need one cross-process
+   * boundary.
+   */
+  withMutation<T>(
+    operation: () => T & ([Extract<T, PromiseLike<unknown>>] extends [never] ? unknown : never)
+  ): T {
+    return this.transaction(operation);
+  }
+
+  /** Read lease ownership while inside `withMutation` for an atomic decision. */
+  hasLease(rootInput: string, key: string): boolean {
+    const root = canonicalRoot(rootInput);
+    this.releaseDeadOwners();
+    return Boolean(
+      this.db
+        .prepare("SELECT 1 AS one FROM cache_leases WHERE root = ? AND key = ? LIMIT 1")
+        .get(root, key)
+    );
+  }
+
   async status(rootInput: string): Promise<DerivedCacheStatus> {
     const root = canonicalRoot(rootInput);
     const entries = await this.scan(root);

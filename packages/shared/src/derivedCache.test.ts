@@ -10,6 +10,15 @@ import {
   type DerivedCacheLease,
 } from "./derivedCache.js";
 
+declare const mutationCallbackType: DerivedCacheCoordinator;
+if (false) {
+  // The cross-process transaction cannot join async work after releasing its lock.
+  // @ts-expect-error asynchronous mutation callbacks are not synchronously joined
+  mutationCallbackType.withMutation(async () => {});
+  // @ts-expect-error a conditional asynchronous result also escapes the transaction
+  mutationCallbackType.withMutation(() => (Math.random() > 0.5 ? Promise.resolve() : undefined));
+}
+
 const roots: string[] = [];
 
 function cacheRoot(): string {
