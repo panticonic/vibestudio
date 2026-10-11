@@ -1,8 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, fork } from "node:child_process";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import { deserializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 
 const execute = promisify(execFile);
 
@@ -44,6 +45,44 @@ it("maintains build and native extension dependency trees through the real child
     ).rejects.toMatchObject({
       stderr: expect.stringContaining("Refusing invalid dependency cache directory"),
     });
+  } finally {
+    await fs.rm(fixture, { recursive: true, force: true });
+  }
+});
+
+it("transfers the original maintenance failure graph to its process owner", async () => {
+  const scratch = path.join(process.cwd(), ".cache/dependency-maintenance-tests");
+  await fs.mkdir(scratch, { recursive: true });
+  const fixture = await fs.mkdtemp(path.join(scratch, "failure-"));
+  try {
+    const outside = path.join(fixture, "unowned/3333333333333333");
+    const child = fork("src/server/buildV2/dependencyContentMaintenanceProcess.ts", [outside], {
+      execArgv: ["--import", "tsx"],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+      env: { ...process.env, VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: fixture },
+    });
+    let failure: unknown;
+    const stderr: Buffer[] = [];
+    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("message", (message: unknown) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        (message as { type?: unknown }).type === "dependency-maintenance-failure"
+      )
+        failure = deserializeRpcFailure((message as { failure: RpcFailure }).failure);
+    });
+    const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+      child.once("close", (exitCode, exitSignal) => resolve([exitCode, exitSignal]));
+    });
+    expect(code).toBe(1);
+    expect(signal).toBeNull();
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("Refusing invalid dependency cache directory"),
+    });
+    expect(Buffer.concat(stderr).toString()).toContain(
+      "Refusing invalid dependency cache directory"
+    );
   } finally {
     await fs.rm(fixture, { recursive: true, force: true });
   }
