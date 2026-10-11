@@ -1,5 +1,5 @@
 import { joinChildProcess } from "./lib/join-child-process.mjs";
-import { test, afterEach } from "node:test";
+import { test, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -19,8 +19,27 @@ async function fixture() {
   return root;
 }
 afterEach(async () => {
+  mock.restoreAll();
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
+
+async function releaseBuildFixture(root, key = "a".repeat(64), bytes = Buffer.from("export default {};")) {
+  const source = path.join(root, "source");
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, "bundle.js"), bytes);
+  await fs.writeFile(path.join(source, "metadata.json"), JSON.stringify({ buildKey: key }));
+  await fs.writeFile(
+    path.join(source, "artifacts.json"),
+    JSON.stringify([
+      {
+        path: "bundle.js",
+        byteLength: bytes.length,
+        integrity: `sha256-${createHash("sha256").update(bytes).digest("hex")}`,
+      },
+    ])
+  );
+  return { source, key, bytes };
+}
 
 test("ready admission propagates the original process failure without a deadline", async () => {
   const root = await fixture();
@@ -77,21 +96,7 @@ test("exports only immutable records and verifies every payload before publicati
   const root = await fixture();
   const source = path.join(root, "source"),
     destination = path.join(root, "release");
-  await fs.mkdir(source);
-  const key = "a".repeat(64),
-    bytes = Buffer.from("export default {};");
-  await fs.writeFile(path.join(source, "bundle.js"), bytes);
-  await fs.writeFile(path.join(source, "metadata.json"), JSON.stringify({ buildKey: key }));
-  await fs.writeFile(
-    path.join(source, "artifacts.json"),
-    JSON.stringify([
-      {
-        path: "bundle.js",
-        byteLength: bytes.length,
-        integrity: `sha256-${createHash("sha256").update(bytes).digest("hex")}`,
-      },
-    ])
-  );
+  const { key, bytes } = await releaseBuildFixture(root);
   await fs.writeFile(path.join(source, "grants.db"), "private mutable authority");
   await fs.writeFile(path.join(source, "metadata.json.tmp.writer"), "incomplete");
   await Promise.all([
@@ -132,6 +137,78 @@ test("exports only immutable records and verifies every payload before publicati
     exportReleaseBuild(source, path.join(root, "other"), "b".repeat(64)),
     /key mismatch/
   );
+});
+
+test("accepts a Windows EPERM rename collision only after verifying the incumbent", async () => {
+  const root = await fixture();
+  const { source, key } = await releaseBuildFixture(root);
+  const destination = path.join(root, "release");
+  const realRename = fs.rename.bind(fs);
+  const renameError = Object.assign(new Error("destination already exists"), { code: "EPERM" });
+  mock.method(fs, "rename", async (from, to) => {
+    await realRename(from, to);
+    throw renameError;
+  });
+
+  await exportReleaseBuild(source, destination, key);
+  assert.equal(await fs.readFile(path.join(destination, "bundle.js"), "utf8"), "export default {};");
+  assert.equal((await fs.readdir(root)).some((name) => name.includes(".publishing-")), false);
+});
+
+test("preserves a genuine EPERM when no release destination was published", async () => {
+  const root = await fixture();
+  const { source, key } = await releaseBuildFixture(root);
+  const destination = path.join(root, "release");
+  const renameError = Object.assign(new Error("rename denied"), { code: "EPERM" });
+  mock.method(fs, "rename", async () => {
+    throw renameError;
+  });
+
+  await assert.rejects(exportReleaseBuild(source, destination, key), (error) => error === renameError);
+  await assert.rejects(fs.stat(destination), { code: "ENOENT" });
+  assert.equal((await fs.readdir(root)).some((name) => name.includes(".publishing-")), false);
+});
+
+test("retains rename and incumbent verification failures for an invalid publication race", async () => {
+  const root = await fixture();
+  const { source, key } = await releaseBuildFixture(root);
+  const destination = path.join(root, "release");
+  const renameError = Object.assign(new Error("destination collision"), { code: "EPERM" });
+  mock.method(fs, "rename", async () => {
+    await fs.mkdir(destination);
+    await fs.writeFile(path.join(destination, "metadata.json"), JSON.stringify({ buildKey: "wrong" }));
+    throw renameError;
+  });
+
+  await assert.rejects(exportReleaseBuild(source, destination, key), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.cause, renameError);
+    assert.equal(error.errors[0], renameError);
+    assert.match(error.errors[1].message, /key mismatch/);
+    return true;
+  });
+  assert.equal((await fs.readdir(root)).some((name) => name.includes(".publishing-")), false);
+});
+
+test("keeps a staging cleanup failure together with the publication error", async () => {
+  const root = await fixture();
+  const { source, key } = await releaseBuildFixture(root);
+  const renameError = Object.assign(new Error("rename denied"), { code: "EPERM" });
+  const cleanupError = new Error("staging cleanup failed");
+  mock.method(fs, "rename", async () => {
+    throw renameError;
+  });
+  mock.method(fs, "rm", async () => {
+    throw cleanupError;
+  });
+
+  await assert.rejects(exportReleaseBuild(source, path.join(root, "release"), key), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.cause, renameError);
+    assert.equal(error.errors[0], renameError);
+    assert.equal(error.errors[1], cleanupError);
+    return true;
+  });
 });
 
 test("rejects artifact paths that would escape the release record", async () => {

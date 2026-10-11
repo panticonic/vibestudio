@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
-import * as fsp from "node:fs/promises";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
 import { joinChildProcess } from "./lib/join-child-process.mjs";
@@ -45,46 +46,149 @@ export function awaitHubReady(child, readyFile) {
 /** Ship only the sealed record and its artifacts, never a producer's databases or grants. */
 export async function exportReleaseBuild(source, destination, expectedKey) {
   if (!/^[0-9a-f]{64}$/u.test(expectedKey)) throw new Error("Invalid release build key");
-  const metadata = JSON.parse(await fsp.readFile(path.join(source, "metadata.json"), "utf8"));
-  if (metadata.buildKey !== expectedKey) throw new Error("Release build record key mismatch");
-  const artifacts = JSON.parse(await fsp.readFile(path.join(source, "artifacts.json"), "utf8"));
   await fsp.mkdir(path.dirname(destination), { recursive: true });
+  const files = await verifyReleaseBuildDirectory(source, expectedKey, false);
+  if (await releaseBuildDestinationExists(destination)) {
+    await verifyReleaseBuildDirectory(destination, expectedKey, true);
+    return;
+  }
+
   const staging = await fsp.mkdtemp(`${destination}.publishing-`);
+  let failure;
+  let hasFailure = false;
   try {
-    const files = ["metadata.json", "artifacts.json", "executable-modules.json.gz"];
-    for (const artifact of artifacts) {
-      if (
-        !artifact.path ||
-        artifact.path.includes("\\") ||
-        path.posix.isAbsolute(artifact.path) ||
-        artifact.path.split("/").some((part) => !part || part === "." || part === "..")
-      )
-        throw new Error(`Invalid release artifact path: ${artifact.path}`);
-      const bytes = await fsp.readFile(path.join(source, artifact.path));
-      if (
-        bytes.length !== artifact.byteLength ||
-        artifact.integrity !== `sha256-${createHash("sha256").update(bytes).digest("hex")}`
-      )
-        throw new Error(`Release artifact integrity mismatch: ${artifact.path}`);
-      files.push(artifact.path);
-    }
-    for (const file of new Set(files)) {
+    for (const file of files) {
       const from = path.join(source, file);
-      if (file === "executable-modules.json.gz" && !fs.existsSync(from)) continue;
       const to = path.join(staging, file);
       await fsp.mkdir(path.dirname(to), { recursive: true });
       await fsp.copyFile(from, to);
     }
+    await verifyReleaseBuildDirectory(staging, expectedKey, true);
     try {
       await fsp.rename(staging, destination);
-    } catch (error) {
-      if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY") throw error;
-      // Build keys identify compilation recipes; artifact digests identify
-      // bytes. Independent executions may embed different diagnostic paths.
-      // Keep the first complete record, as the shared BuildStore does.
+    } catch (renameError) {
+      let incumbentExists;
+      try {
+        incumbentExists = await releaseBuildDestinationExists(destination);
+      } catch (inspectionError) {
+        throw new AggregateError(
+          [renameError, inspectionError],
+          "Could not inspect a release build publication collision",
+          { cause: renameError }
+        );
+      }
+      if (!incumbentExists) throw renameError;
+      try {
+        await verifyReleaseBuildDirectory(destination, expectedKey, true);
+      } catch (verificationError) {
+        throw new AggregateError(
+          [renameError, verificationError],
+          "Release build publication collided with an invalid incumbent",
+          { cause: renameError }
+        );
+      }
     }
-  } finally {
+  } catch (error) {
+    failure = error;
+    hasFailure = true;
+  }
+  try {
     await fsp.rm(staging, { recursive: true, force: true });
+  } catch (cleanupError) {
+    if (hasFailure) {
+      throw new AggregateError(
+        [failure, cleanupError],
+        "Release build publication failed and staging cleanup also failed",
+        { cause: failure }
+      );
+    }
+    throw cleanupError;
+  }
+  if (hasFailure) throw failure;
+}
+
+async function releaseBuildDestinationExists(destination) {
+  try {
+    const stat = await fsp.lstat(destination);
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      throw new Error("Release build destination is not a real directory");
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function verifyReleaseBuildDirectory(directory, expectedKey, exactContents) {
+  const metadata = JSON.parse(await fsp.readFile(path.join(directory, "metadata.json"), "utf8"));
+  if (!metadata || typeof metadata !== "object" || metadata.buildKey !== expectedKey)
+    throw new Error("Release build record key mismatch");
+
+  const artifacts = JSON.parse(await fsp.readFile(path.join(directory, "artifacts.json"), "utf8"));
+  if (!Array.isArray(artifacts)) throw new Error("Invalid release artifact manifest");
+  const files = new Set(["metadata.json", "artifacts.json"]);
+  for (const artifact of artifacts) {
+    const artifactPath = artifact && typeof artifact === "object" ? artifact.path : undefined;
+    if (
+      typeof artifactPath !== "string" ||
+      artifactPath.includes("\\") ||
+      artifactPath.includes(":") ||
+      path.posix.isAbsolute(artifactPath) ||
+      path.win32.isAbsolute(artifactPath) ||
+      artifactPath.split("/").some((part) => !part || part === "." || part === "..") ||
+      files.has(artifactPath) ||
+      artifactPath === "executable-modules.json.gz"
+    ) {
+      throw new Error(`Invalid release artifact path: ${String(artifactPath)}`);
+    }
+    if (
+      !Number.isSafeInteger(artifact.byteLength) ||
+      artifact.byteLength < 0 ||
+      typeof artifact.integrity !== "string" ||
+      !/^sha256-[0-9a-f]{64}$/u.test(artifact.integrity)
+    ) {
+      throw new Error(`Invalid release artifact manifest entry: ${artifactPath}`);
+    }
+    const bytes = await fsp.readFile(path.join(directory, artifactPath));
+    if (
+      bytes.length !== artifact.byteLength ||
+      artifact.integrity !== `sha256-${createHash("sha256").update(bytes).digest("hex")}`
+    ) {
+      throw new Error(`Release artifact integrity mismatch: ${artifactPath}`);
+    }
+    files.add(artifactPath);
+  }
+
+  try {
+    const modulesPath = path.join(directory, "executable-modules.json.gz");
+    const modules = JSON.parse(gunzipSync(await fsp.readFile(modulesPath)).toString("utf8"));
+    if (!Array.isArray(modules)) throw new Error("Invalid executable module inventory");
+    files.add("executable-modules.json.gz");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+
+  if (exactContents) await assertExactReleaseBuildFiles(directory, files);
+  return [...files];
+}
+
+async function assertExactReleaseBuildFiles(directory, expectedFiles) {
+  const actualFiles = new Set();
+  const visit = async (current, relative = "") => {
+    for (const entry of await fsp.readdir(current, { withFileTypes: true })) {
+      const entryPath = relative ? `${relative}/${entry.name}` : entry.name;
+      const absolutePath = path.join(current, entry.name);
+      if (entry.isDirectory()) await visit(absolutePath, entryPath);
+      else if (entry.isFile()) actualFiles.add(entryPath);
+      else throw new Error(`Invalid release build entry: ${entryPath}`);
+    }
+  };
+  await visit(directory);
+  if (
+    actualFiles.size !== expectedFiles.size ||
+    [...expectedFiles].some((file) => !actualFiles.has(file))
+  ) {
+    throw new Error("Release build directory does not match its sealed artifact manifest");
   }
 }
 

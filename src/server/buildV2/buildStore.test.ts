@@ -9,6 +9,7 @@ import {
   artifactFilePath,
   collectRetention,
   configureReleaseBuilds,
+  drainBuildStorePublications,
   get,
   getByExecution,
   getOrHydrate,
@@ -1127,6 +1128,174 @@ describe("build artifact helpers", () => {
       } else {
         process.env["VIBESTUDIO_INSTANCE_ROOT"] = previousInstanceRoot;
       }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["valid", "corrupt"] as const)(
+    "accepts a validated %s shared-build winner after a rename collision",
+    async (winnerKind) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-shared-publish-winner-"));
+      const previousSharedCache = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+      const sharedCache = path.join(root, "shared");
+      process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = sharedCache;
+      const key = `${winnerKind}-${"a".repeat(60)}`;
+      setUserDataPath(path.join(root, "producer"));
+      const winnerError = Object.assign(new Error("rename winner already published"), {
+        code: "EPERM",
+      });
+      const realRename = fs.promises.rename;
+      let renameSpy: import("vitest").MockInstance<typeof fs.promises.rename> | undefined;
+      try {
+        const source = await put(
+          key,
+          { entries: build().artifacts },
+          { ...build().metadata, buildKey: key }
+        );
+        const sharedDir = path.join(sharedCache, key);
+        renameSpy = vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
+          if (String(to) !== sharedDir) return realRename(from, to);
+          fs.cpSync(String(from), sharedDir, { recursive: true, errorOnExist: true });
+          if (winnerKind === "corrupt") {
+            fs.writeFileSync(path.join(sharedDir, "worker.js"), "export default [];");
+          }
+          throw winnerError;
+        });
+
+        setUserDataPath(path.join(root, "consumer"));
+        if (winnerKind === "valid") {
+          const hydrated = await getOrHydrate(key);
+          expect(hydrated?.artifacts[0]?.content).toBe("export default {};");
+          expect(fs.existsSync(path.join(sharedDir, "metadata.json"))).toBe(true);
+        } else {
+          await expect(getOrHydrate(key)).rejects.toSatisfy((error: unknown) => {
+            if (!(error instanceof AggregateError)) return false;
+            const failures = [...error.errors];
+            return (
+              failures.includes(winnerError) &&
+              failures.some(
+                (failure) => failure instanceof Error && /integrity/i.test(failure.message)
+              )
+            );
+          });
+        }
+        expect(source.buildKey).toBe(key);
+      } finally {
+        renameSpy?.mockRestore();
+        if (previousSharedCache === undefined)
+          delete process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+        else process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = previousSharedCache;
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it("preserves shared-build rename and cleanup failures together", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-shared-publish-cleanup-"));
+    const previousSharedCache = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+    const sharedCache = path.join(root, "shared");
+    process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = sharedCache;
+    const key = `cleanup-${"b".repeat(58)}`;
+    setUserDataPath(path.join(root, "producer"));
+    const renameError = Object.assign(new Error("directory rename denied"), { code: "EPERM" });
+    const cleanupError = new Error("temporary publication cleanup denied");
+    const realRename = fs.promises.rename;
+    const realRm = fs.promises.rm;
+    let renameSpy: import("vitest").MockInstance<typeof fs.promises.rename> | undefined;
+    let rmSpy: import("vitest").MockInstance<typeof fs.promises.rm> | undefined;
+    try {
+      await put(key, { entries: build().artifacts }, { ...build().metadata, buildKey: key });
+      const sharedDir = path.join(sharedCache, key);
+      let tempPath: string | undefined;
+      renameSpy = vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
+        if (String(to) !== sharedDir) return realRename(from, to);
+        tempPath = String(from);
+        fs.cpSync(tempPath, sharedDir, { recursive: true, errorOnExist: true });
+        throw renameError;
+      });
+      rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+        if (String(target) === tempPath) throw cleanupError;
+        return realRm(target, options);
+      });
+
+      setUserDataPath(path.join(root, "consumer"));
+      let failure: unknown;
+      try {
+        await getOrHydrate(key);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(AggregateError);
+      const failures: unknown[] = [];
+      const collect = (error: unknown): void => {
+        if (error instanceof AggregateError) {
+          for (const member of error.errors) collect(member);
+        } else {
+          failures.push(error);
+        }
+      };
+      collect(failure);
+      expect(failures).toContain(renameError);
+      expect(failures).toContain(cleanupError);
+    } finally {
+      rmSpy?.mockRestore();
+      renameSpy?.mockRestore();
+      if (previousSharedCache === undefined)
+        delete process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+      else process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = previousSharedCache;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drains independent shared-build publication failures as one complete graph", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-shared-publish-drain-"));
+    const previousSharedCache = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+    process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = path.join(root, "shared");
+    setUserDataPath(path.join(root, "producer"));
+    const failures = [
+      new Error("first publication failure"),
+      new Error("second publication failure"),
+    ];
+    let releasePublications: (() => void) | undefined;
+    const publicationGate = new Promise<void>((resolve) => {
+      releasePublications = resolve;
+    });
+    const realRename = fs.promises.rename;
+    let renameSpy: import("vitest").MockInstance<typeof fs.promises.rename> | undefined;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      renameSpy = vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
+        if (path.dirname(String(to)) === process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"]) {
+          const index = path.basename(String(to)).endsWith("1") ? 0 : 1;
+          await publicationGate;
+          throw failures[index];
+        }
+        return realRename(from, to);
+      });
+      for (const suffix of ["1", "2"]) {
+        const key = `${"c".repeat(62)}${suffix}`;
+        await put(key, { entries: build().artifacts }, { ...build().metadata, buildKey: key });
+      }
+
+      const drain = drainBuildStorePublications();
+      releasePublications?.();
+      let failure: unknown;
+      try {
+        await drain;
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (failure instanceof AggregateError) {
+        expect(failure.errors).toEqual(failures);
+        expect(failure.cause).toBe(failures[0]);
+      }
+    } finally {
+      warnSpy.mockRestore();
+      renameSpy?.mockRestore();
+      if (previousSharedCache === undefined)
+        delete process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+      else process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = previousSharedCache;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

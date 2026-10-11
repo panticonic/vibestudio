@@ -1,4 +1,5 @@
 import { logVerbose } from "@vibestudio/dev-log";
+import { formatRpcFailure } from "@vibestudio/rpc";
 import { workspaceReleaseResourceRoot } from "../preparedWorkspaceTemplate.js";
 import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
 /**
@@ -452,9 +453,7 @@ function isFileSystemErrorCode(error: unknown, codes: readonly string[]): boolea
 }
 
 function warnCleanupFailure(pathName: string, error: unknown): void {
-  console.warn(
-    `[buildStore] Failed to remove ${pathName}: ${error instanceof Error ? error.message : String(error)}`
-  );
+  console.warn(`[buildStore] Failed to remove ${pathName}: ${formatRpcFailure(error)}`);
 }
 
 /** Project only the sealed artifacts, never mutable metadata or writer scratch files. */
@@ -515,7 +514,8 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return;
   const cacheRoot = path.dirname(sharedDir);
-  if (fs.existsSync(path.join(sharedDir, "metadata.json"))) {
+  if (sharedBuildDirectoryExists(sharedDir)) {
+    assertCompleteSharedBuild(sharedDir, key);
     return;
   }
 
@@ -527,17 +527,46 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
     await materializeBuildTree(source, tmpDir);
     try {
       await fs.promises.rename(tmpDir, sharedDir);
-    } catch (error) {
-      // A published destination means another writer won the race. Windows
-      // may report EPERM for this collision rather than EEXIST.
-      if (!fs.existsSync(sharedDir)) throw error;
-      await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    } catch (renameError) {
+      let incumbentExists: boolean;
+      try {
+        incumbentExists = sharedBuildDirectoryExists(sharedDir);
+      } catch (inspectionError) {
+        throw new AggregateError(
+          [renameError, inspectionError],
+          `Could not inspect shared build publication collision for ${key}`,
+          { cause: renameError }
+        );
+      }
+      if (!incumbentExists) throw renameError;
+      try {
+        assertCompleteSharedBuild(sharedDir, key);
+      } catch (verificationError) {
+        throw new AggregateError(
+          [renameError, verificationError],
+          `Shared build publication collided with an invalid incumbent for ${key}`,
+          { cause: renameError }
+        );
+      }
+      try {
+        await fs.promises.rm(tmpDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [renameError, cleanupError],
+          `Shared build publication winner was verified, but temporary cleanup failed for ${key}`,
+          { cause: renameError }
+        );
+      }
     }
   } catch (error) {
     try {
       await fs.promises.rm(tmpDir, { recursive: true, force: true });
     } catch (cleanupError) {
-      warnCleanupFailure(tmpDir, cleanupError);
+      throw new AggregateError(
+        [error, cleanupError],
+        `Shared build publication failed and temporary cleanup also failed for ${key}`,
+        { cause: error }
+      );
     }
     throw error;
   } finally {
@@ -546,11 +575,30 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
         if (result) await collectSharedArtifactPool();
       })
       .catch((error) => {
-        console.warn(
-          `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
-        );
+        console.warn(`[buildStore] Shared cache prune failed: ${formatRpcFailure(error)}`);
       });
   }
+}
+
+function sharedBuildDirectoryExists(sharedDir: string): boolean {
+  try {
+    const stat = fs.lstatSync(sharedDir);
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      throw new Error("Shared build publication destination is not a real directory");
+    return true;
+  } catch (error) {
+    if (isFileSystemErrorCode(error, ["ENOENT"])) return false;
+    throw error;
+  }
+}
+
+function assertCompleteSharedBuild(sharedDir: string, key: string): void {
+  const build = readBuildDir(sharedDir, key, { verifyExecution: false });
+  if (!build) throw new Error(`Shared build ${key} is incomplete or has a different build key`);
+  // readBuildDir checks the exact metadata key, canonical artifact paths, and
+  // payload lengths. Accessing the lazy payloads invokes the canonical hash
+  // verifier before an existing directory can win publication.
+  for (const artifact of build.artifacts) void artifact.content;
 }
 
 // Shared builds are a reconstruction cache, not part of the durability commit
@@ -565,12 +613,10 @@ function scheduleSharedBuildPublication(key: string, sourceDir: string): void {
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return;
   const publicationId = path.resolve(sharedDir);
-  if (
-    fs.existsSync(path.join(sharedDir, "metadata.json")) ||
-    sharedBuildPublicationTasks.has(publicationId)
-  ) {
-    return;
-  }
+  // Existing metadata is not proof that a published tree is complete. Let
+  // publishSharedBuild validate an incumbent through readBuildDir and its
+  // lazy artifact hashes before treating it as the winner.
+  if (sharedBuildPublicationTasks.has(publicationId)) return;
   const task = new Promise<void>((resolve) => setImmediate(resolve))
     .then(() => publishSharedBuild(key, sourceDir))
     .finally(() => {
@@ -579,7 +625,7 @@ function scheduleSharedBuildPublication(key: string, sourceDir: string): void {
   sharedBuildPublicationTasks.set(publicationId, task);
   void task.catch((error) => {
     console.warn(
-      `[buildStore] Shared build publication failed for ${key}: ${error instanceof Error ? error.message : String(error)}`
+      `[buildStore] Shared build publication failed for ${key}: ${formatRpcFailure(error)}`
     );
   });
 }
@@ -706,8 +752,15 @@ async function runBounded<T>(
   );
   // The owner may remove its temporary tree after rejection. Settle every
   // writer first so no sibling operation can recreate files during cleanup.
-  const failed = results.find((result) => result.status === "rejected");
-  if (failed?.status === "rejected") throw failed.reason;
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : []
+  );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Multiple build artifact writes failed", {
+      cause: failures[0],
+    });
+  }
 }
 
 function buildArtifactSetIntegrity(entries: BuildArtifactManifestEntry[]): string {
@@ -1157,9 +1210,7 @@ export async function getOrHydrate(
             if (result) await collectSharedArtifactPool();
           })
           .catch((error) => {
-            console.warn(
-              `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
-            );
+            console.warn(`[buildStore] Shared cache prune failed: ${formatRpcFailure(error)}`);
           });
       }
     }
@@ -1688,7 +1739,7 @@ export async function collectRetention(input: {
       } catch (error) {
         result.cleanupFailures.push({
           buildKey: key,
-          error: error instanceof Error ? error.message : String(error),
+          error: formatRpcFailure(error),
         });
       }
       continue;
@@ -1700,7 +1751,7 @@ export async function collectRetention(input: {
     } catch (error) {
       result.cleanupFailures.push({
         buildKey: key,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatRpcFailure(error),
       });
     }
   }
@@ -1763,13 +1814,13 @@ export async function collectRetention(input: {
       } catch (error) {
         result.cleanupFailures.push({
           buildKey: key,
-          error: error instanceof Error ? error.message : String(error),
+          error: formatRpcFailure(error),
         });
       }
     } catch (error) {
       result.cleanupFailures.push({
         buildKey: key,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatRpcFailure(error),
       });
     }
   }
@@ -1784,7 +1835,7 @@ export async function collectRetention(input: {
     } catch (error) {
       result.cleanupFailures.push({
         buildKey: "shared-artifact-pool",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatRpcFailure(error),
       });
     }
   }
@@ -1823,7 +1874,7 @@ export async function scanRetention(): Promise<BuildStoreRetentionScan> {
     } catch (error) {
       failures.push({
         key: entry,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatRpcFailure(error),
       });
     }
   }
@@ -1834,6 +1885,13 @@ export async function scanRetention(): Promise<BuildStoreRetentionScan> {
 /** Join optional reconstruction publications after build admission has stopped. */
 export async function drainBuildStorePublications(): Promise<void> {
   const results = await Promise.allSettled(sharedBuildPublicationTasks.values());
-  const rejected = results.find((result) => result.status === "rejected");
-  if (rejected?.status === "rejected") throw rejected.reason;
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : []
+  );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Multiple shared build publications failed", {
+      cause: failures[0],
+    });
+  }
 }
