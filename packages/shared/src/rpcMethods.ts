@@ -35,7 +35,7 @@ export function createRpcMethods<M extends ServiceMethodSchemas>(
 /** Defer schema loading while retaining the complete static receiver contract. */
 export function createLazyRpcMethods<M extends ServiceMethodSchemas>(
   service: string,
-  names: readonly (keyof M & string)[],
+  names: readonly (keyof NoInfer<M> & string)[],
   load: () => Promise<M>,
   namespace = service
 ): RpcMethods<M> {
@@ -72,7 +72,7 @@ export function createLazyRpcMethods<M extends ServiceMethodSchemas>(
 export function createReceiverRpcMethods<
   T extends { [K in keyof T]: (...args: never[]) => unknown },
 >(
-  names: readonly (keyof T & string)[],
+  names: readonly (keyof NoInfer<T> & string)[],
   namespace = ""
 ): { readonly [K in keyof T]: RpcMethod<Parameters<T[K]>, Awaited<ReturnType<T[K]>>> } {
   const methods = Object.fromEntries(

@@ -13,6 +13,10 @@ import { mainRpcMethod, mainRpcMethods } from "./mainRpc.js";
 
 function compilationContract(rpc: RpcClient) {
   const wire = wireCallerFor(rpc);
+  // @ts-expect-error Names alone cannot manufacture a receiver's method signatures.
+  createReceiverRpcMethods(["inspect"]);
+  // @ts-expect-error Descriptor names must come from the loaded receiver schema.
+  createLazyRpcMethods("probe", ["unknownMethod"], async () => methods);
   const receiverMethods = createReceiverRpcMethods<{
     inspect(value: string): Promise<string>;
   }>(["inspect"]);
