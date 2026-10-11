@@ -1,6 +1,6 @@
 import { parse, type ParserPlugin } from "@babel/parser";
 
-export type ModuleImportSyntax = "import" | "export" | "dynamic-import" | "require";
+export type ModuleImportSyntax = "import" | "export" | "dynamic-import" | "require" | "compiler";
 export type ModuleImportKind = "value" | "type";
 
 export interface ModuleImportReference {
@@ -35,6 +35,14 @@ const PARSER_PLUGINS: ParserPlugin[] = [
   "importAttributes",
   "explicitResourceManagement",
 ];
+
+export interface ModuleImportAnalysisOptions {
+  /**
+   * Record the module a configured JSX transform emits when this source uses
+   * JSX. The caller supplies this from the owning compiler/build contract.
+   */
+  jsxRuntime?: string;
+}
 
 const BARE_NODE_BUILTINS = new Set([
   "assert",
@@ -271,7 +279,11 @@ function visitAst(value: unknown, visit: (node: AstNode) => void, seen: Set<obje
  * import-looking text in strings, comments, templates, and regexes is never
  * interpreted as code.
  */
-export function analyzeModuleImports(source: string, filename?: string): ModuleImportReference[] {
+export function analyzeModuleImports(
+  source: string,
+  filename?: string,
+  options: ModuleImportAnalysisOptions = {}
+): ModuleImportReference[] {
   const ast = parse(source, {
     sourceType: "unambiguous",
     sourceFilename: filename,
@@ -285,9 +297,17 @@ export function analyzeModuleImports(source: string, filename?: string): ModuleI
     createImportExpressions: true,
   });
   const references: ModuleImportReference[] = [];
+  let jsxLocation: AstNode | undefined;
   visitAst(
     ast.program,
     (node) => {
+      if (
+        options.jsxRuntime &&
+        !jsxLocation &&
+        (node.type === "JSXElement" || node.type === "JSXFragment")
+      ) {
+        jsxLocation = node;
+      }
       const found =
         node.type === "ImportDeclaration" ||
         node.type === "ExportNamedDeclaration" ||
@@ -298,6 +318,20 @@ export function analyzeModuleImports(source: string, filename?: string): ModuleI
     },
     new Set()
   );
+  if (options.jsxRuntime && jsxLocation) {
+    references.push(
+      reference(
+        {
+          type: "StringLiteral",
+          value: options.jsxRuntime,
+          start: jsxLocation.start,
+          loc: jsxLocation.loc,
+        },
+        "compiler",
+        { kind: "value", named: [], hasDefault: false, hasNamespace: true }
+      )
+    );
+  }
   return references.sort((left, right) => left.offset - right.offset);
 }
 
@@ -306,7 +340,7 @@ export function moduleCoordinate(specifier: string): string | null {
     specifier.startsWith(".") ||
     specifier.startsWith("/") ||
     specifier.startsWith("node:") ||
-    specifier.startsWith("cloudflare:") ||
+    specifier === "cloudflare:workers" ||
     BARE_NODE_BUILTINS.has(specifier)
   ) {
     return null;

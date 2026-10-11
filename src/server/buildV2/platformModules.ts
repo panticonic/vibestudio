@@ -88,6 +88,12 @@ export const WORKER_RUNTIME_COMPANION_MODULES: readonly string[] = [CDP_CLIENT_M
  */
 export const TERMINAL_SHIM_MODULE = "@workspace/terminal-shim";
 
+/** Module binding supplied by workerd for terminal-worker bundles. */
+export const TERMINAL_YOGA_WASM_MODULE = "yoga.wasm";
+
+/** Modules supplied by workerd for terminal-worker bundles. */
+export const TERMINAL_WORKER_RUNTIME_EXTERNALS: readonly string[] = [TERMINAL_YOGA_WASM_MODULE];
+
 /** Subpath specifier the builder substitutes for Ink's `yoga-layout` import. */
 export const TERMINAL_SHIM_YOGA = `${TERMINAL_SHIM_MODULE}/yoga`;
 

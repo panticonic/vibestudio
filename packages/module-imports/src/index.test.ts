@@ -128,6 +128,27 @@ describe("analyzeModuleImports", () => {
     ]);
   });
 
+  it("reports a configured compiler JSX runtime only when JSX is present", () => {
+    expect(
+      analyzeModuleImports("export const View = () => <section />;", "view.tsx", {
+        jsxRuntime: "react/jsx-runtime",
+      })
+    ).toMatchObject([
+      {
+        specifier: "react/jsx-runtime",
+        syntax: "compiler",
+        kind: "value",
+        line: 1,
+      },
+    ]);
+    expect(
+      analyzeModuleImports('const example = "<section />";', "view.tsx", {
+        jsxRuntime: "react/jsx-runtime",
+      })
+    ).toEqual([]);
+    expect(analyzeModuleImports("export const View = () => <section />;", "view.tsx")).toEqual([]);
+  });
+
   it("analyzes executable template interpolations while ignoring literal template text", () => {
     const source = [
       "const loaded = `literal import('ignored') ${",
@@ -193,6 +214,10 @@ describe("analyzeModuleImports", () => {
     expect(moduleCoordinate("plain/subpath")).toBe("plain");
     expect(moduleCoordinate("node:fs")).toBeNull();
     expect(moduleCoordinate("fs/promises")).toBeNull();
+    expect(moduleCoordinate("cloudflare:workers")).toBeNull();
+    expect(moduleCoordinate("cloudflare:unknown-runtime")).toBe("cloudflare:unknown-runtime");
+    expect(moduleCoordinate("#internal/alias")).toBe("#internal");
+    expect(moduleCoordinate("native.wasm")).toBe("native.wasm");
     expect(moduleCoordinate("./local.js")).toBeNull();
     expect(definitelyTypedCoordinate("mdast")).toBe("@types/mdast");
     expect(definitelyTypedCoordinate("@scope/name")).toBe("@types/scope__name");

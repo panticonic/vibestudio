@@ -81,6 +81,8 @@ import {
   TERMINAL_SHIM_YOGA,
   TERMINAL_SHIM_SIGNAL_EXIT,
   TERMINAL_SHIM_TERMINAL_SIZE,
+  TERMINAL_YOGA_WASM_MODULE,
+  TERMINAL_WORKER_RUNTIME_EXTERNALS,
   WORKER_RUNTIME_COMPANION_MODULES,
 } from "./platformModules.js";
 import { resolveExportSubpath } from "@vibestudio/typecheck/workspace";
@@ -3605,7 +3607,7 @@ function resolveYogaPaths(resolveDir: string): YogaPaths {
  * Build plugin for Ink terminal workers. Routes Ink's `import Yoga from
  * 'yoga-layout'` to the terminal-shim sync loader, resolves that loader's deep
  * yoga imports (which yoga's exports map blocks), shims the two npm packages
- * that break in workerd, and marks `yoga.wasm` external (workerd supplies it as
+ * that break in workerd, and marks the terminal wasm binding external (workerd supplies it as
  * a module binding). Register BEFORE the workspace plugin so these intercepts win.
  */
 function createTerminalWorkerAliasPlugin(resolveDir: string): esbuild.Plugin {
@@ -3645,7 +3647,11 @@ function createTerminalWorkerAliasPlugin(resolveDir: string): esbuild.Plugin {
         return r.errors.length > 0 ? r : { path: r.path, external: r.external };
       });
       // Provided by workerd as a pre-compiled wasm module binding.
-      build.onResolve({ filter: /^yoga\.wasm$/ }, () => ({ path: "yoga.wasm", external: true }));
+      build.onResolve({ filter: /.*/ }, (args) =>
+        args.path === TERMINAL_YOGA_WASM_MODULE
+          ? { path: TERMINAL_YOGA_WASM_MODULE, external: true }
+          : null
+      );
     },
   };
 }
@@ -3848,7 +3854,10 @@ async function buildWorker(
   if (dedupePlugin) {
     plugins.push(dedupePlugin);
   }
-  const workerExternals = [...WORKER_RUNTIME_EXTERNALS, ...(terminalWorker ? ["yoga.wasm"] : [])];
+  const workerExternals = [
+    ...WORKER_RUNTIME_EXTERNALS,
+    ...(terminalWorker ? TERMINAL_WORKER_RUNTIME_EXTERNALS : []),
+  ];
   const preparedPlugins = composePreparedDependencyPlugins(
     plugins,
     nodePaths,
@@ -3890,7 +3899,10 @@ async function buildWorker(
       // dead code paths we never reach at runtime.
       // Terminal workers import "yoga.wasm" — workerd provides it as a
       // pre-compiled wasm module binding, so it stays external.
-      external: [...WORKER_RUNTIME_EXTERNALS, ...(terminalWorker ? ["yoga.wasm"] : [])],
+      external: [
+        ...WORKER_RUNTIME_EXTERNALS,
+        ...(terminalWorker ? TERMINAL_WORKER_RUNTIME_EXTERNALS : []),
+      ],
       plugins: preparedPlugins,
       nodePaths,
       tsconfigRaw: { compilerOptions: {} },
@@ -3943,7 +3955,7 @@ async function buildWorker(
         entries: [
           ...workerArtifacts.entries,
           {
-            path: "yoga.wasm",
+            path: TERMINAL_YOGA_WASM_MODULE,
             role: "wasm",
             contentType: "application/wasm",
             encoding: "base64",

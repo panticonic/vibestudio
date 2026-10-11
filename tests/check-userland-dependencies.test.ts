@@ -5,7 +5,189 @@ import {
   collectExactUserlandDependencyPins,
   collectHostReuseRangeFindings,
   collectStartupHostReuseFindings,
+  runtimeImportPolicyForUnit,
 } from "../scripts/check-userland-dependencies.mjs";
+import { collectPackageManifestImportFindings } from "../scripts/lib/package-import-audit.mjs";
+import {
+  TERMINAL_SHIM_MODULE,
+  TERMINAL_YOGA_WASM_MODULE,
+  TERMINAL_WORKER_RUNTIME_EXTERNALS,
+} from "../src/server/buildV2/platformModules.js";
+
+describe("collectPackageManifestImportFindings", () => {
+  it("allows the host terminal binding only for its declared runtime owner", async () => {
+    const isTerminalWorker = (manifest) => manifest.terminal === true;
+    const terminalOwner = {
+      name: TERMINAL_SHIM_MODULE,
+      kind: "package",
+      manifest: {},
+    };
+    const terminalWorker = {
+      name: "@workspace-workers/terminal",
+      kind: "worker",
+      manifest: { terminal: true },
+    };
+    const unrelatedPackage = {
+      name: "@workspace/unrelated",
+      kind: "package",
+      manifest: {},
+    };
+    const policy = {
+      isTerminalWorker,
+      terminalShimModule: TERMINAL_SHIM_MODULE,
+      terminalWorkerExternals: TERMINAL_WORKER_RUNTIME_EXTERNALS,
+    };
+
+    expect(TERMINAL_WORKER_RUNTIME_EXTERNALS).toEqual([TERMINAL_YOGA_WASM_MODULE]);
+    expect(runtimeImportPolicyForUnit(terminalOwner, policy)).toEqual([TERMINAL_YOGA_WASM_MODULE]);
+    expect(runtimeImportPolicyForUnit(terminalWorker, policy)).toEqual([TERMINAL_YOGA_WASM_MODULE]);
+    expect(runtimeImportPolicyForUnit(unrelatedPackage, policy)).toEqual([]);
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-terminal-import-audit-"));
+    const packageRoot = path.join(root, "packages", "terminal-shim");
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    try {
+      fs.writeFileSync(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: terminalOwner.name, exports: { ".": "./src/index.ts" } })
+      );
+      fs.writeFileSync(
+        path.join(packageRoot, "src", "index.ts"),
+        `import ${JSON.stringify(TERMINAL_YOGA_WASM_MODULE)};\n`
+      );
+      await expect(
+        collectPackageManifestImportFindings(packageRoot, root, {
+          runtimeModuleSpecifiers: runtimeImportPolicyForUnit(terminalOwner, policy),
+        })
+      ).resolves.toEqual([]);
+      await expect(
+        collectPackageManifestImportFindings(packageRoot, root, {
+          runtimeModuleSpecifiers: runtimeImportPolicyForUnit(unrelatedPackage, policy),
+        })
+      ).resolves.toEqual([
+        expect.objectContaining({ dependency: TERMINAL_YOGA_WASM_MODULE, typeOnly: false }),
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("checks production import forms at the nearest package manifest boundary", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-package-import-audit-"));
+    const pkg = path.join(root, "packages", "fixture");
+    const source = path.join(pkg, "src");
+    fs.mkdirSync(source, { recursive: true });
+    try {
+      fs.writeFileSync(
+        path.join(pkg, "package.json"),
+        JSON.stringify({
+          name: "@workspace/fixture",
+          exports: { ".": "./src/index.ts", "./testing": "./src/testing.test.ts" },
+          imports: {
+            "#internal/*": "./src/internal/*.ts",
+            "#external": "@scope/external",
+          },
+          dependencies: {
+            "@scope/runtime": "^1.0.0",
+            "@scope/peer": "^1.0.0",
+            "@scope/external": "^1.0.0",
+          },
+          peerDependencies: { "@scope/peer": "^1.0.0" },
+          devDependencies: { "@scope/types": "^1.0.0", "@scope/type-only": "^1.0.0" },
+        })
+      );
+      fs.writeFileSync(
+        path.join(source, "index.ts"),
+        [
+          'import "@scope/runtime/subpath";',
+          'export { value } from "@scope/peer/subpath";',
+          'import type { Shape } from "@scope/type-only/types";',
+          'type RuntimeShape = import("@scope/types/subpath").Shape;',
+          'const late = await import("@scope/dynamic");',
+          'const required = require("@scope/required/subpath");',
+          'import "#internal/model";',
+          'import "#external";',
+        ].join("\n")
+      );
+      fs.writeFileSync(path.join(pkg, "src", "testing.test.ts"), 'import "@scope/test-only";\n');
+      fs.mkdirSync(path.join(source, "internal"), { recursive: true });
+      fs.writeFileSync(
+        path.join(source, "internal", "model.ts"),
+        'import "@scope/internal-missing";\n'
+      );
+
+      await expect(collectPackageManifestImportFindings(pkg, root)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            packageName: "@workspace/fixture",
+            dependency: "@scope/dynamic",
+            importer: "packages/fixture/src/index.ts",
+            typeOnly: false,
+          }),
+          expect.objectContaining({
+            packageName: "@workspace/fixture",
+            dependency: "@scope/required",
+            importer: "packages/fixture/src/index.ts",
+            typeOnly: false,
+          }),
+          expect.objectContaining({
+            packageName: "@workspace/fixture",
+            dependency: "@scope/internal-missing",
+            importer: "packages/fixture/src/internal/model.ts",
+            typeOnly: false,
+          }),
+        ])
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("requires JSX's compiler runtime only when the owner supplies that transform", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-jsx-import-audit-"));
+    const pkg = path.join(root, "fixture");
+    fs.mkdirSync(path.join(pkg, "src"), { recursive: true });
+    try {
+      fs.writeFileSync(
+        path.join(pkg, "package.json"),
+        JSON.stringify({ name: "fixture", exports: { ".": "./src/index.tsx" } })
+      );
+      fs.writeFileSync(path.join(pkg, "src", "index.tsx"), "export const view = <main />;");
+      await expect(
+        collectPackageManifestImportFindings(pkg, root, { jsxRuntime: "react/jsx-runtime" })
+      ).resolves.toEqual([expect.objectContaining({ dependency: "react", typeOnly: false })]);
+      await expect(collectPackageManifestImportFindings(pkg, root)).resolves.toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps relative imports inside the nearest owning package boundary", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-nested-package-audit-"));
+    const outer = path.join(root, "outer");
+    const inner = path.join(outer, "vendor", "inner");
+    fs.mkdirSync(path.join(inner, "src"), { recursive: true });
+    try {
+      fs.writeFileSync(
+        path.join(outer, "package.json"),
+        JSON.stringify({ name: "outer", exports: { ".": "./index.ts" } })
+      );
+      fs.writeFileSync(path.join(outer, "index.ts"), 'import "./vendor/inner/src/index";');
+      fs.writeFileSync(
+        path.join(inner, "package.json"),
+        JSON.stringify({ name: "inner", exports: { ".": "./src/index.ts" } })
+      );
+      fs.writeFileSync(path.join(inner, "src", "index.ts"), 'import "missing-inner-dep";');
+
+      await expect(collectPackageManifestImportFindings(outer, root)).resolves.toEqual([]);
+      await expect(collectPackageManifestImportFindings(inner, root)).resolves.toEqual([
+        expect.objectContaining({ dependency: "missing-inner-dep", packageName: "inner" }),
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("collectHostReuseRangeFindings", () => {
   it("requires the published Host range to fit entirely inside Base's runtime range", () => {

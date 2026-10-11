@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import semver from "semver";
 import { parse as parseYaml } from "yaml";
 import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
+import { collectPackageManifestImportFindings } from "./lib/package-import-audit.mjs";
 
 const defaultAppRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEPENDENCY_SECTIONS = [
@@ -65,6 +66,19 @@ const GOVERNED_RUNTIME_PACKAGES = new Set([
   "@panticonic/pi-chord",
   "@panticonic/pi-durable",
 ]);
+
+export function runtimeImportPolicyForUnit(
+  unit,
+  { isTerminalWorker, terminalShimModule, terminalWorkerExternals }
+) {
+  if (
+    unit.name === terminalShimModule ||
+    (unit.kind === "worker" && isTerminalWorker(unit.manifest))
+  ) {
+    return terminalWorkerExternals;
+  }
+  return [];
+}
 
 export function collectExactUserlandDependencyPins(userlandRoot, appRoot = defaultAppRoot) {
   const root = path.resolve(userlandRoot);
@@ -261,17 +275,130 @@ export async function collectUserlandDependencyFindings(appRoot, userlandRoot) {
   );
 }
 
+/**
+ * Check production imports in every configured checkout at its owning
+ * package boundary. Template graph discovery supplies the actual buildable
+ * units; the import walker follows only their declared package entrypoints.
+ */
+export async function collectTemplateImportManifestFindings(appRoot) {
+  const configured = developmentTemplateConfig.requireDevelopmentTemplateCheckouts(appRoot);
+  const { discoverPackageGraph } = await import("../src/server/buildV2/packageGraph.js");
+  const { auditWorkspaceDependencies } = await import("../src/server/buildV2/dependencyAudit.js");
+  const { resolveTemplate } = await import("../src/server/buildV2/templateResolver.js");
+  const { getAdapter } = await import("../src/server/buildV2/adapters/index.js");
+  const { isTerminalWorker } = await import("../packages/shared/src/unitManifest.ts");
+  const { TERMINAL_SHIM_MODULE, TERMINAL_WORKER_RUNTIME_EXTERNALS } =
+    await import("../src/server/buildV2/platformModules.ts");
+  const { composeDevelopmentTemplateCheckouts } =
+    await import("../src/dev/developmentTemplateComposition.ts");
+  const findings = [];
+  const graphFindings = [];
+  let auditedUnits = 0;
+
+  const base = configured.sources.find((source) => source.role === "base");
+  if (!base) throw new Error("Configured template registry has no Base source");
+  const compositions = [];
+  for (const source of configured.sources) {
+    if (source.role === "base") compositions.push({ id: "base", sources: [base] });
+    else if (source.role === "development") {
+      for (const consumerId of source.consumers ?? []) {
+        const consumer = configured.sources.find((candidate) => candidate.id === consumerId);
+        if (!consumer)
+          throw new Error(`Development template ${source.id} has unknown consumer ${consumerId}`);
+        compositions.push({
+          id: `${consumerId}+${source.id}`,
+          sources: [base, consumer, source],
+        });
+      }
+    } else {
+      compositions.push({ id: `base+${source.id}`, sources: [base, source] });
+    }
+  }
+  const appNodeModules = [path.join(path.resolve(appRoot), "node_modules")];
+  for (const compositionSpec of compositions) {
+    const composition = composeDevelopmentTemplateCheckouts(
+      compositionSpec.sources.map((source) => ({
+        checkout: configured.checkouts[source.id],
+        url: source.url,
+      }))
+    );
+    try {
+      const graph = discoverPackageGraph(composition.root);
+      for (const unit of graph.allNodes()) {
+        if (unit.kind === "template") continue;
+        auditedUnits += 1;
+        let jsxRuntime = "react/jsx-runtime";
+        if (unit.kind === "panel") {
+          const framework = resolveTemplate(
+            unit.manifest,
+            { ...unit.peerDependencies, ...unit.dependencies },
+            unit.path,
+            composition.root
+          ).framework;
+          jsxRuntime = getAdapter(framework).jsx === "automatic" ? "react/jsx-runtime" : undefined;
+        }
+        const unitFindings = await collectPackageManifestImportFindings(
+          unit.path,
+          composition.root,
+          {
+            jsxRuntime,
+            runtimeModuleSpecifiers: runtimeImportPolicyForUnit(unit, {
+              isTerminalWorker,
+              terminalShimModule: TERMINAL_SHIM_MODULE,
+              terminalWorkerExternals: TERMINAL_WORKER_RUNTIME_EXTERNALS,
+            }),
+          }
+        );
+        findings.push(
+          ...unitFindings.map((finding) => ({
+            ...finding,
+            templateId: compositionSpec.id,
+            unitPath: unit.relativePath,
+          }))
+        );
+      }
+      graphFindings.push(
+        ...auditWorkspaceDependencies(graph, composition.root, appNodeModules).map((finding) => ({
+          ...finding,
+          composition: compositionSpec.id,
+        }))
+      );
+    } finally {
+      composition.release();
+    }
+  }
+  const uniqueImports = new Map();
+  for (const finding of findings) {
+    const key = `${finding.manifest}\u0000${finding.importer}\u0000${finding.dependency}\u0000${finding.typeOnly}`;
+    const existing = uniqueImports.get(key);
+    if (existing) existing.compositions.push(finding.templateId);
+    else uniqueImports.set(key, { ...finding, compositions: [finding.templateId] });
+  }
+  return {
+    findings: [...uniqueImports.values()],
+    graphFindings,
+    auditedUnits,
+    templateCount: Object.keys(configured.checkouts).length,
+    compositionCount: compositions.length,
+  };
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(
     defaultAppRoot,
     "base"
   );
   const findings = await collectUserlandDependencyFindings(defaultAppRoot, userlandRoot);
+  const templateImportAudit = await collectTemplateImportManifestFindings(defaultAppRoot);
+  const templateImports = templateImportAudit.findings;
+  const templateGraphFindings = templateImportAudit.graphFindings;
   const exactPins = collectExactUserlandDependencyPins(userlandRoot);
   const reuseRanges = collectHostReuseRangeFindings(defaultAppRoot, userlandRoot);
   const startupReuse = await collectStartupHostReuseFindings(defaultAppRoot, userlandRoot);
   if (
     findings.length > 0 ||
+    templateImports.length > 0 ||
+    templateGraphFindings.length > 0 ||
     exactPins.length > 0 ||
     reuseRanges.length > 0 ||
     startupReuse.length > 0
@@ -331,12 +458,46 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
         "realm that loads it. See skills/workspace-dev/DEPENDENCIES.md in the Base checkout."
     );
   }
+  if (templateImports.length > 0) {
+    console.error(
+      `Template production imports are missing manifest ownership in ${templateImports.length} location(s):\n`
+    );
+    for (const finding of templateImports.sort((left, right) =>
+      `${left.templateId}:${left.manifest}:${left.dependency}`.localeCompare(
+        `${right.templateId}:${right.manifest}:${right.dependency}`
+      )
+    )) {
+      console.error(
+        `  ${finding.templateId}/${finding.unitPath}: ${finding.importer} imports ${finding.dependency}` +
+          `${finding.typeOnly ? " as a type" : ""}; declare it in ${finding.manifest}` +
+          `${finding.compositions.length > 1 ? ` (also used by ${finding.compositions.slice(1).join(", ")})` : ""}`
+      );
+    }
+    console.error(
+      "Production value imports need dependencies, peerDependencies, or optionalDependencies. " +
+        "Type-only imports may use devDependencies."
+    );
+  }
+  if (templateGraphFindings.length > 0) {
+    console.error(
+      `Template dependency graphs have ${templateGraphFindings.length} ownership failure(s):\n`
+    );
+    for (const finding of templateGraphFindings) {
+      console.error(
+        `  ${finding.composition}/${finding.unitPath} (${finding.unitName}): ${finding.message}`
+      );
+    }
+  }
   if (
     findings.length > 0 ||
+    templateImports.length > 0 ||
+    templateGraphFindings.length > 0 ||
     exactPins.length > 0 ||
     reuseRanges.length > 0 ||
     startupReuse.length > 0
   )
     process.exit(1);
-  console.log("Userland dependency ownership, Host reuse ranges, and startup closure reuse OK.");
+  console.log(
+    `Userland dependency ownership, Host reuse ranges, startup closure reuse, and ${templateImportAudit.auditedUnits} production import graphs across ${templateImportAudit.templateCount} configured templates and ${templateImportAudit.compositionCount} composed graphs OK.`
+  );
 }
