@@ -57,89 +57,120 @@ function captureOwnedProcessIdentity(pid) {
     code: "EEXECUTOR_UNAVAILABLE",
   });
 }
-function observeOwnedProcessGroup(value) {
+function observeOwnedProcessGroupReceipt(value) {
   let identity;
   try {
     identity = parseOwnedProcessIdentity(value);
   } catch {
-    return "unknown";
+    return {
+      status: "unknown",
+      activeMemberCount: 0,
+      snapshot: emptyGroupSnapshot(),
+      leader: { status: "unknown" },
+    };
   }
-  if (identity.platform !== process.platform) return "unknown";
-  try {
-    const current =
-      identity.platform === "linux" ? linuxStat(identity.pid) : darwinStat(identity.pid);
-    if (
-      current.processGroupId !== identity.processGroupId ||
-      current.startCoordinate !== identity.startCoordinate
-    )
-      return "unknown";
-    return current.state === "Z" || current.state === "X"
-      ? processGroupExists(identity.processGroupId)
+  if (identity.platform !== process.platform)
+    return {
+      status: "unknown",
+      activeMemberCount: 0,
+      snapshot: emptyGroupSnapshot(),
+      leader: { status: "unknown" },
+    };
+  const snapshot =
+    identity.platform === "linux"
+      ? linuxProcessGroupSnapshot(identity.processGroupId, identity.pid)
+      : darwinProcessGroupSnapshot(identity.processGroupId, identity.pid);
+  const leader = snapshot.leader;
+  if (
+    leader &&
+    (leader.pgid !== identity.processGroupId || leader.startCoordinate !== identity.startCoordinate)
+  ) {
+    return {
+      status: "unknown",
+      activeMemberCount: snapshot.activeMemberCount,
+      snapshot: publicGroupSnapshot(snapshot),
+      leader: { status: "reused", current: publicLeader(leader) },
+    };
+  }
+  const hasActiveMembers = snapshot.activeMemberCount > 0;
+  const status =
+    leader && leader.state !== "Z" && leader.state !== "X"
+      ? "owned"
+      : hasActiveMembers
         ? "retained"
-        : "absent"
-      : "owned";
-  } catch (error) {
-    if (error.code !== "ESRCH") throw error;
-    return processGroupExists(identity.processGroupId) ? "retained" : "absent";
-  }
+        : "absent";
+  return {
+    status,
+    activeMemberCount: snapshot.activeMemberCount,
+    snapshot: publicGroupSnapshot(snapshot),
+    leader: leader
+      ? {
+          status: leader.state === "Z" || leader.state === "X" ? "exited" : "matched",
+          current: publicLeader(leader),
+        }
+      : { status: "missing" },
+  };
+}
+function observeOwnedProcessGroup(value) {
+  return observeOwnedProcessGroupReceipt(value).status;
 }
 function observeOwnedProcess(identity) {
-  const observation = observeOwnedProcessGroup(identity);
+  const observation = observeOwnedProcessGroupReceipt(identity).status;
   return observation === "retained" ? "unknown" : observation;
 }
-function inspectOwnedProcessGroupMembers(value) {
-  const identity = parseOwnedProcessIdentity(value);
-  if (identity.platform !== process.platform) {
-    throw ownershipError("Process-group identity belongs to another platform");
-  }
-  return identity.platform === "linux"
-    ? linuxProcessGroupMembers(identity.processGroupId)
-    : darwinProcessGroupMembers(identity.processGroupId);
+function emptyGroupSnapshot() {
+  return { members: [], truncated: false, commandBasenameTruncated: false };
 }
-function ownedProcessFailure(cause, identity) {
+function publicGroupSnapshot(snapshot) {
+  return {
+    members: snapshot.members.map(({ pid, ppid, pgid, uid, state, command }) => ({
+      pid,
+      ppid,
+      pgid,
+      uid,
+      state,
+      command,
+    })),
+    truncated: snapshot.truncated,
+    commandBasenameTruncated: snapshot.commandBasenameTruncated,
+  };
+}
+function publicLeader(leader) {
+  return {
+    pid: leader.pid,
+    processGroupId: leader.pgid,
+    ...(leader.startCoordinate === undefined ? {} : { startCoordinate: leader.startCoordinate }),
+    state: leader.state,
+  };
+}
+function ownedProcessFailure(cause, identity, observation) {
   if (identity === null) {
     return Object.assign(new Error("Owned process-group retirement failed", { cause }), {
       code: "EOWNERSHIP",
       ownedProcessIdentity: null,
     });
   }
-  let preservedCause = cause;
-  let snapshot;
-  try {
-    snapshot = inspectOwnedProcessGroupMembers(identity);
-  } catch (observationError) {
-    preservedCause = new AggregateError(
-      [cause, observationError],
-      "Process operation and exact-group diagnostics failed",
-      { cause }
-    );
-  }
-  return Object.assign(
-    new Error("Owned process-group retirement failed", { cause: preservedCause }),
-    {
-      code: "EOWNERSHIP",
-      ownedProcessIdentity: identity,
-      ...(snapshot === undefined ? {} : { ownedProcessGroupSnapshot: snapshot }),
-    }
-  );
+  return Object.assign(new Error("Owned process-group retirement failed", { cause }), {
+    code: "EOWNERSHIP",
+    ownedProcessIdentity: identity,
+    ...(observation === undefined ? {} : { ownedProcessGroupObservation: observation }),
+  });
 }
 function signalOwnedProcessIdentity(value, signal, options = {}) {
   const identity = parseOwnedProcessIdentity(value);
+  const observe = options.observeGroup ?? (() => observeOwnedProcessGroupReceipt(identity));
   let observation;
   try {
-    observation = options.groupExists
-      ? options.groupExists()
-        ? "retained"
-        : "absent"
-      : observeOwnedProcessGroup(identity);
+    observation = observe();
   } catch (cause) {
     throw ownedProcessFailure(cause, identity);
   }
-  if (observation === "absent") return;
-  if (observation !== "owned" && observation !== "retained") {
+  if (observation.status === "absent") return;
+  if (observation.status !== "owned" && observation.status !== "retained") {
     throw ownedProcessFailure(
       ownershipError("Exact process-group ownership can no longer be proven"),
-      identity
+      identity,
+      observation
     );
   }
   try {
@@ -147,12 +178,10 @@ function signalOwnedProcessIdentity(value, signal, options = {}) {
     else process.kill(-identity.processGroupId, signal);
   } catch (error) {
     if (error.code === "ESRCH") return;
-    let stillPresent;
     if (error.code === "EPERM") {
+      let afterSignal;
       try {
-        stillPresent = options.groupExists
-          ? options.groupExists()
-          : observeOwnedProcessGroup(identity) !== "absent";
+        afterSignal = observe();
       } catch (observationError) {
         throw ownedProcessFailure(
           new AggregateError(
@@ -160,50 +189,20 @@ function signalOwnedProcessIdentity(value, signal, options = {}) {
             "Process signal and terminal ownership observation failed",
             { cause: error }
           ),
-          identity
+          identity,
+          observation
         );
       }
-      if (!stillPresent) return;
+      if (afterSignal.status === "absent") return;
+      throw ownedProcessFailure(error, identity, afterSignal);
     }
-    throw ownedProcessFailure(error, identity);
+    throw ownedProcessFailure(error, identity, observation);
   }
 }
-function processGroupExists(processGroupId) {
-  if (process.platform === "linux") {
-    try {
-      process.kill(-processGroupId, 0);
-    } catch (error) {
-      if (error.code === "ESRCH") return false;
-      throw error;
-    }
-    for (const entry of fs.readdirSync("/proc")) {
-      if (!/^\d+$/u.test(entry)) continue;
-      try {
-        const member = linuxStat(Number(entry));
-        if (
-          member.processGroupId === processGroupId &&
-          member.state !== "Z" &&
-          member.state !== "X"
-        )
-          return true;
-      } catch (error) {
-        if (error.code !== "ESRCH") throw error;
-      }
-    }
-    return false;
-  }
-  // macOS reports EPERM for `kill(-pgid, 0)` once a group contains only
-  // zombies, even when the caller owns the processes. The process table is the
-  // authoritative observation here and also lets us exclude those zombies.
-  const result = spawnSync("ps", ["-axo", "pgid=,stat="], { encoding: "utf8" });
-  if (result.status !== 0) throw ownershipError("Cannot observe native process-group members");
-  return result.stdout.split(/\r?\n/u).some((line) => {
-    const match = line.trim().match(/^(\d+)\s+(\S+)$/u);
-    return match !== null && Number(match[1]) === processGroupId && !/^[ZX]/u.test(match[2]);
-  });
-}
-function linuxProcessGroupMembers(processGroupId) {
+function linuxProcessGroupSnapshot(processGroupId, leaderPid) {
   const members = [];
+  let leader = null;
+  let activeMemberCount = 0;
   let truncated = false;
   let commandBasenameTruncated = false;
   for (const entry of fs.readdirSync("/proc")) {
@@ -214,11 +213,17 @@ function linuxProcessGroupMembers(processGroupId) {
       const close = raw.lastIndexOf(")");
       if (close < 0) throw new Error(`Process ${pid} has a malformed /proc stat record`);
       const command = raw.slice(raw.indexOf("(") + 1, close);
-      const fields = raw.slice(close + 1).trim().split(/\s+/u);
+      const fields = raw
+        .slice(close + 1)
+        .trim()
+        .split(/\s+/u);
+      const state = fields[0];
       const ppid = Number(fields[1]);
       const pgid = Number(fields[2]);
-      if (pgid !== processGroupId) continue;
-      if (!Number.isSafeInteger(ppid) || !fields[0]) {
+      const startCoordinate = fields[19];
+      const belongsToGroup = pgid === processGroupId;
+      if (!belongsToGroup && pid !== leaderPid) continue;
+      if (!Number.isSafeInteger(ppid) || !state) {
         throw new Error(`Process ${pid} has an incomplete /proc group record`);
       }
       const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
@@ -226,51 +231,72 @@ function linuxProcessGroupMembers(processGroupId) {
       if (uid === undefined) throw new Error(`Process ${pid} has no real UID record`);
       const boundedCommand = boundedBasename(command);
       commandBasenameTruncated ||= boundedCommand.truncated;
-      if (members.length === 64) {
-        truncated = true;
-        break;
-      }
-      members.push({
+      const member = {
         pid,
         ppid,
         pgid,
         uid: Number(uid),
-        state: fields[0],
+        state,
+        startCoordinate,
         command: boundedCommand.value,
-      });
+      };
+      if (pid === leaderPid) leader = member;
+      if (!belongsToGroup) continue;
+      if (state !== "Z" && state !== "X") activeMemberCount += 1;
+      if (members.length === 64) {
+        truncated = true;
+        continue;
+      }
+      members.push(member);
     } catch (error) {
       if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error;
     }
   }
-  return { members, truncated, commandBasenameTruncated };
+  return { members, leader, activeMemberCount, truncated, commandBasenameTruncated };
 }
-function darwinProcessGroupMembers(processGroupId) {
-  const result = spawnSync("ps", ["-axo", "pid=,ppid=,pgid=,uid=,stat=,comm="], {
+function darwinProcessGroupSnapshot(processGroupId, leaderPid) {
+  const result = spawnSync("ps", ["-axo", "pid=,ppid=,pgid=,uid=,stat=,lstart=,comm="], {
     encoding: "utf8",
   });
   if (result.status !== 0) throw ownershipError("Cannot inspect exact process-group members");
   const members = [];
+  let leader = null;
+  let activeMemberCount = 0;
   let truncated = false;
   let commandBasenameTruncated = false;
   for (const line of result.stdout.split(/\r?\n/u)) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/u);
-    if (!match || Number(match[3]) !== processGroupId) continue;
-    const boundedCommand = boundedBasename(match[6]);
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const prefix = trimmed.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)(?:\s|$)/u);
+    if (!prefix) continue;
+    const pid = Number(prefix[1]);
+    const pgid = Number(prefix[3]);
+    if (pgid !== processGroupId && pid !== leaderPid) continue;
+    const match = trimmed.match(
+      /^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+\s+\S+\s+\d+\s+\S+\s+\d{4})\s+(.+)$/u
+    );
+    if (!match) throw new Error("Owned process-group member has a malformed ps record");
+    const boundedCommand = boundedBasename(match[7]);
     commandBasenameTruncated ||= boundedCommand.truncated;
+    const member = {
+      pid,
+      ppid: Number(match[2]),
+      pgid,
+      uid: Number(match[4]),
+      state: match[5][0],
+      startCoordinate: match[6],
+      command: boundedCommand.value,
+    };
+    if (pid === leaderPid) leader = member;
+    if (pgid !== processGroupId) continue;
+    if (member.state !== "Z" && member.state !== "X") activeMemberCount += 1;
     if (members.length === 64) {
       truncated = true;
-      break;
+      continue;
     }
-    members.push({
-      pid: Number(match[1]),
-      ppid: Number(match[2]),
-      pgid: Number(match[3]),
-      uid: Number(match[4]),
-      state: match[5],
-      command: boundedCommand.value,
-    });
+    members.push(member);
   }
-  return { members, truncated, commandBasenameTruncated };
+  return { members, leader, activeMemberCount, truncated, commandBasenameTruncated };
 }
 function boundedBasename(command) {
   const value = command.split(/[\\/]/u).at(-1) || command;
@@ -324,7 +350,7 @@ export {
   captureOwnedProcessIdentity,
   observeOwnedProcess,
   observeOwnedProcessGroup,
-  inspectOwnedProcessGroupMembers,
+  observeOwnedProcessGroupReceipt,
   ownedProcessFailure,
   parseOwnedProcessIdentity,
   signalOwnedProcessIdentity,

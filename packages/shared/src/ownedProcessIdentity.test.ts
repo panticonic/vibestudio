@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  inspectOwnedProcessGroupMembers,
   observeOwnedProcessGroup,
+  observeOwnedProcessGroupReceipt,
   type OwnedProcessIdentity,
 } from "./ownedProcessIdentity.mjs";
 
@@ -53,9 +53,35 @@ describe.skipIf(process.platform !== "linux")("native group execution liveness",
     processes({ 101: stat(101, "Z"), 202: "202 (owned member) S 101 101" });
     expect(observeOwnedProcessGroup(receipt)).toBe("retained");
   });
+  it("treats a truncated diagnostic snapshot of an all-zombie group as absent", () => {
+    const entries = { 101: stat(101, "Z") } as Record<number, string>;
+    for (let pid = 201; pid < 270; pid += 1) entries[pid] = stat(pid, "Z");
+    processes(entries);
+
+    const observation = observeOwnedProcessGroupReceipt(receipt);
+    expect(observation).toMatchObject({
+      status: "absent",
+      activeMemberCount: 0,
+      snapshot: { truncated: true },
+    });
+  });
+  it("counts live group members beyond the bounded diagnostic snapshot", () => {
+    const entries = { 101: stat(101, "Z") } as Record<number, string>;
+    for (let pid = 201; pid < 270; pid += 1) entries[pid] = stat(pid, "Z");
+    entries[271] = stat(271, "S");
+    processes(entries);
+
+    const observation = observeOwnedProcessGroupReceipt(receipt);
+    expect(observation).toMatchObject({
+      status: "retained",
+      activeMemberCount: 1,
+      snapshot: { truncated: true },
+    });
+    expect(observation.snapshot.members.some((member) => member.pid === 271)).toBe(false);
+  });
   it("returns only bounded exact-group process identity fields", () => {
     processes({ 101: stat(101, "Z"), 202: stat(202, "S", 101) });
-    expect(inspectOwnedProcessGroupMembers(receipt)).toEqual({
+    expect(observeOwnedProcessGroupReceipt(receipt).snapshot).toEqual({
       members: [
         {
           pid: 101,
@@ -84,7 +110,18 @@ describe.skipIf(process.platform !== "linux")("native group execution liveness",
   });
   it("does not grant ownership to a reused PID, even if it is a zombie", () => {
     processes({ 101: stat(101, "Z", 101, "2000") });
-    expect(observeOwnedProcessGroup(receipt)).toBe("unknown");
+    expect(observeOwnedProcessGroupReceipt(receipt)).toMatchObject({
+      status: "unknown",
+      leader: {
+        status: "reused",
+        current: {
+          pid: 101,
+          processGroupId: 101,
+          startCoordinate: "2000",
+          state: "Z",
+        },
+      },
+    });
   });
   it("preserves the kernel observation failure for the retiring owner", () => {
     processes({ 101: stat(101, "S") });

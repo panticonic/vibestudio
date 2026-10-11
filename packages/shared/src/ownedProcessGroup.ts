@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import {
   captureOwnedProcessIdentity,
-  observeOwnedProcessGroup,
+  observeOwnedProcessGroupReceipt,
   ownedProcessFailure,
   parseOwnedProcessIdentity,
   signalOwnedProcessIdentity,
@@ -17,7 +17,7 @@ export interface OwnedProcessGroupHandle {
 }
 
 export interface OwnedProcessGroupOptions {
-  groupExists?: (processGroupId: number) => boolean;
+  observeGroup?: () => ReturnType<typeof observeOwnedProcessGroupReceipt>;
   signalGroup?: (processGroupId: number, signal: NodeJS.Signals) => void;
   requestGracefulStop?: (signal: NodeJS.Signals) => void;
 }
@@ -90,7 +90,7 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
       // shutdown or an observer join is already in flight.
       if (signal === "SIGKILL") {
         if (process.platform === "win32") this.child?.kill(signal);
-        else if (this.groupExists()) this.signal(signal);
+        else this.signal(signal);
       } else if (!this.stopRequested && this.leaderIsLive()) {
         this.stopRequested = true;
         if (this.options.requestGracefulStop) this.options.requestGracefulStop(signal);
@@ -136,11 +136,11 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
   private leaderIsLive(): boolean {
     if (this.child) return this.child.exitCode === null && this.child.signalCode === null;
     if (!this.identity) throw new Error("Detached process-group identity is unavailable");
-    const observation = observeOwnedProcessGroup(this.identity);
-    if (observation === "unknown") {
+    const observation = this.observeGroup();
+    if (observation.status === "unknown") {
       throw new Error("Exact process-group ownership can no longer be proven");
     }
-    return observation === "owned";
+    return observation.status === "owned";
   }
 
   private async joinOnce(): Promise<void> {
@@ -153,7 +153,7 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
       while (this.leaderIsLive()) await this.observeAgain();
     }
     if (process.platform !== "win32") {
-      if (this.groupExists()) this.signal("SIGKILL");
+      this.signal("SIGKILL");
       while (this.groupExists()) await this.observeAgain();
     }
     // Exit is not producer close: a retained stdio pipe must still be joined.
@@ -168,21 +168,25 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
     const identity = this.identity;
     if (!identity) throw new Error("Detached process-group identity is unavailable");
     signalOwnedProcessIdentity(identity, signal, {
-      groupExists: () => this.groupExists(),
+      observeGroup: () => this.observeGroup(),
       ...(this.options.signalGroup ? { signalGroup: this.options.signalGroup } : {}),
     });
   }
 
-  private groupExists(): boolean {
+  private observeGroup(): ReturnType<typeof observeOwnedProcessGroupReceipt> {
+    if (this.options.observeGroup) return this.options.observeGroup();
     const identity = this.identity;
     if (!identity) throw new Error("Detached process-group identity is unavailable");
-    if (this.options.groupExists) return this.options.groupExists(identity.processGroupId);
-    const observation = observeOwnedProcessGroup(identity);
-    if (observation === "unknown") {
+    return observeOwnedProcessGroupReceipt(identity);
+  }
+
+  private groupExists(): boolean {
+    const observation = this.observeGroup();
+    if (observation.status === "unknown") {
       throw Object.assign(new Error("Exact process-group ownership can no longer be proven"), {
         code: "EOWNERSHIP",
       });
     }
-    return observation !== "absent";
+    return observation.status !== "absent";
   }
 }

@@ -5,7 +5,9 @@ import { OwnedProcessGroup } from "./ownedProcessGroup.js";
 import {
   captureOwnedProcessIdentity,
   observeOwnedProcessGroup,
+  observeOwnedProcessGroupReceipt,
   parseOwnedProcessIdentity,
+  type OwnedProcessGroupObservationReceipt,
 } from "./ownedProcessIdentity.mjs";
 
 describe.skipIf(process.platform === "win32")("durable owned process groups", () => {
@@ -17,6 +19,44 @@ describe.skipIf(process.platform === "win32")("durable owned process groups", ()
     fixtureOwner = null;
     fixture = null;
   });
+
+  function injectedObservation(
+    status: "owned" | "retained" | "absent",
+    pid = 1,
+    pgid = 1
+  ): OwnedProcessGroupObservationReceipt {
+    const members =
+      status === "absent"
+        ? []
+        : [
+            {
+              pid,
+              ppid: process.pid,
+              pgid,
+              uid: typeof process.getuid === "function" ? process.getuid() : 0,
+              state: "S",
+              command: "fixture",
+            },
+          ];
+    return {
+      status,
+      activeMemberCount: members.filter((member) => member.state !== "Z" && member.state !== "X")
+        .length,
+      leader:
+        status === "owned"
+          ? {
+              status: "matched",
+              current: {
+                pid,
+                processGroupId: pgid,
+                startCoordinate: "fixture-start",
+                state: "S",
+              },
+            }
+          : { status: "missing" },
+      snapshot: { members, truncated: false, commandBasenameTruncated: false },
+    };
+  }
 
   it("adopts a persisted receipt and drains resistant descendants after the leader exits", async () => {
     const resistant = `
@@ -93,7 +133,7 @@ describe.skipIf(process.platform === "win32")("durable owned process groups", ()
     });
     let live = true;
     const owner = OwnedProcessGroup.create(fixture, {
-      groupExists: () => live,
+      observeGroup: () => injectedObservation(live ? "retained" : "absent"),
       signalGroup: () => {
         live = false;
         throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
@@ -112,8 +152,10 @@ describe.skipIf(process.platform === "win32")("durable owned process groups", ()
     const closed = once(fixture, "close");
     const denied = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
     const owner = OwnedProcessGroup.create(fixture, {
-      groupExists: () => true,
-      signalGroup: () => { throw denied; },
+      observeGroup: () => injectedObservation("retained"),
+      signalGroup: () => {
+        throw denied;
+      },
     });
     await expect(owner.join()).rejects.toMatchObject({ code: "EOWNERSHIP", cause: denied });
     // The real fixture's sole process has exited and its producer is closed;
@@ -142,24 +184,87 @@ describe.skipIf(process.platform === "win32")("durable owned process groups", ()
       code: "EOWNERSHIP",
       cause: denied,
       ownedProcessIdentity: owner.identity,
-      ownedProcessGroupSnapshot: {
-        members: expect.arrayContaining([
-          expect.objectContaining({
-            pid: fixture.pid,
-            pgid: owner.identity!.processGroupId,
-            uid: expect.any(Number),
-            ppid: expect.any(Number),
-            state: expect.any(String),
-            command: expect.any(String),
-          }),
-        ]),
-        truncated: false,
-        commandBasenameTruncated: false,
-      },
+      ownedProcessGroupObservation: expect.objectContaining({
+        status: "owned",
+        leader: expect.objectContaining({ status: "matched" }),
+        snapshot: {
+          members: expect.arrayContaining([
+            expect.objectContaining({
+              pid: fixture.pid,
+              pgid: owner.identity!.processGroupId,
+              uid: expect.any(Number),
+              ppid: expect.any(Number),
+              state: expect.any(String),
+              command: expect.any(String),
+            }),
+          ]),
+          truncated: false,
+          commandBasenameTruncated: false,
+        },
+      }),
     });
     fixture.kill("SIGKILL");
     await closed;
     fixture = null;
+  });
+
+  it("attaches the decisive post-EPERM membership receipt", async () => {
+    fixture = spawn(process.execPath, ["-e", "process.exit(0)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const closed = once(fixture, "close");
+    const denied = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    const afterSignal = injectedObservation("retained", fixture.pid!, fixture.pid!);
+    let observations = 0;
+    const owner = OwnedProcessGroup.create(fixture, {
+      observeGroup: () => {
+        observations += 1;
+        return observations === 1
+          ? injectedObservation("retained", fixture!.pid!, fixture!.pid!)
+          : afterSignal;
+      },
+      signalGroup: () => {
+        throw denied;
+      },
+    });
+    const failure = await owner.join().then(
+      () => null,
+      (error: unknown) => error
+    );
+    expect(failure).toMatchObject({
+      code: "EOWNERSHIP",
+      cause: denied,
+      ownedProcessGroupObservation: afterSignal,
+    });
+    expect(observations).toBe(2);
+    await closed;
+    fixture = null;
+  });
+
+  it("captures leader identity and group members in one observation receipt", async () => {
+    fixture = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    fixtureOwner = OwnedProcessGroup.create(fixture);
+    const receipt = observeOwnedProcessGroupReceipt(fixtureOwner.identity!);
+    expect(receipt).toMatchObject({
+      status: "owned",
+      leader: expect.objectContaining({
+        status: "matched",
+        current: expect.objectContaining({
+          pid: fixture.pid,
+          processGroupId: fixture.pid,
+          startCoordinate: expect.any(String),
+        }),
+      }),
+      snapshot: {
+        members: expect.arrayContaining([
+          expect.objectContaining({ pid: fixture.pid, pgid: fixture.pid }),
+        ]),
+      },
+    });
   });
 
   it("preserves both signal denial and failed terminal observation", async () => {
@@ -172,8 +277,14 @@ describe.skipIf(process.platform === "win32")("durable owned process groups", ()
     const observation = new Error("Cannot observe owned members");
     let signals = 0;
     const owner = OwnedProcessGroup.create(fixture, {
-      groupExists: () => { if (signals) throw observation; return true; },
-      signalGroup: () => { signals++; throw denied; },
+      observeGroup: () => {
+        if (signals) throw observation;
+        return injectedObservation("retained");
+      },
+      signalGroup: () => {
+        signals++;
+        throw denied;
+      },
     });
     await expect(owner.join()).rejects.toMatchObject({
       code: "EOWNERSHIP",
