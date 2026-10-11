@@ -409,7 +409,7 @@ describe("execution-owned native operation evidence", () => {
       journal.captureWorkerLifecycleRequest("runtime.retireEntity", [
         { id: "do:workers/notes:NotesDO:probe-1" },
       ]),
-      undefined,
+      null,
       2
     );
     const lifecycle = journal
@@ -443,6 +443,39 @@ describe("execution-owned native operation evidence", () => {
         entityId: "do:workers/notes:NotesDO:probe-1",
       },
     ]);
+  });
+
+  it("validates a fulfilled retire result while recording wire null as logical void", () => {
+    const journal = new ExecutionJournal();
+    const request = journal.captureWorkerLifecycleRequest("runtime.retireEntity", [
+      { id: "worker:workers/notes:probe-1" },
+    ]);
+
+    journal.recordWorkerLifecycle(request, null, 3);
+
+    expect(journal.close().entries).toEqual([
+      {
+        type: "worker.lifecycle",
+        receipt: {
+          protocol: "worker-lifecycle-observation.v1",
+          callId: 3,
+          operation: "retire",
+          entityId: "worker:workers/notes:probe-1",
+        },
+      },
+    ]);
+  });
+
+  it("rejects a malformed successful void result before recording retirement evidence", () => {
+    const journal = new ExecutionJournal();
+    const request = journal.captureWorkerLifecycleRequest("runtime.retireEntity", [
+      { id: "worker:workers/notes:probe-1" },
+    ]);
+
+    expect(() => journal.recordWorkerLifecycle(request, "not-void", 4)).toThrow(
+      'method "retireEntity" return value failed schema validation'
+    );
+    expect(journal.close().entries).toEqual([]);
   });
 
   it("captures canonical lifecycle request identity before an RPC settles", async () => {

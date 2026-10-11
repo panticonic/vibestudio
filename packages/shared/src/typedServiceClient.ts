@@ -462,6 +462,31 @@ type MethodResult<D extends MethodSchema> = D["returns"] extends z.ZodType
   ? z.infer<D["returns"]>
   : unknown;
 
+/** Parse a service result using the logical schema after applying the shared
+ * JSON representation rule for void (`undefined` is carried as `null`). */
+export function parseServiceMethodReturn<D extends MethodSchema>(
+  service: string,
+  method: string,
+  definition: D,
+  result: unknown
+): MethodResult<D> {
+  if (!definition.returns) return result as MethodResult<D>;
+  try {
+    // JSON success envelopes represent logical `undefined` as `null`. Convert
+    // only when the declared schema accepts undefined and rejects null, so
+    // nullable domain results remain untouched.
+    const normalizedResult =
+      result === null &&
+      !definition.returns.safeParse(null).success &&
+      definition.returns.safeParse(undefined).success
+        ? undefined
+        : result;
+    return definition.returns.parse(normalizedResult) as MethodResult<D>;
+  } catch (error) {
+    throw schemaFailure(service, method, "return value", error);
+  }
+}
+
 export type MethodFn<D extends MethodSchema> = (
   ...args: ArgsOf<z.input<D["args"]>>
 ) => Promise<MethodResult<D>>;
@@ -592,21 +617,7 @@ export async function callTypedServiceMethod<
   if (!definition) throw new Error(`Service "${service}" has no method "${method}"`);
   const parsedArgs = parseServiceMethodArgs(service, method, definition, args);
   const result = await call(service, method, parsedArgs);
-  if (!definition.returns) return result as MethodResult<M[K]>;
-  try {
-    // JSON success envelopes represent logical `undefined` as `null`. Convert
-    // only when the declared schema accepts undefined and rejects null, so
-    // nullable domain results remain untouched.
-    const normalizedResult =
-      result === null &&
-      !definition.returns.safeParse(null).success &&
-      definition.returns.safeParse(undefined).success
-        ? undefined
-        : result;
-    return definition.returns.parse(normalizedResult);
-  } catch (error) {
-    throw schemaFailure(service, method, "return value", error);
-  }
+  return parseServiceMethodReturn(service, method, definition, result);
 }
 
 /**

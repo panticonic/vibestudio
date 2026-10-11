@@ -6,6 +6,7 @@ import {
   defineServiceMethods,
   describeArgsValidationError,
   fixedPreparedAuthorityRequirement,
+  parseServiceMethodReturn,
   maxArgsArity,
   preparedAuthoritySelectorKey,
   selectedPreparedAuthorityRequirement,
@@ -175,6 +176,18 @@ describe("createTypedServiceClient", () => {
 
     await expect(client.voidResult()).resolves.toBeUndefined();
     await expect(client.nullableResult()).resolves.toBeNull();
+  });
+
+  it("uses the shared result parser for void and nullable wire representations", () => {
+    expect(
+      parseServiceMethodReturn("demo", "voidResult", methods.voidResult, null)
+    ).toBeUndefined();
+    expect(
+      parseServiceMethodReturn("demo", "nullableResult", methods.nullableResult, null)
+    ).toBeNull();
+    expect(() => parseServiceMethodReturn("demo", "ping", methods.ping, null)).toThrow(
+      'method "ping" return value failed schema validation'
+    );
   });
 
   it("rejects method names that collide with a group prefix", () => {

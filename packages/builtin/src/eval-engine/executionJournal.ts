@@ -1,4 +1,7 @@
-import { parseServiceMethodArgs } from "@vibestudio/shared/typedServiceClient";
+import {
+  parseServiceMethodArgs,
+  parseServiceMethodReturn,
+} from "@vibestudio/shared/typedServiceClient";
 import {
   runtimeMethods,
   NativeRuntimeHealthObservationSchema,
@@ -161,7 +164,12 @@ export class ExecutionJournal {
     if (!request) return;
     let receipt: EvalWorkerLifecycleObservation;
     if (request.method === "runtime.createEntity") {
-      const entity = runtimeMethods.createEntity.returns!.parse(result);
+      const entity = parseServiceMethodReturn(
+        "runtime",
+        "createEntity",
+        runtimeMethods.createEntity,
+        result
+      );
       if (entity.kind !== request.kind) return;
       const creation = {
         protocol: "worker-lifecycle-observation.v1" as const,
@@ -177,7 +185,12 @@ export class ExecutionJournal {
           ? { ...creation, kind: "do", className: request.className }
           : { ...creation, kind: "worker" };
     } else if (request.method === "workers.resolveDurableObject") {
-      const target = workersMethods.resolveDurableObject.returns!.parse(result);
+      const target = parseServiceMethodReturn(
+        "workers",
+        "resolveDurableObject",
+        workersMethods.resolveDurableObject,
+        result
+      );
       receipt = {
         protocol: "worker-lifecycle-observation.v1",
         callId,
@@ -188,7 +201,12 @@ export class ExecutionJournal {
         objectKey: target.objectKey,
       };
     } else if (request.method === "workers.resolveService") {
-      const service = workersMethods.resolveService.returns!.parse(result);
+      const service = parseServiceMethodReturn(
+        "workers",
+        "resolveService",
+        workersMethods.resolveService,
+        result
+      );
       // Regular-worker service resolutions are HTTP routes, not RPC receivers.
       if (service.kind !== "durable-object") return;
       receipt = {
@@ -203,7 +221,7 @@ export class ExecutionJournal {
         objectKey: service.objectKey,
       };
     } else if (request.method === "runtime.retireEntity") {
-      runtimeMethods.retireEntity.returns!.parse(result);
+      parseServiceMethodReturn("runtime", "retireEntity", runtimeMethods.retireEntity, result);
       receipt = {
         protocol: "worker-lifecycle-observation.v1",
         callId,
@@ -248,7 +266,12 @@ export class ExecutionJournal {
       target = { transport: "invokeProvider", providerKey };
       invokedMethod = providerMethod;
     } else return;
-    const returned = extensionsMethods.invoke.returns!.parse(result);
+    const returned = parseServiceMethodReturn(
+      "extensions",
+      "invoke",
+      extensionsMethods.invoke,
+      result
+    );
     const shape: NativeExtensionInvocationObservation["result"] =
       returned === null
         ? { kind: "null" }
@@ -277,7 +300,12 @@ export class ExecutionJournal {
     const protocol = "webhook-observation.v1" as const;
     let receipt: NativeWebhookObservation;
     if (method === "webhookIngress.createSubscription") {
-      const subscription = webhookIngressMethods.createSubscription.returns!.parse(result);
+      const subscription = parseServiceMethodReturn(
+        "webhookIngress",
+        "createSubscription",
+        webhookIngressMethods.createSubscription,
+        result
+      );
       receipt = {
         protocol,
         method: "createSubscription",
@@ -291,7 +319,12 @@ export class ExecutionJournal {
         webhookIngressMethods.listSubscriptions,
         args
       )[0];
-      const subscriptions = webhookIngressMethods.listSubscriptions.returns!.parse(result);
+      const subscriptions = parseServiceMethodReturn(
+        "webhookIngress",
+        "listSubscriptions",
+        webhookIngressMethods.listSubscriptions,
+        result
+      );
       receipt = {
         protocol,
         method: "listSubscriptions",
@@ -308,7 +341,12 @@ export class ExecutionJournal {
         webhookIngressMethods.rotateSecret,
         args
       );
-      const rotated = webhookIngressMethods.rotateSecret.returns!.parse(result);
+      const rotated = parseServiceMethodReturn(
+        "webhookIngress",
+        "rotateSecret",
+        webhookIngressMethods.rotateSecret,
+        result
+      );
       if (rotated.subscription.subscriptionId !== input.subscriptionId)
         throw new Error("Webhook secret rotation returned a different subscription identity");
       receipt = {
@@ -337,7 +375,7 @@ export class ExecutionJournal {
   recordPermissionInventory(method: string, args: unknown[], result: unknown): void {
     if (this.closed || method !== "permissions.list") return;
     parseServiceMethodArgs("permissions", "list", permissionsMethods.list, args);
-    const grants = permissionsMethods.list.returns!.parse(result);
+    const grants = parseServiceMethodReturn("permissions", "list", permissionsMethods.list, result);
     const counts = { capability: 0, "credential-use": 0, "browser-site": 0 };
     for (const grant of grants) counts[grant.kind]++;
     this.append({
@@ -359,7 +397,12 @@ export class ExecutionJournal {
       runtimeMethods["supervision.health"],
       args
     );
-    const health = runtimeMethods["supervision.health"].returns!.parse(result);
+    const health = parseServiceMethodReturn(
+      "runtime",
+      "supervision.health",
+      runtimeMethods["supervision.health"],
+      result
+    );
     const sameIdentity = (candidate: typeof identity) =>
       candidate.kind === identity.kind && candidate.entityId === identity.entityId;
     if (
@@ -397,8 +440,18 @@ export class ExecutionJournal {
       return;
     const entities =
       method === "runtime.supervision.list"
-        ? runtimeMethods["supervision.list"].returns!.parse(result)
-        : runtimeMethods["supervision.describe"].returns!.parse(result);
+        ? parseServiceMethodReturn(
+            "runtime",
+            "supervision.list",
+            runtimeMethods["supervision.list"],
+            result
+          )
+        : parseServiceMethodReturn(
+            "runtime",
+            "supervision.describe",
+            runtimeMethods["supervision.describe"],
+            result
+          );
     this.append({
       type: "runtime.units",
       receipt: NativeRuntimeUnitObservationSchema.parse({
@@ -417,7 +470,12 @@ export class ExecutionJournal {
       credentialsMethods.resolveCredential,
       args
     );
-    const resolved = credentialsMethods.resolveCredential.returns!.parse(result);
+    const resolved = parseServiceMethodReturn(
+      "credentials",
+      "resolveCredential",
+      credentialsMethods.resolveCredential,
+      result
+    );
     this.append({
       type: "credentials.resolution",
       receipt: NativeCredentialResolutionObservationSchema.parse({
@@ -440,7 +498,12 @@ export class ExecutionJournal {
         notificationMethods.show,
         args
       );
-      const notificationId = notificationMethods.show.returns!.parse(result);
+      const notificationId = parseServiceMethodReturn(
+        "notification",
+        "show",
+        notificationMethods.show,
+        result
+      );
       receipt = {
         protocol,
         method,
@@ -467,7 +530,12 @@ export class ExecutionJournal {
     const protocol = "blob-tree-observation.v1" as const;
     let receipt: NativeBlobTreeObservation;
     if (method === "blobstore.putTree") {
-      const stored = blobstoreMethods.putTree.returns!.parse(result);
+      const stored = parseServiceMethodReturn(
+        "blobstore",
+        "putTree",
+        blobstoreMethods.putTree,
+        result
+      );
       receipt = { protocol, method: "putTree", ...stored };
     } else if (method === "blobstore.listTree") {
       const [ref] = parseServiceMethodArgs("blobstore", "listTree", blobstoreMethods.listTree, [
@@ -478,7 +546,7 @@ export class ExecutionJournal {
         protocol,
         method: "listTree",
         ref,
-        page: blobstoreMethods.listTree.returns!.parse(result),
+        page: parseServiceMethodReturn("blobstore", "listTree", blobstoreMethods.listTree, result),
       };
     } else if (method === "blobstore.diffTrees") {
       const [from, to] = parseServiceMethodArgs(
@@ -492,7 +560,12 @@ export class ExecutionJournal {
         method: "diffTrees",
         from,
         to,
-        diff: blobstoreMethods.diffTrees.returns!.parse(result),
+        diff: parseServiceMethodReturn(
+          "blobstore",
+          "diffTrees",
+          blobstoreMethods.diffTrees,
+          result
+        ),
       };
     } else if (method === "blobstore.materializeTree") {
       const [ref] = parseServiceMethodArgs(
@@ -505,7 +578,12 @@ export class ExecutionJournal {
         protocol,
         method: "materializeTree",
         ref,
-        ...blobstoreMethods.materializeTree.returns!.parse(result),
+        ...parseServiceMethodReturn(
+          "blobstore",
+          "materializeTree",
+          blobstoreMethods.materializeTree,
+          result
+        ),
       };
     } else return;
     this.append({
@@ -520,7 +598,12 @@ export class ExecutionJournal {
     const protocol = "blob-text-observation.v1" as const;
     if (method === "blobstore.putText") {
       const [text] = parseServiceMethodArgs("blobstore", "putText", blobstoreMethods.putText, args);
-      const stored = blobstoreMethods.putText.returns!.parse(result);
+      const stored = parseServiceMethodReturn(
+        "blobstore",
+        "putText",
+        blobstoreMethods.putText,
+        result
+      );
       receipt = {
         protocol,
         method: "putText",
@@ -535,7 +618,12 @@ export class ExecutionJournal {
         blobstoreMethods.getText,
         args
       );
-      const text = blobstoreMethods.getText.returns!.parse(result);
+      const text = parseServiceMethodReturn(
+        "blobstore",
+        "getText",
+        blobstoreMethods.getText,
+        result
+      );
       receipt = {
         protocol,
         method: "getText",
@@ -550,7 +638,12 @@ export class ExecutionJournal {
         blobstoreMethods.getRange,
         args
       );
-      const text = blobstoreMethods.getRange.returns!.parse(result);
+      const text = parseServiceMethodReturn(
+        "blobstore",
+        "getRange",
+        blobstoreMethods.getRange,
+        result
+      );
       receipt = {
         protocol,
         method: "getRange",
@@ -567,7 +660,7 @@ export class ExecutionJournal {
         blobstoreMethods.grep,
         [args[0], args[1], args[2]]
       );
-      const matches = blobstoreMethods.grep.returns!.parse(result);
+      const matches = parseServiceMethodReturn("blobstore", "grep", blobstoreMethods.grep, result);
       receipt = {
         protocol,
         method: "grep",
@@ -586,7 +679,7 @@ export class ExecutionJournal {
     if (this.closed) return;
     let receipt: NativeServerLogObservation;
     if (method === "serverLog.stats") {
-      const stats = serverLogMethods.stats.returns!.parse(result);
+      const stats = parseServiceMethodReturn("serverLog", "stats", serverLogMethods.stats, result);
       receipt = {
         protocol: "server-log-observation.v1",
         kind: "stats",
