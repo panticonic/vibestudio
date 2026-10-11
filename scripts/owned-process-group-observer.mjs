@@ -79,6 +79,16 @@ export function prepareDarwinProcessObserver({
         String(compiler.stderr || compiler.stdout || compiler.status)
     );
   }
+  const sdk = run("xcrun", ["--sdk", "macosx", "--show-sdk-path"], {
+    cwd,
+    encoding: "utf8",
+  });
+  if (sdk.error) throw sdk.error;
+  if (sdk.status !== 0 || !path.isAbsolute(sdk.stdout.trim())) {
+    throw new Error(
+      "Could not locate the macOS SDK: " + String(sdk.stderr || sdk.stdout || sdk.status)
+    );
+  }
   try {
     writeFileSync(temporarySource, sourceBytes, { mode: 0o600, flag: "wx" });
     const compiled = run(
@@ -89,6 +99,8 @@ export function prepareDarwinProcessObserver({
         "-Wextra",
         "-Werror",
         "-O2",
+        "-isysroot",
+        sdk.stdout.trim(),
         "-mmacosx-version-min=14.0",
         "-arch",
         targetArch,

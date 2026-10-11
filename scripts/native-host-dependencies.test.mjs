@@ -145,8 +145,16 @@ test("Darwin process observer preparation is content-bound and atomically reusab
   let compilations = 0;
   let forceCompiledArch;
   const run = (executable, args) => {
-    if (executable === "xcrun") return { status: 0, stdout: "/toolchain/clang\n" };
+    if (executable === "xcrun") {
+      assert.deepEqual(args.slice(0, 2), ["--sdk", "macosx"]);
+      return {
+        status: 0,
+        stdout: args[2] === "--show-sdk-path" ? "/toolchain/MacOSX.sdk\n" : "/toolchain/clang\n",
+      };
+    }
     if (args[0] === "--version") return { status: 0, stdout: "1\n" };
+    assert.equal(executable, "/toolchain/clang");
+    assert.equal(args[args.indexOf("-isysroot") + 1], "/toolchain/MacOSX.sdk");
     compilations++;
     const compiledArch = forceCompiledArch ?? args[args.indexOf("-arch") + 1];
     const output = args[args.indexOf("-o") + 1];
