@@ -1,10 +1,114 @@
 import { expect, it, vi } from "vitest";
-import { mkdtemp, writeFile, readFile, mkdir, rm, access, cp, realpath } from "node:fs/promises";
+import {
+  mkdtemp,
+  writeFile,
+  readFile,
+  mkdir,
+  rm,
+  access,
+  cp,
+  realpath,
+  readdir,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { waitForNativeJob } from "./nativeWorkspaceJob.js";
 import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
 import { build } from "esbuild";
+import { WorkspaceRuntime } from "@vibestudio/process-adapter";
+import { ImmutableTreeWorkerClient } from "./buildV2/immutableTreeWorkerClient.js";
+
+async function failNativeRuntimeDiskWorkerAdmission(
+  root: string,
+  cleanupFailure?: Error
+): Promise<{ error: unknown; launcherExited: boolean; runtimeEntries: string[] }> {
+  const statePath = path.join(root, "state");
+  const sourceRoot = path.join(statePath, "source");
+  await mkdir(sourceRoot, { recursive: true });
+  const operationFailure = new Error("controlled disk worker admission failure");
+  let launcherExited = false;
+  const fork = vi.spyOn(WorkspaceRuntime.prototype, "fork").mockImplementationOnce(() => {
+    throw operationFailure;
+  });
+  const stop = WorkspaceRuntime.prototype.stop;
+  const stopSpy = vi.spyOn(WorkspaceRuntime.prototype, "stop").mockImplementation(async function (
+    this: WorkspaceRuntime
+  ) {
+    const result = await stop.call(this);
+    launcherExited = result.launcherExited;
+    return result;
+  });
+  const closeSpy = cleanupFailure
+    ? (() => {
+        const close = ImmutableTreeWorkerClient.prototype.close;
+        return vi
+          .spyOn(ImmutableTreeWorkerClient.prototype, "close")
+          .mockImplementation(async function (this: ImmutableTreeWorkerClient) {
+            await close.call(this);
+            throw cleanupFailure;
+          });
+      })()
+    : undefined;
+  let error: unknown;
+  let runtime: Awaited<ReturnType<typeof startNativeWorkspaceRuntime>> | undefined;
+  try {
+    runtime = await startNativeWorkspaceRuntime({
+      workspaceId: "cleanup-fixture",
+      statePath,
+      sourceRoot,
+      scratchRoot: path.join(statePath, "scratch"),
+      buildsRoot: path.join(statePath, "builds"),
+      appRoot: process.cwd(),
+    });
+  } catch (caught) {
+    error = caught;
+  } finally {
+    if (runtime) {
+      const stopped = await runtime.stop();
+      if (stopped.launcherExited) await runtime.retireStorage();
+    }
+    fork.mockRestore();
+    stopSpy.mockRestore();
+    closeSpy?.mockRestore();
+  }
+  return {
+    error,
+    launcherExited,
+    runtimeEntries: await readdir(path.join(statePath, "native-runtime")),
+  };
+}
+
+it("joins a real workspace owner and removes its private runtime after disk admission fails", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "native-workspace-partial-start-"));
+  try {
+    const result = await failNativeRuntimeDiskWorkerAdmission(root);
+    expect(result.error).toBeInstanceOf(Error);
+    expect((result.error as Error).message).toBe("controlled disk worker admission failure");
+    expect(result.launcherExited).toBe(true);
+    expect(result.runtimeEntries).toEqual([]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("preserves startup and dependency-worker cleanup failures and retains its owned runtime", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "native-workspace-partial-cleanup-failure-"));
+  const cleanupFailure = new Error("controlled dependency worker retirement failure");
+  try {
+    const result = await failNativeRuntimeDiskWorkerAdmission(root, cleanupFailure);
+    expect(result.error).toBeInstanceOf(AggregateError);
+    const aggregate = result.error as AggregateError;
+    expect(aggregate.errors[0]).toMatchObject({
+      message: "controlled disk worker admission failure",
+    });
+    expect(aggregate.errors[1]).toBe(cleanupFailure);
+    expect(aggregate.cause).toBe(aggregate.errors[0]);
+    expect(result.launcherExited).toBe(true);
+    expect(result.runtimeEntries).toHaveLength(1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it("runs the production disk receiver under its platform execution contract", async () => {
   // An Electron-hosted invocation still launches the installed standalone Node

@@ -25,6 +25,18 @@ import {
 } from "./appRoot.js";
 import { stateLayout } from "./stateLayout.js";
 
+function hasOwnershipFailure(error: unknown, seen = new Set<object>()): boolean {
+  if (!error || typeof error !== "object" || seen.has(error)) return false;
+  seen.add(error);
+  const fields = error as { code?: unknown; cause?: unknown; errors?: unknown[] };
+  return (
+    fields.code === "EOWNERSHIP" ||
+    hasOwnershipFailure(fields.cause, seen) ||
+    (Array.isArray(fields.errors) &&
+      fields.errors.some((child) => hasOwnershipFailure(child, seen)))
+  );
+}
+
 /** Installed owner of a workspace's single native domain. The containing state
  * directory is an ownership anchor, never itself a guest resource grant. */
 export async function startNativeWorkspaceRuntime(input: {
@@ -58,86 +70,128 @@ export async function startNativeWorkspaceRuntime(input: {
   const runtimeRoot = path.join(privateRoot, "native-runtime", incarnation);
   const home = path.join(privateRoot, "scratch", "home");
   const extensionStorage = path.join(privateRoot, "extensions", "storage", input.workspaceId);
-  for (const directory of [
-    runtimeRoot,
-    home,
-    sourceRoot,
-    scratchRoot,
-    buildsRoot,
-    providerInputsRoot,
-    extensionStorage,
-  ]) {
-    await mkdir(directory, { recursive: true });
-    if (!(await lstat(directory)).isDirectory() || (await realpath(directory)) !== directory)
-      throw new Error("Native resource anchors must be canonical directories owned by the host");
-  }
-  const installedRequire = createRequire(path.join(input.appRoot, "package.json"));
-  const artifacts = resolveRequiredHostArtifactRoot();
-  const workerEntry = path.join(runtimeRoot, "fs-disk-worker.cjs");
-  const workspaceEntry = path.join(runtimeRoot, "workspaceChild.js");
-  const extensionEntry = path.join(runtimeRoot, "extensionChild.js");
-  await Promise.all([
-    copyFile(path.join(artifacts, "extension-child.mjs"), extensionEntry),
-    copyFile(path.join(artifacts, "workspace-child.mjs"), workspaceEntry),
-    copyFile(path.join(artifacts, "fs-disk-worker.cjs"), workerEntry),
-  ]);
-  await writeFile(path.join(runtimeRoot, "package.json"), '{"type":"module"}\n');
-  const { rgPath } = installedRequire("@vscode/ripgrep") as { rgPath: string };
-  const ripgrep = path.join(runtimeRoot, platform === "win32" ? "rg.exe" : "rg");
-  await copyFile(rgPath, ripgrep);
-  // The installed compiler is an executable plus adjacent standard libraries.
-  // Admit that complete immutable resource into the workspace's native domain;
-  // bundled API clients cannot resolve it relative to their generated bundle.
-  const installedCompiler = await realpath(resolveNativeTypeScriptServerPath(input.appRoot));
-  const compilerRoot = path.join(runtimeRoot, "typescript");
-  await materializeImmutableTree(path.dirname(installedCompiler), compilerRoot);
-  const compiler = path.join(compilerRoot, path.basename(installedCompiler));
-  const runtime = prepareNativeRuntime({ appRoot: input.appRoot, runtimeRoot, platform });
-  const { executable } = runtime;
-  const identity = createHash("sha256");
-  for (const resource of [workspaceEntry, workerEntry, extensionEntry, compiler])
-    identity.update(await readFile(resource));
-  const sandbox = await WorkspaceRuntime.start(
-    {
-      version: 1,
-      owner: {
-        workspaceId: input.workspaceId,
-        contextId: null,
-        runtimeId: `native:${input.workspaceId}`,
-        incarnation,
-        executionDigest: identity.digest("hex"),
-      },
-      executable,
-      privateRoot,
-      args: [],
-      cwd: home,
+  let runtimeRootCreated = false;
+  const runtimeRootSetup = async () => {
+    await mkdir(path.dirname(runtimeRoot), { recursive: true });
+    await mkdir(runtimeRoot);
+    runtimeRootCreated = true;
+    for (const directory of [
+      runtimeRoot,
       home,
-      environment: {
-        PATH: [
-          path.dirname(executable),
-          runtimeRoot,
-          ...(platform === "win32"
-            ? (process.env["PATH"] ?? process.env["Path"] ?? "").split(path.delimiter)
-            : ["/usr/bin", "/bin"]),
-        ].join(path.delimiter),
-        LANG: "C.UTF-8",
-        ...runtime.environment,
-        [TYPESCRIPT_SERVER_PATH_ENV]: compiler,
-      },
-      read: [...runtime.readPaths, sourceRoot, buildsRoot, providerInputsRoot],
-      // These are owner-selected anchors, never the destinations of guest links.
-      // Unix MXC enforces these grants; Windows uses normal host permissions.
-      write: [home, scratchRoot, extensionStorage],
-      sockets: [],
-    },
-    {
-      ...getNativeExecutionInstallation(input.appRoot),
-      workspaceEntry,
+      sourceRoot,
+      scratchRoot,
+      buildsRoot,
+      providerInputsRoot,
+      extensionStorage,
+    ]) {
+      await mkdir(directory, { recursive: true });
+      if (!(await lstat(directory)).isDirectory() || (await realpath(directory)) !== directory)
+        throw new Error("Native resource anchors must be canonical directories owned by the host");
     }
-  );
+    const installedRequire = createRequire(path.join(input.appRoot, "package.json"));
+    const artifacts = resolveRequiredHostArtifactRoot();
+    const workerEntry = path.join(runtimeRoot, "fs-disk-worker.cjs");
+    const workspaceEntry = path.join(runtimeRoot, "workspaceChild.js");
+    const extensionEntry = path.join(runtimeRoot, "extensionChild.js");
+    const copied = await Promise.allSettled([
+      copyFile(path.join(artifacts, "extension-child.mjs"), extensionEntry),
+      copyFile(path.join(artifacts, "workspace-child.mjs"), workspaceEntry),
+      copyFile(path.join(artifacts, "fs-disk-worker.cjs"), workerEntry),
+    ]);
+    const copyFailures = copied.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (copyFailures.length === 1) throw copyFailures[0];
+    if (copyFailures.length > 1)
+      throw new AggregateError(copyFailures, "Native workspace bootstrap copies failed", {
+        cause: copyFailures[0],
+      });
+    await writeFile(path.join(runtimeRoot, "package.json"), '{"type":"module"}\n');
+    const { rgPath } = installedRequire("@vscode/ripgrep") as { rgPath: string };
+    const ripgrep = path.join(runtimeRoot, platform === "win32" ? "rg.exe" : "rg");
+    await copyFile(rgPath, ripgrep);
+    // The installed compiler is an executable plus adjacent standard libraries.
+    // Admit that complete immutable resource into the workspace's native domain;
+    // bundled API clients cannot resolve it relative to their generated bundle.
+    const installedCompiler = await realpath(resolveNativeTypeScriptServerPath(input.appRoot));
+    const compilerRoot = path.join(runtimeRoot, "typescript");
+    await materializeImmutableTree(path.dirname(installedCompiler), compilerRoot);
+    const compiler = path.join(compilerRoot, path.basename(installedCompiler));
+    const runtime = prepareNativeRuntime({ appRoot: input.appRoot, runtimeRoot, platform });
+    const { executable } = runtime;
+    const identity = createHash("sha256");
+    for (const resource of [workspaceEntry, workerEntry, extensionEntry, compiler])
+      identity.update(await readFile(resource));
+    const sandbox = await WorkspaceRuntime.start(
+      {
+        version: 1,
+        owner: {
+          workspaceId: input.workspaceId,
+          contextId: null,
+          runtimeId: `native:${input.workspaceId}`,
+          incarnation,
+          executionDigest: identity.digest("hex"),
+        },
+        executable,
+        privateRoot,
+        args: [],
+        cwd: home,
+        home,
+        environment: {
+          PATH: [
+            path.dirname(executable),
+            runtimeRoot,
+            ...(platform === "win32"
+              ? (process.env["PATH"] ?? process.env["Path"] ?? "").split(path.delimiter)
+              : ["/usr/bin", "/bin"]),
+          ].join(path.delimiter),
+          LANG: "C.UTF-8",
+          ...runtime.environment,
+          [TYPESCRIPT_SERVER_PATH_ENV]: compiler,
+        },
+        read: [...runtime.readPaths, sourceRoot, buildsRoot, providerInputsRoot],
+        // These are owner-selected anchors, never the destinations of guest links.
+        // Unix MXC enforces these grants; Windows uses normal host permissions.
+        write: [home, scratchRoot, extensionStorage],
+        sockets: [],
+      },
+      {
+        ...getNativeExecutionInstallation(input.appRoot),
+        workspaceEntry,
+      }
+    );
+    return { sandbox, workerEntry, ripgrep, extensionEntry };
+  };
+
+  let runtimeSetup: Awaited<ReturnType<typeof runtimeRootSetup>>;
+  try {
+    runtimeSetup = await runtimeRootSetup();
+  } catch (operationFailure) {
+    const failures: unknown[] = [];
+    try {
+      if (runtimeRootCreated && !hasOwnershipFailure(operationFailure))
+        await rm(runtimeRoot, { recursive: true, force: true });
+    } catch (cleanupFailure) {
+      failures.push(cleanupFailure);
+    }
+    if (failures.length > 0)
+      throw new AggregateError(
+        [operationFailure, ...failures],
+        "Native workspace startup and partial-resource cleanup failed",
+        { cause: operationFailure }
+      );
+    throw operationFailure;
+  }
+
+  const { sandbox, workerEntry, ripgrep, extensionEntry } = runtimeSetup;
   const dependencyRoot = path.join(runtimeRoot, "dependencies");
   const dependencyWorker = new ImmutableTreeWorkerClient();
   const dependencyAdmissions = new Map<string, Promise<NativeDependencyResources>>();
+  let disk: ReturnType<typeof createFsDiskPort> | undefined;
+  let stopped: Awaited<ReturnType<WorkspaceRuntime["stop"]>> | undefined;
+  let dependenciesRetired = false;
+  let stopping: Promise<Awaited<ReturnType<WorkspaceRuntime["stop"]>>> | undefined;
+  let retiringStorage: Promise<void> | undefined;
   let retiring = false;
   let dependencyRetirement: Promise<void> | undefined;
   const retireDependencies = (): Promise<void> => {
@@ -149,7 +203,43 @@ export async function startNativeWorkspaceRuntime(input: {
       dependencyAdmissions.clear();
     })());
   };
-  let disk: ReturnType<typeof createFsDiskPort> | undefined;
+  const stopOwnedRuntime = () => {
+    if (stopping) return stopping;
+    retiring = true;
+    stopping = (async () => {
+      const failures: unknown[] = [];
+      try {
+        disk?.retire();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        stopped ??= await sandbox.stop();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (stopped && !stopped.launcherExited) {
+        failures.push(
+          Object.assign(new Error("Native workspace launcher still owns its runtime resources"), {
+            code: "EOWNERSHIP",
+          })
+        );
+      }
+      if (stopped?.launcherExited) {
+        try {
+          await retireDependencies();
+          dependenciesRetired = true;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(failures, "Native workspace stop failed", { cause: failures[0] });
+      return stopped!;
+    })();
+    return stopping;
+  };
   try {
     const diskProcess = sandbox.fork(workerEntry, { VIBESTUDIO_RIPGREP_PATH: ripgrep });
     disk = createFsDiskPort(diskProcess);
@@ -256,22 +346,57 @@ export async function startNativeWorkspaceRuntime(input: {
         }
       },
       async stop() {
-        retiring = true;
-        disk?.retire();
-        const stopped = await sandbox.stop();
-        if (stopped.launcherExited) await retireDependencies();
-        return stopped;
+        return stopOwnedRuntime();
       },
       async retireStorage() {
-        const stopped = await sandbox.stop();
-        if (!stopped.launcherExited) throw new Error("Native workspace still owns its storage");
-        await retireDependencies();
+        if (retiringStorage) return retiringStorage;
+        retiringStorage = (async () => {
+          const failures: unknown[] = [];
+          try {
+            await stopOwnedRuntime();
+          } catch (error) {
+            failures.push(error);
+          }
+          if (stopped?.launcherExited && dependenciesRetired && runtimeRootCreated) {
+            try {
+              await rm(runtimeRoot, { recursive: true, force: true });
+              runtimeRootCreated = false;
+            } catch (error) {
+              failures.push(error);
+            }
+          }
+          if (failures.length === 1) throw failures[0];
+          if (failures.length > 1)
+            throw new AggregateError(failures, "Native workspace storage retirement failed", {
+              cause: failures[0],
+            });
+        })();
+        return retiringStorage;
       },
     };
   } catch (error) {
-    disk?.retire();
-    await sandbox.stop();
-    await retireDependencies();
+    const failures: unknown[] = [];
+    try {
+      await stopOwnedRuntime();
+    } catch (cleanupError) {
+      failures.push(cleanupError);
+    }
+    if (stopped?.launcherExited && dependenciesRetired && runtimeRootCreated) {
+      try {
+        await rm(runtimeRoot, { recursive: true, force: true });
+        runtimeRootCreated = false;
+      } catch (cleanupError) {
+        failures.push(cleanupError);
+      }
+    }
+    if (failures.length > 0)
+      throw new AggregateError(
+        [error, ...failures],
+        "Native workspace startup and cleanup failed",
+        {
+          cause: error,
+        }
+      );
     throw error;
   }
 }

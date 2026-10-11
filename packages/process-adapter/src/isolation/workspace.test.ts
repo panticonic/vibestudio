@@ -113,6 +113,81 @@ it.each([false, true])(
   }
 );
 
+it("keeps startup failure and unconfirmed launcher ownership in the rejection graph", async () => {
+  vi.useFakeTimers();
+  const peer = Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: vi.fn(() => true),
+    unref: vi.fn(),
+  });
+  setTimeout(() => peer.stdout.end(), 1);
+  setTimeout(() => peer.stderr.write("native policy rejected: precise diagnostic"), 20);
+  vi.mocked(spawn).mockImplementation(() => peer as unknown as ReturnType<typeof spawn>);
+  const root = path.resolve("fixture");
+  const runtime = path.join(root, "runtime");
+  const home = path.join(root, "state");
+  const pending = WorkspaceRuntime.start(
+    {
+      version: 1,
+      owner: {
+        workspaceId: "fixture",
+        contextId: null,
+        runtimeId: "fixture",
+        incarnation: "fixture",
+        executionDigest: "fixture",
+      },
+      privateRoot: root,
+      executable: path.join(runtime, "node"),
+      args: [],
+      cwd: home,
+      home,
+      environment: {},
+      read: [runtime],
+      write: [home],
+      sockets: [],
+    },
+    {
+      ...(process.platform === "win32"
+        ? ({ platform: "win32", mechanism: "host-process" } as const)
+        : ({
+            platform: process.platform as "linux" | "darwin",
+            mechanism: "mxc-process",
+            launcher: path.join(root, "launcher"),
+          } as const)),
+      workspaceEntry: path.join(runtime, "workspaceChild.js"),
+    }
+  );
+  let rejection: unknown;
+  const observed = pending.catch((error) => {
+    rejection = error;
+  });
+  await vi.advanceTimersByTimeAsync(10_000);
+  await vi.advanceTimersByTimeAsync(4_000);
+  await observed;
+  expect(rejection).toBeInstanceOf(AggregateError);
+  const aggregate = rejection as AggregateError;
+  expect(aggregate.errors[0]).toMatchObject({
+    message: expect.stringContaining("native policy rejected: precise diagnostic"),
+  });
+  expect(
+    aggregate.errors.some(
+      (child) =>
+        typeof child === "object" &&
+        child !== null &&
+        "code" in child &&
+        child.code === "EOWNERSHIP"
+    )
+  ).toBe(true);
+  expect(aggregate.cause).toBe(aggregate.errors[0]);
+  expect(peer.kill).toHaveBeenCalled();
+  expect(peer.unref).toHaveBeenCalledOnce();
+  expect(peer.stdin.destroyed).toBe(true);
+  expect(peer.stdout.destroyed).toBe(true);
+  expect(peer.stderr.destroyed).toBe(true);
+});
+
 it.each([false, true])(
   "retains late native diagnostics after startup stdout closes (executor hangs: %s)",
   async (hangs) => {

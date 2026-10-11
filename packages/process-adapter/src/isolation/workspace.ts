@@ -203,6 +203,10 @@ export class WorkspaceRuntime {
     });
   }
 
+  /** Start the owned launcher and wait until its control channel is ready.
+   * A rejection means startup resources are joined, except when its error graph
+   * contains `code: "EOWNERSHIP"`; in that case the caller must retain its
+   * incarnation resources because launcher retirement could not be confirmed. */
   static async start(
     policy: ExecutionPolicy,
     installation: WorkspaceRuntimeInstallation
@@ -243,7 +247,34 @@ export class WorkspaceRuntime {
       await sandbox.ready;
       return sandbox;
     } catch (error) {
-      await sandbox.stop();
+      let stopped: WorkspaceStopResult;
+      try {
+        stopped = await sandbox.stop();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [
+            error,
+            cleanupError,
+            Object.assign(new Error("Workspace launcher retirement could not be confirmed"), {
+              code: "EOWNERSHIP",
+            }),
+          ],
+          "Workspace runtime startup and retirement failed",
+          { cause: error }
+        );
+      }
+      if (!stopped.launcherExited) {
+        throw new AggregateError(
+          [
+            error,
+            Object.assign(new Error("Workspace launcher still owns startup resources"), {
+              code: "EOWNERSHIP",
+            }),
+          ],
+          "Workspace runtime startup failed before launcher retirement was confirmed",
+          { cause: error }
+        );
+      }
       throw error;
     }
   }
