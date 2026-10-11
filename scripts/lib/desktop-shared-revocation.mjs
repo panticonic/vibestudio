@@ -7,6 +7,7 @@ const { capabilityPatternCovers } = await tsImport(
   "@vibestudio/shared/authorityManifest",
   import.meta.url
 );
+const { deserializeRpcFailure } = await tsImport("@vibestudio/rpc", import.meta.url);
 
 export async function until(read, label, deadline) {
   while (Date.now() < deadline) {
@@ -44,7 +45,7 @@ export async function nativeRpc(page, destination, method, args) {
   ) {
     throw new Error(`Native RPC ${method} requires an explicit hub or workspace destination`);
   }
-  return page.evaluate(
+  const outcome = await page.evaluate(
     async ({ destination, method, args }) => {
       const bridge = window.__vibestudioTransport;
       if (!bridge) throw new Error("Native workspace transport is unavailable");
@@ -65,14 +66,11 @@ export async function nativeRpc(page, destination, method, args) {
             return;
           }
           if ("error" in message) {
-            reject(
-              Object.assign(new Error(message.error), {
-                code: message.errorCode,
-                errorKind: message.errorKind,
-                errorData: message.errorData,
-              })
-            );
-          } else resolve(message.result);
+            // Cross the browser evaluation boundary as structured data. A
+            // browser-thrown Error loses the RPC graph in Playwright's error
+            // transport, while stringifying the failure prints [object Object].
+            resolve({ failure: message.error });
+          } else resolve({ result: message.result });
         });
         const caller = {
           callerId: bridge.identity.runtimeId,
@@ -96,6 +94,8 @@ export async function nativeRpc(page, destination, method, args) {
     },
     { destination, method, args }
   );
+  if ("failure" in outcome) throw deserializeRpcFailure(outcome.failure);
+  return outcome.result;
 }
 
 async function visibleCards(app, approvalId) {

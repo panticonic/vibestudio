@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import {
   browserImportApprovalIdentity,
   browserImportApprovalRejection,
@@ -7,14 +8,18 @@ import {
   waitForApprovalSettlement,
 } from "./desktop-shared-revocation.mjs";
 
-function rpcPage(responseOwner, deferResponse = false) {
+function rpcPage(responseOwner, deferResponse = false, failure) {
   let sent;
   let receive;
   let subscriptions = 0;
   const respond = () =>
     receive({
       delivery: { caller: responseOwner },
-      message: { type: "response", requestId: sent.message.requestId, result: "ok" },
+      message: {
+        type: "response",
+        requestId: sent.message.requestId,
+        ...(failure ? { error: failure } : { result: "ok" }),
+      },
     });
   return {
     respond,
@@ -106,6 +111,32 @@ test("native RPC rejects missing destinations and responses from another owner",
     nativeRpc(page, { kind: "workspace", workspaceId: "workspace-a" }, "vcs.mainState", []),
     /response came from the wrong owner/
   );
+});
+
+test("native RPC preserves nested failures across the browser evaluation boundary", async () => {
+  const dependencyFailure = Object.assign(new Error("Dependency link failed"), { code: "UNKNOWN" });
+  const producerFailure = Object.assign(new Error("Invalid producer path"), { code: "ENOENT" });
+  const failure = serializeRpcFailure(
+    Object.assign(
+      new AggregateError(
+        [dependencyFailure, new Error("TypeScript worker failed", { cause: producerFailure })],
+        "Workspace preparation failed"
+      ),
+      { code: "PREPARATION_FAILED" }
+    )
+  );
+  const page = rpcPage({ callerId: "hub", callerKind: "server" }, false, failure);
+  await assert.rejects(
+    nativeRpc(page, { kind: "hub" }, "hubControl.listWorkspaces", []),
+    (error) => {
+      assert.equal(error.message, failure.message);
+      assert.equal(error.code, failure.code);
+      assert.equal(error.errors[0].code, "UNKNOWN");
+      assert.equal(error.errors[1].cause.code, "ENOENT");
+      return true;
+    }
+  );
+  assert.equal(page.subscriptions, 0);
 });
 
 test("browser import approvals use structured owner, capability, and operation identity", () => {
