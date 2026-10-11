@@ -11,7 +11,14 @@ import {
   awaitHubReady,
   exportReleaseBuild,
   prepareInstalledTemplateRelease,
+  withStandaloneReleaseSession,
 } from "./prebuild-release-userland.mjs";
+import {
+  createConnectDeepLink,
+  createConnectPairUrl,
+  DEFAULT_IROH_RELAYS,
+  PAIRING_PROTOCOL_VERSION,
+} from "./cli/lib/connect-grammar.generated.mjs";
 const roots = [];
 async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "release-userland-test-"));
@@ -23,7 +30,11 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 
-async function releaseBuildFixture(root, key = "a".repeat(64), bytes = Buffer.from("export default {};")) {
+async function releaseBuildFixture(
+  root,
+  key = "a".repeat(64),
+  bytes = Buffer.from("export default {};")
+) {
   const source = path.join(root, "source");
   await fs.mkdir(source);
   await fs.writeFile(path.join(source, "bundle.js"), bytes);
@@ -92,6 +103,72 @@ test("joins a failed spawn without requiring an exit event for a nonexistent pro
   assert.equal(result.error.code, "ENOENT");
 });
 
+test("installed session joins its server and listeners after operation and shutdown failures", async () => {
+  const root = await fixture();
+  const appRoot = path.join(root, "app");
+  const scratchParent = path.join(root, "scratch");
+  const serverEntry = path.join(appRoot, "dist/server.mjs");
+  const cliEntry = path.join(appRoot, "dist/cli/client.mjs");
+  await fs.mkdir(scratchParent, { recursive: true });
+  await fs.mkdir(path.dirname(serverEntry), { recursive: true });
+  await fs.mkdir(path.dirname(cliEntry), { recursive: true });
+  const serverId = `srv_${"s".repeat(24)}`;
+  const serverBootId = `boot_${"b".repeat(24)}`;
+  const pairing = {
+    endpointId: "1".repeat(64),
+    relays: DEFAULT_IROH_RELAYS,
+    v: PAIRING_PROTOCOL_VERSION,
+    code: Buffer.alloc(16, 7).toString("base64url"),
+  };
+  const ready = {
+    mode: "hub",
+    gatewayUrl: "https://example.test",
+    rootInvite: {
+      ...pairing,
+      deepLink: createConnectDeepLink(pairing),
+      pairUrl: createConnectPairUrl(pairing),
+      expiresInMs: 60_000,
+      expiresAt: 60_000,
+      serverId,
+      serverBootId,
+    },
+    serverId,
+    serverBootId,
+    gatewayPort: 1234,
+    pid: process.pid,
+    version: "test",
+    buildId: "a".repeat(64),
+    workspaces: [],
+  };
+  await fs.writeFile(
+    serverEntry,
+    `import fs from "node:fs";
+     const readyArg = process.argv.indexOf("--ready-file");
+     fs.writeFileSync(process.argv[readyArg + 1], ${JSON.stringify(JSON.stringify(ready))});
+     process.on("disconnect", () => process.exit(7));
+     setInterval(() => {}, 1000);`
+  );
+  await fs.writeFile(cliEntry, "console.log(JSON.stringify({ system: {}, base: {} }));");
+
+  const operationFailure = new Error("release verification callback failed");
+  const baselineSigint = process.listenerCount("SIGINT");
+  const baselineSigterm = process.listenerCount("SIGTERM");
+  await assert.rejects(
+    withStandaloneReleaseSession(appRoot, process.execPath, scratchParent, async () => {
+      throw operationFailure;
+    }),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.cause.cause, operationFailure);
+      assert.match(error.errors[1].message, /server exited \(7\)/u);
+      return true;
+    }
+  );
+  assert.equal(process.listenerCount("SIGINT"), baselineSigint);
+  assert.equal(process.listenerCount("SIGTERM"), baselineSigterm);
+  assert.deepEqual(await fs.readdir(scratchParent), []);
+});
+
 test("exports only immutable records and verifies every payload before publication", async () => {
   const root = await fixture();
   const source = path.join(root, "source"),
@@ -151,8 +228,14 @@ test("accepts a Windows EPERM rename collision only after verifying the incumben
   });
 
   await exportReleaseBuild(source, destination, key);
-  assert.equal(await fs.readFile(path.join(destination, "bundle.js"), "utf8"), "export default {};");
-  assert.equal((await fs.readdir(root)).some((name) => name.includes(".publishing-")), false);
+  assert.equal(
+    await fs.readFile(path.join(destination, "bundle.js"), "utf8"),
+    "export default {};"
+  );
+  assert.equal(
+    (await fs.readdir(root)).some((name) => name.includes(".publishing-")),
+    false
+  );
 });
 
 test("preserves a genuine EPERM when no release destination was published", async () => {
@@ -164,9 +247,15 @@ test("preserves a genuine EPERM when no release destination was published", asyn
     throw renameError;
   });
 
-  await assert.rejects(exportReleaseBuild(source, destination, key), (error) => error === renameError);
+  await assert.rejects(
+    exportReleaseBuild(source, destination, key),
+    (error) => error === renameError
+  );
   await assert.rejects(fs.stat(destination), { code: "ENOENT" });
-  assert.equal((await fs.readdir(root)).some((name) => name.includes(".publishing-")), false);
+  assert.equal(
+    (await fs.readdir(root)).some((name) => name.includes(".publishing-")),
+    false
+  );
 });
 
 test("retains rename and incumbent verification failures for an invalid publication race", async () => {
@@ -176,7 +265,10 @@ test("retains rename and incumbent verification failures for an invalid publicat
   const renameError = Object.assign(new Error("destination collision"), { code: "EPERM" });
   mock.method(fs, "rename", async () => {
     await fs.mkdir(destination);
-    await fs.writeFile(path.join(destination, "metadata.json"), JSON.stringify({ buildKey: "wrong" }));
+    await fs.writeFile(
+      path.join(destination, "metadata.json"),
+      JSON.stringify({ buildKey: "wrong" })
+    );
     throw renameError;
   });
 
@@ -187,7 +279,10 @@ test("retains rename and incumbent verification failures for an invalid publicat
     assert.match(error.errors[1].message, /key mismatch/);
     return true;
   });
-  assert.equal((await fs.readdir(root)).some((name) => name.includes(".publishing-")), false);
+  assert.equal(
+    (await fs.readdir(root)).some((name) => name.includes(".publishing-")),
+    false
+  );
 });
 
 test("keeps a staging cleanup failure together with the publication error", async () => {
@@ -261,4 +356,80 @@ test("template preparation joins cancellation before retiring private scratch", 
   } finally {
     watcher.close();
   }
+});
+
+async function failingTemplatePreparer(root, failure) {
+  const entry = path.join(root, "preparer.mjs");
+  await fs.writeFile(
+    entry,
+    `process.send({ kind: "failed", failure: ${JSON.stringify(failure)} }, () => process.exit(1));`
+  );
+  return {
+    appRoot: root,
+    resources: root,
+    executable: process.execPath,
+    entry,
+    scratchParent: root,
+  };
+}
+
+test("a joined template build failure still retires its private scratch", async () => {
+  const root = await fixture();
+  const input = await failingTemplatePreparer(root, {
+    message: "template compilation failed",
+    errorKind: "application",
+    code: "EBUILD",
+  });
+  await assert.rejects(prepareInstalledTemplateRelease(input), { code: "EBUILD" });
+  assert.equal(
+    (await fs.readdir(root)).some((name) => name.startsWith(".template-release-")),
+    false
+  );
+});
+
+test("template build and scratch retirement failures retain both causes", async () => {
+  const root = await fixture();
+  const input = await failingTemplatePreparer(root, {
+    message: "template compilation failed",
+    errorKind: "application",
+    code: "EBUILD",
+  });
+  const cleanupFailure = Object.assign(new Error("scratch removal denied"), { code: "EACCES" });
+  const remove = fs.rm.bind(fs);
+  mock.method(fs, "rm", async (target, options) => {
+    if (path.basename(String(target)).startsWith(".template-release-")) throw cleanupFailure;
+    return remove(target, options);
+  });
+  await assert.rejects(prepareInstalledTemplateRelease(input), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length, 2);
+    assert.equal(error.errors[0].code, "EBUILD");
+    assert.equal(error.errors[1], cleanupFailure);
+    assert.equal(error.cause, error.errors[0]);
+    return true;
+  });
+});
+
+test("nested template ownership failures retain the state anchor", async () => {
+  const root = await fixture();
+  const input = await failingTemplatePreparer(root, {
+    message: "template compilation and runtime retirement failed",
+    errorKind: "application",
+    name: "AggregateError",
+    errors: [
+      { message: "template compilation failed", errorKind: "application", code: "EBUILD" },
+      { message: "runtime ownership uncertain", errorKind: "internal", code: "EOWNERSHIP" },
+    ],
+  });
+  await assert.rejects(prepareInstalledTemplateRelease(input), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(
+      error.errors.map((child) => child.code),
+      ["EBUILD", "EOWNERSHIP"]
+    );
+    return true;
+  });
+  const retained = (await fs.readdir(root)).filter((name) => name.startsWith(".template-release-"));
+  assert.equal(retained.length, 1);
+  assert.equal((await fs.stat(path.join(root, retained[0], "tmp"))).isDirectory(), true);
 });

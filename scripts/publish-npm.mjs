@@ -10,6 +10,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatRpcFailure } from "@vibestudio/rpc";
 import { tsImport } from "tsx/esm/api";
+import { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
+
+export { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
 
 const { createDevelopmentClientLifetime } = await tsImport(
   "./development-client-lifecycle.ts",
@@ -42,36 +45,6 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
     console.error(`\n[publish-npm] ${formatSafeRpcFailure(error)}`);
     process.exitCode = 1;
   }
-}
-
-export async function runWithOwnedCleanup(operation, cleanup, message) {
-  let value;
-  let operationFailure;
-  let hasOperationFailure = false;
-  try {
-    value = await operation();
-  } catch (error) {
-    operationFailure = error;
-    hasOperationFailure = true;
-  }
-
-  let cleanupFailure;
-  let hasCleanupFailure = false;
-  try {
-    await cleanup();
-  } catch (error) {
-    cleanupFailure = error;
-    hasCleanupFailure = true;
-  }
-
-  if (hasOperationFailure && hasCleanupFailure) {
-    throw new AggregateError([operationFailure, cleanupFailure], message, {
-      cause: operationFailure,
-    });
-  }
-  if (hasOperationFailure) throw operationFailure;
-  if (hasCleanupFailure) throw cleanupFailure;
-  return value;
 }
 
 export function spawnResultFailure(result, command) {

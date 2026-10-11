@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { envelopeFromMessage } from "@vibestudio/rpc";
+import { envelopeFromMessage, formatRpcFailure } from "@vibestudio/rpc";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { createServerInvocation } from "./cli/lib/server-entry.mjs";
 import { readCurrentHostBuildGeneration } from "./host-build-generations.mjs";
@@ -15,6 +15,12 @@ import {
   developmentTemplateSetEnv,
 } from "../src/dev/developmentTemplateSet.ts";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
+import { joinChildProcess } from "./lib/join-child-process.mjs";
+import {
+  hasOwnershipFailure,
+  runOwnedCleanupSteps,
+  runWithOwnedCleanup,
+} from "./lib/owned-cleanup.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REMOTE_CLI = "@workspace-apps/remote-cli";
@@ -241,11 +247,20 @@ async function waitForLogLine(url, shellToken, events, needle) {
   );
 }
 
-async function stopServer(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGINT");
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise((resolve) => child.once("exit", resolve));
+function requestServerStop(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return undefined;
+  const signaled = child.kill("SIGINT");
+  if (!signaled && child.exitCode === null && child.signalCode === null)
+    throw new Error("Could not request terminal smoke server shutdown");
+  return signaled ? "SIGINT" : undefined;
+}
+
+async function joinServer(child, expectedSignal) {
+  const result = await joinChildProcess(child);
+  if (result.error) throw result.error;
+  if (result.signal && result.signal !== expectedSignal)
+    throw new Error(`Terminal smoke server was terminated by ${result.signal}`);
+  if (result.code !== 0) throw new Error(`Terminal smoke server exited (${result.code})`);
 }
 
 async function main() {
@@ -259,79 +274,111 @@ async function main() {
   const readyFile = path.join(tempRoot, "hub-ready.json");
   const serverHome = path.join(tempRoot, "server-home");
   const serverConfig = path.join(tempRoot, "server-xdg-config");
-  fs.mkdirSync(serverHome, { recursive: true });
-  fs.mkdirSync(serverConfig, { recursive: true });
   let events = null;
   let child = null;
+  let serverStopSignal;
   let preparation;
-  let retirementFailed = false;
-  try {
-    const hostArtifactRoot = readCurrentHostBuildGeneration(repoRoot, "desktop");
-    const templates = await resolveDevelopmentTemplateSet({
-      repoRoot,
-      checkpointRoot: path.join(tempRoot, "template-checkpoints"),
-    });
-    if (!templates)
-      throw new Error(
-        "A source smoke test needs the canonical template checkouts. Run `pnpm dev:templates setup`."
-      );
-    const env = {
-      ...process.env,
-      ...developmentTemplateSetEnv(templates),
-      NODE_ENV: process.env.NODE_ENV ?? "development",
-      VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
-      HOME: serverHome,
-      XDG_CONFIG_HOME: serverConfig,
-      APPDATA: path.join(tempRoot, "server-appdata"),
-      npm_config_cache: process.env.npm_config_cache ?? path.join(tempRoot, "npm-cache"),
-    };
-    preparation = prepareWorkspaceRelease({
-      executable: process.execPath,
-      entry: path.join(hostArtifactRoot, "prepare-workspace-templates.mjs"),
-      appRoot: repoRoot,
-      output: path.join(tempRoot, "release"),
-      scratch: path.join(tempRoot, "preparation"),
-      env,
-    });
-    await preparation.completed;
-    const serverInvocation = createServerInvocation([
-      path.join(hostArtifactRoot, "server.mjs"),
-      "--app-root",
-      repoRoot,
-      "--ready-file",
-      readyFile,
-    ]);
-    child = spawn(serverInvocation.command, serverInvocation.args, {
-      cwd: repoRoot,
-      stdio: ["ignore", "pipe", "pipe"],
-      env,
-    });
-    child.stdout.on("data", (chunk) => process.stdout.write(chunk));
-    child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+  let operationFailure;
+  return runWithOwnedCleanup(
+    async () => {
+      try {
+        fs.mkdirSync(serverHome, { recursive: true });
+        fs.mkdirSync(serverConfig, { recursive: true });
+        const hostArtifactRoot = readCurrentHostBuildGeneration(repoRoot, "desktop");
+        const templates = await resolveDevelopmentTemplateSet({
+          repoRoot,
+          checkpointRoot: path.join(tempRoot, "template-checkpoints"),
+        });
+        if (!templates)
+          throw new Error(
+            "A source smoke test needs the canonical template checkouts. Run `pnpm dev:templates setup`."
+          );
+        const env = {
+          ...process.env,
+          ...developmentTemplateSetEnv(templates),
+          NODE_ENV: process.env.NODE_ENV ?? "development",
+          VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
+          HOME: serverHome,
+          XDG_CONFIG_HOME: serverConfig,
+          APPDATA: path.join(tempRoot, "server-appdata"),
+          npm_config_cache: process.env.npm_config_cache ?? path.join(tempRoot, "npm-cache"),
+        };
+        preparation = prepareWorkspaceRelease({
+          executable: process.execPath,
+          entry: path.join(hostArtifactRoot, "prepare-workspace-templates.mjs"),
+          appRoot: repoRoot,
+          output: path.join(tempRoot, "release"),
+          scratch: path.join(tempRoot, "preparation"),
+          env,
+        });
+        await preparation.completed;
+        const serverInvocation = createServerInvocation([
+          path.join(hostArtifactRoot, "server.mjs"),
+          "--app-root",
+          repoRoot,
+          "--ready-file",
+          readyFile,
+        ]);
+        child = spawn(serverInvocation.command, serverInvocation.args, {
+          cwd: repoRoot,
+          stdio: ["ignore", "pipe", "pipe"],
+          env,
+        });
+        child.stdout.on("data", (chunk) => process.stdout.write(chunk));
+        child.stderr.on("data", (chunk) => process.stderr.write(chunk));
 
-    const ready = await waitForReady(readyFile);
-    const { url, shellToken } = await pairShellToken(ready);
-    events = await createShellEventClient(url, shellToken);
+        const ready = await waitForReady(readyFile);
+        const { url, shellToken } = await pairShellToken(ready);
+        events = await createShellEventClient(url, shellToken);
 
-    const gate = await launchTerminalWithGate(url, shellToken, events);
-    const running = await waitForRunning(url, shellToken, events);
-    await waitForLogLine(url, shellToken, events, `Connected as ${REMOTE_CLI}`);
-    await waitForLogLine(url, shellToken, events, "Running executable units:");
-    console.log(
-      `[terminal-smoke] ${REMOTE_CLI} ${running.status} build=${String(running.activeBundleKey).slice(0, 12)} approvals=${gate.approvalsResolved}`
-    );
-  } catch (error) {
-    retirementFailed = error.code === "EOWNERSHIP";
-    throw error;
-  } finally {
-    await events?.close();
-    if (child) await stopServer(child);
-    await preparation?.stop();
-    if (!retirementFailed) fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
+        const gate = await launchTerminalWithGate(url, shellToken, events);
+        const running = await waitForRunning(url, shellToken, events);
+        await waitForLogLine(url, shellToken, events, `Connected as ${REMOTE_CLI}`);
+        await waitForLogLine(url, shellToken, events, "Running executable units:");
+        console.log(
+          `[terminal-smoke] ${REMOTE_CLI} ${running.status} build=${String(running.activeBundleKey).slice(0, 12)} approvals=${gate.approvalsResolved}`
+        );
+      } catch (error) {
+        operationFailure = error;
+        throw error;
+      }
+    },
+    async () => {
+      const failures = [];
+      await runOwnedCleanupSteps(
+        [
+          async () => events?.close(),
+          async () => {
+            if (child) serverStopSignal = requestServerStop(child);
+          },
+          async () => {
+            if (child) await joinServer(child, serverStopSignal);
+          },
+          async () => preparation?.stop(),
+        ],
+        "Terminal smoke operation retirement failed"
+      ).catch((error) => failures.push(error));
+      if (
+        !hasOwnershipFailure(operationFailure) &&
+        !failures.some((error) => hasOwnershipFailure(error))
+      ) {
+        await runOwnedCleanupSteps(
+          [() => fs.promises.rm(tempRoot, { recursive: true, force: true })],
+          "Terminal smoke scratch retirement failed"
+        ).catch((error) => failures.push(error));
+      }
+      if (failures.length) {
+        if (failures.length === 1) throw failures[0];
+        throw new AggregateError(failures, "Terminal smoke cleanup failed", {
+          cause: failures[0],
+        });
+      }
+    },
+    "Terminal smoke failed"
+  );
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
-  process.exit(1);
+  console.error(formatRpcFailure(error));
+  process.exitCode = 1;
 });

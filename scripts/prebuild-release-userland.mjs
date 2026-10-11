@@ -7,6 +7,11 @@ import { gunzipSync } from "node:zlib";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
 import { joinChildProcess } from "./lib/join-child-process.mjs";
+import {
+  hasOwnershipFailure,
+  runOwnedCleanupSteps,
+  runWithOwnedCleanup,
+} from "./lib/owned-cleanup.mjs";
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 
 /** Ready-file publication and process exit are the owner's authoritative lifecycle edges. */
@@ -250,11 +255,19 @@ async function withReleaseConsumerSession(
   let closed;
   let serverError;
   let stopping = false;
+  let stopFailure;
   let tail = "";
+  let operationFailure;
   const cancellation = new AbortController();
   const stop = () => {
     stopping = true;
-    if (server?.connected) server.disconnect();
+    if (server?.connected) {
+      try {
+        server.disconnect();
+      } catch (error) {
+        stopFailure ??= error;
+      }
+    }
   };
   const interrupt = (signal) => {
     cancellation.abort(new Error(`Release operation cancelled by ${signal}`));
@@ -264,138 +277,179 @@ async function withReleaseConsumerSession(
   const onTerminate = () => interrupt("SIGTERM");
   process.on("SIGINT", onInterrupt);
   process.on("SIGTERM", onTerminate);
-  try {
-    const inherited = {};
-    for (const key of [
-      "PATH",
-      "SystemRoot",
-      "WINDIR",
-      "COMSPEC",
-      "PATHEXT",
-      "LANG",
-      "LC_ALL",
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "NO_PROXY",
-      "NODE_EXTRA_CA_CERTS",
-    ])
-      if (process.env[key] !== undefined) inherited[key] = process.env[key];
-    // Release coordinates come from the installed pointer; configuration,
-    // credentials and caches belong exclusively to this build operation.
-    const env = {
-      ...inherited,
-      NODE_ENV: "production",
-      ...environment,
-      VIBESTUDIO_APP_ROOT: appRoot,
-      VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
-      VIBESTUDIO_INSTANCE_ROOT: path.join(scratch, "instance"),
-      VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: path.join(scratch, "derived"),
-      XDG_CONFIG_HOME: path.join(scratch, "config"),
-      XDG_CACHE_HOME: path.join(scratch, "cache"),
-      LOCALAPPDATA: path.join(scratch, "config"),
-      TMPDIR: path.join(scratch, "tmp"),
-      TMP: path.join(scratch, "tmp"),
-      TEMP: path.join(scratch, "tmp"),
-      APPDATA: path.join(scratch, "config"),
-      HOME: path.join(scratch, "home"),
-      USERPROFILE: path.join(scratch, "home"),
-    };
-    for (const dir of [
-      env.VIBESTUDIO_INSTANCE_ROOT,
-      env.HOME,
-      env.XDG_CONFIG_HOME,
-      env.XDG_CACHE_HOME,
-      env.TMPDIR,
-    ])
-      await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
-    const readyFile = path.join(scratch, "ready.json");
-    cancellation.signal.throwIfAborted();
-    server = spawn(executable, [serverEntry, "--app-root", appRoot, "--ready-file", readyFile], {
-      env,
-      cwd: scratch,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-    });
-    server.on("error", (error) => {
-      serverError ??= error;
-    });
-    server.once("exit", (code, signal) => {
-      if (!stopping)
-        serverError ??= new Error(`Release build server exited (${signal ?? code}): ${tail}`);
-    });
-    closed = joinChildProcess(server);
-    for (const stream of [server.stdout, server.stderr])
-      stream.on("data", (chunk) => {
-        tail = (tail + chunk).slice(-8192);
-      });
-    const ready = await awaitHubReady(server, readyFile);
-    const cli = async (args) => {
-      cancellation.signal.throwIfAborted();
-      if (serverError) throw serverError;
-      const controller = new AbortController();
-      const onServerClose = () => controller.abort(cancellation.signal.reason ?? serverError);
-      server.once("exit", onServerClose);
-      server.once("error", onServerClose);
-      let output = "",
-        errorOutput = "";
-      const child = spawn(executable, [cliEntry, ...args, "--json"], {
-        env,
-        cwd: scratch,
-        signal: controller.signal,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const joined = joinChildProcess(child);
-      let failure;
-      child.on("error", (error) => {
-        failure = error;
-      });
-      child.stdout.on("data", (chunk) => {
-        output += chunk;
-      });
-      child.stderr.on("data", (chunk) => {
-        errorOutput = (errorOutput + chunk).slice(-8192);
-      });
+  return runWithOwnedCleanup(
+    async () => {
       try {
-        const { code } = await joined;
-        if (failure || code !== 0)
-          throw (
-            serverError ??
-            failure ??
-            new Error(`Release build CLI failed: ${errorOutput}\n${output}`)
-          );
-        return JSON.parse(output.trim());
-      } finally {
-        server.off("exit", onServerClose);
-        server.off("error", onServerClose);
+        const inherited = {};
+        for (const key of [
+          "PATH",
+          "SystemRoot",
+          "WINDIR",
+          "COMSPEC",
+          "PATHEXT",
+          "LANG",
+          "LC_ALL",
+          "HTTP_PROXY",
+          "HTTPS_PROXY",
+          "NO_PROXY",
+          "NODE_EXTRA_CA_CERTS",
+        ])
+          if (process.env[key] !== undefined) inherited[key] = process.env[key];
+        // Release coordinates come from the installed pointer; configuration,
+        // credentials and caches belong exclusively to this build operation.
+        const env = {
+          ...inherited,
+          NODE_ENV: "production",
+          ...environment,
+          VIBESTUDIO_APP_ROOT: appRoot,
+          VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
+          VIBESTUDIO_INSTANCE_ROOT: path.join(scratch, "instance"),
+          VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: path.join(scratch, "derived"),
+          XDG_CONFIG_HOME: path.join(scratch, "config"),
+          XDG_CACHE_HOME: path.join(scratch, "cache"),
+          LOCALAPPDATA: path.join(scratch, "config"),
+          TMPDIR: path.join(scratch, "tmp"),
+          TMP: path.join(scratch, "tmp"),
+          TEMP: path.join(scratch, "tmp"),
+          APPDATA: path.join(scratch, "config"),
+          HOME: path.join(scratch, "home"),
+          USERPROFILE: path.join(scratch, "home"),
+        };
+        for (const dir of [
+          env.VIBESTUDIO_INSTANCE_ROOT,
+          env.HOME,
+          env.XDG_CONFIG_HOME,
+          env.XDG_CACHE_HOME,
+          env.TMPDIR,
+        ])
+          await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+        const readyFile = path.join(scratch, "ready.json");
+        cancellation.signal.throwIfAborted();
+        server = spawn(
+          executable,
+          [serverEntry, "--app-root", appRoot, "--ready-file", readyFile],
+          {
+            env,
+            cwd: scratch,
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe", "ipc"],
+          }
+        );
+        server.on("error", (error) => {
+          serverError ??= error;
+        });
+        server.once("exit", (code, signal) => {
+          if (!stopping)
+            serverError ??= new Error(`Release build server exited (${signal ?? code}): ${tail}`);
+        });
+        closed = joinChildProcess(server);
+        for (const stream of [server.stdout, server.stderr])
+          stream.on("data", (chunk) => {
+            tail = (tail + chunk).slice(-8192);
+          });
+        const ready = await awaitHubReady(server, readyFile);
+        const cli = async (args) => {
+          cancellation.signal.throwIfAborted();
+          if (serverError) throw serverError;
+          const controller = new AbortController();
+          const onServerClose = () => controller.abort(cancellation.signal.reason ?? serverError);
+          server.once("exit", onServerClose);
+          server.once("error", onServerClose);
+          let output = "",
+            errorOutput = "";
+          const child = spawn(executable, [cliEntry, ...args, "--json"], {
+            env,
+            cwd: scratch,
+            signal: controller.signal,
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          const joined = joinChildProcess(child);
+          let failure;
+          child.on("error", (error) => {
+            failure = error;
+          });
+          child.stdout.on("data", (chunk) => {
+            output += chunk;
+          });
+          child.stderr.on("data", (chunk) => {
+            errorOutput = (errorOutput + chunk).slice(-8192);
+          });
+          try {
+            const { code } = await joined;
+            if (failure || code !== 0)
+              throw (
+                serverError ??
+                failure ??
+                new Error(`Release build CLI failed: ${errorOutput}\n${output}`)
+              );
+            return JSON.parse(output.trim());
+          } finally {
+            server.off("exit", onServerClose);
+            server.off("error", onServerClose);
+          }
+        };
+        await cli(["remote", "pair", ready.rootInvite.deepLink]);
+        const pair = await cli(["remote", "ensure-user-workspaces"]);
+        const result = await operation({
+          cli,
+          pair,
+          scratch,
+          resources,
+          env,
+          signal: cancellation.signal,
+        });
+        cancellation.signal.throwIfAborted();
+        if (serverError) throw serverError;
+        return result;
+      } catch (error) {
+        operationFailure = error;
+        throw new Error(`Installed release operation failed: ${error.message}\n${tail}`, {
+          cause: error,
+        });
       }
-    };
-    await cli(["remote", "pair", ready.rootInvite.deepLink]);
-    const pair = await cli(["remote", "ensure-user-workspaces"]);
-    const result = await operation({
-      cli,
-      pair,
-      scratch,
-      resources,
-      env,
-      signal: cancellation.signal,
-    });
-    cancellation.signal.throwIfAborted();
-    if (serverError) throw serverError;
-    return result;
-  } catch (error) {
-    throw new Error(`Installed release operation failed: ${error.message}\n${tail}`, {
-      cause: error,
-    });
-  } finally {
-    stop();
-    await closed;
-    try {
-      await fsp.rm(scratch, { recursive: true, force: true });
-    } finally {
-      process.off("SIGINT", onInterrupt);
-      process.off("SIGTERM", onTerminate);
-    }
-  }
+    },
+    async () => {
+      const failures = [];
+      await runOwnedCleanupSteps(
+        [
+          async () => stop(),
+          async () => {
+            if (stopFailure) throw stopFailure;
+          },
+          async () => {
+            if (!closed) return;
+            const result = await closed;
+            if (result.error) throw result.error;
+            if (result.signal)
+              throw new Error(`Release build server was terminated by ${result.signal}: ${tail}`);
+            if (result.code !== 0)
+              throw new Error(`Release build server exited (${result.code}): ${tail}`);
+          },
+        ],
+        "Installed release process retirement failed"
+      ).catch((error) => failures.push(error));
+      if (
+        !hasOwnershipFailure(operationFailure) &&
+        !failures.some((error) => hasOwnershipFailure(error))
+      ) {
+        await runOwnedCleanupSteps(
+          [() => fsp.rm(scratch, { recursive: true, force: true })],
+          "Installed release scratch retirement failed"
+        ).catch((error) => failures.push(error));
+      }
+      await runOwnedCleanupSteps(
+        [() => process.off("SIGINT", onInterrupt), () => process.off("SIGTERM", onTerminate)],
+        "Installed release signal listener retirement failed"
+      ).catch((error) => failures.push(error));
+      if (failures.length) {
+        if (failures.length === 1) throw failures[0];
+        throw new AggregateError(failures, "Installed release cleanup failed", {
+          cause: failures[0],
+        });
+      }
+    },
+    `Installed release operation failed: ${tail}`
+  );
 }
 
 /** The installed dependency boundary produces the source package and artifacts
@@ -447,25 +501,45 @@ export async function prepareInstalledTemplateRelease({
     "VIBESTUDIO_WORKSPACE_SOURCES",
   ])
     delete env[key];
-  await fsp.mkdir(env.TMPDIR, { recursive: true });
-  const preparation = prepareWorkspaceRelease({
-    appRoot,
-    output: resources,
-    scratch: path.join(scratch, "producer"),
-    env,
-    executable,
-    entry,
-  });
-  let retirementFailed = false;
+  let preparation;
+  const failures = [];
+  const retainFailure = (error) => {
+    if (!failures.includes(error)) failures.push(error);
+  };
   try {
+    await fsp.mkdir(env.TMPDIR, { recursive: true });
+    preparation = prepareWorkspaceRelease({
+      appRoot,
+      output: resources,
+      scratch: path.join(scratch, "producer"),
+      env,
+      executable,
+      entry,
+    });
     await preparation.completed;
   } catch (error) {
-    retirementFailed = error.code === "EOWNERSHIP";
-    throw error;
-  } finally {
-    await preparation.stop();
-    if (!retirementFailed) await fsp.rm(scratch, { recursive: true, force: true });
+    retainFailure(error);
   }
+  try {
+    await preparation?.stop();
+  } catch (error) {
+    retainFailure(error);
+  }
+  // Ownership failures may be nested in a producer's aggregate receipt. Keep
+  // the state anchor until physical retirement is proven; an ordinary build
+  // failure still permits cleanup after its producer has been joined.
+  if (!failures.some((error) => hasOwnershipFailure(error))) {
+    try {
+      await fsp.rm(scratch, { recursive: true, force: true });
+    } catch (error) {
+      retainFailure(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(failures, "Installed template preparation and cleanup failed", {
+      cause: failures[0],
+    });
 }
 
 export async function prebuildReleaseUserland(context) {
