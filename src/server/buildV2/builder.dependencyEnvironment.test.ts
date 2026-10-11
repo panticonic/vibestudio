@@ -403,97 +403,110 @@ describe("dependency-environment resolver", () => {
     }
   );
 
-  it("adapts plugin-generated modules to ordinary JS, TS, CSS, and asset loaders", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-plugin-loaders-"));
-    const source = path.join(root, "source");
-    const entry = path.join(source, "entry.component");
-    try {
-      fs.mkdirSync(source, { recursive: true });
-      fs.writeFileSync(entry, "plugin-owned entry");
-      fs.writeFileSync(path.join(source, "helper.ts"), "export const helper: number = 7;");
-      fs.writeFileSync(path.join(source, "theme.css"), ".component { color: red; }");
-      fs.writeFileSync(path.join(source, "icon.svg"), "<svg>owned</svg>");
-      let pluginEndInputs: string[] = [];
-      const frameworkPlugin: esbuild.Plugin = {
-        name: "framework-virtual-source",
-        setup(build) {
-          build.onEnd((result) => {
-            pluginEndInputs = Object.keys(result.metafile?.inputs ?? {});
-          });
-          build.onResolve({ filter: /\.component$/ }, (args) => ({
-            path: args.path,
-            namespace: "component-source",
-          }));
-          build.onLoad({ filter: /.*/, namespace: "component-source" }, (args) => ({
-            contents:
-              'import { helper } from "./helper.ts"; import icon from "./icon.svg"; import "./theme.css"; export { helper, icon };',
-            loader: "js",
-            resolveDir: path.dirname(args.path),
-          }));
-        },
-      };
-      const result = await esbuild.build({
-        entryPoints: [entry],
-        bundle: true,
-        format: "esm",
-        platform: "browser",
-        sourcemap: "linked",
-        outdir: path.join(root, "out"),
-        metafile: true,
-        write: false,
-        logLevel: "silent",
-        loader: { ".svg": "text" },
-        plugins: composePreparedDependencyPlugins([frameworkPlugin], [], [source]),
-      });
-      expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("7");
-      expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("<svg>owned</svg>");
-      expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("color: red");
-      const metafile = result.metafile;
-      expect(metafile).toBeDefined();
-      const inputPaths = Object.keys(metafile!.inputs);
-      expect(inputPaths).toContain(`component-source:${entry}`);
-      expect(inputPaths).toContain(path.join(source, "helper.ts"));
-      expect(JSON.stringify(metafile)).not.toContain("vibestudio-prepared-");
-      expect(pluginEndInputs).toContain(`component-source:${entry}`);
-      expect(pluginEndInputs).not.toContain(`vibestudio-prepared-plugin:component-source:${entry}`);
-      const entryMetadata = Object.values(metafile!.outputs).find(
-        (output) => output.entryPoint !== undefined
-      );
-      expect(entryMetadata?.entryPoint).toBe(`component-source:${entry}`);
-      expect(Object.keys(entryMetadata?.inputs ?? {})).toContain(`component-source:${entry}`);
-      const mapFile = result.outputFiles.find((file) => file.path.endsWith(".map"));
-      expect(mapFile).toBeDefined();
-      const inMemorySourceMap = JSON.parse(mapFile!.text) as { sourcesContent?: string[] };
-      expect(inMemorySourceMap.sourcesContent).toContain("export const helper: number = 7;");
+  it.each([false, true])(
+    "adapts plugin-generated modules to ordinary loaders (aliased=%s)",
+    async (aliased) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-plugin-loaders-"));
+      const physicalSource = path.join(root, "source");
+      const source = aliased ? path.join(root, "source-alias") : physicalSource;
+      const entry = path.join(source, "entry.component");
+      try {
+        fs.mkdirSync(physicalSource, { recursive: true });
+        if (aliased)
+          fs.symlinkSync(physicalSource, source, process.platform === "win32" ? "junction" : "dir");
+        fs.writeFileSync(entry, "plugin-owned entry");
+        fs.writeFileSync(path.join(source, "helper.ts"), "export const helper: number = 7;");
+        fs.writeFileSync(path.join(source, "theme.css"), ".component { color: red; }");
+        fs.writeFileSync(path.join(source, "icon.svg"), "<svg>owned</svg>");
+        let pluginEndInputs: string[] = [];
+        const frameworkPlugin: esbuild.Plugin = {
+          name: "framework-virtual-source",
+          setup(build) {
+            build.onEnd((result) => {
+              pluginEndInputs = Object.keys(result.metafile?.inputs ?? {});
+            });
+            build.onResolve({ filter: /\.component$/ }, (args) => ({
+              path: args.path,
+              namespace: "component-source",
+            }));
+            build.onLoad({ filter: /.*/, namespace: "component-source" }, (args) => ({
+              contents:
+                'import { helper } from "./helper.ts"; import icon from "./icon.svg"; import "./theme.css"; export { helper, icon };',
+              loader: "js",
+              resolveDir: path.dirname(args.path),
+            }));
+          },
+        };
+        const result = await esbuild.build({
+          entryPoints: [entry],
+          bundle: true,
+          format: "esm",
+          platform: "browser",
+          sourcemap: "linked",
+          outdir: path.join(root, "out"),
+          metafile: true,
+          write: false,
+          logLevel: "silent",
+          loader: { ".svg": "text" },
+          plugins: composePreparedDependencyPlugins([frameworkPlugin], [], [source]),
+        });
+        expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("7");
+        expect(result.outputFiles.map((file) => file.text).join("\n")).toContain(
+          "<svg>owned</svg>"
+        );
+        expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("color: red");
+        const metafile = result.metafile;
+        expect(metafile).toBeDefined();
+        const inputPaths = Object.keys(metafile!.inputs);
+        expect(inputPaths).toContain(`component-source:${entry}`);
+        // Ordinary files have physical identities; plugin-owned virtual identities stay intact.
+        const helperIdentity = fs.realpathSync(path.join(source, "helper.ts"));
+        expect(inputPaths).toContain(helperIdentity);
+        expect(JSON.stringify(metafile)).not.toContain("vibestudio-prepared-");
+        expect(pluginEndInputs).toContain(`component-source:${entry}`);
+        expect(pluginEndInputs).toContain(helperIdentity);
+        expect(pluginEndInputs).not.toContain(
+          `vibestudio-prepared-plugin:component-source:${entry}`
+        );
+        const entryMetadata = Object.values(metafile!.outputs).find(
+          (output) => output.entryPoint !== undefined
+        );
+        expect(entryMetadata?.entryPoint).toBe(`component-source:${entry}`);
+        expect(Object.keys(entryMetadata?.inputs ?? {})).toContain(`component-source:${entry}`);
+        const mapFile = result.outputFiles.find((file) => file.path.endsWith(".map"));
+        expect(mapFile).toBeDefined();
+        const inMemorySourceMap = JSON.parse(mapFile!.text) as { sourcesContent?: string[] };
+        expect(inMemorySourceMap.sourcesContent).toContain("export const helper: number = 7;");
 
-      const diskOutDir = path.join(root, "written-out");
-      const written = await esbuild.build({
-        entryPoints: [entry],
-        bundle: true,
-        format: "esm",
-        platform: "browser",
-        sourcemap: "linked",
-        outdir: diskOutDir,
-        metafile: true,
-        logLevel: "silent",
-        loader: { ".svg": "text" },
-        plugins: composePreparedDependencyPlugins([frameworkPlugin], [], [source]),
-      });
-      const writtenMap = Object.keys(written.metafile!.outputs).find((outputPath) =>
-        outputPath.endsWith(".map")
-      );
-      expect(writtenMap).toBeDefined();
-      const writtenMapPath = path.isAbsolute(writtenMap!)
-        ? writtenMap!
-        : path.resolve(process.cwd(), writtenMap!);
-      const writtenSourceMap = JSON.parse(fs.readFileSync(writtenMapPath, "utf8")) as {
-        sourcesContent?: string[];
-      };
-      expect(writtenSourceMap.sourcesContent).toContain("export const helper: number = 7;");
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+        const diskOutDir = path.join(root, "written-out");
+        const written = await esbuild.build({
+          entryPoints: [entry],
+          bundle: true,
+          format: "esm",
+          platform: "browser",
+          sourcemap: "linked",
+          outdir: diskOutDir,
+          metafile: true,
+          logLevel: "silent",
+          loader: { ".svg": "text" },
+          plugins: composePreparedDependencyPlugins([frameworkPlugin], [], [source]),
+        });
+        const writtenMap = Object.keys(written.metafile!.outputs).find((outputPath) =>
+          outputPath.endsWith(".map")
+        );
+        expect(writtenMap).toBeDefined();
+        const writtenMapPath = path.isAbsolute(writtenMap!)
+          ? writtenMap!
+          : path.resolve(process.cwd(), writtenMap!);
+        const writtenSourceMap = JSON.parse(fs.readFileSync(writtenMapPath, "utf8")) as {
+          sourcesContent?: string[];
+        };
+        expect(writtenSourceMap.sourcesContent).toContain("export const helper: number = 7;");
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
     }
-  });
+  );
 
   it("does not wrap a prepared namespace twice when a plugin returns build.resolve()", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-plugin-resolved-file-"));
