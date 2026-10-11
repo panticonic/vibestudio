@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   collectInstalledRuntimeReadRoots,
   getExistingAppNodeModulesRoots,
+  getInstalledNodeRuntime,
 } from "./runtimePaths.js";
 
 const fixtures: string[] = [];
@@ -16,6 +17,81 @@ function fixture(): string {
   fixtures.push(root);
   return root;
 }
+
+function installRuntimeSelection(appRoot: string, version: string, digest: string) {
+  const targetName = "linux-x64";
+  const archive = `node-v${version}-linux-x64.tar.gz`;
+  const directory = `${version}-${digest}`;
+  const root = path.join(appRoot, "dist/node/releases", targetName, directory);
+  mkdirSync(root, { recursive: true });
+  writeFileSync(path.join(root, "runtime.json"), JSON.stringify({ version, platform: "linux", arch: "x64" }));
+  writeFileSync(
+    path.join(root, "vibestudio-runtime.json"),
+    JSON.stringify({ version: 1, nodeVersion: version, archive, archiveSha256: digest })
+  );
+  mkdirSync(path.join(appRoot, "dist/node/selected"), { recursive: true });
+  writeFileSync(
+    path.join(appRoot, "dist/node/selected", `${targetName}.json`),
+    JSON.stringify({
+      version: 1,
+      platform: "linux",
+      arch: "x64",
+      nodeVersion: version,
+      archive,
+      archiveSha256: digest,
+      directory,
+    })
+  );
+  return root;
+}
+
+describe("installed Node runtime selection", () => {
+  it("uses the selected immutable release and retains the first choice for the process lifetime", () => {
+    const root = fixture();
+    const appRoot = path.join(root, "app");
+    const oldRuntime = installRuntimeSelection(appRoot, "22.23.2", "a".repeat(64));
+    const first = getInstalledNodeRuntime(appRoot, "linux", "x64");
+    expect(first.root).toBe(oldRuntime);
+    expect(first.version).toBe("22.23.2");
+
+    installRuntimeSelection(appRoot, "24.11.0", "b".repeat(64));
+    expect(getInstalledNodeRuntime(appRoot, "linux", "x64")).toBe(first);
+    expect(first.root).toBe(oldRuntime);
+  });
+
+  it("memoizes a physical installation across filesystem aliases", () => {
+    const root = fixture();
+    const appRoot = path.join(root, "app");
+    const alias = path.join(root, "app-alias");
+    const firstRuntime = installRuntimeSelection(appRoot, "22.23.2", "d".repeat(64));
+    symlinkSync(appRoot, alias, "junction");
+
+    const first = getInstalledNodeRuntime(appRoot, "linux", "x64");
+    installRuntimeSelection(appRoot, "24.11.0", "e".repeat(64));
+    expect(getInstalledNodeRuntime(alias, "linux", "x64")).toBe(first);
+    expect(first.root).toBe(firstRuntime);
+  });
+
+  it("rejects selectors that escape the immutable target release directory", () => {
+    const appRoot = path.join(fixture(), "app");
+    mkdirSync(path.join(appRoot, "dist/node/selected"), { recursive: true });
+    writeFileSync(
+      path.join(appRoot, "dist/node/selected/linux-x64.json"),
+      JSON.stringify({
+        version: 1,
+        platform: "linux",
+        arch: "x64",
+        nodeVersion: "24.11.0",
+        archive: "node-v24.11.0-linux-x64.tar.gz",
+        archiveSha256: "c".repeat(64),
+        directory: "../legacy",
+      })
+    );
+    expect(() => getInstalledNodeRuntime(appRoot, "linux", "x64")).toThrow(
+      "Installed Node runtime selection does not match this host"
+    );
+  });
+});
 
 it("uses one physical dependency realm even when Electron exposes an ASAR alias", () => {
   const root = fixture();

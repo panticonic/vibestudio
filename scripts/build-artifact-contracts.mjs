@@ -4,9 +4,10 @@ import path from "node:path";
 /** Retained developer instances and build coordination are never release inputs. */
 export const DEVELOPMENT_DIST_ENTRIES = new Set([
   "host-generations", "source-server-prerequisites.lock", "host-build.lock",
+  "node-payload",
 ]);
 
-/** Inspect owned application outputs without entering runtime distributions or symlinks. */
+/** Inspect app outputs without entering verified runtime distributions or symlinks. */
 export function applicationSourceMaps(dist) {
   const maps = [];
   const visit = (directory, prefix = "") => {

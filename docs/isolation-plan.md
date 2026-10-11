@@ -54,8 +54,10 @@ MXC on Unix and direct host execution on Windows.
 The installed standalone Node distribution supplies the actual Node executable,
 npm and runtime resources. Source, npm and Electron products use the same
 installed resource resolvers and explicit execution mechanism. Unix MXC payloads
-are staged under `dist/mxc/<platform>-<arch>`; Node distributions are staged under
-`dist/node/<platform>-<arch>`. Packaging validates the selected target's payloads.
+are staged under `dist/mxc/<platform>-<arch>`. Node distributions are retained
+immutably under `dist/node/releases/<platform>-<arch>/<version>-<archive-sha256>`,
+with `dist/node/selected/<platform>-<arch>.json` selecting the current release.
+Packaging copies only that selected target into the installed resource tree.
 
 Cancellation and descendant cleanup are best effort. Closing a command or the
 root process does not prove every descendant stopped. Commands in one workspace

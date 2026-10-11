@@ -9,7 +9,12 @@ import {
 } from "./build-artifact-contracts.mjs";
 import { assertHostNativeDependencies } from "./native-host-dependencies.mjs";
 import { SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
-import { assertNodeRuntimeArtifacts, NODE_RUNTIME_TARGETS } from "./node-runtime-artifacts.mjs";
+import {
+  assertSelectedNodeRuntimeArtifacts,
+  NODE_RUNTIME_TARGETS,
+  nodeRuntimeTarget,
+  nodeRuntimeTargetName,
+} from "./node-runtime-artifacts.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -359,14 +364,18 @@ for (const smoke of executableSmokes) {
 const nativeContractCount = assertHostNativeDependencies({ cwd: repoRoot });
 
 if (process.env.NODE_ENV === "production") {
-  // Stock toolchains retain their upstream contents, including npm source maps.
-  // Verify those distributions separately; the no-map rule owns app outputs.
+  // Immutable versioned releases coexist with legacy flat paths held by older
+  // source processes. Verify the canonical current-host selector; never remove
+  // or reinterpret those retained legacy trees.
   const nodeRoot = path.join(repoRoot, "dist", "node");
-  for (const name of fs.readdirSync(nodeRoot)) {
-    const target = NODE_RUNTIME_TARGETS.find((entry) => `${entry.platform}-${entry.arch}` === name);
-    if (!target) throw new Error(`Unexpected Node distribution: ${name}`);
-    await assertNodeRuntimeArtifacts(repoRoot, target);
-  }
+  const allowedRoots = new Set([
+    "releases",
+    "selected",
+    ...NODE_RUNTIME_TARGETS.map(nodeRuntimeTargetName),
+  ]);
+  for (const name of fs.readdirSync(nodeRoot))
+    if (!allowedRoots.has(name)) throw new Error(`Unexpected Node distribution entry: ${name}`);
+  await assertSelectedNodeRuntimeArtifacts(repoRoot, nodeRuntimeTarget());
   const maps = applicationSourceMaps(path.join(repoRoot, "dist"));
   if (maps.length > 0) {
     throw new Error(`Production dist contains source maps: ${maps.join(", ")}`);

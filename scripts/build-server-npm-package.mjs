@@ -39,6 +39,12 @@ import { fileURLToPath } from "node:url";
 import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
 import { STANDALONE_SERVER_RUNTIME_ARTIFACTS } from "./server-runtime-artifacts.mjs";
+import {
+  assertSelectedNodeRuntimeArtifacts,
+  nodeRuntimeSelectionPath,
+  nodeRuntimeTarget,
+  nodeRuntimeTargetName,
+} from "./node-runtime-artifacts.mjs";
 
 import { assertNativeIsolationArtifacts } from "./native-isolation-artifacts.mjs";
 
@@ -128,9 +134,23 @@ async function prepareServerTemplateRelease(root) {
     }
   };
   try {
-    // The installation exists only during publication; npm owns the consumer's
-    // dependency tree after the package is installed there.
-    copyTree(path.join(repoRoot, "dist/node"), path.join(root, "dist/node"), defaultSkip);
+    // Publish only the selected host runtime. Retained legacy and prior-version
+    // trees stay in the source checkout for live processes, never in this package.
+    const runtimeTarget = nodeRuntimeTarget();
+    const selectedRuntime = await assertSelectedNodeRuntimeArtifacts(repoRoot, runtimeTarget);
+    const targetName = nodeRuntimeTargetName(runtimeTarget);
+    const packageRuntimeRoot = path.join(root, "dist", "node");
+    const releaseRoot = path.join(packageRuntimeRoot, "releases", targetName);
+    mkdirp(releaseRoot);
+    fs.cpSync(selectedRuntime.root, path.join(releaseRoot, path.basename(selectedRuntime.root)), {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+    });
+    copyFile(
+      path.relative(repoRoot, nodeRuntimeSelectionPath(repoRoot, runtimeTarget)),
+      path.join(packageRuntimeRoot, "selected", `${targetName}.json`)
+    );
     await run(process.platform === "win32" ? "npm.cmd" : "npm", [
       "install",
       "--omit=dev",

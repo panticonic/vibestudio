@@ -1,12 +1,17 @@
 import {
   stageNodeRuntime,
+  stageNodeRuntimePayload,
   nodeRuntimeTarget,
-  assertNodeRuntimeArtifacts,
+  assertSelectedNodeRuntimeArtifacts,
+  assertNodeRuntimePayload,
+  nodeRuntimeTargetName,
+  nodeRuntimeIdentity,
 } from "./node-runtime-artifacts.mjs";
 import {
   copyFileSync,
   chmodSync,
   mkdirSync,
+  readdirSync,
   statSync,
   readFileSync,
   renameSync,
@@ -50,10 +55,10 @@ export function publishNativeArtifact(source, destination, executable) {
 export default async function stageElectronNativeIsolation(context) {
   if (typeof Arch[context.arch] !== "string")
     throw new Error("Unknown Electron packaging architecture");
-  await stageNodeRuntime(
-    context.packager.projectDir,
-    nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch])
-  );
+  const target = nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch]);
+  await stageNodeRuntime(context.packager.projectDir, target);
+  await stageNodeRuntimePayload(context.packager.projectDir, target);
+  await assertNodeRuntimePayload(context.packager.projectDir, target);
   prepareNativeDependencyFiles({
     cwd: context.packager.projectDir,
     platform: context.electronPlatformName,
@@ -72,10 +77,21 @@ export default async function stageElectronNativeIsolation(context) {
 
 /** afterPack runs before signing changes the executable bytes. */
 export async function assertPackagedNativeIsolation(resources, context) {
-  await assertNodeRuntimeArtifacts(
-    path.join(resources, "app.asar.unpacked"),
-    nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch])
+  const target = nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch]);
+  const installedRoot = path.join(resources, "app.asar.unpacked");
+  await assertSelectedNodeRuntimeArtifacts(installedRoot, target);
+  const nodeRoot = path.join(installedRoot, "dist", "node");
+  const selectedPlatforms = readdirSync(path.join(nodeRoot, "releases"));
+  if (selectedPlatforms.length !== 1 || selectedPlatforms[0] !== nodeRuntimeTargetName(target))
+    throw new Error("Packaged application contains an unselected Node runtime target");
+  const selectedVersions = readdirSync(
+    path.join(nodeRoot, "releases", nodeRuntimeTargetName(target))
   );
+  if (selectedVersions.length !== 1 || selectedVersions[0] !== nodeRuntimeIdentity(target))
+    throw new Error("Packaged application contains an unselected Node runtime release");
+  const selectedManifests = readdirSync(path.join(nodeRoot, "selected"));
+  if (selectedManifests.length !== 1 || selectedManifests[0] !== `${nodeRuntimeTargetName(target)}.json`)
+    throw new Error("Packaged application contains an unselected Node runtime selector");
   if (context.electronPlatformName === "win32") {
     const require = createRequire(path.join(context.packager.projectDir, "package.json"));
     const source = `${require.resolve("@cloudflare/workerd-windows-64/bin/workerd.exe")}.manifest`;

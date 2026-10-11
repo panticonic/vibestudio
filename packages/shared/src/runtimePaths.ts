@@ -136,20 +136,61 @@ export function getInstalledNodeRuntime(
 ): { root: string; executable: string; npmCli: string; version: string } {
   if (!/^(linux-(x64|arm64)|darwin-arm64|win32-x64)$/u.test(`${platform}-${arch}`))
     throw new Error(`Unsupported Node runtime target: ${platform}-${arch}`);
-  const root = getPhysicalAppPath(appRoot, `dist/node/${platform}-${arch}`);
+  const physicalRoot = createRuntimeLayout(appRoot).appUnpackedRoot;
+  const key = `${fs.realpathSync.native(physicalRoot)}\0${platform}-${arch}`;
+  const cached = installedNodeRuntimeSelections.get(key);
+  if (cached) return cached;
+  const selectionPath = getPhysicalAppPath(appRoot, `dist/node/selected/${platform}-${arch}.json`);
+  const selection = JSON.parse(fs.readFileSync(selectionPath, "utf8")) as {
+    version?: unknown;
+    platform?: unknown;
+    arch?: unknown;
+    nodeVersion?: unknown;
+    archive?: unknown;
+    archiveSha256?: unknown;
+    directory?: unknown;
+  };
+  if (
+    selection.version !== 1 ||
+    selection.platform !== platform ||
+    selection.arch !== arch ||
+    typeof selection.nodeVersion !== "string" ||
+    !/^\d+\.\d+\.\d+$/u.test(selection.nodeVersion) ||
+    typeof selection.archive !== "string" ||
+    !selection.archive.startsWith(
+      `node-v${selection.nodeVersion}-${platform === "win32" ? "win" : platform}-${arch}.`
+    ) ||
+    typeof selection.archiveSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(selection.archiveSha256) ||
+    selection.directory !== `${selection.nodeVersion}-${selection.archiveSha256}`
+  )
+    throw new Error("Installed Node runtime selection does not match this host");
+  const root = getPhysicalAppPath(
+    appRoot,
+    `dist/node/releases/${platform}-${arch}/${selection.directory}`
+  );
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "runtime.json"), "utf8")) as {
     version?: unknown;
     platform?: unknown;
     arch?: unknown;
   };
   if (
-    typeof manifest.version !== "string" ||
-    !/^\d+\.\d+\.\d+$/u.test(manifest.version) ||
+    manifest.version !== selection.nodeVersion ||
     manifest.platform !== platform ||
     manifest.arch !== arch
   )
     throw new Error("Installed Node runtime metadata does not match this host");
-  return {
+  const receipt = JSON.parse(
+    fs.readFileSync(path.join(root, "vibestudio-runtime.json"), "utf8")
+  ) as { version?: unknown; nodeVersion?: unknown; archive?: unknown; archiveSha256?: unknown };
+  if (
+    receipt.version !== 1 ||
+    receipt.nodeVersion !== selection.nodeVersion ||
+    receipt.archive !== selection.archive ||
+    receipt.archiveSha256 !== selection.archiveSha256
+  )
+    throw new Error("Installed Node runtime receipt does not match its selection");
+  const result = Object.freeze({
     root,
     executable: path.join(root, platform === "win32" ? "node.exe" : "bin/node"),
     npmCli: path.join(
@@ -158,9 +199,16 @@ export function getInstalledNodeRuntime(
         ? "node_modules/npm/bin/npm-cli.js"
         : "lib/node_modules/npm/bin/npm-cli.js"
     ),
-    version: manifest.version,
-  };
+    version: selection.nodeVersion,
+  });
+  installedNodeRuntimeSelections.set(key, result);
+  return result;
 }
+
+const installedNodeRuntimeSelections = new Map<
+  string,
+  { root: string; executable: string; npmCli: string; version: string }
+>();
 
 /** Resolve the directory closure of trusted installed executables/libraries.
  *

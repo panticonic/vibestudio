@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -13,8 +13,14 @@ import {
   nodeRuntimeTarget,
   nodeRuntimeExecutable,
   nodeRuntimeDirectory,
+  nodeRuntimeSelectionPath,
+  nodeRuntimePayloadDirectory,
+  nodeRuntimePayloadSelectionPath,
   verifyNodeRuntimeArchive,
   assertNodeRuntimeArtifacts,
+  assertSelectedNodeRuntimeArtifacts,
+  assertNodeRuntimePayload,
+  stageNodeRuntimePayload,
   stageNodeRuntime,
 } from "./node-runtime-artifacts.mjs";
 
@@ -54,6 +60,10 @@ test(
       await writeFile(path.join(source, "bin", "node"), "#!/bin/sh\nprintf 'runtime-alive'\n");
       const archive = path.join(cache, archiveName);
       await promisify(execFile)("tar", ["-czf", archive, "-C", appRoot, "fixture-node"]);
+      const legacyRuntime = path.join(appRoot, "dist", "node", "linux-x64");
+      await mkdir(legacyRuntime, { recursive: true });
+      await writeFile(path.join(legacyRuntime, "runtime.json"), '{"version":"22.23.2"}\n');
+      const legacyBytes = await readFile(path.join(legacyRuntime, "runtime.json"));
       const target = {
         ...nodeRuntimeTarget("linux", "x64"),
         archive: archiveName,
@@ -67,6 +77,36 @@ test(
       ]);
       assert.deepEqual(results[0], results[1]);
       assert.deepEqual(await assertNodeRuntimeArtifacts(appRoot, target), results[0]);
+      assert.deepEqual(await assertSelectedNodeRuntimeArtifacts(appRoot, target), {
+        ...results[0],
+        selection: JSON.parse(await readFile(nodeRuntimeSelectionPath(appRoot, target), "utf8")),
+      });
+      assert.deepEqual(
+        await readFile(path.join(legacyRuntime, "runtime.json")),
+        legacyBytes,
+        "publishing an upgraded runtime must retain the legacy executable tree byte-for-byte"
+      );
+      await stageNodeRuntimePayload(appRoot, target);
+      assert.deepEqual(await assertNodeRuntimePayload(appRoot, target), {
+        root: nodeRuntimePayloadDirectory(appRoot, target),
+        executable: path.join(nodeRuntimePayloadDirectory(appRoot, target), "bin/node"),
+      });
+      const payloadTargetRoot = path.dirname(nodeRuntimePayloadDirectory(appRoot, target));
+      assert.deepEqual(await readdir(payloadTargetRoot), [path.basename(nodeRuntimePayloadDirectory(appRoot, target))]);
+      await mkdir(path.join(payloadTargetRoot, "older-release"));
+      await assert.rejects(assertNodeRuntimePayload(appRoot, target), /unselected releases/);
+      await rm(path.join(payloadTargetRoot, "older-release"), { recursive: true });
+      const payloadSelection = await readFile(
+        nodeRuntimePayloadSelectionPath(appRoot, target),
+        "utf8"
+      );
+      await writeFile(path.join(nodeRuntimePayloadDirectory(appRoot, target), "bin/node"), "tampered");
+      await assert.rejects(stageNodeRuntimePayload(appRoot, target), /differs from its verified distribution/);
+      assert.equal(
+        await readFile(nodeRuntimePayloadSelectionPath(appRoot, target), "utf8"),
+        payloadSelection,
+        "an unverified existing payload cannot publish a new selection"
+      );
       // A live instance retains this executable path while another instance
       // rebuilds the host. Cleaning compiler output must not retire a runtime.
       await writeFile(path.join(appRoot, "dist", "old-host-entry.js"), "obsolete");
@@ -78,6 +118,13 @@ test(
       await assert.rejects(readFile(path.join(appRoot, "dist", "old-host-entry.js")), {
         code: "ENOENT",
       });
+      await assert.rejects(readdir(path.join(appRoot, "dist", "node-payload")), {
+        code: "ENOENT",
+      });
+      assert.deepEqual(await assertSelectedNodeRuntimeArtifacts(appRoot, target), {
+        ...results[0],
+        selection: JSON.parse(await readFile(nodeRuntimeSelectionPath(appRoot, target), "utf8")),
+      });
       const launch = await promisify(execFile)(results[0].executable, []);
       assert.equal(launch.stdout, "runtime-alive");
       assert.equal((await promisify(execFile)(launcher, [])).stdout, "sandbox-alive");
@@ -87,6 +134,33 @@ test(
     }
   }
 );
+
+test("rejects a selector that names another release instead of falling back", async () => {
+  const appRoot = await mkdtemp(path.join(os.tmpdir(), "node-artifact-selector-"));
+  const target = nodeRuntimeTarget("linux", "x64");
+  try {
+    await mkdir(nodeRuntimeDirectory(appRoot, target), { recursive: true });
+    await mkdir(path.dirname(nodeRuntimeSelectionPath(appRoot, target)), { recursive: true });
+    await writeFile(
+      nodeRuntimeSelectionPath(appRoot, target),
+      JSON.stringify({
+        version: 1,
+        platform: "linux",
+        arch: "x64",
+        nodeVersion: NODE_RUNTIME_VERSION,
+        archive: target.archive,
+        archiveSha256: target.sha256,
+        directory: "../legacy",
+      })
+    );
+    await assert.rejects(
+      assertSelectedNodeRuntimeArtifacts(appRoot, target),
+      /Selected Node runtime differs from its verified distribution/
+    );
+  } finally {
+    await rm(appRoot, { recursive: true, force: true });
+  }
+});
 test("rejects substituted downloads before extraction", () => {
   const content = Buffer.from("verified fixture archive");
   const target = { archive: "fixture", sha256: createHash("sha256").update(content).digest("hex") };

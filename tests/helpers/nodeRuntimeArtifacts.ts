@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { nodeRuntimeTarget, NODE_RUNTIME_VERSION } from "../../scripts/node-runtime-artifacts.mjs";
+import {
+  nodeRuntimeDirectory,
+  nodeRuntimeTarget,
+  NODE_RUNTIME_VERSION,
+} from "../../scripts/node-runtime-artifacts.mjs";
 
 /** Synthetic complete receipt for packaging orchestration tests, never execution. */
 export function writeNodeRuntimeFixture(root: string, platform: string, arch: string) {
   const target = nodeRuntimeTarget(platform, arch);
-  const destination = path.join(root, "dist/node", `${platform}-${arch}`);
+  const destination = nodeRuntimeDirectory(root, target);
   const executable = platform === "win32" ? "node.exe" : "bin/node";
   const files = {
     [executable]: Buffer.from("synthetic toolchain executable; this test only verifies staging"),

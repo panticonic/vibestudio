@@ -20,6 +20,13 @@ import {
   assertNativeIsolationArtifacts,
   nativeIsolationTarget,
 } from "../scripts/native-isolation-artifacts.mjs";
+import {
+  nodeRuntimeIdentity,
+  nodeRuntimeTarget,
+  nodeRuntimeTargetName,
+  stageNodeRuntime,
+  stageNodeRuntimePayload,
+} from "../scripts/node-runtime-artifacts.mjs";
 import { writeNodeRuntimeFixture } from "./helpers/nodeRuntimeArtifacts.js";
 import stageElectronNativeIsolation, {
   assertPackagedNativeIsolation,
@@ -105,6 +112,7 @@ describe("native isolation artifact matrix", () => {
   it("verifies the unpacked helper before signing", async () => {
     const { root, artifactRoot } = fixture();
     const target = nativeIsolationTarget("linux", "arm64");
+    const runtimeTarget = nodeRuntimeTarget("linux", "arm64");
     writeNodeRuntimeFixture(root, "linux", "arm64");
     writeArtifacts(root, artifactRoot, [target]);
     const source = path.join(
@@ -128,9 +136,11 @@ describe("native isolation artifact matrix", () => {
         "app.asar.unpacked",
         target.artifact.replace(/[^/]+$/, "manifest.json")
       );
+      await stageNodeRuntime(root, runtimeTarget);
+      await stageNodeRuntimePayload(root, runtimeTarget);
       cpSync(
-        path.join(root, "dist/node/linux-arm64"),
-        path.join(resources, "app.asar.unpacked/dist/node/linux-arm64"),
+        path.join(root, "dist/node-payload"),
+        path.join(resources, "app.asar.unpacked/dist/node"),
         { recursive: true }
       );
       writeFileSync(installedManifest, readFileSync(sourceManifest));
@@ -165,7 +175,7 @@ describe("native isolation artifact matrix", () => {
     };
     await stageElectronNativeIsolation(context as never);
     const resources = path.join(root, "resources");
-    cpSync(path.join(root, "dist/node"), path.join(resources, "app.asar.unpacked/dist/node"), {
+    cpSync(path.join(root, "dist/node-payload"), path.join(resources, "app.asar.unpacked/dist/node"), {
       recursive: true,
     });
     cpSync(
@@ -185,15 +195,50 @@ describe("native isolation artifact matrix", () => {
 
   it("uses Electron Builder's real resource filter without dropping vendored node_modules", async () => {
     const { root } = fixture();
-    const runtime = path.join(root, "dist/node");
-    mkdirSync(path.join(runtime, "win32-x64/node_modules/corepack/dist"), { recursive: true });
-    mkdirSync(path.join(runtime, "linux-x64/node_modules/other"), { recursive: true });
-    writeFileSync(path.join(runtime, "win32-x64/node.exe"), "windows node");
+    const windowsTarget = nodeRuntimeTarget("win32", "x64");
+    const linuxTarget = nodeRuntimeTarget("linux", "x64");
+    const runtime = path.join(root, "dist/node-payload");
+    const windowsRelease = path.join(
+      runtime,
+      "releases",
+      nodeRuntimeTargetName(windowsTarget),
+      nodeRuntimeIdentity(windowsTarget)
+    );
+    mkdirSync(path.join(windowsRelease, "node_modules/corepack/dist"), { recursive: true });
+    mkdirSync(
+      path.join(
+        runtime,
+        "releases",
+        nodeRuntimeTargetName(linuxTarget),
+        nodeRuntimeIdentity(linuxTarget),
+        "node_modules/other"
+      ),
+      { recursive: true }
+    );
+    mkdirSync(path.join(runtime, "selected"), { recursive: true });
+    writeFileSync(path.join(windowsRelease, "node.exe"), "windows node");
     writeFileSync(
-      path.join(runtime, "win32-x64/node_modules/corepack/dist/corepack.js"),
+      path.join(windowsRelease, "node_modules/corepack/dist/corepack.js"),
       "corepack"
     );
-    writeFileSync(path.join(runtime, "linux-x64/node_modules/other/index.js"), "other");
+    writeFileSync(
+      path.join(
+        runtime,
+        "releases",
+        nodeRuntimeTargetName(linuxTarget),
+        nodeRuntimeIdentity(linuxTarget),
+        "node_modules/other/index.js"
+      ),
+      "other"
+    );
+    writeFileSync(
+      path.join(runtime, "selected", "win32-x64.json"),
+      JSON.stringify({ version: 1, platform: "win32", arch: "x64" })
+    );
+    writeFileSync(
+      path.join(runtime, "selected", "linux-x64.json"),
+      JSON.stringify({ version: 1, platform: "linux", arch: "x64" })
+    );
 
     const builderConfig = parseYaml(readFileSync("electron-builder.yml", "utf8")) as {
       win?: { extraResources?: unknown };
@@ -208,11 +253,28 @@ describe("native isolation artifact matrix", () => {
     await copyFiles(matchers);
 
     const installed = path.join(resources, "app.asar.unpacked/dist/node");
-    expect(existsSync(path.join(installed, "win32-x64/node.exe"))).toBe(true);
     expect(
-      existsSync(path.join(installed, "win32-x64/node_modules/corepack/dist/corepack.js"))
+      existsSync(
+        path.join(
+          installed,
+          "releases/win32-x64",
+          nodeRuntimeIdentity(windowsTarget),
+          "node.exe"
+        )
+      )
     ).toBe(true);
-    expect(existsSync(path.join(installed, "linux-x64/node_modules/other/index.js"))).toBe(false);
+    expect(
+      existsSync(
+        path.join(
+          installed,
+          "releases/win32-x64",
+          nodeRuntimeIdentity(windowsTarget),
+          "node_modules/corepack/dist/corepack.js"
+        )
+      )
+    ).toBe(true);
+    expect(existsSync(path.join(installed, "releases/linux-x64"))).toBe(false);
+    expect(existsSync(path.join(installed, "selected/linux-x64.json"))).toBe(false);
   });
 
   it.each(["source", "target", "checksum", "machine"] as const)(
