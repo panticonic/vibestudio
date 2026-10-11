@@ -3057,4 +3057,4 @@ async function main(parentOwnerSignal) {
   }
 }
 
-await runParentOwnedMain(main);
+await runParentOwnedMain(main, repoRoot);

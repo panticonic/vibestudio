@@ -282,4 +282,4 @@ await runParentOwnedMain(async (ownerSignal) => {
     );
   }
   if (primaryFailure) throw primaryFailure;
-});
+}, process.cwd());

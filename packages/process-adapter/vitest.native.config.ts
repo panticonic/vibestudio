@@ -28,6 +28,7 @@ export default defineConfig({
     // running from. Every other launcher supplies it; this suite spawned hosts
     // with nothing set and they refused to start at all.
     env: {
+      VIBESTUDIO_APP_ROOT: path.resolve(__dirname, "..", ".."),
       VIBESTUDIO_HOST_ARTIFACT_ROOT: path.resolve(__dirname, "..", "..", "dist"),
     },
   },

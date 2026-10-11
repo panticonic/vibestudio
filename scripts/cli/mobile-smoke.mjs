@@ -1971,7 +1971,10 @@ async function main() {
   const { tsImport } = await import("tsx/esm/api");
   const { runParentOwnedMain } = await import("../lib/parent-owned-main.mjs");
   const { createOwnedProcessLifetime } = await tsImport("../development-client-lifecycle.ts", import.meta.url);
-  await runParentOwnedMain(signal => runSmoke(options, signal, createOwnedProcessLifetime));
+  await runParentOwnedMain(
+    signal => runSmoke(options, signal, createOwnedProcessLifetime),
+    repoRoot
+  );
 }
 
 async function runSmoke(options, ownerSignal, createOwnedProcessLifetime) {

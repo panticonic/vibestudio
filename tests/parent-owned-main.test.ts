@@ -37,18 +37,19 @@ it.skipIf(process.platform !== "linux")(
       const work = lifetime.acquire(() => spawn(process.execPath, ["-e", "console.log('ready'); setInterval(() => {}, 1000)"], { detached: true, stdio: ["ignore", "pipe", "inherit"] }));
       try {
         await once(work.stdout, "data");
-        console.log(JSON.stringify({ ready: true, ownerPid: process.pid, workPid: work.pid }));
+        console.log(JSON.stringify({ ready: true, ownerPid: process.pid, workPid: work.pid, appRoot: process.env.VIBESTUDIO_APP_ROOT }));
         await new Promise(done => { if (signal.aborted) done(); else signal.addEventListener("abort", done, { once: true }); });
       } finally {
         if (!process.connected) throw new Error("Explicit cancellation revoked the cleanup lease");
         await lifetime.close();
         await writeFile(${JSON.stringify(receipt)}, JSON.stringify({ retired: true, leaseConnected: process.connected }));
       }
-    });
+    }, ${JSON.stringify(resolve("."))});
   `
     );
     const launcher = spawn(process.execPath, [entry], {
       detached: true,
+      env: { ...process.env, VIBESTUDIO_APP_ROOT: join(scratch, "wrong-root") },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const launcherOwner = OwnedProcessGroup.create(launcher);
@@ -58,7 +59,7 @@ it.skipIf(process.platform !== "linux")(
       errors += chunk;
     });
     try {
-      const ready = await new Promise<{ ownerPid: number; workPid: number }>(
+      const ready = await new Promise<{ ownerPid: number; workPid: number; appRoot: string }>(
         (resolveReady, reject) => {
           let output = "";
           launcher.stdout.on("data", (chunk) => {
@@ -71,6 +72,7 @@ it.skipIf(process.platform !== "linux")(
           launcher.once("exit", (code) => reject(new Error(`Launcher exited ${code}: ${errors}`)));
         }
       );
+      expect(ready.appRoot).toBe(resolve("."));
       identities.push(
         ...[ready.ownerPid, ready.workPid].map((pid) => captureOwnedProcessIdentity(pid))
       );
@@ -135,7 +137,7 @@ it.skipIf(process.platform !== "linux")(
         await secretService?.dispose();
         await lifetime.close();
       }
-    });
+    }, ${JSON.stringify(resolve("."))});
   `
     );
     const launcher = spawn(process.execPath, [entry], {

@@ -196,4 +196,4 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
   }
 }
 
-await runParentOwnedMain(main);
+await runParentOwnedMain(main, repoRoot);

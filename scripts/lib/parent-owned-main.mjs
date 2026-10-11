@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
+import path from "node:path";
 import { createOwnedProcessGroupReceiver } from "@vibestudio/shared/ownedProcessRegistration";
 import { tsImport } from "tsx/esm/api";
 
@@ -11,7 +13,14 @@ const STOP = "vibestudio:parent-owned-stop";
 /** Run resource ownership behind an IPC lease, so a killed launcher cannot
  * skip the owner's finally block. The owner remains alive to retire its
  * children and storage when the kernel revokes that lease. */
-export async function runParentOwnedMain(main) {
+export async function runParentOwnedMain(main, appRoot) {
+  if (typeof appRoot !== "string" || appRoot.length === 0) {
+    throw new TypeError("Parent-owned execution requires its explicit application root");
+  }
+  if (!path.isAbsolute(appRoot) || !statSync(appRoot).isDirectory()) {
+    throw new TypeError("Parent-owned execution requires an existing absolute application root");
+  }
+  process.env["VIBESTUDIO_APP_ROOT"] = appRoot;
   if (process.send) {
     const controller = new AbortController();
     const stop = () => controller.abort();
