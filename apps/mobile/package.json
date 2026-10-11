@@ -27,8 +27,8 @@
     "@vibestudio/mobile-iroh": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
-    "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*",
+    "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/workspace-contracts": "workspace:*",
     "jotai": "^2.17.0",
     "lucide-react-native": "^1.39.0",
@@ -50,6 +50,7 @@
     "web-streams-polyfill": "^3.3.3"
   },
   "devDependencies": {
+    "@babel/plugin-transform-dynamic-import": "^7.29.7",
     "@babel/plugin-transform-export-namespace-from": "^7.25.0",
     "@react-native-community/cli": "^18.0.0",
     "@react-native-community/cli-platform-android": "^18.0.0",

@@ -120,7 +120,12 @@ module.exports = (async () => {
     transform: {
       "^.+\\.[jt]sx?$": [
         require.resolve("babel-jest"),
-        { configFile: path.join(__dirname, "babel.config.js") },
+        {
+          configFile: path.join(__dirname, "babel.config.js"),
+          // Jest executes CommonJS in its VM. Compile lazy schema imports into
+          // that same module system so they use Jest's resolver and transforms.
+          plugins: [require.resolve("@babel/plugin-transform-dynamic-import")],
+        },
       ],
     },
     // React Native and its ecosystem ship untranspiled sources that must be
