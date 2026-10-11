@@ -73,6 +73,7 @@ describe("desktop host-service publication", () => {
       expose: (_method: string, handler: typeof exposed) => {
         exposed = handler;
       },
+      stream: vi.fn(),
     } as unknown as RpcClient;
     const handler = vi.fn(() => "ok");
     exposeServerOriginatedHostMethod(rpc, "desktopProbe.inspect", handler);
@@ -139,6 +140,7 @@ describe("desktop host-service publication", () => {
       exposeStreaming: (_method: string, handler: typeof stream) => {
         stream = handler;
       },
+      stream: vi.fn(),
     } as unknown as RpcClient;
     const exposeHostMethod = vi.fn();
     publishHostService(
@@ -182,6 +184,7 @@ describe("desktop host-service publication", () => {
       exposeStreaming: (_method: string, handler: typeof stream) => {
         stream = handler;
       },
+      stream: vi.fn(),
     } as unknown as RpcClient;
     const cancel = vi.fn();
     exposeServerOriginatedHostStream(

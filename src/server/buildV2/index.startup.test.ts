@@ -817,10 +817,29 @@ describe("BuildSystemV2 startup", () => {
     expect(rebuiltBundle).toBe(warmBundle);
     expect(coldBinding).toEqual(warmBinding);
 
-    const loaded = (await import(
-      `data:text/javascript;base64,${Buffer.from(rebuiltBundle).toString("base64")}`
-    )) as { RetainedWorker?: new () => { marker(): string } };
-    expect(new loaded.RetainedWorker!().marker()).toBe("cold-cache-runtime-loaded");
+    // `cloudflare:workers` is supplied by workerd at runtime. Bind that one
+    // host API while importing the exact retained bytes under Node so this
+    // test exercises the bundle instead of asking Node to implement workerd.
+    const { registerHooks } = await import("node:module");
+    const cloudflareWorkers = `data:text/javascript,${encodeURIComponent(
+      "export class WorkerEntrypoint {}"
+    )}`;
+    const hooks = registerHooks({
+      resolve(specifier, context, nextResolve) {
+        if (specifier === "cloudflare:workers") {
+          return { url: cloudflareWorkers, shortCircuit: true };
+        }
+        return nextResolve(specifier, context);
+      },
+    });
+    try {
+      const loaded = (await import(
+        `data:text/javascript;base64,${Buffer.from(rebuiltBundle).toString("base64")}`
+      )) as { RetainedWorker?: new () => { marker(): string } };
+      expect(new loaded.RetainedWorker!().marker()).toBe("cold-cache-runtime-loaded");
+    } finally {
+      hooks.deregister();
+    }
   }, 60_000);
 
   it("reports an execution as non-reconstructible when its source root is absent", async () => {

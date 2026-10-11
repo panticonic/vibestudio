@@ -237,6 +237,7 @@ it("cancels and joins native alarm work through its correlated RPC owner", async
     const base = requireDevelopmentTemplateCheckout(process.cwd(), "base");
     const source = `
       import { DurableObjectBase } from ${JSON.stringify(join(base, "packages/runtime/src/worker/durable-base.ts"))};
+      import { createNativeModelScopeRpc } from ${JSON.stringify(join(process.cwd(), "tests/helpers/nativeModelScopeRpc.ts"))};
       import { Harness, createRegistry } from '@panticonic/pi-durable';
       import { NativeDatabase, SqliteStorage } from '@panticonic/pi-durable/storage/sqlite';
       import { BACKGROUND_CONTEXT } from '@panticonic/pi-chord/context';
@@ -244,14 +245,14 @@ it("cancels and joins native alarm work through its correlated RPC owner", async
       import { openaiCodexProvider } from '@panticonic/pi-ai/providers/openai-codex';
       import { createCredentialedModelConnection } from ${JSON.stringify(join(base, "packages/agentic-do/src/native-model-transport.ts"))};
       export class Probe extends DurableObjectBase {
-        constructor(ctx,env) { super(ctx,env); this.observations=[]; this.opening=null; this.flight=null; this.terminalFlight=null; this.closed=false; this.alarmEntered=new Promise(resolve=>{this.admitAlarm=resolve;}); }
+        constructor(ctx,env) { super(ctx,env); this.scopeHost=createNativeModelScopeRpc(); this.observations=[]; this.opening=null; this.flight=null; this.terminalFlight=null; this.closed=false; this.alarmEntered=new Promise(resolve=>{this.admitAlarm=resolve;}); }
         createTables() {}
         async open() { return this.opening ??= (async()=>{
           await this.initializeSchema();
           const models=createModels(); const provider=openaiCodexProvider();
           models.setProvider({...provider,auth:{apiKey:{name:'fixture host auth',resolve:async({credential})=>({auth:{apiKey:credential.key},source:'fixture host auth'})}}});
           const storage=await SqliteStorage.open(new NativeDatabase(this.ctx.storage));
-          const harness=await Harness.open(storage,{registry:createRegistry(),models,publishWake:async()=>{},modelRequests:async(request,api,context)=>createCredentialedModelConnection({model:request.model,credential:{id:'fixture',label:'fixture',accountIdentity:{providerUserId:'fixture'},audience:[{url:request.model.baseUrl,match:'path-prefix'}],injection:{type:'header',name:'authorization',valueTemplate:'Bearer {token}'},scopes:[],lifecycle:{state:'active',canRefresh:false}},rpc:{call:async()=>{throw Error('No unary transport');},stream:async()=>{throw Error('No SSE fallback');}},egressFetch:(url,init)=>fetch('http://127.0.0.1:${address.port}/upgrade',init),onDiagnostic:event=>this.observations.push(event)},context)},BACKGROUND_CONTEXT);
+          const harness=await Harness.open(storage,{registry:createRegistry(),models,publishWake:async()=>{},modelRequests:async(request,api,context)=>createCredentialedModelConnection({model:request.model,credential:{id:'fixture',label:'fixture',accountIdentity:{providerUserId:'fixture'},audience:[{url:request.model.baseUrl,match:'path-prefix'}],injection:{type:'header',name:'authorization',valueTemplate:'Bearer {token}'},scopes:[],lifecycle:{state:'active',canRefresh:false}},rpc:{call:async()=>{throw Error('No unary transport');},stream:async()=>{throw Error('No SSE fallback');}},cleanupRpc:this.scopeHost.rpc,egressFetch:(url,init)=>fetch('http://127.0.0.1:${address.port}/upgrade',init),onDiagnostic:event=>this.observations.push(event)},context)},BACKGROUND_CONTEXT);
           const conversation=await harness.root(BACKGROUND_CONTEXT,{agent:{model:{provider:'openai-codex',modelId:'gpt-6.1-sol'},stream:{transport:'websocket',cacheRetention:'none'}}});
           await conversation.submit({type:'input',content:'fixture'},BACKGROUND_CONTEXT); return harness;
         })(); }
@@ -263,7 +264,7 @@ it("cancels and joins native alarm work through its correlated RPC owner", async
           if(path==='/one/fixture-init') { await this.open(); return Response.json({opened:true}); }
           if(path==='/one/fixture-alarm-entered') { await this.alarmEntered; return Response.json({entered:true}); }
           if(path==='/one/fixture-alarm-aborted') { return Response.json({aborted:this.alarmSignal?.aborted===true}); }
-          if(path==='/one/fixture-join') { if(this.flight) await this.flight; if(this.terminalFlight) await this.terminalFlight; return Response.json({closed:this.closed,passFailure:this.passFailure,response:this.response,observations:this.observations}); }
+          if(path==='/one/fixture-join') { if(this.flight) await this.flight; if(this.terminalFlight) await this.terminalFlight; return Response.json({closed:this.closed,passFailure:this.passFailure,response:this.response,observations:this.observations,scopes:this.scopeHost.inspect()}); }
           if(path==='/one/__rpc') {
             const envelope=JSON.parse(await request.clone().text());
             if(envelope.message?.type==='request' && envelope.message.method==='__alarm') {
@@ -449,12 +450,14 @@ it("cancels and joins native alarm work through its correlated RPC owner", async
     const terminal = await observedOriginal;
     expect(terminal).toHaveProperty("value.status", 200);
     expect(terminal).toHaveProperty("value.body.message.type", "response");
-    expect(terminal).toHaveProperty("value.body.message.error", "Harness is closed");
+    expect(terminal).toHaveProperty("value.body.message.error.message", "Harness is closed");
     markStage("join native peer close");
     await peerClosed.promise;
     const joined = await hostRequest("fixture-join");
     observations.push(joined);
     expect(joined).toMatchObject({ status: 200, body: { closed: true } });
+    expect(joined.body.scopes.open).toEqual([]);
+    expect(joined.body.scopes.closed).toHaveLength(1);
     // The provider barrier, correlated cancellation, and lifecycle release
     // prove shutdown joined live work rather than detaching the alarm request.
     expect(joined.body.response).toBeDefined();
@@ -464,7 +467,7 @@ it("cancels and joins native alarm work through its correlated RPC owner", async
       message: "Harness is closed",
     });
     expect(joined.body.response.body.message).toMatchObject({
-      error: "Harness is closed",
+      error: { message: "Harness is closed" },
     });
     // Later host-control calls use the same canonical response envelope and
     // preserve the Harness's terminal failure.
@@ -472,7 +475,7 @@ it("cancels and joins native alarm work through its correlated RPC owner", async
     expect(await hostAlarmRequest(afterClose.envelope)).toMatchObject({
       status: 200,
       body: {
-        message: { type: "response", error: "Harness is closed" },
+        message: { type: "response", error: { message: "Harness is closed" } },
       },
     });
     expect(joined.body.observations).toEqual(

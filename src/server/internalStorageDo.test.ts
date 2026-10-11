@@ -94,15 +94,17 @@ describe("DurableObjectBase exact schema identity", () => {
       message: {
         type: "response",
         requestId: "schema-product-1",
-        errorKind: "service",
-        errorCode: "DO_SCHEMA_INCOMPATIBLE",
-        errorData: {
-          reason: "shape-drift",
-          source: "test",
-          className: "TestDO",
-          objectKey: "test-key",
-          persistedVersion: null,
-          targetVersion: 2,
+        error: {
+          errorKind: "service",
+          code: "DO_SCHEMA_INCOMPATIBLE",
+          errorData: {
+            reason: "shape-drift",
+            source: "test",
+            className: "TestDO",
+            objectKey: "test-key",
+            persistedVersion: null,
+            targetVersion: 2,
+          },
         },
       },
     });

@@ -51,6 +51,35 @@ describe("build diagnostics path normalization", () => {
     expect(diagnostics[0]?.file).toBe("panels/hello/src/App.tsx");
   });
 
+  it("strips an owned esbuild namespace before mapping prepared source coordinates", () => {
+    const sourceRoot = path.join(path.sep, "tmp", "vibestudio-build", "abc123");
+    const namespace = "vibestudio-prepared-file";
+    const failure = {
+      errors: [
+        {
+          text: "Unexpected token",
+          location: {
+            file: `${namespace}:${path.join(sourceRoot, "panels/hello/src/App.tsx")}`,
+            namespace,
+            line: 7,
+            column: 4,
+            length: 1,
+            lineText: "const x = ;",
+          },
+          notes: [],
+        },
+      ],
+      warnings: [],
+    };
+
+    const [diagnostic] = diagnosticsFromError(failure, {
+      workspaceRoot: path.join(path.sep, "workspace"),
+      sourceRoot,
+      unitRelativePath: "panels/hello",
+    });
+    expect(diagnostic?.file).toBe("panels/hello/src/App.tsx");
+  });
+
   it("prefixes unit-relative diagnostic files with the workspace unit path", () => {
     expect(
       workspaceDiagnosticPath("src/index.ts", {

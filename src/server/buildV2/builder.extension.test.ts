@@ -3,10 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@vibestudio/env-paths";
 
-import { buildUnit, initBuilder, closeBuilder } from "./builder.js";
+import { buildUnit, closeBuilder, extensionRuntimeDepsProjected, initBuilder } from "./builder.js";
 import { setBuildRootConfig } from "./effectiveVersion.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
@@ -49,6 +50,40 @@ describe("buildUnit extension builds", () => {
     await closeBuilder();
     await setBuildRootConfig(null);
     fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("requires cached runtime dependencies to belong to the build projection", () => {
+    const projection = path.join(root, "projection");
+    const buildDir = path.join(projection, "build");
+    const bundlePath = path.join(buildDir, "bundle.cjs");
+    const hostDependency = path.join(projection, "node_modules", "fixture-dependency");
+    fs.mkdirSync(hostDependency, { recursive: true });
+    fs.writeFileSync(path.join(hostDependency, "package.json"), '{"main":"index.js"}');
+    fs.writeFileSync(path.join(hostDependency, "index.js"), "module.exports = 'host';\n");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(bundlePath, "module.exports = true;\n");
+
+    // Node's ordinary resolver walks from the bundle into the host's node_modules.
+    expect(() => createRequire(bundlePath).resolve("fixture-dependency")).not.toThrow();
+    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"])).toBe(false);
+
+    // Immutable dependency projections preserve links to their content store. The
+    // store may live outside the build directory, but its package entry is owned
+    // by this build's node_modules projection.
+    const storePackage = path.join(root, "dependency-store", "fixture-dependency");
+    const projectedDependency = path.join(buildDir, "node_modules", "fixture-dependency");
+    fs.mkdirSync(projectedDependency, { recursive: true });
+    fs.writeFileSync(path.join(projectedDependency, "package.json"), '{"main":"missing.js"}');
+    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"])).toBe(false);
+
+    fs.rmSync(projectedDependency, { recursive: true, force: true });
+    fs.mkdirSync(storePackage, { recursive: true });
+    fs.writeFileSync(path.join(storePackage, "package.json"), '{"main":"index.js"}');
+    fs.writeFileSync(path.join(storePackage, "index.js"), "module.exports = 'store';\n");
+    fs.mkdirSync(path.dirname(projectedDependency), { recursive: true });
+    fs.symlinkSync(storePackage, projectedDependency, "dir");
+
+    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"])).toBe(true);
   });
 
   it("builds a workspace extension package as a node ESM bundle with inline sourcemaps", async () => {

@@ -33,7 +33,6 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { builtinModules, createRequire } from "module";
-import { pathToFileURL } from "url";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import { resolveNativeTypeScriptServerPath } from "../appRoot.js";
 import {
@@ -4783,7 +4782,7 @@ async function refreshCachedExtensionRuntimeDeps(result: BuildResult): Promise<v
     result.metadata.details.kind === "extension" ? result.metadata.details : null;
   const deps = extensionDetails?.externalDeps ?? {};
   if (Object.keys(deps).length === 0) return;
-  if (extensionRuntimeDepsResolvable(primaryArtifactFilePath(result), Object.keys(deps))) return;
+  if (extensionRuntimeDepsProjected(primaryArtifactFilePath(result), Object.keys(deps))) return;
 
   const runtimeDeps = await ensureExtensionRuntimeDeps(
     _appRoot,
@@ -4809,12 +4808,24 @@ async function refreshCachedExtensionRuntimeDeps(result: BuildResult): Promise<v
   }
 }
 
-function extensionRuntimeDepsResolvable(bundlePath: string, deps: string[]): boolean {
+export function extensionRuntimeDepsProjected(bundlePath: string, deps: string[]): boolean {
   if (deps.length === 0) return true;
-  const runtimeRequire = createRequire(pathToFileURL(bundlePath).href);
+  const nodeModulesDir = path.join(path.dirname(bundlePath), "node_modules");
+  // Keep this resolver's lookup paths distinct from the bundle's. Node caches
+  // path resolution process-wide, so an earlier host-ancestor lookup from the
+  // bundle can otherwise mask a newly materialized local projection.
+  const runtimeRequire = createRequire(
+    path.join(nodeModulesDir, ".vibestudio-resolver", "resolve.cjs")
+  );
   try {
     for (const dep of deps) {
-      runtimeRequire.resolve(dep);
+      const packageEntry = path.join(nodeModulesDir, ...dep.split("/"));
+      const packageRoot = fs.realpathSync(packageEntry);
+      const resolvedPath = fs.realpathSync(runtimeRequire.resolve(dep));
+      const relative = path.relative(packageRoot, resolvedPath);
+      if (!fs.statSync(packageRoot).isDirectory()) return false;
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+        return false;
     }
     return true;
   } catch {

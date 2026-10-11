@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
+import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
 import { joinChildProcess } from "./lib/join-child-process.mjs";
@@ -14,9 +15,7 @@ import {
 } from "./lib/owned-cleanup.mjs";
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 
-// Overlap CLI startup and cached artifact reads. Build V2 independently bounds
-// compilation; workspace selection stays serial because CLI calls share a profile.
-const RELEASE_VERIFICATION_CONCURRENCY = 6;
+const RELEASE_VERIFIER_RESULT_PREFIX = "VIBESTUDIO_RELEASE_RPC_RESULT:";
 
 /** Ready-file publication and process exit are the owner's authoritative lifecycle edges. */
 export function awaitHubReady(child, readyFile, signal) {
@@ -380,10 +379,13 @@ async function withReleaseConsumerSession(
         );
         server.on("error", (error) => {
           serverError ??= error;
+          if (!stopping) cancellation.abort(serverError);
         });
         server.once("exit", (code, signal) => {
-          if (!stopping)
+          if (!stopping) {
             serverError ??= new Error(`Release build server exited (${signal ?? code}): ${tail}`);
+            cancellation.abort(serverError);
+          }
         });
         closed = joinChildProcess(server);
         for (const stream of [server.stdout, server.stderr])
@@ -439,6 +441,16 @@ async function withReleaseConsumerSession(
           scratch,
           resources,
           env,
+          runBuildBatch: (sources) =>
+            runInstalledRpcBatch({
+              executable,
+              runnerEntry: path.join(path.dirname(cliEntry), "releaseVerifierRunner.mjs"),
+              cliEntry,
+              sources,
+              env,
+              scratch,
+              signal: cancellation.signal,
+            }),
           signal: cancellation.signal,
         });
         cancellation.signal.throwIfAborted();
@@ -595,7 +607,7 @@ export async function verifyReleaseUserland(context) {
   await withInstalledReleaseSession(context, verifyPreparedReleaseUserland);
 }
 
-export async function verifyPreparedReleaseUserland({ cli, pair, resources, env }) {
+export async function verifyPreparedReleaseUserland({ cli, pair, resources, env, runBuildBatch }) {
   const manifest = JSON.parse(
     await fsp.readFile(path.join(resources, "userland-builds/release.json"), "utf8")
   );
@@ -613,62 +625,208 @@ export async function verifyPreparedReleaseUserland({ cli, pair, resources, env 
     await cli(["remote", "select", workspace.name]);
     const records = manifest.builds.filter((record) => record.workspace === kind);
     if (records.length === 0) throw new Error(`Release has no prepared artifacts for ${kind}`);
-    await runBoundedJoined(records, RELEASE_VERIFICATION_CONCURRENCY, async (record) => {
+    for (const record of records)
       console.log(`[release-builds] Verifying ${kind}: ${record.source}`);
-      const result = await cli([
-        "agent",
-        "call",
-        "build.getBuild",
-        JSON.stringify([record.source]),
-      ]);
-      const key = result.bundle?.buildKey ?? result.buildKey;
-      if (key !== record.buildKey)
-        throw new Error(
-          `Release build identity changed for ${kind}:${record.source}: ${key} != ${record.buildKey}`
+    const batch = await runBuildBatch(records.map((record) => record.source));
+    const failures = [];
+    for (const [index, record] of records.entries()) {
+      const outcome = batch.outcomes[index];
+      if (!outcome || outcome.source !== record.source) {
+        failures.push(
+          new Error(`Release verifier omitted ordered result for ${kind}:${record.source}`)
         );
-      const local = path.join(
-        env.VIBESTUDIO_INSTANCE_ROOT,
-        "workspaces",
-        workspace.name,
-        "state",
-        "builds",
-        key
+        continue;
+      }
+      if (outcome.status === "rejected") {
+        failures.push(outcome.failure);
+        continue;
+      }
+      const key = outcome.buildKey;
+      if (key !== record.buildKey) {
+        failures.push(
+          new Error(
+            `Release build identity changed for ${kind}:${record.source}: ${key} != ${record.buildKey}`
+          )
+        );
+        continue;
+      }
+      try {
+        const local = path.join(
+          env.VIBESTUDIO_INSTANCE_ROOT,
+          "workspaces",
+          workspace.name,
+          "state",
+          "builds",
+          key
+        );
+        const metadata = JSON.parse(await fsp.readFile(path.join(local, "metadata.json"), "utf8"));
+        if (metadata.builtAt !== record.builtAt)
+          throw new Error(
+            `Fresh installation rebuilt ${kind}:${record.source} instead of reusing its release artifact`
+          );
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (batch.outcomes.length !== records.length)
+      failures.push(
+        new Error(
+          `Release verifier returned ${batch.outcomes.length} results for ${records.length} artifacts in ${kind}`
+        )
       );
-      const metadata = JSON.parse(await fsp.readFile(path.join(local, "metadata.json"), "utf8"));
-      if (metadata.builtAt !== record.builtAt)
-        throw new Error(
-          `Fresh installation rebuilt ${kind}:${record.source} instead of reusing its release artifact`
-        );
-      return record;
-    });
+    if (batch.cleanupFailure) failures.push(batch.cleanupFailure);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Release artifact verification failed", {
+        cause: failures[0],
+      });
     verified += records.length;
   }
   console.log(`[release-builds] Verified ${verified} exact artifacts in a fresh installation`);
 }
 
-async function runBoundedJoined(items, concurrency, operation) {
-  const outcomes = new Array(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-      while (next < items.length) {
-        const index = next++;
-        try {
-          outcomes[index] = { status: "fulfilled", value: await operation(items[index]) };
-        } catch (reason) {
-          outcomes[index] = { status: "rejected", reason };
-        }
-      }
-    })
-  );
-  const failures = outcomes
-    .filter((outcome) => outcome.status === "rejected")
-    .map((outcome) => outcome.reason);
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Release artifact verification failed", {
-      cause: failures[0],
+export async function runInstalledRpcBatch({
+  executable,
+  runnerEntry,
+  cliEntry,
+  sources,
+  env,
+  scratch,
+  signal,
+}) {
+  const inputPath = path.join(scratch, "release-verifier-input.json");
+  await fsp.writeFile(inputPath, JSON.stringify({ cliEntry, sources }), { mode: 0o600 });
+  let result;
+  let primaryFailure;
+  try {
+    const child = spawn(executable, [runnerEntry, inputPath], {
+      env,
+      cwd: scratch,
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
+    const joined = joinChildProcess(child);
+    let stdout = "";
+    let stderr = "";
+    let spawnFailure;
+    child.on("error", (error) => (spawnFailure = error));
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr = (stderr + chunk).slice(-8192)));
+    let cancelDelivery;
+    let cancelDeliveryFailure;
+    const deliverCancellation = () => {
+      if (cancelDelivery) return;
+      cancelDelivery = new Promise((resolve) => {
+        if (!child.connected || child.exitCode !== null || child.signalCode !== null) {
+          resolve();
+          return;
+        }
+        try {
+          child.send(
+            {
+              type: "cancel",
+              failure: serializeRpcFailure(
+                signal.reason ?? new Error("Release verification was cancelled")
+              ),
+            },
+            (error) => {
+              if (error && child.exitCode === null && child.signalCode === null) {
+                cancelDeliveryFailure = error;
+                try {
+                  child.kill();
+                } catch (killError) {
+                  cancelDeliveryFailure = new AggregateError(
+                    [error, killError],
+                    "Could not deliver cancellation or retire the release verifier",
+                    { cause: error }
+                  );
+                }
+              }
+              resolve();
+            }
+          );
+        } catch (error) {
+          if (child.exitCode === null && child.signalCode === null) {
+            cancelDeliveryFailure = error;
+            try {
+              child.kill();
+            } catch (killError) {
+              cancelDeliveryFailure = new AggregateError(
+                [error, killError],
+                "Could not deliver cancellation or retire the release verifier",
+                { cause: error }
+              );
+            }
+          }
+          resolve();
+        }
+      });
+    };
+    const onAbort = () => deliverCancellation();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) deliverCancellation();
+    const terminal = await joined;
+    signal?.removeEventListener("abort", onAbort);
+    await cancelDelivery;
+    const resultLine = stdout
+      .split(/\r?\n/u)
+      .find((line) => line.startsWith(RELEASE_VERIFIER_RESULT_PREFIX));
+    const payload = resultLine
+      ? JSON.parse(resultLine.slice(RELEASE_VERIFIER_RESULT_PREFIX.length))
+      : {};
+    const outcomes = (payload.outcomes ?? []).map((outcome) =>
+      outcome.status === "rejected"
+        ? { ...outcome, failure: deserializeRpcFailure(outcome.failure) }
+        : outcome
+    );
+    const failures = [
+      ...(signal?.aborted ? [signal.reason] : []),
+      ...(payload.fatal ? [deserializeRpcFailure(payload.fatal)] : []),
+      ...outcomes.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.failure] : [])),
+      ...(payload.cleanupFailure ? [deserializeRpcFailure(payload.cleanupFailure)] : []),
+      ...(cancelDeliveryFailure ? [cancelDeliveryFailure] : []),
+      ...(!resultLine
+        ? [
+            terminal.error ??
+              spawnFailure ??
+              new Error(`Release verifier runner returned no result: ${stderr}`),
+          ]
+        : []),
+      ...(terminal.error || spawnFailure || terminal.signal || terminal.code !== 0
+        ? [
+            terminal.error ??
+              spawnFailure ??
+              new Error(
+                `Release verifier runner exited (${terminal.signal ?? terminal.code}): ${stderr}`
+              ),
+          ]
+        : []),
+    ];
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Release RPC batch failed", {
+        cause: signal?.aborted ? signal.reason : failures[0],
+      });
+    result = {
+      outcomes,
+    };
+  } catch (error) {
+    primaryFailure = error;
   }
-  return outcomes.map((outcome) => outcome.value);
+  let cleanupFailure;
+  try {
+    await fsp.rm(inputPath, { force: true });
+  } catch (error) {
+    cleanupFailure = error;
+  }
+  if (primaryFailure && cleanupFailure)
+    throw new AggregateError(
+      [primaryFailure, cleanupFailure],
+      "Release verifier input cleanup failed",
+      {
+        cause: primaryFailure,
+      }
+    );
+  if (primaryFailure) throw primaryFailure;
+  if (cleanupFailure) throw cleanupFailure;
+  return result;
 }

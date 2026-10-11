@@ -3052,8 +3052,14 @@ describe("EgressProxy", () => {
         });
         expect(failure.status).toBe(500);
         expect(JSON.parse(failure.body)).toMatchObject({
-          errorCode: "ECONNRESET",
-          errorData: { phase: "response" },
+          error: {
+            code: "ECONNRESET",
+            errorData: { phase: "response" },
+            cause: {
+              code: "ECONNRESET",
+              errorData: { phase: "response" },
+            },
+          },
         });
       }
       const blocked = await requestThroughHttpProxy({

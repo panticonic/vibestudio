@@ -371,9 +371,11 @@ async function waitForRun(
   const connection = scope.client;
   const release = connection.retainConnection();
   let consecutiveReadFailures = 0;
+  let status: EvalStatus | undefined;
+  let operationFailure: unknown;
+  let operationFailed = false;
   try {
     for (;;) {
-      let status: EvalStatus;
       try {
         status = await readRunState(scope, stored);
         consecutiveReadFailures = 0;
@@ -388,17 +390,35 @@ async function waitForRun(
           // one-invocation attestation retention window. Status reads are
           // idempotent, so force the next poll through a newly authenticated
           // transport instead of surfacing a false system-test failure.
-          await connection.close().catch(() => undefined);
+          await connection.close();
         }
         await new Promise((resolve) => setTimeout(resolve, pollMs));
         continue;
       }
-      if (!["pending", "running", "cancelling"].includes(status.status)) return status;
+      if (!["pending", "running", "cancelling"].includes(status.status)) break;
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
-  } finally {
-    await release();
+  } catch (error) {
+    operationFailure = error;
+    operationFailed = true;
   }
+  let cleanupFailure: unknown;
+  let cleanupFailed = false;
+  try {
+    await release();
+  } catch (error) {
+    cleanupFailure = error;
+    cleanupFailed = true;
+  }
+  if (operationFailed && cleanupFailed)
+    throw new AggregateError(
+      [operationFailure, cleanupFailure],
+      "System-test status wait and connection cleanup failed",
+      { cause: operationFailure }
+    );
+  if (operationFailed) throw operationFailure;
+  if (cleanupFailed) throw cleanupFailure;
+  return status!;
 }
 
 function isStaleSystemTestStatusAttestation(error: unknown): boolean {

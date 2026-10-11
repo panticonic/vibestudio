@@ -7,7 +7,12 @@ import { createShellApprovalService } from "../server/services/shellApprovalServ
 import { approvalCommands } from "./approvalCommands.js";
 import { parseInvocation } from "./commandTable.js";
 
-const rpc = vi.hoisted(() => ({ call: vi.fn(), stream: vi.fn(), close: vi.fn() }));
+const rpc = vi.hoisted(() => ({
+  call: vi.fn(),
+  callTarget: vi.fn(),
+  stream: vi.fn(),
+  close: vi.fn(),
+}));
 const credentials = vi.hoisted(() => vi.fn());
 vi.mock("./rpcClient.js", () => ({
   RpcClient: vi.fn(function () {
@@ -37,6 +42,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   credentials.mockReturnValue({ kind: "device", workspaceName: "desktop-workspace" });
   rpc.close.mockResolvedValue(undefined);
+  rpc.callTarget.mockResolvedValue(undefined);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -271,6 +277,7 @@ describe("approval watch ownership", () => {
       [["shell-approval:pending-changed", "shell-approval:resolved"], expect.any(String)],
       { signal: expect.any(AbortSignal), bodyIdleTimeoutMs: null }
     );
+    expect(rpc.stream.mock.calls[0]![3].signal.aborted).toBe(true);
     expect(rpc.close).toHaveBeenCalledOnce();
     expect(process.listenerCount("SIGINT")).toBe(initialSigint);
     expect(process.listenerCount("SIGTERM")).toBe(initialSigterm);

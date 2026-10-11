@@ -2,10 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { discoverPackageGraph } from "./packageGraph.js";
 import { computeEffectiveVersions, setBuildRootConfig } from "./effectiveVersion.js";
 import { setBuildSourceProvider, type BuildSourceProvider } from "./buildSource.js";
+import { closeBuilder, initBuilder } from "./builder.js";
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import { StateTransitionTrigger, type WorkspaceStateSource } from "./stateTrigger.js";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 
@@ -22,6 +25,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-grouppush-"));
     workspaceRoot = path.join(root, "workspace");
+    setUserDataPath(path.join(root, "state"));
     await setBuildRootConfig({ appRoot: process.cwd(), workspaceRoot });
     for (const name of ["a", "b"]) {
       const dir = path.join(workspaceRoot, "packages", name);
@@ -37,6 +41,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
   afterEach(async () => {
     trigger?.stop();
     trigger = null;
+    await closeBuilder();
     setBuildSourceProvider(null);
     await setBuildRootConfig(null);
     fs.rmSync(root, { recursive: true, force: true });
@@ -141,6 +146,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
   });
 
   it("settles graph state without waiting for speculative cache warming", async () => {
+    initBuilder(path.join(process.cwd(), "node_modules"), process.cwd(), runIsolatedBuildJob);
     const panelDir = path.join(workspaceRoot, "workers", "slow-worker");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
@@ -200,6 +206,10 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       source,
     });
     trigger.start();
+    const warmingFinished = new Promise<void>((resolve) => {
+      trigger!.once("build-complete", resolve);
+      trigger!.once("build-error", resolve);
+    });
     publicationCb!({
       ...makeEvent("state:X"),
       changedPaths: ["workers/slow-worker/index.ts"],
@@ -222,5 +232,6 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
     ]);
     expect(trigger.getState().stateHash).toBe("state:X");
     releaseMaterialization();
+    await warmingFinished;
   });
 });

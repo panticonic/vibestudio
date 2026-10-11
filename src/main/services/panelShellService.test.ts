@@ -80,9 +80,10 @@ function createServiceHarness(
       artifacts: {},
     })
   );
-  const getViewInfo = vi.fn(() => ({
+  const getViewInfo = vi.fn((runtimeId: string) => ({
     type: "app",
-    workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
+    workspaceIdentity: { workspaceId: "workspace-test", runtimeId },
+    hostChrome: runtimeId === "@workspace-apps/shell",
     visible: true,
     bounds: { x: 0, y: 0, width: 100, height: 100 },
     capabilities: appCapabilities,

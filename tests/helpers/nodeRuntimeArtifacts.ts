@@ -3,6 +3,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   nodeRuntimeDirectory,
+  nodeRuntimeIdentity,
+  nodeRuntimeSelectionPath,
   nodeRuntimeTarget,
   NODE_RUNTIME_VERSION,
 } from "../../scripts/node-runtime-artifacts.mjs";
@@ -43,4 +45,16 @@ export function writeNodeRuntimeFixture(
       ),
     })
   );
+  const selection = {
+    version: 1,
+    platform: target.platform,
+    arch: target.arch,
+    nodeVersion: NODE_RUNTIME_VERSION,
+    archive: target.archive,
+    archiveSha256: target.sha256,
+    directory: nodeRuntimeIdentity(target),
+  };
+  const selected = nodeRuntimeSelectionPath(root, target);
+  mkdirSync(path.dirname(selected), { recursive: true });
+  writeFileSync(selected, `${JSON.stringify(selection)}\n`);
 }

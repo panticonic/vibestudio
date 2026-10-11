@@ -19,6 +19,105 @@ function writePackage(nodeModules: string, name: string, marker: string): void {
 }
 
 describe("dependency-environment resolver", () => {
+  it("uses stable virtual identities for prepared files and retains physical diagnostics", async () => {
+    const build = async (prefix: string) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+      const source = path.join(root, "source");
+      const entry = path.join(source, "entry.js");
+      fs.mkdirSync(source, { recursive: true });
+      fs.writeFileSync(entry, 'export const marker = "stable";\n');
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "cjs",
+        platform: "node",
+        write: false,
+        logLevel: "silent",
+        plugins: composePreparedDependencyPlugins([], [], [source]),
+      });
+      return { root, source, entry, result };
+    };
+
+    const first = await build("vibestudio-prepared-source-first-");
+    const second = await build("vibestudio-prepared-source-second-");
+    try {
+      expect(first.result.outputFiles[0]?.text).toBe(second.result.outputFiles[0]?.text);
+
+      const broken = path.join(first.source, "broken.js");
+      fs.writeFileSync(broken, "const broken = );\n");
+      const failure = await esbuild
+        .build({
+          entryPoints: [broken],
+          bundle: true,
+          write: false,
+          logLevel: "silent",
+          plugins: composePreparedDependencyPlugins([], [], [first.source]),
+        })
+        .catch((error: unknown) => error as esbuild.BuildFailure);
+      expect(failure.errors[0]?.location?.file).toBe(broken);
+    } finally {
+      fs.rmSync(first.root, { recursive: true, force: true });
+      fs.rmSync(second.root, { recursive: true, force: true });
+    }
+  });
+
+  it("assigns duplicate package roots identities from their owner, not discovery order", async () => {
+    const build = async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-duplicate-package-roots-"));
+      const source = path.join(root, "source");
+      const firstModules = path.join(root, "first", "node_modules");
+      const secondModules = path.join(root, "second", "node_modules");
+      const writeModule = (base: string, name: string, contents: string) => {
+        const directory = path.join(base, ...name.split("/"));
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(
+          path.join(directory, "package.json"),
+          JSON.stringify({ name, version: "1.0.0", type: "module", exports: "./index.js" })
+        );
+        fs.writeFileSync(path.join(directory, "index.js"), contents);
+      };
+      fs.mkdirSync(source, { recursive: true });
+      writeModule(firstModules, "left", 'export { marker } from "duplicate";\n');
+      writeModule(
+        path.join(firstModules, "left", "node_modules"),
+        "duplicate",
+        'export const marker = "first";\n'
+      );
+      writeModule(secondModules, "right", 'export { marker } from "duplicate";\n');
+      writeModule(
+        path.join(secondModules, "right", "node_modules"),
+        "duplicate",
+        'export const marker = "second";\n'
+      );
+      const entry = path.join(source, "entry.js");
+      fs.writeFileSync(
+        entry,
+        'import { marker as left } from "left"; import { marker as right } from "right"; export { left, right };\n'
+      );
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        write: false,
+        logLevel: "silent",
+        plugins: composePreparedDependencyPlugins([], [firstModules, secondModules], [source]),
+      });
+      return { root, output: result.outputFiles[0]?.text };
+    };
+
+    const first = await build();
+    const second = await build();
+    try {
+      expect(first.output).toBe(second.output);
+      expect(first.output).toContain('"first"');
+      expect(first.output).toContain('"second"');
+    } finally {
+      fs.rmSync(first.root, { recursive: true, force: true });
+      fs.rmSync(second.root, { recursive: true, force: true });
+    }
+  });
+
   it("preserves global plugin callbacks and resolves imports from owned virtual modules", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-virtual-runtime-module-"));
     try {

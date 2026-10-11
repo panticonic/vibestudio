@@ -54,6 +54,11 @@ function requireWorkspaceCredentials(): CliCredentials {
   return creds;
 }
 
+/** Create the canonical RPC client for the CLI's currently selected workspace. */
+export function createSelectedWorkspaceClient(): RpcClient {
+  return new RpcClient(requireWorkspaceCredentials());
+}
+
 function sessionName(inv: ParsedInvocation): string {
   const name = inv.positionals[0] ?? DEFAULT_SESSION;
   if (!isValidSessionName(name)) {
@@ -349,7 +354,7 @@ async function call(inv: ParsedInvocation): Promise<number> {
       if (!Array.isArray(parsed)) throw new UsageError("ARGS_JSON must be a JSON array");
       args = parsed;
     }
-    const client = new RpcClient(requireWorkspaceCredentials());
+    const client = createSelectedWorkspaceClient();
     let result: unknown;
     if (target) {
       result = await client.callTarget(target, method, args);
@@ -368,7 +373,7 @@ async function call(inv: ParsedInvocation): Promise<number> {
 async function services(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const docs = typedClient("docs", docsMethods, new RpcClient(requireWorkspaceCredentials()));
+    const docs = typedClient("docs", docsMethods, createSelectedWorkspaceClient());
     const name = inv.positionals[0];
     if (name) {
       const def = await docs.describeService(name);
@@ -466,11 +471,7 @@ async function logs(inv: ParsedInvocation): Promise<number> {
       }
       options.limit = limit;
     }
-    const runtime = typedClient(
-      "runtime",
-      runtimeMethods,
-      new RpcClient(requireWorkspaceCredentials())
-    );
+    const runtime = typedClient("runtime", runtimeMethods, createSelectedWorkspaceClient());
     const matches = (await runtime.supervision.list()).filter(
       (entry) =>
         entry.identity.entityId === unit || entry.source === unit || entry.displayName === unit
@@ -510,11 +511,7 @@ async function diag(inv: ParsedInvocation): Promise<number> {
       }
       options.limit = limit;
     }
-    const runtime = typedClient(
-      "runtime",
-      runtimeMethods,
-      new RpcClient(requireWorkspaceCredentials())
-    );
+    const runtime = typedClient("runtime", runtimeMethods, createSelectedWorkspaceClient());
     const matches = (await runtime.supervision.list()).filter(
       (entry) =>
         entry.identity.entityId === unit || entry.source === unit || entry.displayName === unit

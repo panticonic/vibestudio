@@ -13,6 +13,7 @@ function baseFixture(paths: Record<string, string[]>): string {
     path.join(root, "tsconfig.json"),
     JSON.stringify({ compilerOptions: { paths } })
   );
+  fs.mkdirSync(path.join(root, "packages"));
   return root;
 }
 
@@ -24,10 +25,12 @@ describe("hostSourceAliases", () => {
   it("resolves tsconfig path targets from the config directory", () => {
     const baseRoot = baseFixture({ "@vibestudio/durable": ["./packages/durable/src/index.ts"] });
     const aliases = hostSourceAliases(baseRoot);
-    const durable = aliases.find((alias) => alias.find === "@vibestudio/durable");
+    const durable = aliases.find(
+      (alias) => alias.find instanceof RegExp && alias.find.test("@vibestudio/durable")
+    );
 
     expect(durable).toEqual({
-      find: "@vibestudio/durable",
+      find: /^@vibestudio\/durable$/,
       replacement: path.resolve(baseRoot, "packages/durable/src/index.ts"),
     });
   });

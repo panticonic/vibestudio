@@ -36,7 +36,7 @@ import {
 } from "./remoteClient.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { runTerminalLaunchGate } from "./terminalLaunchGate.js";
-import { agentCommands } from "./agent/index.js";
+import { agentCommands, createSelectedWorkspaceClient } from "./agent/index.js";
 import { fsCommands } from "./agent/fsCommands.js";
 import { vcsCommands } from "./agent/vcsCommands.js";
 import { evalCommands } from "./agent/evalCommand.js";
@@ -1230,6 +1230,8 @@ export function installBrokenPipeHandler(
   stream.on("error", onError);
   return () => stream.off("error", onError);
 }
+
+export { createSelectedWorkspaceClient };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // stdout belongs to command results (including binary and JSON output).

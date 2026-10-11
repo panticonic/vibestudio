@@ -40,7 +40,13 @@ import { isAuthorizedChrome } from "./chromeTrust.js";
 import { requireReviewedSourceConsumer } from "./workspaceTemplateSourceService.js";
 
 export interface VcsServiceDeps {
-  workspaceVcs: WorkspaceVcs;
+  workspaceVcs: Pick<
+    WorkspaceVcs,
+    | "semanticCausalCall"
+    | "semanticPublishCall"
+    | "semanticEpochTransitionPublishCall"
+    | "referencesReachable"
+  >;
   entityCache?: Pick<EntityCache, "resolveContext" | "resolveActive">;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   listOwnedContexts?: (input: { contextId: string }) => Promise<{

@@ -42,6 +42,7 @@ describe("buildPlatformLibrary", () => {
   });
 
   it("rebuilds an edited platform implementation without changing its package coordinates", async () => {
+    await closeBuilder();
     const appRoot = path.join(root, "host");
     const packageRoot = path.join(appRoot, "packages/probe");
     const installedRoot = path.join(appRoot, "node_modules/@vibestudio");

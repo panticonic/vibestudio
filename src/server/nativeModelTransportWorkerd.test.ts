@@ -94,6 +94,7 @@ it.each(["complete", "cancel"] as const)(
               type: "message",
               id: "fixture-message",
               role: "assistant",
+              phase: "final_answer",
               status: "completed",
               content: [{ type: "output_text", text: "Fixture answer.", annotations: [] }],
             };
@@ -136,6 +137,7 @@ it.each(["complete", "cancel"] as const)(
       const templateBase = requireDevelopmentTemplateCheckout(process.cwd(), "base");
       const transportPath = join(templateBase, "packages/agentic-do/src/native-model-transport.ts");
       const source = `
+      import { createNativeModelScopeRpc } from ${JSON.stringify(resolve("tests/helpers/nativeModelScopeRpc.ts"))};
       import { Harness, createRegistry } from '@panticonic/pi-durable';
       import { NativeDatabase, SqliteStorage } from '@panticonic/pi-durable/storage/sqlite';
       import { BACKGROUND_CONTEXT } from '@panticonic/pi-chord/context';
@@ -144,7 +146,7 @@ it.each(["complete", "cancel"] as const)(
       import { createCredentialedModelConnection } from ${JSON.stringify(transportPath)};
       const providerRoot = 'http://127.0.0.1:${address.port}';
       export class Probe {
-        constructor(ctx) { this.ctx = ctx; this.opening = null; this.diagnostics = []; this.submission = null; }
+        constructor(ctx) { this.scopeHost = createNativeModelScopeRpc(); this.ctx = ctx; this.opening = null; this.diagnostics = []; this.submission = null; }
         async harness() {
           return this.opening ??= (async () => {
             const models = createModels();
@@ -153,7 +155,7 @@ it.each(["complete", "cancel"] as const)(
             models.setProvider({ ...provider, auth: { apiKey: { name: 'fixture host auth', resolve: async ({credential}) => ({auth:{apiKey:credential.key}, source:'fixture host auth'}) } } });
             const storage = await SqliteStorage.open(new NativeDatabase(this.ctx.storage));
             return Harness.open(storage, { models, registry: createRegistry(), publishWake: async () => {}, modelRequests: async (request, api, context) => {
-              return createCredentialedModelConnection({ model: request.model, credential: { id: 'fixture-credential', label: 'fixture', accountIdentity: {providerUserId:'fixture-account'}, audience:[{url:request.model.baseUrl,match:'path-prefix'}], injection:{type:'header',name:'authorization',valueTemplate:'Bearer {token}'}, scopes:[], lifecycle:{state:'active',canRefresh:false} }, rpc:{call:async()=>{throw new Error('No unary transport');}, stream:async()=>{throw new Error('No SSE fallback expected');}}, egressFetch: (url, init) => fetch(providerRoot + '/upgrade', init), onDiagnostic: (event) => { this.diagnostics.push(event); console.info("[NativeProbeTransport] " + JSON.stringify(event)); } }, context);
+              return createCredentialedModelConnection({ model: request.model, credential: { id: 'fixture-credential', label: 'fixture', accountIdentity: {providerUserId:'fixture-account'}, audience:[{url:request.model.baseUrl,match:'path-prefix'}], injection:{type:'header',name:'authorization',valueTemplate:'Bearer {token}'}, scopes:[], lifecycle:{state:'active',canRefresh:false} }, rpc:{call:async()=>{throw new Error('No unary transport');}, stream:async()=>{throw new Error('No SSE fallback expected');}}, cleanupRpc:this.scopeHost.rpc, egressFetch: (url, init) => fetch(providerRoot + '/upgrade', init), onDiagnostic: (event) => { this.diagnostics.push(event); console.info("[NativeProbeTransport] " + JSON.stringify(event)); } }, context);
             } }, BACKGROUND_CONTEXT);
           })();
         }
@@ -161,7 +163,7 @@ it.each(["complete", "cancel"] as const)(
           if (new URL(request.url).pathname === '/inspect') {
             if (!this.opening) return Response.json({admitted:false});
             const harness = await this.opening;
-            if (this.closed) return Response.json({closed:true,diagnostics:this.diagnostics});
+            if (this.closed) return Response.json({closed:true,diagnostics:this.diagnostics,scopes:this.scopeHost.inspect()});
             const current = await harness.inspect(BACKGROUND_CONTEXT);
             return Response.json({scheduling:current.scheduling, tasks:current.tasks.map(({record,state})=>({id:record.id,name:record.name,status:record.status,phase:record.checkpoint?.phase,state:state.kind})), submissions:current.submissions.map((s)=>({id:s.id,status:s.status})), diagnostics:this.diagnostics});
           }
@@ -257,7 +259,14 @@ it.each(["complete", "cancel"] as const)(
         (response) => response.json()
       );
       ownedFetches.push(original);
-      await sent.promise;
+      await Promise.race([
+        sent.promise,
+        original.then((result) => {
+          throw new Error("Native model submission settled before provider admission", {
+            cause: result,
+          });
+        }),
+      ]);
       expect(requestType).toBe("response.create");
       if (mode === "cancel") {
         const cancelling = fetch(`http://${endpoint}/cancel`, { signal: requests.signal }).then(
@@ -274,6 +283,8 @@ it.each(["complete", "cancel"] as const)(
       const retained = await (
         await fetch(`http://${endpoint}/inspect`, { signal: requests.signal })
       ).json();
+      expect(retained.scopes.open).toEqual([]);
+      expect(retained.scopes.closed).toHaveLength(1);
       observations.push(...retained.diagnostics);
       await peerClosed.promise;
       if (mode === "complete") {

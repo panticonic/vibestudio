@@ -203,8 +203,10 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
         message: {
           type: "response",
           requestId: "request-1",
-          errorKind: "transport",
-          errorCode: "CONNECTION_LOST",
+          error: {
+            errorKind: "transport",
+            code: "CONNECTION_LOST",
+          },
         },
       },
     });

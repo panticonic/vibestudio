@@ -31,7 +31,18 @@ describe("WorkspaceClient", () => {
 
       const result = await client.getActive();
 
-      expect(rpc.call).toHaveBeenCalledWith("main", "workspace.getActive", []);
+      expect(rpc.call).toHaveBeenCalledOnce();
+      const [target, method, args, options] = rpc.call.mock.calls[0]!;
+      expect(target).toBe("main");
+      expect(method).toMatchObject({ name: "workspace.getActive" });
+      expect(method).toEqual(
+        expect.objectContaining({
+          invoke: expect.any(Function),
+          parseArgs: expect.any(Function),
+        })
+      );
+      expect(args).toEqual([]);
+      expect(options).toBeUndefined();
       expect(result).toBe("default");
     });
   });

@@ -232,6 +232,10 @@ function esbuildMessageToDiagnostic(
   contextOrWorkspaceRoot?: string | DiagnosticPathContext
 ): BuildDiagnostic {
   const loc = msg.location;
+  const namespacedFile =
+    loc?.namespace && loc.file.startsWith(`${loc.namespace}:`)
+      ? loc.file.slice(loc.namespace.length + 1)
+      : (loc?.file ?? "");
   const suggestion =
     loc?.suggestion && loc.suggestion.length > 0
       ? loc.suggestion
@@ -242,7 +246,7 @@ function esbuildMessageToDiagnostic(
   return {
     source: "esbuild",
     severity,
-    file: workspaceDiagnosticPath(loc?.file ?? "", contextOrWorkspaceRoot),
+    file: workspaceDiagnosticPath(namespacedFile, contextOrWorkspaceRoot),
     // esbuild line is 1-based; column is 0-based byte offset on the line.
     line: loc?.line ?? 0,
     column: loc?.column ?? 0,

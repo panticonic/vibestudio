@@ -62,6 +62,18 @@ function publicTargets(manifest: PackageManifest): string[] {
   );
 }
 
+function exportedTargets(
+  value: unknown,
+  conditions: readonly string[] = []
+): Array<{ conditions: readonly string[]; target: string }> {
+  if (typeof value === "string") return [{ conditions, target: value }];
+  if (Array.isArray(value)) return value.flatMap((entry) => exportedTargets(entry, conditions));
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([key, entry]) =>
+    exportedTargets(entry, key.startsWith(".") ? conditions : [...conditions, key])
+  );
+}
+
 function missingConcreteTargets(packageDirectory: string, targets: string[]): string[] {
   return [...new Set(targets)]
     .filter((target) => !target.includes("*"))
@@ -80,14 +92,35 @@ function effectiveCompilerOptions(tsconfigPath: string): CompilerOptions {
 }
 
 function expectDistEntrypoints(manifest: PackageManifest): void {
-  const targets = publicTargets(manifest);
+  const targets = [
+    ...(manifest.main ? [{ conditions: ["default"], target: manifest.main }] : []),
+    ...(manifest.types ? [{ conditions: ["types"], target: manifest.types }] : []),
+    ...exportedTargets(manifest.exports),
+  ];
   expect(
     targets.length,
     `${manifest.name} must declare at least one public entrypoint`
   ).toBeGreaterThan(0);
   expect(
-    targets.filter((target) => !target.startsWith("./dist/")),
-    `${manifest.name} emitted entrypoints must resolve under dist/`
+    targets
+      .filter(
+        ({ conditions }) =>
+          !conditions.some((condition) => ["browser", "worker"].includes(condition)) &&
+          (conditions.length === 0 ||
+            conditions.some((condition) => ["types", "import", "default"].includes(condition)))
+      )
+      .map(({ target }) => target)
+      .filter((target) => !target.startsWith("./dist/")),
+    `${manifest.name} compiled consumer entrypoints must resolve under dist/`
+  ).toEqual([]);
+  expect(
+    targets
+      .filter(({ conditions }) =>
+        conditions.some((condition) => ["browser", "worker"].includes(condition))
+      )
+      .map(({ target }) => target)
+      .filter((target) => !target.startsWith("./src/")),
+    `${manifest.name} browser and worker source entrypoints must resolve under src/`
   ).toEqual([]);
 }
 
@@ -96,6 +129,22 @@ describe("package build profiles", () => {
     directory,
     manifest: readManifest(directory),
   }));
+
+  it("keeps subpath keys separate from nested export conditions", () => {
+    expect(
+      exportedTargets({
+        "./plain": "./dist/plain.js",
+        "./conditional": {
+          browser: { import: "./src/conditional.browser.js" },
+          import: "./dist/conditional.js",
+        },
+      })
+    ).toEqual([
+      { conditions: [], target: "./dist/plain.js" },
+      { conditions: ["browser", "import"], target: "./src/conditional.browser.js" },
+      { conditions: ["import"], target: "./dist/conditional.js" },
+    ]);
+  });
 
   it("requires every packages/* package to declare a known profile", () => {
     const declarations = packages.map(({ manifest }) => ({
@@ -147,13 +196,13 @@ describe("package build profiles", () => {
       expect(compilerOptions.noEmit).not.toBe(true);
 
       if (profile === "tsc-output") {
-        expect(manifest.scripts?.["build"]).toBe("tsc --project tsconfig['build'].json");
+        expect(manifest.scripts?.["build"]).toBe("tsc --project tsconfig.build.json");
         expect(fs.existsSync(path.join(directory, "build.mjs"))).toBe(false);
         return;
       }
 
       if (profile === "tsc-build-incremental") {
-        expect(manifest.scripts?.["build"]).toBe("tsc --build tsconfig['build'].json");
+        expect(manifest.scripts?.["build"]).toBe("tsc --build tsconfig.build.json");
         expect(compilerOptions.composite).toBe(true);
         expect(fs.existsSync(path.join(directory, "build.mjs"))).toBe(false);
         return;

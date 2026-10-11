@@ -252,6 +252,7 @@ describe("EvalDO durable exact-ack redelivery", () => {
       version: 5,
       freshSchemaFingerprint: fingerprint,
       durableWorkQueues: [],
+      nativeOwner: false,
     };
     const reopened = await createTestDO(
       TestEvalDO,

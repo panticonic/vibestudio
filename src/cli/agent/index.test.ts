@@ -184,6 +184,31 @@ describe("vibestudio agent commands", () => {
     expect(jsonOutput()).toMatchObject({ entityId: "session:work" });
   });
 
+  it("exports the selected workspace RPC client with the canonical CLI credentials", async () => {
+    writeCredentials(tmpDir);
+    const connection = {
+      serverUrl: "http://localhost",
+      protocol: "http",
+      externalHost: "localhost",
+      gatewayPort: 1234,
+      serverId: "server",
+      serverBootId: "boot",
+      workspaceId: "workspace",
+      callerKind: "shell",
+    };
+    const { rpcBodies } = stubServer(() => connection);
+    const { createSelectedWorkspaceClient } = await import("../client.js");
+    const client = createSelectedWorkspaceClient();
+    const release = client.retainConnection();
+    try {
+      await expect(client.mainCall("auth.getConnectionInfo", [])).resolves.toEqual(connection);
+      expect(rpcBodies).toEqual([{ method: "auth.getConnectionInfo", args: [] }]);
+    } finally {
+      await client.close();
+      await release();
+    }
+  });
+
   it("attach is idempotent when the entity is still live", async () => {
     writeCredentials(tmpDir);
     const { main } = await import("../client.js");

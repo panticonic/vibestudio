@@ -23,7 +23,7 @@ type RunResult = {
   success: boolean;
   console: string;
   returnValue?: unknown;
-  error?: string;
+  error?: { message: string; errorKind: "application" };
   scopeKeys?: string[];
 };
 
@@ -327,7 +327,11 @@ describe("vibestudio eval commands", () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     stubServer(() =>
-      terminalStart({ success: false, console: "", error: "boom" } satisfies RunResult)
+      terminalStart({
+        success: false,
+        console: "",
+        error: { message: "boom", errorKind: "application" },
+      } satisfies RunResult)
     );
 
     const { main } = await import("../client.js");
@@ -335,7 +339,7 @@ describe("vibestudio eval commands", () => {
 
     const output = jsonOutput();
     expect(output["success"]).toBe(false);
-    expect(output["error"]).toBe("boom");
+    expect(output["error"]).toEqual({ message: "boom", errorKind: "application" });
   });
 
   it("reports only actionable approvals belonging to this eval", async () => {

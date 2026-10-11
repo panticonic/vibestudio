@@ -25,6 +25,12 @@ Build ownership and reuse live in `build.mjs`, so direct builds and desktop laun
 
 Infrastructure package builds hash their compiler inputs and verify emitted output. Source edits retain incremental compiler state; missing or changed output resets it. Files retired from the compiler program are removed from `dist` after compilation. An excluded test only invalidates production output when production code imports it.
 
+`dist/cli/client.mjs` also exposes the canonical selected-workspace client factory.
+Importing it does not execute a command. The typed release verifier runner imports
+that exact installed entry, multiplexes calls on one owned connection, and joins
+calls and client retirement before reporting results. Authentication and RPC
+remain owned by the ordinary CLI client implementation.
+
 `pnpm type-check:host` and `pnpm type-check:userland` retain each original compiler program, including its global/module augmentations, source aliases, tests, and compiler options. Compiler realms and template compositions run sequentially. Incremental no-emit state is seeded privately and retained when the compiler completes, including cached diagnostics from a failed check. Compiler errors still propagate; cancellation or launch failure retains the preceding state. Temporary configurations and unpublished state are removed. State lives under the host checkout's `.cache/typecheck-state`, with derived-cache leases and quotas. Template source and installed dependencies are projected into host-owned temporary directories, so no compiler state is written into external template checkouts.
 
 ## CI and release parallelism

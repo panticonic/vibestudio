@@ -458,6 +458,20 @@ const clientConfig = {
   },
 };
 
+const releaseVerifierRunnerConfig = {
+  entryPoints: ["src/cli/releaseVerifierRunner.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "esm",
+  outfile: "dist/cli/releaseVerifierRunner.mjs",
+  external: ["ws", "@number0/iroh"],
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+  banner: { js: NODE_ESM_COMPAT_BANNER },
+};
+
 const adblockWorkerConfig = {
   entryPoints: ["src/main/adblock/filterEngineWorker.ts"],
   bundle: true,
@@ -781,6 +795,7 @@ async function build() {
             internalDoBundleConfig,
             bootstrapConfig,
             clientConfig,
+            releaseVerifierRunnerConfig,
           ],
           assertHostBuildMetafiles,
           buildHostArtifact

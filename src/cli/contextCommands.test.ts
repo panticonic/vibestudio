@@ -15,10 +15,10 @@ afterEach(() => {
   for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** A mock RpcClient whose `call` dispatches from a fixed method→result map. */
+/** A mock RpcClient whose typed main caller dispatches by qualified method. */
 function mockClient(results: Record<string, (args: unknown[]) => unknown>): RpcClient {
   return {
-    call: async (method: string, args: unknown[] = []) => {
+    mainCall: async (method: string, args: unknown[] = []) => {
       const fn = results[method];
       if (!fn) throw new Error(`unexpected call ${method}`);
       return fn(args);

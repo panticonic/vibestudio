@@ -38,11 +38,12 @@ content-addressed artifacts without rebuilding them. Both paths are exercised
 through isolated developer instances rather than by deleting or reusing a
 person's normal instance.
 
-Interactive Build V2 defaults to three concurrent build lanes. A unit build
-already uses parallel esbuild, TypeScript, package-resolution, and hashing work;
-the default therefore caps admitted unit builds and limits aggregate CPU and
-memory exposure while allowing interactive requests, required startup work, and
-speculative preparation to make progress.
+Interactive Build V2 defaults to three concurrent build lanes. Each unit
+uses native compiler processes and TypeScript, package-resolution, and hashing
+work. The admission limit bounds their aggregate resource use while allowing
+interactive requests, required startup work, and speculative preparation to
+make progress. Some internal stages share owners and serialize; increasing
+admission helps only when those dependency edges permit independent work.
 The scheduler prioritizes interactive requests over background preparation.
 `VIBESTUDIO_MAX_CONCURRENT_BUILDS` is an existing process-local operator override
 for throughput-oriented batch work. Operators can raise it when the runner has
@@ -62,9 +63,24 @@ overwrite another role's inputs and multiply native executors. Keep this
 ownership edge explicit when changing the release critical path.
 
 Fresh-install verification overlaps six independent source requests within each
-selected workspace, preserving the ordinary `build.getBuild` path and exact
-artifact identity and creation-time checks. It joins every request and retains
-all failures before switching the shared CLI profile to another workspace.
+selected workspace through one installed CLI client connection, preserving the
+ordinary `build.getBuild` path and exact artifact identity and creation-time
+checks. Separate CLI processes sharing an Iroh endpoint identity contend for
+that identity's lock; admitting more processes does not parallelize those calls.
+The verifier instead multiplexes requests on the existing authenticated client,
+joins every request, retains all failures, and closes that client before
+switching the shared CLI profile to another workspace.
+
+A restored extension's runtime dependencies must exist in its own build-local
+`node_modules` projection. Packages reachable only through a host ancestor do
+not establish readiness for the isolated extension. Owned package-store symlinks
+remain valid; an absent or incomplete projection follows the same installation
+and materialization path as a cold build.
+
+Prepared compiler inputs have stable virtual identities relative to their owned
+source or dependency roots. Temporary physical roots remain resolution and
+diagnostic coordinates, rather than becoming part of executable bytes. Identical
+immutable inputs must produce identical output when materialized in a new root.
 
 Parallelism must avoid multiplying shared work. A protected-main publication
 checks its roots as one operation: authenticated immutable tree reads are shared

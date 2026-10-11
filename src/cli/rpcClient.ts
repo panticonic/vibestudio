@@ -250,6 +250,8 @@ export class RpcClient {
   private httpDispatcher: Agent | null = null;
   private keepPushOpen = false;
   private retainedConnections = 0;
+  private closePromise: Promise<void> | null = null;
+  private closeFailure: Promise<void> | null = null;
 
   constructor(creds: RpcClientCredential) {
     this.url = creds.url;
@@ -361,6 +363,7 @@ export class RpcClient {
 
   /** Relay call to a runtime target (worker, DO, panel) by entity/target id. */
   async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
+    this.assertOpen();
     if (targetId === "main") requireQualifiedServiceMethod(method);
     if (this.isIroh) {
       return await this.dispatchIroh(targetId, method, args);
@@ -375,9 +378,11 @@ export class RpcClient {
    * resources use {@link stream} so the response itself owns their lifetime.
    */
   async callTargetPush(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
+    this.assertOpen();
     if (targetId === "main") requireQualifiedServiceMethod(method);
     this.keepPushOpen = true;
     const client = await this.persistentClient();
+    this.assertOpen();
     return await client.callTarget(targetId, method, args);
   }
 
@@ -387,11 +392,13 @@ export class RpcClient {
     args: unknown[] = [],
     options?: RpcStreamOptions
   ): Promise<Response> {
+    this.assertOpen();
     if (targetId === "main") requireQualifiedServiceMethod(method);
     // Push/stream: Iroh when the credential is a pairing blob, otherwise the
     // persistent loopback/LAN WebSocket (no more "streaming requires Iroh").
     this.keepPushOpen = true;
     const client = await this.persistentClient();
+    this.assertOpen();
     return await client.stream(targetId, method, args, options);
   }
 
@@ -399,16 +406,20 @@ export class RpcClient {
     event: string,
     listener: (payload: unknown, fromId: string) => void
   ): Promise<() => void> {
+    this.assertOpen();
     this.keepPushOpen = true;
     const client = await this.persistentClient();
+    this.assertOpen();
     return await client.onEvent(event, listener);
   }
 
   async onRecovery(
     handler: (kind: "resubscribe" | "cold-recover") => void | Promise<void>
   ): Promise<() => void> {
+    this.assertOpen();
     this.keepPushOpen = true;
     const client = await this.persistentClient();
+    this.assertOpen();
     return await client.onRecovery(handler);
   }
 
@@ -420,12 +431,14 @@ export class RpcClient {
    * streams; HTTP siblings use the same authenticated workspace URL.
    */
   async openSiblingConnection(): Promise<RpcClient> {
+    this.assertOpen();
     if (this.isIroh) {
       // QUIC gives every request its own independently flow-controlled stream,
       // so the old Iroh reason for a second physical connection no longer
       // exists. Share the one credential endpoint and let the event/watch own a
       // separate request stream. Binding the same Endpoint ID twice is invalid.
       await this.ensureIrohClient();
+      this.assertOpen();
       const sibling = this.rawToken
         ? new RpcClient({
             url: this.url,
@@ -458,7 +471,26 @@ export class RpcClient {
     });
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    if (this.closeFailure) return this.closeFailure;
+    const closing = Promise.resolve().then(() => this.retireResources());
+    this.closePromise = closing;
+    void closing.then(
+      () => {
+        if (this.closePromise === closing) this.closePromise = null;
+      },
+      () => {
+        if (this.closePromise === closing) {
+          this.closePromise = null;
+          this.closeFailure = closing;
+        }
+      }
+    );
+    return closing;
+  }
+
+  private async retireResources(): Promise<void> {
     const iroh = this.irohClient;
     const ws = this.wsClient;
     const httpDispatcher = this.httpDispatcher;
@@ -498,6 +530,12 @@ export class RpcClient {
     this.releaseEndpointLock = null;
   }
 
+  private assertOpen(): void {
+    if (this.closePromise || this.closeFailure) {
+      throw new ConnectionError("RPC client is closing or could not be closed");
+    }
+  }
+
   /**
    * Keep the push transport alive across a bounded batch of ordinary calls.
    * Pollers use this so Iroh pairing/ICE is paid once per command, not once
@@ -511,8 +549,17 @@ export class RpcClient {
       if (released) return;
       released = true;
       this.retainedConnections = Math.max(0, this.retainedConnections - 1);
-      if (this.retainedConnections === 0 && !this.keepPushOpen) {
-        await this.close().catch(() => undefined);
+      const ownsResources =
+        this.irohClient !== null ||
+        this.wsClient !== null ||
+        this.httpDispatcher !== null ||
+        this.releaseEndpointLock !== null;
+      if (
+        this.retainedConnections === 0 &&
+        !this.keepPushOpen &&
+        (ownsResources || this.closePromise !== null || this.closeFailure !== null)
+      ) {
+        await this.close();
       }
     };
   }
@@ -520,6 +567,7 @@ export class RpcClient {
   /** Build an `RpcEnvelope` and POST it to the envelope-native `/rpc`. */
   private async dispatch(targetId: string, method: string, args: unknown[]): Promise<unknown> {
     const token = await this.ensureBearerToken();
+    this.assertOpen();
     const requestId =
       typeof globalThis.crypto?.randomUUID === "function"
         ? globalThis.crypto.randomUUID()
@@ -602,20 +650,43 @@ export class RpcClient {
 
   private async dispatchIroh(targetId: string, method: string, args: unknown[]): Promise<unknown> {
     const client = await this.ensureIrohClient();
+    this.assertOpen();
+    let result: unknown;
+    let operationFailure: unknown;
+    let operationFailed = false;
     try {
-      return targetId === "main"
-        ? await client.call(requireQualifiedServiceMethod(method), args)
-        : await client.callTarget(targetId, method, args);
+      result =
+        targetId === "main"
+          ? await client.call(requireQualifiedServiceMethod(method), args)
+          : await client.callTarget(targetId, method, args);
     } catch (error) {
-      throw toRpcError(error);
-    } finally {
-      if (!this.keepPushOpen && this.retainedConnections === 0) {
-        await this.close().catch(() => undefined);
+      operationFailure = toRpcError(error);
+      operationFailed = true;
+    }
+    let cleanupFailure: unknown;
+    let cleanupFailed = false;
+    if (!this.keepPushOpen && this.retainedConnections === 0) {
+      try {
+        await this.close();
+      } catch (error) {
+        cleanupFailure = error;
+        cleanupFailed = true;
       }
     }
+    if (operationFailed && cleanupFailed) {
+      throw new AggregateError(
+        [operationFailure, cleanupFailure],
+        "RPC call and transport cleanup failed",
+        { cause: operationFailure }
+      );
+    }
+    if (operationFailed) throw operationFailure;
+    if (cleanupFailed) throw cleanupFailure;
+    return result;
   }
 
   private ensureIrohClient(): Promise<import("../node/iroh/irohRpcClient.js").IrohRpcClient> {
+    this.assertOpen();
     if (!this.pairing || !this.endpointSecret) {
       throw new Error("Stored credential does not contain Iroh reach and endpoint identity");
     }
@@ -650,11 +721,13 @@ export class RpcClient {
 
   /** Select the credential's one persistent push/stream transport. */
   private async persistentClient(): Promise<PersistentRpcClient> {
+    this.assertOpen();
     if (!this.isIroh) return await this.ensureWsClient();
     return await this.ensureIrohClient();
   }
 
   private ensureWsClient(): Promise<import("./wsClient.js").WsRpcClient> {
+    this.assertOpen();
     if (!this.wsClient) {
       this.wsClient = import("./wsClient.js")
         .then(({ WsRpcClient }) => {

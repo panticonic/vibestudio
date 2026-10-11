@@ -11,6 +11,7 @@ import {
   awaitHubReady,
   exportReleaseBuild,
   prepareInstalledTemplateRelease,
+  runInstalledRpcBatch,
   verifyPreparedReleaseUserland,
   withStandaloneReleaseSession,
 } from "./prebuild-release-userland.mjs";
@@ -118,60 +119,47 @@ test("ready admission propagates the original process failure without a deadline
   assert.equal(child.listenerCount("exit"), 0);
 });
 
-test("verifies source builds with bounded per-role concurrency and serial workspace selection", async () => {
+test("joins each selected-workspace batch before changing the shared CLI route", async () => {
   const root = await fixture();
   const records = verificationRecords(7);
   const context = await verificationFixture(root, records);
   const selected = [];
-  let currentWorkspace;
-  let startedBase = 0;
-  let active = 0;
-  let maximumActive = 0;
-  let resolveFirstWave;
-  let resolveAllBase;
-  const firstWave = new Promise((resolve) => (resolveFirstWave = resolve));
-  const allBase = new Promise((resolve) => (resolveAllBase = resolve));
-  const releasePending = [];
-  const bySource = new Map(records.map((record) => [record.source, record]));
+  let resolveBatch;
+  let batchStarted;
+  const started = new Promise((resolve) => (batchStarted = resolve));
+  const pendingBatch = new Promise((resolve) => (resolveBatch = resolve));
   const cli = async (args) => {
     if (args[0] === "remote" && args[1] === "create-workspace") return { name: "base-workspace" };
     if (args[0] === "remote" && args[1] === "select") {
-      currentWorkspace = args[2];
-      selected.push(currentWorkspace);
+      selected.push(args[2]);
       return {};
     }
-    if (args[0] !== "agent") throw new Error(`Unexpected CLI command: ${args.join(" ")}`);
-    const [source] = JSON.parse(args[3]);
-    const record = bySource.get(source);
-    if (!record) throw new Error(`Unknown release source: ${source}`);
-    if (currentWorkspace === "base-workspace") {
-      active++;
-      maximumActive = Math.max(maximumActive, active);
-      startedBase++;
-      if (startedBase === 6) resolveFirstWave();
-      if (startedBase === records.filter((item) => item.workspace === "base").length)
-        resolveAllBase();
-      return await new Promise((resolve) => {
-        releasePending.push(() => {
-          active--;
-          resolve({ buildKey: record.buildKey });
-        });
-      });
-    }
-    return { buildKey: record.buildKey };
+    throw new Error(`Unexpected CLI command: ${args.join(" ")}`);
   };
-
-  const verification = verifyPreparedReleaseUserland({ ...context, cli });
-  await firstWave;
-  assert.equal(maximumActive, 6);
+  let firstBatch = true;
+  const runBuildBatch = async (sources) => {
+    if (firstBatch) {
+      firstBatch = false;
+      batchStarted(sources);
+      await pendingBatch;
+    }
+    return {
+      outcomes: sources.map((source) => ({
+        status: "fulfilled",
+        source,
+        buildKey: records.find((record) => record.source === source).buildKey,
+      })),
+    };
+  };
+  const verification = verifyPreparedReleaseUserland({ ...context, cli, runBuildBatch });
+  const baseSources = await started;
+  assert.deepEqual(
+    baseSources,
+    records.filter((record) => record.workspace === "base").map((r) => r.source)
+  );
   assert.deepEqual(selected, ["base-workspace"]);
-  for (const release of releasePending.splice(0)) release();
-  await allBase;
-  assert.deepEqual(selected, ["base-workspace"]);
-  for (const release of releasePending.splice(0)) release();
+  resolveBatch();
   await verification;
-
-  assert.equal(maximumActive, 6);
   assert.deepEqual(selected, ["base-workspace", "system-workspace", "personal-workspace"]);
 });
 
@@ -180,56 +168,32 @@ test("joins all failures for a selected role and preserves their input order and
   const records = verificationRecords(8);
   const context = await verificationFixture(root, records);
   const selected = [];
-  let currentWorkspace;
-  let started = 0;
-  let resolveSix;
-  let resolveAll;
-  const sixStarted = new Promise((resolve) => (resolveSix = resolve));
-  const allStarted = new Promise((resolve) => (resolveAll = resolve));
-  const pending = [];
-  const failures = new Map(
-    records
-      .filter((record) => record.workspace === "base")
-      .map((record) => [record.source, new Error(`failed ${record.source}`)])
-  );
+  const failures = records
+    .filter((record) => record.workspace === "base")
+    .map((record) => new Error(`failed ${record.source}`));
   const cli = async (args) => {
     if (args[0] === "remote" && args[1] === "create-workspace") return { name: "base-workspace" };
     if (args[0] === "remote" && args[1] === "select") {
-      currentWorkspace = args[2];
-      selected.push(currentWorkspace);
+      selected.push(args[2]);
       return {};
     }
-    const [source] = JSON.parse(args[3]);
-    if (currentWorkspace === "base-workspace") {
-      started++;
-      if (started === 6) resolveSix();
-      if (started === 8) resolveAll();
-      return await new Promise((resolve, reject) => {
-        pending.push(() => reject(failures.get(source)));
-      });
-    }
-    throw new Error("Later workspace selection must not occur after failures");
+    throw new Error(`Unexpected CLI command: ${args.join(" ")}`);
   };
-
-  const verification = verifyPreparedReleaseUserland({ ...context, cli });
-  await sixStarted;
-  assert.deepEqual(selected, ["base-workspace"]);
-  for (const release of pending.splice(0)) release();
-  await allStarted;
-  for (const release of pending.splice(0)) release();
+  const runBuildBatch = async (sources) => ({
+    outcomes: sources.map((source) => ({
+      status: "rejected",
+      source,
+      failure: failures[sources.indexOf(source)],
+    })),
+  });
+  const verification = verifyPreparedReleaseUserland({ ...context, cli, runBuildBatch });
   await assert.rejects(verification, (error) => {
     assert.ok(error instanceof AggregateError);
-    assert.deepEqual(
-      error.errors,
-      records
-        .filter((record) => record.workspace === "base")
-        .map((record) => failures.get(record.source))
-    );
+    assert.deepEqual(error.errors, failures);
     assert.equal(error.cause, error.errors[0]);
     return true;
   });
   assert.deepEqual(selected, ["base-workspace"]);
-  assert.equal(started, 8);
 });
 
 test("still rejects changed build keys and rebuilt artifacts during release verification", async () => {
@@ -240,20 +204,28 @@ test("still rejects changed build keys and rebuilt artifacts during release veri
   const cli = async (args) => {
     if (args[0] === "remote" && args[1] === "create-workspace") return { name: "base-workspace" };
     if (args[0] === "remote" && args[1] === "select") return {};
-    if (args[0] === "agent") return { buildKey: "d".repeat(64) };
     throw new Error(`Unexpected CLI command: ${args.join(" ")}`);
   };
+  const runBuildBatch = async (sources) => ({
+    outcomes: sources.map((source) => ({
+      status: "fulfilled",
+      source,
+      buildKey: "d".repeat(64),
+    })),
+  });
   await assert.rejects(
-    verifyPreparedReleaseUserland({ ...context, cli }),
+    verifyPreparedReleaseUserland({ ...context, cli, runBuildBatch }),
     new RegExp(`Release build identity changed for base:${base.source}`)
   );
 
   const matchingCli = async (args) => {
     if (args[0] === "remote" && args[1] === "create-workspace") return { name: "base-workspace" };
     if (args[0] === "remote" && args[1] === "select") return {};
-    if (args[0] === "agent") return { buildKey: base.buildKey };
     throw new Error(`Unexpected CLI command: ${args.join(" ")}`);
   };
+  const matchingBuildBatch = async (sources) => ({
+    outcomes: sources.map((source) => ({ status: "fulfilled", source, buildKey: base.buildKey })),
+  });
   const metadataPath = path.join(
     context.env.VIBESTUDIO_INSTANCE_ROOT,
     "workspaces",
@@ -265,7 +237,11 @@ test("still rejects changed build keys and rebuilt artifacts during release veri
   );
   await fs.writeFile(metadataPath, JSON.stringify({ builtAt: "newer" }));
   await assert.rejects(
-    verifyPreparedReleaseUserland({ ...context, cli: matchingCli }),
+    verifyPreparedReleaseUserland({
+      ...context,
+      cli: matchingCli,
+      runBuildBatch: matchingBuildBatch,
+    }),
     /Fresh installation rebuilt base:base\/source-0 instead of reusing its release artifact/
   );
 });
@@ -698,6 +674,55 @@ test("template preparation joins cancellation before retiring private scratch", 
       (await fs.readdir(root)).some((name) => name.startsWith(".template-release-")),
       false
     );
+  } finally {
+    watcher.close();
+  }
+});
+
+test("release RPC cancellation reaches and joins the owned verifier process", async () => {
+  const root = await fixture();
+  const runner = path.join(root, "runner.mjs");
+  const ready = path.join(root, "runner-ready");
+  const retired = path.join(root, "runner-retired");
+  await fs.writeFile(
+    runner,
+    `import fs from "node:fs";
+    fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+    process.on("message", (message) => {
+      if (message?.type !== "cancel") return;
+      fs.writeFileSync(${JSON.stringify(retired)}, "joined");
+      process.stdout.write("VIBESTUDIO_RELEASE_RPC_RESULT:" + JSON.stringify({ fatal: message.failure }) + "\\n");
+      setImmediate(() => process.exit(0));
+    });
+    setInterval(() => {}, 1000);`
+  );
+  const watcher = (await import("node:fs")).watch(root);
+  const becameReady = new Promise((resolve) => {
+    watcher.on("change", (_event, file) => {
+      if (String(file) === "runner-ready") resolve();
+    });
+  });
+  const controller = new AbortController();
+  const cancellation = new Error("release server exited while verifier was running");
+  try {
+    const batch = runInstalledRpcBatch({
+      executable: process.execPath,
+      runnerEntry: runner,
+      cliEntry: path.join(root, "client.mjs"),
+      sources: ["base/a"],
+      env: process.env,
+      scratch: root,
+      signal: controller.signal,
+    });
+    await becameReady;
+    controller.abort(cancellation);
+    await assert.rejects(batch, (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.cause, cancellation);
+      assert.equal(error.errors[0], cancellation);
+      return true;
+    });
+    assert.equal(await fs.readFile(retired, "utf8"), "joined");
   } finally {
     watcher.close();
   }

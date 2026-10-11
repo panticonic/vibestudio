@@ -54,6 +54,7 @@ const UNEXPOSED_VCS_METHODS = new Set([
   "finalizeExternalDelta",
   // Read-time projections the agent tooling composes; no standalone operation.
   "readMemory",
+  "readFiles",
   "resolveRepository",
   // Delivered as `vibestudio fs ls`, which reads the session context directly.
   "listDirectory",

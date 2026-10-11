@@ -14,6 +14,7 @@ import { createAuthorityService } from "./authorityService.js";
 import { AuthorityPlanStore } from "./authorityPlanStore.js";
 import { resolveCodeIdentity } from "./principalIdentity.js";
 import { createVcsService } from "./vcsService.js";
+import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 
 const fixtures: Array<{ store: AuthorityPlanStore; path: string }> = [];
 afterEach(() => {
@@ -64,9 +65,15 @@ function fixture() {
     handle: "alice",
   });
   const ctx: ServiceContext = { caller };
-  const semanticCall = vi.fn(async () => ({ contextId: binding.contextId }));
+  const semanticCall = vi.fn<WorkspaceVcs["semanticCausalCall"]>();
   const vcs = createVcsService({
-    workspaceVcs: { semanticCall } as never,
+    workspaceVcs: {
+      semanticCausalCall: semanticCall,
+      semanticPublishCall: vi.fn<WorkspaceVcs["semanticPublishCall"]>(),
+      semanticEpochTransitionPublishCall:
+        vi.fn<WorkspaceVcs["semanticEpochTransitionPublishCall"]>(),
+      referencesReachable: vi.fn<WorkspaceVcs["referencesReachable"]>(),
+    },
     entityCache,
     listOwnedContexts: async () => ({ contexts: [] }),
   });

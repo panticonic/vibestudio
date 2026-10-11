@@ -44,6 +44,7 @@ it("contains an actually failed close protocol and retains its original error un
   const owner = { join: vi.fn(async () => {}), retire: vi.fn(() => retirement.promise) };
   const operation = closeOwnedDesktop(
     {
+      process: () => ({ exitCode: null, signalCode: null }),
       close: async () => {
         throw failure;
       },
@@ -69,6 +70,7 @@ it("preserves close and containment failures together", async () => {
   };
   const error = await closeOwnedDesktop(
     {
+      process: () => ({ exitCode: null, signalCode: null }),
       close: async () => {
         throw original;
       },

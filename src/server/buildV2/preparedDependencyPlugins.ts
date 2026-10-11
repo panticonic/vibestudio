@@ -92,15 +92,57 @@ export function composePreparedDependencyPlugins(
   ownedRoots: readonly string[],
   externals: readonly string[] = []
 ): esbuild.Plugin[] {
-  const roots = [...nodePaths, ...ownedRoots].filter(Boolean).map((root) => path.resolve(root));
+  const rootIdentities = [
+    ...nodePaths.map((root, index) =>
+      root
+        ? {
+            root: canonical(path.resolve(root)),
+            lexicalRoot: path.resolve(root),
+            identity: `dependency-${index}`,
+          }
+        : null
+    ),
+    ...ownedRoots.map((root, index) =>
+      root
+        ? {
+            root: canonical(path.resolve(root)),
+            lexicalRoot: path.resolve(root),
+            identity: index === 0 ? "source" : index === 1 ? "output" : `owned-${index - 2}`,
+          }
+        : null
+    ),
+  ].filter((root): root is NonNullable<typeof root> => root !== null);
+  const roots = rootIdentities.map(({ root }) => root);
   const workspaceRoots = ownedRoots
     .filter((root) => !nodePaths.includes(root))
     .map((root) => path.resolve(root));
   const packageRoots = new Set<string>();
+  const packageRootIdentities = new Map<string, string>();
   const dependencySearchRoots = new Set<string>();
   const locations = new Map<string, Location>();
   const metadataPaths = new Map<string, string>();
   const namespaceKey = (namespace: string, file: string) => `${namespace}\0${file}`;
+
+  const virtualInputPath = (physicalPath: string): string => {
+    const canonicalPath = canonical(physicalPath);
+    const ownedPackageRoots = [...packageRootIdentities].map(([root, identity]) => ({
+      root,
+      identity,
+    }));
+    const matches = [...rootIdentities, ...ownedPackageRoots]
+      .filter(({ root }) => {
+        const relative = path.relative(root, canonicalPath);
+        return (
+          relative === "" ||
+          (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+        );
+      })
+      .sort((left, right) => right.root.length - left.root.length);
+    const match = matches[0];
+    if (!match) throw new Error(`Prepared input has no stable owned root: ${physicalPath}`);
+    const relative = path.relative(match.root, canonicalPath).replaceAll("\\", "/");
+    return relative ? `${match.identity}/${relative}` : match.identity;
+  };
 
   const rememberLocation = (namespace: string, file: string, location: Location): void => {
     locations.set(namespaceKey(namespace, file), location);
@@ -173,6 +215,25 @@ export function composePreparedDependencyPlugins(
 
   const normalizeBuildResult = (result: esbuild.BuildResult): void => {
     if (result.metafile) normalizeMetafile(result.metafile);
+    const normalizeMessages = (messages: esbuild.Message[]): void => {
+      for (const message of messages) {
+        const location = message.location;
+        if (!location) continue;
+        let namespace = location.namespace;
+        let file = location.file;
+        if (namespace && file.startsWith(`${namespace}:`)) {
+          file = file.slice(namespace.length + 1);
+        } else if (file.startsWith(`${OWNED_FILE_NAMESPACE}:`)) {
+          namespace = OWNED_FILE_NAMESPACE;
+          file = file.slice(OWNED_FILE_NAMESPACE.length + 1);
+        }
+        if (!namespace) continue;
+        const ownedLocation = locations.get(namespaceKey(namespace, file));
+        if (ownedLocation) Object.assign(location, { file: ownedLocation.physicalPath });
+      }
+    };
+    normalizeMessages(result.errors);
+    normalizeMessages(result.warnings);
   };
 
   const locationFor = (namespace: string, file: string, resolveDir?: string): Location => {
@@ -218,6 +279,41 @@ export function composePreparedDependencyPlugins(
       if (!fs.existsSync(path.join(candidate, "package.json"))) continue;
       const physicalRoot = canonical(candidate);
       packageRoots.add(physicalRoot);
+      if (!packageRootIdentities.has(physicalRoot)) {
+        let version = "";
+        try {
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(physicalRoot, "package.json"), "utf8")
+          ) as { version?: unknown };
+          if (typeof manifest.version === "string" && manifest.version)
+            version = `@${manifest.version}`;
+        } catch {
+          // The package is admitted by its owned manifest below; absence of a
+          // version only changes the stable source label, not admission.
+        }
+        const baseIdentity = `package/${name}${version}`;
+        let owningRoot = rootIdentities
+          .filter(({ root }) => within(root, physicalRoot))
+          .sort((left, right) => right.root.length - left.root.length)[0];
+        let relative = owningRoot ? path.relative(owningRoot.root, physicalRoot) : "";
+        if (!owningRoot) {
+          const lexicalCandidate = path.resolve(candidate);
+          owningRoot = rootIdentities
+            .filter(({ lexicalRoot }) => within(lexicalRoot, lexicalCandidate))
+            .sort((left, right) => right.lexicalRoot.length - left.lexicalRoot.length)[0];
+          if (owningRoot) relative = path.relative(owningRoot.lexicalRoot, lexicalCandidate);
+        }
+        relative = relative.replaceAll("\\", "/");
+        const enclosingPackage = [...packageRootIdentities]
+          .filter(([root]) => within(root, searchRoot))
+          .sort((left, right) => right[0].length - left[0].length)[0];
+        const packageIdentity = owningRoot
+          ? `${baseIdentity}/${owningRoot.identity}/${relative}`
+          : enclosingPackage
+            ? `${enclosingPackage[1]}/${path.relative(enclosingPackage[0], physicalRoot).replaceAll("\\", "/")}`
+            : baseIdentity;
+        packageRootIdentities.set(physicalRoot, packageIdentity);
+      }
       dependencySearchRoots.add(path.dirname(candidate));
       dependencySearchRoots.add(path.dirname(physicalRoot));
       return;
@@ -280,11 +376,24 @@ export function composePreparedDependencyPlugins(
       const proxy = new Proxy(build, {
         get(target, property, receiver) {
           if (property === "resolve") {
-            return (specifier: string, options: esbuild.ResolveOptions) => {
-              return realResolve(specifier, {
+            return async (specifier: string, options: esbuild.ResolveOptions) => {
+              const result = await realResolve(specifier, {
                 ...options,
                 pluginData: withResolveContext(options.pluginData, "request"),
               });
+              if (!isOwnedNamespace(result.namespace)) return result;
+              const namespace = result.namespace;
+              const virtualPath = result.path.startsWith(`${namespace}:`)
+                ? result.path.slice(namespace.length + 1)
+                : result.path;
+              const location = locations.get(namespaceKey(namespace, virtualPath));
+              if (!location) return result;
+              return {
+                ...result,
+                path: location.physicalPath,
+                namespace: originalNamespace(namespace) ?? namespace,
+                pluginData: visiblePluginData(result.pluginData),
+              };
             };
           }
           if (property === "onResolve") {
@@ -509,11 +618,12 @@ export function composePreparedDependencyPlugins(
 
         if (args.kind === "entry-point") {
           if (!entryPath || !allowedPath(entryPath)) return null;
-          rememberLocation(OWNED_FILE_NAMESPACE, entryPath, {
+          const virtualPath = virtualInputPath(entryPath);
+          rememberLocation(OWNED_FILE_NAMESPACE, virtualPath, {
             physicalPath: entryPath,
             resolveDir: path.dirname(entryPath),
           });
-          return { path: entryPath, namespace: OWNED_FILE_NAMESPACE };
+          return { path: virtualPath, namespace: OWNED_FILE_NAMESPACE };
         }
 
         const resolved = await build.resolve(specifier, {
@@ -540,11 +650,17 @@ export function composePreparedDependencyPlugins(
           };
         }
         const namespace = OWNED_FILE_NAMESPACE;
-        rememberLocation(namespace, resolved.path, {
+        const virtualPath = virtualInputPath(resolved.path);
+        rememberLocation(namespace, virtualPath, {
           physicalPath: resolved.path,
           resolveDir: path.dirname(resolved.path),
         });
-        return { ...resolved, namespace, pluginData: visiblePluginData(resolved.pluginData) };
+        return {
+          ...resolved,
+          path: virtualPath,
+          namespace,
+          pluginData: visiblePluginData(resolved.pluginData),
+        };
       };
       build.onResolve({ filter: /.*/ }, resolveRequest);
       build.onLoad({ filter: /.*/, namespace: OWNED_FILE_NAMESPACE }, async (args) => {

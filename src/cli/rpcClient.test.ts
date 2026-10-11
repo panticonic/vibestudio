@@ -407,6 +407,56 @@ describe("rpcClient", () => {
     expect(irohMocks.close).toHaveBeenCalledOnce();
   });
 
+  it("joins one in-progress close and refuses new calls until transport retirement completes", async () => {
+    irohMocks.call.mockResolvedValue("ready");
+    let finishClose!: () => void;
+    let notifyCloseStarted!: () => void;
+    const closeStarted = new Promise<void>((resolve) => (notifyCloseStarted = resolve));
+    irohMocks.close.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          finishClose = () => resolve(undefined);
+          notifyCloseStarted();
+        })
+    );
+    const client = new RpcClient(PAIRED_CREDS);
+    const release = client.retainConnection();
+    await expect(client.call("auth.getConnectionInfo", [])).resolves.toBe("ready");
+
+    const firstClose = client.close();
+    const secondClose = client.close();
+    expect(secondClose).toBe(firstClose);
+    await closeStarted;
+    expect(irohMocks.close).toHaveBeenCalledOnce();
+    await expect(client.call("auth.getConnectionInfo", [])).rejects.toThrow(
+      "RPC client is closing"
+    );
+
+    finishClose();
+    await Promise.all([firstClose, secondClose]);
+    await release();
+    expect(irohMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("retains an Iroh call failure together with transport cleanup failure", async () => {
+    const operationFailure = new Error("RPC operation failed");
+    const cleanupFailure = new Error("transport close failed");
+    irohMocks.call.mockRejectedValueOnce(operationFailure);
+    irohMocks.close.mockRejectedValueOnce(cleanupFailure);
+    const client = new RpcClient(PAIRED_CREDS);
+
+    let failure: unknown;
+    try {
+      await client.call("auth.getConnectionInfo", []);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).cause).toBe(operationFailure);
+    expect((failure as AggregateError).errors[0]).toBe(operationFailure);
+    expect((failure as AggregateError).errors[1].cause).toBe(cleanupFailure);
+  });
+
   it("connects an explicit Iroh endpoint without resolving a workspace", async () => {
     const client = new RpcClient({
       url: PAIRED_CREDS.url,

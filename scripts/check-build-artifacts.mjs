@@ -265,6 +265,14 @@ const contracts = [
 
 const importSmokes = [
   {
+    path: "dist/cli/client.mjs",
+    exportName: "createSelectedWorkspaceClient",
+  },
+  {
+    path: "dist/cli/releaseVerifierRunner.mjs",
+    exportName: "verifyReleaseBuildBatch",
+  },
+  {
     path: "packages/extension-host/dist/index.js",
     exportName: "ExtensionHost",
   },

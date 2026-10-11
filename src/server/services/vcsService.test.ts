@@ -13,9 +13,15 @@ import {
   channelTrajectoryFor,
   commandIdForTrajectoryInvocation,
 } from "@vibestudio/trajectory-identity";
-import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import type {
+  WorkspaceSemanticInput,
+  WorkspaceSemanticMethod,
+  WorkspaceSemanticOutput,
+  WorkspaceVcs,
+} from "../vcsHost/workspaceVcs.js";
 import { createVcsService } from "./vcsService.js";
 import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
+import type { RpcCausalParent } from "@vibestudio/rpc";
 
 const EVENT = { kind: "event" as const, eventId: "event:one" };
 const INTERNAL_AUTHORIZATION = {} as unknown as NonNullable<ServiceContext["authorization"]>;
@@ -60,7 +66,11 @@ function service(options?: {
         contextIds: readonly string[],
         references: readonly { kind: string; value: unknown }[]
       ) => boolean | Promise<boolean>);
-  semanticCall?: (method: string, request: { input: unknown }) => unknown | Promise<unknown>;
+  semanticCall?: (
+    method: string,
+    input: unknown,
+    causalParent: RpcCausalParent | null
+  ) => unknown | Promise<unknown>;
   testPolicyForContext?: (
     contextId: string
   ) => import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
@@ -70,33 +80,54 @@ function service(options?: {
   ) => Promise<void>;
   onEpochTransitionPublished?: () => void;
 }) {
-  const semanticCall = vi.fn(async (method: string, request: { input: unknown }) => {
-    if (options && "failure" in options) throw options.failure;
-    if (options?.semanticCall) return options.semanticCall(method, request);
-    return options?.result ?? { contextId: "context:own" };
-  });
-  const semanticPublishCall = vi.fn(async (input: unknown, ..._authorityEnvelope: unknown[]) => {
-    if (options && "failure" in options) throw options.failure;
-    if (options?.semanticCall) return options.semanticCall("vcsPush", { input });
-    return options?.result ?? { contextId: "context:own" };
-  });
-  const semanticEpochTransitionPublishCall = vi.fn(
-    async (_input: unknown, ..._authorityEnvelope: unknown[]) => {
+  const semanticCall = vi.fn<WorkspaceVcs["semanticCausalCall"]>(
+    async <M extends WorkspaceSemanticMethod>(
+      method: M,
+      input: WorkspaceSemanticInput<M>,
+      causalParent: RpcCausalParent | null
+    ): Promise<WorkspaceSemanticOutput<M>> => {
       if (options && "failure" in options) throw options.failure;
-      return options?.result ?? { contextId: "context:own" };
+      if (options?.semanticCall)
+        return (await options.semanticCall(
+          method,
+          input,
+          causalParent
+        )) as WorkspaceSemanticOutput<M>;
+      return (options?.result ?? { contextId: "context:own" }) as WorkspaceSemanticOutput<M>;
     }
   );
+  const semanticPublishCall = vi.fn<WorkspaceVcs["semanticPublishCall"]>(
+    async (input, causalParent, _caller, _signal) => {
+      if (options && "failure" in options) throw options.failure;
+      if (options?.semanticCall)
+        return (await options.semanticCall(
+          "vcsPush",
+          input,
+          causalParent
+        )) as WorkspaceSemanticOutput<"vcsPush">;
+      return (options?.result ?? {
+        contextId: "context:own",
+      }) as WorkspaceSemanticOutput<"vcsPush">;
+    }
+  );
+  const semanticEpochTransitionPublishCall = vi.fn<
+    WorkspaceVcs["semanticEpochTransitionPublishCall"]
+  >(async (_input, _causalParent, _caller, _signal) => {
+    if (options && "failure" in options) throw options.failure;
+    return (options?.result ?? { contextId: "context:own" }) as WorkspaceSemanticOutput<"vcsPush">;
+  });
   const definition = createVcsService({
     workspaceVcs: {
-      semanticCall,
+      semanticCausalCall: semanticCall,
       semanticPublishCall,
       semanticEpochTransitionPublishCall,
-      referencesReachable: vi.fn(async (contextIds, references) =>
-        typeof options?.referencesReachable === "function"
-          ? options.referencesReachable(contextIds, references)
-          : (options?.referencesReachable ?? true)
+      referencesReachable: vi.fn<WorkspaceVcs["referencesReachable"]>(
+        async (contextIds, references) =>
+          typeof options?.referencesReachable === "function"
+            ? options.referencesReachable(contextIds, references)
+            : (options?.referencesReachable ?? true)
       ),
-    } as unknown as WorkspaceVcs,
+    },
     entityCache: {
       resolveContext: () => options?.context ?? null,
       resolveActive: (id: string) =>
@@ -159,15 +190,13 @@ describe("canonical vcsService", () => {
   it("exposes exactly the canonical public semantic methods", () => {
     const { definition } = service();
     expect(Object.keys(definition.methods).sort()).toEqual(Object.keys(vcsMethods).sort());
-    expect(Object.keys(definition.methods)).toHaveLength(27);
+    expect(Object.keys(definition.methods)).toHaveLength(28);
   });
 
   it("reads current main metadata without granting access to its content", async () => {
     const { definition, semanticCall } = service({ result: EVENT, referencesReachable: false });
     await expect(definition.handler(agentContext(), "mainState", [])).resolves.toEqual(EVENT);
-    expect(semanticCall).toHaveBeenCalledWith("vcsMainState", {
-      ingress: { causalParent: null },
-    });
+    expect(semanticCall).toHaveBeenCalledWith("vcsMainState", undefined, null);
     await expect(
       definition.handler(agentContext(), "readFile", [
         {
@@ -182,8 +211,11 @@ describe("canonical vcsService", () => {
 
   it("retains zero arguments through authority preparation and the semantic wire contract", async () => {
     const { definition, semanticCall } = service({
-      semanticCall: (_method, request) => {
-        gadWireMethods.vcsMainState.args.parse([request]);
+      semanticCall: (_method, input, causalParent) => {
+        const serialized = JSON.parse(
+          JSON.stringify({ input, ingress: { causalParent } })
+        ) as unknown;
+        gadWireMethods.vcsMainState.args.parse([serialized]);
         return EVENT;
       },
     });
@@ -205,18 +237,13 @@ describe("canonical vcsService", () => {
         []
       )
     ).resolves.toEqual(EVENT);
-    expect(semanticCall).toHaveBeenCalledWith("vcsMainState", { ingress: { causalParent: null } });
+    expect(semanticCall).toHaveBeenCalledWith("vcsMainState", undefined, null);
   });
 
   it("forwards only input and the exact per-call causal edge", async () => {
     const { definition, semanticCall } = service();
     await definition.handler(shellContext(), "status", [{ contextId: "context:target" }]);
-    expect(semanticCall).toHaveBeenCalledWith("vcsStatus", {
-      input: { contextId: "context:target" },
-      ingress: {
-        causalParent: null,
-      },
-    });
+    expect(semanticCall).toHaveBeenCalledWith("vcsStatus", { contextId: "context:target" }, null);
   });
 
   it("notifies the owning host coordinator after an ordinary delta merge", async () => {
@@ -269,12 +296,7 @@ describe("canonical vcsService", () => {
     const channelId = "channel:trusted";
     const { definition, semanticCall } = service();
     await definition.handler(agentContext(channelId), "status", [{ contextId: "context:agent" }]);
-    expect(semanticCall).toHaveBeenCalledWith("vcsStatus", {
-      input: { contextId: "context:agent" },
-      ingress: {
-        causalParent: null,
-      },
-    });
+    expect(semanticCall).toHaveBeenCalledWith("vcsStatus", { contextId: "context:agent" }, null);
   });
 
   it("preserves a trusted relay's exact causal invocation", async () => {
@@ -298,9 +320,8 @@ describe("canonical vcsService", () => {
     await definition.handler(ctx, "status", [{ contextId: "context:agent" }]);
     expect(semanticCall).toHaveBeenCalledWith(
       "vcsStatus",
-      expect.objectContaining({
-        ingress: expect.objectContaining({ causalParent: ctx.causalParent }),
-      })
+      { contextId: "context:agent" },
+      ctx.causalParent
     );
   });
 
@@ -623,11 +644,8 @@ describe("canonical vcsService", () => {
     ]);
     expect(semanticCall).toHaveBeenCalledWith(
       "vcsQuery",
-      expect.objectContaining({
-        input: expect.objectContaining({
-          visibilityContextIds: ["context:child", "context:own"],
-        }),
-      })
+      expect.objectContaining({ visibilityContextIds: ["context:child", "context:own"] }),
+      null
     );
   });
 
@@ -648,9 +666,8 @@ describe("canonical vcsService", () => {
     for (const method of ["vcsWalk", "vcsSearch"]) {
       expect(semanticCall).toHaveBeenCalledWith(
         method,
-        expect.objectContaining({
-          input: expect.objectContaining({ visibilityContextIds: ["context:own"] }),
-        })
+        expect.objectContaining({ visibilityContextIds: ["context:own"] }),
+        null
       );
     }
   });
@@ -843,8 +860,8 @@ describe("canonical vcsService", () => {
         contextIds.length === 1 &&
         contextIds[0] === "context:own" &&
         references.every(({ value }) => reachable.has(key(value))),
-      semanticCall: (method, request) => {
-        const input = request.input as { node?: VcsSemanticNodeRef; root?: VcsSemanticNodeRef };
+      semanticCall: (method, inputValue) => {
+        const input = inputValue as { node?: VcsSemanticNodeRef; root?: VcsSemanticNodeRef };
         if (method === "vcsInspect" && input.node) {
           return {
             root: input.node,

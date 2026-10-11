@@ -7,9 +7,9 @@ import {
 } from "./workspaceState.js";
 
 const slot = {
-  slot_id: "panel:one",
+  slot_id: "panel:tree/one",
   parent_slot_id: null,
-  current_entity_id: "entity:one",
+  current_entity_id: "panel:nav-one",
   current_entry_key: "entry:one",
   sort_key: 1,
   created_at: 1,
@@ -32,7 +32,7 @@ describe("workspace-state presentation boundary", () => {
       group: { kind: "roots", ownerUserId: null },
       nodes: [
         {
-          slotId: "panel:one",
+          slotId: "panel:tree/one",
           parentSlotId: null,
           ownerUserId: null,
           createdAt: 1,
