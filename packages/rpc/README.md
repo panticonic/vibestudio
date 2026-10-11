@@ -66,7 +66,14 @@ Transport implementations live under `@vibestudio/rpc/transports/*`:
 
 Protocol helpers live under `@vibestudio/rpc/protocol/*`.
 
-Public calls take receiver-owned `RpcMethod` descriptors. Schemas validate arguments and results, and TypeScript derives both types from the same contract. Dynamic selectors validate against the canonical receiver and return `unknown`; there is no caller-selected result generic. Raw wire clients live in the internal entry point for transport infrastructure.
+Public calls take receiver-owned `RpcMethod` descriptors. Schemas validate arguments and results, and TypeScript derives both types from the same contract. Dynamic service selectors validate against the canonical receiver and return `unknown`; there is no caller-selected result generic. Explicitly uncontracted panel handles retain unknown arguments and results; use a receiver contract for checked panel calls. Raw wire clients live in the internal entry point for transport infrastructure.
+
+Pass the existing typed client into workspace, panel, eval, and extension factories.
+Its call closure retains transport and lifecycle ownership when another bundle
+supplies a structural method descriptor. Internal transport lookup uses local
+module registries; a separately compiled consumer must not extract a wire client
+from a foreign facade. Bind portable service clients with
+`createLazyTypedRpcServiceClient` and the receiver's canonical schemas.
 
 Failures cross unary, streaming, upload, and shutdown boundaries as one structured graph, preserving aggregate members, causes, shared references, codes, data, and diagnostics. Use `formatRpcFailure(error)` at display boundaries to show the underlying failures.
 

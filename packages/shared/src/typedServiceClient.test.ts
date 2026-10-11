@@ -7,6 +7,9 @@ import {
   describeArgsValidationError,
   fixedPreparedAuthorityRequirement,
   parseServiceMethodReturn,
+  parseQualifiedServiceMethod,
+  qualifyServiceMethod,
+  requireQualifiedServiceMethod,
   maxArgsArity,
   preparedAuthoritySelectorKey,
   selectedPreparedAuthorityRequirement,
@@ -60,6 +63,33 @@ const methods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.string().nullable(),
   } as const,
+});
+
+describe("qualified service methods", () => {
+  it("provides one canonical wire name and rejects unqualified ingress names", () => {
+    expect(qualifyServiceMethod("hubControl", "routeWorkspace")).toBe("hubControl.routeWorkspace");
+    expect(qualifyServiceMethod("main", "units.list")).toBe("main.units.list");
+    expect(parseQualifiedServiceMethod("hubControl.routeWorkspace")).toBe(
+      "hubControl.routeWorkspace"
+    );
+    expect(parseQualifiedServiceMethod("routeWorkspace")).toBeNull();
+    expect(parseQualifiedServiceMethod(".routeWorkspace")).toBeNull();
+    expect(parseQualifiedServiceMethod("hubControl.")).toBeNull();
+    expect(() => requireQualifiedServiceMethod("routeWorkspace")).toThrow(
+      "Expected a service-qualified RPC method"
+    );
+    expect(() => qualifyServiceMethod("hub.control", "routeWorkspace")).toThrow(
+      "service names cannot contain dots"
+    );
+  });
+
+  it("keeps direct transport calls statically service-qualified", () => {
+    const acceptsDirectCall = (_method: import("./typedServiceClient.js").QualifiedServiceMethod) =>
+      undefined;
+    acceptsDirectCall("hubControl.routeWorkspace");
+    // @ts-expect-error Direct transport calls must name a service.
+    acceptsDirectCall("routeWorkspace");
+  });
 });
 
 describe("createTypedServiceClient", () => {

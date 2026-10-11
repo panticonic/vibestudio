@@ -1,4 +1,3 @@
-import { isRemoteRpcError } from "@vibestudio/rpc";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import { docsMethods } from "@vibestudio/service-schemas/docs";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
@@ -11,7 +10,7 @@ import {
   type CliCredentials,
 } from "../credentialStore.js";
 import { pairRemoteServer, selectRemoteWorkspace } from "../remoteClient.js";
-import { RpcClient, RpcError } from "../rpcClient.js";
+import { RpcClient } from "../rpcClient.js";
 import {
   deleteAgentSession,
   isValidSessionName,
@@ -30,6 +29,7 @@ import {
   printResult,
 } from "../output.js";
 import { typedClient } from "../typedClients.js";
+import { parseQualifiedServiceMethod } from "@vibestudio/shared/typedServiceClient";
 import { skillCommand } from "./skillCommand.js";
 import { isConnectPairingInput } from "@vibestudio/shared/connect";
 
@@ -69,15 +69,6 @@ function assertSessionWorkspace(session: AgentSession, creds: CliCredentials): v
         `but the selected workspace is ${creds.serverId}/${creds.workspaceId}`
     );
   }
-}
-
-/** Whether an RPC failure means the entity is already gone on the server. */
-function isEntityNotFoundError(error: unknown): boolean {
-  return (
-    (error instanceof RpcError || isRemoteRpcError(error)) &&
-    ((isRemoteRpcError(error) ? error.code : error.errorCode) === "ENTITY_NOT_FOUND" ||
-      /\b(?:not found|unknown entity|no such entity|already retired)\b/i.test(error.message))
-  );
 }
 
 async function sessionEntityExists(client: RpcClient, entityId: string): Promise<boolean> {
@@ -256,29 +247,18 @@ async function detach(inv: ParsedInvocation): Promise<number> {
     assertSessionWorkspace(session, creds);
     const client = new RpcClient(creds);
     const runtime = typedClient("runtime", runtimeMethods, client);
-    let entityMissing = false;
-    try {
-      await runtime.retireEntity({ id: session.entityId, removeContext: inv.flags["rm"] === true });
-    } catch (error) {
-      // The entity is already gone — still clean up the local session file.
-      if (!isEntityNotFoundError(error)) throw error;
-      entityMissing = true;
-    }
+    // runtime.retireEntity is idempotent: the server returns successfully when
+    // the entity is absent or already retired, so there is no separate
+    // not-found outcome for the CLI to report.
+    await runtime.retireEntity({ id: session.entityId, removeContext: inv.flags["rm"] === true });
     deleteAgentSession(name);
     printResult(
       {
         detached: name,
         entityId: session.entityId,
         removedContext: inv.flags["rm"] === true,
-        entityMissing,
       },
-      {
-        json,
-        human: () =>
-          console.log(
-            entityMissing ? `detached ${name} (entity already gone)` : `detached ${name}`
-          ),
-      }
+      { json, human: () => console.log(`detached ${name}`) }
     );
     return 0;
   } catch (error) {
@@ -339,7 +319,8 @@ async function call(inv: ParsedInvocation): Promise<number> {
     const method = inv.positionals[0];
     // Relay targets (workers/DOs/panels) dispatch plain entity-defined method
     // names; only direct server calls require the SERVICE.METHOD form.
-    if (!method || (!target && !method.includes("."))) {
+    const qualifiedMethod = method ? parseQualifiedServiceMethod(method) : null;
+    if (!method || ((!target || target === "main") && !qualifiedMethod)) {
       throw new UsageError(
         "usage: vibestudio agent call SERVICE.METHOD [ARGS_JSON | --input] [--target ID] (plain METHOD with --target)"
       );
@@ -369,9 +350,14 @@ async function call(inv: ParsedInvocation): Promise<number> {
       args = parsed;
     }
     const client = new RpcClient(requireWorkspaceCredentials());
-    const result = target
-      ? await client.callTarget(target, method, args)
-      : await client.call(method, args);
+    let result: unknown;
+    if (target) {
+      result = await client.callTarget(target, method, args);
+    } else if (qualifiedMethod) {
+      result = await client.call(qualifiedMethod, args);
+    } else {
+      throw new UsageError("direct RPC methods must use SERVICE.METHOD");
+    }
     printResult(result, { json });
     return 0;
   } catch (error) {

@@ -148,11 +148,24 @@ describe("createEvalImportLoader", () => {
       source: "@workspace/pkg",
       found: true,
       workspaceRoot: "/workspace",
+      unit: { name: "@workspace/pkg", kind: "package", relativePath: "packages/pkg" },
     }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "panel");
 
     await expect(loadImport.resolveWorkspaceImport("@workspace/pkg/report")).resolves.toBe(true);
+    await expect(loadImport.resolveWorkspaceUnit("@workspace/pkg/report")).resolves.toMatchObject({
+      name: "@workspace/pkg",
+      relativePath: "packages/pkg",
+      isRoot: false,
+    });
+    await expect(loadImport.resolveWorkspaceUnit("packages/pkg")).resolves.toEqual({
+      name: "@workspace/pkg",
+      kind: "package",
+      relativePath: "packages/pkg",
+      isRoot: true,
+    });
     expect(call).toHaveBeenCalledWith("build", "inspectBuildProvenance", ["@workspace/pkg"]);
+    expect(call).toHaveBeenCalledWith("build", "inspectBuildProvenance", ["packages/pkg"]);
   });
 
   it("does not claim missing or ambiguous workspace units", async () => {

@@ -17,6 +17,10 @@ import {
 import { createMainRpcCaller, type MainRpcCaller } from "@vibestudio/service-schemas/mainRpc";
 import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import type { z } from "zod";
+import {
+  requireQualifiedServiceMethod,
+  type QualifiedServiceMethod,
+} from "@vibestudio/shared/typedServiceClient";
 
 /**
  * HTTP RPC client for a paired Vibestudio server.
@@ -351,12 +355,13 @@ export class RpcClient {
   }
 
   /** Direct service dispatch: `service.method` on the server dispatcher. */
-  async call(method: string, args: unknown[] = []): Promise<unknown> {
+  async call(method: QualifiedServiceMethod, args: unknown[] = []): Promise<unknown> {
     return this.callTarget("main", method, args);
   }
 
   /** Relay call to a runtime target (worker, DO, panel) by entity/target id. */
   async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
+    if (targetId === "main") requireQualifiedServiceMethod(method);
     if (this.isIroh) {
       return await this.dispatchIroh(targetId, method, args);
     }
@@ -370,6 +375,7 @@ export class RpcClient {
    * resources use {@link stream} so the response itself owns their lifetime.
    */
   async callTargetPush(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
+    if (targetId === "main") requireQualifiedServiceMethod(method);
     this.keepPushOpen = true;
     const client = await this.persistentClient();
     return await client.callTarget(targetId, method, args);
@@ -381,6 +387,7 @@ export class RpcClient {
     args: unknown[] = [],
     options?: RpcStreamOptions
   ): Promise<Response> {
+    if (targetId === "main") requireQualifiedServiceMethod(method);
     // Push/stream: Iroh when the credential is a pairing blob, otherwise the
     // persistent loopback/LAN WebSocket (no more "streaming requires Iroh").
     this.keepPushOpen = true;
@@ -597,7 +604,7 @@ export class RpcClient {
     const client = await this.ensureIrohClient();
     try {
       return targetId === "main"
-        ? await client.call(method, args)
+        ? await client.call(requireQualifiedServiceMethod(method), args)
         : await client.callTarget(targetId, method, args);
     } catch (error) {
       throw toRpcError(error);

@@ -104,7 +104,8 @@ jobs:
 
   linux-installers:
     name: Build Linux installers (deb/rpm/pacman)
-    needs: github-release
+    # These jobs create private run-scoped candidates only. Signing and release
+    # attachment remain gated on the validated draft and these exact artifacts.
     if: ${{ vars.RELEASE_LINUX == 'true' }}
     strategy:
       matrix:
@@ -406,7 +407,8 @@ jobs:
 
   windows-installer:
     name: Build Windows x64 installer
-    needs: github-release
+    # This job creates a private run-scoped candidate only; publication remains
+    # gated on the validated draft and this exact artifact.
     if: ${{ vars.RELEASE_WINDOWS == 'true' }}
     runs-on: windows-2025
     permissions:

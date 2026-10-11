@@ -1,5 +1,4 @@
-import { dispatchRpcCall } from "@vibestudio/rpc/internal";
-import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { mainRpcMethod, mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 /**
  * Panel-init resolution for the headless host: the shared PanelManager over
  * plain RPC delegates, with in-memory view state. getPanelInit() returns the bootstrap config
@@ -45,7 +44,7 @@ export class PanelInitClient {
     workspaceId: string
   ) {
     const callService = (service: string, method: string, args: unknown[]) =>
-      dispatchRpcCall(rpc, "main", `${service}.${method}`, args);
+      rpc.call("main", mainRpcMethod(`${service}.${method}`), args);
     const workspaceState = createWorkspaceStateClient(callService);
     const runtime = createRuntimeClient(callService);
 

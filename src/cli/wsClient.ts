@@ -17,6 +17,10 @@ import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator"
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
+import {
+  requireQualifiedServiceMethod,
+  type QualifiedServiceMethod,
+} from "@vibestudio/shared/typedServiceClient";
 
 export interface WsClientConfig {
   url: string;
@@ -40,12 +44,12 @@ export class WsRpcClient {
     await this.ensureConnected();
   }
 
-  async call(method: string, args: unknown[] = []): Promise<unknown> {
-    const { core } = await this.ensureConnected();
-    return await core.call("main", method, args);
+  async call(method: QualifiedServiceMethod, args: unknown[] = []): Promise<unknown> {
+    return this.callTarget("main", method, args);
   }
 
   async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
+    if (targetId === "main") requireQualifiedServiceMethod(method);
     const { core } = await this.ensureConnected();
     return await core.call(targetId, method, args);
   }
@@ -56,6 +60,7 @@ export class WsRpcClient {
     args: unknown[] = [],
     options?: RpcStreamOptions
   ): Promise<Response> {
+    if (targetId === "main") requireQualifiedServiceMethod(method);
     const { core } = await this.ensureConnected();
     return await core.stream(targetId, method, args, options);
   }

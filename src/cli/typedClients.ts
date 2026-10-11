@@ -10,13 +10,15 @@
 
 import {
   createTypedServiceClient,
+  qualifyServiceMethod,
+  type QualifiedServiceMethod,
   type ServiceMethodSchemas,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
 
 /** Anything that can dispatch a raw `"service.method"` RPC with an args array. */
 export interface ServiceMethodCaller {
-  call(method: string, args: unknown[]): Promise<unknown>;
+  call(method: QualifiedServiceMethod, args: unknown[]): Promise<unknown>;
 }
 
 /** Build a typed client for one service over a raw `"service.method"` caller. */
@@ -26,6 +28,6 @@ export function typedClient<M extends ServiceMethodSchemas>(
   rpc: ServiceMethodCaller
 ): TypedServiceClient<M> {
   return createTypedServiceClient(service, methods, (svc, method, args) =>
-    rpc.call(`${svc}.${method}`, args)
+    rpc.call(qualifyServiceMethod(svc, method), args)
   );
 }

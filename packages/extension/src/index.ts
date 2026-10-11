@@ -1,4 +1,4 @@
-import type { RpcCaller } from "@vibestudio/rpc";
+import type { RpcCaller, RpcClient, RpcEventContext } from "@vibestudio/rpc";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import type { UnitRegistryEntryBase } from "@vibestudio/unit-host/types";
 import type { CallerKind } from "@vibestudio/shared/principalKinds";
@@ -364,10 +364,12 @@ export interface ExtensionWorkersLike {
   listServices(): Promise<unknown[]>;
 }
 
-export interface ExtensionRpcLike extends RpcCaller {
-  /** Subscribe to host-delivered events where supported by the runtime. */
-  on(eventName: string, cb: (event: { payload: unknown }) => void): () => void;
-}
+/** Schema-validated extension transport; method calls require RpcMethod descriptors. */
+export type ExtensionRpcLike = RpcCaller &
+  Pick<RpcClient, "emit"> & {
+    /** Host-delivered lifecycle events use a closed registration policy. */
+    on(eventName: string, cb: (event: RpcEventContext) => void): () => void;
+  };
 
 export interface ExtensionContext {
   readonly name: string;

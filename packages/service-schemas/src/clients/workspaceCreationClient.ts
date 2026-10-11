@@ -1,4 +1,4 @@
-import { dispatchRpcCall } from "@vibestudio/rpc/internal";
+import type { RpcCaller } from "@vibestudio/rpc";
 import { z } from "zod";
 import {
   workspaceCreationMethods,
@@ -70,8 +70,7 @@ export async function submitWorkspaceCreation(
   return receipt;
 }
 
-import type { RpcCaller } from "@vibestudio/rpc";
-import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
+import { createLazyTypedRpcServiceClient } from "@vibestudio/shared/typedRpcServiceClient";
 
 type Creation = TypedServiceClient<typeof workspaceCreationMethods>;
 export interface WorkspaceCreationClient {
@@ -80,12 +79,14 @@ export interface WorkspaceCreationClient {
 }
 
 /** Portable creation only; never exposes hub inventory or routing credentials. */
-export function createWorkspaceCreationClient(rpc: RpcCaller): WorkspaceCreationClient {
-  const client = createLazyTypedServiceClient(
-    "hubControl",
+export function createWorkspaceCreationClient(
+  rpc: Pick<RpcCaller, "call">
+): WorkspaceCreationClient {
+  const client = createLazyTypedRpcServiceClient(
+    rpc,
+    { targetId: "main", namespace: "hubControl" },
     ["createWorkspace", "workspaceCreationReceipt"] as const,
-    async () => (await import("../workspaceCreation.js")).workspaceCreationMethods,
-    (service, method, args) => dispatchRpcCall(rpc, "main", `${service}.${method}`, args)
+    async () => (await import("../workspaceCreation.js")).workspaceCreationMethods
   );
   return { create: client.createWorkspace, receipt: client.workspaceCreationReceipt };
 }

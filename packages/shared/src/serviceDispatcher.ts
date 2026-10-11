@@ -1,5 +1,5 @@
 import { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "@vibestudio/rpc";
-import { validateWebsiteMethodPolicy } from "./typedServiceClient.js";
+import { parseQualifiedServiceMethod, validateWebsiteMethodPolicy } from "./typedServiceClient.js";
 /**
  * ServiceDispatcher - Unified service dispatch for panels and shell.
  *
@@ -2971,10 +2971,8 @@ function restoreAuthorityAssessmentBaseline(
  * Helper to parse "service.method" format.
  */
 export function parseServiceMethod(fullMethod: string): { service: string; method: string } | null {
+  if (!parseQualifiedServiceMethod(fullMethod)) return null;
   const dotIndex = fullMethod.indexOf(".");
-  if (dotIndex === -1) {
-    return null;
-  }
   return {
     service: fullMethod.substring(0, dotIndex),
     method: fullMethod.substring(dotIndex + 1),

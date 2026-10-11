@@ -66,6 +66,20 @@ function setPriv(instance: object, key: string, value: unknown): void {
   (instance as unknown as Record<string, unknown>)[key] = value;
 }
 
+function seedRuntimeUnitIdentity(instance: object): void {
+  const source = "packages/runtime";
+  (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] = source;
+  setPriv(instance, "runtimeUnitIdentity", {
+    source,
+    unit: {
+      name: "@workspace/runtime",
+      kind: "package",
+      relativePath: source,
+      isRoot: true,
+    },
+  });
+}
+
 function ownedRpc(
   call: (
     targetId: string,
@@ -386,7 +400,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       run<T>(store: unknown, callback: () => T): T;
     }>(instance, "activeEvalExecution");
     const runtimeRpc = priv<
-      () => {
+      () => RpcClient & {
         registerResidentSession(
           channelId: string,
           receiver: (payload: unknown) => void | Promise<void>,
@@ -2400,13 +2414,12 @@ describe("EvalDO cancellation + forced recovery", () => {
     mockOwnedCall(instance, fakeRpc.call);
     mockOwnedStream(instance, fakeRpc.stream);
     mockOwnedEmit(instance, fakeRpc.emit);
-    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
-      "@workspace/runtime";
+    seedRuntimeUnitIdentity(instance);
     setPriv(instance, "portableHelpers", { journal: { current: () => null } });
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
         createHostedRuntime: (host: Record<string, unknown>) => ({
-          rpc: host["rpc"],
+          rpc: host["rpc"] as RpcClient,
           fs: host["fs"],
           gatewayFetch: host["gatewayFetch"],
         }),
@@ -2589,13 +2602,12 @@ describe("EvalDO cancellation + forced recovery", () => {
     };
     mockOwnedCall(instance, fakeRpc.call);
     mockOwnedEmit(instance, fakeRpc.emit);
-    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
-      "@workspace/runtime";
+    seedRuntimeUnitIdentity(instance);
     setPriv(instance, "portableHelpers", { journal: { current: () => null } });
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
         createHostedRuntime: (host: Record<string, unknown>) => ({
-          rpc: host["rpc"],
+          rpc: host["rpc"] as RpcClient,
           fs: host["fs"],
         }),
         createPanelRuntime: () => ({ getPanelHandle: () => null }),
@@ -3299,7 +3311,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const support = {
       createPanelRuntime: () => ({}),
       createHostedRuntime: (host: Record<string, unknown>) => ({
-        rpc: host["rpc"],
+        rpc: host["rpc"] as RpcClient,
         fs: host["fs"],
         openExternal: host["openExternal"],
       }),
@@ -3353,7 +3365,7 @@ describe("EvalDO cancellation + forced recovery", () => {
   it("runLocked endows isolate modules and threads abort into eval outbound rpc.call", async () => {
     // Verifies task 2a end-to-end through the REAL runLocked: the `rpc` binding handed to the sandbox
     // forwards the current run's signal as the rpc call's `options.signal`, so abort can unwind it.
-    const { instance } = await createTestDO(EvalDO);
+    const { instance, sql } = await createTestDO(EvalDO);
 
     // Capture the options every outbound rpc.call receives.
     const seenOptions: Array<{ method: string; options: unknown }> = [];
@@ -3383,13 +3395,12 @@ describe("EvalDO cancellation + forced recovery", () => {
     // host bundle carries no static workspace imports. Declare the provider on
     // the env and stub the loaded module with minimal factories — the rt's
     // `rpc` is the host's option-threading proxy, which is what this test pins.
-    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
-      "@workspace/runtime";
+    seedRuntimeUnitIdentity(instance);
     setPriv(instance, "portableHelpers", { journal: { current: () => null } });
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
         createHostedRuntime: (host: Record<string, unknown>) => ({
-          rpc: host["rpc"],
+          rpc: host["rpc"] as RpcClient,
           fs: host["fs"],
         }),
         createPanelRuntime: () => ({ getPanelHandle: () => null }),
@@ -3411,6 +3422,8 @@ describe("EvalDO cancellation + forced recovery", () => {
       enterEval: () => {},
       exitEval: () => Promise.resolve(),
     };
+    let explicitRefRuntime: object | undefined;
+    let previousProviderNamespace: object | undefined;
     setPriv(instance, "ensureEngine", () =>
       Promise.resolve({
         SqlScopePersistence: class SqlScopePersistence {},
@@ -3428,6 +3441,16 @@ describe("EvalDO cancellation + forced recovery", () => {
           expect(opts.require("node:util/types")).toBe(
             (opts.require("node:util") as typeof import("node:util")).types
           );
+          if (explicitRefRuntime) {
+            expect(opts.moduleMap["@workspace/runtime"]).toBe(explicitRefRuntime);
+            expect(opts.require("@workspace/runtime")).toBe(explicitRefRuntime);
+            expect(opts.moduleMap["packages/runtime"]).not.toBe(explicitRefRuntime);
+          } else {
+            expect(opts.moduleMap["@workspace/runtime"]).toBe(opts.moduleMap["packages/runtime"]);
+            expect(opts.require("@workspace/runtime")).toBe(opts.moduleMap["packages/runtime"]);
+          }
+          expect(opts.moduleMap["packages/runtime"]).not.toBe(previousProviderNamespace);
+          previousProviderNamespace = opts.moduleMap["packages/runtime"] as object;
           const rpcBinding = opts.bindings["rpc"] as Pick<RpcCaller, "call">;
           // Eval uses the same portable RpcClient call shape as panels/workers.
           await rpcBinding.call("main", testProbeRpcMethods["svc.method"], [], {
@@ -3483,10 +3506,37 @@ describe("EvalDO cancellation + forced recovery", () => {
         invocationId: "invocation:parent",
       });
     }
+    const firstRunOptions = [...seenOptions];
+    // A versioned explicit package reference may already be retained as a library
+    // module. The semantic root alias must not replace that loaded ref when it
+    // also serves as the host's configured runtime provider.
+    const explicitRef = executionArtifact("f");
+    seedPendingRun(sql, "explicit-runtime-ref");
+    instance.retainExecutionRoot("explicit-runtime-ref", "@workspace/runtime", explicitRef);
+    explicitRefRuntime = { version: "explicit-ref" };
+    setPriv(instance, "moduleMap", { "@workspace/runtime": explicitRefRuntime });
+    const explicitRunController = new AbortController();
+    await runLocked(
+      { code: "x", contextId: "ctx", gatewayToken: "gateway-test" },
+      explicitRunController.signal,
+      "run-sig-explicit-ref"
+    );
+    const explicitRunOptions = seenOptions.slice(firstRunOptions.length);
+    expect(explicitRunOptions.length).toBeGreaterThan(0);
+    for (const { options } of explicitRunOptions) {
+      expect((options as { signal?: AbortSignal }).signal?.aborted).toBe(false);
+    }
+    expect(priv(instance, "moduleMap")).not.toHaveProperty("packages/runtime");
+    expect(priv(instance, "moduleMap")).toHaveProperty("@workspace/runtime", explicitRefRuntime);
+    expect(instance.listRetainedExecutionRoots()).toContainEqual({
+      runId: "explicit-runtime-ref",
+      moduleSpecifier: "@workspace/runtime",
+      artifact: explicitRef,
+    });
     // The run composes caller cancellation with callback-failure cancellation.
     // Both outbound operations must still observe the caller's abort.
     controller.abort(new Error("cancel test run"));
-    for (const { options } of seenOptions) {
+    for (const { options } of firstRunOptions) {
       expect((options as { signal?: AbortSignal }).signal?.aborted).toBe(true);
       expect((options as { signal?: AbortSignal }).signal?.reason).toBe(controller.signal.reason);
     }

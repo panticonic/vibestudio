@@ -9,10 +9,7 @@ import {
   type VcsMoveInput,
   type VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
-import {
-  createTypedServiceClient,
-  type TypedServiceClient,
-} from "@vibestudio/shared/typedServiceClient";
+import type { TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import {
   JSON_FLAG,
@@ -24,6 +21,7 @@ import { jsonMode, printError, printResult, UsageError } from "../output.js";
 import { resolveSessionScope, SCOPE_FLAGS } from "./sessionContext.js";
 import type { RpcClient } from "../rpcClient.js";
 import { vcsGitCommand } from "./vcsGitCommands.js";
+import { typedClient } from "../typedClients.js";
 import {
   loadVcsCommandJournalEntry,
   saveVcsCommandJournalEntry,
@@ -80,9 +78,7 @@ interface FriendlyTransferBatch {
 }
 
 function clientFor(client: RpcClient): CliVcs {
-  return createTypedServiceClient("vcs", vcsMethods, (_service, method, args) =>
-    client.call(`vcs.${method}`, args)
-  );
+  return typedClient("vcs", vcsMethods, client);
 }
 
 function commandId(inv: ParsedInvocation): string {

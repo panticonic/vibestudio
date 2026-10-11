@@ -148,12 +148,23 @@ export class WorkspaceRepositories {
       this.composedViewCache.delete(key);
     }
 
+    const compositionStartedAt = performance.now();
     await Promise.all(
       normalized.map((repo) => this.deps.contentProjection.ensureStateMirrored(repo.stateHash))
     );
+    const mirrorsCompletedAt = performance.now();
     const { stateHash } = await this.composer.composeStateGrafts(
       normalized.map((repo) => ({ path: repo.repoPath, stateHash: repo.stateHash }))
     );
+    const compositionCompletedAt = performance.now();
+    if (compositionCompletedAt - compositionStartedAt >= 100) {
+      console.info("[VcsProfile] workspace repository composition", {
+        repositories: normalized.length,
+        mirrorChecksMs: mirrorsCompletedAt - compositionStartedAt,
+        composeStateGraftsMs: compositionCompletedAt - mirrorsCompletedAt,
+        totalMs: compositionCompletedAt - compositionStartedAt,
+      });
+    }
     if (this.composedViewCache.size >= 128) {
       const oldest = this.composedViewCache.keys().next().value;
       if (oldest !== undefined) this.composedViewCache.delete(oldest);

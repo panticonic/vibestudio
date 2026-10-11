@@ -22,7 +22,6 @@ describe("extension child runtime", () => {
 
     expect(source).toContain("rpc: {");
     expect(source).toContain("createMainRpcCaller(runtimeSchemaCaller())");
-    expect(source).toContain("call: (...args) => schemaRpcClient(getRuntimeBridge()).call(...args)");
     expect(source).not.toContain("call: <T>");
     expect(source).toContain('type: "ws:route"');
     expect(source.includes("call" + "DO")).toBe(false);

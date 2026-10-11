@@ -45,11 +45,22 @@ export function groupBuildArtifacts(configs) {
   return [...groups.values()];
 }
 
-export async function buildArtifactGroups(configs, build = esbuild.build) {
-  return joinBuildOperations(
+export async function buildArtifactGroups(
+  configs,
+  validateResults,
+  build = esbuild.build
+) {
+  if (typeof validateResults !== "function") {
+    throw new TypeError("buildArtifactGroups requires a result validator");
+  }
+  const results = await joinBuildOperations(
     groupBuildArtifacts(configs).map((group) => () => build({ ...group, metafile: true })),
     "Host compiler realms failed"
   );
+  // BuildResult retains each compiler realm's full metafile. Validate while
+  // this helper owns the joined results, then release them before the caller
+  // starts the next compiler phase.
+  validateResults(results);
 }
 
 /** Independent phases keep ownership until every admitted operation settles. */

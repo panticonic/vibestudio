@@ -379,7 +379,7 @@ jobs:
   packaged-acceptance-macos-14:
     name: Installed application (darwin-arm64, macos-14)
     needs: application-candidate-mac
-    if: ${{ !cancelled() }}
+    if: ${{ needs.application-candidate-mac.result == 'success' }}
     uses: ./.github/workflows/packaged-acceptance.yml
     with:
       runner: macos-14
@@ -391,7 +391,7 @@ jobs:
   packaged-acceptance-macos-26:
     name: Installed application (darwin-arm64, macos-26)
     needs: application-candidate-mac
-    if: ${{ !cancelled() }}
+    if: ${{ needs.application-candidate-mac.result == 'success' }}
     uses: ./.github/workflows/packaged-acceptance.yml
     with:
       runner: macos-26
@@ -403,7 +403,7 @@ jobs:
   packaged-acceptance-windows:
     name: Installed application (win32-x64, configured Windows runner)
     needs: application-candidate-windows
-    if: ${{ !cancelled() }}
+    if: ${{ needs.application-candidate-windows.result == 'success' }}
     uses: ./.github/workflows/packaged-acceptance.yml
     with:
       runner: ${{ inputs.windows-runner || 'windows-2025' }}

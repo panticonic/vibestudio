@@ -31,4 +31,18 @@ describe("WsRpcClient connection ownership", () => {
     await expect(client.ready()).rejects.toThrow("admission timed out");
     expect(transportMocks.close).toHaveBeenCalledOnce();
   });
+
+  it("rejects dynamically supplied unqualified direct methods before connecting", async () => {
+    const client = new WsRpcClient({
+      url: "https://server.example",
+      callerId: "shell:cli",
+      callerKind: "shell",
+      getToken: () => "token",
+    });
+
+    await expect(Reflect.apply(client.call, client, ["retireEntity", []])).rejects.toThrow(
+      'Expected a service-qualified RPC method (service.method), received "retireEntity"'
+    );
+    expect(transportMocks.connectAndWait).not.toHaveBeenCalled();
+  });
 });

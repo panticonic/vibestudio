@@ -1,4 +1,3 @@
-import { dispatchRpcCall } from "@vibestudio/rpc/internal";
 import {
   DurableObjectBase,
   rpc,
@@ -6,7 +5,7 @@ import {
   type LifecyclePrepareResult,
 } from "@vibestudio/durable";
 import { docsMethods } from "@vibestudio/service-schemas/docs";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { createTypedRpcServiceClient } from "@vibestudio/shared/typedRpcServiceClient";
 
 /** A real domain callback must remain serviceable until terminal release joins. */
 export class RetirementProbeDO extends DurableObjectBase {
@@ -54,8 +53,10 @@ export class RetirementProbeDO extends DurableObjectBase {
     if (input.phase !== "release") return { status: "ready" };
     // The host callback returns only after the authoritative receiver receipt.
     // No elapsed-time completion or local manufactured cancellation is used.
-    const docs = createTypedServiceClient("docs", docsMethods, (service, method, args) =>
-      dispatchRpcCall(this.rpc, "main", `${service}.${method}`, args)
+    const docs = createTypedRpcServiceClient(
+      this.rpc,
+      { targetId: "main", namespace: "docs" },
+      docsMethods
     );
     await docs.listServices();
     if (this.domainState() !== "terminal") throw new Error("Domain release is unconfirmed");

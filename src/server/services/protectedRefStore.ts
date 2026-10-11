@@ -586,8 +586,22 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
         }
         if (conflicts.length > 0) throw new RefBatchConflictError(conflicts);
         if (deps.assertTreeComplete) {
+          const completenessStartedAt = performance.now();
+          let completenessRoots = 0;
           for (const entry of entries) {
-            if (entry.next !== null) await deps.assertTreeComplete(entry.next);
+            if (entry.next !== null) {
+              await deps.assertTreeComplete(entry.next);
+              completenessRoots += 1;
+            }
+          }
+          const completenessCompletedAt = performance.now();
+          if (completenessCompletedAt - completenessStartedAt >= 100) {
+            console.info("[VcsProfile] protected ref tree completeness", {
+              publicationId: input.evidence.publicationId,
+              entries: entries.length,
+              roots: completenessRoots,
+              assertTreeCompleteMs: completenessCompletedAt - completenessStartedAt,
+            });
           }
         }
         // The semantic main event is protected state even when its repository

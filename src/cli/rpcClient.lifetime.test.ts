@@ -34,7 +34,7 @@ it("closing a client cancels an HTTP RPC that has not produced response headers"
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Missing test server address");
   const client = new RpcClient({ url: `http://127.0.0.1:${address.port}`, token: "test-token" });
-  const result = client.call("waitForever").then(
+  const result = client.callTarget("worker:lifetime-test", "waitForever").then(
     () => ({ resolved: true }),
     (error: unknown) => ({ resolved: false, error })
   );

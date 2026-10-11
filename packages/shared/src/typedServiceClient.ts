@@ -30,6 +30,37 @@ import type {
 import type { AuthorityRequirement, PrincipalKind } from "./authorization.js";
 import type { CapabilityPresentation } from "./authorityPresentation.js";
 
+/** A direct main-target RPC method. Target-specific entity methods use plain names. */
+export type QualifiedServiceMethod = `${string}.${string}`;
+
+/** Serialize a service and method into the canonical direct-RPC wire name. */
+export function qualifyServiceMethod(service: string, method: string): QualifiedServiceMethod {
+  if (!service || service.includes(".") || !method) {
+    throw new TypeError(
+      "RPC service and method names must be non-empty; service names cannot contain dots"
+    );
+  }
+  return `${service}.${method}` as QualifiedServiceMethod;
+}
+
+/** Narrow a dynamic RPC name at an ingress that accepts direct service calls. */
+export function parseQualifiedServiceMethod(value: string): QualifiedServiceMethod | null {
+  const dotIndex = value.indexOf(".");
+  if (dotIndex <= 0 || dotIndex === value.length - 1) return null;
+  return value as QualifiedServiceMethod;
+}
+
+/** Validate an already serialized direct-RPC name at a transport boundary. */
+export function requireQualifiedServiceMethod(value: string): QualifiedServiceMethod {
+  const qualified = parseQualifiedServiceMethod(value);
+  if (!qualified) {
+    throw new TypeError(
+      `Expected a service-qualified RPC method (service.method), received "${value}"`
+    );
+  }
+  return qualified;
+}
+
 export interface AuthorityResourcePresentation {
   type: string;
   label: string;

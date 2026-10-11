@@ -1,6 +1,6 @@
 import { residentChannelRpcMethods } from "@vibestudio/shared/residentSession";
 import { schemaRpcClient } from "@vibestudio/rpc/internal";
-import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { mainRpcMethod, mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { wireClientFor, registerRpcWireClient, createRpcPeer } from "@vibestudio/rpc/internal";
 import { type RpcWireClient } from "@vibestudio/rpc/internal";
 import {
@@ -30,6 +30,7 @@ import {
   requireBuildBundleResult,
   type BuildServiceClient,
   type EvalImportLoader,
+  type EvalWorkspaceUnitIdentity,
 } from "@vibestudio/service-schemas/clients/evalImportLoader";
 import {
   executionArtifactRefSchema,
@@ -599,6 +600,7 @@ export class EvalDO extends DurableObjectBase {
    * host bundle never statically imports workspace code.
    */
   private runtimeSupport: RuntimeSupportModule | null = null;
+  private runtimeUnitIdentity: { source: string; unit: EvalWorkspaceUnitIdentity } | null = null;
   /** The declared runtime unit's `./portable` helpers (z, defineContract, …). */
   private portableHelpers: Record<string, unknown> | null = null;
   /** Owner identity established by the first hosted runtime. A warm
@@ -2532,7 +2534,7 @@ export class EvalDO extends DurableObjectBase {
       evalEventIngressMethods,
       (service, method, callArgs) =>
         this.runDetached(() =>
-          wireClientFor(this.rpc).call("main", `${service}.${method}`, callArgs, options)
+          this.rpc.call("main", mainRpcMethod(`${service}.${method}`), callArgs, options)
         )
     );
     const previous = this.liveEventDeliveries.get(runId) ?? Promise.resolve();
@@ -2601,6 +2603,7 @@ export class EvalDO extends DurableObjectBase {
     this.engine = null;
     this.scopeManager = null;
     this.runtimeSupport = null;
+    this.runtimeUnitIdentity = null;
     this.portableHelpers = null;
     this.hostedRuntimeIdentity = null;
     this.moduleMap = {};
@@ -3167,6 +3170,14 @@ export class EvalDO extends DurableObjectBase {
       "EVAL_RUNTIME_SOURCE",
       "evalRuntime"
     );
+    const loadImport = this.makeLoadImport(execution);
+    const runtimeIdentity = this.runtimeUnitIdentity;
+    if (!runtimeIdentity || runtimeIdentity.source !== runtimeModuleName) {
+      throw new Error(
+        `EvalDO: declared runtime source ${runtimeModuleName} has no resolved workspace identity`
+      );
+    }
+    const runtimeUnit = runtimeIdentity.unit;
     const describeHelpOverview = async () => ({
       // Names only — keeps the eval scope lean. For a service's methods +
       // typed schemas, call help('<name>') (rich bindings show the ergonomic
@@ -3305,10 +3316,28 @@ export class EvalDO extends DurableObjectBase {
         )
       ).map(([specifier, namespace]) => [specifier, freezeModuleNamespace(namespace)])
     );
+    const runtimeNamespace = { ...rt, ...(this.portableHelpers ?? {}) };
+    const retainedModuleSpecifiers = new Set(
+      this.listRetainedExecutionRoots().map(({ moduleSpecifier }) => moduleSpecifier)
+    );
+    const providerAliases = runtimeUnit.isRoot
+      ? [...new Set([runtimeUnit.name, runtimeUnit.relativePath])]
+      : [];
+    const retainedExplicitAliases = new Set(
+      providerAliases.filter(
+        (specifier) =>
+          this.moduleMap[specifier] !== undefined && retainedModuleSpecifiers.has(specifier)
+      )
+    );
     const runModuleMap: Record<string, unknown> = {
       ...this.moduleMap,
       ...runLocalModules,
-      [runtimeModuleName]: { ...rt, ...(this.portableHelpers ?? {}) },
+      [runtimeModuleName]: runtimeNamespace,
+      ...Object.fromEntries(
+        providerAliases
+          .filter((specifier) => !retainedExplicitAliases.has(specifier))
+          .map((specifier) => [specifier, runtimeNamespace])
+      ),
     };
     const evalRuntimeModule = runModuleMap[runtimeModuleName];
     if (evalRuntimeModule && typeof evalRuntimeModule === "object") {
@@ -3378,7 +3407,7 @@ export class EvalDO extends DurableObjectBase {
           syntax: args.syntax ?? "tsx",
           imports: args.imports,
           sourcePath,
-          loadImport: this.makeLoadImport(execution),
+          loadImport,
           loadSourceFile: sourcePath
             ? (path: string) => this.readSourceFile(path, execution)
             : undefined,
@@ -3441,11 +3470,15 @@ export class EvalDO extends DurableObjectBase {
       if (!signal?.aborted) {
         const localKeys = new Set([
           runtimeModuleName,
+          ...providerAliases,
           ...Object.keys(this.isolateModuleMap),
           ...Object.keys(runLocalModules),
         ]);
         for (const [specifier, value] of Object.entries(runModuleMap)) {
           if (!localKeys.has(specifier)) this.moduleMap[specifier] = value;
+        }
+        for (const specifier of providerAliases) {
+          if (!retainedExplicitAliases.has(specifier)) delete this.moduleMap[specifier];
         }
       }
       await scopeManager.exitEval(scopePersistence);
@@ -3753,6 +3786,13 @@ export class EvalDO extends DurableObjectBase {
   ): Promise<RuntimeSupportModule> {
     if (this.runtimeSupport && this.portableHelpers) return this.runtimeSupport;
     const runtimeSource = this.requireDeclaredProviderSource("EVAL_RUNTIME_SOURCE", "evalRuntime");
+    const importLoader = this.makeLoadImport(execution);
+    const runtimeUnit = await importLoader.resolveWorkspaceUnit(runtimeSource);
+    if (!runtimeUnit) {
+      throw new Error(
+        `eval: declared runtime unit ${runtimeSource} is not present in the workspace graph`
+      );
+    }
     const [hosted, panelRuntime, portable] = await Promise.all([
       this.loadLibraryModule(`${runtimeSource}/hosted`, execution),
       this.loadLibraryModule(`${runtimeSource}/panel-runtime`, execution),
@@ -3772,6 +3812,7 @@ export class EvalDO extends DurableObjectBase {
     }
     this.portableHelpers = { ...(portable as Record<string, unknown>) };
     this.runtimeSupport = support as unknown as RuntimeSupportModule;
+    this.runtimeUnitIdentity = { source: runtimeSource, unit: runtimeUnit };
     return this.runtimeSupport;
   }
 
@@ -3876,6 +3917,7 @@ export class EvalDO extends DurableObjectBase {
     };
     return Object.assign(tracked, {
       resolveWorkspaceImport: load.resolveWorkspaceImport,
+      resolveWorkspaceUnit: load.resolveWorkspaceUnit,
     });
   }
 
@@ -3894,7 +3936,7 @@ export class EvalDO extends DurableObjectBase {
       evalExecutionRootsMethods,
       // Artifact retention belongs to the sealed kernel, not evaluated code.
       (service, method, args) =>
-        this.runDetached(() => wireClientFor(this.rpc).call("main", `${service}.${method}`, args))
+        this.runDetached(() => this.rpc.call("main", mainRpcMethod(`${service}.${method}`), args))
     );
     await roots.retain(
       execution.runId,
@@ -4022,9 +4064,10 @@ export class EvalDO extends DurableObjectBase {
         onStatusChange: this.rpc.onStatusChange.bind(this.rpc),
       })
     );
-    return Object.assign(schemaRpcClient(wire), {
+    const rpc = Object.assign(schemaRpcClient(wire), {
       registerResidentSession: wire.registerResidentSession,
     });
+    return rpc;
   }
 
   private async settleResidentSessions(execution: EvalExecutionContext): Promise<void> {
@@ -4094,9 +4137,9 @@ export class EvalDO extends DurableObjectBase {
     parent: RunArgs["parent"] | null,
     recordOperation: (entry: Record<string, unknown>) => void
   ): PanelRuntimeApiLike {
-    const activeRpc = this.createActiveRuntimeRpc();
+    const rpc = this.createActiveRuntimeRpc();
     return support.createPanelRuntime({
-      rpc: activeRpc,
+      rpc,
       operationSignal: () => this.requireActiveEvalExecution().signal,
       contextId,
       recordOperation,
@@ -4212,7 +4255,7 @@ export class EvalDO extends DurableObjectBase {
       contextId: execution.contextId,
       gatewayToken: token,
     };
-    const activeRpc = this.createActiveRuntimeRpc();
+    const rpc = this.createActiveRuntimeRpc();
     const gatewayConfig = {
       serverUrl: String(this.env["GATEWAY_URL"] ?? ""),
       token,
@@ -4231,15 +4274,15 @@ export class EvalDO extends DurableObjectBase {
       recordOperation,
       id: this.rpcSelfId,
       contextId: execution.contextId,
-      rpc: activeRpc,
-      fs: support.createRpcFs(activeRpc),
+      rpc,
+      fs: support.createRpcFs(rpc),
       gatewayConfig,
       gatewayFetch: support.createGatewayFetch({
-        rpc: activeRpc,
+        rpc,
         serverUrl: gatewayConfig.serverUrl,
       }),
       panelRuntime,
-      workers: support.createWorkerdClient(activeRpc),
+      workers: support.createWorkerdClient(rpc),
       openExternal: (url: string, options?: unknown) =>
         this.requireActiveEvalExecution().externalOpen.openExternal(
           url,

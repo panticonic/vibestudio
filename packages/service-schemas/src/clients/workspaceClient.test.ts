@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { createWorkspaceClient } from "./workspaceClient.js";
 
 describe("createWorkspaceClient project discovery", () => {
@@ -47,7 +48,7 @@ describe("createWorkspaceClient project discovery", () => {
       }
       throw new Error(`Unexpected RPC ${method}`);
     });
-    const workspace = createWorkspaceClient({ call } as never);
+    const workspace = createWorkspaceClient(schemaRpcMock({ call }));
 
     await expect(workspace.projects()).resolves.toEqual(["projects/alpha", "projects/zeta"]);
     await expect(workspace.projectForPath("projects/alpha/src.ts")).resolves.toEqual({

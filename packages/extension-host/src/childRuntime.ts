@@ -1,5 +1,9 @@
 import { createCredentialClient } from "@vibestudio/service-schemas/clients/credentialClient";
-import { createMainRpcCaller, mainRpcMethods, type MainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import {
+  createMainRpcCaller,
+  mainRpcMethods,
+  type MainRpcMethods,
+} from "@vibestudio/service-schemas/mainRpc";
 import {
   schemaRpcClient,
   createInternalRpcClient,
@@ -23,10 +27,7 @@ import {
   type StreamingMethodFrame,
 } from "@vibestudio/rpc";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
-import {
-  createExtensionProxy,
-  type ExtensionsClient,
-} from "@vibestudio/extension";
+import { createExtensionProxy, type ExtensionsClient } from "@vibestudio/extension";
 
 import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
@@ -220,7 +221,7 @@ const mainRpc = createMainRpcCaller(runtimeSchemaCaller());
 
 function createMainServiceClient<M extends ServiceMethodSchemas>(
   service: string,
-  methods: M,
+  methods: M
 ): TypedServiceClient<M> {
   return createTypedServiceClient(service, methods, (serviceName, method, args) => {
     const methodName = `${serviceName}.${method}` as keyof MainRpcMethods & string;
@@ -352,10 +353,7 @@ function createFsClient() {
     async appendFile(filePath: string, data: string | Uint8Array) {
       await mainRpc("fs.appendFile", [filePath, data]);
     },
-    async readdir(
-      filePath: string,
-      options?: { withFileTypes?: boolean; recursive?: boolean },
-    ) {
+    async readdir(filePath: string, options?: { withFileTypes?: boolean; recursive?: boolean }) {
       return mainRpc("fs.readdir", [filePath, options]);
     },
     async mkdir(filePath: string, options?: { recursive?: boolean }) {
@@ -402,11 +400,7 @@ function createFsClient() {
       return {
         fd: handleId,
         async read(buffer: Uint8Array, offset: number, length: number, position: number | null) {
-          const result = await mainRpc("fs.handleRead", [
-            handleId,
-            length,
-            position,
-          ]);
+          const result = await mainRpc("fs.handleRead", [handleId, length, position]);
           buffer.set(result.buffer, offset);
           return { bytesRead: result.bytesRead, buffer };
         },
@@ -417,11 +411,7 @@ function createFsClient() {
           position: number | null = null
         ) {
           const slice = buffer.subarray(offset, offset + length);
-          const result = await mainRpc("fs.handleWrite", [
-            handleId,
-            slice,
-            position,
-          ]);
+          const result = await mainRpc("fs.handleWrite", [handleId, slice, position]);
           return { bytesWritten: result.bytesWritten, buffer };
         },
         async close() {
@@ -477,6 +467,7 @@ function createContext() {
     return resolved;
   };
 
+  const rpc = schemaRpcClient(getRuntimeBridge());
   const ctx = {
     name,
     version,
@@ -496,8 +487,10 @@ function createContext() {
     git: createGitInteropClient(),
     workspace: createMainServiceClient("workspace", workspaceMethods),
     rpc: {
-      ...runtimeSchemaCaller(),
-      on: (eventName: string, cb: (event: { payload: unknown }) => void) =>
+      call: rpc.call,
+      stream: rpc.stream,
+      emit: rpc.emit,
+      on: (eventName: string, cb: (event: import("@vibestudio/rpc").RpcEventContext) => void) =>
         getRuntimeBridge().on(eventName, cb, {
           kind: "closed",
           reason: "This listener consumes host or implementation lifecycle events.",

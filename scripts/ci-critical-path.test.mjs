@@ -129,7 +129,11 @@ test("native verification and release candidates share prepared inputs without s
   for (const [jobName, candidate, runner, target, app] of acceptanceJobs) {
     assert.deepEqual(dependenciesOf(jobs[jobName]), [candidate]);
     assert.equal(jobs[jobName].uses, "./.github/workflows/packaged-acceptance.yml");
-    assert.match(jobs[jobName].if, /!cancelled\(\)/);
+    assert.equal(
+      jobs[jobName].if,
+      `\${{ needs.${candidate}.result == 'success' }}`,
+      "acceptance may consume only an artifact produced by its own successful candidate job"
+    );
     assert.deepEqual(jobs[jobName].with, { runner, target, app });
     const ancestors = transitiveDependencies(jobs, jobName);
     assert.ok(
@@ -153,7 +157,7 @@ test("native verification and release candidates share prepared inputs without s
   assert.equal(
     downloadStep.if,
     undefined,
-    "candidate download must not be skipped after a producer failure"
+    "after the producer succeeds, acceptance must fail if its artifact is unexpectedly absent"
   );
   assert.ok(
     acceptanceSteps.some(
@@ -190,6 +194,74 @@ test("native verification and release candidates share prepared inputs without s
   const releaseJobs = (await readWorkflow("release.yml")).jobs;
   assert.equal(releaseJobs["release-quality"].uses, "./.github/workflows/ci.yml");
   assert.deepEqual(dependenciesOf(releaseJobs["github-release"]), ["release-quality"]);
+
+  for (const [producer, publisher] of [
+    ["linux-installers", "publish-linux"],
+    ["windows-installer", "publish-windows"],
+  ]) {
+    const job = releaseJobs[producer];
+    const ancestors = transitiveDependencies(releaseJobs, producer);
+    assert.ok(
+      !ancestors.has("github-release"),
+      `${producer} should prepare its private candidate in parallel with release validation`
+    );
+    assert.deepEqual(job.permissions, { contents: "read" });
+    const source = JSON.stringify(job);
+    assert.doesNotMatch(
+      source,
+      /\$\{\{\s*secrets\./,
+      `${producer} must not receive publication credentials`
+    );
+    assert.doesNotMatch(
+      source,
+      /softprops\/action-gh-release/,
+      `${producer} must not publish to GitHub Releases`
+    );
+    assert.ok(
+      dependenciesOf(releaseJobs[publisher]).includes(producer),
+      `${publisher} must wait for its exact candidate producer`
+    );
+  }
+
+  const macAncestors = transitiveDependencies(releaseJobs, "mac-dmg");
+  assert.ok(
+    macAncestors.has("github-release"),
+    "the Apple-credentialed build must remain behind release validation"
+  );
+
+  for (const [publisher, producer, acceptance] of [
+    ["publish-linux", "linux-installers", undefined],
+    ["publish-windows", "windows-installer", "accept-windows-installer"],
+    ["publish-macos", "mac-dmg", "accept-macos-installer"],
+  ]) {
+    const job = releaseJobs[publisher];
+    const dependencies = dependenciesOf(job);
+    assert.ok(
+      dependencies.includes("github-release"),
+      `${publisher} must wait for the validated draft`
+    );
+    assert.ok(
+      dependencies.includes(producer),
+      `${publisher} must wait for its exact immutable candidate`
+    );
+    if (acceptance) {
+      assert.ok(
+        dependencies.includes(acceptance),
+        `${publisher} must wait for installed acceptance`
+      );
+    }
+    assert.doesNotMatch(
+      job.if ?? "",
+      /always\(\)|!cancelled\(\)/,
+      `${publisher} must skip when a required dependency fails or is cancelled`
+    );
+  }
+
+  const releaseAncestors = transitiveDependencies(releaseJobs, "publish-release");
+  assert.ok(
+    releaseAncestors.has("release-quality"),
+    "the public release must remain behind full quality validation"
+  );
 });
 
 test("application packaging captures production outputs before desktop template bootstrap", async () => {

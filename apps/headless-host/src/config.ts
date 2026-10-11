@@ -93,7 +93,10 @@ export function resolveConfig(
 
   const idleExitEnv = env["VIBESTUDIO_HEADLESS_IDLE_EXIT_MS"];
   const clientSessionId = overrides.clientSessionId ?? `headless-${randomUUID()}`;
-  const profileRoot = path.join(env["VIBESTUDIO_INSTANCE_ROOT"] ?? os.tmpdir(), "vibestudio-headless");
+  const profileRoot = path.join(
+    env["VIBESTUDIO_INSTANCE_ROOT"] ?? os.tmpdir(),
+    "vibestudio-headless"
+  );
   return {
     serverUrl: serverUrl.replace(/\/$/, ""),
     auth,

@@ -142,6 +142,17 @@ describe("rpcClient", () => {
     vi.restoreAllMocks();
   });
 
+  it("rejects an unqualified method at the dynamic main-target boundary before connecting", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RpcClient(CREDS);
+
+    await expect(client.callTarget("main", "ensureUserWorkspaces", [])).rejects.toThrow(
+      'Expected a service-qualified RPC method (service.method), received "ensureUserWorkspaces"'
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("types the refresh-shell response", async () => {
     vi.stubGlobal(
       "fetch",

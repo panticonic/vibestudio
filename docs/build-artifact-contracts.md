@@ -37,6 +37,10 @@ candidate waits for Darwin inputs; the Windows candidate starts independently.
 The universal `npm-server-preflight` needs all three Unix producers.
 Each installed-acceptance job waits only for the application candidate for its
 platform, without waiting for the other platform, native tests, or npm checks.
+Its condition requires that exact producer to succeed: a dependency edge alone
+does not prevent execution after producer failure when a status-check function
+overrides GitHub Actions' implicit success condition. Failed or cancelled
+production leaves acceptance skipped and the required release gate unsatisfied.
 Shared reusable workflows keep the
 platform job definitions consistent. Consumers verify downloaded inputs before
 use. Run-scoped artifact names and observer attestations bind them to the
@@ -48,11 +52,15 @@ otherwise a slow unrelated producer serializes those consumers. Keep platform
 variation in shared reusable workflows rather than copying build recipes.
 
 The reusable CI workflow must still succeed in full before the release
-workflow creates its draft. Parallel candidate preparation is not publication
-authority: all required verification remains part of the release gate. Keep
-new `needs` edges tied to a consumed artifact or another concrete prerequisite;
-record that reason beside the edge. Independent checks should overlap, without
-rebuilding the same candidate or weakening its installed acceptance tests.
+workflow creates its draft. Linux and Windows installer jobs can prepare private,
+run-scoped candidates alongside that validation: they have read-only repository
+permissions and do not receive publication credentials. Signing, artifact
+attachment, and making the release public still wait for the validated draft
+and exact candidate; installed acceptance remains a required gate where defined.
+The Apple-credentialed macOS build stays behind the draft. Keep `needs` edges
+tied to a consumed artifact or another concrete prerequisite, and record that
+reason beside the edge. Independent checks should overlap, without rebuilding
+the same candidate or weakening its installed acceptance tests.
 
 `pnpm check:workflows` runs a checksum-pinned actionlint against every workflow,
 including expression-context and dependency validation, both locally through
@@ -87,6 +95,30 @@ Measure the entire owned process tree, including each esbuild child's PID,
 parent, peak RSS, and active compilation identity. Node's own RSS and a completed
 bundle's size do not measure the compiler child's peak memory. Successful-build
 receipts alone cannot identify a compile killed before it wrote a receipt.
+
+Composition typechecks also need a measured memory allowance. On the October
+2026 Linux checkout, one Base source/integration check completed in 30 seconds
+with a 5.8 GiB process-tree peak; a 6 GiB diagnostic scope killed the compiler
+before completion. That scope failure does not establish an unbounded compiler
+or a source error; a completed run does not justify its memory cost either.
+The measured program contained 4,648 files, performed about 19 million generic
+instantiations, and created about 3.9 million types. Attribute excessive memory
+to the compiler's actual allocations and type-checking work before declaring
+a larger allowance to be a fix. Prefer a heap profile over a full type trace:
+retaining and serializing every expanded type can itself exceed the compiler's
+normal memory use and invalidate the measurement. During that
+investigation, admit one composition compiler at a time on this host and leave
+headroom for its projection and the desktop. Measure again when the source
+graph or compiler changes. Independent unit checks can overlap when their
+measured peaks fit the remaining budget.
+
+TypeScript 7.0.2 defaults to four independent checker instances, with files
+assigned across them in its [checker pool](https://github.com/microsoft/typescript-go/blob/typescript/v7.0.2/internal/compiler/checkerpool.go).
+The measured trace contained roughly a million types in each checker context;
+aggregate diagnostics include that repeated work. Separate process-level
+concurrency from this internal replication when attributing memory. Do not
+claim that a source abstraction reduces compiler memory without comparing the
+same program and retaining its exact diagnostics and public types.
 
 Cold profiling must keep the existing native operation and startup receipts.
 On a Linux host with delegated systemd memory controllers, an explicitly sized

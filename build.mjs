@@ -768,7 +768,7 @@ async function build() {
     buildNativeIsolation();
     // These phases own separate outputs. Join them before the server compiler
     // consumes the internal DO bundle and workerd programs.
-    const [, workerdPrograms, initialHostBuilds] = await joinBuildOperations([
+    const [, workerdPrograms] = await joinBuildOperations([
       () => stageNodeRuntime(),
       () => buildWorkerdPrograms({ minify: !isDev, logOverride }),
       () =>
@@ -782,13 +782,11 @@ async function build() {
             bootstrapConfig,
             clientConfig,
           ],
+          assertHostBuildMetafiles,
           buildHostArtifact
         ),
       () => buildHeadlessHost(),
     ]);
-    assertHostBuildMetafiles(
-      initialHostBuilds.filter((result) => result && typeof result === "object")
-    );
     await joinBuildOperations([
       () => buildDependencyWorkers(),
       () => buildServerArtifacts(["standalone", "electron"], workerdPrograms),
@@ -905,16 +903,16 @@ async function buildServerArtifacts(modes, workerdPrograms) {
       ...workers[mode],
     ];
   });
-  const results = await buildArtifactGroups(
+  await buildArtifactGroups(
     [
       ...configs,
       fsDiskWorkerConfig,
       ...nativeWorkspaceArtifactConfigs({ isDev, logOverride }),
       dependencyContentMaintenanceConfig,
     ],
+    assertHostBuildMetafiles,
     buildHostArtifact
   );
-  assertHostBuildMetafiles(results);
 }
 
 async function buildSourceServerPrerequisites() {
@@ -938,14 +936,17 @@ async function buildSourceServerPrerequisites() {
     // infrastructure portion of `pnpm dev` without rebuilding desktop UI.
     await buildVibestudioPackages();
     buildNativeIsolation();
-    const [, programs, prerequisites] = await joinBuildOperations([
+    const [, programs] = await joinBuildOperations([
       () => stageNodeRuntime(),
       () => buildWorkerdPrograms({ minify: !isDev, logOverride }),
       () =>
-        buildArtifactGroups([browserTransportConfig, internalDoBundleConfig], buildHostArtifact),
+        buildArtifactGroups(
+          [browserTransportConfig, internalDoBundleConfig],
+          assertHostBuildMetafiles,
+          buildHostArtifact
+        ),
       () => buildHeadlessHost(),
     ]);
-    assertHostBuildMetafiles(prerequisites);
     await buildServerArtifacts(["standalone"], programs);
 
     // Authority startup identifies the installed host by the exact source

@@ -13,6 +13,7 @@ import {
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import type { CliStoredPairing } from "./credentialStore.js";
 import { TimeoutError } from "./output.js";
+import { qualifyServiceMethod } from "@vibestudio/shared/typedServiceClient";
 
 export interface TerminalLaunchGateOptions {
   target?: HostTarget;
@@ -39,7 +40,7 @@ export async function runTerminalLaunchGate(
   const target = options.target ?? "terminal";
   const rpc = new RpcClient(creds);
   const launchClient = new HostLaunchClient((service, method, args) =>
-    rpc.call(`${service}.${method}`, args)
+    rpc.call(qualifyServiceMethod(service, method), args)
   );
   const startedAt = Date.now();
   // Building and starting the terminal can legitimately take a while; only an

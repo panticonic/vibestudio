@@ -331,18 +331,25 @@ describe("vibestudio agent commands", () => {
     expect(fs.existsSync(sessionFile(tmpDir, "work"))).toBe(false);
   });
 
-  it("detach deletes the session file when the entity is already gone", async () => {
+  it("detach completes local cleanup when retireEntity idempotently accepts an absent entity", async () => {
     writeCredentials(tmpDir);
     const { main } = await import("../client.js");
     stubServer((body) => (body.method === "runtime.createEntity" ? SESSION_HANDLE : []));
     await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
 
-    stubServer(() => {
-      throw new Error("entity session:work not found");
+    const { rpcBodies } = stubServer((body) => {
+      if (body.method === "runtime.retireEntity") return undefined;
+      throw new Error(`unexpected method ${body.method}`);
     });
     await expect(main(["agent", "detach", "work", "--json"])).resolves.toBe(0);
     expect(fs.existsSync(sessionFile(tmpDir, "work"))).toBe(false);
-    expect(jsonOutput()).toMatchObject({ detached: "work", entityMissing: true });
+    expect(rpcBodies).toEqual([
+      {
+        method: "runtime.retireEntity",
+        args: [{ id: "session:work", removeContext: false }],
+      },
+    ]);
+    expect(jsonOutput()).toMatchObject({ detached: "work", entityId: "session:work" });
   });
 
   it("detach keeps the session file when retire fails for other reasons", async () => {
@@ -441,6 +448,14 @@ describe("vibestudio agent commands", () => {
       method: "ping",
       args: [],
     });
+  });
+
+  it("requires service qualification when --target names main", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    const { rpcBodies } = stubServer(() => "unexpected");
+    await expect(main(["agent", "call", "ping", "--target", "main", "--json"])).resolves.toBe(2);
+    expect(rpcBodies).toEqual([]);
   });
 
   it("call rejects malformed args as usage errors (exit 2)", async () => {

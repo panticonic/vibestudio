@@ -58,12 +58,7 @@ export function dispatchRpcStream(
   args: unknown[],
   options?: import("./types.js").RpcStreamOptions
 ): Promise<Response> {
-  return wireStreamFor(caller).stream(
-    target,
-    method,
-    args,
-    options
-  );
+  return wireStreamFor(caller).stream(target, method, args, options);
 }
 
 export { schemaRpcClient, schemaRpcCaller, schemaRpcStream } from "./schemaClient.js";

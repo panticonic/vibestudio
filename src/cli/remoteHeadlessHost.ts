@@ -70,9 +70,7 @@ async function createIrohHeadlessHostOverrides(
         options?: unknown
       ): Promise<unknown> {
         void options;
-        return targetId === "main"
-          ? client.call(method, args)
-          : client.callTarget(targetId, method, args);
+        return client.callTarget(targetId, method, args);
       },
       stream(
         targetId: string,

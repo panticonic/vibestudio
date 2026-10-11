@@ -11,6 +11,14 @@ import {
 } from "@vibestudio/shared/typedServiceClient";
 
 export type BuildServiceClient = TypedServiceClient<typeof buildMethods>;
+export interface EvalWorkspaceUnitIdentity {
+  /** Stable semantic name shared by source-path and package-name references. */
+  name: string;
+  kind: string;
+  relativePath: string;
+  /** True when the reference names the unit root rather than an export subpath. */
+  isRoot: boolean;
+}
 export interface EvalImportLoader {
   (specifier: string, ref: string | undefined, externals: string[]): Promise<BuildBundleResult>;
   /**
@@ -20,6 +28,8 @@ export interface EvalImportLoader {
    * workspace build.
    */
   resolveWorkspaceImport(specifier: string): Promise<boolean>;
+  /** Resolve a workspace reference to its graph identity without building it. */
+  resolveWorkspaceUnit(specifier: string): Promise<EvalWorkspaceUnitIdentity | null>;
 }
 
 export interface EvalImportLoaderOptions {
@@ -114,16 +124,38 @@ export function createEvalImportLoader(
     );
   };
 
-  const resolveWorkspaceImport = async (specifier: string): Promise<boolean> => {
+  const resolveWorkspaceUnit = async (
+    specifier: string
+  ): Promise<EvalWorkspaceUnitIdentity | null> => {
     // Provenance resolution understands exact package names, workspace-relative
-    // paths, and unique unit basenames. Probe the package root so declared
-    // export subpaths ("pkg/subpath") are recognized without building them.
+    // paths, and unique unit basenames. Scoped package export subpaths resolve
+    // through their declared package root; source paths are probed whole first
+    // so a path such as packages/runtime is not truncated to "packages".
     const packageRoot = specifier.startsWith("@")
       ? specifier.split("/").slice(0, 2).join("/")
       : (specifier.split("/")[0] ?? specifier);
-    const result = await build.inspectBuildProvenance(packageRoot);
-    return result.found && result.ambiguous !== true;
+    const candidates =
+      specifier.startsWith("@") || packageRoot === specifier
+        ? [packageRoot]
+        : [specifier, packageRoot];
+    for (const candidate of candidates) {
+      const result = await build.inspectBuildProvenance(candidate);
+      if (result.ambiguous === true) return null;
+      if (!result.found || !result.unit) continue;
+      return {
+        name: result.unit.name,
+        kind: result.unit.kind,
+        relativePath: result.unit.relativePath,
+        isRoot:
+          specifier === result.unit.name ||
+          specifier === result.unit.relativePath ||
+          (candidate === specifier && !specifier.includes("/")),
+      };
+    }
+    return null;
   };
+  const resolveWorkspaceImport = async (specifier: string): Promise<boolean> =>
+    (await resolveWorkspaceUnit(specifier)) !== null;
 
-  return Object.assign(loadImport, { resolveWorkspaceImport });
+  return Object.assign(loadImport, { resolveWorkspaceImport, resolveWorkspaceUnit });
 }

@@ -21,6 +21,10 @@ import { createReconnectingIrohClientPipe } from "@vibestudio/rpc/transports/rec
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import {
+  requireQualifiedServiceMethod,
+  type QualifiedServiceMethod,
+} from "@vibestudio/shared/typedServiceClient";
 
 export interface IrohRpcClientOptions {
   reach: IrohReach;
@@ -74,11 +78,12 @@ export class IrohRpcClient {
     return (await this.ensureConnected()).callerId;
   }
 
-  async call(method: string, args: unknown[] = []): Promise<unknown> {
-    return (await this.ensureConnected()).rpc.call("main", method, args);
+  async call(method: QualifiedServiceMethod, args: unknown[] = []): Promise<unknown> {
+    return this.callTarget("main", method, args);
   }
 
   async callTarget(target: string, method: string, args: unknown[] = []): Promise<unknown> {
+    if (target === "main") requireQualifiedServiceMethod(method);
     return (await this.ensureConnected()).rpc.call(target, method, args);
   }
 
@@ -88,6 +93,7 @@ export class IrohRpcClient {
     args: unknown[] = [],
     options?: RpcStreamOptions
   ): Promise<Response> {
+    if (target === "main") requireQualifiedServiceMethod(method);
     return (await this.ensureConnected()).rpc.stream(target, method, args, options);
   }
 

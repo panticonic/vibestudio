@@ -63,7 +63,10 @@ function recordingRpc(): {
     }
   };
   const rpc = schemaRpcMock({ call: callImpl });
-  return { rpc, captured };
+  return {
+    rpc,
+    captured,
+  };
 }
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────

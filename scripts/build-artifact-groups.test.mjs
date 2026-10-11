@@ -27,16 +27,38 @@ test("compatible entries share one graph while compiler realms retain their opti
   assert.deepEqual(groups[2].external, ["native"]);
 });
 
-test("independent compiler realms run concurrently and retain result order", async () => {
+test("independent compiler realms run concurrently and validate joined results in order", async () => {
   const finish = [];
+  let validated;
   const pending = buildArtifactGroups(
     [artifact("a"), artifact("b", { format: "cjs" })],
+    (results) => {
+      validated = results;
+    },
     () => new Promise((resolve) => finish.push(resolve))
   );
   assert.equal(finish.length, 2);
   finish[1]("second");
   finish[0]("first");
-  assert.deepEqual(await pending, ["first", "second"]);
+  assert.equal(await pending, undefined);
+  assert.deepEqual(validated, ["first", "second"]);
+});
+
+test("result validation failures propagate after every compiler realm settles", async () => {
+  const validationFailure = new Error("host input rejected");
+  let validated = false;
+  await assert.rejects(
+    buildArtifactGroups(
+      [artifact("a")],
+      () => {
+        validated = true;
+        throw validationFailure;
+      },
+      async () => "result"
+    ),
+    (error) => error === validationFailure
+  );
+  assert.equal(validated, true);
 });
 
 test("a failed compiler joins admitted siblings before returning its original error", async () => {
@@ -45,6 +67,7 @@ test("a failed compiler joins admitted siblings before returning its original er
   let settled = false;
   const pending = buildArtifactGroups(
     [artifact("a"), artifact("b", { format: "cjs" })],
+    () => assert.fail("failed compiler results must not be validated"),
     (config) => {
       if (config.format === "esm") throw failure;
       return new Promise((resolve) => {
@@ -67,14 +90,20 @@ test("multiple failed compiler realms retain every original failure after joinin
   const shared = Object.assign(new Error("Dependency unavailable"), { code: "EDEPENDENCY" });
   const first = new Error("ESM compilation failed", { cause: shared });
   const second = new AggregateError([shared], "CJS compilation failed", { cause: shared });
-  await assert.rejects(buildArtifactGroups(
-    [artifact("a"), artifact("b", { format: "cjs" })],
-    async (config) => { throw config.format === "esm" ? first : second; }
-  ), (error) => {
-    assert.ok(error instanceof AggregateError);
-    assert.deepEqual(error.errors, [first, second]);
-    assert.equal(error.errors[0].cause, error.errors[1].cause);
-    assert.equal(error.errors[1].errors[0], shared);
-    return true;
-  });
+  await assert.rejects(
+    buildArtifactGroups(
+      [artifact("a"), artifact("b", { format: "cjs" })],
+      () => assert.fail("failed compiler results must not be validated"),
+      async (config) => {
+        throw config.format === "esm" ? first : second;
+      }
+    ),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [first, second]);
+      assert.equal(error.errors[0].cause, error.errors[1].cause);
+      assert.equal(error.errors[1].errors[0], shared);
+      return true;
+    }
+  );
 });
