@@ -36,6 +36,8 @@ import { builtinModules, createRequire } from "module";
 import { pathToFileURL } from "url";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import { resolveNativeTypeScriptServerPath } from "../appRoot.js";
+import { BuildSlotQueue, BuilderLifetime, joinedFailure } from "./builderLifetime.js";
+import { profileEsbuildBuild } from "./compilerProfile.js";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { BuildDiagnosticsError, BuildRequestError, diagnosticsFromError } from "./diagnostics.js";
 import type { LibraryBuildTarget, WorkspaceTestRuntime } from "@vibestudio/service-schemas/build";
@@ -121,7 +123,7 @@ async function buildWithEsbuild<T extends esbuild.BuildOptions>(
   options: T & { [Key in Exclude<keyof T, keyof esbuild.BuildOptions>]: never }
 ): Promise<esbuild.BuildResult<T>> {
   try {
-    return await esbuild.build(options);
+    return await profileEsbuildBuild(options);
   } catch (error) {
     if (
       error &&
@@ -164,6 +166,11 @@ let _immutableTreeWorker: ImmutableTreeWorkerClient | null = null;
 
 let workerBatches = 0;
 let workerRetirement: Promise<void> | undefined;
+let builderLifetime = new BuilderLifetime();
+let buildSlotQueue: BuildSlotQueue | undefined;
+let builderShutdown: Promise<void> | undefined;
+let builderShutdownComplete = false;
+let builderConfigured = false;
 
 async function joinWorkerRetirement(operations: Array<Promise<void> | undefined>): Promise<void> {
   const outcomes = await Promise.allSettled(operations);
@@ -180,50 +187,49 @@ async function joinWorkerRetirement(operations: Array<Promise<void> | undefined>
 
 /** A build closure owns compiler residency, including concurrent dependency builds. */
 export async function withBuilderWorkers<T>(operation: () => Promise<T>): Promise<T> {
-  workerBatches++;
-  let value!: T;
-  let operationFailure: unknown;
-  let operationFailed = false;
-  try {
-    await workerRetirement;
-    value = await operation();
-  } catch (error) {
-    operationFailure = error;
-    operationFailed = true;
-  }
-
-  let retirementFailure: unknown;
-  let retirementFailed = false;
-  try {
-    workerBatches--;
-    if (workerBatches === 0) {
-      const retirement = joinWorkerRetirement([
-        _libraryLoweringWorker?.close(),
-        _workspaceRpcCatalogWorker?.close(),
-        _immutableTreeWorker?.close(),
-      ]);
-      workerRetirement = retirement;
-      try {
-        await retirement;
-      } finally {
-        if (workerRetirement === retirement) workerRetirement = undefined;
-      }
+  return builderLifetime.run(async () => {
+    workerBatches++;
+    let value!: T;
+    let operationFailure: unknown;
+    let operationFailed = false;
+    try {
+      await workerRetirement;
+      builderLifetime.assertOpen();
+      value = await operation();
+    } catch (error) {
+      operationFailure = error;
+      operationFailed = true;
     }
-  } catch (error) {
-    retirementFailure = error;
-    retirementFailed = true;
-  }
 
-  if (operationFailed && retirementFailed) {
-    throw new AggregateError(
-      [operationFailure, retirementFailure],
-      "Build operation and worker retirement failed",
-      { cause: operationFailure }
-    );
-  }
-  if (operationFailed) throw operationFailure;
-  if (retirementFailed) throw retirementFailure;
-  return value;
+    let retirementFailure: unknown;
+    let retirementFailed = false;
+    try {
+      workerBatches--;
+      if (workerBatches === 0 && !builderLifetime.isClosing) {
+        const retirement = joinWorkerRetirement([
+          _libraryLoweringWorker?.close(),
+          _workspaceRpcCatalogWorker?.close(),
+          _immutableTreeWorker?.close(),
+        ]);
+        workerRetirement = retirement;
+        try {
+          await retirement;
+        } finally {
+          if (workerRetirement === retirement) workerRetirement = undefined;
+        }
+      }
+    } catch (error) {
+      retirementFailure = error;
+      retirementFailed = true;
+    }
+
+    const failures: unknown[] = [];
+    if (operationFailed) failures.push(operationFailure);
+    if (retirementFailed) failures.push(retirementFailure);
+    const failure = joinedFailure(failures, "Build operation and worker retirement failed");
+    if (failure !== undefined || failures.length > 0) throw failure;
+    return value;
+  });
 }
 
 function createHostRequire(nodeModulesRoot: string): NodeJS.Require {
@@ -268,12 +274,32 @@ export function initBuilder(
   ensureBuildProvider?: (target: "react-native") => Promise<void>,
   signal?: AbortSignal
 ): void {
-  const reuseWorkers = _appRoot === path.resolve(appRoot) && _libraryLoweringWorker !== null;
+  if (builderLifetime.isClosing && !builderShutdownComplete) {
+    throw new Error("Cannot initialize the builder while its previous lifetime is retiring");
+  }
+  if (builderShutdownComplete) {
+    builderLifetime = new BuilderLifetime();
+    buildSlotQueue = new BuildSlotQueue(MAX_CONCURRENT_BUILDS);
+    builderShutdown = undefined;
+    builderShutdownComplete = false;
+    workerBatches = 0;
+    workerRetirement = undefined;
+    _libraryLoweringWorker = null;
+    _workspaceRpcCatalogWorker = null;
+    _immutableTreeWorker = null;
+    builderConfigured = false;
+  }
+  const resolvedAppRoot = path.resolve(appRoot);
+  if (builderConfigured && _appRoot !== resolvedAppRoot) {
+    throw new Error("Cannot reconfigure the builder before closing its current lifetime");
+  }
+  const reuseWorkers = _appRoot === resolvedAppRoot && _libraryLoweringWorker !== null;
   _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
-  _appRoot = path.resolve(appRoot);
+  _appRoot = resolvedAppRoot;
   _runNativeJob = runNativeJob;
   _ensureBuildProvider = ensureBuildProvider;
-  buildSignal = signal;
+  buildSignal = signal ? AbortSignal.any([signal, builderLifetime.signal]) : builderLifetime.signal;
+  buildSlotQueue ??= new BuildSlotQueue(MAX_CONCURRENT_BUILDS);
   _hostWorkspacePackageManifests = discoverHostWorkspacePackageManifests(_appRoot);
   if (!reuseWorkers) {
     workerRetirement = joinWorkerRetirement([
@@ -291,21 +317,45 @@ export function initBuilder(
     );
     _immutableTreeWorker = new ImmutableTreeWorkerClient();
   }
+  builderConfigured = true;
 }
 
 export async function closeBuilder(): Promise<void> {
-  const worker = _libraryLoweringWorker;
-  const catalogWorker = _workspaceRpcCatalogWorker;
-  const immutableTreeWorker = _immutableTreeWorker;
-  _libraryLoweringWorker = null;
-  _workspaceRpcCatalogWorker = null;
-  _immutableTreeWorker = null;
-  await joinWorkerRetirement([
-    workerRetirement,
-    worker?.close(),
-    catalogWorker?.close(),
-    immutableTreeWorker?.close(),
-  ]);
+  if (builderShutdown) return builderShutdown;
+  const closing = new Error("Build system is shutting down");
+  buildSlotQueue?.close(closing);
+  builderShutdown = (async () => {
+    try {
+      const operationFailures = await builderLifetime.close(closing);
+      const worker = _libraryLoweringWorker;
+      const catalogWorker = _workspaceRpcCatalogWorker;
+      const immutableTreeWorker = _immutableTreeWorker;
+      _libraryLoweringWorker = null;
+      _workspaceRpcCatalogWorker = null;
+      _immutableTreeWorker = null;
+      let workerFailure: unknown;
+      let workerFailed = false;
+      try {
+        await joinWorkerRetirement([
+          workerRetirement,
+          worker?.close(),
+          catalogWorker?.close(),
+          immutableTreeWorker?.close(),
+        ]);
+      } catch (error) {
+        workerFailure = error;
+        workerFailed = true;
+      }
+      workerRetirement = undefined;
+      const failures = [...operationFailures];
+      if (workerFailed) failures.push(workerFailure);
+      const failure = joinedFailure(failures, "Build system shutdown failed");
+      if (failure !== undefined || failures.length > 0) throw failure;
+    } finally {
+      builderShutdownComplete = true;
+    }
+  })();
+  return builderShutdown;
 }
 
 // ---------------------------------------------------------------------------
@@ -412,7 +462,6 @@ let runningBuilds = 0;
 let runningNonInteractiveBuilds = 0;
 let runningSpeculativeBuilds = 0;
 type BuildPriority = "interactive" | "background" | "speculative";
-const waitQueue: Array<{ priority: BuildPriority; resolve: () => void }> = [];
 
 /**
  * Speculative preparation must not occupy every build lane. Required
@@ -454,6 +503,7 @@ function traceBuildStages(label: string): { enter(stage: string): void; done(): 
   let stage = "queued";
   let stageStarted = started;
   const timer = setInterval(() => {
+    const queuedBuilds = buildSlotQueue?.queuedCount ?? 0;
     logVerbose(
       "BuildV2",
       `${label} still in ${stage} after ` +
@@ -461,7 +511,7 @@ function traceBuildStages(label: string): { enter(stage: string): void; done(): 
         `(${Math.round((Date.now() - started) / 1000)}s total; ` +
         `${runningBuilds}/${MAX_CONCURRENT_BUILDS} permits held ` +
         `(${runningNonInteractiveBuilds} non-interactive, ` +
-        `${runningSpeculativeBuilds} speculative), ${waitQueue.length} waiting)`
+        `${runningSpeculativeBuilds} speculative), ${queuedBuilds} waiting)`
     );
   }, STAGE_STALL_NOTICE_MS);
   timer.unref?.();
@@ -507,25 +557,11 @@ async function withBuildSlot<T>(
   run: () => Promise<T>,
   priority: BuildPriority = "interactive"
 ): Promise<T> {
+  builderLifetime.assertOpen();
   if (buildSlotHeld.getStore()) return run();
-  while (
-    !hasBuildSlotCapacity(
-      priority,
-      runningBuilds,
-      runningNonInteractiveBuilds,
-      runningSpeculativeBuilds,
-      MAX_CONCURRENT_BUILDS
-    )
-  ) {
-    await new Promise<void>((resolve) => {
-      const waiter = { priority, resolve };
-      const rank = (candidate: BuildPriority): number =>
-        candidate === "interactive" ? 0 : candidate === "background" ? 1 : 2;
-      const insertionPoint = waitQueue.findIndex((entry) => rank(entry.priority) > rank(priority));
-      if (insertionPoint >= 0) waitQueue.splice(insertionPoint, 0, waiter);
-      else waitQueue.push(waiter);
-    });
-  }
+  const queue = buildSlotQueue;
+  if (!queue) throw new Error("Build scheduler is not initialized");
+  const lease = await queue.acquire(priority, hasBuildSlotCapacity, buildSignal);
   runningBuilds++;
   if (priority !== "interactive") runningNonInteractiveBuilds++;
   if (priority === "speculative") runningSpeculativeBuilds++;
@@ -535,7 +571,7 @@ async function withBuildSlot<T>(
     runningBuilds--;
     if (priority !== "interactive") runningNonInteractiveBuilds--;
     if (priority === "speculative") runningSpeculativeBuilds--;
-    waitQueue.shift()?.resolve();
+    lease.release();
   }
 }
 

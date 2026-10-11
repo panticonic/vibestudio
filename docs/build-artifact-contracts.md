@@ -60,3 +60,48 @@ the commit/quality gates and in CI. Its semantic checks do not depend on
 optional shellcheck or pyflakes installations. Focused workflow tests protect
 the actual artifact dependency graph. Use observed job durations to assess the
 critical path; a parallel graph alone does not establish a measured speedup.
+
+## Compiler memory and ownership
+
+Prepared-dependency resolution distinguishes plugin requests from delegation to
+esbuild's default resolver. Default delegation must bypass every composed plugin,
+including framework deduplication; otherwise a plugin can request resolution
+from `node_modules`, the authority can delegate from its parent, and the same
+plugin can restart that request indefinitely. The real-esbuild composition
+regression in `builder.dependencyEnvironment.test.ts` verifies this boundary.
+Compiler diagnostics report admission and terminal completion before a build
+receipt exists, so an unfinished resolver can be distinguished from a large
+finite module graph.
+
+BuildV2's three build lanes belong to one Node process. They are not a host-wide
+resource budget: the Hub's template preparation and each workspace server have
+independent builders, and each compiler can fan out internally. Do not multiply
+these lanes by the number of workspaces and describe the result as bounded host
+concurrency. A shared compiler-admission design must account for all those
+owners and their child processes, retain interactive demand, and release capacity
+only after the admitted operation has actually terminated.
+
+Disk-backed derived caches prevent scratch storage from consuming RAM. They do
+not bound compiler heaps, output buffers, worker threads, or workerd memory.
+Measure the entire owned process tree, including each esbuild child's PID,
+parent, peak RSS, and active compilation identity. Node's own RSS and a completed
+bundle's size do not measure the compiler child's peak memory. Successful-build
+receipts alone cannot identify a compile killed before it wrote a receipt.
+
+Cold profiling must keep the existing native operation and startup receipts.
+On a Linux host with delegated systemd memory controllers, an explicitly sized
+memory scope can contain a diagnostic workload so its failure cannot exhaust
+the desktop's remaining memory. Run the real managed-instance command inside
+that scope, not a substitute build implementation. Keep the cleanup owner and
+evidence directory outside the scope: a kernel OOM kill cannot execute a
+JavaScript or Python `finally` block. The outer owner must inspect the actual
+scope terminal result, stop the exact managed instance, join its processes, and
+retire its private scratch paths. Report a resource-limit failure as a failed
+measurement; it is not a passing test or a production recovery policy.
+
+Builder retirement closes admission before joining active work. Queued requests
+must settle without starting another compilation during shutdown; active builds
+retain their worker resources until their terminal result. Close auxiliary
+workers only after that join, and preserve operation and retirement failures
+together. A timeout, a larger heap allowance, or a smaller local lane override
+does not repair missing ownership or establish a safe host-wide budget.

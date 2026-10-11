@@ -213,7 +213,9 @@ describe("BuildSystemV2 library package subpaths", () => {
     const preparation = buildSystem.prepareTypecheck("packages/target", "ctx:dependency-agent");
     await started;
     let shutdownComplete = false;
-    const shutdown = buildSystem.shutdown().then(() => {
+    const shutdown = buildSystem.shutdown();
+    expect(buildSystem.shutdown()).toBe(shutdown);
+    const observedShutdown = shutdown.then(() => {
       shutdownComplete = true;
     });
     await Promise.resolve();
@@ -229,7 +231,7 @@ describe("BuildSystemV2 library package subpaths", () => {
       moduleConditions: ["import", "default"],
     });
     expect(admitted).toHaveLength(1);
-    await shutdown;
+    await observedShutdown;
     await expect(buildSystem.prepareTypecheck("packages/target")).rejects.toThrow("retiring");
     buildSystem = null;
   });

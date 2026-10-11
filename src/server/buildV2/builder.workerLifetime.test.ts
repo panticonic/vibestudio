@@ -11,6 +11,79 @@ afterEach(async () => {
 });
 
 describe("build-owned compiler residency", () => {
+  it("closes admission, joins admitted work, then permits a new explicit lifetime", async () => {
+    const appRoot = process.cwd();
+    initBuilder(path.join(appRoot, "node_modules"), appRoot, async () => {
+      throw new Error("unused");
+    });
+    const close = vi
+      .spyOn(LibraryLoweringWorkerClient.prototype, "close")
+      .mockResolvedValue(undefined);
+    let started!: () => void;
+    const workStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const admitted = withBuilderWorkers(async () => {
+      started();
+      await gate;
+    });
+    await workStarted;
+
+    let retired = false;
+    const retirement = closeBuilder().then(() => {
+      retired = true;
+    });
+    await expect(withBuilderWorkers(async () => undefined)).rejects.toThrow("shutting down");
+    expect(retired).toBe(false);
+    finish();
+    await Promise.all([admitted, retirement]);
+    expect(close).toHaveBeenCalledOnce();
+
+    initBuilder(path.join(appRoot, "node_modules"), appRoot, async () => {
+      throw new Error("unused");
+    });
+    await expect(withBuilderWorkers(async () => "reopened")).resolves.toBe("reopened");
+  });
+
+  it("does not reinitialize until auxiliary worker retirement reaches terminal", async () => {
+    const appRoot = process.cwd();
+    initBuilder(path.join(appRoot, "node_modules"), appRoot, async () => {
+      throw new Error("unused");
+    });
+    let finishClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => {
+      finishClose = resolve;
+    });
+    let closeStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      closeStarted = resolve;
+    });
+    vi.spyOn(LibraryLoweringWorkerClient.prototype, "close").mockImplementation(async () => {
+      closeStarted();
+      await closeGate;
+    });
+
+    const closing = closeBuilder();
+    await started;
+    expect(() =>
+      initBuilder(path.join(appRoot, "node_modules"), appRoot, async () => {
+        throw new Error("unused");
+      })
+    ).toThrow("retiring");
+    finishClose();
+    await closing;
+
+    expect(() =>
+      initBuilder(path.join(appRoot, "node_modules"), appRoot, async () => {
+        throw new Error("unused");
+      })
+    ).not.toThrow();
+  });
+
   it("shares workers across overlapping closures and joins last-owner retirement", async () => {
     initBuilder(path.join(process.cwd(), "node_modules"), process.cwd(), async () => {
       throw new Error("unused");

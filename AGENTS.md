@@ -102,6 +102,17 @@ must manage them. Cleanup is complete only when both owned processes and owned
 scratch paths are retired. Retain bounded failure evidence on disk, and repair
 any failed retirement before continuing the investigation.
 
+For memory-pressure investigations, measure the entire owned process tree,
+including compiler children and their active build identities. A per-process
+build limit and a disk-backed cache do not bound total host memory. Where the
+OS provides a memory resource group, place the diagnostic workload in an
+explicitly sized group that leaves capacity for the rest of the host. Keep its
+evidence collector and cleanup owner outside that group: an OOM kill cannot run
+an in-process `finally`. Treat quota termination as failed diagnostic evidence,
+then stop and join the exact workload before removing scratch. This protects
+the investigation; it does not replace repairing compiler memory growth or
+shared resource admission in the product.
+
 ## External template verification
 
 Configured Base, Personal, System, and catalog-template checkouts are source inputs,

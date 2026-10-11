@@ -310,6 +310,7 @@ export function composePreparedDependencyPlugins(
                   namespace === undefined ? options : { ...options, namespace };
                 build.onResolve(registrationOptions, async (args) => {
                   const marked = resolveContext(args.pluginData);
+                  if (marked?.[RESOLVE_CONTEXT] === "skip") return null;
                   const owned =
                     isOwnedNamespace(args.namespace) || marked?.[RESOLVE_CONTEXT] === "request";
                   const originalNs = owned ? originalNamespace(args.namespace) : args.namespace;

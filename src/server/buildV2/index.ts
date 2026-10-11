@@ -59,6 +59,7 @@ import {
   withBuilderWorkers,
   type BuildUnitOptions,
 } from "./builder.js";
+import { joinedFailure } from "./builderLifetime.js";
 import {
   setBuildSourceProvider,
   getBuildSourceProvider,
@@ -2456,6 +2457,7 @@ export async function initBuildSystemV2(
     Promise<Awaited<ReturnType<BuildSystemV2["prepareTypecheck"]>>>
   >();
   let retiringDependencies = false;
+  let shutdownFlight: Promise<void> | undefined;
 
   const buildSystem: BuildSystemV2 = {
     getBuild,
@@ -3547,14 +3549,55 @@ export async function initBuildSystemV2(
       );
     },
 
-    async shutdown(): Promise<void> {
+    shutdown(): Promise<void> {
+      if (shutdownFlight) return shutdownFlight;
       retiringDependencies = true;
-      trigger.stop();
-      await Promise.allSettled(dependencyPreparations);
-      await Promise.all([authorityAnalysisWorker.close(), typecheckWorker.close(), closeBuilder()]);
-      authorityPublicationUnsubscribe();
-      setBuildSourceProvider(null);
-      logVerbose("BuildV2", "Shut down");
+      shutdownFlight = (async () => {
+        const failures: unknown[] = [];
+        try {
+          trigger.stop();
+        } catch (error) {
+          failures.push(error);
+        }
+        const firstStage = await Promise.allSettled([
+          closeBuilder(),
+          Promise.allSettled([...dependencyPreparations]).then((outcomes) => {
+            failures.push(
+              ...outcomes.flatMap((outcome) =>
+                outcome.status === "rejected" ? [outcome.reason] : []
+              )
+            );
+          }),
+        ]);
+        failures.push(
+          ...firstStage.flatMap((outcome) =>
+            outcome.status === "rejected" ? [outcome.reason] : []
+          )
+        );
+        const workerClosures = await Promise.allSettled([
+          authorityAnalysisWorker.close(),
+          typecheckWorker.close(),
+        ]);
+        failures.push(
+          ...workerClosures.flatMap((outcome) =>
+            outcome.status === "rejected" ? [outcome.reason] : []
+          )
+        );
+        try {
+          authorityPublicationUnsubscribe();
+        } catch (error) {
+          failures.push(error);
+        }
+        try {
+          setBuildSourceProvider(null);
+        } catch (error) {
+          failures.push(error);
+        }
+        logVerbose("BuildV2", "Shut down");
+        const failure = joinedFailure(failures, "Build system shutdown failed");
+        if (failure !== undefined || failures.length > 0) throw failure;
+      })();
+      return shutdownFlight;
     },
   };
   return buildSystem;

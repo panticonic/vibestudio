@@ -598,6 +598,53 @@ describe("dependency-environment resolver", () => {
     }
   });
 
+  it("does not re-enter plugins during the prepared authority's default resolution", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-plugin-default-resolution-"));
+    const source = path.join(root, "source");
+    const modules = path.join(root, "prepared", "node_modules");
+    try {
+      fs.mkdirSync(source, { recursive: true });
+      writePackage(modules, "react", "prepared react");
+      const entry = path.join(source, "entry.js");
+      fs.writeFileSync(entry, 'import { marker } from "react"; export { marker };');
+      let dedupeCalls = 0;
+      const dedupePlugin: esbuild.Plugin = {
+        name: "dedupe-shaped-plugin",
+        setup(build) {
+          build.onResolve({ filter: /^react$/ }, async (args) => {
+            if (path.resolve(args.resolveDir).startsWith(path.resolve(modules))) return null;
+            dedupeCalls += 1;
+            if (dedupeCalls > 8) {
+              throw new Error("plugin resolution re-entered before default resolution completed");
+            }
+            const resolved = await build.resolve(args.path, {
+              kind: args.kind,
+              resolveDir: modules,
+            });
+            if (resolved.errors.length > 0) return { errors: resolved.errors };
+            return resolved;
+          });
+        },
+      };
+
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        write: false,
+        logLevel: "silent",
+        nodePaths: [modules],
+        plugins: composePreparedDependencyPlugins([dedupePlugin], [modules], [source]),
+      });
+
+      expect(dedupeCalls).toBe(1);
+      expect(result.outputFiles[0]?.text).toContain("prepared react");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("runs the real Svelte compiler in the prepared namespace composition", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-svelte-composition-"));
     try {
