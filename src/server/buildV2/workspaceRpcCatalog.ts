@@ -487,55 +487,160 @@ export function collectWorkspaceRpcCatalog(
      * module-level runtime clients, which are not bound to an object.
      */
     durableObjects?: boolean;
-  }
+  },
+  tsserverPath?: string
 ): WorkspaceRpcMethodDoc[] {
   const absoluteWorkerSourcePath = path.resolve(workerSourcePath);
   const methods: WorkspaceRpcMethodDoc[] = [];
   const diagnostics: BuildDiagnostic[] = [];
   const files = sourceFiles(absoluteWorkerSourcePath);
   const sources = files.map((file) => ({ fileName: file, content: fs.readFileSync(file, "utf8") }));
-  usingTypeScriptProject(sources, (project) => {
-    for (const file of files) {
-      const source = project.program.getSourceFile(file);
-      if (!source) throw new Error(`TypeScript did not parse ${file}`);
-      if (input.durableObjects) {
-        for (const statement of source.statements) {
-          const offending = moduleRuntimeValueImport(statement);
-          if (!offending) continue;
-          const position = source.getLineAndCharacterOfPosition(offending.node.getStart(source));
-          diagnostics.push({
-            source: "authority",
-            severity: "error",
-            file,
-            line: position.line + 1,
-            column: position.character + 1,
-            message: `${input.provider} declares Durable Object classes but imports a module-level runtime client from "${offending.specifier}"; those clients are bound to a panel, plain worker, or eval runtime, not to this object.`,
-            suggestion:
-              "Use the object's own clients (this.rpc, this.fs, this.credentials, this.notifications, this.blobstore) and the PanelDurableObjectBase instance methods. Import base classes from @workspace/runtime/worker/kernel, /worker/durable-base, or /worker/panel-durable-base; type-only imports are fine. See skills/workspace-dev/WORKERS.md.",
-          });
+  usingTypeScriptProject(
+    sources,
+    (project) => {
+      for (const file of files) {
+        const source = project.program.getSourceFile(file);
+        if (!source) throw new Error(`TypeScript did not parse ${file}`);
+        if (input.durableObjects) {
+          for (const statement of source.statements) {
+            const offending = moduleRuntimeValueImport(statement);
+            if (!offending) continue;
+            const position = source.getLineAndCharacterOfPosition(offending.node.getStart(source));
+            diagnostics.push({
+              source: "authority",
+              severity: "error",
+              file,
+              line: position.line + 1,
+              column: position.character + 1,
+              message: `${input.provider} declares Durable Object classes but imports a module-level runtime client from "${offending.specifier}"; those clients are bound to a panel, plain worker, or eval runtime, not to this object.`,
+              suggestion:
+                "Use the object's own clients (this.rpc, this.fs, this.credentials, this.notifications, this.blobstore) and the PanelDurableObjectBase instance methods. Import base classes from @workspace/runtime/worker/kernel, /worker/durable-base, or /worker/panel-durable-base; type-only imports are fine. See skills/workspace-dev/WORKERS.md.",
+            });
+          }
         }
-      }
-      const visit = (node: ts.Node): void => {
-        if (ts.isClassDeclaration(node) && node.name) {
-          for (const member of node.members) {
-            if (!ts.isMethodDeclaration(member)) continue;
-            const decorator = rpcDecorator(member);
-            const name = methodName(member);
-            if (!decorator || !name) continue;
-            const description = methodDescription(member);
-            const label = `${path.relative(absoluteWorkerSourcePath, file)}:${name}`;
-            let access: WorkspaceRpcMethodDoc["access"];
-            let website: WorkspaceRpcMethodDoc["website"];
-            let effect: WorkspaceRpcMethodDoc["effect"];
-            let execution: WorkspaceRpcMethodDoc["execution"];
-            let handleProduction: { capability: string } | undefined;
-            let schemaContract: WorkspaceRpcSchemaMetadata | undefined;
-            const collectDeclaration = <T>(
-              read: () => T,
-              suggestion?: string
-            ): { value: T } | null => {
+        const visit = (node: ts.Node): void => {
+          if (ts.isClassDeclaration(node) && node.name) {
+            for (const member of node.members) {
+              if (!ts.isMethodDeclaration(member)) continue;
+              const decorator = rpcDecorator(member);
+              const name = methodName(member);
+              if (!decorator || !name) continue;
+              const description = methodDescription(member);
+              const label = `${path.relative(absoluteWorkerSourcePath, file)}:${name}`;
+              let access: WorkspaceRpcMethodDoc["access"];
+              let website: WorkspaceRpcMethodDoc["website"];
+              let effect: WorkspaceRpcMethodDoc["effect"];
+              let execution: WorkspaceRpcMethodDoc["execution"];
+              let handleProduction: { capability: string } | undefined;
+              let schemaContract: WorkspaceRpcSchemaMetadata | undefined;
+              const collectDeclaration = <T>(
+                read: () => T,
+                suggestion?: string
+              ): { value: T } | null => {
+                try {
+                  return { value: read() };
+                } catch (error) {
+                  if (!(error instanceof WorkspaceRpcDeclarationError)) throw error;
+                  const position = source.getLineAndCharacterOfPosition(member.getStart(source));
+                  diagnostics.push({
+                    source: "schema",
+                    severity: "error",
+                    file,
+                    line: position.line + 1,
+                    column: position.character + 1,
+                    message: error.message,
+                    ...(suggestion ? { suggestion } : {}),
+                  });
+                  return null;
+                }
+              };
               try {
-                return { value: read() };
+                if (decorator.kind === "schemaRpc") {
+                  const schema = input.rpcSchemas?.[node.name.text]?.[name];
+                  if (!schema) {
+                    throw new WorkspaceRpcDeclarationError(
+                      `${input.provider}:${node.name.text}.${name} uses @schemaRpc without a manifest-bound typed receiver schema`
+                    );
+                  }
+                  schemaContract = schema;
+                  const principals = schema.authority ? authorityPrincipals(schema.authority) : [];
+                  if (
+                    principals.length === 0 ||
+                    !schema.tier ||
+                    !schema.access?.sensitivity ||
+                    !schema.directEffect
+                  ) {
+                    throw new WorkspaceRpcDeclarationError(
+                      `${label} has an incomplete typed receiver authority declaration`
+                    );
+                  }
+                  access = {
+                    principals,
+                    tier: schema.tier.tier,
+                    sensitivity: schema.access.sensitivity,
+                    ...(schema.tier.session === "codeOnly" ? { codeOnly: true } : {}),
+                    ...(schema.crossWorkspace === true ? { crossWorkspace: true } : {}),
+                  };
+                  website = schema.website;
+                  effect = schema.directEffect;
+                  execution = schema.execution;
+                } else {
+                  // These fields are independent. Diagnose each, but never publish
+                  // a partial method contract or infer an exposure/effect decision.
+                  const policy = new StaticRpcPolicy(project, source, label);
+                  const fieldsResult = collectDeclaration(() =>
+                    policy.fields(decorator.call.arguments[0], "RPC policy")
+                  );
+                  if (!fieldsResult) continue;
+                  const fields = fieldsResult.value;
+                  const websiteResult = collectDeclaration(
+                    () => websitePolicyOf(policy, fields),
+                    'Declare a static website policy: { kind: "closed", reason: "..." } or { kind: "eligible", rationale: "..." }, inline or as a module-level const. Choose the exposure intentionally; see skills/workspace-dev/WORKERS.md.'
+                  );
+                  const accessResult = collectDeclaration(() => accessOf(policy, fields));
+                  const effectResult = collectDeclaration(
+                    () => effectOf(policy, fields),
+                    'Declare a static effect: { kind: "open" } for a method with no protected effect, or { kind: "userland-capability", capability: "...", resource: ... } matching authority.provides. This does not replace service-target authorization; see skills/workspace-dev/WORKERS.md.'
+                  );
+                  const handleResult = collectDeclaration(() => handleProductionOf(policy, fields));
+                  if (!websiteResult || !accessResult || !effectResult || !handleResult) continue;
+                  website = websiteResult.value;
+                  access = accessResult.value;
+                  effect = effectResult.value;
+                  handleProduction = handleResult.value;
+                }
+                methods.push({
+                  website,
+                  className: node.name.text,
+                  name,
+                  signature: signatureOf(member, source),
+                  inputContractDigest: sha256Canonical({
+                    signature: signatureOf(member, source),
+                    ...(schemaContract ? { argsSchema: schemaContract.argsSchema } : {}),
+                  }),
+                  ...(schemaContract
+                    ? {
+                        argsSchema: schemaContract.argsSchema,
+                        ...(schemaContract.returnsSchema
+                          ? { returnsSchema: schemaContract.returnsSchema }
+                          : {}),
+                        ...(member.parameters.every((parameter) => ts.isIdentifier(parameter.name))
+                          ? {
+                              argumentNames: member.parameters.map((parameter) =>
+                                parameter.name.getText(source)
+                              ),
+                            }
+                          : {}),
+                      }
+                    : {}),
+                  effect,
+                  ...(handleProduction ? { _handleCapability: handleProduction.capability } : {}),
+                  ...((schemaContract?.description ?? description)
+                    ? { description: schemaContract?.description ?? description }
+                    : {}),
+                  ...(access ? { access } : {}),
+                  ...(execution ? { execution } : {}),
+                });
               } catch (error) {
                 if (!(error instanceof WorkspaceRpcDeclarationError)) throw error;
                 const position = source.getLineAndCharacterOfPosition(member.getStart(source));
@@ -546,132 +651,32 @@ export function collectWorkspaceRpcCatalog(
                   line: position.line + 1,
                   column: position.character + 1,
                   message: error.message,
-                  ...(suggestion ? { suggestion } : {}),
                 });
-                return null;
               }
-            };
-            try {
-              if (decorator.kind === "schemaRpc") {
-                const schema = input.rpcSchemas?.[node.name.text]?.[name];
-                if (!schema) {
-                  throw new WorkspaceRpcDeclarationError(
-                    `${input.provider}:${node.name.text}.${name} uses @schemaRpc without a manifest-bound typed receiver schema`
-                  );
-                }
-                schemaContract = schema;
-                const principals = schema.authority ? authorityPrincipals(schema.authority) : [];
-                if (
-                  principals.length === 0 ||
-                  !schema.tier ||
-                  !schema.access?.sensitivity ||
-                  !schema.directEffect
-                ) {
-                  throw new WorkspaceRpcDeclarationError(
-                    `${label} has an incomplete typed receiver authority declaration`
-                  );
-                }
-                access = {
-                  principals,
-                  tier: schema.tier.tier,
-                  sensitivity: schema.access.sensitivity,
-                  ...(schema.tier.session === "codeOnly" ? { codeOnly: true } : {}),
-                  ...(schema.crossWorkspace === true ? { crossWorkspace: true } : {}),
-                };
-                website = schema.website;
-                effect = schema.directEffect;
-                execution = schema.execution;
-              } else {
-                // These fields are independent. Diagnose each, but never publish
-                // a partial method contract or infer an exposure/effect decision.
-                const policy = new StaticRpcPolicy(project, source, label);
-                const fieldsResult = collectDeclaration(() =>
-                  policy.fields(decorator.call.arguments[0], "RPC policy")
-                );
-                if (!fieldsResult) continue;
-                const fields = fieldsResult.value;
-                const websiteResult = collectDeclaration(
-                  () => websitePolicyOf(policy, fields),
-                  'Declare a static website policy: { kind: "closed", reason: "..." } or { kind: "eligible", rationale: "..." }, inline or as a module-level const. Choose the exposure intentionally; see skills/workspace-dev/WORKERS.md.'
-                );
-                const accessResult = collectDeclaration(() => accessOf(policy, fields));
-                const effectResult = collectDeclaration(
-                  () => effectOf(policy, fields),
-                  'Declare a static effect: { kind: "open" } for a method with no protected effect, or { kind: "userland-capability", capability: "...", resource: ... } matching authority.provides. This does not replace service-target authorization; see skills/workspace-dev/WORKERS.md.'
-                );
-                const handleResult = collectDeclaration(() => handleProductionOf(policy, fields));
-                if (!websiteResult || !accessResult || !effectResult || !handleResult) continue;
-                website = websiteResult.value;
-                access = accessResult.value;
-                effect = effectResult.value;
-                handleProduction = handleResult.value;
-              }
-              methods.push({
-                website,
-                className: node.name.text,
-                name,
-                signature: signatureOf(member, source),
-                inputContractDigest: sha256Canonical({
-                  signature: signatureOf(member, source),
-                  ...(schemaContract ? { argsSchema: schemaContract.argsSchema } : {}),
-                }),
-                ...(schemaContract
-                  ? {
-                      argsSchema: schemaContract.argsSchema,
-                      ...(schemaContract.returnsSchema
-                        ? { returnsSchema: schemaContract.returnsSchema }
-                        : {}),
-                      ...(member.parameters.every((parameter) => ts.isIdentifier(parameter.name))
-                        ? {
-                            argumentNames: member.parameters.map((parameter) =>
-                              parameter.name.getText(source)
-                            ),
-                          }
-                        : {}),
-                    }
-                  : {}),
-                effect,
-                ...(handleProduction ? { _handleCapability: handleProduction.capability } : {}),
-                ...((schemaContract?.description ?? description)
-                  ? { description: schemaContract?.description ?? description }
-                  : {}),
-                ...(access ? { access } : {}),
-                ...(execution ? { execution } : {}),
-              });
-            } catch (error) {
-              if (!(error instanceof WorkspaceRpcDeclarationError)) throw error;
-              const position = source.getLineAndCharacterOfPosition(member.getStart(source));
-              diagnostics.push({
-                source: "schema",
-                severity: "error",
-                file,
-                line: position.line + 1,
-                column: position.character + 1,
-                message: error.message,
-              });
             }
           }
-        }
-      };
-      // Provider packages can contain generated expressions with thousands of
-      // nested syntax nodes. Recursive descent makes catalog extraction depend
-      // on the JavaScript call-stack limit even though TypeScript parsed the
-      // file successfully. Walk the same tree iteratively so exact authority
-      // analysis remains total for valid source.
-      const pending: ts.Node[] = [source];
-      while (pending.length > 0) {
-        const node = pending.pop()!;
-        visit(node);
-        const children: ts.Node[] = [];
-        node.forEachChild((child) => {
-          children.push(child);
-        });
-        for (let index = children.length - 1; index >= 0; index -= 1) {
-          pending.push(children[index]!);
+        };
+        // Provider packages can contain generated expressions with thousands of
+        // nested syntax nodes. Recursive descent makes catalog extraction depend
+        // on the JavaScript call-stack limit even though TypeScript parsed the
+        // file successfully. Walk the same tree iteratively so exact authority
+        // analysis remains total for valid source.
+        const pending: ts.Node[] = [source];
+        while (pending.length > 0) {
+          const node = pending.pop()!;
+          visit(node);
+          const children: ts.Node[] = [];
+          node.forEachChild((child) => {
+            children.push(child);
+          });
+          for (let index = children.length - 1; index >= 0; index -= 1) {
+            pending.push(children[index]!);
+          }
         }
       }
-    }
-  });
+    },
+    { tsserverPath }
+  );
   if (diagnostics.length > 0) {
     throw new BuildDiagnosticsError(
       `${diagnostics[0]!.message}${diagnostics.length > 1 ? `; ${diagnostics.length - 1} additional declaration errors` : ""}`,

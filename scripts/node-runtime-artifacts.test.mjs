@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -58,6 +68,12 @@ test(
       await mkdir(path.join(source, "bin"), { recursive: true });
       await mkdir(cache, { recursive: true });
       await writeFile(path.join(source, "bin", "node"), "#!/bin/sh\nprintf 'runtime-alive'\n");
+      await mkdir(path.join(source, "lib", "node_modules", "npm", "bin"), { recursive: true });
+      await writeFile(
+        path.join(source, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+        "npm fixture"
+      );
+      await symlink("../lib/node_modules/npm/bin/npm-cli.js", path.join(source, "bin", "npm"));
       const archive = path.join(cache, archiveName);
       await promisify(execFile)("tar", ["-czf", archive, "-C", appRoot, "fixture-node"]);
       const legacyRuntime = path.join(appRoot, "dist", "node", "linux-x64");
@@ -87,12 +103,26 @@ test(
         "publishing an upgraded runtime must retain the legacy executable tree byte-for-byte"
       );
       await stageNodeRuntimePayload(appRoot, target);
+      assert.equal(
+        await readlink(path.join(nodeRuntimePayloadDirectory(appRoot, target), "bin", "npm")),
+        "../lib/node_modules/npm/bin/npm-cli.js",
+        "installer staging must retain distribution-relative links so the payload remains relocatable"
+      );
+      assert.equal(
+        await readFile(
+          path.join(nodeRuntimePayloadDirectory(appRoot, target), "bin", "npm"),
+          "utf8"
+        ),
+        "npm fixture"
+      );
       assert.deepEqual(await assertNodeRuntimePayload(appRoot, target), {
         root: nodeRuntimePayloadDirectory(appRoot, target),
         executable: path.join(nodeRuntimePayloadDirectory(appRoot, target), "bin/node"),
       });
       const payloadTargetRoot = path.dirname(nodeRuntimePayloadDirectory(appRoot, target));
-      assert.deepEqual(await readdir(payloadTargetRoot), [path.basename(nodeRuntimePayloadDirectory(appRoot, target))]);
+      assert.deepEqual(await readdir(payloadTargetRoot), [
+        path.basename(nodeRuntimePayloadDirectory(appRoot, target)),
+      ]);
       await mkdir(path.join(payloadTargetRoot, "older-release"));
       await assert.rejects(assertNodeRuntimePayload(appRoot, target), /unselected releases/);
       await rm(path.join(payloadTargetRoot, "older-release"), { recursive: true });
@@ -100,8 +130,14 @@ test(
         nodeRuntimePayloadSelectionPath(appRoot, target),
         "utf8"
       );
-      await writeFile(path.join(nodeRuntimePayloadDirectory(appRoot, target), "bin/node"), "tampered");
-      await assert.rejects(stageNodeRuntimePayload(appRoot, target), /differs from its verified distribution/);
+      await writeFile(
+        path.join(nodeRuntimePayloadDirectory(appRoot, target), "bin/node"),
+        "tampered"
+      );
+      await assert.rejects(
+        stageNodeRuntimePayload(appRoot, target),
+        /differs from its verified distribution/
+      );
       assert.equal(
         await readFile(nodeRuntimePayloadSelectionPath(appRoot, target), "utf8"),
         payloadSelection,

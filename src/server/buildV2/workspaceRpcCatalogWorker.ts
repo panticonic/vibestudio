@@ -7,6 +7,7 @@ import { serializeBuildWorkerFailure } from "./workerFailure.js";
 interface Request {
   id: number;
   workerSourcePath: string;
+  tsserverPath?: string;
   input: {
     provider: string;
     authority: UnitAuthorityManifest;
@@ -21,7 +22,11 @@ let queue = Promise.resolve();
 port.on("message", (request: Request) => {
   queue = queue.then(async () => {
     try {
-      const result = await collectWorkspaceRpcCatalog(request.workerSourcePath, request.input);
+      const result = await collectWorkspaceRpcCatalog(
+        request.workerSourcePath,
+        request.input,
+        request.tsserverPath
+      );
       port.postMessage({ id: request.id, result });
     } catch (error) {
       port.postMessage({

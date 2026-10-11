@@ -7,6 +7,7 @@ import {
   WorkspaceRpcCatalogWorkerClient,
 } from "./workspaceRpcCatalogWorkerClient.js";
 import { BuildDiagnosticsError } from "./diagnostics.js";
+import { resolveNativeTypeScriptServerPath, TYPESCRIPT_SERVER_PATH_ENV } from "../appRoot.js";
 
 const roots: string[] = [];
 const clients: WorkspaceRpcCatalogWorkerClient[] = [];
@@ -57,6 +58,35 @@ describe("WorkspaceRpcCatalogWorkerClient", () => {
     expect(resolveWorkspaceRpcCatalogWorkerEntry()).toBe(
       path.join(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "workspace-rpc-catalog-worker.mjs")
     );
+  });
+
+  it("uses the explicitly owned physical TypeScript executable in its worker", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rpc-worker-physical-ts-"));
+    roots.push(root);
+    fs.writeFileSync(
+      path.join(root, "provider.ts"),
+      `class NotesDO {
+        @rpc({ website: { kind: "eligible", rationale: "Explicit receiver exposure for this physical compiler fixture." }, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+        async getNote(): Promise<void> {}
+      }`
+    );
+    const priorPath = process.env[TYPESCRIPT_SERVER_PATH_ENV];
+    process.env[TYPESCRIPT_SERVER_PATH_ENV] = path.join(root, "missing-tsserver");
+    const client = new WorkspaceRpcCatalogWorkerClient(
+      resolveNativeTypeScriptServerPath(process.cwd())
+    );
+    clients.push(client);
+    try {
+      await expect(
+        client.collect(root, {
+          provider: "workers/notes",
+          authority: { requests: [], provides: [] },
+        })
+      ).resolves.toEqual([expect.objectContaining({ name: "getNote" })]);
+    } finally {
+      if (priorPath === undefined) delete process.env[TYPESCRIPT_SERVER_PATH_ENV];
+      else process.env[TYPESCRIPT_SERVER_PATH_ENV] = priorPath;
+    }
   });
 
   it("parses a large catalog without occupying the server event loop", async () => {

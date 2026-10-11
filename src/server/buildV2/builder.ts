@@ -35,6 +35,7 @@ import { createHash } from "crypto";
 import { builtinModules, createRequire, isBuiltin } from "module";
 import { pathToFileURL } from "url";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
+import { resolveNativeTypeScriptServerPath } from "../appRoot.js";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { BuildDiagnosticsError, BuildRequestError, diagnosticsFromError } from "./diagnostics.js";
 import type { LibraryBuildTarget, WorkspaceTestRuntime } from "@vibestudio/service-schemas/build";
@@ -251,7 +252,9 @@ export function initBuilder(
     // this same retirement promise and receive its original failure.
     void workerRetirement.catch(() => undefined);
     _libraryLoweringWorker = new LibraryLoweringWorkerClient();
-    _workspaceRpcCatalogWorker = new WorkspaceRpcCatalogWorkerClient();
+    _workspaceRpcCatalogWorker = new WorkspaceRpcCatalogWorkerClient(
+      resolveNativeTypeScriptServerPath(_appRoot)
+    );
     _immutableTreeWorker = new ImmutableTreeWorkerClient();
   }
 }

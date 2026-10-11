@@ -26,6 +26,8 @@ export class WorkspaceRpcCatalogWorkerClient {
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
 
+  constructor(private readonly tsserverPath?: string) {}
+
   collect(
     workerSourcePath: string,
     input: {
@@ -40,7 +42,7 @@ export class WorkspaceRpcCatalogWorkerClient {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       try {
-        worker.postMessage({ id, workerSourcePath, input });
+        worker.postMessage({ id, workerSourcePath, input, tsserverPath: this.tsserverPath });
       } catch (error) {
         this.pending.delete(id);
         reject(error);

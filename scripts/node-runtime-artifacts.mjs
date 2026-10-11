@@ -184,7 +184,12 @@ async function stageNodeRuntimePayloadImpl(appRoot, target) {
     if (releases.some((name) => name !== identity))
       throw new Error(`Node runtime payload contains an older release: ${nodeRuntimeTargetName(target)}`);
     if (!releases.includes(identity)) {
-      await cp(selected.root, temporary, { recursive: true, errorOnExist: true, force: false });
+      await cp(selected.root, temporary, {
+        recursive: true,
+        errorOnExist: true,
+        force: false,
+        verbatimSymlinks: true,
+      });
       try {
         await rename(temporary, payload);
       } catch (error) {

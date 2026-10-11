@@ -146,6 +146,7 @@ async function prepareServerTemplateRelease(root) {
       recursive: true,
       errorOnExist: true,
       force: false,
+      verbatimSymlinks: true,
     });
     copyFile(
       path.relative(repoRoot, nodeRuntimeSelectionPath(repoRoot, runtimeTarget)),
