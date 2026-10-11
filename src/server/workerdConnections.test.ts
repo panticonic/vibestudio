@@ -32,6 +32,8 @@ async function withServer(
 
 function reply(res: ServerResponse, request: { message: { requestId: string } }): void {
   res.setHeader("Content-Type", "application/json");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("Keep-Alive", "timeout=9");
   res.end(
     JSON.stringify({
       from: "do",
@@ -84,12 +86,30 @@ describe("owned workerd HTTP connections", () => {
             ([label]) => label === "[WorkerdHttp] request failed"
           );
           expect(failureLogs).toHaveLength(1);
-          expect(failureLogs[0]?.[1]).toMatchObject({
+          const failureEvidence = JSON.parse(String(failureLogs[0]?.[1])) as {
+            method: string;
+            requestId: string;
+            exchanges: Array<{
+              localPort?: number;
+              requestSentAtMs?: number;
+              requestBodySentAtMs?: number;
+              requestErrorAtMs?: number;
+              requestError?: { code?: string };
+            }>;
+          };
+          expect(failureEvidence).toMatchObject({
             method: "reset",
             requestId: "failed-request",
             exchanges: [expect.objectContaining({ localPort: expect.any(Number) })],
           });
-          expect(failureLogs[0]?.[1]).not.toHaveProperty("requestId", "successful-request");
+          expect(failureEvidence.exchanges[0]?.requestError?.code).toEqual(expect.any(String));
+          const exchange = failureEvidence.exchanges[0]!;
+          expect(exchange.requestSentAtMs).toEqual(expect.any(Number));
+          expect(exchange.requestBodySentAtMs).toEqual(expect.any(Number));
+          expect(exchange.requestErrorAtMs).toEqual(expect.any(Number));
+          expect(exchange.requestSentAtMs).toBeLessThanOrEqual(exchange.requestBodySentAtMs!);
+          expect(exchange.requestBodySentAtMs).toBeLessThanOrEqual(exchange.requestErrorAtMs!);
+          expect(failureEvidence).not.toHaveProperty("requestId", "successful-request");
         } finally {
           warning.mockRestore();
         }
@@ -102,7 +122,10 @@ describe("owned workerd HTTP connections", () => {
       (req, res) => {
         req.resume();
         req.on("end", () => {
-          res.writeHead(200, { "Content-Type": "text/plain" });
+          res.setHeader("Content-Type", "text/plain");
+          res.setHeader("Connection", "keep-alive");
+          res.setHeader("Keep-Alive", "timeout=17");
+          res.writeHead(200);
           res.flushHeaders();
           res.write("partial");
           req.socket.destroy();
@@ -126,14 +149,18 @@ describe("owned workerd HTTP connections", () => {
           );
           expect(response.status).toBe(200);
           await expect(observation.readText(response)).rejects.toThrow();
-          const failureEvidence = warning.mock.calls.find(
+          const failureLog = warning.mock.calls.find(
             ([label]) => label === "[WorkerdHttp] request failed"
-          )?.[1];
+          );
+          const failureEvidence = JSON.parse(String(failureLog?.[1])) as Record<string, unknown>;
           expect(failureEvidence).toMatchObject({
             requestId: "body-reset-request",
             exchanges: [
               expect.objectContaining({
                 responseStatus: 200,
+                responseConnection: "keep-alive",
+                responseKeepAlive: "timeout=17",
+                responseHeadersAtMs: expect.any(Number),
               }),
             ],
           });
@@ -182,9 +209,10 @@ describe("owned workerd HTTP connections", () => {
           await expect(postToDurableObject(ref, "commit-and-disconnect", [], deps)).rejects.toThrow(
             /fetch/
           );
-          const failureEvidence = warning.mock.calls.find(
+          const failureLog = warning.mock.calls.find(
             ([label]) => label === "[WorkerdHttp] request failed"
-          )?.[1];
+          );
+          const failureEvidence = JSON.parse(String(failureLog?.[1])) as Record<string, unknown>;
           expect(failureEvidence).toMatchObject({
             source: ref.source,
             className: ref.className,
@@ -194,6 +222,11 @@ describe("owned workerd HTTP connections", () => {
               expect.objectContaining({
                 localPort: expect.any(Number),
                 remotePort: expect.any(Number),
+                socketPreviousResponseStatus: 200,
+                socketPreviousResponseConnection: "keep-alive",
+                socketPreviousResponseKeepAlive: "timeout=9",
+                socketPreviousResponseAgeMs: expect.any(Number),
+                socketPreviousResponseBodyAgeMs: expect.any(Number),
               }),
             ],
           });

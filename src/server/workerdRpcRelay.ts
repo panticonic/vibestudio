@@ -34,7 +34,19 @@ const responseObservations = new WeakMap<Response, WorkerdHttpObservation>();
 type WorkerdHttpExchange = {
   localPort?: number;
   remotePort?: number;
+  requestCreatedAtMs?: number;
+  requestSentAtMs?: number;
+  requestBodySentAtMs?: number;
   responseStatus?: number;
+  responseHeadersAtMs?: number;
+  responseConnection?: string;
+  responseKeepAlive?: string;
+  socketPreviousResponseStatus?: number;
+  socketPreviousResponseConnection?: string;
+  socketPreviousResponseKeepAlive?: string;
+  socketPreviousResponseAgeMs?: number;
+  socketPreviousResponseBodyAgeMs?: number;
+  requestErrorAtMs?: number;
   phase?: "request-sent" | "response-headers" | "request-error" | "response-body-complete";
   responseBodyComplete?: boolean;
   requestError?: { name: string; code?: string; syscall?: string; errno?: number };
@@ -54,6 +66,16 @@ type WorkerdHttpObservationState = {
 
 const workerdHttpObservation = new AsyncLocalStorage<WorkerdHttpObservationState>();
 const workerdRequestObservations = new WeakMap<object, WorkerdHttpObservationState>();
+const workerdRequestSockets = new WeakMap<object, object>();
+type WorkerdSocketProtocolFacts = {
+  responseStatus?: number;
+  responseConnection?: string;
+  responseKeepAlive?: string;
+  responseAtMs?: number;
+  responseBodyCompleteAtMs?: number;
+};
+const workerdSocketProtocolFacts = new WeakMap<object, WorkerdSocketProtocolFacts>();
+const workerdRequestProtocolFacts = new WeakMap<object, WorkerdSocketProtocolFacts>();
 
 function exchangeFor(request: unknown): WorkerdHttpExchange | undefined {
   if (!request || typeof request !== "object") return undefined;
@@ -70,13 +92,47 @@ function exchangeFor(request: unknown): WorkerdHttpExchange | undefined {
   return exchange;
 }
 
+function responseHeaderValue(headers: unknown, name: string): string | undefined {
+  if (!Array.isArray(headers)) return undefined;
+  for (let index = 0; index + 1 < headers.length; index += 2) {
+    const rawName = headers[index];
+    const rawValue = headers[index + 1];
+    const headerName =
+      typeof rawName === "string"
+        ? rawName
+        : rawName instanceof Uint8Array
+          ? Buffer.from(rawName).toString("latin1")
+          : undefined;
+    if (headerName?.toLowerCase() !== name) continue;
+    const headerValue =
+      typeof rawValue === "string"
+        ? rawValue
+        : rawValue instanceof Uint8Array
+          ? Buffer.from(rawValue).toString("latin1")
+          : undefined;
+    return headerValue?.slice(0, 128);
+  }
+  return undefined;
+}
+
 channel("undici:request:create").subscribe((event: unknown) => {
   if (!event || typeof event !== "object") return;
   const detail = event as { request?: unknown };
   const state = workerdHttpObservation.getStore();
   if (state && detail.request && typeof detail.request === "object") {
     workerdRequestObservations.set(detail.request, state);
+    const exchange = exchangeFor(detail.request);
+    if (exchange) exchange.requestCreatedAtMs = Math.max(0, Date.now() - state.startedAt);
   }
+});
+
+channel("undici:request:bodySent").subscribe((event: unknown) => {
+  if (!event || typeof event !== "object") return;
+  const detail = event as { request?: unknown };
+  const exchange = exchangeFor(detail.request);
+  if (!exchange) return;
+  const state = workerdRequestObservations.get(detail.request as object);
+  if (state) exchange.requestBodySentAtMs = Math.max(0, Date.now() - state.startedAt);
 });
 
 channel("undici:client:sendHeaders").subscribe((event: unknown) => {
@@ -84,7 +140,26 @@ channel("undici:client:sendHeaders").subscribe((event: unknown) => {
   const detail = event as { request?: unknown; socket?: unknown };
   const exchange = exchangeFor(detail.request);
   if (!exchange || !detail.socket || typeof detail.socket !== "object") return;
+  const state = workerdRequestObservations.get(detail.request as object);
+  if (state) exchange.requestSentAtMs = Math.max(0, Date.now() - state.startedAt);
   const socket = detail.socket as { localPort?: unknown; remotePort?: unknown };
+  if (detail.request && typeof detail.request === "object") {
+    workerdRequestSockets.set(detail.request, detail.socket);
+  }
+  const previousResponse = workerdSocketProtocolFacts.get(detail.socket);
+  if (previousResponse?.responseAtMs !== undefined) {
+    const now = Date.now();
+    exchange.socketPreviousResponseStatus = previousResponse.responseStatus;
+    exchange.socketPreviousResponseConnection = previousResponse.responseConnection;
+    exchange.socketPreviousResponseKeepAlive = previousResponse.responseKeepAlive;
+    exchange.socketPreviousResponseAgeMs = Math.max(0, now - previousResponse.responseAtMs);
+    if (previousResponse.responseBodyCompleteAtMs !== undefined) {
+      exchange.socketPreviousResponseBodyAgeMs = Math.max(
+        0,
+        now - previousResponse.responseBodyCompleteAtMs
+      );
+    }
+  }
   if (typeof socket.localPort === "number") exchange.localPort = socket.localPort;
   if (typeof socket.remotePort === "number") exchange.remotePort = socket.remotePort;
   exchange.phase = "request-sent";
@@ -92,19 +167,52 @@ channel("undici:client:sendHeaders").subscribe((event: unknown) => {
 
 channel("undici:request:headers").subscribe((event: unknown) => {
   if (!event || typeof event !== "object") return;
-  const detail = event as { request?: unknown; response?: { statusCode?: unknown } };
+  const detail = event as {
+    request?: unknown;
+    response?: { statusCode?: unknown; headers?: unknown };
+  };
   const exchange = exchangeFor(detail.request);
+  const state = workerdRequestObservations.get(detail.request as object);
   if (exchange && typeof detail.response?.statusCode === "number") {
     exchange.responseStatus = detail.response.statusCode;
+    if (state) exchange.responseHeadersAtMs = Math.max(0, Date.now() - state.startedAt);
+    exchange.responseConnection = responseHeaderValue(detail.response.headers, "connection");
+    exchange.responseKeepAlive = responseHeaderValue(detail.response.headers, "keep-alive");
+    const socket =
+      detail.request && typeof detail.request === "object"
+        ? workerdRequestSockets.get(detail.request)
+        : undefined;
+    if (socket) {
+      const facts: WorkerdSocketProtocolFacts = {
+        responseStatus: exchange.responseStatus,
+        responseConnection: exchange.responseConnection,
+        responseKeepAlive: exchange.responseKeepAlive,
+        responseAtMs: Date.now(),
+      };
+      workerdSocketProtocolFacts.set(socket, facts);
+      if (detail.request && typeof detail.request === "object") {
+        workerdRequestProtocolFacts.set(detail.request, facts);
+      }
+    }
     exchange.phase = "response-headers";
   }
+});
+
+channel("undici:request:trailers").subscribe((event: unknown) => {
+  if (!event || typeof event !== "object") return;
+  const detail = event as { request?: unknown };
+  if (!detail.request || typeof detail.request !== "object") return;
+  const facts = workerdRequestProtocolFacts.get(detail.request);
+  if (facts) facts.responseBodyCompleteAtMs = Date.now();
 });
 
 channel("undici:request:error").subscribe((event: unknown) => {
   if (!event || typeof event !== "object") return;
   const detail = event as { request?: unknown; error?: unknown };
   const exchange = exchangeFor(detail.request);
+  const state = workerdRequestObservations.get(detail.request as object);
   if (!exchange || !detail.error || typeof detail.error !== "object") return;
+  if (state) exchange.requestErrorAtMs = Math.max(0, Date.now() - state.startedAt);
   const error = detail.error as {
     name?: unknown;
     code?: unknown;
@@ -142,11 +250,14 @@ export function createWorkerdHttpObservation(
         return await operation();
       } catch (error) {
         if (!responseCompleted && !state.signal?.aborted) {
-          console.warn("[WorkerdHttp] request failed", {
-            ...state.metadata,
-            elapsedMs: Math.max(0, Date.now() - state.startedAt),
-            exchanges: [...state.exchanges.values()].slice(0, 4),
-          });
+          console.warn(
+            "[WorkerdHttp] request failed",
+            JSON.stringify({
+              ...state.metadata,
+              elapsedMs: Math.max(0, Date.now() - state.startedAt),
+              exchanges: [...state.exchanges.values()].slice(0, 4),
+            })
+          );
         }
         throw error;
       }
