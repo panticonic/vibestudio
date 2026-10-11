@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeOwnedProcessGroup, type OwnedProcessIdentity } from "./ownedProcessIdentity.mjs";
+import {
+  inspectOwnedProcessGroupMembers,
+  observeOwnedProcessGroup,
+  type OwnedProcessIdentity,
+} from "./ownedProcessIdentity.mjs";
 
 const receipt: OwnedProcessIdentity = {
   version: 1,
@@ -21,6 +25,7 @@ function processes(entries: Record<number, string>) {
   vi.spyOn(fs, "readFileSync").mockImplementation((path) => {
     const pid = Number(String(path).split("/")[2]);
     if (entries[pid] === undefined) throw Object.assign(new Error("gone"), { code: "ENOENT" });
+    if (String(path).endsWith("/status")) return "Uid:\t1000\t1000\t1000\t1000\n" as never;
     return entries[pid] as never;
   });
   // kill(0) sees the group even when all of its members have already exited.
@@ -47,6 +52,31 @@ describe.skipIf(process.platform !== "linux")("native group execution liveness",
   it("retains a live group member even when its birth coordinate is unavailable", () => {
     processes({ 101: stat(101, "Z"), 202: "202 (owned member) S 101 101" });
     expect(observeOwnedProcessGroup(receipt)).toBe("retained");
+  });
+  it("returns only bounded exact-group process identity fields", () => {
+    processes({ 101: stat(101, "Z"), 202: stat(202, "S", 101) });
+    expect(inspectOwnedProcessGroupMembers(receipt)).toEqual({
+      members: [
+        {
+          pid: 101,
+          ppid: 0,
+          pgid: 101,
+          uid: 1000,
+          state: "Z",
+          command: "native child",
+        },
+        {
+          pid: 202,
+          ppid: 0,
+          pgid: 101,
+          uid: 1000,
+          state: "S",
+          command: "native child",
+        },
+      ],
+      truncated: false,
+      commandBasenameTruncated: false,
+    });
   });
   it("refuses ownership when the exact leader has no birth coordinate", () => {
     processes({ 101: "101 (leader) S 1 101" });

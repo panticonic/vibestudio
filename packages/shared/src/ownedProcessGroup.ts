@@ -2,7 +2,9 @@ import type { ChildProcess } from "node:child_process";
 import {
   captureOwnedProcessIdentity,
   observeOwnedProcessGroup,
+  ownedProcessFailure,
   parseOwnedProcessIdentity,
+  signalOwnedProcessIdentity,
   type OwnedProcessIdentity,
 } from "./ownedProcessIdentity.mjs";
 
@@ -120,9 +122,15 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
   }
 
   private ownershipFailure(cause: unknown): Error {
-    return Object.assign(new Error("Owned process-group retirement failed", { cause }), {
-      code: "EOWNERSHIP",
-    });
+    if (
+      cause instanceof Error &&
+      "code" in cause &&
+      cause.code === "EOWNERSHIP" &&
+      "ownedProcessIdentity" in cause
+    ) {
+      return cause;
+    }
+    return ownedProcessFailure(cause, this.identity);
   }
 
   private leaderIsLive(): boolean {
@@ -159,33 +167,10 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
   private signal(signal: NodeJS.Signals): void {
     const identity = this.identity;
     if (!identity) throw new Error("Detached process-group identity is unavailable");
-    try {
-      if (this.options.signalGroup) {
-        this.options.signalGroup(identity.processGroupId, signal);
-      } else {
-        const observation = observeOwnedProcessGroup(identity);
-        if (observation === "unknown") {
-          throw Object.assign(new Error("Exact process-group ownership can no longer be proven"), {
-            code: "EOWNERSHIP",
-          });
-        }
-        if (observation !== "absent") process.kill(-identity.processGroupId, signal);
-      }
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ESRCH") return;
-      // On macOS the last live member may become a zombie between the
-      // observation and kill. Permission denial alone proves nothing; accept
-      // retirement only when the owned group now has no live executors.
-      if (code === "EPERM") {
-        try {
-          if (!this.groupExists()) return;
-        } catch (observationError) {
-          throw new AggregateError([error, observationError], "Process signal and ownership observation failed", { cause: error });
-        }
-      }
-      throw error;
-    }
+    signalOwnedProcessIdentity(identity, signal, {
+      groupExists: () => this.groupExists(),
+      ...(this.options.signalGroup ? { signalGroup: this.options.signalGroup } : {}),
+    });
   }
 
   private groupExists(): boolean {

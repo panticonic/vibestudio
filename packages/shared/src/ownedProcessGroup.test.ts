@@ -122,6 +122,46 @@ describe.skipIf(process.platform === "win32")("durable owned process groups", ()
     fixture = null;
   });
 
+  it("preserves signal denial with the exact identity and bounded group members", async () => {
+    fixture = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const closed = once(fixture, "close");
+    const denied = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    const owner = OwnedProcessGroup.create(fixture, {
+      signalGroup: () => {
+        throw denied;
+      },
+    });
+    const failure = await owner.retire("SIGKILL").then(
+      () => null,
+      (error: unknown) => error
+    );
+    expect(failure).toMatchObject({
+      code: "EOWNERSHIP",
+      cause: denied,
+      ownedProcessIdentity: owner.identity,
+      ownedProcessGroupSnapshot: {
+        members: expect.arrayContaining([
+          expect.objectContaining({
+            pid: fixture.pid,
+            pgid: owner.identity!.processGroupId,
+            uid: expect.any(Number),
+            ppid: expect.any(Number),
+            state: expect.any(String),
+            command: expect.any(String),
+          }),
+        ]),
+        truncated: false,
+        commandBasenameTruncated: false,
+      },
+    });
+    fixture.kill("SIGKILL");
+    await closed;
+    fixture = null;
+  });
+
   it("preserves both signal denial and failed terminal observation", async () => {
     fixture = spawn(process.execPath, ["-e", "process.exit(0)"], {
       detached: true,
