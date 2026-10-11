@@ -63,7 +63,7 @@ describe("ProtectedRefStore", () => {
     expect(persisted.mainEventId).toBe("event:after:completion");
   });
 
-  it("checks every immutable tree before the gate with bounded concurrency", async () => {
+  it("checks all immutable trees in one batch before the gate", async () => {
     const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "protected-main-tree-checks-"));
     roots.push(statePath);
     const entries = Array.from({ length: 9 }, (_, index) => ({
@@ -71,19 +71,13 @@ describe("ProtectedRefStore", () => {
       expectedOld: null,
       next: A,
     }));
-    let active = 0;
-    let maximumActive = 0;
-    const checked: string[] = [];
+    const checked: string[][] = [];
     const gate = vi.fn(async () => undefined);
     const store = createProtectedRefStore({
       statePath,
       gate,
-      assertTreeComplete: async (root) => {
-        active += 1;
-        maximumActive = Math.max(maximumActive, active);
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        checked.push(root);
-        active -= 1;
+      assertTreesComplete: async (batch) => {
+        checked.push([...batch]);
       },
     });
 
@@ -97,9 +91,7 @@ describe("ProtectedRefStore", () => {
       },
     });
 
-    expect(maximumActive).toBeGreaterThan(1);
-    expect(maximumActive).toBeLessThanOrEqual(4);
-    expect(checked).toHaveLength(entries.length);
+    expect(checked).toEqual([entries.map((entry) => entry.next!)]);
     expect(gate).toHaveBeenCalledOnce();
   });
 
@@ -112,14 +104,13 @@ describe("ProtectedRefStore", () => {
       next: `state:${String(index).repeat(64)}`,
     }));
     const gate = vi.fn(async () => undefined);
-    const checked: string[] = [];
+    const checked: string[][] = [];
     const store = createProtectedRefStore({
       statePath,
       gate,
-      assertTreeComplete: async (root) => {
-        checked.push(root);
-        if (root === entries[2]!.next) throw new Error("missing tree two");
-        if (root === entries[5]!.next) throw new Error("missing tree five");
+      assertTreesComplete: async (batch) => {
+        checked.push([...batch]);
+        throw new AggregateError([new Error("missing tree two"), new Error("missing tree five")]);
       },
     });
 
@@ -142,7 +133,7 @@ describe("ProtectedRefStore", () => {
       "missing tree two",
       "missing tree five",
     ]);
-    expect(checked).toHaveLength(entries.length);
+    expect(checked).toEqual([entries.map((entry) => entry.next!)]);
     expect(gate).not.toHaveBeenCalled();
     expect(store.listMains()).toHaveLength(0);
   });

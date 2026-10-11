@@ -11,6 +11,7 @@ import {
   awaitHubReady,
   exportReleaseBuild,
   prepareInstalledTemplateRelease,
+  verifyPreparedReleaseUserland,
   withStandaloneReleaseSession,
 } from "./prebuild-release-userland.mjs";
 import {
@@ -52,6 +53,60 @@ async function releaseBuildFixture(
   return { source, key, bytes };
 }
 
+async function verificationFixture(root, records) {
+  const resources = path.join(root, "resources");
+  const instanceRoot = path.join(root, "instance");
+  await fs.mkdir(path.join(resources, "userland-builds"), { recursive: true });
+  await fs.writeFile(
+    path.join(resources, "userland-builds/release.json"),
+    JSON.stringify({ builds: records })
+  );
+  for (const kind of ["base", "system", "personal"]) {
+    const workspaceName = `${kind}-workspace`;
+    for (const record of records.filter((candidate) => candidate.workspace === kind)) {
+      const directory = path.join(
+        instanceRoot,
+        "workspaces",
+        workspaceName,
+        "state",
+        "builds",
+        record.buildKey
+      );
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(
+        path.join(directory, "metadata.json"),
+        JSON.stringify({ builtAt: record.builtAt })
+      );
+    }
+  }
+  return {
+    resources,
+    env: { VIBESTUDIO_INSTANCE_ROOT: instanceRoot },
+    pair: {
+      system: { name: "system-workspace" },
+      personal: { name: "personal-workspace" },
+    },
+  };
+}
+
+function verificationRecords(baseCount = 1) {
+  return [
+    ...Array.from({ length: baseCount }, (_, index) => ({
+      workspace: "base",
+      source: `base/source-${index}`,
+      buildKey: (index + 1).toString(16).padStart(64, "0"),
+      builtAt: `base-${index}`,
+    })),
+    { workspace: "system", source: "system/source", buildKey: "b".repeat(64), builtAt: "system" },
+    {
+      workspace: "personal",
+      source: "personal/source",
+      buildKey: "c".repeat(64),
+      builtAt: "personal",
+    },
+  ];
+}
+
 test("ready admission propagates the original process failure without a deadline", async () => {
   const root = await fixture();
   const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
@@ -61,6 +116,158 @@ test("ready admission propagates the original process failure without a deadline
   child.emit("error", error);
   await assertion;
   assert.equal(child.listenerCount("exit"), 0);
+});
+
+test("verifies source builds with bounded per-role concurrency and serial workspace selection", async () => {
+  const root = await fixture();
+  const records = verificationRecords(7);
+  const context = await verificationFixture(root, records);
+  const selected = [];
+  let currentWorkspace;
+  let startedBase = 0;
+  let active = 0;
+  let maximumActive = 0;
+  let resolveFirstWave;
+  let resolveAllBase;
+  const firstWave = new Promise((resolve) => (resolveFirstWave = resolve));
+  const allBase = new Promise((resolve) => (resolveAllBase = resolve));
+  const releasePending = [];
+  const bySource = new Map(records.map((record) => [record.source, record]));
+  const cli = async (args) => {
+    if (args[0] === "remote" && args[1] === "create-workspace") return { name: "base-workspace" };
+    if (args[0] === "remote" && args[1] === "select") {
+      currentWorkspace = args[2];
+      selected.push(currentWorkspace);
+      return {};
+    }
+    if (args[0] !== "agent") throw new Error(`Unexpected CLI command: ${args.join(" ")}`);
+    const [source] = JSON.parse(args[3]);
+    const record = bySource.get(source);
+    if (!record) throw new Error(`Unknown release source: ${source}`);
+    if (currentWorkspace === "base-workspace") {
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      startedBase++;
+      if (startedBase === 6) resolveFirstWave();
+      if (startedBase === records.filter((item) => item.workspace === "base").length)
+        resolveAllBase();
+      return await new Promise((resolve) => {
+        releasePending.push(() => {
+          active--;
+          resolve({ buildKey: record.buildKey });
+        });
+      });
+    }
+    return { buildKey: record.buildKey };
+  };
+
+  const verification = verifyPreparedReleaseUserland({ ...context, cli });
+  await firstWave;
+  assert.equal(maximumActive, 6);
+  assert.deepEqual(selected, ["base-workspace"]);
+  for (const release of releasePending.splice(0)) release();
+  await allBase;
+  assert.deepEqual(selected, ["base-workspace"]);
+  for (const release of releasePending.splice(0)) release();
+  await verification;
+
+  assert.equal(maximumActive, 6);
+  assert.deepEqual(selected, ["base-workspace", "system-workspace", "personal-workspace"]);
+});
+
+test("joins all failures for a selected role and preserves their input order and identity", async () => {
+  const root = await fixture();
+  const records = verificationRecords(8);
+  const context = await verificationFixture(root, records);
+  const selected = [];
+  let currentWorkspace;
+  let started = 0;
+  let resolveSix;
+  let resolveAll;
+  const sixStarted = new Promise((resolve) => (resolveSix = resolve));
+  const allStarted = new Promise((resolve) => (resolveAll = resolve));
+  const pending = [];
+  const failures = new Map(
+    records
+      .filter((record) => record.workspace === "base")
+      .map((record) => [record.source, new Error(`failed ${record.source}`)])
+  );
+  const cli = async (args) => {
+    if (args[0] === "remote" && args[1] === "create-workspace") return { name: "base-workspace" };
+    if (args[0] === "remote" && args[1] === "select") {
+      currentWorkspace = args[2];
+      selected.push(currentWorkspace);
+      return {};
+    }
+    const [source] = JSON.parse(args[3]);
+    if (currentWorkspace === "base-workspace") {
+      started++;
+      if (started === 6) resolveSix();
+      if (started === 8) resolveAll();
+      return await new Promise((resolve, reject) => {
+        pending.push(() => reject(failures.get(source)));
+      });
+    }
+    throw new Error("Later workspace selection must not occur after failures");
+  };
+
+  const verification = verifyPreparedReleaseUserland({ ...context, cli });
+  await sixStarted;
+  assert.deepEqual(selected, ["base-workspace"]);
+  for (const release of pending.splice(0)) release();
+  await allStarted;
+  for (const release of pending.splice(0)) release();
+  await assert.rejects(verification, (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(
+      error.errors,
+      records
+        .filter((record) => record.workspace === "base")
+        .map((record) => failures.get(record.source))
+    );
+    assert.equal(error.cause, error.errors[0]);
+    return true;
+  });
+  assert.deepEqual(selected, ["base-workspace"]);
+  assert.equal(started, 8);
+});
+
+test("still rejects changed build keys and rebuilt artifacts during release verification", async () => {
+  const root = await fixture();
+  const records = verificationRecords();
+  const context = await verificationFixture(root, records);
+  const base = records[0];
+  const cli = async (args) => {
+    if (args[0] === "remote" && args[1] === "create-workspace") return { name: "base-workspace" };
+    if (args[0] === "remote" && args[1] === "select") return {};
+    if (args[0] === "agent") return { buildKey: "d".repeat(64) };
+    throw new Error(`Unexpected CLI command: ${args.join(" ")}`);
+  };
+  await assert.rejects(
+    verifyPreparedReleaseUserland({ ...context, cli }),
+    new RegExp(`Release build identity changed for base:${base.source}`)
+  );
+
+  const matchingCli = async (args) => {
+    if (args[0] === "remote" && args[1] === "create-workspace") return { name: "base-workspace" };
+    if (args[0] === "remote" && args[1] === "select") return {};
+    if (args[0] === "agent") return { buildKey: base.buildKey };
+    throw new Error(`Unexpected CLI command: ${args.join(" ")}`);
+  };
+  const metadataPath = path.join(
+    context.env.VIBESTUDIO_INSTANCE_ROOT,
+    "workspaces",
+    "base-workspace",
+    "state",
+    "builds",
+    base.buildKey,
+    "metadata.json"
+  );
+  await fs.writeFile(metadataPath, JSON.stringify({ builtAt: "newer" }));
+  await assert.rejects(
+    verifyPreparedReleaseUserland({ ...context, cli: matchingCli }),
+    /Fresh installation rebuilt base:base\/source-0 instead of reusing its release artifact/
+  );
 });
 
 test("ready admission preserves the exact explicit cancellation reason", async () => {

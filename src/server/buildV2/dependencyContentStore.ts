@@ -562,6 +562,7 @@ async function pruneContentFiles(storeRoot: string): Promise<DependencyContentPr
   const coordinator = derivedCacheCoordinator(coordinatorRoot);
   const result = { files: 0, bytes: 0 };
   const mode = Number.parseInt(path.basename(storeRoot), 8);
+  coordinator.reapDeadOwners();
   for (const storedPath of await regularFiles(storeRoot)) {
     const digest = digestFromStoredPath(storeRoot, storedPath);
     if (!digest) continue;

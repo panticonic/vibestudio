@@ -231,7 +231,6 @@ export class DerivedCacheCoordinator {
     const leaseId = crypto.randomBytes(20).toString("hex");
     const now = Date.now();
     this.transaction(() => {
-      this.releaseDeadOwners();
       this.db
         .prepare(
           `INSERT INTO cache_entries(root, key, bytes, last_access)
@@ -250,8 +249,10 @@ export class DerivedCacheCoordinator {
       key,
       release: () => {
         if (released) return;
-        released = true;
-        if (!this.leases.delete(leaseId)) return;
+        if (!this.leases.has(leaseId)) {
+          released = true;
+          return;
+        }
         this.transaction(() => {
           this.db
             .prepare("DELETE FROM cache_leases WHERE lease_id = ? AND owner_id = ?")
@@ -260,6 +261,8 @@ export class DerivedCacheCoordinator {
             .prepare("UPDATE cache_entries SET last_access = ? WHERE root = ? AND key = ?")
             .run(Date.now(), root, key);
         });
+        this.leases.delete(leaseId);
+        released = true;
       },
     };
   }
@@ -279,7 +282,6 @@ export class DerivedCacheCoordinator {
   /** Read lease ownership while inside `withMutation` for an atomic decision. */
   hasLease(rootInput: string, key: string): boolean {
     const root = canonicalRoot(rootInput);
-    this.releaseDeadOwners();
     return Boolean(
       this.db
         .prepare("SELECT 1 AS one FROM cache_leases WHERE root = ? AND key = ? LIMIT 1")
@@ -337,7 +339,6 @@ export class DerivedCacheCoordinator {
       );
       let committed = false;
       this.transaction(() => {
-        this.releaseDeadOwners();
         const leased = this.db
           .prepare("SELECT 1 AS one FROM cache_leases WHERE root = ? AND key = ? LIMIT 1")
           .get(root, entry.key);
@@ -361,7 +362,7 @@ export class DerivedCacheCoordinator {
       bytesToRemove -= entry.bytes;
     }
 
-    entries = options.dryRun ? entries : await this.scan(root);
+    entries = options.dryRun ? entries : await this.scan(root, false);
     const after = options.dryRun
       ? {
           ...before,
@@ -391,13 +392,17 @@ export class DerivedCacheCoordinator {
     intervalMs = 0
   ): Promise<T | null> {
     const root = canonicalRoot(rootInput);
-    const now = Date.now();
+    const observed = this.db
+      .prepare("SELECT owner_id FROM cache_maintenance WHERE root = ?")
+      .get(root) as { owner_id: string | null } | undefined;
+    const observedDeadOwner =
+      observed?.owner_id && !ownerIsAlive(observed.owner_id) ? observed.owner_id : null;
     const claimed = this.transaction(() => {
       const current = this.db
         .prepare("SELECT owner_id, last_pruned_at FROM cache_maintenance WHERE root = ?")
         .get(root) as { owner_id: string | null; last_pruned_at: number } | undefined;
-      if (current?.owner_id && ownerIsAlive(current.owner_id)) return false;
-      if (current?.last_pruned_at && now - current.last_pruned_at < intervalMs) return false;
+      if (current?.owner_id && current.owner_id !== observedDeadOwner) return false;
+      if (current?.last_pruned_at && Date.now() - current.last_pruned_at < intervalMs) return false;
       this.db
         .prepare(
           `INSERT INTO cache_maintenance(root, owner_id, last_pruned_at)
@@ -432,8 +437,8 @@ export class DerivedCacheCoordinator {
     this.db.close();
   }
 
-  private async scan(root: string): Promise<DerivedCacheEntry[]> {
-    this.transaction(() => this.releaseDeadOwners());
+  private async scan(root: string, reapOwners = true): Promise<DerivedCacheEntry[]> {
+    if (reapOwners) this.reapDeadOwners();
     const stored = new Map(
       (
         this.db
@@ -521,14 +526,20 @@ export class DerivedCacheCoordinator {
     }
   }
 
-  private releaseDeadOwners(): void {
-    const owners = this.db.prepare("SELECT DISTINCT owner_id FROM cache_leases").all();
-    for (const row of owners) {
-      const owner = row["owner_id"] as string;
-      if (!ownerIsAlive(owner)) {
-        this.db.prepare("DELETE FROM cache_leases WHERE owner_id = ?").run(owner);
-      }
-    }
+  /** Probe process liveness outside SQLite's writer lock, then reap stale owners together. */
+  reapDeadOwners(): void {
+    const owners = this.db.prepare("SELECT DISTINCT owner_id FROM cache_leases").all() as Array<{
+      owner_id: string;
+    }>;
+    const deadOwners = owners.map((row) => row.owner_id).filter((owner) => !ownerIsAlive(owner));
+    if (deadOwners.length === 0) return;
+
+    const placeholders = deadOwners.map(() => "?").join(", ");
+    this.transaction(() => {
+      this.db
+        .prepare(`DELETE FROM cache_leases WHERE owner_id IN (${placeholders})`)
+        .run(...deadOwners);
+    });
   }
 
   private finishTuning(root: string, completed: boolean): void {

@@ -51,6 +51,30 @@ work for identical in-flight build keys, which Build V2 coalesces. Choose a batc
 limit for the runner’s aggregate resources rather than treating one value as a
 universal optimum.
 
+Installed template preparation already submits independent runtime units
+concurrently and joins every outcome before retiring their builder. Template
+roles remain sequential because they currently share process-global user-data
+selection, builder configuration, source providers, and worker ownership.
+Increasing unit admission does not remove that dependency. Overlapping roles
+requires isolating those owners first and admitting the isolated work against
+one host-wide resource budget; simply running the role loop concurrently would
+overwrite another role's inputs and multiply native executors. Keep this
+ownership edge explicit when changing the release critical path.
+
+Fresh-install verification overlaps six independent source requests within each
+selected workspace, preserving the ordinary `build.getBuild` path and exact
+artifact identity and creation-time checks. It joins every request and retains
+all failures before switching the shared CLI profile to another workspace.
+
+Parallelism must avoid multiplying shared work. A protected-main publication
+checks its roots as one operation: authenticated immutable tree reads are shared
+within that operation, with bounded storage concurrency, while every root keeps
+its own completeness and depth proof. The operation joins all checks before
+approval or ref mutation. Derived-cache process-liveness probes run outside
+SQLite writer transactions; reclamation then compares the observed owner inside
+a short transaction. A failed lease release retains ownership until deletion
+commits, so cleanup can still retire the lease.
+
 Source maps are also an explicit unit cost. Extensions retain maps because they
 run as host-side code, while panel, app, and worker manifests opt in with
 `vibestudio.sourcemap: true`. In the representative shell workspace, making

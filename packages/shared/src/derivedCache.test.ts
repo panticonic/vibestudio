@@ -86,6 +86,42 @@ describe("DerivedCacheCoordinator", () => {
     }
   });
 
+  it("retains local lease ownership when a release transaction fails", () => {
+    const root = cacheRoot();
+    const file = derivedCacheDatabasePath(root);
+    const coordinator = new DerivedCacheCoordinator(file);
+    const lease = coordinator.acquire(root, "active");
+    const state = coordinator as unknown as { db: DatabaseSync };
+    state.db.exec("PRAGMA busy_timeout = 0");
+    const blocker = new DatabaseSync(file);
+    blocker.exec("BEGIN IMMEDIATE");
+    try {
+      let failure: unknown;
+      try {
+        lease.release();
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ errcode: 5 });
+      expect(
+        blocker
+          .prepare("SELECT COUNT(*) AS count FROM cache_leases WHERE root = ? AND key = ?")
+          .get(path.resolve(root), "active")
+      ).toEqual({ count: 1 });
+    } finally {
+      blocker.exec("ROLLBACK");
+      blocker.close();
+    }
+
+    expect(() => lease.release()).not.toThrow();
+    expect(
+      state.db
+        .prepare("SELECT COUNT(*) AS count FROM cache_leases WHERE root = ? AND key = ?")
+        .get(path.resolve(root), "active")
+    ).toEqual({ count: 0 });
+    coordinator.close();
+  });
+
   it("charges a shared inode proportionally instead of once per pathname", async () => {
     const root = cacheRoot();
     const owner = path.join(path.dirname(root), "content-owner");
@@ -203,6 +239,58 @@ describe("DerivedCacheCoordinator", () => {
     }
   });
 
+  it("reaps dead owners outside the writer lock without deleting a newly admitted lease", async () => {
+    const root = cacheRoot();
+    put(root, "contended", 64 * 1024);
+    const file = derivedCacheDatabasePath(root);
+    const collector = new DerivedCacheCoordinator(file);
+    const owner = new DerivedCacheCoordinator(file);
+    const database = new DatabaseSync(file);
+    database
+      .prepare("INSERT INTO cache_leases(lease_id, root, key, owner_id) VALUES (?, ?, ?, ?)")
+      .run("dead-lease", path.resolve(root), "contended", "2147483647:legacy");
+    database.close();
+
+    const originalKill = process.kill.bind(process);
+    let freshLease: DerivedCacheLease | undefined;
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === 2147483647) {
+        // Liveness probes must not hold BEGIN IMMEDIATE: an independent owner
+        // can publish a lease while the stale owner is being examined.
+        freshLease = owner.acquire(root, "contended");
+        const error = Object.assign(new Error("no such process"), { code: "ESRCH" });
+        throw error;
+      }
+      return originalKill(pid, signal);
+    });
+    try {
+      collector.reapDeadOwners();
+
+      const leases = new DatabaseSync(file, { readOnly: true });
+      try {
+        expect(
+          leases
+            .prepare(
+              "SELECT lease_id FROM cache_leases WHERE root = ? AND key = ? ORDER BY lease_id"
+            )
+            .all(path.resolve(root), "contended")
+        ).toEqual([{ lease_id: expect.any(String) }]);
+      } finally {
+        leases.close();
+      }
+      expect(freshLease).toBeDefined();
+      expect(
+        (await collector.prune(root, { targetBytes: 0, freeFloorBytes: 0 })).removedEntries
+      ).toBe(0);
+      expect(fs.existsSync(path.join(root, "contended"))).toBe(true);
+    } finally {
+      kill.mockRestore();
+      freshLease?.release();
+      owner.close();
+      collector.close();
+    }
+  });
+
   it("releases its own leases on close", async () => {
     const root = cacheRoot();
     put(root, "entry", 64 * 1024);
@@ -216,6 +304,58 @@ describe("DerivedCacheCoordinator", () => {
         (await collector.prune(root, { targetBytes: 0, freeFloorBytes: 0 })).removedEntries
       ).toBe(1);
     } finally {
+      collector.close();
+    }
+  });
+
+  it("does not steal a maintenance slot completed while probing a dead owner", async () => {
+    const root = cacheRoot();
+    const file = derivedCacheDatabasePath(root);
+    const collector = new DerivedCacheCoordinator(file);
+    const contender = new DerivedCacheCoordinator(file);
+    const database = new DatabaseSync(file);
+    database
+      .prepare("INSERT INTO cache_maintenance(root, owner_id, last_pruned_at) VALUES (?, ?, 0)")
+      .run(path.resolve(root), "2147483647:legacy");
+    database.close();
+
+    const originalKill = process.kill.bind(process);
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === 2147483647) {
+        const contenderState = contender as unknown as { db: DatabaseSync; ownerId: string };
+        contenderState.db.exec("BEGIN IMMEDIATE");
+        contenderState.db
+          .prepare("UPDATE cache_maintenance SET owner_id = ? WHERE root = ?")
+          .run(contenderState.ownerId, path.resolve(root));
+        contenderState.db.exec("COMMIT");
+        contenderState.db.exec("BEGIN IMMEDIATE");
+        contenderState.db
+          .prepare(
+            "UPDATE cache_maintenance SET owner_id = NULL, last_pruned_at = ? WHERE root = ? AND owner_id = ?"
+          )
+          .run(Date.now(), path.resolve(root), contenderState.ownerId);
+        contenderState.db.exec("COMMIT");
+        const error = Object.assign(new Error("no such process"), { code: "ESRCH" });
+        throw error;
+      }
+      return originalKill(pid, signal);
+    });
+    let contenderOperations = 0;
+    try {
+      const result = await collector.maintain(
+        root,
+        async () => {
+          contenderOperations++;
+          throw new Error("collector must not steal the completed maintenance slot");
+        },
+        60_000
+      );
+
+      expect(result).toBeNull();
+      expect(contenderOperations).toBe(0);
+    } finally {
+      kill.mockRestore();
+      contender.close();
       collector.close();
     }
   });

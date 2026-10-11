@@ -19,6 +19,7 @@ import { treeHashDigest } from "@vibestudio/shared/contentTree/treeObjects";
 import {
   blobPath,
   collectTreeReachableDigests,
+  collectTreeReachableDigestsBatch,
   collectExactTreeListing,
   createBlobstoreService,
   diffTrees,
@@ -312,6 +313,94 @@ describe("blobstoreService", () => {
     await expect(
       collectTreeReachableDigests(blobsDir, tree.stateHash!, { verifyContent: true })
     ).rejects.toThrow(/CAS object digest mismatch/);
+  });
+
+  it("joins and retains every failed content verification", async () => {
+    const first = await putBytes(blobsDir, Buffer.from("first", "utf8"));
+    const second = await putBytes(blobsDir, Buffer.from("second", "utf8"));
+    const tree = await putTree(
+      blobsDir,
+      [
+        { name: "first.txt", kind: "file", contentHash: first.digest, mode: 0o100644 },
+        { name: "second.txt", kind: "file", contentHash: second.digest, mode: 0o100644 },
+      ],
+      { root: true }
+    );
+    await Promise.all([
+      fsp.unlink(blobPath(blobsDir, first.digest)),
+      fsp.unlink(blobPath(blobsDir, second.digest)),
+    ]);
+
+    let failure: unknown;
+    try {
+      await collectTreeReachableDigests(blobsDir, tree.stateHash!, { verifyContent: true });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors.map((error) => (error as Error).message)).toEqual([
+      `Content object missing from store: ${first.digest}`,
+      `Content object missing from store: ${second.digest}`,
+    ]);
+  });
+
+  it("authenticates a shared tree node once for a batch of roots", async () => {
+    const content = await putBytes(blobsDir, Buffer.from("shared", "utf8"));
+    const tree = await putTree(
+      blobsDir,
+      [{ name: "value.txt", kind: "file", contentHash: content.digest, mode: 0o100644 }],
+      { root: true }
+    );
+    const statePath = blobPath(blobsDir, treeHashDigest(tree.stateHash!));
+    const treePath = blobPath(blobsDir, treeHashDigest(tree.treeHash));
+    const readFile = vi.spyOn(fsp, "readFile");
+
+    const outcomes = await collectTreeReachableDigestsBatch(blobsDir, [
+      tree.stateHash!,
+      tree.stateHash!,
+    ]);
+
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
+    expect(readFile.mock.calls.filter(([file]) => file === statePath)).toHaveLength(1);
+    expect(readFile.mock.calls.filter(([file]) => file === treePath)).toHaveLength(1);
+    readFile.mockRestore();
+  });
+
+  it("checks a shared subtree's depth at every root occurrence", async () => {
+    const content = await putBytes(blobsDir, Buffer.from("leaf", "utf8"));
+    let deepHash = (
+      await putTree(blobsDir, [
+        { name: "leaf.txt", kind: "file", contentHash: content.digest, mode: 0o100644 },
+      ])
+    ).treeHash;
+    for (let depth = 0; depth < 127; depth += 1) {
+      deepHash = (await putTree(blobsDir, [{ name: "child", kind: "dir", childHash: deepHash }]))
+        .treeHash;
+    }
+    const shallowRoot = await putTree(
+      blobsDir,
+      [{ name: "child", kind: "dir", childHash: deepHash }],
+      { root: true }
+    );
+    const intermediate = await putTree(blobsDir, [
+      { name: "child", kind: "dir", childHash: deepHash },
+    ]);
+    const tooDeepRoot = await putTree(blobsDir, [
+      { name: "parent", kind: "dir", childHash: intermediate.treeHash },
+    ]);
+
+    const outcomes = await collectTreeReachableDigestsBatch(blobsDir, [
+      shallowRoot.stateHash!,
+      tooDeepRoot.treeHash,
+    ]);
+
+    expect(outcomes[0]).toMatchObject({ status: "fulfilled" });
+    expect(outcomes[1]).toMatchObject({ status: "rejected" });
+    if (outcomes[1]?.status === "rejected") {
+      expect((outcomes[1].reason as Error).message).toMatch(/max depth/);
+    }
   });
 
   it("returns 404 for unknown digests and 400 for malformed digests", async () => {

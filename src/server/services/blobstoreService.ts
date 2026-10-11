@@ -990,48 +990,215 @@ export async function collectTreeReachableDigests(
   ref: string,
   options: { verifyContent?: boolean } = {}
 ): Promise<{ treeDigests: string[]; contentDigests: string[] } | null> {
-  const rootHash = await resolveTreeRef(blobsDir, ref);
-  if (!rootHash) return null;
-  const treeDigests = new Set<string>();
-  const contentDigests = new Set<string>();
-  if (STATE_HASH_RE.test(ref)) treeDigests.add(treeHashDigest(ref));
+  const [outcome] = await collectTreeReachableDigestsBatch(blobsDir, [ref], options);
+  if (!outcome) throw new Error("collectTreeReachableDigests: missing batch outcome");
+  if (outcome.status === "rejected") throw outcome.reason;
+  return outcome.value;
+}
 
-  const walk = async (treeHash: string, depth: number): Promise<void> => {
-    if (depth > MAX_TREE_DEPTH)
-      throw new Error("collectTreeReachableDigests: tree exceeds max depth");
-    treeDigests.add(treeHashDigest(treeHash));
-    const entries = await readTreeNode(blobsDir, treeHash);
-    if (!entries) throw missingTreeObjectError(treeHash);
-    for (const entry of entries) {
-      if (entry.kind === "file") {
-        contentDigests.add(entry.contentHash);
-      } else {
-        await walk(entry.childHash, depth + 1);
+export type TreeReachabilityOutcome =
+  | { status: "fulfilled"; value: { treeDigests: string[]; contentDigests: string[] } | null }
+  | { status: "rejected"; reason: unknown };
+
+/**
+ * Check multiple roots as one immutable-store operation. Tree nodes shared by
+ * roots are read and authenticated once, while each root keeps an independent
+ * depth/cycle proof and result. Outcomes are returned in input order so a
+ * caller can join all roots and report every failure before publishing.
+ */
+export async function collectTreeReachableDigestsBatch(
+  blobsDir: string,
+  refs: readonly string[],
+  options: { verifyContent?: boolean } = {}
+): Promise<TreeReachabilityOutcome[]> {
+  const results: TreeReachabilityOutcome[] = new Array(refs.length);
+  const roots: Array<{ index: number; treeHash: string }> = [];
+  const resolvedRefs = new Map<string, Promise<string | null>>();
+  let nextRef = 0;
+  const refWorkers = Array.from({ length: Math.min(4, refs.length) }, async () => {
+    while (nextRef < refs.length) {
+      const index = nextRef++;
+      const ref = refs[index]!;
+      try {
+        let resolution = resolvedRefs.get(ref);
+        if (!resolution) {
+          resolution = resolveTreeRef(blobsDir, ref);
+          resolvedRefs.set(ref, resolution);
+        }
+        const rootHash = await resolution;
+        if (rootHash === null) results[index] = { status: "fulfilled", value: null };
+        else roots.push({ index, treeHash: rootHash });
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
       }
     }
+  });
+  await Promise.all(refWorkers);
+
+  // Load the union of referenced tree graphs. The queue and attempted set
+  // form operation-scoped single-flight reads without retaining any global
+  // cache or changing the CAS validation performed by readTreeNode.
+  const entriesByHash = new Map<string, ManifestHashEntry[]>();
+  const failuresByHash = new Map<string, unknown>();
+  const attempted = new Set<string>();
+  let frontier = new Set(roots.map(({ treeHash }) => treeHash));
+  const depthLimited = new Set<string>();
+  for (let depth = 0; depth <= MAX_TREE_DEPTH && frontier.size > 0; depth += 1) {
+    const current = [...frontier].filter((treeHash) => !attempted.has(treeHash));
+    frontier = new Set();
+    let cursor = 0;
+    const treeWorkers = Array.from({ length: Math.min(4, current.length) }, async () => {
+      while (cursor < current.length) {
+        const treeHash = current[cursor++]!;
+        attempted.add(treeHash);
+        try {
+          const entries = await readTreeNode(blobsDir, treeHash);
+          if (!entries) throw missingTreeObjectError(treeHash);
+          entriesByHash.set(treeHash, entries);
+          for (const entry of entries) {
+            if (entry.kind !== "dir") continue;
+            if (depth === MAX_TREE_DEPTH) depthLimited.add(entry.childHash);
+            else if (!attempted.has(entry.childHash)) frontier.add(entry.childHash);
+          }
+        } catch (reason) {
+          failuresByHash.set(treeHash, reason);
+        }
+      }
+    });
+    await Promise.all(treeWorkers);
+  }
+
+  const heights = new Map<string, number>();
+  const heightOf = (treeHash: string, ancestry: Set<string>, depth = 0): number => {
+    if (depth > MAX_TREE_DEPTH)
+      throw new Error("collectTreeReachableDigests: tree exceeds max depth");
+    const failure = failuresByHash.get(treeHash);
+    if (failuresByHash.has(treeHash)) throw failure;
+    const entries = entriesByHash.get(treeHash);
+    if (!entries) {
+      if (depthLimited.has(treeHash)) {
+        throw new Error("collectTreeReachableDigests: tree exceeds max depth");
+      }
+      throw missingTreeObjectError(treeHash);
+    }
+    if (ancestry.has(treeHash))
+      throw new Error("collectTreeReachableDigests: cyclic tree reference");
+    const cached = heights.get(treeHash);
+    if (cached !== undefined) return cached;
+    ancestry.add(treeHash);
+    let height = 0;
+    for (const entry of entries) {
+      if (entry.kind === "dir") {
+        if (depth === MAX_TREE_DEPTH) {
+          throw new Error("collectTreeReachableDigests: tree exceeds max depth");
+        }
+        height = Math.max(height, 1 + heightOf(entry.childHash, ancestry, depth + 1));
+      }
+    }
+    ancestry.delete(treeHash);
+    heights.set(treeHash, height);
+    return height;
   };
 
-  await walk(rootHash, 0);
-  if (options.verifyContent && contentDigests.size > 0) {
-    const pending = [...contentDigests];
-    let cursor = 0;
-    const workers = Array.from(
-      { length: Math.min(32, pending.length) },
-      async (): Promise<void> => {
-        while (cursor < pending.length) {
-          const digest = assertPresent(pending[cursor++]);
+  const closures = new Map<number, { treeDigests: Set<string>; contentDigests: Set<string> }>();
+  for (const { index, treeHash } of roots) {
+    try {
+      const treeDigests = new Set<string>();
+      const contentDigests = new Set<string>();
+      const visited = new Set<string>();
+      if (STATE_HASH_RE.test(refs[index]!)) treeDigests.add(treeHashDigest(refs[index]!));
+      const walk = (currentHash: string, depth: number, ancestry: Set<string>): void => {
+        if (depth > MAX_TREE_DEPTH || depth + heightOf(currentHash, new Set()) > MAX_TREE_DEPTH) {
+          throw new Error("collectTreeReachableDigests: tree exceeds max depth");
+        }
+        if (ancestry.has(currentHash)) {
+          throw new Error("collectTreeReachableDigests: cyclic tree reference");
+        }
+        if (visited.has(currentHash)) return;
+        visited.add(currentHash);
+        treeDigests.add(treeHashDigest(currentHash));
+        const entries = entriesByHash.get(currentHash);
+        if (!entries) {
+          if (failuresByHash.has(currentHash)) throw failuresByHash.get(currentHash);
+          throw missingTreeObjectError(currentHash);
+        }
+        ancestry.add(currentHash);
+        for (const entry of entries) {
+          if (entry.kind === "file") contentDigests.add(entry.contentHash);
+          else walk(entry.childHash, depth + 1, ancestry);
+        }
+        ancestry.delete(currentHash);
+      };
+      walk(treeHash, 0, new Set());
+      closures.set(index, { treeDigests, contentDigests });
+    } catch (reason) {
+      results[index] = { status: "rejected", reason };
+    }
+  }
+
+  const contentOwners = new Map<string, number[]>();
+  if (options.verifyContent) {
+    for (const [index, closure] of closures) {
+      for (const digest of closure.contentDigests) {
+        const owners = contentOwners.get(digest) ?? [];
+        owners.push(index);
+        contentOwners.set(digest, owners);
+      }
+    }
+    const digests = [...contentOwners.keys()];
+    const contentFailures = new Map<string, unknown>();
+    let nextContent = 0;
+    const contentWorkers = Array.from({ length: Math.min(32, digests.length) }, async () => {
+      while (nextContent < digests.length) {
+        const digest = digests[nextContent++]!;
+        try {
           if (!(await verifyBlob(blobsDir, digest))) {
             throw new Error(`Content object missing from store: ${digest}`);
           }
+        } catch (reason) {
+          contentFailures.set(digest, reason);
         }
       }
-    );
-    await Promise.all(workers);
+    });
+    await Promise.all(contentWorkers);
+    const rootContentFailures = new Map<number, unknown[]>();
+    for (const digest of digests) {
+      if (!contentFailures.has(digest)) continue;
+      const reason = contentFailures.get(digest);
+      for (const index of contentOwners.get(digest) ?? []) {
+        const failures = rootContentFailures.get(index) ?? [];
+        failures.push(reason);
+        rootContentFailures.set(index, failures);
+      }
+    }
+    for (const [index, failures] of rootContentFailures) {
+      results[index] =
+        failures.length === 1
+          ? { status: "rejected", reason: failures[0] }
+          : {
+              status: "rejected",
+              reason: new AggregateError(
+                failures,
+                `collectTreeReachableDigests: ${failures.length} content objects failed verification`,
+                { cause: failures[0] }
+              ),
+            };
+    }
   }
-  return {
-    treeDigests: [...treeDigests].sort(compareUtf16CodeUnits),
-    contentDigests: [...contentDigests].sort(compareUtf16CodeUnits),
-  };
+
+  for (const { index } of roots) {
+    if (results[index]) continue;
+    const closure = closures.get(index);
+    if (!closure) continue;
+    results[index] = {
+      status: "fulfilled",
+      value: {
+        treeDigests: [...closure.treeDigests].sort(compareUtf16CodeUnits),
+        contentDigests: [...closure.contentDigests].sort(compareUtf16CodeUnits),
+      },
+    };
+  }
+  return results;
 }
 
 export async function sweepUnreachableBlobs(

@@ -106,46 +106,8 @@ export type RefGate = (batch: RefGateBatch) => Promise<RefGateCompletion | undef
 export interface ProtectedRefStoreDeps {
   statePath: string;
   gate: RefGate;
-  assertTreeComplete?: (contentRoot: string) => Promise<void>;
+  assertTreesComplete?: (contentRoots: readonly string[]) => Promise<void>;
   now?: () => number;
-}
-
-// Tree roots are independent immutable reads. Keep enough lookups in flight to
-// overlap storage latency without turning a large multi-repository publication
-// into an unbounded fan-out against the content store.
-const TREE_COMPLETENESS_CONCURRENCY = 4;
-
-async function assertAllTreesComplete(
-  roots: readonly string[],
-  assertTreeComplete: (contentRoot: string) => Promise<void>
-): Promise<void> {
-  let next = 0;
-  const failures: Array<{ error: unknown } | undefined> = new Array(roots.length);
-  const workers = Array.from(
-    { length: Math.min(TREE_COMPLETENESS_CONCURRENCY, roots.length) },
-    async () => {
-      while (next < roots.length) {
-        const index = next++;
-        const root = roots[index]!;
-        try {
-          await assertTreeComplete(root);
-        } catch (error) {
-          failures[index] = { error };
-        }
-      }
-    }
-  );
-  await Promise.all(workers);
-  const failedRoots = failures.filter((failure) => failure !== undefined);
-  if (failedRoots.length === 1) throw failedRoots[0]!.error;
-  if (failedRoots.length > 1) {
-    const errors = failedRoots.map(({ error }) => error);
-    throw new AggregateError(
-      errors,
-      `Protected-main publication could not verify ${failedRoots.length} content trees`,
-      { cause: errors[0] }
-    );
-  }
 }
 
 export interface ProtectedRefStore {
@@ -623,10 +585,10 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
           }
         }
         if (conflicts.length > 0) throw new RefBatchConflictError(conflicts);
-        if (deps.assertTreeComplete) {
+        if (deps.assertTreesComplete) {
           const completenessStartedAt = performance.now();
           const roots = entries.flatMap((entry) => (entry.next === null ? [] : [entry.next]));
-          await assertAllTreesComplete(roots, deps.assertTreeComplete);
+          await deps.assertTreesComplete(roots);
           const completenessCompletedAt = performance.now();
           if (completenessCompletedAt - completenessStartedAt >= 100) {
             console.info("[VcsProfile] protected ref tree completeness", {

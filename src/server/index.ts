@@ -1479,7 +1479,7 @@ async function main() {
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
-  const { collectTreeReachableDigests, putBootstrapBytes } =
+  const { collectTreeReachableDigestsBatch, putBootstrapBytes } =
     await import("./services/blobstoreService.js");
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
@@ -1493,11 +1493,32 @@ async function main() {
     // Validity check BEFORE approval (§2.1): every candidate `main` state must
     // be a well-formed tree fully present in the content store — userland can
     // never publish a hash the store cannot expand. Fails closed before any prompt.
-    assertTreeComplete: async (stateHash) => {
-      const reachable = await collectTreeReachableDigests(layout.blobsDir, stateHash);
-      if (!reachable) {
-        throw new Error(
-          `updateMains: candidate main ${stateHash} is not fully present in the content store`
+    assertTreesComplete: async (stateHashes) => {
+      const outcomes = await collectTreeReachableDigestsBatch(layout.blobsDir, stateHashes);
+      const failures: unknown[] = [];
+      for (let index = 0; index < stateHashes.length; index += 1) {
+        const stateHash = stateHashes[index]!;
+        const outcome = outcomes[index];
+        if (!outcome) {
+          failures.push(
+            new Error(`updateMains: no completeness result for candidate main ${stateHash}`)
+          );
+        } else if (outcome.status === "rejected") {
+          failures.push(outcome.reason);
+        } else if (!outcome.value) {
+          failures.push(
+            new Error(
+              `updateMains: candidate main ${stateHash} is not fully present in the content store`
+            )
+          );
+        }
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(
+          failures,
+          `Protected-main publication could not verify ${failures.length} content trees`,
+          { cause: failures[0] }
         );
       }
     },

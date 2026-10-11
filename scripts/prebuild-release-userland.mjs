@@ -14,6 +14,10 @@ import {
 } from "./lib/owned-cleanup.mjs";
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 
+// Overlap CLI startup and cached artifact reads. Build V2 independently bounds
+// compilation; workspace selection stays serial because CLI calls share a profile.
+const RELEASE_VERIFICATION_CONCURRENCY = 6;
+
 /** Ready-file publication and process exit are the owner's authoritative lifecycle edges. */
 export function awaitHubReady(child, readyFile, signal) {
   return new Promise((resolve, reject) => {
@@ -609,7 +613,7 @@ export async function verifyPreparedReleaseUserland({ cli, pair, resources, env 
     await cli(["remote", "select", workspace.name]);
     const records = manifest.builds.filter((record) => record.workspace === kind);
     if (records.length === 0) throw new Error(`Release has no prepared artifacts for ${kind}`);
-    for (const record of records) {
+    await runBoundedJoined(records, RELEASE_VERIFICATION_CONCURRENCY, async (record) => {
       console.log(`[release-builds] Verifying ${kind}: ${record.source}`);
       const result = await cli([
         "agent",
@@ -635,8 +639,36 @@ export async function verifyPreparedReleaseUserland({ cli, pair, resources, env 
         throw new Error(
           `Fresh installation rebuilt ${kind}:${record.source} instead of reusing its release artifact`
         );
-      verified++;
-    }
+      return record;
+    });
+    verified += records.length;
   }
   console.log(`[release-builds] Verified ${verified} exact artifacts in a fresh installation`);
+}
+
+async function runBoundedJoined(items, concurrency, operation) {
+  const outcomes = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      while (next < items.length) {
+        const index = next++;
+        try {
+          outcomes[index] = { status: "fulfilled", value: await operation(items[index]) };
+        } catch (reason) {
+          outcomes[index] = { status: "rejected", reason };
+        }
+      }
+    })
+  );
+  const failures = outcomes
+    .filter((outcome) => outcome.status === "rejected")
+    .map((outcome) => outcome.reason);
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Release artifact verification failed", {
+      cause: failures[0],
+    });
+  }
+  return outcomes.map((outcome) => outcome.value);
 }

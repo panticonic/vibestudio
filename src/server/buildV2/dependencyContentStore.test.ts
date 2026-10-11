@@ -91,9 +91,25 @@ it("keeps equal payloads with distinct executable modes in distinct inode pools"
 });
 
 it("starts another verified replica before the Windows hardlink ceiling", async () => {
+  const seedTree = path.join(root, "seed");
+  await fs.promises.mkdir(seedTree);
+  const seedFile = path.join(seedTree, "package.js");
+  await fs.promises.writeFile(seedFile, "shared dependency payload");
+  await deduplicateDependencyContent(seedTree);
+
+  // Start the primary replica at the boundary instead of hashing a thousand
+  // identical files merely to reach it. The source file and CAS entry share
+  // one link; these anchors bring that verified inode to 1,023 links.
+  const anchorDirectory = path.join(root, "anchors");
+  await fs.promises.mkdir(anchorDirectory);
+  for (let index = 0; index < 1_021; index += 1) {
+    await fs.promises.link(seedFile, path.join(anchorDirectory, `anchor-${index}`));
+  }
+  expect((await fs.promises.stat(seedFile, { bigint: true })).nlink).toBe(1_023n);
+
   const tree = path.join(root, "many-dependencies");
   await fs.promises.mkdir(tree);
-  const files = Array.from({ length: 1_030 }, (_, index) => path.join(tree, `package-${index}.js`));
+  const files = Array.from({ length: 3 }, (_, index) => path.join(tree, `package-${index}.js`));
   await Promise.all(files.map((file) => fs.promises.writeFile(file, "shared dependency payload")));
 
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -112,6 +128,8 @@ it("starts another verified replica before the Windows hardlink ceiling", async 
   expect(stats.every((stat) => stat.nlink <= 1_024n)).toBe(true);
 
   await fs.promises.rm(tree, { recursive: true, force: true });
+  await fs.promises.rm(anchorDirectory, { recursive: true, force: true });
+  await fs.promises.rm(seedTree, { recursive: true, force: true });
   const pruned = await pruneUnreferencedDependencyContent();
   expect(pruned.files).toBeGreaterThanOrEqual(2);
 });
@@ -555,7 +573,8 @@ it("joins all hash workers and aggregates independent failures", async () => {
   const workerErrors = (caught as AggregateError).errors as Array<Error & { cause?: unknown }>;
   expect(workerErrors).toHaveLength(failures.length);
   expect(workerErrors.map((error) => error.cause)).toEqual(failures);
-  for (const error of workerErrors) {
+  for (const [index, error] of workerErrors.entries()) {
+    expect(error.cause).toBe(failures[index]);
     expect(error).toMatchObject({
       name: "DependencyContentCoordinatorError",
       message: "Dependency content coordinator publishing the primary replica failed",
