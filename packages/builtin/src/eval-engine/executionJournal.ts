@@ -1,3 +1,4 @@
+import { parseServiceMethodArgs } from "@vibestudio/shared/typedServiceClient";
 import {
   runtimeMethods,
   NativeRuntimeHealthObservationSchema,
@@ -46,8 +47,10 @@ import {
 import { workersMethods } from "@vibestudio/service-schemas/workers";
 
 type WorkerLifecycleRequest =
-  | { method: "runtime.createEntity"; className: string; objectKey?: string }
+  | { method: "runtime.createEntity"; kind: "do"; className: string; objectKey?: string }
+  | { method: "runtime.createEntity"; kind: "worker"; objectKey?: string }
   | { method: "workers.resolveDurableObject" }
+  | { method: "workers.resolveService"; query: string }
   | { method: "runtime.retireEntity"; entityId: string };
 
 import {
@@ -101,20 +104,46 @@ export class ExecutionJournal {
   ): WorkerLifecycleRequest | undefined {
     try {
       if (method === "runtime.createEntity") {
-        const [spec] = runtimeMethods.createEntity.args.parse(args);
-        if (spec.kind !== "do") return undefined;
+        const [spec] = parseServiceMethodArgs(
+          "runtime",
+          "createEntity",
+          runtimeMethods.createEntity,
+          args
+        );
+        if (spec.kind !== "do" && spec.kind !== "worker") return undefined;
         return {
           method,
-          className: spec.className,
+          ...(spec.kind === "do"
+            ? { kind: "do" as const, className: spec.className }
+            : { kind: "worker" as const }),
           ...(spec.key === undefined ? {} : { objectKey: spec.key }),
         };
       }
       if (method === "workers.resolveDurableObject") {
-        workersMethods.resolveDurableObject.args.parse(args);
+        parseServiceMethodArgs(
+          "workers",
+          "resolveDurableObject",
+          workersMethods.resolveDurableObject,
+          args
+        );
         return { method };
       }
+      if (method === "workers.resolveService") {
+        const [query] = parseServiceMethodArgs(
+          "workers",
+          "resolveService",
+          workersMethods.resolveService,
+          args
+        );
+        return { method, query };
+      }
       if (method === "runtime.retireEntity") {
-        const [request] = runtimeMethods.retireEntity.args.parse(args);
+        const [request] = parseServiceMethodArgs(
+          "runtime",
+          "retireEntity",
+          runtimeMethods.retireEntity,
+          args
+        );
         return { method, entityId: request.id };
       }
     } catch {
@@ -133,17 +162,20 @@ export class ExecutionJournal {
     let receipt: EvalWorkerLifecycleObservation;
     if (request.method === "runtime.createEntity") {
       const entity = runtimeMethods.createEntity.returns!.parse(result);
-      receipt = {
-        protocol: "worker-lifecycle-observation.v1",
+      if (entity.kind !== request.kind) return;
+      const creation = {
+        protocol: "worker-lifecycle-observation.v1" as const,
         callId,
-        operation: "create",
+        operation: "create" as const,
         entityId: entity.id,
         targetId: entity.targetId,
-        kind: "do",
         source: entity.source.repoPath,
-        className: request.className,
         ...(request.objectKey === undefined ? {} : { objectKey: request.objectKey }),
       };
+      receipt =
+        request.kind === "do"
+          ? { ...creation, kind: "do", className: request.className }
+          : { ...creation, kind: "worker" };
     } else if (request.method === "workers.resolveDurableObject") {
       const target = workersMethods.resolveDurableObject.returns!.parse(result);
       receipt = {
@@ -154,6 +186,21 @@ export class ExecutionJournal {
         source: target.source,
         className: target.className,
         objectKey: target.objectKey,
+      };
+    } else if (request.method === "workers.resolveService") {
+      const service = workersMethods.resolveService.returns!.parse(result);
+      // Regular-worker service resolutions are HTTP routes, not RPC receivers.
+      if (service.kind !== "durable-object") return;
+      receipt = {
+        protocol: "worker-lifecycle-observation.v1",
+        callId,
+        operation: "resolve-service",
+        query: request.query,
+        serviceName: service.name,
+        targetId: service.targetId,
+        source: service.source,
+        className: service.className,
+        objectKey: service.objectKey,
       };
     } else if (request.method === "runtime.retireEntity") {
       runtimeMethods.retireEntity.returns!.parse(result);
@@ -183,11 +230,21 @@ export class ExecutionJournal {
         >;
     let invokedMethod: string;
     if (method === "extensions.invoke") {
-      const [extensionKey, publicMethod] = extensionsMethods.invoke.args.parse(args);
+      const [extensionKey, publicMethod] = parseServiceMethodArgs(
+        "extensions",
+        "invoke",
+        extensionsMethods.invoke,
+        args
+      );
       target = { transport: "invoke", extensionKey };
       invokedMethod = publicMethod;
     } else if (method === "extensions.invokeProvider") {
-      const [providerKey, providerMethod] = extensionsMethods.invokeProvider.args.parse(args);
+      const [providerKey, providerMethod] = parseServiceMethodArgs(
+        "extensions",
+        "invokeProvider",
+        extensionsMethods.invokeProvider,
+        args
+      );
       target = { transport: "invokeProvider", providerKey };
       invokedMethod = providerMethod;
     } else return;
@@ -228,7 +285,12 @@ export class ExecutionJournal {
         hasSecret: subscription.verifier.hasSecret,
       };
     } else if (method === "webhookIngress.listSubscriptions") {
-      const options = webhookIngressMethods.listSubscriptions.args.parse(args)[0];
+      const options = parseServiceMethodArgs(
+        "webhookIngress",
+        "listSubscriptions",
+        webhookIngressMethods.listSubscriptions,
+        args
+      )[0];
       const subscriptions = webhookIngressMethods.listSubscriptions.returns!.parse(result);
       receipt = {
         protocol,
@@ -240,7 +302,12 @@ export class ExecutionJournal {
         })),
       };
     } else if (method === "webhookIngress.rotateSecret") {
-      const [input] = webhookIngressMethods.rotateSecret.args.parse(args);
+      const [input] = parseServiceMethodArgs(
+        "webhookIngress",
+        "rotateSecret",
+        webhookIngressMethods.rotateSecret,
+        args
+      );
       const rotated = webhookIngressMethods.rotateSecret.returns!.parse(result);
       if (rotated.subscription.subscriptionId !== input.subscriptionId)
         throw new Error("Webhook secret rotation returned a different subscription identity");
@@ -251,7 +318,12 @@ export class ExecutionJournal {
         secretPresent: rotated.secret.length > 0,
       };
     } else if (method === "webhookIngress.revokeSubscription") {
-      const [input] = webhookIngressMethods.revokeSubscription.args.parse(args);
+      const [input] = parseServiceMethodArgs(
+        "webhookIngress",
+        "revokeSubscription",
+        webhookIngressMethods.revokeSubscription,
+        args
+      );
       // A void operation has no result payload to validate. Successful RPC
       // completion is authoritative; JSON transports encode absence as null.
       receipt = { protocol, method: "revokeSubscription", subscriptionId: input.subscriptionId };
@@ -264,7 +336,7 @@ export class ExecutionJournal {
 
   recordPermissionInventory(method: string, args: unknown[], result: unknown): void {
     if (this.closed || method !== "permissions.list") return;
-    permissionsMethods.list.args.parse(args);
+    parseServiceMethodArgs("permissions", "list", permissionsMethods.list, args);
     const grants = permissionsMethods.list.returns!.parse(result);
     const counts = { capability: 0, "credential-use": 0, "browser-site": 0 };
     for (const grant of grants) counts[grant.kind]++;
@@ -281,7 +353,12 @@ export class ExecutionJournal {
 
   recordRuntimeHealth(method: string, args: unknown[], result: unknown): void {
     if (this.closed || method !== "runtime.supervision.health") return;
-    const [identity, options] = runtimeMethods["supervision.health"].args.parse(args);
+    const [identity, options] = parseServiceMethodArgs(
+      "runtime",
+      "supervision.health",
+      runtimeMethods["supervision.health"],
+      args
+    );
     const health = runtimeMethods["supervision.health"].returns!.parse(result);
     const sameIdentity = (candidate: typeof identity) =>
       candidate.kind === identity.kind && candidate.entityId === identity.entityId;
@@ -334,7 +411,12 @@ export class ExecutionJournal {
 
   recordCredentialResolution(method: string, args: unknown[], result: unknown): void {
     if (this.closed || method !== "credentials.resolveCredential") return;
-    const request = credentialsMethods.resolveCredential.args.parse(args);
+    const request = parseServiceMethodArgs(
+      "credentials",
+      "resolveCredential",
+      credentialsMethods.resolveCredential,
+      args
+    );
     const resolved = credentialsMethods.resolveCredential.returns!.parse(result);
     this.append({
       type: "credentials.resolution",
@@ -352,7 +434,12 @@ export class ExecutionJournal {
     const protocol = "notification-lifecycle-observation.v1" as const;
     let receipt;
     if (method === "notification.show") {
-      const [input] = notificationMethods.show.args.parse(args);
+      const [input] = parseServiceMethodArgs(
+        "notification",
+        "show",
+        notificationMethods.show,
+        args
+      );
       const notificationId = notificationMethods.show.returns!.parse(result);
       receipt = {
         protocol,
@@ -361,7 +448,12 @@ export class ExecutionJournal {
         actionLabels: (input.actions ?? []).map((action) => action.label),
       };
     } else if (method === "notification.dismiss") {
-      const [notificationId] = notificationMethods.dismiss.args.parse(args);
+      const [notificationId] = parseServiceMethodArgs(
+        "notification",
+        "dismiss",
+        notificationMethods.dismiss,
+        args
+      );
       receipt = { protocol, method, notificationId };
     } else return;
     this.append({
@@ -378,7 +470,10 @@ export class ExecutionJournal {
       const stored = blobstoreMethods.putTree.returns!.parse(result);
       receipt = { protocol, method: "putTree", ...stored };
     } else if (method === "blobstore.listTree") {
-      const [ref] = blobstoreMethods.listTree.args.parse([args[0], args[1]]);
+      const [ref] = parseServiceMethodArgs("blobstore", "listTree", blobstoreMethods.listTree, [
+        args[0],
+        args[1],
+      ]);
       receipt = {
         protocol,
         method: "listTree",
@@ -386,7 +481,12 @@ export class ExecutionJournal {
         page: blobstoreMethods.listTree.returns!.parse(result),
       };
     } else if (method === "blobstore.diffTrees") {
-      const [from, to] = blobstoreMethods.diffTrees.args.parse(args);
+      const [from, to] = parseServiceMethodArgs(
+        "blobstore",
+        "diffTrees",
+        blobstoreMethods.diffTrees,
+        args
+      );
       receipt = {
         protocol,
         method: "diffTrees",
@@ -395,7 +495,12 @@ export class ExecutionJournal {
         diff: blobstoreMethods.diffTrees.returns!.parse(result),
       };
     } else if (method === "blobstore.materializeTree") {
-      const [ref] = blobstoreMethods.materializeTree.args.parse([args[0], args[1], args[2]]);
+      const [ref] = parseServiceMethodArgs(
+        "blobstore",
+        "materializeTree",
+        blobstoreMethods.materializeTree,
+        [args[0], args[1], args[2]]
+      );
       receipt = {
         protocol,
         method: "materializeTree",
@@ -414,7 +519,7 @@ export class ExecutionJournal {
     let receipt: NativeBlobTextObservation;
     const protocol = "blob-text-observation.v1" as const;
     if (method === "blobstore.putText") {
-      const [text] = blobstoreMethods.putText.args.parse(args);
+      const [text] = parseServiceMethodArgs("blobstore", "putText", blobstoreMethods.putText, args);
       const stored = blobstoreMethods.putText.returns!.parse(result);
       receipt = {
         protocol,
@@ -424,7 +529,12 @@ export class ExecutionJournal {
         lineCount: text.split(/\r?\n/u).length,
       };
     } else if (method === "blobstore.getText") {
-      const [digest] = blobstoreMethods.getText.args.parse(args);
+      const [digest] = parseServiceMethodArgs(
+        "blobstore",
+        "getText",
+        blobstoreMethods.getText,
+        args
+      );
       const text = blobstoreMethods.getText.returns!.parse(result);
       receipt = {
         protocol,
@@ -434,7 +544,12 @@ export class ExecutionJournal {
         size: text === null ? null : new TextEncoder().encode(text).length,
       };
     } else if (method === "blobstore.getRange") {
-      const [digest, offset, length] = blobstoreMethods.getRange.args.parse(args);
+      const [digest, offset, length] = parseServiceMethodArgs(
+        "blobstore",
+        "getRange",
+        blobstoreMethods.getRange,
+        args
+      );
       const text = blobstoreMethods.getRange.returns!.parse(result);
       receipt = {
         protocol,
@@ -446,7 +561,12 @@ export class ExecutionJournal {
         decodedSize: text === null ? null : new TextEncoder().encode(text).length,
       };
     } else if (method === "blobstore.grep") {
-      const [digest, , options] = blobstoreMethods.grep.args.parse([args[0], args[1], args[2]]);
+      const [digest, , options] = parseServiceMethodArgs(
+        "blobstore",
+        "grep",
+        blobstoreMethods.grep,
+        [args[0], args[1], args[2]]
+      );
       const matches = blobstoreMethods.grep.returns!.parse(result);
       receipt = {
         protocol,
@@ -480,9 +600,14 @@ export class ExecutionJournal {
       const resultSchema =
         kind === "tail" ? serverLogMethods.tail.returns! : serverLogMethods.query.returns!;
       const envelope = resultSchema.parse(result);
-      const query = kind === "query" ? serverLogMethods.query.args.parse([args[0]])[0] : undefined;
+      const query =
+        kind === "query"
+          ? parseServiceMethodArgs("serverLog", "query", serverLogMethods.query, [args[0]])[0]
+          : undefined;
       const tailLimit =
-        kind === "tail" ? serverLogMethods.tail.args.parse([args[0]])[0] : undefined;
+        kind === "tail"
+          ? parseServiceMethodArgs("serverLog", "tail", serverLogMethods.tail, [args[0]])[0]
+          : undefined;
       const byLevel = { verbose: 0, info: 0, warn: 0, error: 0 };
       for (const row of envelope.records) byLevel[row.level]++;
       receipt = {

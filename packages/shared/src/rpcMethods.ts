@@ -55,7 +55,7 @@ export function createLazyRpcMethods<M extends ServiceMethodSchemas>(
             args
           );
         },
-        async parseArgs(args: unknown[]) {
+        async parseArgs(args: unknown[]): Promise<unknown[]> {
           const definition = (await methods())[method];
           if (!definition) throw new Error(`Service "${service}" has no method "${method}"`);
           return parseServiceMethodArgs(service, method, definition, args);

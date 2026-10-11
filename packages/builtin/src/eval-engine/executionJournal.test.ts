@@ -16,6 +16,14 @@ function nonRpcEntries(entries: Record<string, unknown>[]) {
   return entries.filter((entry) => entry["type"] !== "rpc.call");
 }
 
+function rpcOwnerIdentity(instance: object): { ownerId: string; ownerGeneration: string } {
+  const owner = instance as unknown as {
+    rpc: { selfId: string };
+    kernelIncarnationId: string;
+  };
+  return { ownerId: owner.rpc.selfId, ownerGeneration: owner.kernelIncarnationId };
+}
+
 function profile(): BuildPerformanceProfileWire {
   return {
     version: 1,
@@ -53,6 +61,8 @@ describe("execution-owned native operation evidence", () => {
     const journal = new ExecutionJournal();
     const receipt: EvalRpcCallObservation = {
       protocol: "rpc-call-observation.v1",
+      ownerId: "owner:notes",
+      ownerGeneration: "00000000-0000-4000-8000-000000000001",
       callId: 0,
       admissionOrder: 0,
       settlementOrder: 1,
@@ -146,6 +156,7 @@ describe("execution-owned native operation evidence", () => {
         };
       }
     ).createExecutionContext({ contextId: "owner" });
+    const ownerIdentity = rpcOwnerIdentity(instance);
 
     const first = owner.rpc.call("do:notes:NotesDO:key-1", "notes.readRows", []);
     const second = owner.rpc.call("do:notes:NotesDO:key-1", "notes.readRows", []);
@@ -168,6 +179,7 @@ describe("execution-owned native operation evidence", () => {
     expect(receipts).toEqual([
       {
         protocol: "rpc-call-observation.v1",
+        ...ownerIdentity,
         callId: 1,
         admissionOrder: 1,
         settlementOrder: 2,
@@ -178,6 +190,7 @@ describe("execution-owned native operation evidence", () => {
       },
       {
         protocol: "rpc-call-observation.v1",
+        ...ownerIdentity,
         callId: 0,
         admissionOrder: 0,
         settlementOrder: 3,
@@ -188,6 +201,7 @@ describe("execution-owned native operation evidence", () => {
       },
       {
         protocol: "rpc-call-observation.v1",
+        ...ownerIdentity,
         callId: 2,
         admissionOrder: 4,
         settlementOrder: 5,
@@ -197,6 +211,162 @@ describe("execution-owned native operation evidence", () => {
       },
     ]);
     expect(JSON.stringify(receipts)).not.toContain("guest mutation");
+  });
+
+  it("orders RPC admissions and settlements across cells within one owner generation", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const nativeRpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
+    vi.spyOn(nativeRpc, "call").mockResolvedValue({ rows: [] });
+    const createExecutionContext = (
+      instance as unknown as {
+        createExecutionContext: (input: { contextId: string }) => {
+          rpc: typeof nativeRpc;
+          operationJournal: ExecutionJournal;
+        };
+      }
+    ).createExecutionContext;
+    const firstCell = createExecutionContext.call(instance, { contextId: "cell-a" });
+    const secondCell = createExecutionContext.call(instance, { contextId: "cell-b" });
+    const ownerIdentity = rpcOwnerIdentity(instance);
+
+    await firstCell.rpc.call("do:notes:NotesDO:key-1", "notes.writeRows", [[{ id: 1 }]]);
+    await instance.reset();
+    await secondCell.rpc.call("do:notes:NotesDO:key-1", "notes.readRows", []);
+
+    const receipt = (execution: typeof firstCell) =>
+      execution.operationJournal.close().entries.find((entry) => entry["type"] === "rpc.call")?.[
+        "receipt"
+      ];
+    const first = receipt(firstCell) as EvalRpcCallObservation;
+    const second = receipt(secondCell) as EvalRpcCallObservation;
+    expect(first).toMatchObject({
+      ...ownerIdentity,
+      callId: 0,
+      admissionOrder: 0,
+      settlementOrder: 1,
+      method: "notes.writeRows",
+    });
+    expect(second).toMatchObject({
+      ...ownerIdentity,
+      callId: 0,
+      admissionOrder: 2,
+      settlementOrder: 3,
+      method: "notes.readRows",
+    });
+    expect(second.admissionOrder).toBeGreaterThan(first.settlementOrder);
+
+    const { instance: nextInstance } = await createTestDO(EvalDO);
+    const nextNativeRpc = wireClientFor(
+      (nextInstance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
+    vi.spyOn(nextNativeRpc, "call").mockResolvedValue({ rows: [] });
+    const nextExecution = (
+      nextInstance as unknown as {
+        createExecutionContext: (input: { contextId: string }) => {
+          rpc: typeof nextNativeRpc;
+          operationJournal: ExecutionJournal;
+        };
+      }
+    ).createExecutionContext({ contextId: "cell-c" });
+    await nextExecution.rpc.call("do:notes:NotesDO:key-1", "notes.readRows", []);
+    const nextReceipt = nextExecution.operationJournal
+      .close()
+      .entries.find((entry) => entry["type"] === "rpc.call")?.["receipt"] as EvalRpcCallObservation;
+    expect(nextReceipt).toMatchObject({ admissionOrder: 0, settlementOrder: 1 });
+    expect(nextReceipt.ownerId).toBe(first.ownerId);
+    expect(nextReceipt.ownerGeneration).not.toBe(first.ownerGeneration);
+  });
+
+  it("records canonical regular worker identity without a fabricated DO class", () => {
+    const journal = new ExecutionJournal();
+    const request = journal.captureWorkerLifecycleRequest("runtime.createEntity", [
+      {
+        kind: "worker",
+        execution: { surface: "code", source: "workers/consumer" },
+        key: "consumer-1",
+      },
+    ]);
+    journal.recordWorkerLifecycle(
+      request,
+      {
+        id: "worker:consumer-1",
+        kind: "worker",
+        source: { repoPath: "workers/consumer", effectiveVersion: "v1" },
+        contextId: "context:1",
+        targetId: "worker:consumer-1",
+      },
+      0
+    );
+    expect(journal.close().entries).toEqual([
+      {
+        type: "worker.lifecycle",
+        receipt: {
+          protocol: "worker-lifecycle-observation.v1",
+          operation: "create",
+          callId: 0,
+          entityId: "worker:consumer-1",
+          targetId: "worker:consumer-1",
+          kind: "worker",
+          source: "workers/consumer",
+          objectKey: "consumer-1",
+        },
+      },
+    ]);
+  });
+
+  it("records a resolved service's actual RPC identity and omits HTTP route resolutions", () => {
+    const journal = new ExecutionJournal();
+    const request = journal.captureWorkerLifecycleRequest("workers.resolveService", ["notes.v1"]);
+    const common = {
+      source: "workers/notes",
+      name: "notes",
+      action: "Read notes",
+      origin: "workspace",
+      protocols: ["notes.v1"],
+      authority: { principals: ["user"] },
+      presentation: { domain: "computer", verb: "see" },
+    };
+    journal.recordWorkerLifecycle(
+      request,
+      {
+        ...common,
+        kind: "durable-object",
+        className: "NotesDO",
+        objectKey: "notes-1",
+        targetId: "do:notes:NotesDO:notes-1",
+      },
+      0
+    );
+    journal.recordWorkerLifecycle(
+      request,
+      {
+        ...common,
+        kind: "worker",
+        routePath: "/notes",
+        routeBasePath: "/",
+      },
+      1
+    );
+    expect(journal.close().entries).toEqual([
+      {
+        type: "worker.lifecycle",
+        receipt: {
+          protocol: "worker-lifecycle-observation.v1",
+          callId: 0,
+          operation: "resolve-service",
+          query: "notes.v1",
+          serviceName: "notes",
+          source: "workers/notes",
+          className: "NotesDO",
+          objectKey: "notes-1",
+          targetId: "do:notes:NotesDO:notes-1",
+        },
+      },
+    ]);
   });
 
   it("records only canonical DO owner identities for create, resolve, and retire", () => {

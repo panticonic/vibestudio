@@ -532,12 +532,12 @@ function expectedCallShape(service: string, method: string, definition: MethodSc
 }
 
 /** The shared argument validator for unary and streaming schema clients. */
-export function parseServiceMethodArgs(
+export function parseServiceMethodArgs<Definition extends MethodSchema>(
   service: string,
   method: string,
-  definition: MethodSchema,
+  definition: Definition,
   args: unknown[]
-): unknown[] {
+): ArgsOf<z.infer<Definition["args"]>> {
   let parsedArgs: unknown[];
   try {
     const tupleItems = (definition.args as unknown as { _def?: { items?: readonly unknown[] } })
@@ -573,7 +573,7 @@ export function parseServiceMethodArgs(
     });
     throw failure;
   }
-  return parsedArgs;
+  return parsedArgs as ArgsOf<z.infer<Definition["args"]>>;
 }
 
 /** Validate and dispatch one dynamically selected method from a schema table.

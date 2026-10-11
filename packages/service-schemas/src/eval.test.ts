@@ -30,6 +30,12 @@ describe("eval RPC observation fingerprints", () => {
       available: true,
       encoding: '{"a":1,"b":2}',
     });
+    expect(fingerprintEvalRpcValue({ "\ud800": 1, "\ud801": 2 })).toEqual(
+      fingerprintEvalRpcValue({ "\ud801": 2, "\ud800": 1 })
+    );
+    expect(fingerprintEvalRpcValue({ "\ud800": 1 })).not.toEqual(
+      fingerprintEvalRpcValue({ "\ud801": 1 })
+    );
   });
 
   it("marks unsupported, cyclic, accessor, and oversized receiver results unavailable without running getters", () => {
@@ -56,6 +62,8 @@ describe("eval RPC observation fingerprints", () => {
     expect(
       evalRpcCallObservationSchema.parse({
         protocol: "rpc-call-observation.v1",
+        ownerId: "owner:example",
+        ownerGeneration: "00000000-0000-4000-8000-000000000001",
         callId: 2,
         admissionOrder: 0,
         settlementOrder: 1,
@@ -68,6 +76,8 @@ describe("eval RPC observation fingerprints", () => {
     expect(
       evalRpcCallObservationSchema.safeParse({
         protocol: "rpc-call-observation.v1",
+        ownerId: "owner:example",
+        ownerGeneration: "00000000-0000-4000-8000-000000000001",
         callId: 3,
         admissionOrder: 3,
         settlementOrder: 1,
@@ -75,6 +85,17 @@ describe("eval RPC observation fingerprints", () => {
         method: "runtime.createEntity",
         outcome: "rejected",
         result: { available: true, fingerprint: "0".repeat(64) },
+      }).success
+    ).toBe(false);
+    expect(
+      evalRpcCallObservationSchema.safeParse({
+        protocol: "rpc-call-observation.v1",
+        callId: 4,
+        admissionOrder: 0,
+        settlementOrder: 1,
+        targetId: "main",
+        method: "runtime.createEntity",
+        outcome: "fulfilled",
       }).success
     ).toBe(false);
     expect(

@@ -622,6 +622,8 @@ export class EvalDO extends DurableObjectBase {
   /** Stable only for this exact in-memory notebook heap. */
   private readonly kernelIncarnationId: string;
   private readonly kernelStartedAt: number;
+  /** Monotonic RPC admission/settlement order across every cell in this owner incarnation. */
+  private rpcObservationEventOrder = 0;
   private kernelRestarted = false;
   private kernelEventPending = true;
   /** Exact durable recovery report captured when this incarnation first hydrates scope. */
@@ -797,7 +799,8 @@ export class EvalDO extends DurableObjectBase {
     const base = wireClientFor(this.rpc);
     const operationJournal = new ExecutionJournal();
     let rpcCallSequence = 0;
-    let rpcEventOrder = 0;
+    const ownerId = base.selfId;
+    const ownerGeneration = this.kernelIncarnationId;
     const mergeOptions = <T extends RpcCallOptions | RpcStreamOptions>(value?: T): T => {
       const options = {
         ...(value ?? {}),
@@ -818,7 +821,7 @@ export class EvalDO extends DurableObjectBase {
       options?: RpcCallOptions
     ): Promise<unknown> => {
       const callId = rpcCallSequence++;
-      const admissionOrder = rpcEventOrder++;
+      const admissionOrder = this.rpcObservationEventOrder++;
       const workerLifecycleRequest =
         targetId === "main"
           ? operationJournal.captureWorkerLifecycleRequest(method, args)
@@ -852,9 +855,11 @@ export class EvalDO extends DurableObjectBase {
         const result = await base.call(targetId, method, args, mergeOptions(options));
         operationJournal.recordRpcCall({
           protocol: "rpc-call-observation.v1",
+          ownerId,
+          ownerGeneration,
           callId,
           admissionOrder,
-          settlementOrder: rpcEventOrder++,
+          settlementOrder: this.rpcObservationEventOrder++,
           targetId,
           method,
           outcome: "fulfilled",
@@ -890,9 +895,11 @@ export class EvalDO extends DurableObjectBase {
         if (!rpcReceiptRecorded) {
           operationJournal.recordRpcCall({
             protocol: "rpc-call-observation.v1",
+            ownerId,
+            ownerGeneration,
             callId,
             admissionOrder,
-            settlementOrder: rpcEventOrder++,
+            settlementOrder: this.rpcObservationEventOrder++,
             targetId,
             method,
             outcome: "rejected",

@@ -38,6 +38,8 @@ export type EvalRpcFingerprint = z.infer<typeof evalRpcFingerprintSchema>;
 export const evalRpcCallObservationSchema = z
   .object({
     protocol: z.literal("rpc-call-observation.v1"),
+    ownerId: z.string().min(1),
+    ownerGeneration: z.string().uuid(),
     callId: z.number().int().nonnegative(),
     admissionOrder: z.number().int().nonnegative(),
     settlementOrder: z.number().int().nonnegative(),
@@ -63,25 +65,40 @@ export const evalRpcCallObservationSchema = z
   });
 export type EvalRpcCallObservation = z.infer<typeof evalRpcCallObservationSchema>;
 
-export const evalWorkerLifecycleObservationSchema = z.discriminatedUnion("operation", [
+const evalWorkerCreationObservationSchema = z.object({
+  protocol: z.literal("worker-lifecycle-observation.v1"),
+  callId: z.number().int().nonnegative(),
+  operation: z.literal("create"),
+  entityId: z.string().min(1),
+  targetId: z.string().min(1),
+  source: z.string().min(1),
+  objectKey: z.string().optional(),
+});
+export const evalWorkerLifecycleObservationSchema = z.union([
+  z.discriminatedUnion("kind", [
+    evalWorkerCreationObservationSchema
+      .extend({ kind: z.literal("do"), className: z.string().min(1) })
+      .strict(),
+    evalWorkerCreationObservationSchema.extend({ kind: z.literal("worker") }).strict(),
+  ]),
   z
     .object({
       protocol: z.literal("worker-lifecycle-observation.v1"),
       callId: z.number().int().nonnegative(),
-      operation: z.literal("create"),
-      entityId: z.string().min(1),
+      operation: z.literal("resolve"),
       targetId: z.string().min(1),
-      kind: z.literal("do"),
       source: z.string().min(1),
       className: z.string().min(1),
-      objectKey: z.string().optional(),
+      objectKey: z.string().min(1),
     })
     .strict(),
   z
     .object({
       protocol: z.literal("worker-lifecycle-observation.v1"),
       callId: z.number().int().nonnegative(),
-      operation: z.literal("resolve"),
+      operation: z.literal("resolve-service"),
+      query: z.string(),
+      serviceName: z.string(),
       targetId: z.string().min(1),
       source: z.string().min(1),
       className: z.string().min(1),
@@ -104,14 +121,9 @@ export type CapturedEvalRpcFingerprint =
   | { available: false; reason: "unsupported" | "too-large" | "unreadable" };
 
 function compareEvalFingerprintKeys(left: string, right: string): number {
-  const encoder = new TextEncoder();
-  const a = encoder.encode(left);
-  const b = encoder.encode(right);
-  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
-    const delta = a[index]! - b[index]!;
-    if (delta !== 0) return delta;
-  }
-  return a.length - b.length;
+  // UTF-16 ordering distinguishes every JavaScript key, including unpaired
+  // surrogates that a UTF-8 encoder would both replace with the same character.
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /** Capture deterministic canonical JSON under strict per-value size/depth/node bounds. */
