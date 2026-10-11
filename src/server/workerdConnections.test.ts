@@ -1,7 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { once } from "node:events";
-import { describe, expect, it } from "vitest";
-import { destroyWorkerdConnections, postToDurableObject } from "./workerdRpcRelay.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createWorkerdHttpObservation,
+  destroyWorkerdConnections,
+  getWorkerdConnectionDispatcher,
+  postToDurableObject,
+} from "./workerdRpcRelay.js";
 
 const ref = { source: "workers/test", className: "TestDO", objectKey: "connections" };
 
@@ -39,6 +44,107 @@ function reply(res: ServerResponse, request: { message: { requestId: string } })
 }
 
 describe("owned workerd HTTP connections", () => {
+  it("attributes concurrent socket failures to the request that owned each socket", async () => {
+    await withServer(
+      (req, res) => {
+        req.resume();
+        req.on("end", () => {
+          if (req.url === "/reset") req.socket.destroy();
+          else res.end("ok");
+        });
+      },
+      async (origin) => {
+        const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const request = (path: string, requestId: string) => {
+          const observation = createWorkerdHttpObservation({
+            source: "workers/test",
+            className: "TestDO",
+            method: path.slice(1),
+            requestId,
+          });
+          const url = `${origin}${path}`;
+          return observation
+            .fetch(() =>
+              fetch(url, {
+                method: "POST",
+                body: "test",
+                dispatcher: getWorkerdConnectionDispatcher(url),
+              } as RequestInit)
+            )
+            .then((response) => observation.readText(response));
+        };
+        try {
+          const outcomes = await Promise.allSettled([
+            request("/reset", "failed-request"),
+            request("/success", "successful-request"),
+          ]);
+          expect(outcomes[0]?.status).toBe("rejected");
+          expect(outcomes[1]).toMatchObject({ status: "fulfilled", value: "ok" });
+          const failureLogs = warning.mock.calls.filter(
+            ([label]) => label === "[WorkerdHttp] request failed"
+          );
+          expect(failureLogs).toHaveLength(1);
+          expect(failureLogs[0]?.[1]).toMatchObject({
+            method: "reset",
+            requestId: "failed-request",
+            exchanges: [expect.objectContaining({ localPort: expect.any(Number) })],
+          });
+          expect(failureLogs[0]?.[1]).not.toHaveProperty("requestId", "successful-request");
+        } finally {
+          warning.mockRestore();
+        }
+      }
+    );
+  });
+
+  it("records response headers when a socket resets while the body is being read", async () => {
+    await withServer(
+      (req, res) => {
+        req.resume();
+        req.on("end", () => {
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          res.flushHeaders();
+          res.write("partial");
+          req.socket.destroy();
+        });
+      },
+      async (origin) => {
+        const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const observation = createWorkerdHttpObservation({
+          source: "workers/test",
+          className: "TestDO",
+          method: "body-reset",
+          requestId: "body-reset-request",
+        });
+        try {
+          const response = await observation.fetch(() =>
+            fetch(origin, {
+              method: "POST",
+              body: "test",
+              dispatcher: getWorkerdConnectionDispatcher(origin),
+            } as RequestInit)
+          );
+          expect(response.status).toBe(200);
+          await expect(observation.readText(response)).rejects.toThrow();
+          const failureEvidence = warning.mock.calls.find(
+            ([label]) => label === "[WorkerdHttp] request failed"
+          )?.[1];
+          expect(failureEvidence).toMatchObject({
+            requestId: "body-reset-request",
+            exchanges: [
+              expect.objectContaining({
+                responseStatus: 200,
+              }),
+            ],
+          });
+          expect(failureEvidence).not.toHaveProperty("exchanges.0.responseBodyComplete");
+        } finally {
+          warning.mockRestore();
+        }
+      }
+    );
+  });
+
   it("reuses sockets for repeated calls and never replays an ambiguously delivered POST", async () => {
     const sockets = new Set<IncomingMessage["socket"]>();
     const deliveries: string[] = [];
@@ -71,9 +177,32 @@ describe("owned workerd HTTP connections", () => {
           await expect(postToDurableObject(ref, "read", [], deps)).resolves.toBe("done");
         }
         expect(sockets.size).toBeLessThan(6);
-        await expect(postToDurableObject(ref, "commit-and-disconnect", [], deps)).rejects.toThrow(
-          /fetch/
-        );
+        const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          await expect(postToDurableObject(ref, "commit-and-disconnect", [], deps)).rejects.toThrow(
+            /fetch/
+          );
+          const failureEvidence = warning.mock.calls.find(
+            ([label]) => label === "[WorkerdHttp] request failed"
+          )?.[1];
+          expect(failureEvidence).toMatchObject({
+            source: ref.source,
+            className: ref.className,
+            method: "commit-and-disconnect",
+            requestId: expect.any(String),
+            exchanges: [
+              expect.objectContaining({
+                localPort: expect.any(Number),
+                remotePort: expect.any(Number),
+              }),
+            ],
+          });
+          expect(failureEvidence).not.toHaveProperty("url");
+          expect(failureEvidence).not.toHaveProperty("headers");
+          expect(failureEvidence).not.toHaveProperty("body");
+        } finally {
+          warning.mockRestore();
+        }
         await expect(postToDurableObject(ref, "next-call", [], deps)).resolves.toBe("done");
         expect(deliveries).toEqual([
           ...Array<string>(6).fill("read"),

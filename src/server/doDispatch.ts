@@ -43,6 +43,7 @@ import {
   doRefKey,
   doRefUrl,
   describeWorkerdFetchFailure,
+  createWorkerdHttpObservation,
   getWorkerdConnectionDispatcher,
 } from "./workerdRpcRelay.js";
 import { parseDurableWorkReady, type DurableWorkReadyHint } from "@vibestudio/shared/durableWork";
@@ -159,17 +160,27 @@ export async function postToDOWithToken(
   }
 
   let res: Response;
+  const observation = createWorkerdHttpObservation(
+    {
+      source: ref.source,
+      className: ref.className,
+      method,
+    },
+    signal
+  );
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: encodeRpcJson(envelope),
-      signal,
-      // The method's owner defines its semantic lifetime. In particular,
-      // lifecycle release may legitimately join owned model work, so Undici's
-      // response-header/body defaults must never become a hidden deadline.
-      dispatcher: getWorkerdConnectionDispatcher(url),
-    } as RequestInit);
+    res = await observation.fetch(() =>
+      fetch(url, {
+        method: "POST",
+        headers,
+        body: encodeRpcJson(envelope),
+        signal,
+        // The method's owner defines its semantic lifetime. In particular,
+        // lifecycle release may legitimately join owned model work, so Undici's
+        // response-header/body defaults must never become a hidden deadline.
+        dispatcher: getWorkerdConnectionDispatcher(url),
+      } as RequestInit)
+    );
   } catch (error) {
     if (signal?.aborted) {
       throw signal.reason instanceof Error ? signal.reason : new Error("DO dispatch aborted");
@@ -181,7 +192,7 @@ export async function postToDOWithToken(
   }
 
   if (!res.ok) {
-    const body = await res.text();
+    const body = await observation.readText(res);
     let parsed: {
       error?: import("@vibestudio/rpc").RpcFailure;
       metadata?: { durableWorkReady?: unknown };
@@ -197,7 +208,7 @@ export async function postToDOWithToken(
   }
 
   try {
-    const decoded: unknown = decodeRpcJson(await res.text());
+    const decoded: unknown = decodeRpcJson(await observation.readText(res));
     if (
       !decoded ||
       typeof decoded !== "object" ||
@@ -264,6 +275,15 @@ async function postRpcToDOWithToken(
     // before the receiver had finished its handler and alarm drain.
     dispatcher: getWorkerdConnectionDispatcher(url),
   } as RequestInit;
+  const observation = createWorkerdHttpObservation(
+    {
+      source: ref.source,
+      className: ref.className,
+      method,
+      requestId,
+    },
+    signal
+  );
 
   let cancelDelivery: Promise<void> | null = null;
   let admitted = false;
@@ -274,14 +294,22 @@ async function postRpcToDOWithToken(
       ...envelope,
       message: { type: "request-cancel", requestId, fromId: caller.callerId },
     };
+    const cancellationObservation = createWorkerdHttpObservation({
+      source: ref.source,
+      className: ref.className,
+      method: `${method}.__cancel`,
+      requestId,
+    });
     cancelDelivery = (async () => {
-      const response = await fetch(url, {
-        method: "POST",
-        headers,
-        body: encodeRpcJson(cancellation),
-        dispatcher: getWorkerdConnectionDispatcher(url),
-      } as RequestInit);
-      const body = await response.text();
+      const response = await cancellationObservation.fetch(() =>
+        fetch(url, {
+          method: "POST",
+          headers,
+          body: encodeRpcJson(cancellation),
+          dispatcher: getWorkerdConnectionDispatcher(url),
+        } as RequestInit)
+      );
+      const body = await cancellationObservation.readText(response);
       if (!response.ok) {
         throw new Error(
           `DO RPC ${requestContext} cancellation delivery failed (${response.status})${body ? `: ${body}` : ""}`
@@ -300,7 +328,7 @@ async function postRpcToDOWithToken(
   try {
     let response: Response;
     try {
-      response = await fetch(url, init);
+      response = await observation.fetch(() => fetch(url, init));
     } catch (error) {
       throw new AmbiguousDoDispatchError(
         `DO RPC ${requestContext} fetch to ${url} failed: ${describeWorkerdFetchFailure(error)}`,
@@ -308,7 +336,7 @@ async function postRpcToDOWithToken(
       );
     }
     if (!response.ok) {
-      const body = await response.text();
+      const body = await observation.readText(response);
       let parsed: {
         error?: import("@vibestudio/rpc").RpcFailure;
       };
@@ -324,7 +352,7 @@ async function postRpcToDOWithToken(
     }
     admitted = true;
     cancel();
-    const decoded = decodeRpcJson(await response.text()) as RpcEnvelope;
+    const decoded = decodeRpcJson(await observation.readText(response)) as RpcEnvelope;
     const message = decoded?.message;
     if (message?.type !== "response" || message.requestId !== requestId) {
       throw new Error(`DO RPC ${requestContext} returned a mismatched terminal response`);

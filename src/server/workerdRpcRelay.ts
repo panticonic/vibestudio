@@ -1,4 +1,6 @@
 import { deserializeRpcFailure } from "@vibestudio/rpc";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import { doTargetId, type DORefParam } from "@vibestudio/shared/workspaceServiceRpc";
 import {
   decodeRpcJson,
@@ -26,6 +28,169 @@ export type DORef = DORefParam;
 
 /** Each workerd endpoint owns its transport pool and its generation retirement. */
 const workerdConnectionDispatchers = new Map<string, Pool>();
+type WorkerdHttpObservation = ReturnType<typeof createWorkerdHttpObservation>;
+const responseObservations = new WeakMap<Response, WorkerdHttpObservation>();
+
+type WorkerdHttpExchange = {
+  localPort?: number;
+  remotePort?: number;
+  responseStatus?: number;
+  phase?: "request-sent" | "response-headers" | "request-error" | "response-body-complete";
+  responseBodyComplete?: boolean;
+  requestError?: { name: string; code?: string; syscall?: string; errno?: number };
+};
+
+type WorkerdHttpObservationState = {
+  metadata: {
+    source: string;
+    className: string;
+    method: string;
+    requestId?: string;
+  };
+  startedAt: number;
+  exchanges: Map<object, WorkerdHttpExchange>;
+  signal?: AbortSignal;
+};
+
+const workerdHttpObservation = new AsyncLocalStorage<WorkerdHttpObservationState>();
+const workerdRequestObservations = new WeakMap<object, WorkerdHttpObservationState>();
+
+function exchangeFor(request: unknown): WorkerdHttpExchange | undefined {
+  if (!request || typeof request !== "object") return undefined;
+  const state = workerdRequestObservations.get(request);
+  if (!state) return undefined;
+  let exchange = state.exchanges.get(request);
+  if (!exchange) {
+    // The operation may make a primary request and a cancellation request.
+    // Keep a hard bound even if a caller accidentally loops within one scope.
+    if (state.exchanges.size >= 4) return undefined;
+    exchange = {};
+    state.exchanges.set(request, exchange);
+  }
+  return exchange;
+}
+
+channel("undici:request:create").subscribe((event: unknown) => {
+  if (!event || typeof event !== "object") return;
+  const detail = event as { request?: unknown };
+  const state = workerdHttpObservation.getStore();
+  if (state && detail.request && typeof detail.request === "object") {
+    workerdRequestObservations.set(detail.request, state);
+  }
+});
+
+channel("undici:client:sendHeaders").subscribe((event: unknown) => {
+  if (!event || typeof event !== "object") return;
+  const detail = event as { request?: unknown; socket?: unknown };
+  const exchange = exchangeFor(detail.request);
+  if (!exchange || !detail.socket || typeof detail.socket !== "object") return;
+  const socket = detail.socket as { localPort?: unknown; remotePort?: unknown };
+  if (typeof socket.localPort === "number") exchange.localPort = socket.localPort;
+  if (typeof socket.remotePort === "number") exchange.remotePort = socket.remotePort;
+  exchange.phase = "request-sent";
+});
+
+channel("undici:request:headers").subscribe((event: unknown) => {
+  if (!event || typeof event !== "object") return;
+  const detail = event as { request?: unknown; response?: { statusCode?: unknown } };
+  const exchange = exchangeFor(detail.request);
+  if (exchange && typeof detail.response?.statusCode === "number") {
+    exchange.responseStatus = detail.response.statusCode;
+    exchange.phase = "response-headers";
+  }
+});
+
+channel("undici:request:error").subscribe((event: unknown) => {
+  if (!event || typeof event !== "object") return;
+  const detail = event as { request?: unknown; error?: unknown };
+  const exchange = exchangeFor(detail.request);
+  if (!exchange || !detail.error || typeof detail.error !== "object") return;
+  const error = detail.error as {
+    name?: unknown;
+    code?: unknown;
+    syscall?: unknown;
+    errno?: unknown;
+  };
+  exchange.requestError = {
+    name: typeof error.name === "string" ? error.name.slice(0, 80) : "Error",
+    ...(typeof error.code === "string" ? { code: error.code.slice(0, 80) } : {}),
+    ...(typeof error.syscall === "string" ? { syscall: error.syscall.slice(0, 80) } : {}),
+    ...(typeof error.errno === "number" ? { errno: error.errno } : {}),
+  };
+  exchange.phase = "request-error";
+});
+
+/** Run a workerd HTTP exchange with bounded failure-only transport evidence. */
+export function createWorkerdHttpObservation(
+  metadata: WorkerdHttpObservationState["metadata"],
+  signal?: AbortSignal
+): {
+  fetch: <T extends Response>(operation: () => Promise<T>) => Promise<T>;
+  readText: (response: Response) => Promise<string>;
+  readArrayBuffer: (response: Response) => Promise<ArrayBuffer>;
+} {
+  const state: WorkerdHttpObservationState = {
+    metadata,
+    startedAt: Date.now(),
+    exchanges: new Map(),
+    ...(signal ? { signal } : {}),
+  };
+  let responseCompleted = false;
+  const observe = async <T>(operation: () => Promise<T>): Promise<T> =>
+    workerdHttpObservation.run(state, async () => {
+      try {
+        return await operation();
+      } catch (error) {
+        if (!responseCompleted && !state.signal?.aborted) {
+          console.warn("[WorkerdHttp] request failed", {
+            ...state.metadata,
+            elapsedMs: Math.max(0, Date.now() - state.startedAt),
+            exchanges: [...state.exchanges.values()].slice(0, 4),
+          });
+        }
+        throw error;
+      }
+    });
+  return {
+    fetch: observe,
+    readText: (response) =>
+      observe(async () => {
+        const body = await response.text();
+        responseCompleted = true;
+        for (const exchange of state.exchanges.values()) {
+          exchange.responseBodyComplete = true;
+          exchange.phase = "response-body-complete";
+        }
+        return body;
+      }),
+    readArrayBuffer: (response) =>
+      observe(async () => {
+        const body = await response.arrayBuffer();
+        responseCompleted = true;
+        for (const exchange of state.exchanges.values()) {
+          exchange.responseBodyComplete = true;
+          exchange.phase = "response-body-complete";
+        }
+        return body;
+      }),
+  };
+}
+
+export async function readWorkerdResponseText(response: Response): Promise<string> {
+  const observation = responseObservations.get(response);
+  if (!observation) return response.text();
+  const body = await observation.readText(response);
+  responseObservations.delete(response);
+  return body;
+}
+
+async function readWorkerdResponseArrayBuffer(response: Response): Promise<ArrayBuffer> {
+  const observation = responseObservations.get(response);
+  if (!observation) return response.arrayBuffer();
+  const body = await observation.readArrayBuffer(response);
+  responseObservations.delete(response);
+  return body;
+}
 
 export function getWorkerdConnectionDispatcher(endpoint: string): Dispatcher {
   const origin = new URL(endpoint).origin;
@@ -262,22 +427,37 @@ async function fetchEnvelopeFromDO(
   signal?: AbortSignal
 ): Promise<Response> {
   const url = `${deps.workerdUrl}${doRefUrl(ref, "__rpc")}`;
+  const message = envelope.message;
+  const observation = createWorkerdHttpObservation(
+    {
+      source: ref.source,
+      className: ref.className,
+      method: message.type === "request" ? message.method : "__rpc",
+      ...(message.type === "request" || message.type === "request-cancel"
+        ? { requestId: message.requestId }
+        : {}),
+    },
+    signal
+  );
   let res: Response;
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        ...doExecutableHeaders(ref, deps.resolveExecutableAdmission),
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${deps.workerdGatewayToken}`,
-        ...(deps.workerdDispatchSecret
-          ? { "X-Vibestudio-Dispatch-Secret": deps.workerdDispatchSecret }
-          : {}),
-      },
-      body: encodeRpcJson(envelope),
-      ...(signal ? { signal } : {}),
-      dispatcher: getWorkerdConnectionDispatcher(url),
-    } as RequestInit);
+    res = await observation.fetch(() =>
+      fetch(url, {
+        method: "POST",
+        headers: {
+          ...doExecutableHeaders(ref, deps.resolveExecutableAdmission),
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${deps.workerdGatewayToken}`,
+          ...(deps.workerdDispatchSecret
+            ? { "X-Vibestudio-Dispatch-Secret": deps.workerdDispatchSecret }
+            : {}),
+        },
+        body: encodeRpcJson(envelope),
+        ...(signal ? { signal } : {}),
+        dispatcher: getWorkerdConnectionDispatcher(url),
+      } as RequestInit)
+    );
+    responseObservations.set(res, observation);
   } catch (error) {
     const wrapped = new Error(
       `DO RPC fetch to ${url} failed: ${describeWorkerdFetchFailure(error)}`
@@ -319,7 +499,7 @@ async function postEnvelopeToDO(
       await assertDurableObjectResponseOk(ref, response);
       // Own the acknowledgement body as well as the POST. This is a unary
       // cancellation delivery receipt, not background cleanup.
-      await response.arrayBuffer();
+      await readWorkerdResponseArrayBuffer(response);
     })();
     void cancellationDelivery.catch(() => {});
     return cancellationDelivery;
@@ -337,7 +517,7 @@ async function postEnvelopeToDO(
     admitted = true;
     if (cancellationRequested) void sendCancellation();
     await assertDurableObjectResponseOk(ref, res);
-    return decodeRpcJson(await res.text()) as RpcEnvelope;
+    return decodeRpcJson(await readWorkerdResponseText(res)) as RpcEnvelope;
   })().then(
     (value) => ({ status: "fulfilled" as const, value }),
     (reason) => ({ status: "rejected" as const, reason })
@@ -377,7 +557,7 @@ async function postEnvelopeToDO(
 
 async function assertDurableObjectResponseOk(ref: DORef, res: Response): Promise<void> {
   if (res.ok) return;
-  const text = await res.text();
+  const text = await readWorkerdResponseText(res);
   const identity = `${ref.source}:${ref.className}/${ref.objectKey}`;
   let parsed: { error?: import("@vibestudio/rpc").RpcFailure };
   try {

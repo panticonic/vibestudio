@@ -278,10 +278,17 @@ process.env.NODE_ENV;
         try {
           service.updateFile('index.ts', ${JSON.stringify(source)});
           const result = service.check();
+          const expectedRootFile = path.join(fs.realpathSync(${JSON.stringify(path.join(statePath, "scratch", "home"))}), "index.ts");
+          const rootFileCandidates = result.diagnostics
+            .filter(diagnostic => diagnostic.code === 2322)
+            .map(diagnostic => ({
+              file: diagnostic.file,
+              identity: diagnostic.file ? fileIdentity(diagnostic.file) : undefined,
+            }));
           const rootAssignment = result.diagnostics.find(diagnostic =>
-            diagnostic.code === 2322 && diagnostic.file && fileIdentity(diagnostic.file) === path.join(fs.realpathSync(${JSON.stringify(path.join(statePath, "scratch", "home"))}), "index.ts")
+            diagnostic.code === 2322 && diagnostic.file && fileIdentity(diagnostic.file) === expectedRootFile
           );
-          assert(rootAssignment, JSON.stringify(result.diagnostics.map(({ code, message, file }) => ({ code, message, file }))));
+          assert(rootAssignment, JSON.stringify({ expectedRootFile, rootFileCandidates, diagnostics: result.diagnostics.map(({ code, message, file }) => ({ code, message, file })) }));
           assert(!result.diagnostics.some(diagnostic =>
             diagnostic.code === 2322 && diagnostic.file && fileIdentity(diagnostic.file) === fileIdentity(${JSON.stringify(path.join(sdkResource, "types", "index.ts"))})
           ), JSON.stringify(result.diagnostics.map(({ code, message, file }) => ({ code, message, file }))));
@@ -401,9 +408,21 @@ it("materializes independent dependency realms for workspace package owners", as
       script: `
         import { createRequire } from 'node:module';
         import { pathToFileURL } from 'node:url';
+        import path from 'node:path';
         const require = createRequire(import.meta.url);
         const assert = require('node:assert/strict');
-        const engine = await import(pathToFileURL(${JSON.stringify(path.join(resources.workspacePackages["@vibestudio/typecheck"]!, "index.js"))}));
+        const enginePath = ${JSON.stringify(path.join(resources.workspacePackages["@vibestudio/typecheck"]!, "index.js"))};
+        const enginePackageRoot = ${JSON.stringify(path.join(resources.workspacePackages["@vibestudio/typecheck"]!, "node_modules", "typescript"))};
+        const expectedTypeScriptImports = ${JSON.stringify(canonicalTypeScriptManifest.imports)};
+        const engineTypeScriptManifest = JSON.parse(require('node:fs').readFileSync(path.join(enginePackageRoot, 'package.json'), 'utf8'));
+        assert.deepEqual(engineTypeScriptManifest.imports, expectedTypeScriptImports, JSON.stringify({ enginePath, enginePackageRoot, expectedTypeScriptImports, actualImports: engineTypeScriptManifest.imports }));
+        let engine;
+        try {
+          engine = await import(pathToFileURL(enginePath));
+        } catch (error) {
+          const resolvedTypeScriptEntry = require.resolve('typescript', { paths: [${JSON.stringify(resources.workspacePackages["@vibestudio/typecheck"]!)}] });
+          throw new Error(JSON.stringify({ enginePath, enginePackageRoot, resolvedTypeScriptEntry, expectedTypeScriptImports, actualImports: engineTypeScriptManifest.imports, cause: String(error) }), { cause: error });
+        }
         const transform = require(${JSON.stringify(resources.workspacePackages["@vibestudio/svelte-type-source"]!)});
         assert.equal(engine.hasProject, true);
         assert.equal(transform.version, '6.0.3');

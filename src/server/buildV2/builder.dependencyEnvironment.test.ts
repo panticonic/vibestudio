@@ -20,6 +20,59 @@ function writePackage(nodeModules: string, name: string, marker: string): void {
 
 describe("dependency-environment resolver", () => {
   it.each([true, false])(
+    "matches owned dependency roots through a filesystem alias (guarded=%s)",
+    async (guarded) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-aliased-dependency-"));
+      const alias = `${root}-alias`;
+      try {
+        fs.symlinkSync(root, alias, "junction");
+        const modules = path.join(root, "node_modules");
+        writePackage(modules, "owner", "owned");
+        const owner = path.join(modules, "owner");
+        fs.writeFileSync(
+          path.join(owner, "package.json"),
+          JSON.stringify({
+            name: "owner",
+            version: "1.0.0",
+            type: "module",
+            exports: "./index.js",
+          })
+        );
+        fs.writeFileSync(
+          path.join(owner, "index.js"),
+          guarded
+            ? 'export function run() { try { return require("missing-vibestudio-optional-helper"); } catch { return "optional helper absent"; } }'
+            : 'export function run() { return require("missing-vibestudio-optional-helper"); }'
+        );
+        const entry = path.join(root, "entry.js");
+        fs.writeFileSync(entry, 'export { run } from "owner";');
+        const build = esbuild.build({
+          entryPoints: [entry],
+          bundle: true,
+          format: "cjs",
+          platform: "node",
+          write: false,
+          logLevel: "silent",
+          plugins: [createDependencyEnvironmentResolvePlugin([path.join(alias, "node_modules")])],
+        });
+        if (guarded) {
+          const output = (await build).outputFiles[0]!.text;
+          const module = { exports: {} as { run: () => string } };
+          new Function("require", "module", output)(() => {
+            throw new Error("module not found");
+          }, module);
+          expect(module.exports.run()).toBe("optional helper absent");
+        } else {
+          await expect(build).rejects.toThrow("Could not resolve");
+        }
+      } finally {
+        fs.rmSync(alias, { recursive: true, force: true });
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it.each([true, false])(
     "preserves guarded missing requires in owned dependencies (guarded=%s)",
     async (guarded) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-guarded-dependency-"));

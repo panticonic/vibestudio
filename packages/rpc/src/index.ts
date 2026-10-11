@@ -77,6 +77,7 @@ export {
   RPC_ABORTED_CODE,
   PANEL_RUNTIME_LEASED_CODE,
 } from "./errors.js";
+export { INVALID_RPC_METHOD_DESCRIPTOR_CODE } from "./methodDescriptor.js";
 export type {
   AuthorizationContext,
   AuthoritySubjectBinding,

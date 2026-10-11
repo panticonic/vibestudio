@@ -722,8 +722,16 @@ function packageNameFromSpecifier(specifier: string): string {
   return specifier.startsWith("@") ? `${parts[0] ?? ""}/${parts[1] ?? ""}` : (parts[0] ?? "");
 }
 
+function canonicalFilesystemPath(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
 function pathIsWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
+  const relative = path.relative(canonicalFilesystemPath(root), canonicalFilesystemPath(candidate));
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
@@ -804,7 +812,8 @@ export function createDependencyEnvironmentResolvePlugin(
       .sort(([a], [b]) => b.length - a.length)[0];
     if (!target) return undefined;
     const [realRoot, logicalRoot] = target;
-    return path.join(logicalRoot, path.relative(realRoot, resolveDir));
+    const canonicalResolveDir = canonicalFilesystemPath(resolveDir);
+    return path.join(logicalRoot, path.relative(realRoot, canonicalResolveDir));
   };
 
   return {

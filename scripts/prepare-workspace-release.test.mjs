@@ -5,14 +5,15 @@ import path from "node:path";
 import os from "node:os";
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 
-async function withProducer(code, check) {
+async function withProducer(code, check, configureAppRoot = async (root) => root) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-release-lifecycle-"));
   let owner;
   try {
+    const appRoot = await configureAppRoot(root);
     const entry = path.join(root, "producer.cjs");
     await fs.writeFile(entry, code);
     owner = prepareWorkspaceRelease({
-      appRoot: root,
+      appRoot,
       output: root,
       scratch: path.join(root, "scratch"),
       env: { ...process.env },
@@ -25,6 +26,21 @@ async function withProducer(code, check) {
     await fs.rm(root, { recursive: true, force: true });
   }
 }
+
+void test("launches the producer from its entry directory when the packaged app root is a file", async () => {
+  await withProducer(
+    `process.send({kind:"sources-ready"}, () => process.disconnect());`,
+    async (owner) => {
+      await owner.sourcesReady;
+      await owner.completed;
+    },
+    async (root) => {
+      const appRoot = path.join(root, "app.asar");
+      await fs.writeFile(appRoot, "packed application archive");
+      return appRoot;
+    }
+  );
+});
 
 void test("publishes source readiness while compilation remains owned, then joins explicit cancellation", async () => {
   await withProducer(

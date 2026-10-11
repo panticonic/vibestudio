@@ -2309,11 +2309,9 @@ describe("createRpcClient lifetime ownership", () => {
       stream: (_envelope, signal) => {
         observedSignal = signal;
         return new Promise<Response>((_resolve, reject) => {
-          signal?.addEventListener(
-            "abort",
-            () => reject(rpcCallerAbortedError(signal.reason)),
-            { once: true }
-          );
+          signal?.addEventListener("abort", () => reject(rpcCallerAbortedError(signal.reason)), {
+            once: true,
+          });
         });
       },
     };
@@ -2679,34 +2677,60 @@ it("retains host-minted invocation ancestry in borrowed handler clients without 
   );
 });
 
-
-it.each(["call", "peer", "stream", "readable"] as const)("owns typed %s before async argument validation can yield", async kind => {
-  const observed: Promise<unknown>[] = [];
-  const fake = controllableTransport();
-  const rpc = schemaRpcClient(createRpcClient({ selfId: "typed-owner", callerKind: "worker", transport: fake.transport,
-    onOutboundOperation: operation => observed.push(operation) }));
-  let rejectValidation!: (failure: Error) => void;
-  const parsing = new Promise<never>((_, reject) => { rejectValidation = reject; });
-  const method = { name: "validated", async parseArgs(_args: []) { return parsing; },
-    async invoke(args: [], dispatch: (args: unknown[]) => Promise<unknown>) { return dispatch(await this.parseArgs(args)); } };
-  const typed = rpc.peer("target").withContract(defineContract({ caller: { methods: { validated: method } } }), "caller");
-  const pending = kind === "call" ? rpc.call("target", method, []) : kind === "peer" ? typed.call.validated() :
-    kind === "stream" ? rpc.stream("target", method, []) : rpc.streamReadable("target", method, []);
-  expect(observed).toHaveLength(1);
-  expect(fake.sent).toHaveLength(0);
-  const failure = new Error("Invalid exact receiver arguments");
-  const rejected = expect(pending).rejects.toBe(failure);
-  rejectValidation(failure);
-  await rejected;
-  await expect(observed[0]).rejects.toBe(failure);
-  expect(fake.sent).toHaveLength(0);
-});
-
+it.each(["call", "peer", "stream", "readable"] as const)(
+  "owns typed %s before async argument validation can yield",
+  async (kind) => {
+    const observed: Promise<unknown>[] = [];
+    const fake = controllableTransport();
+    const rpc = schemaRpcClient(
+      createRpcClient({
+        selfId: "typed-owner",
+        callerKind: "worker",
+        transport: fake.transport,
+        onOutboundOperation: (operation) => observed.push(operation),
+      })
+    );
+    let rejectValidation!: (failure: Error) => void;
+    const parsing = new Promise<never>((_, reject) => {
+      rejectValidation = reject;
+    });
+    const method = {
+      name: "validated",
+      async parseArgs(_args: []) {
+        return parsing;
+      },
+      async invoke(args: [], dispatch: (args: unknown[]) => Promise<unknown>) {
+        return dispatch(await this.parseArgs(args));
+      },
+    };
+    const typed = rpc
+      .peer("target")
+      .withContract(defineContract({ caller: { methods: { validated: method } } }), "caller");
+    const pending =
+      kind === "call"
+        ? rpc.call("target", method, [])
+        : kind === "peer"
+          ? typed.call.validated()
+          : kind === "stream"
+            ? rpc.stream("target", method, [])
+            : rpc.streamReadable("target", method, []);
+    expect(observed).toHaveLength(1);
+    expect(fake.sent).toHaveLength(0);
+    const failure = new Error("Invalid exact receiver arguments");
+    const rejected = expect(pending).rejects.toBe(failure);
+    rejectValidation(failure);
+    await rejected;
+    await expect(observed[0]).rejects.toBe(failure);
+    expect(fake.sent).toHaveLength(0);
+  }
+);
 
 describe("schema client transport identity", () => {
   const method = {
     name: "read",
-    async parseArgs(args: []) { return args; },
+    async parseArgs(args: []) {
+      return args;
+    },
     async invoke(args: [], dispatch: (parsed: unknown[]) => Promise<unknown>) {
       return dispatch(await this.parseArgs(args));
     },
@@ -2730,7 +2754,12 @@ describe("schema client transport identity", () => {
     const fake = controllableTransport();
     const wire = createRpcClient({ selfId: "scoped-wire", transport: fake.transport });
     const facade = schemaRpcClient(wire);
-    const firstParent = { kind: "trajectory-invocation" as const, logId: "channel:first", head: "main", invocationId: "first" };
+    const firstParent = {
+      kind: "trajectory-invocation" as const,
+      logId: "channel:first",
+      head: "main",
+      invocationId: "first",
+    };
     const secondParent = { ...firstParent, logId: "channel:second", invocationId: "second" };
     const firstSignal = new AbortController().signal;
     const secondSignal = new AbortController().signal;
@@ -2752,18 +2781,71 @@ describe("schema client transport identity", () => {
   it("retains retirement on the old wire and creates a new facade for the restored endpoint", async () => {
     const oldTransport = controllableTransport();
     const lifetime = new AbortController();
-    const oldWire = createRpcClient({ selfId: "restored-owner", transport: oldTransport.transport, lifetime: lifetime.signal });
+    const oldWire = createRpcClient({
+      selfId: "restored-owner",
+      transport: oldTransport.transport,
+      lifetime: lifetime.signal,
+    });
     const oldFacade = schemaRpcClient(oldWire);
     lifetime.abort(new Error("owner retired"));
     expect(schemaRpcClient(oldWire)).toBe(oldFacade);
     await expect(oldFacade.call("server", method, [])).rejects.toThrow("has been retired");
     expect(oldTransport.sent).toHaveLength(0);
     const newTransport = controllableTransport();
-    const newWire = createRpcClient({ selfId: "restored-owner", transport: newTransport.transport });
+    const newWire = createRpcClient({
+      selfId: "restored-owner",
+      transport: newTransport.transport,
+    });
     const newFacade = schemaRpcClient(newWire);
     expect(newFacade).not.toBe(oldFacade);
     await newFacade.emit("server", "restored", {});
     expect(newTransport.sent).toHaveLength(1);
     expect(newFacade.status()).toBe("connected");
+  });
+});
+
+describe("public RPC method descriptor validation", () => {
+  it("rejects malformed call, stream, readable, and peer descriptors as structured failures", async () => {
+    const fake = controllableTransport();
+    const observed: Promise<unknown>[] = [];
+    const rpc = schemaRpcClient(
+      createRpcClient({
+        selfId: "descriptor-validation",
+        callerKind: "worker",
+        transport: fake.transport,
+        onOutboundOperation: (operation) => observed.push(operation),
+      })
+    );
+    const raw = rpc as unknown as {
+      call(target: string, method: unknown, args: unknown[]): Promise<unknown>;
+      stream(target: string, method: unknown, args: unknown[]): Promise<Response>;
+      streamReadable(target: string, method: unknown, args: unknown[]): Promise<unknown>;
+    };
+    const contract = defineContract({
+      caller: { methods: { putRows: "putRows" as never } },
+    });
+    const peer = rpc.peer("server").withContract(contract, "caller");
+
+    const unsafePeerCall = peer.call as unknown as Record<string, () => Promise<unknown>>;
+    const failures = [
+      () => raw.call("server", "putRows", []),
+      () => raw.stream("server", "putRows", []),
+      () => raw.streamReadable("server", "putRows", []),
+      () => unsafePeerCall["putRows"]!(),
+    ];
+    for (const [index, invoke] of failures.entries()) {
+      await expect(invoke()).rejects.toMatchObject({
+        name: "RpcBoundaryError",
+        errorKind: "protocol",
+        code: "INVALID_RPC_METHOD_DESCRIPTOR",
+        errorData: {
+          rpcMethodDescriptor: {
+            operation: ["call", "stream", "streamReadable", "peer.call"][index],
+          },
+        },
+      });
+    }
+    expect(fake.sent).toHaveLength(0);
+    expect(observed).toHaveLength(4);
   });
 });

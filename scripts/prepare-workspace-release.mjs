@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { joinChildProcess } from "./lib/join-child-process.mjs";
 
 /** One producer owns source publication and exhaustive compilation. Launchers
@@ -18,7 +19,7 @@ export function prepareWorkspaceRelease(input) {
       "--scratch",
       input.scratch,
     ],
-    { cwd: input.appRoot, env: input.env, stdio: ["ignore", "pipe", "pipe", "ipc"] }
+    { cwd: path.dirname(input.entry), env: input.env, stdio: ["ignore", "pipe", "pipe", "ipc"] }
   );
   let resolveReady, rejectReady;
   const sourcesReady = new Promise((resolve, reject) => {

@@ -1,5 +1,11 @@
 import { encodeRpcJson, decodeRpcJson } from "./wireJson.js";
-import { schemaRpcClient, wireClientFor, registerRpcWireClient, ownRpcOperation, registerRpcOperationOwner } from "./schemaClient.js";
+import {
+  schemaRpcClient,
+  wireClientFor,
+  registerRpcWireClient,
+  ownRpcOperation,
+  registerRpcOperationOwner,
+} from "./schemaClient.js";
 import type { RpcWireClient } from "./internal-types.js";
 import { serializeRpcFailure, deserializeRpcFailure } from "./errors.js";
 import { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "./authority.js";
@@ -37,6 +43,7 @@ import type {
 import { originOfEnvelope, responseEnvelopeFor } from "./envelope.js";
 import { bytesToBase64, base64ToBytes } from "./base64.js";
 import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
+import { assertRpcMethodDescriptor } from "./methodDescriptor.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 import { isRpcAborted, rpcCallerAbortedError, RpcBoundaryError, rpcErrorDataOf } from "./errors.js";
 import {
@@ -160,9 +167,12 @@ export function createRpcPeer(
         call: createCallProxy((name, args) => {
           const method = methods?.[name];
           if (!method) throw new Error(`RPC contract has no ${role} method ${name}`);
-          return ownRpcOperation(client, () => method.invoke(args, (parsed) =>
-            client.call(targetId, method.name, parsed, options)
-          ));
+          return ownRpcOperation(client, async () => {
+            assertRpcMethodDescriptor(method, "peer.call");
+            return method.invoke(args, (parsed) =>
+              client.call(targetId, method.name, parsed, options)
+            );
+          });
         }),
       } as never;
     },
@@ -542,7 +552,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         ),
       peer: (targetId, options) => createRpcPeer(scoped, targetId, options),
     };
-    return registerRpcWireClient(scoped, operation => observeOutbound(operation()));
+    return registerRpcWireClient(scoped, (operation) => observeOutbound(operation()));
   }
 
   function requestContext(
@@ -1335,13 +1345,16 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     options?: RpcTargetOptions
   ): RpcPeer {
     return createRpcPeer(
-      registerRpcOperationOwner({
-        call: (target, method, args, value) =>
-          observeOutbound(callWithProvenance(provenance, target, method, args, value)),
-        emit: (target, event, payload, value) =>
-          observeOutbound(emitWithProvenance(provenance, target, event, payload, value)),
-        on: client.on.bind(client),
-      }, operation => observeOutbound(operation())),
+      registerRpcOperationOwner(
+        {
+          call: (target, method, args, value) =>
+            observeOutbound(callWithProvenance(provenance, target, method, args, value)),
+          emit: (target, event, payload, value) =>
+            observeOutbound(emitWithProvenance(provenance, target, event, payload, value)),
+          on: client.on.bind(client),
+        },
+        (operation) => observeOutbound(operation())
+      ),
       targetId,
       options
     );
@@ -1666,7 +1679,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
   config.lifetime?.addEventListener("abort", retire, { once: true });
   if (config.lifetime?.aborted) retire();
 
-  return registerRpcWireClient(client, operation => observeOutbound(operation()));
+  return registerRpcWireClient(client, (operation) => observeOutbound(operation()));
 }
 
 /** One client view path: peers must retain the same options as direct effects. */
@@ -1694,7 +1707,7 @@ function withCallOptions(
     ready: base.ready.bind(base),
     onStatusChange: base.onStatusChange.bind(base),
   };
-  return registerRpcWireClient(Object.freeze(view), operation =>
+  return registerRpcWireClient(Object.freeze(view), (operation) =>
     enter(() => ownRpcOperation(base, operation))
   );
 }

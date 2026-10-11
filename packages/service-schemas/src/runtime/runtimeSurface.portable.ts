@@ -110,7 +110,7 @@ export const WORKERS_RUNTIME_METHOD_CATALOG = {
     signature:
       "createDurableObject(source: string, className: string, options?: DurableObjectCreateOptions): Promise<DurableObjectEntityHandle>",
     description:
-      "Create a concrete Durable Object through the canonical entity lifecycle, owned by the caller and therefore safe to pass to workers.destroy. Use resolveDurableObject for an existing/shared object; resolving never transfers lifecycle ownership.",
+      "Create a concrete Durable Object through the canonical entity lifecycle, owned by the caller and therefore safe to pass to workers.destroy. Call the returned handle's targetId directly for RPC; the handle does not echo its creation key. Retain an explicit options.key if you will later resolve the object by source, class, and key. Use resolveDurableObject for an existing/shared object; resolving never transfers lifecycle ownership.",
     argumentNames: ["source", "className", "options"],
     argsSchema: {
       type: "array",
@@ -747,7 +747,9 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   id: valueEntry(),
   contextId: valueEntry(),
-  rpc: valueEntry("Portable RPC client (the full createRpcClient)."),
+  rpc: valueEntry(
+    "Portable RPC client. `rpc.call(targetId, methodDescriptor, args, options?)` requires an `RpcMethod` descriptor object; the method argument is never a method-name string. Import `mainRpcMethods` from `@vibestudio/service-schemas/mainRpc` for host methods, or the userland receiver's exported descriptor table. For a disposable receiver with no contract module, derive descriptors from its actual method names using `createReceiverRpcMethods` from `@vibestudio/shared/rpcMethods`. Pass the complete positional argument array, including `[]` for a zero-argument method. Calls, streams, and readable streams share this descriptor contract."
+  ),
   fs: valueEntry(
     "Per-context filesystem sandbox. Paths are context-root-relative. The semantic workspace records managed mutations before projection; moves preserve file identity and copies mint a new identity with exact copy provenance. Tracked-to-scratch renames, managed empty-directory mkdir, and open with write flags are rejected. Scratch mkdir and utimes remain direct filesystem operations. Platform-excluded paths and paths outside reserved workspace source roots are local scratch."
   ),

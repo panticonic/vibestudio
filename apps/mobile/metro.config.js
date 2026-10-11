@@ -1,4 +1,5 @@
 const { getDefaultConfig, mergeConfig } = require("@react-native/metro-config");
+const { execFileSync } = require("node:child_process");
 const fs = require("fs");
 const path = require("path");
 const { createNativeBoundary } = require("./metroNativeBoundary.cjs");
@@ -6,6 +7,15 @@ const developmentTemplateConfig = require("../../src/dev/developmentTemplateConf
 
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, "..", "..");
+// Resolve native imports from the exact package exports used at runtime. The
+// infrastructure cache builds missing dist outputs once and reuses verified
+// outputs, so Metro never guesses a source entry that may not exist or match
+// the package's platform conditions.
+execFileSync(
+  process.execPath,
+  [path.join(monorepoRoot, "scripts", "build-infrastructure-packages.mjs")],
+  { cwd: monorepoRoot, stdio: "inherit" }
+);
 const templateReleaseRoot = process.env.VIBESTUDIO_TEMPLATE_RELEASE_ROOT?.trim();
 const templateRoots = templateReleaseRoot
   ? Object.fromEntries(
@@ -116,22 +126,11 @@ const config = {
         return context.resolveRequest(context, `${rootIroh}${subpath}`, platform);
       }
 
-      // 0a. Resolve @vibestudio/* packages to their TypeScript source.
-      //     These packages export "main": "./dist/index.js" for Node/esbuild,
-      //     but dist/ may not exist (it's built by the desktop build pipeline).
-      //     Metro can bundle .ts directly, so point to src/index.ts instead.
-      if (moduleName.startsWith("@vibestudio/") && !moduleName.startsWith("@vibestudio/shared/")) {
-        const pkgName = moduleName.split("/").slice(0, 2).join("/");
-        const subpath = moduleName.slice(pkgName.length);
-        const pkgDir = path.resolve(monorepoRoot, "packages", pkgName.replace("@vibestudio/", ""));
-        if (subpath) {
-          // Subpath import like @vibestudio/rpc/types
-          const resolved = path.resolve(pkgDir, "src", subpath.slice(1));
-          return context.resolveRequest(context, resolved, platform);
-        }
-        // Bare import like @vibestudio/rpc -> packages/rpc/src/index.ts
-        const srcEntry = path.resolve(pkgDir, "src", "index.ts");
-        return { type: "sourceFile", filePath: srcEntry };
+      // Package manifests own root/subpath mappings and platform conditions.
+      // The verified infrastructure outputs above make those export targets
+      // available before Metro resolves them.
+      if (moduleName.startsWith("@vibestudio/")) {
+        return context.resolveRequest(context, moduleName, platform);
       }
 
       if (moduleName.startsWith("@workspace")) {
