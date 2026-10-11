@@ -58,6 +58,40 @@ function sameInode(left: fs.Stats, right: fs.Stats): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+async function linkWithDiagnostics(sourcePath: string, destinationPath: string): Promise<void> {
+  try {
+    await fs.promises.link(sourcePath, destinationPath);
+  } catch (cause) {
+    const [source, destinationDirectory] = await Promise.all([
+      fs.promises.lstat(sourcePath).catch(() => null),
+      fs.promises.lstat(path.dirname(destinationPath)).catch(() => null),
+    ]);
+    const errorDetails = cause as NodeJS.ErrnoException;
+    const sourceLinks = source?.nlink;
+    const sourceDevice = source?.dev;
+    const destinationDevice = destinationDirectory?.dev;
+    const sameDevice =
+      sourceDevice !== undefined && destinationDevice !== undefined
+        ? sourceDevice === destinationDevice
+        : undefined;
+    const details = [
+      `code=${errorDetails.code ?? "unknown"}`,
+      `errno=${typeof errorDetails.errno === "number" ? errorDetails.errno : "unknown"}`,
+      `syscall=${errorDetails.syscall ?? "unknown"}`,
+      `sourceLinks=${sourceLinks ?? "unavailable"}`,
+      `sameDevice=${sameDevice ?? "unavailable"}`,
+    ].join(" ");
+    const failure = new Error(`Dependency content hardlink failed (${details})`, {
+      cause,
+    }) as NodeJS.ErrnoException;
+    failure.name = "DependencyContentLinkError";
+    if (errorDetails.code !== undefined) failure.code = errorDetails.code;
+    if (errorDetails.errno !== undefined) failure.errno = errorDetails.errno;
+    if (errorDetails.syscall !== undefined) failure.syscall = errorDetails.syscall;
+    throw failure;
+  }
+}
+
 async function ensureContentLink(
   storeRoot: string,
   digest: string,
@@ -115,9 +149,11 @@ async function replaceWithContentLink(
     path.dirname(filePath),
     `.dependency-link-${process.pid}-${crypto.randomBytes(8).toString("hex")}`
   );
+  let primaryFailure: unknown;
+  let hasPrimaryFailure = false;
   try {
     try {
-      await fs.promises.link(blobCasPath(storeRoot, digest), replacement);
+      await linkWithDiagnostics(blobCasPath(storeRoot, digest), replacement);
     } catch (error) {
       // An unreferenced-object sweep may remove the pool name after the CAS
       // lookup but before this link. Re-publish from our still-valid source;
@@ -125,12 +161,26 @@ async function replaceWithContentLink(
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       verifiedContent.delete(storedPath);
       storedPath = await ensureContentLink(storeRoot, digest, filePath, sourceStat.size);
-      await fs.promises.link(storedPath, replacement);
+      await linkWithDiagnostics(storedPath, replacement);
     }
     await fs.promises.rename(replacement, filePath);
-  } finally {
-    await fs.promises.rm(replacement, { force: true }).catch(() => undefined);
+  } catch (error) {
+    hasPrimaryFailure = true;
+    primaryFailure = error;
   }
+  try {
+    await fs.promises.rm(replacement, { force: true });
+  } catch (cleanupFailure) {
+    if (hasPrimaryFailure) {
+      throw new AggregateError(
+        [primaryFailure, cleanupFailure],
+        "Dependency content publication and temporary-link cleanup failed",
+        { cause: primaryFailure }
+      );
+    }
+    throw cleanupFailure;
+  }
+  if (hasPrimaryFailure) throw primaryFailure;
   return { bytes: sourceStat.size, linked: true };
 }
 
@@ -157,21 +207,29 @@ export async function deduplicateDependencyContent(
     linkedBytes: 0,
   };
 
-  await Promise.all(
-    Array.from({ length: Math.min(HASH_CONCURRENCY, files.length) }, async () => {
-      for (;;) {
-        const filePath = files[cursor++];
-        if (!filePath) return;
-        const linked = await replaceWithContentLink(filePath);
-        result.files += 1;
-        result.bytes += linked.bytes;
-        if (linked.linked) {
-          result.linkedFiles += 1;
-          result.linkedBytes += linked.bytes;
-        }
+  const workers = Array.from({ length: Math.min(HASH_CONCURRENCY, files.length) }, async () => {
+    for (;;) {
+      const filePath = files[cursor++];
+      if (!filePath) return;
+      const linked = await replaceWithContentLink(filePath);
+      result.files += 1;
+      result.bytes += linked.bytes;
+      if (linked.linked) {
+        result.linkedFiles += 1;
+        result.linkedBytes += linked.bytes;
       }
-    })
+    }
+  });
+  const outcomes = await Promise.allSettled(workers);
+  const failures = outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : []
   );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Dependency content deduplication workers failed", {
+      cause: failures[0],
+    });
+  }
   return result;
 }
 
