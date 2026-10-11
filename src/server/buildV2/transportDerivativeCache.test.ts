@@ -81,6 +81,45 @@ describe("TransportDerivativeCache", () => {
     await expect(cache.close()).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("retains every failure from concurrently admitted prewarm jobs", async () => {
+    const { root } = fixture();
+    const cache = new TransportDerivativeCache(root, 2);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const first = `sha256-${createHash("sha256").update("first missing source").digest("hex")}`;
+    const second = `sha256-${createHash("sha256").update("second missing source").digest("hex")}`;
+
+    cache.scheduleFile(first, path.join(root, "first-missing.js"));
+    cache.scheduleFile(second, path.join(root, "second-missing.js"));
+    await expect(cache.close()).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(AggregateError);
+      const failures = (error as AggregateError).errors;
+      expect(failures).toHaveLength(2);
+      expect(failures.map((failure) => (failure as NodeJS.ErrnoException).code)).toEqual([
+        "ENOENT",
+        "ENOENT",
+      ]);
+      return true;
+    });
+  });
+
+  it("joins temporary cleanup and publication failures without masking either", async () => {
+    const { root, body, integrity } = fixture();
+    const cache = new TransportDerivativeCache(root);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const publishFailure = new Error("derivative write failed");
+    const cleanupFailure = new Error("temporary cleanup failed");
+    vi.spyOn(fs.promises, "writeFile").mockRejectedValueOnce(publishFailure);
+    vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(cleanupFailure);
+
+    cache.schedule(integrity, body);
+    await expect(cache.close()).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([publishFailure, cleanupFailure]);
+      expect((error as Error & { cause?: unknown }).cause).toBe(publishFailure);
+      return true;
+    });
+  });
+
   it("rejects a derivative whose encoded bytes no longer match its metadata", async () => {
     const { root, body, integrity } = fixture();
     const cache = new TransportDerivativeCache(root);

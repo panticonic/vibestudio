@@ -56,4 +56,38 @@ describe("build-owned compiler residency", () => {
     ).rejects.toBe(failure);
     expect(lowering).toHaveBeenCalledTimes(2);
   });
+
+  it("preserves every worker retirement error and the failed build that owned them", async () => {
+    initBuilder(path.join(process.cwd(), "node_modules"), process.cwd(), async () => {
+      throw new Error("unused");
+    });
+    const loweringFailure = new Error("lowering worker close failed");
+    const catalogFailure = new Error("catalog worker close failed");
+    vi.spyOn(LibraryLoweringWorkerClient.prototype, "close").mockRejectedValue(loweringFailure);
+    vi.spyOn(WorkspaceRpcCatalogWorkerClient.prototype, "close").mockRejectedValue(catalogFailure);
+    vi.spyOn(ImmutableTreeWorkerClient.prototype, "close").mockResolvedValue(undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const buildFailure = new Error("build failed");
+    let caught: unknown;
+    try {
+      await withBuilderWorkers(async () => {
+        throw buildFailure;
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError);
+    const combined = caught as AggregateError;
+    expect(combined.errors).toEqual([
+      buildFailure,
+      expect.objectContaining({
+        errors: [loweringFailure, catalogFailure],
+        cause: loweringFailure,
+      }),
+    ]);
+    expect(combined.cause).toBe(buildFailure);
+    vi.restoreAllMocks();
+  });
 });

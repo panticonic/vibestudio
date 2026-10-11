@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { createHash, randomUUID } from "node:crypto";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
+import { formatRpcFailure } from "@vibestudio/rpc";
 
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 
@@ -18,6 +19,37 @@ interface DerivativeMetadata {
 }
 
 const POLICY = "p1-br6-gzip6";
+
+function failureFrom(errors: unknown[], message: string): unknown {
+  const unique = errors.filter((error, index) => errors.indexOf(error) === index);
+  if (unique.length === 1) return unique[0];
+  return new AggregateError(unique, message, { cause: unique[0] });
+}
+
+async function withCleanup<T>(
+  operation: () => Promise<T>,
+  cleanup: () => void | Promise<void>,
+  message: string
+): Promise<T> {
+  let value!: T;
+  const failures: unknown[] = [];
+  try {
+    value = await operation();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await cleanup();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length > 0) throw failureFrom(failures, message);
+  return value;
+}
+
+function isMissingFile(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
 
 function digest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -52,7 +84,7 @@ export class TransportDerivativeCache {
   private active = 0;
   private closed = false;
   private closing: Promise<void> | undefined;
-  private failure: Error | undefined;
+  private readonly failures: unknown[] = [];
 
   constructor(
     private readonly root = path.join(getSharedDerivedDataPath(), "transport-derivatives"),
@@ -84,30 +116,43 @@ export class TransportDerivativeCache {
     const owner = this.owner();
     const lease = owner.acquire(this.root, this.entryKey(key));
     const { dataPath, metadataPath } = this.paths(key, encoding);
-    try {
-      const [body, rawMetadata] = await Promise.all([
-        fs.promises.readFile(dataPath),
-        fs.promises.readFile(metadataPath, "utf8"),
-      ]);
-      const metadata = JSON.parse(rawMetadata) as DerivativeMetadata;
-      if (
-        metadata.version !== 1 ||
-        metadata.sourceIntegrity !== integrity ||
-        metadata.encoding !== encoding ||
-        metadata.policy !== POLICY ||
-        metadata.byteLength !== body.byteLength ||
-        metadata.digest !== digest(body)
-      ) {
-        return null;
-      }
-      return body;
-    } catch (error) {
-      if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT")
-        return null;
-      throw error;
-    } finally {
-      lease.release();
-    }
+    return withCleanup(
+      async () => {
+        const reads = await Promise.allSettled([
+          fs.promises.readFile(dataPath),
+          fs.promises.readFile(metadataPath, "utf8"),
+        ]);
+        const readFailures = reads.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : []
+        );
+        if (readFailures.length > 0) {
+          if (readFailures.every(isMissingFile)) return null;
+          throw failureFrom(readFailures, "Transport derivative reads failed");
+        }
+        const body = (reads[0] as PromiseFulfilledResult<Buffer>).value;
+        const rawMetadata = (reads[1] as PromiseFulfilledResult<string>).value;
+        let metadata: DerivativeMetadata;
+        try {
+          metadata = JSON.parse(rawMetadata) as DerivativeMetadata;
+        } catch (error) {
+          if (error instanceof SyntaxError) return null;
+          throw error;
+        }
+        if (
+          metadata.version !== 1 ||
+          metadata.sourceIntegrity !== integrity ||
+          metadata.encoding !== encoding ||
+          metadata.policy !== POLICY ||
+          metadata.byteLength !== body.byteLength ||
+          metadata.digest !== digest(body)
+        ) {
+          return null;
+        }
+        return body;
+      },
+      () => lease.release(),
+      "Transport derivative read and lease release failed"
+    );
   }
 
   schedule(integrity: string, body: Buffer): void {
@@ -124,11 +169,19 @@ export class TransportDerivativeCache {
     this.closed = true;
     this.closing = (async () => {
       const settled = await Promise.allSettled(this.jobs);
-      this.coordinator?.close();
+      const failures = this.failures.splice(0);
+      failures.push(
+        ...settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))
+      );
+      const coordinator = this.coordinator;
       this.coordinator = undefined;
-      if (this.failure) throw this.failure;
-      const rejected = settled.find((result) => result.status === "rejected");
-      if (rejected?.status === "rejected") throw rejected.reason;
+      try {
+        coordinator?.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length > 0)
+        throw failureFrom(failures, "Transport derivative cache operations failed");
     })();
     return this.closing;
   }
@@ -148,25 +201,27 @@ export class TransportDerivativeCache {
     const job = (async () => {
       const owner = this.owner();
       const lease = owner.acquire(this.root, this.entryKey(sourceDigest(integrity)!));
-      try {
-        const missing: TransportEncoding[] = [];
-        for (const encoding of ["br", "gzip"] as const) {
-          if (!(await this.read(integrity, encoding))) missing.push(encoding);
-        }
-        if (!missing.length) return;
-        const body = await source();
-        if (`sha256-${digest(body)}` !== integrity) {
-          throw new Error(`Transport source integrity mismatch: ${integrity}`);
-        }
-        for (const encoding of missing) await this.publish(integrity, body, encoding);
-      } finally {
-        lease.release();
-      }
+      await withCleanup(
+        async () => {
+          const missing: TransportEncoding[] = [];
+          for (const encoding of ["br", "gzip"] as const) {
+            if (!(await this.read(integrity, encoding))) missing.push(encoding);
+          }
+          if (!missing.length) return;
+          const body = await source();
+          if (`sha256-${digest(body)}` !== integrity) {
+            throw new Error(`Transport source integrity mismatch: ${integrity}`);
+          }
+          for (const encoding of missing) await this.publish(integrity, body, encoding);
+        },
+        () => lease.release(),
+        "Transport derivative publication and lease release failed"
+      );
       await owner.prune(this.root);
     })()
       .catch((error) => {
-        this.failure ??= error instanceof Error ? error : new Error(String(error));
-        console.warn(`[TransportDerivativeCache] ${String(error)}`);
+        this.failures.push(error);
+        console.warn(`[TransportDerivativeCache] ${formatRpcFailure(error)}`);
       })
       .finally(() => {
         this.scheduled.delete(integrity);
@@ -206,16 +261,25 @@ export class TransportDerivativeCache {
       byteLength: body.byteLength,
       digest: digest(body),
     };
-    try {
-      await fs.promises.writeFile(dataTemp, body, { flag: "wx" });
-      await fs.promises.rename(dataTemp, paths.dataPath);
-      await fs.promises.writeFile(metadataTemp, `${JSON.stringify(metadata)}\n`, { flag: "wx" });
-      await fs.promises.rename(metadataTemp, paths.metadataPath);
-    } finally {
-      await Promise.all([
-        fs.promises.rm(dataTemp, { force: true }),
-        fs.promises.rm(metadataTemp, { force: true }),
-      ]);
-    }
+    await withCleanup(
+      async () => {
+        await fs.promises.writeFile(dataTemp, body, { flag: "wx" });
+        await fs.promises.rename(dataTemp, paths.dataPath);
+        await fs.promises.writeFile(metadataTemp, `${JSON.stringify(metadata)}\n`, { flag: "wx" });
+        await fs.promises.rename(metadataTemp, paths.metadataPath);
+      },
+      async () => {
+        const cleanup = await Promise.allSettled([
+          fs.promises.rm(dataTemp, { force: true }),
+          fs.promises.rm(metadataTemp, { force: true }),
+        ]);
+        const failures = cleanup.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : []
+        );
+        if (failures.length > 0)
+          throw failureFrom(failures, "Transport derivative temporary cleanup failed");
+      },
+      "Transport derivative publication and temporary cleanup failed"
+    );
   }
 }

@@ -258,6 +258,125 @@ describe("dependency-environment resolver", () => {
     }
   });
 
+  it.each([false, true])(
+    "keeps an absent optional peer unavailable even when ambient resolution finds it (ambient=%s)",
+    async (ambientPresent) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-optional-peer-"));
+      try {
+        const preparedModules = path.join(
+          root,
+          "derived",
+          "external-deps",
+          "cache",
+          "node_modules"
+        );
+        const owner = path.join(preparedModules, "optional-owner");
+        const entry = path.join(owner, "build", "entry.js");
+        fs.mkdirSync(path.dirname(entry), { recursive: true });
+        fs.writeFileSync(
+          path.join(owner, "package.json"),
+          JSON.stringify({
+            name: "optional-owner",
+            version: "1.0.0",
+            type: "module",
+            peerDependencies: { "optional-peer": "^1.0.0" },
+            peerDependenciesMeta: { "optional-peer": { optional: true } },
+          })
+        );
+        fs.writeFileSync(entry, 'export const loadPeer = () => import("optional-peer");\n');
+        if (ambientPresent)
+          writePackage(path.join(root, "node_modules"), "optional-peer", "ambient");
+
+        const result = await esbuild.build({
+          entryPoints: [entry],
+          bundle: true,
+          format: "esm",
+          platform: "node",
+          write: false,
+          logLevel: "silent",
+          plugins: [createDependencyEnvironmentResolvePlugin([preparedModules])],
+        });
+        const output = result.outputFiles.map(({ text }) => text).join("\n");
+        expect(output).toContain('import("optional-peer")');
+        expect(output).not.toContain('var marker = "ambient"');
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it("bundles an optional peer when the prepared graph owns it", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-owned-optional-peer-"));
+    try {
+      const preparedModules = path.join(root, "derived", "external-deps", "cache", "node_modules");
+      const owner = path.join(preparedModules, "optional-owner");
+      const entry = path.join(owner, "build", "entry.js");
+      fs.mkdirSync(path.dirname(entry), { recursive: true });
+      fs.writeFileSync(
+        path.join(owner, "package.json"),
+        JSON.stringify({
+          name: "optional-owner",
+          version: "1.0.0",
+          type: "module",
+          peerDependencies: { "optional-peer": "^1.0.0" },
+          peerDependenciesMeta: { "optional-peer": { optional: true } },
+        })
+      );
+      fs.writeFileSync(entry, 'export const loadPeer = () => import("optional-peer");\n');
+      writePackage(preparedModules, "optional-peer", "prepared");
+
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        platform: "node",
+        write: false,
+        logLevel: "silent",
+        plugins: [createDependencyEnvironmentResolvePlugin([preparedModules])],
+      });
+      const output = result.outputFiles.map(({ text }) => text).join("\n");
+      expect(output).toContain('marker = "prepared"');
+      expect(output).not.toContain('import("optional-peer")');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("continues to reject required peers resolved only from ambient modules", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-required-peer-"));
+    try {
+      const preparedModules = path.join(root, "derived", "external-deps", "cache", "node_modules");
+      const owner = path.join(preparedModules, "required-owner");
+      const entry = path.join(owner, "build", "entry.js");
+      fs.mkdirSync(path.dirname(entry), { recursive: true });
+      fs.writeFileSync(
+        path.join(owner, "package.json"),
+        JSON.stringify({
+          name: "required-owner",
+          version: "1.0.0",
+          type: "module",
+          peerDependencies: { "required-peer": "^1.0.0" },
+        })
+      );
+      fs.writeFileSync(entry, 'import "required-peer";\n');
+      writePackage(path.join(root, "node_modules"), "required-peer", "ambient");
+
+      await expect(
+        esbuild.build({
+          entryPoints: [entry],
+          bundle: true,
+          format: "esm",
+          platform: "node",
+          write: false,
+          logLevel: "silent",
+          plugins: [createDependencyEnvironmentResolvePlugin([preparedModules])],
+        })
+      ).rejects.toThrow("escaped the prepared build environment");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("accepts package sources reached through an owned workspace symlink", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hermetic-build-"));
     try {

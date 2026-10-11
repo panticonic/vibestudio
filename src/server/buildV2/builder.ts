@@ -164,17 +164,34 @@ let workerRetirement: Promise<void> | undefined;
 
 async function joinWorkerRetirement(operations: Array<Promise<void> | undefined>): Promise<void> {
   const outcomes = await Promise.allSettled(operations);
-  const failed = outcomes.find((outcome) => outcome.status === "rejected");
-  if (failed?.status === "rejected") throw failed.reason;
+  const failures = outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : []
+  );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Build worker retirement failed", {
+      cause: failures[0],
+    });
+  }
 }
 
 /** A build closure owns compiler residency, including concurrent dependency builds. */
 export async function withBuilderWorkers<T>(operation: () => Promise<T>): Promise<T> {
   workerBatches++;
+  let value!: T;
+  let operationFailure: unknown;
+  let operationFailed = false;
   try {
     await workerRetirement;
-    return await operation();
-  } finally {
+    value = await operation();
+  } catch (error) {
+    operationFailure = error;
+    operationFailed = true;
+  }
+
+  let retirementFailure: unknown;
+  let retirementFailed = false;
+  try {
     workerBatches--;
     if (workerBatches === 0) {
       const retirement = joinWorkerRetirement([
@@ -189,7 +206,21 @@ export async function withBuilderWorkers<T>(operation: () => Promise<T>): Promis
         if (workerRetirement === retirement) workerRetirement = undefined;
       }
     }
+  } catch (error) {
+    retirementFailure = error;
+    retirementFailed = true;
   }
+
+  if (operationFailed && retirementFailed) {
+    throw new AggregateError(
+      [operationFailure, retirementFailure],
+      "Build operation and worker retirement failed",
+      { cause: operationFailure }
+    );
+  }
+  if (operationFailed) throw operationFailure;
+  if (retirementFailed) throw retirementFailure;
+  return value;
 }
 
 function createHostRequire(nodeModulesRoot: string): NodeJS.Require {
@@ -910,14 +941,24 @@ export function createDependencyEnvironmentResolvePlugin(
           resolveDir,
           pluginData: { ...priorData, [recursionKey]: true },
         });
-        if (
-          resolved.errors.length > 0 &&
-          ownedResolveDir &&
-          isOptionalImportFromOwnedPackage(args.resolveDir, packageName, [
-            ...roots,
-            ...ownedPackageTargets.keys(),
-          ])
-        ) {
+        const optionalPeerImport = isOptionalImportFromOwnedPackage(args.resolveDir, packageName, [
+          ...roots,
+          ...ownedPackageTargets.keys(),
+        ]);
+        const resolvedIsWithinEnvironment =
+          resolved.errors.length === 0 &&
+          (roots.some((root) => pathIsWithin(root, resolved.path)) ||
+            [...ownedPackageTargets.keys()].some((root) => pathIsWithin(root, resolved.path)) ||
+            (declaredRealPackageRoot && pathIsWithin(declaredRealPackageRoot, resolved.path)));
+        const resolutionEscaped =
+          resolved.errors.length === 0 &&
+          !resolved.external &&
+          resolved.namespace === "file" &&
+          !resolvedIsWithinEnvironment;
+        if (optionalPeerImport && (resolved.errors.length > 0 || resolutionEscaped)) {
+          // An optional peer absent from the prepared graph stays absent. In
+          // particular, an ambient ancestor must not satisfy it by accident;
+          // preserve the package's own optional dynamic-import behavior.
           return { path: args.path, external: true };
         }
         if (resolved.errors.length > 0 && ownedResolveDir === args.resolveDir) {
@@ -931,11 +972,7 @@ export function createDependencyEnvironmentResolvePlugin(
         if (resolved.errors.length > 0 || resolved.external || resolved.namespace !== "file") {
           return resolved;
         }
-        if (
-          !roots.some((root) => pathIsWithin(root, resolved.path)) &&
-          ![...ownedPackageTargets.keys()].some((root) => pathIsWithin(root, resolved.path)) &&
-          !(declaredRealPackageRoot && pathIsWithin(declaredRealPackageRoot, resolved.path))
-        ) {
+        if (resolutionEscaped) {
           return {
             errors: [
               {

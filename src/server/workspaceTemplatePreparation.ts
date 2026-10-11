@@ -44,7 +44,7 @@ export async function prepareWorkspaceTemplates(input: {
   output: string;
   scratch: string;
   signal?: AbortSignal;
-  onSourcesPrepared?: () => void;
+  onSourcesPrepared?: () => void | Promise<void>;
 }): Promise<void> {
   const pins = readDefaultWorkspaceTemplates(input.appRoot);
   const sources = JSON.parse(process.env["VIBESTUDIO_WORKSPACE_SOURCES"] ?? "[]") as Array<{
@@ -208,7 +208,7 @@ export async function prepareWorkspaceTemplates(input: {
     }
     publishManifest();
     input.signal?.throwIfAborted();
-    input.onSourcesPrepared?.();
+    await input.onSourcesPrepared?.();
     // Exhaustive compilation is batch work. Its compiler and native children
     // inherit this priority so interactive hosts get CPU first under contention.
     os.setPriority(Math.max(os.getPriority(), os.constants.priority.PRIORITY_BELOW_NORMAL));
