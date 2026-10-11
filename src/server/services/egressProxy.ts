@@ -71,6 +71,7 @@ import {
 } from "./networkDestination.js";
 
 import { EgressListener } from "./egressListener.js";
+import { requestHostHttp } from "./hostHttpTransport.js";
 import {
   EGRESS_CREDENTIAL_HEADER,
   EGRESS_WEBSOCKET_SCOPE_HEADER,
@@ -618,14 +619,14 @@ export class EgressProxy {
       initialBytesOut: bytesOut,
       replaySafe: true,
       execute: async (targetUrl, headers, _authorization, transport) => {
-        const response = await fetch(targetUrl.toString(), {
+        const response = await requestHostHttp({
+          url: targetUrl,
           method: params.method,
           headers: headers as HeadersInit,
-          body: body as BodyInit | undefined,
-          redirect: "manual",
+          body: body ? Buffer.from(body) : undefined,
           dispatcher: transport.dispatcher,
           signal: transport.signal,
-        } as RequestInit & { dispatcher: Dispatcher });
+        });
         const redirect = isRedirectStatus(response.status) && response.headers.has("location");
         if (redirect) await response.body?.cancel();
         const responseBody = redirect
@@ -882,14 +883,14 @@ export class EgressProxy {
       // caller never declared. The redirect is surfaced as a rejection so the
       // caller fixes the remote URL instead of silently following it.
       execute: async (targetUrl, headers, _authorization, transport) => {
-        const response = await fetch(targetUrl.toString(), {
+        const response = await requestHostHttp({
+          url: targetUrl,
           method: params.method,
           headers: headers as HeadersInit,
-          body: body as BodyInit | undefined,
-          redirect: "manual",
+          body: body ? Buffer.from(body) : undefined,
           dispatcher: transport.dispatcher,
           signal: transport.signal,
-        } as RequestInit & { dispatcher: Dispatcher });
+        });
         if (isRedirectStatus(response.status)) {
           throw new ForwardRejection(
             403,

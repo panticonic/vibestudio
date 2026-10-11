@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { GitClient, readExactGitSnapshot, discoverTrackedGitSnapshot } from "@vibestudio/git";
+import { readExactGitSnapshot, discoverTrackedGitSnapshot } from "@vibestudio/git";
 import { getUserDataPath, setUserDataPath } from "@vibestudio/env-paths";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { readDefaultWorkspaceTemplates } from "@vibestudio/workspace/templateRelease";
@@ -34,6 +34,7 @@ import { getExistingAppNodeModulesRoots } from "@vibestudio/shared/runtimePaths"
 import { exportReleaseBuild } from "../../scripts/prebuild-release-userland.mjs";
 import { drainBuildStorePublications } from "./buildV2/buildStore.js";
 import { blobCasPath, linkReconstructableBlobFile } from "./storage/blobCas.js";
+import { createHostBootstrapGitReadClient } from "./services/hostGitHttpClient.js";
 
 /** Prepare the same immutable release for a source supervisor or a packager.
  * Source publication and compilation are phases of the same owned producer.
@@ -50,7 +51,8 @@ export async function prepareWorkspaceTemplates(input: {
     pin: WorkspaceTemplatePin;
     checkout: string;
   }>;
-  const git = new GitClient();
+  const bootstrapGit = createHostBootstrapGitReadClient({ signal: input.signal });
+  const git = bootstrapGit.git;
   const snapshots = new Map<string, ReturnType<typeof readExactGitSnapshot>>();
   const snapshotBlobs = new Map<string, string>();
   fs.mkdirSync(input.scratch, { recursive: true });
@@ -119,7 +121,10 @@ export async function prepareWorkspaceTemplates(input: {
                 sink,
                 reservedPaths: "exclude",
               })
-            : acquireRootTemplateSnapshot({ pin: requested, git, sink });
+            : (() => {
+                bootstrapGit.admitRemote(templateGitTransportUrl(requested.url));
+                return acquireRootTemplateSnapshot({ pin: requested, git, sink });
+              })();
           snapshots.set(key, pending);
           snapshotBlobs.set(key, blobsDir);
         }
@@ -149,6 +154,7 @@ export async function prepareWorkspaceTemplates(input: {
               normalizeTemplateGitUrl(source.pin.url) === normalizeTemplateGitUrl(address.url)
           );
           if (local) return { ref: local.pin.ref, commit: local.pin.commit };
+          bootstrapGit.admitRemote(templateGitTransportUrl(address.url));
           const dir = path.join(statePath, "tracks", String(snapshots.size));
           fs.mkdirSync(dir, { recursive: true });
           const snapshot = await discoverTrackedGitSnapshot({
