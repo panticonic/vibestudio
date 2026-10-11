@@ -7,7 +7,7 @@ import {
   serializeWorkspaceSources,
   type WorkspaceSource,
 } from "@vibestudio/workspace/workspaceSources";
-import { workspaceRpcDestination } from "@vibestudio/rpc";
+import { deserializeRpcFailure, workspaceRpcDestination } from "@vibestudio/rpc";
 import { nativeWorkspaceCleanup } from "@vibestudio/shared/nativeWorkspaceCleanup";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -240,7 +240,7 @@ export interface HubRuntimeState {
 
 interface HubControlTransport {
   ingress: import("./irohIngress.js").IrohIngress;
-  pairing: IrohReach;
+  pairingReach(): Promise<IrohReach>;
   rpcServer: import("./rpcServer.js").RpcServer;
   grantStore: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   eventService: EventService;
@@ -261,7 +261,7 @@ interface ControlInvite {
   outcome: Promise<HubPairingOutcome>;
   settled: boolean;
   resolve(outcome: HubPairingOutcome): void;
-  reject(error: Error): void;
+  reject(error: unknown): void;
 }
 
 const WORKSPACE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -1088,8 +1088,8 @@ function requireControlTransport(state: HubRuntimeState): HubControlTransport {
   return state.controlTransport;
 }
 
-function reachFromControlTransport(transport: HubControlTransport): ChildReach {
-  return transport.pairing;
+function reachFromControlTransport(transport: HubControlTransport): Promise<ChildReach> {
+  return transport.pairingReach();
 }
 
 function settleControlInvite(invite: ControlInvite, outcome: HubPairingOutcome): void {
@@ -1098,17 +1098,23 @@ function settleControlInvite(invite: ControlInvite, outcome: HubPairingOutcome):
   invite.resolve(outcome);
 }
 
+function rejectControlInvite(invite: ControlInvite, error: unknown): void {
+  if (invite.settled) return;
+  invite.settled = true;
+  invite.reject(error);
+}
+
 /** Track an armed invite until its expiry; persisted invites re-enter on startup. */
 function trackControlInvite(
   state: HubRuntimeState,
   codeHash: string,
   invite: { expiresAt: number; userId?: string }
-): void {
+): ControlInvite {
   const transport = requireControlTransport(state);
   const previous = transport.invites.get(codeHash);
   if (previous?.timer) clearTimeout(previous.timer);
   let resolve!: (outcome: HubPairingOutcome) => void;
-  let reject!: (error: Error) => void;
+  let reject!: (error: unknown) => void;
   const outcome = new Promise<HubPairingOutcome>((done, fail) => {
     resolve = done;
     reject = fail;
@@ -1126,16 +1132,22 @@ function trackControlInvite(
   transport.invites.set(codeHash, record);
   const expire = (): void => {
     if (transport.invites.get(codeHash) === record) transport.invites.delete(codeHash);
-    state.deviceAuthStore.cleanupPairingInvites(Date.now());
+    try {
+      state.deviceAuthStore.cleanupPairingInvites(Date.now());
+    } catch (error) {
+      rejectControlInvite(record, error);
+      return;
+    }
     settleControlInvite(record, { status: "expired" });
   };
   const remainingMs = invite.expiresAt - Date.now();
   if (remainingMs <= 0) {
     expire();
-    return;
+    return record;
   }
   record.timer = setTimeout(expire, remainingMs);
   record.timer.unref();
+  return record;
 }
 
 async function armControlInvite(
@@ -1143,8 +1155,13 @@ async function armControlInvite(
   invite: { code: string; expiresAt: number; userId?: string }
 ): Promise<ChildReach> {
   const transport = requireControlTransport(state);
-  trackControlInvite(state, hashSecret(invite.code), invite);
-  return reachFromControlTransport(transport);
+  const codeHash = hashSecret(invite.code);
+  const tracked = trackControlInvite(state, codeHash, invite);
+  const inviteTerminal = tracked.outcome.then((outcome) => {
+    throw new Error(`Pairing invite became ${outcome.status} before its reach was available`);
+  });
+  if (tracked.settled) return await inviteTerminal;
+  return await Promise.race([reachFromControlTransport(transport), inviteTerminal]);
 }
 
 function cancelControlInvite(transport: HubControlTransport, codeHash: string): void {
@@ -1162,6 +1179,25 @@ async function disarmControlInvite(state: HubRuntimeState, code: string): Promis
   cancelControlInvite(transport, codeHash);
   const wasPersisted = state.deviceAuthStore.cancelPairingInvite(code);
   return wasTracked || wasPersisted;
+}
+
+async function throwAfterCleanup(
+  failure: unknown,
+  cleanup: readonly (() => unknown | Promise<unknown>)[],
+  message: string
+): Promise<never> {
+  const cleanupFailures: unknown[] = [];
+  for (const retire of cleanup) {
+    try {
+      await retire();
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+  }
+  if (cleanupFailures.length > 0) {
+    throw new AggregateError([failure, ...cleanupFailures], message);
+  }
+  throw failure;
 }
 
 /** Cancel only an invite visible to this caller, and acknowledge its retirement. */
@@ -1293,10 +1329,12 @@ async function armChildReach(
   });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
+    const failure = body["error"];
+    if (failure && typeof failure === "object" && !Array.isArray(failure)) {
+      throw deserializeRpcFailure(failure);
+    }
     throw new Error(
-      typeof body["error"] === "string"
-        ? body["error"]
-        : `Workspace route failed with HTTP ${response.status}`
+      typeof failure === "string" ? failure : `Workspace route failed with HTTP ${response.status}`
     );
   }
   const reach = {
@@ -1540,8 +1578,11 @@ async function handleInternalRoute(
       try {
         reach = await armControlInvite(state, pairing);
       } catch (error) {
-        await disarmControlInvite(state, pairing.code);
-        throw error;
+        throw await throwAfterCleanup(
+          error,
+          [() => disarmControlInvite(state, pairing.code)],
+          "Device invite reach failed and its pairing invite could not be retired"
+        );
       }
       sendJson(res, 200, {
         pairing: pairingInviteFromReach(state, pairing.code, pairing.expiresAt, reach),
@@ -2052,9 +2093,15 @@ export async function executeHubControl(
       });
       reach = await armControlInvite(state, pairing);
     } catch (error) {
-      if (pairing) await disarmControlInvite(state, pairing.code);
-      state.userStore.rollbackInvite(invited.id);
-      throw error;
+      const failedPairing = pairing;
+      throw await throwAfterCleanup(
+        error,
+        [
+          ...(failedPairing ? [() => disarmControlInvite(state, failedPairing.code)] : []),
+          () => state.userStore.rollbackInvite(invited.id),
+        ],
+        "User invite creation failed and its resources could not be retired"
+      );
     }
     try {
       await recordMembershipOps(state, [
@@ -2072,9 +2119,15 @@ export async function executeHubControl(
         })),
       ]);
     } catch (error) {
-      if (pairing) await disarmControlInvite(state, pairing.code);
-      state.userStore.rollbackInvite(invited.id);
-      throw error;
+      const failedPairing = pairing;
+      throw await throwAfterCleanup(
+        error,
+        [
+          ...(failedPairing ? [() => disarmControlInvite(state, failedPairing.code)] : []),
+          () => state.userStore.rollbackInvite(invited.id),
+        ],
+        "User invite audit failed and its resources could not be retired"
+      );
     }
     if (!pairing) throw new Error("Invite pairing was not created");
     emitWorkspaceCatalogChanged(state);
@@ -2103,8 +2156,11 @@ export async function executeHubControl(
     try {
       reach = await armControlInvite(state, pairing);
     } catch (error) {
-      await disarmControlInvite(state, pairing.code);
-      throw error;
+      throw await throwAfterCleanup(
+        error,
+        [() => disarmControlInvite(state, pairing.code)],
+        "Pairing reach failed and its invite could not be retired"
+      );
     }
     respond({
       userId: subject.userId,
@@ -2432,13 +2488,14 @@ async function startHubControlTransport(
       state.identityDb.getDeviceForEndpoint(endpointId) !== null ||
       state.deviceAuthStore.hasLivePairingInvite(),
     attach: (connection) => rpcServer.attachIrohConnection(connection),
-    log: (message) => console.warn(`[iroh-hub] ${message}`),
+    log: (message, error) => console.warn(`[iroh-hub] ${message}`, error),
   });
   await ingress.ready;
   const transport: HubControlTransport = {
     ingress,
-    get pairing() {
-      return ingress.endpoint.reach(relayUrls);
+    async pairingReach() {
+      const onlineEndpoint = await ingress.waitUntilOnline();
+      return onlineEndpoint.reach(relayUrls);
     },
     rpcServer,
     grantStore,

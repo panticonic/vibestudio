@@ -1072,7 +1072,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       ingress: {
         stop: vi.fn(async () => undefined),
       } as never,
-      pairing: CHILD_REACH,
+      pairingReach: vi.fn(async () => CHILD_REACH),
       rpcServer: {} as never,
       grantStore: { close: vi.fn() } as never,
       eventService: { emitProjected: vi.fn() } as never,
@@ -1159,6 +1159,183 @@ describe("hub RPC pairing surfacing (§5)", () => {
       const late = vi.fn();
       await executeHubControl(state, root, "awaitPairing", [{ code }], late);
       expect(late.mock.calls[0]?.[0]).toEqual(outcome);
+    } finally {
+      for (const invite of state.controlTransport?.invites.values() ?? []) {
+        if (invite.timer) clearTimeout(invite.timer);
+      }
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("retires a pairing invite when reach preparation fails", async () => {
+    const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
+    const reachFailure = new Error("home relay discovery failed");
+    vi.mocked(state.controlTransport!.pairingReach).mockRejectedValue(reachFailure);
+    try {
+      await expect(
+        executeHubControl(
+          state,
+          { userId: rootUserId, deviceId: rootDeviceId, handle: "root", role: "root" },
+          "pairDevice",
+          [],
+          vi.fn()
+        )
+      ).rejects.toBe(reachFailure);
+      expect(state.controlTransport?.invites.size).toBe(0);
+      expect(state.identityDb.listPairingCodes()).toHaveLength(0);
+    } finally {
+      for (const invite of state.controlTransport?.invites.values() ?? []) {
+        if (invite.timer) clearTimeout(invite.timer);
+      }
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("preserves reach and invite-retirement failures together", async () => {
+    const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
+    const reachFailure = new Error("home relay discovery failed");
+    const cleanupFailure = new Error("persisted invite retirement failed");
+    vi.mocked(state.controlTransport!.pairingReach).mockRejectedValue(reachFailure);
+    vi.spyOn(state.deviceAuthStore, "cancelPairingInvite").mockImplementation(() => {
+      throw cleanupFailure;
+    });
+    try {
+      const failure = await executeHubControl(
+        state,
+        { userId: rootUserId, deviceId: rootDeviceId, handle: "root", role: "root" },
+        "pairDevice",
+        [],
+        vi.fn()
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toEqual([reachFailure, cleanupFailure]);
+      expect(state.controlTransport?.invites.size).toBe(0);
+    } finally {
+      for (const invite of state.controlTransport?.invites.values() ?? []) {
+        if (invite.timer) clearTimeout(invite.timer);
+      }
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("settles reach preparation when its owned pairing invite is cancelled", async () => {
+    const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
+    let resolveReach!: (reach: typeof CHILD_REACH) => void;
+    let createdPairing: ReturnType<typeof state.deviceAuthStore.createPairingInvite> | undefined;
+    const pendingReach = new Promise<typeof CHILD_REACH>((resolve) => {
+      resolveReach = resolve;
+    });
+    vi.mocked(state.controlTransport!.pairingReach).mockReturnValue(pendingReach);
+    const createPairingInvite = state.deviceAuthStore.createPairingInvite.bind(
+      state.deviceAuthStore
+    );
+    vi.spyOn(state.deviceAuthStore, "createPairingInvite").mockImplementation((...args) => {
+      createdPairing = createPairingInvite(...args);
+      return createdPairing;
+    });
+    try {
+      const preparing = executeHubControl(
+        state,
+        { userId: rootUserId, deviceId: rootDeviceId, handle: "root", role: "root" },
+        "pairDevice",
+        [],
+        vi.fn()
+      );
+      await vi.waitFor(() => expect(state.controlTransport?.invites.size).toBe(1));
+      expect(createdPairing).toBeDefined();
+      expect(state.controlTransport?.invites.has(hashSecret(createdPairing!.code))).toBe(true);
+      expect(state.controlTransport?.invites.get(hashSecret(createdPairing!.code))?.userId).toBe(
+        rootUserId
+      );
+      const cancelled = vi.fn();
+      await executeHubControl(
+        state,
+        { userId: rootUserId, deviceId: rootDeviceId, handle: "root", role: "root" },
+        "cancelPairing",
+        [{ code: createdPairing!.code }],
+        cancelled
+      );
+
+      await expect(preparing).rejects.toThrow("Pairing invite became cancelled");
+      expect(cancelled.mock.calls[0]?.[0]).toEqual({ cancelled: true });
+      expect(state.controlTransport?.invites.size).toBe(0);
+      expect(state.identityDb.listPairingCodes()).toHaveLength(0);
+      resolveReach(CHILD_REACH);
+    } finally {
+      for (const invite of state.controlTransport?.invites.values() ?? []) {
+        if (invite.timer) clearTimeout(invite.timer);
+      }
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("settles expired reach preparation with the expiry cleanup failure", async () => {
+    vi.useFakeTimers();
+    const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
+    const pendingReach = new Promise<typeof CHILD_REACH>(() => undefined);
+    const cleanupFailure = new Error("expired invite cleanup failed");
+    vi.mocked(state.controlTransport!.pairingReach).mockReturnValue(pendingReach);
+    vi.spyOn(state.deviceAuthStore, "cleanupPairingInvites").mockImplementation(() => {
+      throw cleanupFailure;
+    });
+    try {
+      const preparing = executeHubControl(
+        state,
+        { userId: rootUserId, deviceId: rootDeviceId, handle: "root", role: "root" },
+        "pairDevice",
+        [{ ttlMs: 30_000 }],
+        vi.fn()
+      );
+      const preparationFailure = expect(preparing).rejects.toBe(cleanupFailure);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(state.controlTransport?.invites.size).toBe(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await preparationFailure;
+      expect(state.controlTransport?.invites.size).toBe(0);
+      expect(state.identityDb.listPairingCodes()).toHaveLength(0);
+    } finally {
+      for (const invite of state.controlTransport?.invites.values() ?? []) {
+        if (invite.timer) clearTimeout(invite.timer);
+      }
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves cleanup failure when an invite expires before reach preparation begins", async () => {
+    const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
+    const pendingReach = new Promise<typeof CHILD_REACH>(() => undefined);
+    const cleanupFailure = new Error("already-expired invite cleanup failed");
+    vi.mocked(state.controlTransport!.pairingReach).mockReturnValue(pendingReach);
+    vi.spyOn(state.deviceAuthStore, "cleanupPairingInvites").mockImplementation(() => {
+      throw cleanupFailure;
+    });
+    const createPairingInvite = state.deviceAuthStore.createPairingInvite.bind(
+      state.deviceAuthStore
+    );
+    vi.spyOn(state.deviceAuthStore, "createPairingInvite").mockImplementation((...args) => ({
+      ...createPairingInvite(...args),
+      expiresAt: Date.now() - 1,
+    }));
+    try {
+      const failure = await executeHubControl(
+        state,
+        { userId: rootUserId, deviceId: rootDeviceId, handle: "root", role: "root" },
+        "pairDevice",
+        [],
+        vi.fn()
+      ).catch((error: unknown) => error);
+
+      expect(failure).toBe(cleanupFailure);
+      expect(state.controlTransport?.invites.size).toBe(0);
+      expect(state.identityDb.listPairingCodes()).toHaveLength(0);
     } finally {
       for (const invite of state.controlTransport?.invites.values() ?? []) {
         if (invite.timer) clearTimeout(invite.timer);

@@ -75,4 +75,58 @@ describe("RootBootstrapInviteLifecycle", () => {
     await vi.waitFor(() => expect(publish).toHaveBeenLastCalledWith({ id: 3 }));
     lifecycle.stop();
   });
+
+  it("preserves the arming failure when retiring the unusable invite also fails", async () => {
+    const armFailure = new Error("relay reach failed");
+    const cleanupFailure = new Error("pairing invite retirement failed");
+    const pairing = { expiresAt: 2_000 };
+    const cancelPairing = vi.fn(async () => {
+      throw cleanupFailure;
+    });
+    const lifecycle = new RootBootstrapInviteLifecycle({
+      hasRoot: () => false,
+      createPairing: () => pairing,
+      armPairing: async () => {
+        throw armFailure;
+      },
+      cancelPairing,
+      publish: vi.fn(),
+    });
+
+    const failure = await lifecycle.start().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([armFailure, cleanupFailure]);
+    expect(cancelPairing).toHaveBeenCalledWith(pairing);
+  });
+
+  it("retires a successfully armed invite when root ownership completes before publish", async () => {
+    const pairing = { expiresAt: 2_000 };
+    const armed = deferred<{ id: string }>();
+    let rootExists = false;
+    const cancelPairing = vi.fn(async () => undefined);
+    const publish = vi.fn();
+    const lifecycle = new RootBootstrapInviteLifecycle({
+      hasRoot: () => rootExists,
+      createPairing: () => pairing,
+      armPairing: () => armed.promise,
+      cancelPairing,
+      publish,
+    });
+
+    const starting = lifecycle.start();
+    rootExists = true;
+    armed.resolve({ id: "armed" });
+
+    await expect(starting).resolves.toBeNull();
+    expect(cancelPairing).toHaveBeenCalledWith(pairing);
+    expect(publish).toHaveBeenLastCalledWith(null);
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}

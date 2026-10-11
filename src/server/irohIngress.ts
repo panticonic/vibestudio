@@ -3,6 +3,7 @@ import type {
   IrohPhysicalConnection,
   IrohPhysicalEndpoint,
 } from "@vibestudio/iroh-transport";
+import { formatRpcFailure } from "@vibestudio/rpc";
 
 const ADMISSION_REJECTED = 0x210n;
 const SERVER_STOPPED = 0x211n;
@@ -19,7 +20,7 @@ export interface IrohIngressOptions<
   /** Runs after the authenticated QUIC handshake and before any stream is accepted. */
   admitPeer(endpointId: string): boolean | Promise<boolean>;
   attach(connection: Connection): Promise<void>;
-  log?(message: string): void;
+  log?(message: string, error?: unknown): void;
 }
 
 export interface IrohIngress<Endpoint = IrohPhysicalEndpoint<IrohPhysicalConnection>> {
@@ -27,6 +28,10 @@ export interface IrohIngress<Endpoint = IrohPhysicalEndpoint<IrohPhysicalConnect
   readonly endpoint: Endpoint;
   /** Resolves when the endpoint is bound and accepting; relay connectivity remains live state. */
   readonly ready: Promise<void>;
+  /** Resolves with this bound generation only after its binding reports usable reachability. */
+  waitUntilOnline(): Promise<Endpoint>;
+  /** True only while the currently bound generation has reported online. */
+  readonly isOnline: boolean;
   stop(): Promise<void>;
 }
 
@@ -46,15 +51,45 @@ export function startIrohIngress<
     throw new Error("Iroh ingress maxConnections must be a positive safe integer");
   }
   const live = new Set<Connection>();
-  const closedEndpoints = new WeakSet<object>();
+  const endpointClosures = new WeakMap<object, Promise<void>>();
   let endpoint: Endpoint | null = null;
+  type EndpointGeneration = {
+    endpoint: Endpoint;
+    onlineTask: Promise<void> | null;
+    reachReady: Promise<void>;
+    resolveReachReady(): void;
+    rejectReachReady(error: unknown): void;
+    retirementComplete: Promise<void>;
+    resolveRetirementComplete(): void;
+    reachSettled: boolean;
+    retiring: boolean;
+    hasFailure: boolean;
+    failure?: unknown;
+    additionalFailures: unknown[];
+    isOnline: boolean;
+  };
+  let generation: EndpointGeneration | null = null;
   let endpointId = "";
   let stopped = false;
+  let stopFailure: Error | null = null;
   let wakeBackoff: (() => void) | null = null;
-  const closeEndpoint = async (owner: Endpoint | null): Promise<void> => {
-    if (!owner || closedEndpoints.has(owner)) return;
-    closedEndpoints.add(owner);
-    await owner.close();
+  let readySucceeded = false;
+  const closeEndpoint = (owner: Endpoint | null): Promise<void> => {
+    if (!owner) return Promise.resolve();
+    const existing = endpointClosures.get(owner);
+    if (existing) return existing;
+    const closing = Promise.resolve().then(() => owner.close());
+    endpointClosures.set(owner, closing);
+    return closing;
+  };
+  const recordGenerationFailure = (owner: EndpointGeneration, error: unknown): void => {
+    if (owner.retiring || stopped) return;
+    if (!owner.hasFailure) {
+      owner.hasFailure = true;
+      owner.failure = error;
+    } else if (owner.failure !== error) {
+      owner.additionalFailures.push(error);
+    }
   };
 
   async function acceptLoop(owner: Endpoint): Promise<void> {
@@ -155,49 +190,173 @@ export function startIrohIngress<
     let rebindAttempt = 0;
     while (!stopped) {
       let owner: Endpoint | null = null;
+      let onlineTask: Promise<void> | null = null;
+      let acceptTask: Promise<void> | null = null;
+      let generationError: unknown;
+      let hasGenerationError = false;
+      let closeError: unknown;
+      let closeFailed = false;
+      let terminalFailure: unknown;
       try {
         owner = await options.binding.bind();
-        if (stopped) {
-          await closeEndpoint(owner);
-          break;
-        }
-        if (endpointId && owner.endpointId !== endpointId) {
+        if (!stopped && endpointId && owner.endpointId !== endpointId) {
           throw new Error(
             `Iroh ingress endpoint identity changed across generations (${endpointId} -> ${owner.endpointId})`
           );
         }
-        endpointId = owner.endpointId;
-        endpoint = owner;
-        rebindAttempt = 0;
-        if (!readySettled) {
-          readySettled = true;
-          resolveReady();
-        } else {
-          options.log?.(`Iroh ingress recovered endpoint=${endpointId.slice(0, 12)}`);
+        if (!stopped) {
+          endpointId = owner.endpointId;
+          endpoint = owner;
+          onlineTask = options.binding.waitUntilOnline
+            ? Promise.resolve().then(() => options.binding.waitUntilOnline!(owner!))
+            : null;
+          let resolveReachReady!: () => void;
+          let rejectReachReady!: (error: unknown) => void;
+          const reachReady = new Promise<void>((resolve, reject) => {
+            resolveReachReady = resolve;
+            rejectReachReady = reject;
+          });
+          let resolveRetirementComplete!: () => void;
+          const retirementComplete = new Promise<void>((resolve) => {
+            resolveRetirementComplete = resolve;
+          });
+          void reachReady.catch(() => undefined);
+          const currentGeneration: EndpointGeneration = {
+            endpoint: owner,
+            onlineTask,
+            reachReady,
+            resolveReachReady,
+            rejectReachReady,
+            retirementComplete,
+            resolveRetirementComplete,
+            reachSettled: false,
+            retiring: false,
+            hasFailure: false,
+            additionalFailures: [],
+            isOnline: false,
+          };
+          generation = currentGeneration;
+          if (onlineTask) {
+            void onlineTask.then(
+              () => {
+                if (
+                  generation === currentGeneration &&
+                  !stopped &&
+                  !currentGeneration.retiring &&
+                  !currentGeneration.hasFailure &&
+                  !currentGeneration.reachSettled
+                ) {
+                  currentGeneration.isOnline = true;
+                  currentGeneration.reachSettled = true;
+                  currentGeneration.resolveReachReady();
+                }
+              },
+              (error: unknown) => recordGenerationFailure(currentGeneration, error)
+            );
+          }
+          rebindAttempt = 0;
+          if (!readySettled) {
+            readySettled = true;
+            readySucceeded = true;
+            resolveReady();
+          } else {
+            options.log?.(`Iroh ingress recovered endpoint=${endpointId.slice(0, 12)}`);
+          }
+          const currentAcceptTask = acceptLoop(owner).then(() => {
+            if (!stopped) throw new Error("Iroh endpoint accept loop ended unexpectedly");
+          });
+          acceptTask = currentAcceptTask;
+          void acceptTask.catch((error: unknown) => {
+            recordGenerationFailure(currentGeneration, error);
+          });
+          // Direct admission remains active while relay discovery is pending.
+          // Either owned operation may end the generation; finally closes the
+          // endpoint and joins its sibling before exposing the failure.
+          await Promise.all(onlineTask ? [onlineTask, currentAcceptTask] : [currentAcceptTask]);
         }
-        await acceptLoop(owner);
       } catch (error) {
-        if (stopped) break;
-        if (!readySettled) {
-          readySettled = true;
-          rejectReady(error);
-          stopped = true;
-          break;
+        if (!stopped) {
+          generationError = error;
+          hasGenerationError = true;
+          if (!readySettled) {
+            readySettled = true;
+            rejectReady(error);
+            stopped = true;
+          } else {
+            const reason = formatRpcFailure(error);
+            if (reason.includes("endpoint identity changed across generations")) {
+              stopped = true;
+              options.log?.(`Iroh ingress stopped: ${reason}`, error);
+            } else {
+              options.log?.(`Iroh ingress generation failed; rebinding: ${reason}`, error);
+            }
+          }
         }
-        const reason = error instanceof Error ? error.message : String(error);
-        if (reason.includes("endpoint identity changed across generations")) {
-          stopped = true;
-          options.log?.(`Iroh ingress stopped: ${reason}`);
-          break;
-        }
-        options.log?.(`Iroh ingress generation failed; rebinding: ${reason}`);
       } finally {
+        const retiringGeneration: EndpointGeneration | null =
+          generation?.endpoint === owner ? generation : null;
+        if (retiringGeneration) retiringGeneration.retiring = true;
         if (endpoint === owner) endpoint = null;
-        await closeEndpoint(owner).catch(() => undefined);
+        try {
+          await closeEndpoint(owner);
+        } catch (error) {
+          closeFailed = true;
+          closeError = error;
+        }
+        await Promise.allSettled(
+          [onlineTask, acceptTask].filter((task): task is Promise<void> => task !== null)
+        );
+        const failures: unknown[] = [];
+        if (retiringGeneration?.hasFailure) {
+          failures.push(retiringGeneration.failure, ...retiringGeneration.additionalFailures);
+        }
+        if (hasGenerationError && !failures.includes(generationError))
+          failures.push(generationError);
+        if (closeFailed) failures.push(closeError);
+        if (failures.length === 0 && stopped && stopFailure) failures.push(stopFailure);
+        const hasTerminalFailure = failures.length > 0;
+        terminalFailure =
+          failures.length === 0
+            ? undefined
+            : failures.length === 1
+              ? failures[0]
+              : new AggregateError(failures, "Iroh ingress generation terminated with failures");
+        if (retiringGeneration && hasTerminalFailure) {
+          retiringGeneration.hasFailure = true;
+          retiringGeneration.failure = terminalFailure;
+          retiringGeneration.isOnline = false;
+          if (!retiringGeneration.reachSettled) {
+            retiringGeneration.reachSettled = true;
+            retiringGeneration.rejectReachReady(terminalFailure);
+          }
+        } else if (retiringGeneration && !retiringGeneration.reachSettled) {
+          retiringGeneration.reachSettled = true;
+          retiringGeneration.rejectReachReady(new Error("Iroh endpoint generation retired"));
+        }
+        retiringGeneration?.resolveRetirementComplete();
+        if (retiringGeneration && generation === retiringGeneration) generation = null;
+        if (failures.length > 1 && !stopped) {
+          options.log?.(
+            `Iroh ingress generation terminal operations failed: ${formatRpcFailure(terminalFailure)}`,
+            terminalFailure
+          );
+        }
+      }
+      if (closeFailed) {
+        throw (
+          terminalFailure ??
+          new AggregateError([closeError], "Iroh ingress generation failed to close cleanly")
+        );
       }
       if (!stopped) await waitForRebind(rebindAttempt++);
     }
   })();
+  void supervisor.catch((error) => {
+    options.log?.(
+      `Iroh ingress supervisor stopped with an error: ${formatRpcFailure(error)}`,
+      error
+    );
+  });
 
   return {
     get endpoint() {
@@ -209,8 +368,32 @@ export function startIrohIngress<
       return endpointId;
     },
     ready,
+    get isOnline() {
+      return generation?.isOnline === true && !generation.hasFailure;
+    },
+    async waitUntilOnline() {
+      if (!readySucceeded) await ready;
+      const current = generation;
+      if (!current) throw new Error("Iroh ingress has no bound endpoint generation");
+      if (!current.onlineTask) {
+        throw new Error("Iroh endpoint binding cannot report home-relay readiness");
+      }
+      await current.reachReady;
+      if (
+        current.hasFailure ||
+        generation !== current ||
+        endpoint !== current.endpoint ||
+        stopped
+      ) {
+        await current.retirementComplete;
+        if (current.hasFailure) throw current.failure;
+        throw stopFailure ?? new Error("Iroh endpoint generation retired before reach was used");
+      }
+      return current.endpoint as Endpoint;
+    },
     async stop() {
       stopped = true;
+      stopFailure ??= new Error("Iroh ingress stopped before reach became ready");
       if (!readySettled) {
         readySettled = true;
         rejectReady(new Error("Iroh ingress stopped before becoming ready"));
@@ -220,8 +403,15 @@ export function startIrohIngress<
         connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
       }
       live.clear();
-      await closeEndpoint(endpoint);
-      await supervisor.catch(() => undefined);
+      const settled = await Promise.allSettled([closeEndpoint(endpoint), supervisor]);
+      const errors = settled
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason);
+      const uniqueErrors = errors.filter((error, index) => errors.indexOf(error) === index);
+      if (uniqueErrors.length === 1) throw uniqueErrors[0];
+      if (uniqueErrors.length > 1) {
+        throw new AggregateError(uniqueErrors, "Iroh ingress stop failed");
+      }
     },
   };
 }

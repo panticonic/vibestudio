@@ -4978,7 +4978,12 @@ async function main() {
   const { resolveIrohRelayUrls } = await import("./irohRelayConfig.js");
   const workspaceRelayUrls = resolveIrohRelayUrls(process.env["VIBESTUDIO_IROH_RELAYS"]);
   const currentIrohReach = (): import("@vibestudio/iroh-transport").IrohReach | null =>
-    irohIngress?.endpoint.reach(workspaceRelayUrls) ?? null;
+    irohIngress?.isOnline ? irohIngress.endpoint.reach(workspaceRelayUrls) : null;
+  const waitForIrohReach = async (): Promise<import("@vibestudio/iroh-transport").IrohReach> => {
+    if (!irohIngress) throw new Error("Workspace Iroh ingress is not ready");
+    const onlineEndpoint = await irohIngress.waitUntilOnline();
+    return onlineEndpoint.reach(workspaceRelayUrls);
+  };
   // Persisted peers can reconnect as soon as the endpoint binds. Their RPC
   // admission must wait for the same completed startup reported to new peers.
   let settleWorkspaceReadyForPeers!: (ready: boolean) => void;
@@ -5581,7 +5586,7 @@ async function main() {
             return !!device && membershipStore.has(device.userId, entryWorkspaceId);
           },
           attach: (connection) => rpc.attachIrohConnection(connection),
-          log: (message) => console.warn(`[iroh-workspace] ${message}`),
+          log: (message, error) => console.warn(`[iroh-workspace] ${message}`, error),
         });
         await ingress.ready;
         irohIngress = ingress;
@@ -5828,7 +5833,14 @@ async function main() {
             respond(503, { error: "Workspace Iroh ingress is not ready", code: "NOT_READY" });
             return;
           }
-          respond(200, currentIrohReach());
+          try {
+            respond(200, await waitForIrohReach());
+          } catch (error) {
+            respond(503, {
+              error: serializeRpcFailure(error, "transport"),
+              code: "IROH_REACH_UNAVAILABLE",
+            });
+          }
         } catch (error) {
           respond(400, { error: error instanceof Error ? error.message : String(error) });
         }
@@ -7888,6 +7900,7 @@ async function main() {
       console.log(`  Persisted:   ${getAdminTokenPath()}`);
     }
     if (args.readyFile) {
+      const pairing = irohIngress ? await waitForIrohReach() : null;
       const readyPayload = {
         workspaceName,
         workspaceId,
@@ -7896,7 +7909,7 @@ async function main() {
         rpcUrl: `${gatewayWsUrl(gatewayPort)}/rpc`,
         workerdUrl: `${gatewayHttpUrl(gatewayPort)}/_w/`,
         adminToken,
-        pairing: currentIrohReach(),
+        pairing,
         serverId: deviceAuthStore.getServerId(),
         serverBootId,
         tokenFilePath,

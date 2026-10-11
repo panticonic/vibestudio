@@ -77,11 +77,18 @@ export class RootBootstrapInviteLifecycle<Pairing extends RootBootstrapPairing, 
     try {
       invite = await this.deps.armPairing(pairing);
     } catch (error) {
-      await this.deps.cancelPairing(pairing).catch(() => undefined);
+      try {
+        await this.deps.cancelPairing(pairing);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Root bootstrap pairing failed and its invite could not be retired"
+        );
+      }
       throw error;
     }
     if (this.stopped || this.deps.hasRoot()) {
-      await this.deps.cancelPairing(pairing).catch(() => undefined);
+      await this.deps.cancelPairing(pairing);
       this.complete();
       return null;
     }
