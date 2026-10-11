@@ -296,6 +296,45 @@ describe("CdpBridge authentication", () => {
     });
   });
 
+  it("carries provider failure graphs in CDP error data", async () => {
+    const harness = await createHarness();
+    const provider = await connectHostProvider(harness, "desktop-host");
+    const endpoint = await waitForEndpoint(harness);
+    const client = await connectInspectionClient(harness, endpoint);
+    await waitForJson(provider); // target activation
+
+    client.send(
+      JSON.stringify({ id: 19, method: "Runtime.evaluate", params: { expression: "1" } })
+    );
+    const command = await waitForJson(provider);
+    const failure = serializeRpcFailure(
+      new AggregateError(
+        [
+          Object.assign(new Error("provider failed"), { code: "E_PROVIDER" }),
+          new Error("cleanup failed"),
+        ],
+        "CDP operation failed",
+        { cause: new Error("provider failed") }
+      )
+    );
+    provider.send(
+      JSON.stringify({
+        type: "cdp:error",
+        targetId: "panel:tree/browser-1",
+        requestId: command["requestId"],
+        error: failure,
+      })
+    );
+
+    const response = await waitForJson(client);
+    const error = response["error"] as { message?: unknown; data?: unknown };
+    expect(error.message).toContain("provider failed");
+    expect(JSON.parse(String(error.data))).toEqual({
+      protocol: "vibestudio.rpc-failure.v1",
+      failure,
+    });
+  });
+
   it("routes browser Page.navigate as a stable in-target CDP command", async () => {
     const harness = await createHarness();
     const provider = await connectHostProvider(harness, "desktop-host");

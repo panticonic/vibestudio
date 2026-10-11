@@ -799,7 +799,8 @@ export class CdpBridge {
             pending.ws,
             pending.clientId,
             formatRpcFailure(msg.error),
-            pending.sessionId
+            pending.sessionId,
+            msg.error
           );
           this.pendingCommands.delete(msg.requestId);
         }
@@ -1196,9 +1197,28 @@ export class CdpBridge {
     }
   }
 
-  private sendErrorToClient(ws: WebSocket, id: number, message: string, sessionId?: string): void {
+  private sendErrorToClient(
+    ws: WebSocket,
+    id: number,
+    message: string,
+    sessionId?: string,
+    failure?: RpcFailure
+  ): void {
     if (ws.readyState !== WebSocket.OPEN) return;
-    const response: Record<string, unknown> = { id, error: { message } };
+    const response: Record<string, unknown> = {
+      id,
+      error: {
+        message,
+        ...(failure
+          ? {
+              data: JSON.stringify({
+                protocol: "vibestudio.rpc-failure.v1",
+                failure,
+              }),
+            }
+          : {}),
+      },
+    };
     if (sessionId) response["sessionId"] = sessionId;
     ws.send(JSON.stringify(response));
   }
