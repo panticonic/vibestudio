@@ -2228,7 +2228,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async onProtectedRefsPublished(publication: ProtectedRefPublication): Promise<void> {
-    if (!this.attached || publication.changes.length === 0) return;
+    if (!this.attached) return;
     const workspaceStateHash = (await this.ensureFresh()).stateHash;
     const repositories: ProtectedPublicationEvent["repositories"] = [];
     for (const change of publication.changes) {

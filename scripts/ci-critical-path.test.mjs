@@ -43,7 +43,7 @@ function transitiveDependencies(jobs, name, visiting = new Set()) {
   return result;
 }
 
-test("native verification and release candidates share prepared inputs without serializing", async () => {
+test("native artifact consumers wait for their exact producers without unrelated gates", async () => {
   const jobs = await readCiJobs();
   const producerJobs = [
     "native-input-linux-x64",
@@ -195,6 +195,23 @@ test("native verification and release candidates share prepared inputs without s
   assert.equal(releaseJobs["release-quality"].uses, "./.github/workflows/ci.yml");
   assert.deepEqual(dependenciesOf(releaseJobs["github-release"]), ["release-quality"]);
 
+  assert.deepEqual(
+    dependenciesOf(releaseJobs["linux-installers"]),
+    ["release-quality"],
+    "Linux packaging must wait until the reusable CI workflow has uploaded its native payloads"
+  );
+  assert.match(
+    JSON.stringify(releaseJobs["linux-installers"]),
+    /native-isolation-/,
+    "Linux packaging consumes the native artifacts published by reusable CI"
+  );
+  assert.deepEqual(
+    dependenciesOf(releaseJobs["windows-installer"]),
+    [],
+    "Windows packaging consumes no CI-produced native payload artifact"
+  );
+  assert.doesNotMatch(JSON.stringify(releaseJobs["windows-installer"]), /download-artifact/);
+
   for (const [producer, publisher] of [
     ["linux-installers", "publish-linux"],
     ["windows-installer", "publish-windows"],
@@ -203,7 +220,7 @@ test("native verification and release candidates share prepared inputs without s
     const ancestors = transitiveDependencies(releaseJobs, producer);
     assert.ok(
       !ancestors.has("github-release"),
-      `${producer} should prepare its private candidate in parallel with release validation`
+      `${producer} must prepare its private candidate before publication without depending on the draft job`
     );
     assert.deepEqual(job.permissions, { contents: "read" });
     const source = JSON.stringify(job);

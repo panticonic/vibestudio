@@ -106,6 +106,10 @@ jobs:
     name: Build Linux installers (deb/rpm/pacman)
     # These jobs create private run-scoped candidates only. Signing and release
     # attachment remain gated on the validated draft and these exact artifacts.
+    # The reusable CI workflow exposes only its completion edge to this caller,
+    # not the internal native-input producer jobs. Wait for that boundary to
+    # guarantee artifact readiness; a finer-grained producer split can remove it.
+    needs: release-quality
     if: ${{ vars.RELEASE_LINUX == 'true' }}
     strategy:
       matrix:

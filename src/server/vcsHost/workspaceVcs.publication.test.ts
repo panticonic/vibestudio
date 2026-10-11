@@ -2,6 +2,7 @@ import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
 import { ensureLayout, mirrorWorktreeTree, putBytes } from "../services/blobstoreService.js";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
@@ -58,7 +59,9 @@ describe("WorkspaceVcs protected publication notification", () => {
     const listenerReady = new Promise<void>((resolve) => {
       listenerEntered = resolve;
     });
-    const listener = vi.fn(async () => {
+    const observed: ProtectedPublicationEvent[] = [];
+    const listener = vi.fn(async (event: ProtectedPublicationEvent) => {
+      observed.push(event);
       listenerEntered();
       await listenerGate;
     });
@@ -114,6 +117,35 @@ describe("WorkspaceVcs protected publication notification", () => {
         ],
       })
     );
+
+    // A new semantic main event can be published without changing any
+    // repository roots. Its publication identity still advances, so observers
+    // that persist the exact host launch coordinate must receive it.
+    await refs.updateMains({
+      entries: [],
+      evidence: {
+        publicationId: "publication:empty-roots",
+        previousEventId: "event:test",
+        publishedEventId: "event:empty-roots",
+        hostRefsBasisDigest: hostRefBasisDigest([
+          { repoPath: "packages/app", contentRoot: stateHash },
+        ]),
+      },
+    });
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        publicationId: "publication:empty-roots",
+        workspaceStateHash: expect.any(String),
+        changedPaths: [],
+        repositories: [],
+        resultHostRefsBasisDigest: hostRefBasisDigest([
+          { repoPath: "packages/app", contentRoot: stateHash },
+        ]),
+      })
+    );
+    expect(observed[1]?.workspaceStateHash).toBe(observed[0]?.workspaceStateHash);
+
     expect(console.error).toHaveBeenCalledWith(
       expect.stringContaining("protected publication source mirror failed"),
       expect.anything()
