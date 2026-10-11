@@ -19,6 +19,66 @@ function writePackage(nodeModules: string, name: string, marker: string): void {
 }
 
 describe("dependency-environment resolver", () => {
+  it("preserves global plugin callbacks and resolves imports from owned virtual modules", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-virtual-runtime-module-"));
+    try {
+      const preparedRoot = path.join(root, "prepared");
+      const modules = path.join(preparedRoot, "node_modules");
+      const runtime = path.join(modules, "@workspace", "runtime");
+      fs.mkdirSync(preparedRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(preparedRoot, "package.json"),
+        JSON.stringify({ dependencies: { "@workspace/runtime": "workspace:*" } })
+      );
+      fs.mkdirSync(runtime, { recursive: true });
+      fs.writeFileSync(
+        path.join(runtime, "package.json"),
+        JSON.stringify({
+          name: "@workspace/runtime",
+          type: "module",
+          exports: "./index.js",
+        })
+      );
+      fs.writeFileSync(
+        path.join(runtime, "index.js"),
+        'export const marker = "prepared runtime";\n'
+      );
+      const entry = path.join(preparedRoot, "entry.js");
+      fs.writeFileSync(entry, 'export { marker } from "fs";\n');
+      let loadInput: { namespace: string; path: string } | undefined;
+      const virtualFsPlugin: esbuild.Plugin = {
+        name: "virtual-fs-test",
+        setup(build) {
+          build.onResolve({ filter: /^fs$/ }, () => ({
+            path: "fs",
+            namespace: "workspace-fs-shim",
+          }));
+          build.onLoad({ filter: /.*/, namespace: "workspace-fs-shim" }, (args) => {
+            loadInput = { namespace: args.namespace, path: args.path };
+            return {
+              contents: 'export { marker } from "@workspace/runtime";\n',
+              loader: "js",
+              resolveDir: preparedRoot,
+            };
+          });
+        },
+      };
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        write: false,
+        logLevel: "silent",
+        plugins: composePreparedDependencyPlugins([virtualFsPlugin], [modules], [preparedRoot]),
+      });
+      expect(loadInput).toEqual({ namespace: "workspace-fs-shim", path: "fs" });
+      expect(result.outputFiles[0]?.text).toContain("prepared runtime");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([true, false])(
     "matches owned dependency roots through a filesystem alias (guarded=%s)",
     async (guarded) => {
@@ -382,6 +442,46 @@ describe("dependency-environment resolver", () => {
       expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("7");
       expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("<svg>owned</svg>");
       expect(result.outputFiles.map((file) => file.text).join("\n")).toContain("color: red");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not wrap a prepared namespace twice when a plugin returns build.resolve()", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-plugin-resolved-file-"));
+    const source = path.join(root, "source");
+    const entry = path.join(source, "entry.component");
+    try {
+      fs.mkdirSync(source, { recursive: true });
+      fs.writeFileSync(entry, "plugin-owned entry");
+      fs.writeFileSync(
+        path.join(source, "target.js"),
+        'import { value } from "./value.ts"; export { value };'
+      );
+      fs.writeFileSync(path.join(source, "value.ts"), "export const value: number = 42;");
+      const frameworkPlugin: esbuild.Plugin = {
+        name: "return-prepared-resolution",
+        setup(build) {
+          build.onResolve({ filter: /\.component$/ }, async () => {
+            const resolved = await build.resolve("./target.js", {
+              kind: "import-statement",
+              resolveDir: source,
+            });
+            expect(resolved.errors).toHaveLength(0);
+            return resolved;
+          });
+        },
+      };
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        write: false,
+        logLevel: "silent",
+        plugins: composePreparedDependencyPlugins([frameworkPlugin], [], [source]),
+      });
+      expect(result.outputFiles[0]?.text).toContain("42");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -43,6 +43,10 @@ function matchesExternal(specifier: string, externals: readonly string[]): boole
 
 function mapNamespace(namespace: string | undefined): string {
   if (!namespace || namespace === "file") return OWNED_FILE_NAMESPACE;
+  // Plugin callbacks can return the resolution they obtained through
+  // build.resolve(). Preserve our already-owned namespace instead of nesting a
+  // second wrapper namespace that has no corresponding onLoad registration.
+  if (isOwnedNamespace(namespace)) return namespace;
   return `${OWNED_NAMESPACE_PREFIX}${namespace}`;
 }
 
@@ -98,11 +102,14 @@ export function composePreparedDependencyPlugins(
   const namespaceKey = (namespace: string, file: string) => `${namespace}\0${file}`;
 
   const locationFor = (namespace: string, file: string, resolveDir?: string): Location => {
-    const stored = locations.get(namespaceKey(namespace, file));
+    const normalizedFile = file.startsWith(`${namespace}:`)
+      ? file.slice(namespace.length + 1)
+      : file;
+    const stored = locations.get(namespaceKey(namespace, normalizedFile));
     if (stored) return stored;
-    const physicalPath = path.isAbsolute(file)
-      ? file
-      : path.resolve(resolveDir ?? process.cwd(), file);
+    const physicalPath = path.isAbsolute(normalizedFile)
+      ? normalizedFile
+      : path.resolve(resolveDir ?? process.cwd(), normalizedFile);
     return { physicalPath, resolveDir: resolveDir ?? path.dirname(physicalPath) };
   };
 
@@ -216,11 +223,17 @@ export function composePreparedDependencyPlugins(
                 | undefined
                 | Promise<esbuild.OnResolveResult | null | undefined>
             ) => {
-              const original = options.namespace ?? "file";
+              const original = options.namespace;
               const namespaces =
-                original === "file" ? ["file", OWNED_FILE_NAMESPACE] : [mapNamespace(original)];
+                original === undefined
+                  ? [undefined]
+                  : original === "file"
+                    ? ["file", OWNED_FILE_NAMESPACE]
+                    : [mapNamespace(original)];
               for (const namespace of namespaces) {
-                build.onResolve({ ...options, namespace }, async (args) => {
+                const registrationOptions =
+                  namespace === undefined ? options : { ...options, namespace };
+                build.onResolve(registrationOptions, async (args) => {
                   const marked = resolveContext(args.pluginData);
                   const owned =
                     isOwnedNamespace(args.namespace) || marked?.[RESOLVE_CONTEXT] === "request";
@@ -236,7 +249,10 @@ export function composePreparedDependencyPlugins(
                     resolveDir: owned
                       ? (loc.resolveDir ?? path.dirname(loc.physicalPath))
                       : args.resolveDir,
-                    importer: owned && args.importer ? loc.physicalPath : args.importer,
+                    importer:
+                      owned && args.importer && (!originalNs || originalNs === "file")
+                        ? loc.physicalPath
+                        : args.importer,
                     pluginData: visiblePluginData(args.pluginData),
                   };
                   const result = await callback(adapted);
@@ -259,11 +275,14 @@ export function composePreparedDependencyPlugins(
                       };
                     }
                   }
-                  const resolveDir = adapted.resolveDir ?? path.dirname(physicalPath);
-                  locations.set(namespaceKey(nextNamespace, resultPath), {
-                    physicalPath,
-                    resolveDir,
-                  });
+                  const resolveDir =
+                    resultNamespace === "file" || isOwnedNamespace(resultNamespace)
+                      ? path.dirname(physicalPath)
+                      : (adapted.resolveDir ?? path.dirname(physicalPath));
+                  const locationKey = namespaceKey(nextNamespace, resultPath);
+                  if (!locations.has(locationKey)) {
+                    locations.set(locationKey, { physicalPath, resolveDir });
+                  }
                   return { ...result, namespace: nextNamespace };
                 });
               }
@@ -280,27 +299,37 @@ export function composePreparedDependencyPlugins(
                 | undefined
                 | Promise<esbuild.OnLoadResult | null | undefined>
             ) => {
-              const original = options.namespace ?? "file";
+              const original = options.namespace;
               const namespaces =
-                original === "file" ? ["file", OWNED_FILE_NAMESPACE] : [mapNamespace(original)];
+                original === undefined
+                  ? [undefined]
+                  : original === "file"
+                    ? ["file", OWNED_FILE_NAMESPACE]
+                    : [mapNamespace(original)];
               for (const namespace of namespaces) {
-                build.onLoad({ ...options, namespace }, async (args) => {
+                const registrationOptions =
+                  namespace === undefined ? options : { ...options, namespace };
+                build.onLoad(registrationOptions, async (args) => {
                   const owned = isOwnedNamespace(args.namespace);
                   const loc = locationFor(args.namespace, args.path);
+                  const originalNs = owned ? originalNamespace(args.namespace) : args.namespace;
                   const adapted = {
                     ...args,
-                    namespace: owned
-                      ? (originalNamespace(args.namespace) ?? args.namespace)
-                      : args.namespace,
-                    path: owned ? loc.physicalPath : args.path,
+                    namespace: originalNs ?? args.namespace,
+                    path:
+                      owned && (!originalNs || originalNs === "file")
+                        ? loc.physicalPath
+                        : args.path,
                     pluginData: visiblePluginData(args.pluginData),
                   };
                   const result = await callback(adapted);
-                  if (!result || !owned || !result.resolveDir) return result;
-                  locations.set(namespaceKey(args.namespace, args.path), {
-                    ...loc,
-                    resolveDir: result.resolveDir,
-                  });
+                  if (!result || !owned) return result;
+                  if (result.resolveDir) {
+                    locations.set(namespaceKey(args.namespace, args.path), {
+                      ...loc,
+                      resolveDir: result.resolveDir,
+                    });
+                  }
                   const { resolveDir: _resolveDir, ...preserved } = result;
                   return preserved;
                 });
@@ -319,7 +348,9 @@ export function composePreparedDependencyPlugins(
   const resolver: esbuild.Plugin = {
     name: "prepared-dependency-authority",
     setup(build) {
-      build.onResolve({ filter: /.*/ }, async (args) => {
+      const resolveRequest = async (
+        args: esbuild.OnResolveArgs
+      ): Promise<esbuild.OnResolveResult | null | undefined> => {
         const marked = resolveContext(args.pluginData);
         if (marked?.[RESOLVE_CONTEXT] === "skip") return null;
         const pluginRequest = marked?.[RESOLVE_CONTEXT] === "request";
@@ -399,8 +430,7 @@ export function composePreparedDependencyPlugins(
         });
         if (resolved.errors.length > 0) {
           if (owned && isOptionalPeer(resolveDir, name)) return { path: specifier, external: true };
-          if (pluginRequest) return resolved;
-          return owned ? null : resolved;
+          return pluginRequest || !owned ? resolved : null;
         }
         if (resolved.external || resolved.namespace !== "file") return resolved;
         registerPackage(specifier, allowedResolveDir);
@@ -431,7 +461,8 @@ export function composePreparedDependencyPlugins(
           resolveDir: path.dirname(resolved.path),
         });
         return { ...resolved, namespace, pluginData: visiblePluginData(resolved.pluginData) };
-      });
+      };
+      build.onResolve({ filter: /.*/ }, resolveRequest);
       build.onLoad({ filter: /.*/, namespace: OWNED_FILE_NAMESPACE }, async (args) => {
         const loc = locationFor(args.namespace, args.path);
         try {
