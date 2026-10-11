@@ -13,7 +13,7 @@ it("maintains build and native extension dependency trees through the real child
   try {
     const caches = [
       path.join(fixture, "external-deps/1111111111111111"),
-      path.join(fixture, "extension-runtime-deps/2222222222222222-darwin-arm64-node22.23.2"),
+      path.join(fixture, "extension-runtime-deps/2222222222222222-darwin-arm64-node24.21.0"),
     ];
     for (const cache of caches) {
       await fs.mkdir(path.join(cache, "node_modules/example"), { recursive: true });
