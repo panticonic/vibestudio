@@ -1,10 +1,8 @@
-import { createRpcMethods, type RpcMethodMap } from "@vibestudio/shared/rpcMethods";
+import type { RpcMethodMap } from "@vibestudio/shared/rpcMethods";
 import { mainRpcMethods } from "../mainRpc.js";
 import { mergeRpcOptions } from "@vibestudio/rpc/internal";
-import { gadWireMethods } from "../workspaceSource.js";
 import {
   omitTrailingUndefined,
-  GAD_WORKSPACE_SERVICE_PROTOCOL,
   type RpcCallerLike,
   type RpcCallOptionsLike,
   type ResolvedDurableObjectTarget,
@@ -90,11 +88,4 @@ export function createDurableObjectServiceClient<M extends RpcMethodMap>(
       );
     },
   } as DurableObjectServiceClient<M>;
-}
-
-export const gadRpcMethods = createRpcMethods("gad", gadWireMethods, "");
-export function createGadServiceClient(
-  rpc: RpcCallerLike
-): DurableObjectServiceClient<typeof gadRpcMethods> {
-  return createDurableObjectServiceClient(rpc, GAD_WORKSPACE_SERVICE_PROTOCOL, gadRpcMethods);
 }

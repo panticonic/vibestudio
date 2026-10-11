@@ -172,7 +172,19 @@ export class OwnedProcessGroup implements OwnedProcessGroupHandle {
         if (observation !== "absent") process.kill(-identity.processGroupId, signal);
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ESRCH") return;
+      // On macOS the last live member may become a zombie between the
+      // observation and kill. Permission denial alone proves nothing; accept
+      // retirement only when the owned group now has no live executors.
+      if (code === "EPERM") {
+        try {
+          if (!this.groupExists()) return;
+        } catch (observationError) {
+          throw new AggregateError([error, observationError], "Process signal and ownership observation failed", { cause: error });
+        }
+      }
+      throw error;
     }
   }
 

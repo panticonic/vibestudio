@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TypeCheckService } from "@vibestudio/typecheck";
 import { authorityDiagnosticsForProgram } from "./authorityFold.js";
@@ -9,13 +10,18 @@ import { createExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js
 function programFor(source: string) {
   const root = mkdtempSync(join(tmpdir(), "vibestudio-authority-fold-"));
   const file = join(root, "index.ts");
-  writeFileSync(file, source);
+  const completeSource = `${testRpcContract}\n${source}`;
+  writeFileSync(file, completeSource);
   const service = new TypeCheckService({
     panelPath: root,
     workspaceContext: null,
     disableTsconfigDiscovery: true,
+    compilerOptions: {
+      baseUrl: root,
+      paths: { "@vibestudio/shared/rpcMethods": [rpcFactoryPath] },
+    },
   });
-  service.updateFile(file, source);
+  service.updateFile(file, completeSource);
   services.push(service);
   return {
     root,
@@ -33,13 +39,18 @@ function programForFiles(files: Record<string, string>) {
   const sources = Object.entries(files).map(([relative, source]) => {
     const file = join(root, relative);
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, source);
-    return { file, source };
+    const completeSource = `${testRpcContract}\n${source}`;
+    writeFileSync(file, completeSource);
+    return { file, source: completeSource };
   });
   const service = new TypeCheckService({
     panelPath: root,
     workspaceContext: null,
     disableTsconfigDiscovery: true,
+    compilerOptions: {
+      baseUrl: root,
+      paths: { "@vibestudio/shared/rpcMethods": [rpcFactoryPath] },
+    },
   });
   for (const source of sources) service.updateFile(source.file, source.source);
   services.push(service);
@@ -48,6 +59,17 @@ function programForFiles(files: Record<string, string>) {
     project: service.getProject(),
   };
 }
+
+const rpcFactoryPath = fileURLToPath(
+  new URL("../../../packages/shared/src/rpcMethods.ts", import.meta.url)
+)
+  .replace(/\\/gu, "/")
+  .replace(/\.ts$/u, ".js");
+const testRpcContract = `
+  import { createReceiverRpcMethods } from "@vibestudio/shared/rpcMethods";
+  interface TestRpcMethods { deleteNote(): Promise<void> }
+  const authorityRpcMethods = createReceiverRpcMethods<TestRpcMethods>(["deleteNote"]);
+`;
 
 const binding = {
   name: "notes",
@@ -549,10 +571,10 @@ describe("userland authority fold", () => {
   it("requires service admission and the sealed provider method capability", async () => {
     const { root, project } = programFor(`
       declare const workers: { resolveService(query: string, objectKey?: string | null): Promise<{ targetId: string }> };
-      declare const rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> };
+      declare const rpc: { call(target: string, method: object, args: unknown[]): Promise<unknown> };
       async function run() {
         const service = await workers.resolveService("example.notes.v1");
-        await rpc.call(service.targetId, "deleteNote", []);
+        await rpc.call(service.targetId, authorityRpcMethods.deleteNote, []);
       }
     `);
     const environment = createExactWorkspaceAuthorityEnvironment({
@@ -610,8 +632,8 @@ describe("userland authority fold", () => {
   it("reports a dynamic RPC method as unbounded instead of naming the identifier as a method", async () => {
     const { root, project } = programFor(`
       declare const workers: { resolveService(query: string): Promise<{ targetId: string }> };
-      declare const rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> };
-      async function invoke(method: string) {
+      declare const rpc: { call(target: string, method: object, args: unknown[]): Promise<unknown> };
+      async function invoke(method: object) {
         const service = await workers.resolveService("example.notes.v1");
         await rpc.call(service.targetId, method, []);
       }
@@ -650,10 +672,10 @@ describe("userland authority fold", () => {
   it("accepts an exact service target and provider-bound capability family", async () => {
     const { root, project } = programFor(`
       declare const workers: { resolveService(query: string, objectKey?: string | null): Promise<{ targetId: string }> };
-      declare const rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> };
+      declare const rpc: { call(target: string, method: object, args: unknown[]): Promise<unknown> };
       async function run() {
         const service = await workers.resolveService("example.notes.v1");
-        await rpc.call(service.targetId, "deleteNote", []);
+        await rpc.call(service.targetId, authorityRpcMethods.deleteNote, []);
       }
     `);
     const environment = createExactWorkspaceAuthorityEnvironment({
@@ -702,10 +724,10 @@ describe("userland authority fold", () => {
       "index.ts": "export const entry = true;",
       "dep/index.ts": `
         declare const workers: { resolveService(query: string): Promise<{ targetId: string }> };
-        declare const rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> };
+        declare const rpc: { call(target: string, method: object, args: unknown[]): Promise<unknown> };
         async function run() {
           const service = await workers.resolveService("example.notes.v1");
-          await rpc.call(service.targetId, "deleteNote", []);
+          await rpc.call(service.targetId, authorityRpcMethods.deleteNote, []);
         }
       `,
     });

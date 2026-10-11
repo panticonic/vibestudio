@@ -428,7 +428,7 @@ extensions.on("@workspace-extensions/git-tools", "indexed", (payload) => {
 });
 ```
 
-`extensions.use()` returns a `Proxy` that turns property access into `rpc.call("main", "extensions.invoke", [name, prop, args])`. The proxy's `get` trap returns `undefined` for `then`, `Symbol.toPrimitive`, and other well-known protocol properties. Calls to a non-existent or stopped extension fail with `ENOEXT` at invocation time; the proxy itself is always defined.
+`extensions.use()` returns a `Proxy` that turns property access into a typed call to `mainRpcMethods["extensions.invoke"]` with `[name, prop, args]`. The proxy's `get` trap returns `undefined` for `then`, `Symbol.toPrimitive`, and other well-known protocol properties. Calls to a non-existent or stopped extension fail with `ENOEXT` at invocation time; the proxy itself is always defined.
 
 Provider clients call `extensions.invokeProvider(slot, method, args)`. Selection
 comes from `meta/vibestudio.yml`; clients do not resolve or name the extension

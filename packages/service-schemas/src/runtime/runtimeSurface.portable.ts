@@ -284,6 +284,8 @@ export const WORKSPACE_MEMBERS = [
 ];
 
 export const CREDENTIALS_MEMBERS = [
+  "openWebSocketScope",
+  "closeWebSocketScope",
   "store",
   "connect",
   "beginWebsitePublication",
@@ -737,6 +739,9 @@ export const PANEL_TREE_METHOD_CATALOG = {
  * manifests override those five with target-specific wording.
  */
 export const portableExports: Record<string, RuntimeSurfaceEntry> = {
+  formatRpcFailure: valueEntry(
+    "Format an RPC failure, including nested causes and aggregate members, for a text-only display boundary. Use the structured error value for programmatic handling."
+  ),
   PanelOperationError: valueEntry(
     "Structured error class thrown by panel create, navigation, reload, rebuild, and readiness operations. Inspect its failure provenance instead of parsing message text."
   ),
@@ -789,7 +794,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   credentials: namespaceEntry(
     CREDENTIALS_MEMBERS,
-    "Typed credential lifecycle and credentialed network access. Use resolveCredential({ url }) for host-owned audience matching; an unbound URL returns null without UI. Inventory summaries do not replace the resolver's binding and use policy. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal."
+    "Typed credential lifecycle and credentialed network access. Use resolveCredential({ url }) for host-owned audience matching; an unbound URL returns null without UI. Inventory summaries do not replace the resolver's binding and use policy. Use openWebSocketScope({ url, credentialId }) to own one credentialed WebSocket request under the authenticated originating invocation; opening does not authorize credential use. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal."
   ),
   browserData: namespaceEntry(
     BROWSER_DATA_MEMBERS,

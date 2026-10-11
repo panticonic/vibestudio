@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createAuthorityCompilerSnapshot,
@@ -46,12 +47,28 @@ function workspace() {
   return { root, units, add };
 }
 
+const hostNodeModulesPath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../node_modules"
+);
 const runtimeDeclarations = `
+  import { createReceiverRpcMethods } from "@vibestudio/shared/rpcMethods";
+  interface TestRpcMethods {
+    alpha(...args: unknown[]): Promise<unknown>;
+    beta(...args: unknown[]): Promise<unknown>;
+    produce(...args: unknown[]): Promise<unknown>;
+    consume(...args: unknown[]): Promise<unknown>;
+    unused(...args: unknown[]): Promise<unknown>;
+    reachable(...args: unknown[]): Promise<unknown>;
+  }
+  const authorityRpcMethods = createReceiverRpcMethods<TestRpcMethods>([
+    "alpha", "beta", "produce", "consume", "unused", "reachable"
+  ]);
   declare const workers: {
     resolveService(query: string, objectKey?: string): Promise<{ targetId: string }>;
   };
   declare const rpc: {
-    call(target: string, method: string, ...args: unknown[]): Promise<unknown>;
+    call(target: string, method: object, args: unknown[]): Promise<unknown>;
   };
 `;
 
@@ -69,7 +86,7 @@ describe("AuthorityCompilerSnapshot", () => {
       {
         "index.ts": `import { client } from "@workspace/shared";
           ${runtimeDeclarations}
-          export async function run() { const value = await client(); return rpc.call(value.targetId, "alpha"); }
+          export async function run() { const value = await client(); return rpc.call(value.targetId, authorityRpcMethods.alpha, []); }
         `,
       },
       { "@workspace/shared": "workspace:*" }
@@ -80,7 +97,7 @@ describe("AuthorityCompilerSnapshot", () => {
       {
         "index.ts": `import { client } from "@workspace/shared";
           ${runtimeDeclarations}
-          export async function run() { const value = await client(); return rpc.call(value.targetId, "beta"); }
+          export async function run() { const value = await client(); return rpc.call(value.targetId, authorityRpcMethods.beta, []); }
         `,
       },
       { "@workspace/shared": "workspace:*" }
@@ -89,7 +106,7 @@ describe("AuthorityCompilerSnapshot", () => {
     const snapshot = await createAuthorityCompilerSnapshot({
       sourceRoot: fixture.root,
       units: fixture.units,
-      nodeModulesPaths: [],
+      nodeModulesPaths: [hostNodeModulesPath],
     });
 
     expect(snapshot.groups).toHaveLength(1);
@@ -125,8 +142,8 @@ describe("AuthorityCompilerSnapshot", () => {
           ${runtimeDeclarations}
           export async function run() {
             const service = await client();
-            const produced = await rpc.call(service.targetId, "produce");
-            await rpc.call(service.targetId, "consume", produced);
+            const produced = await rpc.call(service.targetId, authorityRpcMethods.produce, []);
+            await rpc.call(service.targetId, authorityRpcMethods.consume, [produced]);
           }
         `,
       },
@@ -136,7 +153,7 @@ describe("AuthorityCompilerSnapshot", () => {
     const snapshot = await createAuthorityCompilerSnapshot({
       sourceRoot: fixture.root,
       units: fixture.units,
-      nodeModulesPaths: [],
+      nodeModulesPaths: [hostNodeModulesPath],
     });
     const facts = snapshot.factsByConsumer.get("@workspace/consumer") ?? [];
     const resolution = facts.find((fact) => fact.kind === "resolution");
@@ -159,7 +176,7 @@ describe("AuthorityCompilerSnapshot", () => {
     fixture.add("@workspace/dependency", "packages/dependency", {
       "index.ts": "export const used = true;",
       "unused.ts": `${runtimeDeclarations}
-        export async function unused() { const service = await workers.resolveService("unused.v1"); return rpc.call(service.targetId, "unused"); }
+        export async function unused() { const service = await workers.resolveService("unused.v1"); return rpc.call(service.targetId, authorityRpcMethods.unused, []); }
       `,
     });
     fixture.add(
@@ -172,7 +189,7 @@ describe("AuthorityCompilerSnapshot", () => {
     const snapshot = await createAuthorityCompilerSnapshot({
       sourceRoot: fixture.root,
       units: fixture.units,
-      nodeModulesPaths: [],
+      nodeModulesPaths: [hostNodeModulesPath],
     });
 
     expect(snapshot.factsByConsumer.get("@workspace/consumer")).toEqual([]);
@@ -194,7 +211,7 @@ describe("AuthorityCompilerSnapshot", () => {
       "index.ts": `${runtimeDeclarations}
         export async function dependency() {
           const service = await workers.resolveService("dependency.v1");
-          return rpc.call(service.targetId, "reachable");
+          return rpc.call(service.targetId, authorityRpcMethods.reachable, []);
         }
       `,
     });
@@ -208,7 +225,7 @@ describe("AuthorityCompilerSnapshot", () => {
     const snapshot = await createAuthorityCompilerSnapshot({
       sourceRoot: fixture.root,
       units: fixture.units,
-      nodeModulesPaths: [],
+      nodeModulesPaths: [hostNodeModulesPath],
     });
 
     expect(
@@ -237,7 +254,7 @@ describe("AuthorityCompilerSnapshot", () => {
     const snapshot = await createAuthorityCompilerSnapshot({
       sourceRoot: fixture.root,
       units: fixture.units,
-      nodeModulesPaths: [],
+      nodeModulesPaths: [hostNodeModulesPath],
     });
 
     expect(snapshot.factsByConsumer.get("@workspace/consumer")).toEqual([]);
@@ -258,7 +275,7 @@ describe("AuthorityCompilerSnapshot", () => {
     const snapshot = await createAuthorityCompilerSnapshot({
       sourceRoot: fixture.root,
       units: fixture.units,
-      nodeModulesPaths: [],
+      nodeModulesPaths: [hostNodeModulesPath],
     });
 
     expect(snapshot.groups).toHaveLength(2);

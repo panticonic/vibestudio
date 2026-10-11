@@ -77,6 +77,7 @@ interface ServiceValue {
   queries: AbstractString;
   objectKeys: AbstractString | { kind: "not-applicable" };
   client: boolean;
+  methods?: ts.Expression;
 }
 
 const RESOLVER_NAMES = new Set(["resolveService"]);
@@ -88,6 +89,8 @@ const CLIENT_FACTORY_NAMES = new Set([
   "profileDO",
 ]);
 const RPC_METHOD_NAMES = new Set(["call", "stream", "streamReadable"]);
+const RPC_METHODS_MODULE = "@vibestudio/shared/rpcMethods";
+const MAIN_RPC_MODULE = "@vibestudio/service-schemas/mainRpc";
 
 // Every service value recognized below originates at one of these public
 // resolver/factory calls. Executable bundles contain thousands of unrelated
@@ -271,11 +274,7 @@ function isTestkitServiceImportDeclaration(declaration: ts.Node): boolean {
 
 function isUnboundServiceClientImportDeclaration(declaration: ts.Node): boolean {
   const specifier = importSpecifierOf(declaration);
-  return (
-    specifier !== null &&
-    (/(?:^|\/)workspaceServiceRpc$/u.test(specifier) ||
-      /(?:^|\/)runtime\/worker(?:\/|$)/u.test(specifier))
-  );
+  return specifier !== null && /(?:^|\/)workspaceServiceRpc$/u.test(specifier);
 }
 
 function isPublicNamespace(
@@ -413,6 +412,46 @@ export function analyzeWorkspaceServiceCalls(
       const sourceFile = input.project.program.getSourceFile(fileName);
       return sourceFile && !sourceFile.isDeclarationFile ? [sourceFile] : [];
     });
+  const canonicalExports = new Map<string, Map<string, string | null>>();
+  for (const sourceFile of programSourceFiles) {
+    const recordModuleExports = (moduleSpecifier: ts.Expression | undefined) => {
+      if (!moduleSpecifier || !ts.isStringLiteralLikeNode(moduleSpecifier)) return;
+      const moduleName = moduleSpecifier.text;
+      if (moduleName !== RPC_METHODS_MODULE && moduleName !== MAIN_RPC_MODULE) return;
+      const moduleSymbol = checker.getSymbolAtLocation(moduleSpecifier);
+      if (!moduleSymbol) return;
+      const exports = checker.getExportsOfModule(moduleSymbol);
+      let moduleExports = canonicalExports.get(moduleName);
+      if (!moduleExports) {
+        moduleExports = new Map();
+        canonicalExports.set(moduleName, moduleExports);
+      }
+      for (const exported of exports) {
+        const target = unalias(checker, exported);
+        const key = symbolKey(input.project, target);
+        if (!key) continue;
+        const prior = moduleExports.get(exported.name);
+        moduleExports.set(exported.name, prior === undefined || prior === key ? key : null);
+      }
+    };
+    for (const statement of sourceFile.statements) {
+      if (ts.isImportDeclaration(statement)) {
+        recordModuleExports(statement.moduleSpecifier);
+      } else if (ts.isExportDeclaration(statement)) {
+        recordModuleExports(statement.moduleSpecifier);
+      }
+    }
+  }
+  const isCanonicalExport = (
+    expression: ts.Expression,
+    moduleName: string,
+    exportName: string
+  ): boolean => {
+    const expected = canonicalExports.get(moduleName)?.get(exportName);
+    if (!expected) return false;
+    const symbol = unalias(checker, checker.getSymbolAtLocation(expression));
+    return symbolKey(input.project, symbol) === expected;
+  };
   const sourceFiles = authoritySourceFiles({
     project: input.project,
     sourceRoot: input.sourceRoot,
@@ -475,8 +514,19 @@ export function analyzeWorkspaceServiceCalls(
     );
   };
 
+  const resolvedFactoryName = (call: ts.CallExpression): string | null => {
+    const rawSymbol = checker.getSymbolAtLocation(call.expression);
+    const symbol = unalias(checker, rawSymbol);
+    if (symbol && CLIENT_FACTORY_NAMES.has(symbol.name)) return symbol.name;
+    const importSpecifier = declarationsOf(input.project, rawSymbol).find(ts.isImportSpecifier);
+    const importedName = importSpecifier?.propertyName?.text ?? importSpecifier?.name.text;
+    return importedName && CLIENT_FACTORY_NAMES.has(importedName)
+      ? importedName
+      : callCalleeName(call);
+  };
+
   const isFactoryCall = (call: ts.CallExpression): boolean => {
-    const name = callCalleeName(call);
+    const name = resolvedFactoryName(call);
     if (!name || !CLIENT_FACTORY_NAMES.has(name)) return false;
     if (
       name === "durableObjectService" &&
@@ -533,7 +583,7 @@ export function analyzeWorkspaceServiceCalls(
         };
       }
       if (isFactoryCall(current)) {
-        if (callCalleeName(current) === "connectViaRpc") {
+        if (resolvedFactoryName(current) === "connectViaRpc") {
           const options = current.arguments[0];
           if (!options || !ts.isObjectLiteralExpression(options)) return null;
           const protocolProperty = options.properties.find(
@@ -565,23 +615,24 @@ export function analyzeWorkspaceServiceCalls(
             client: false,
           };
         }
-        const factoryName = callCalleeName(current);
+        const factoryName = resolvedFactoryName(current);
         const declarations = declarationsOf(
           input.project,
           checker.getSymbolAtLocation(current.expression)
         );
-        // The host-side workspaceServiceRpc helper accepts (rpc, query,
-        // objectKey); the public runtime wrapper binds rpc and accepts (query,
-        // objectKey). They intentionally share a name and semantic result, so
-        // select arguments from the declaration's module rather than arity or
-        // value heuristics (a dynamic query may itself look like an RPC value).
+        // The host-side helper accepts (rpc, query, methods, objectKey); the
+        // public runtime wrapper binds rpc and accepts (query, methods,
+        // objectKey). Select arguments from the declaration's module rather
+        // than arity or value heuristics (a dynamic query may itself look like
+        // an RPC value).
         const queryIndex =
           factoryName === "createDurableObjectServiceClient" &&
           declarations.some(isUnboundServiceClientImportDeclaration)
             ? 1
             : 0;
         const query = current.arguments[queryIndex];
-        const objectKey = current.arguments[queryIndex + 1];
+        const methodTable = current.arguments[queryIndex + 1];
+        const objectKey = current.arguments[queryIndex + 2];
         const genericTestkitHelper = factoryName === "callDO" || factoryName === "profileDO";
         return {
           queries: abstractString(checker, query ?? current, resolveString, seen),
@@ -590,6 +641,7 @@ export function analyzeWorkspaceServiceCalls(
               ? abstractString(checker, objectKey, resolveString, seen)
               : { kind: "not-applicable" },
           client: !genericTestkitHelper,
+          ...(!genericTestkitHelper && methodTable ? { methods: methodTable } : {}),
         };
       }
       if (ts.isIdentifier(current.expression)) {
@@ -625,6 +677,9 @@ export function analyzeWorkspaceServiceCalls(
                   ? { kind: "not-applicable" }
                   : unionString(combined.objectKeys, value.objectKeys),
               client: combined.client || value.client,
+              ...(combined.methods === value.methods && combined.methods
+                ? { methods: combined.methods }
+                : {}),
             }));
           }
         }
@@ -673,6 +728,181 @@ export function analyzeWorkspaceServiceCalls(
     return { kind: "unknown" };
   };
 
+  const staticString = (
+    expression: ts.Expression | undefined,
+    seen = new Set<string>()
+  ): string | null => {
+    if (!expression) return null;
+    const current = isAwaitOrTransparent(expression);
+    if (ts.isStringLiteralLikeNode(current)) return current.text;
+    if (ts.isIdentifier(current)) {
+      const symbol = unalias(checker, checker.getSymbolAtLocation(current));
+      const key = symbolKey(input.project, symbol);
+      if (!key || seen.has(key)) return null;
+      const declaration = declarationsOf(input.project, symbol).find(
+        (candidate): candidate is ts.VariableDeclaration =>
+          ts.isVariableDeclaration(candidate) &&
+          ts.isVariableDeclarationList(candidate.parent) &&
+          (candidate.parent.flags & ts.NodeFlags.Const) !== 0 &&
+          Boolean(candidate.initializer)
+      );
+      const initializer = declaration?.initializer;
+      return initializer ? staticString(initializer, new Set([...seen, key])) : null;
+    }
+    return null;
+  };
+
+  const tableInitializer = (
+    expression: ts.Expression,
+    seen = new Set<string>()
+  ): ts.Expression | null => {
+    const current = isAwaitOrTransparent(expression);
+    if (!ts.isIdentifier(current)) return current;
+    const symbol = unalias(checker, checker.getSymbolAtLocation(current));
+    const key = symbolKey(input.project, symbol);
+    if (!key || seen.has(key)) return null;
+    const declaration = declarationsOf(input.project, symbol).find(
+      (candidate): candidate is ts.VariableDeclaration =>
+        ts.isVariableDeclaration(candidate) &&
+        ts.isVariableDeclarationList(candidate.parent) &&
+        (candidate.parent.flags & ts.NodeFlags.Const) !== 0 &&
+        Boolean(candidate.initializer)
+    );
+    const initializer = declaration?.initializer;
+    return initializer ? tableInitializer(initializer, new Set([...seen, key])) : null;
+  };
+
+  const isMainRpcTable = (expression: ts.Expression, seen = new Set<string>()): boolean => {
+    const current = isAwaitOrTransparent(expression);
+    if (isCanonicalExport(current, MAIN_RPC_MODULE, "mainRpcMethods")) return true;
+    if (!ts.isIdentifier(current)) return false;
+    const symbol = unalias(checker, checker.getSymbolAtLocation(current));
+    const key = symbolKey(input.project, symbol);
+    if (!key || seen.has(key)) return false;
+    const declaration = declarationsOf(input.project, symbol).find(
+      (candidate): candidate is ts.VariableDeclaration =>
+        ts.isVariableDeclaration(candidate) &&
+        ts.isVariableDeclarationList(candidate.parent) &&
+        (candidate.parent.flags & ts.NodeFlags.Const) !== 0 &&
+        Boolean(candidate.initializer)
+    );
+    const initializer = declaration?.initializer;
+    return initializer ? isMainRpcTable(initializer, new Set([...seen, key])) : false;
+  };
+
+  /** Resolve a key through the statically owned table bound to a typed client. */
+  const receiverTableMethodName = (
+    expression: ts.Expression,
+    method: string,
+    seen = new Set<string>()
+  ): string | null => {
+    const current = isAwaitOrTransparent(expression);
+    if (ts.isIdentifier(current)) {
+      const symbol = unalias(checker, checker.getSymbolAtLocation(current));
+      const key = symbolKey(input.project, symbol);
+      if (!key || seen.has(key)) return null;
+      const declaration = declarationsOf(input.project, symbol).find(
+        (candidate): candidate is ts.VariableDeclaration =>
+          ts.isVariableDeclaration(candidate) &&
+          ts.isVariableDeclarationList(candidate.parent) &&
+          (candidate.parent.flags & ts.NodeFlags.Const) !== 0 &&
+          Boolean(candidate.initializer)
+      );
+      const initializer = declaration?.initializer;
+      return initializer
+        ? receiverTableMethodName(initializer, method, new Set([...seen, key]))
+        : null;
+    }
+    if (isMainRpcTable(current)) return method;
+    const initializer = tableInitializer(current);
+    if (!initializer || !ts.isCallExpression(initializer)) return null;
+    const factoryCall = initializer;
+    let names: readonly string[] | null = null;
+    let namespace: string | null = null;
+    if (isCanonicalExport(factoryCall.expression, RPC_METHODS_MODULE, "createReceiverRpcMethods")) {
+      const configuredNames =
+        factoryCall.arguments[0] && tableInitializer(factoryCall.arguments[0]);
+      if (!configuredNames || !ts.isArrayLiteralExpression(configuredNames)) return null;
+      names = configuredNames.elements
+        .map((element) => staticString(element as ts.Expression))
+        .filter((name): name is string => name !== null);
+      const namespaceArgument = factoryCall.arguments[1];
+      namespace = namespaceArgument ? staticString(namespaceArgument) : "";
+    } else if (
+      isCanonicalExport(factoryCall.expression, RPC_METHODS_MODULE, "createLazyRpcMethods")
+    ) {
+      const configuredNames =
+        factoryCall.arguments[1] && tableInitializer(factoryCall.arguments[1]);
+      if (!configuredNames || !ts.isArrayLiteralExpression(configuredNames)) return null;
+      names = configuredNames.elements
+        .map((element) => staticString(element as ts.Expression))
+        .filter((name): name is string => name !== null);
+      const namespaceArgument = factoryCall.arguments[3];
+      namespace = namespaceArgument
+        ? staticString(namespaceArgument)
+        : staticString(factoryCall.arguments[0]);
+    } else if (isCanonicalExport(factoryCall.expression, RPC_METHODS_MODULE, "createRpcMethods")) {
+      const methods = factoryCall.arguments[1] && tableInitializer(factoryCall.arguments[1]);
+      if (!methods || !ts.isObjectLiteralExpression(methods)) return null;
+      names = methods.properties
+        .map((property) => {
+          if (ts.isPropertyAssignment(property) || ts.isMethodDeclaration(property)) {
+            return ts.isIdentifier(property.name) || ts.isStringLiteralLikeNode(property.name)
+              ? property.name.text
+              : null;
+          }
+          return null;
+        })
+        .filter((name): name is string => name !== null);
+      const namespaceArgument = factoryCall.arguments[2];
+      namespace = namespaceArgument
+        ? staticString(namespaceArgument)
+        : staticString(factoryCall.arguments[0]);
+    } else {
+      return null;
+    }
+    if (!names?.includes(method) || namespace === null) return null;
+    return namespace ? `${namespace}.${method}` : method;
+  };
+
+  /** Resolve only statically owned descriptor tables. Never ask the checker
+   * for a RpcMethod object's type: its correlated argument tuple is unrelated
+   * to authority identity and can be expensive for the native checker. */
+  const receiverDescriptorName = (
+    expression: ts.Expression,
+    seen = new Set<string>()
+  ): string | null => {
+    const current = isAwaitOrTransparent(expression);
+    if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
+      const method = ts.isPropertyAccessExpression(current)
+        ? current.name.text
+        : current.argumentExpression && staticString(current.argumentExpression);
+      return method ? receiverTableMethodName(current.expression, method, seen) : null;
+    }
+    if (
+      ts.isCallExpression(current) &&
+      isCanonicalExport(current.expression, MAIN_RPC_MODULE, "mainRpcMethod")
+    ) {
+      return staticString(current.arguments[0]);
+    }
+    if (ts.isIdentifier(current)) {
+      const symbol = unalias(checker, checker.getSymbolAtLocation(current));
+      const key = symbolKey(input.project, symbol);
+      if (!key || seen.has(key)) return null;
+      const declaration = declarationsOf(input.project, symbol).find(
+        (candidate): candidate is ts.VariableDeclaration =>
+          ts.isVariableDeclaration(candidate) &&
+          ts.isVariableDeclarationList(candidate.parent) &&
+          (candidate.parent.flags & ts.NodeFlags.Const) !== 0 &&
+          Boolean(candidate.initializer)
+      );
+      return declaration?.initializer
+        ? receiverDescriptorName(declaration.initializer, new Set([...seen, key]))
+        : null;
+    }
+    return null;
+  };
+
   const argumentValue = (expression: ts.Expression): SymbolicArgumentValue => {
     const producerFor = (candidate: ts.Expression, seen = new Set<string>()): string | null => {
       const current = isAwaitOrTransparent(candidate);
@@ -688,8 +918,60 @@ export function analyzeWorkspaceServiceCalls(
     const producerCallId = producerFor(expression);
     if (producerCallId) return { kind: "service-call-result", producerCallId };
     const current = isAwaitOrTransparent(expression);
-    const strings = abstractString(checker, current, resolveString);
-    return strings.kind === "literals" ? strings : { kind: "unknown" };
+    // RPC arguments are tuple elements. Avoid asking the checker for a tuple,
+    // array, object, or call result type here: besides being irrelevant to
+    // authority identity, serializing correlated RpcMethod tuple types can
+    // make the native checker recurse into unsupported tuple references.
+    if (ts.isStringLiteralLikeNode(current)) {
+      return { kind: "literals", values: new Set([current.text]) };
+    }
+    const resolved = resolveString(current);
+    return resolved.kind === "literals" ? resolved : { kind: "unknown" };
+  };
+
+  const rpcArgumentValues = (expression: ts.Expression): SymbolicArgumentValue[] => {
+    const tuple = (
+      candidate: ts.Expression
+    ): { values: SymbolicArgumentValue[]; complete: boolean } | null => {
+      const current = isAwaitOrTransparent(candidate);
+      if (ts.isArrayLiteralExpression(current)) {
+        const values: SymbolicArgumentValue[] = [];
+        for (let index = 0; index < current.elements.length; index += 1) {
+          const element = current.elements[index]!;
+          if (ts.isSpreadElement(element)) {
+            const spread = tuple(element.expression);
+            if (spread) {
+              values.push(...spread.values);
+              if (!spread.complete) {
+                for (
+                  let remaining = index + 1;
+                  remaining < current.elements.length;
+                  remaining += 1
+                ) {
+                  values.push({ kind: "unknown" });
+                }
+                return { values, complete: false };
+              }
+            } else {
+              // An unresolved spread can have any arity, so later syntactic
+              // elements no longer have a knowable positional index.
+              for (let remaining = index; remaining < current.elements.length; remaining += 1) {
+                values.push({ kind: "unknown" });
+              }
+              return { values, complete: false };
+            }
+          } else {
+            values.push(argumentValue(element as ts.Expression));
+          }
+        }
+        return { values, complete: true };
+      }
+      // A const binding does not make its array contents immutable. Only
+      // inline tuple syntax (including spreads of inline tuples) is stable
+      // without additional readonly-type analysis.
+      return null;
+    };
+    return tuple(expression)?.values ?? [{ kind: "unknown" }];
   };
 
   const factFor = (
@@ -697,7 +979,8 @@ export function analyzeWorkspaceServiceCalls(
     kind: "resolution" | "invocation",
     service: ServiceValue,
     method: ts.Node | undefined,
-    methodIsPropertyName = false
+    methodIsPropertyName = false,
+    methodIsDescriptor = false
   ): WorkspaceServiceCallFact => {
     const sourceFile = call.getSourceFile();
     const unit = sourceUnitForFile(input.sourceRoot, sourceFile.fileName, input.units);
@@ -718,10 +1001,15 @@ export function analyzeWorkspaceServiceCalls(
         ? method.text
         : null
       : null;
+    const descriptorName = method ? receiverDescriptorName(method as ts.Expression) : null;
     const abstractMethod = method
-      ? methodValue !== null
-        ? { kind: "literals" as const, values: new Set([methodValue]) }
-        : abstractString(checker, method as ts.Expression, resolveString)
+      ? methodIsDescriptor
+        ? descriptorName !== null
+          ? { kind: "literals" as const, values: new Set([descriptorName]) }
+          : { kind: "unknown" as const }
+        : methodValue !== null
+          ? { kind: "literals" as const, values: new Set([methodValue]) }
+          : abstractString(checker, method as ts.Expression, resolveString)
       : { kind: "literals" as const, values: new Set<string>() };
     const fact: WorkspaceServiceCallFact = {
       id: `${sourceFile.fileName}:${call.getStart(sourceFile)}:${kind}`,
@@ -761,25 +1049,37 @@ export function analyzeWorkspaceServiceCalls(
         : null;
     const receiverValue = directRpc ?? serviceValue(property.expression);
     if (!receiverValue) continue;
+    const boundMethodCall =
+      !directRpc &&
+      receiverValue.client &&
+      (property.name.text === "call" || property.name.text === "callWithOptions");
     const method = directRpc
       ? call.arguments[1]
-      : property.name.text === "call" ||
-          property.name.text === "stream" ||
-          property.name.text === "streamReadable"
+      : boundMethodCall
         ? call.arguments[0]
         : property.name;
     if (directRpc) {
       if (!method) continue;
-      const fact = factFor(call, "invocation", receiverValue, method);
-      fact.arguments = call.arguments.slice(2).map(argumentValue);
-    } else if (
-      property.name.text === "call" ||
-      property.name.text === "stream" ||
-      property.name.text === "streamReadable"
-    ) {
+      const fact = factFor(call, "invocation", receiverValue, method, false, true);
+      fact.arguments = call.arguments[2]
+        ? rpcArgumentValues(call.arguments[2])
+        : [{ kind: "unknown" }];
+    } else if (boundMethodCall) {
       if (!method) continue;
       const fact = factFor(call, "invocation", receiverValue, method);
-      fact.arguments = call.arguments.slice(1).map(argumentValue);
+      const methodKey = staticString(method as ts.Expression);
+      const descriptorName =
+        methodKey && receiverValue.methods
+          ? receiverTableMethodName(receiverValue.methods, methodKey)
+          : null;
+      fact.methods = descriptorName
+        ? { kind: "literals", values: new Set([descriptorName]) }
+        : { kind: "unknown" };
+      if (property.name.text === "callWithOptions") {
+        fact.arguments = call.arguments[1] ? rpcArgumentValues(call.arguments[1]) : [];
+      } else {
+        fact.arguments = call.arguments.slice(1).map(argumentValue);
+      }
     } else if (receiverValue.client) {
       const fact = factFor(call, "invocation", receiverValue, method, true);
       fact.arguments = call.arguments.map(argumentValue);

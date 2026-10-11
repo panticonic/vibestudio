@@ -1,3 +1,4 @@
+import { isArrayBuffer } from "node:util/types";
 import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
@@ -619,8 +620,30 @@ describe("BuildSystemV2 library package subpaths", () => {
     const installTextCodecs = new RealmFunction(
       "HostTextDecoder",
       "HostTextEncoder",
+      "HostURL",
+      "HostIsArrayBuffer",
       `
         globalThis.Response = class Response {};
+        globalThis.__nativeBinaryBrand = { isArrayBuffer(value) { return HostIsArrayBuffer(value); } };
+        globalThis.URL = class URL {
+          #inner;
+          constructor(input, base) { this.#inner = new HostURL(input, base); }
+          get href() { return this.#inner.href; }
+          set href(value) { this.#inner.href = value; }
+          get origin() { return this.#inner.origin; }
+          get protocol() { return this.#inner.protocol; }
+          set protocol(value) { this.#inner.protocol = value; }
+          get hostname() { return this.#inner.hostname; }
+          set hostname(value) { this.#inner.hostname = value; }
+          get pathname() { return this.#inner.pathname; }
+          set pathname(value) { this.#inner.pathname = value; }
+          get search() { return this.#inner.search; }
+          set search(value) { this.#inner.search = value; }
+          get hash() { return this.#inner.hash; }
+          set hash(value) { this.#inner.hash = value; }
+          toString() { return this.#inner.toString(); }
+          toJSON() { return this.#inner.toJSON(); }
+        };
         globalThis.TextDecoder = class TextDecoder {
           #inner;
           constructor(...args) { this.#inner = new HostTextDecoder(...args); }
@@ -641,8 +664,13 @@ describe("BuildSystemV2 library package subpaths", () => {
           get encoding() { return this.#inner.encoding; }
         };
       `
-    ) as (decoder: typeof TextDecoder, encoder: typeof TextEncoder) => void;
-    installTextCodecs(TextDecoder, TextEncoder);
+    ) as (
+      decoder: typeof TextDecoder,
+      encoder: typeof TextEncoder,
+      url: typeof URL,
+      brand: typeof isArrayBuffer
+    ) => void;
+    installTextCodecs(TextDecoder, TextEncoder, URL, isArrayBuffer);
     const receiver = vm.runInContext(
       `(() => {
         const asyncHooks = {
@@ -659,6 +687,7 @@ describe("BuildSystemV2 library package subpaths", () => {
         return [
           (specifier) => {
             if (specifier === "node:async_hooks") return asyncHooks;
+            if (specifier === "node:util/types") return __nativeBinaryBrand;
             throw new Error("unexpected external dependency " + specifier);
           },
           exports,

@@ -40,6 +40,7 @@ import {
   getPlatformPackageBinaryPath,
 } from "@vibestudio/shared/runtimePaths";
 import {
+  INTERNAL_DO_SOURCE,
   getInternalDOBundle,
   internalDOExecutionIdentity,
   isInternalDOSource,
@@ -76,6 +77,13 @@ const log = createDevLogger("WorkerdManager");
 const DEFAULT_WORKERD_SIGTERM_TIMEOUT_MS = 60_000;
 const DEFAULT_WORKERD_SIGKILL_TIMEOUT_MS = 30_000;
 const WORKERD_STARTUP_OUTPUT_LINES = 40;
+interface WorkerdProcessReceipt {
+  pid: number | undefined;
+  port: number | null;
+  startedAt: number;
+  generation: number;
+  output: string[];
+}
 declare const __filename: string | undefined;
 declare const __dirname: string | undefined;
 
@@ -644,6 +652,7 @@ export class WorkerdManager {
   >();
   private workerdBinary: string | null = null;
   private lastWorkerdStartupOutput: string[] = [];
+  private currentWorkerdReceipt: WorkerdProcessReceipt | null = null;
   private workerdStartedAtMs: number | null = null;
   private workerdMemorySampleTimer: ReturnType<typeof setInterval> | null = null;
   private workerdMemorySamplePid: number | null = null;
@@ -3096,15 +3105,23 @@ export class WorkerdManager {
     });
     const spawnedProcess = this.process;
     const spawnedPid = spawnedProcess.pid;
-    this.workerdStartedAtMs = Date.now();
+    const receipt: WorkerdProcessReceipt = {
+      pid: spawnedPid,
+      port: this.port,
+      startedAt: Date.now(),
+      generation: this.configBootGeneration(),
+      output: [],
+    };
+    this.currentWorkerdReceipt = receipt;
+    this.workerdStartedAtMs = receipt.startedAt;
     this.lastWorkerdRssBytes = null;
     this.startWorkerdMemorySampling(spawnedPid);
-    this.lastWorkerdStartupOutput = [];
+    this.lastWorkerdStartupOutput = receipt.output;
 
     spawnedProcess.stdout?.on("data", (data: Buffer) => {
       const line = data.toString().trim();
       if (line) {
-        this.rememberWorkerdStartupOutput(`stdout: ${line}`);
+        this.rememberWorkerdStartupOutput(`stdout: ${line}`, receipt.output);
         log.verbose(`[workerd] ${line}`);
       }
     });
@@ -3112,7 +3129,7 @@ export class WorkerdManager {
     spawnedProcess.stderr?.on("data", (data: Buffer) => {
       const line = data.toString().trim();
       if (line) {
-        this.rememberWorkerdStartupOutput(`stderr: ${line}`);
+        this.rememberWorkerdStartupOutput(`stderr: ${line}`, receipt.output);
         log.warn(`[workerd] ${line}`);
       }
     });
@@ -3127,13 +3144,13 @@ export class WorkerdManager {
 
       const onExit = (code: number | null, signal: string | null) => {
         readinessAbort.abort(new Error(`workerd exited before readiness (${code}, ${signal})`));
-        this.logWorkerdExit(code, signal, spawnedPid);
+        this.logWorkerdExit(code, signal, receipt);
         if (this.process === spawnedProcess) this.process = null;
         if (!settled) {
           settled = true;
           reject(
             new Error(
-              `workerd exited before accepting HTTP (code=${code}, signal=${signal})${this.recentWorkerdOutputSuffix()}`
+              `workerd exited before accepting HTTP (code=${code}, signal=${signal})${this.recentWorkerdOutputSuffix(receipt.output)}`
             )
           );
         }
@@ -3145,7 +3162,7 @@ export class WorkerdManager {
         if (this.process === spawnedProcess) this.process = null;
         if (!settled) {
           settled = true;
-          reject(new Error(`workerd failed to start: ${err.message}`));
+          reject(new Error(`workerd failed to start: ${err.message}`, { cause: err }));
         }
       };
 
@@ -3163,7 +3180,7 @@ export class WorkerdManager {
           spawnedProcess.removeListener("exit", onExit);
           spawnedProcess.removeListener("error", onError);
           spawnedProcess.on("exit", (code, signal) => {
-            this.logWorkerdExit(code, signal, spawnedPid);
+            this.logWorkerdExit(code, signal, receipt);
             const wasCurrent = this.process === spawnedProcess;
             if (wasCurrent) this.process = null;
             if (wasCurrent && !this.shuttingDown) {
@@ -3185,7 +3202,7 @@ export class WorkerdManager {
           settled = true;
           reject(
             new Error(
-              `${errorMessage(err)}. binary=${binary} port=${this.port} config=${configPath}${this.recentWorkerdOutputSuffix()}`
+              `${errorMessage(err)}. binary=${binary} port=${receipt.port} config=${configPath}${this.recentWorkerdOutputSuffix(receipt.output)}`
             )
           );
         }
@@ -3316,14 +3333,36 @@ export class WorkerdManager {
   private logWorkerdExit(
     code: number | null,
     signal: string | null,
-    pid: number | undefined
+    receipt: WorkerdProcessReceipt
   ): void {
+    const exitedAt = Date.now();
+    const recentOutput = [...receipt.output];
+    const lifecycle = {
+      pid: receipt.pid ?? null,
+      port: receipt.port,
+      code,
+      signal,
+      exitedAt,
+      startedAt: receipt.startedAt,
+      generation: receipt.generation,
+      recentOutput,
+    };
+    const diagnosticSnapshot = this.workerdDiagnostics(receipt.pid);
     log.info(
-      `workerd exited (code=${code}, signal=${signal}); diagnostics=${JSON.stringify(
-        this.workerdDiagnostics(pid)
-      )}`
+      `workerd exited; lifecycle=${JSON.stringify(lifecycle)}; diagnostics=${JSON.stringify({ ...diagnosticSnapshot, pid: receipt.pid ?? null, port: receipt.port, uptimeMs: exitedAt - receipt.startedAt, bootGeneration: receipt.generation })}`
     );
-    if (pid === this.workerdMemorySamplePid) this.stopWorkerdMemorySampling();
+    const diagnosticId = `workerd:${this.deps.workspaceId}`;
+    this.deps.recordLifecycleEvent?.({
+      source: INTERNAL_DO_SOURCE,
+      callerId: diagnosticId,
+      entityId: this.deps.workspaceId,
+      kind: "worker",
+      level: code === 0 ? "info" : "error",
+      message: `workerd process exited (code=${code}, signal=${signal})`,
+      fields: { event: "workerd-process-exited", ...lifecycle },
+    });
+    if (this.currentWorkerdReceipt === receipt) this.currentWorkerdReceipt = null;
+    if (receipt.pid === this.workerdMemorySamplePid) this.stopWorkerdMemorySampling();
   }
 
   private workerdDiagnostics(pid: number | undefined): WorkerdPerformanceSnapshot {
@@ -3368,19 +3407,16 @@ export class WorkerdManager {
     return this.workerdDiagnostics(this.process?.pid);
   }
 
-  private rememberWorkerdStartupOutput(line: string): void {
-    this.lastWorkerdStartupOutput.push(line);
-    if (this.lastWorkerdStartupOutput.length > WORKERD_STARTUP_OUTPUT_LINES) {
-      this.lastWorkerdStartupOutput.splice(
-        0,
-        this.lastWorkerdStartupOutput.length - WORKERD_STARTUP_OUTPUT_LINES
-      );
+  private rememberWorkerdStartupOutput(line: string, output: string[]): void {
+    output.push(line);
+    if (output.length > WORKERD_STARTUP_OUTPUT_LINES) {
+      output.splice(0, output.length - WORKERD_STARTUP_OUTPUT_LINES);
     }
   }
 
-  private recentWorkerdOutputSuffix(): string {
-    if (this.lastWorkerdStartupOutput.length === 0) return "";
-    return `; recent workerd output:\n${this.lastWorkerdStartupOutput.join("\n")}`;
+  private recentWorkerdOutputSuffix(output = this.lastWorkerdStartupOutput): string {
+    if (output.length === 0) return "";
+    return `; recent workerd output:\n${output.join("\n")}`;
   }
 
   private formatWorkerdStartupError(err: unknown): string {

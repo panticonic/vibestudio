@@ -241,6 +241,7 @@ async function postRpcToDOWithToken(
   const instanceId = doTargetId(ref);
   const url = `${deps.workerdUrl}${doRefUrl(ref, "__rpc")}`;
   const requestId = crypto.randomUUID();
+  const requestContext = `${doRefKey(ref)}.${method} requestId=${requestId}`;
   const envelope: RpcEnvelope = {
     from: caller.callerId,
     target: instanceId,
@@ -283,7 +284,7 @@ async function postRpcToDOWithToken(
       const body = await response.text();
       if (!response.ok) {
         throw new Error(
-          `DO cancellation delivery failed (${response.status})${body ? `: ${body}` : ""}`
+          `DO RPC ${requestContext} cancellation delivery failed (${response.status})${body ? `: ${body}` : ""}`
         );
       }
     })();
@@ -302,7 +303,7 @@ async function postRpcToDOWithToken(
       response = await fetch(url, init);
     } catch (error) {
       throw new AmbiguousDoDispatchError(
-        `DO dispatch fetch to ${url} failed: ${describeWorkerdFetchFailure(error)}`,
+        `DO RPC ${requestContext} fetch to ${url} failed: ${describeWorkerdFetchFailure(error)}`,
         error
       );
     }
@@ -314,19 +315,19 @@ async function postRpcToDOWithToken(
       try {
         parsed = decodeRpcJson(body) as typeof parsed;
       } catch {
-        throw new Error(`DO dispatch failed (${response.status}): ${body}`);
+        throw new Error(`DO RPC ${requestContext} failed (${response.status}): ${body}`);
       }
       if (parsed.error) {
         throw deserializeRpcFailure(parsed.error);
       }
-      throw new Error(`DO dispatch failed (${response.status}): ${body}`);
+      throw new Error(`DO RPC ${requestContext} failed (${response.status}): ${body}`);
     }
     admitted = true;
     cancel();
     const decoded = decodeRpcJson(await response.text()) as RpcEnvelope;
     const message = decoded?.message;
     if (message?.type !== "response" || message.requestId !== requestId) {
-      throw new Error("DO RPC returned a mismatched terminal response");
+      throw new Error(`DO RPC ${requestContext} returned a mismatched terminal response`);
     }
     if ("error" in message) {
       const error = deserializeRpcFailure(message.error);

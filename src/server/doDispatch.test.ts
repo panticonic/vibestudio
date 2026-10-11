@@ -832,12 +832,20 @@ describe("DODispatch", () => {
       }));
 
       const ref = makeRef();
-      const failure = dispatch.dispatch(ref, "ping", "arg");
-      await expect(failure).rejects.toThrow(
-        `DO dispatch fetch to http://127.0.0.1:10001${userlandUrl(ref, "__rpc")} failed: ` +
-          "fetch failed (cause: Error: connect ECONNREFUSED 127.0.0.1:10001)"
-      );
-      await expect(failure).rejects.toMatchObject({ cause: fetchFailure });
+      const failure = dispatch.dispatch(ref, "ping", "DO_NOT_INCLUDE_THIS_ARGUMENT");
+      const error = await failure.catch((caught: unknown) => caught);
+      const request = decodeRpcJson(
+        String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)
+      ) as RpcEnvelope;
+      if (request.message.type !== "request") throw new Error("expected RPC request");
+      expect(error).toMatchObject({ cause: fetchFailure });
+      expect(error).toMatchObject({
+        message:
+          `DO RPC ${doRefKey(ref)}.ping requestId=${request.message.requestId} fetch to ` +
+          `http://127.0.0.1:10001${userlandUrl(ref, "__rpc")} failed: ` +
+          "fetch failed (cause: Error: connect ECONNREFUSED 127.0.0.1:10001)",
+      });
+      expect((error as Error).message).not.toContain("DO_NOT_INCLUDE_THIS_ARGUMENT");
 
       expect(getWorkerdUrl).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -866,10 +874,17 @@ describe("DODispatch", () => {
 
       const ref = makeRef();
       const failure = dispatch.dispatch(ref, "getRun");
-      await expect(failure).rejects.toThrow(
-        `DO dispatch fetch to http://127.0.0.1:10001${userlandUrl(ref, "__rpc")} failed: fetch failed`
-      );
-      await expect(failure).rejects.toMatchObject({ cause: fetchFailure });
+      const error = await failure.catch((caught: unknown) => caught);
+      const request = decodeRpcJson(
+        String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)
+      ) as RpcEnvelope;
+      if (request.message.type !== "request") throw new Error("expected RPC request");
+      expect(error).toMatchObject({
+        cause: fetchFailure,
+        message:
+          `DO RPC ${doRefKey(ref)}.getRun requestId=${request.message.requestId} fetch to ` +
+          `http://127.0.0.1:10001${userlandUrl(ref, "__rpc")} failed: fetch failed`,
+      });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 

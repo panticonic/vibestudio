@@ -37,9 +37,19 @@ import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 vi.mock("child_process", () => ({
   spawn: vi.fn(() => {
     const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    const stdoutListeners = new Set<(data: Buffer) => void>();
+    const stderrListeners = new Set<(data: Buffer) => void>();
     const proc = {
-      stdout: { on: vi.fn() },
-      stderr: { on: vi.fn() },
+      stdout: {
+        on: vi.fn((event: string, listener: (data: Buffer) => void) => {
+          if (event === "data") stdoutListeners.add(listener);
+        }),
+      },
+      stderr: {
+        on: vi.fn((event: string, listener: (data: Buffer) => void) => {
+          if (event === "data") stderrListeners.add(listener);
+        }),
+      },
       on: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
         if (!listeners.has(event)) listeners.set(event, new Set());
         listeners.get(event)!.add(fn);
@@ -56,6 +66,12 @@ vi.mock("child_process", () => ({
       }),
       emit: (event: string, ...args: unknown[]) => {
         for (const fn of listeners.get(event) ?? []) fn(...args);
+      },
+      emitOutput: (stream: "stdout" | "stderr", data: string) => {
+        const output = Buffer.from(data);
+        for (const listener of stream === "stderr" ? stderrListeners : stdoutListeners) {
+          listener(output);
+        }
       },
       kill: vi.fn(() => {
         // Simulate process exit after kill
@@ -1869,6 +1885,41 @@ describe("WorkerdManager", () => {
   // listInstances
   // -------------------------------------------------------------------------
   describe("listing", () => {
+    it("preserves the original workerd spawn error cause before readiness", async () => {
+      let nextPort = 49552;
+      vi.mocked(findServicePort).mockImplementation(async (service) =>
+        service === "workerdInspector" ? 49652 : nextPort++
+      );
+      const inheritedFetch = globalThis.fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const href =
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          if (href.endsWith("/__vibestudio_workerd_ready")) throw new TypeError("fetch failed");
+          return await inheritedFetch(input, init);
+        })
+      );
+      const manager = new WorkerdManager(createMockDeps());
+      const spawnCountBefore = vi.mocked(spawn).mock.results.length;
+      const started = manager.startWorker(startArgs());
+      const originalErrors = Array.from(
+        { length: 3 },
+        (_, index) => new Error(`spawn pipe failed ${index + 1}`)
+      );
+      for (let attempt = 0; attempt < originalErrors.length; attempt += 1) {
+        await vi.waitFor(() =>
+          expect(vi.mocked(spawn).mock.results.length).toBe(spawnCountBefore + attempt + 1)
+        );
+        const child = vi.mocked(spawn).mock.results[spawnCountBefore + attempt]!.value as {
+          emit(event: string, ...args: unknown[]): void;
+        };
+        child.emit("error", originalErrors[attempt]!);
+      }
+
+      await expect(started).rejects.toMatchObject({ cause: originalErrors.at(-1) });
+    });
+
     it("rejects a non-router readiness response instead of waiting on a live wrong endpoint", async () => {
       vi.stubGlobal(
         "fetch",
@@ -2520,7 +2571,8 @@ describe("WorkerdManager", () => {
     });
 
     it("recovers an unexpectedly exited runtime and reports a crash generation", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const recordLifecycleEvent = vi.fn();
+      const mgr = new WorkerdManager(createMockDeps({ recordLifecycleEvent }));
       const begin = vi.fn();
       const ready = vi.fn();
       mgr.onRestartBegin(begin);
@@ -2530,8 +2582,10 @@ describe("WorkerdManager", () => {
       const initialGeneration = mgr.getBootGeneration();
       const crashed = vi.mocked(spawn).mock.results.at(-1)?.value as {
         emit(event: string, ...args: unknown[]): void;
+        emitOutput(stream: "stdout" | "stderr", data: string): void;
       };
 
+      crashed.emitOutput("stderr", "fatal fixture diagnostic");
       crashed.emit("exit", 1, null);
 
       await vi.waitFor(() => {
@@ -2544,6 +2598,22 @@ describe("WorkerdManager", () => {
           generation: initialGeneration + 1,
           previousGeneration: initialGeneration,
           reason: "crash",
+        })
+      );
+      expect(recordLifecycleEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: INTERNAL_DO_SOURCE,
+          entityId: "workspace:test",
+          level: "error",
+          fields: expect.objectContaining({
+            event: "workerd-process-exited",
+            generation: initialGeneration,
+            port: 49552,
+            startedAt: expect.any(Number),
+            code: 1,
+            signal: null,
+            recentOutput: expect.arrayContaining(["stderr: fatal fixture diagnostic"]),
+          }),
         })
       );
     });

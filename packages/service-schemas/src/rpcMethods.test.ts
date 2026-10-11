@@ -5,6 +5,7 @@ import { schemaRpcCaller, wireCallerFor } from "@vibestudio/rpc/internal";
 import {
   createExtensionRpcMethods,
   createLazyRpcMethods,
+  createReceiverRpcMethods,
   createRpcMethods,
 } from "@vibestudio/shared/rpcMethods";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
@@ -12,6 +13,11 @@ import { mainRpcMethod, mainRpcMethods } from "./mainRpc.js";
 
 function compilationContract(rpc: RpcClient) {
   const wire = wireCallerFor(rpc);
+  const receiverMethods = createReceiverRpcMethods<{
+    inspect(value: string): Promise<string>;
+  }>(["inspect"]);
+  // @ts-expect-error Canonical method tables cannot be reassigned.
+  receiverMethods.inspect = mainRpcMethods["workers.resolveService"];
   expectTypeOf(wire.call("main", "workers.resolveService", ["vibestudio.models.v1"])).toEqualTypeOf<
     Promise<unknown>
   >();
@@ -57,6 +63,29 @@ function transport(
 }
 
 describe("receiver-owned RPC contracts", () => {
+  it("freezes canonical method descriptors and tables", () => {
+    const receiver = createReceiverRpcMethods<{
+      inspect(value: string): Promise<string>;
+    }>(["inspect"], "probe");
+    const tables = [
+      createRpcMethods("probe", methods),
+      createLazyRpcMethods("probe", ["inspect"], async () => methods),
+      receiver,
+      createExtensionRpcMethods("probe-extension", receiver),
+    ];
+
+    for (const table of tables) {
+      expect(Object.isFrozen(table)).toBe(true);
+      expect(Object.isFrozen(table.inspect)).toBe(true);
+      expect(Reflect.set(table, "inspect", mainRpcMethods["workers.resolveService"])).toBe(false);
+      expect(Reflect.set(table.inspect, "name", "other.method")).toBe(false);
+    }
+
+    expect(Object.isFrozen(mainRpcMethods["workers.resolveService"])).toBe(true);
+    expect(Reflect.set(mainRpcMethods, "workers.resolveService", receiver.inspect)).toBe(false);
+    expect(mainRpcMethods["workers.resolveService"].name).toBe("workers.resolveService");
+  });
+
   it("parses input once and validates the transport result", async () => {
     const wire = transport();
     const caller = schemaRpcCaller(wire);

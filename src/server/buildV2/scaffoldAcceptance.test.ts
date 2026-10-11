@@ -412,11 +412,12 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
       [
         "",
         'import { workers, rpc } from "@workspace/runtime";',
+        'import { recordStoreRpcMethods } from "@workspace-workers/notes-store/contract";',
         "",
         "export async function loadAcceptanceRecords(): Promise<unknown> {",
         '  const service = await workers.resolveService("acceptance.notes.v1");',
         '  if (service.kind !== "durable-object") throw new Error("expected a durable-object service");',
-        '  return rpc.call(service.targetId, "listRecords", [{}]);',
+        "  return rpc.call(service.targetId, recordStoreRpcMethods.listRecords, []);",
         "}",
         "",
       ].join("\n")
@@ -429,6 +430,7 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
     viewerManifest.dependencies = {
       ...viewerManifest.dependencies,
       "@workspace/runtime": "workspace:*",
+      "@workspace-workers/notes-store": "workspace:*",
     };
     // The protocol declaration is review vocabulary the author writes with the
     // consuming code; the workspace-service capability request stays absent so
@@ -511,7 +513,7 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
     const repairs = failing.diagnostics.flatMap((diagnostic) =>
       diagnostic.repair?.code === "missing-authority-request" ? [diagnostic.repair] : []
     );
-    expect(repairs.length).toBeGreaterThan(0);
+    expect(repairs.length, JSON.stringify(failing.diagnostics, null, 2)).toBeGreaterThan(0);
     for (const repair of repairs) {
       expect(repair.file).toBe("panels/notes-viewer/package.json");
       expect(repair.field).toBe("vibestudio.authority.requests");

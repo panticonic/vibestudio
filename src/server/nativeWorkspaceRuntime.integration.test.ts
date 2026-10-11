@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { mkdtemp, writeFile, readFile, mkdir, rm, access, cp } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, mkdir, rm, access, cp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { waitForNativeJob } from "./nativeWorkspaceJob.js";
@@ -262,12 +262,14 @@ process.env.NODE_ENV;
       script: `
         import assert from 'node:assert/strict';
         import fs from 'node:fs';
+        import path from 'node:path';
         import { TypeCheckService } from './bundle.js';
         assert.equal(process.env.VIBESTUDIO_APP_ROOT, undefined);
         if (process.platform !== 'win32') {
           assert.throws(() => fs.readFileSync(${JSON.stringify(path.join(dependency, "index.d.ts"))}));
           assert.throws(() => fs.writeFileSync(${JSON.stringify(path.join(admitted, "typed-dependency", "index.d.ts"))}, 'mutated'));
         }
+        const fileIdentity = file => path.join(fs.realpathSync(path.dirname(file)), path.basename(file));
         const service = new TypeCheckService({panelPath: ${JSON.stringify(sourceRoot)}, nodeModulesPaths: [${JSON.stringify(admitted)}], workspaceContext: {
           monorepoRoot: ${JSON.stringify(sourceRoot)}, packages: new Map(Object.entries(${JSON.stringify(resources.workspacePackages)}).map(([name, dir]) => [name, {
             name, dir, packageJson: JSON.parse(fs.readFileSync(dir + '/package.json', 'utf8')),
@@ -277,11 +279,11 @@ process.env.NODE_ENV;
           service.updateFile('index.ts', ${JSON.stringify(source)});
           const result = service.check();
           const rootAssignment = result.diagnostics.find(diagnostic =>
-            diagnostic.code === 2322 && diagnostic.file === ${JSON.stringify(path.join(statePath, "scratch", "home", "index.ts"))}
+            diagnostic.code === 2322 && diagnostic.file && fileIdentity(diagnostic.file) === path.join(fs.realpathSync(${JSON.stringify(path.join(statePath, "scratch", "home"))}), "index.ts")
           );
           assert(rootAssignment, JSON.stringify(result.diagnostics.map(({ code, message, file }) => ({ code, message, file }))));
           assert(!result.diagnostics.some(diagnostic =>
-            diagnostic.code === 2322 && diagnostic.file === ${JSON.stringify(path.join(sdkResource, "types", "index.ts"))}
+            diagnostic.code === 2322 && diagnostic.file && fileIdentity(diagnostic.file) === fileIdentity(${JSON.stringify(path.join(sdkResource, "types", "index.ts"))})
           ), JSON.stringify(result.diagnostics.map(({ code, message, file }) => ({ code, message, file }))));
           const missingProcess = result.diagnostics.find(diagnostic =>
             /Cannot find name 'process'/.test(diagnostic.message)
@@ -347,14 +349,19 @@ it("materializes independent dependency realms for workspace package owners", as
     );
     await mkdir(engineDependencies, { recursive: true });
     await mkdir(transformDependencies, { recursive: true });
-    await cp(path.resolve("node_modules/typescript"), path.join(engineDependencies, "typescript"), {
+    const typecheckTypescript = await realpath(path.resolve("node_modules/typescript"));
+    const transformTypescript = await realpath(
+      path.resolve("packages/svelte-type-source/node_modules/typescript")
+    );
+    const canonicalTypeScriptManifest = JSON.parse(
+      await readFile(path.join(typecheckTypescript, "package.json"), "utf8")
+    ) as { imports?: unknown };
+    await cp(typecheckTypescript, path.join(engineDependencies, "typescript"), {
       recursive: true,
     });
-    await cp(
-      path.resolve("packages/svelte-type-source/node_modules/typescript"),
-      path.join(transformDependencies, "typescript"),
-      { recursive: true }
-    );
+    await cp(transformTypescript, path.join(transformDependencies, "typescript"), {
+      recursive: true,
+    });
     runtime = await startNativeWorkspaceRuntime({
       workspaceId: "owner-dependency-fixture",
       statePath,
@@ -375,6 +382,19 @@ it("materializes independent dependency realms for workspace package owners", as
         "@vibestudio/svelte-type-source": transformDependencies,
       },
     });
+    const admittedTypeScriptManifest = JSON.parse(
+      await readFile(
+        path.join(
+          resources.workspacePackages["@vibestudio/typecheck"]!,
+          "node_modules",
+          "typescript",
+          "package.json"
+        ),
+        "utf8"
+      )
+    ) as { imports?: unknown };
+    expect(canonicalTypeScriptManifest.imports).toBeDefined();
+    expect(admittedTypeScriptManifest.imports).toEqual(canonicalTypeScriptManifest.imports);
     await runtime.runJob({
       dependencies: "",
       bundle: "",

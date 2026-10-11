@@ -73,8 +73,10 @@ but the consumer call below does not yet statically produce the provider-owned
 method capability:
 
 ```ts
+import { channelClientRpcMethods } from "@workspace/pubsub/rpc-contract";
+
 const channel = await workers.resolveService("vibestudio.channel.v1", channelId);
-await rpc.call(channel.targetId, "removeMember", [memberId]);
+await rpc.call(channel.targetId, channelClientRpcMethods["removeMember"], [{ userId: memberId }]);
 ```
 
 The provider already declares and seals that method's effect:
@@ -621,8 +623,18 @@ derive from a resolved service handle:
 
 ```ts
 const service = await workers.resolveService(protocol, objectKey);
-await rpc.call(service.targetId, method, args);
+await rpc.call(service.targetId, methodDescriptor, args);
 ```
+
+`methodDescriptor` must come from the receiver's exported RPC contract; callers
+do not invent method-name strings or result types.
+
+Canonical descriptor factories freeze both their exported tables and individual
+descriptors. Static analysis resolves those identities through the project's
+public module exports. Direct RPC argument tuples are analysed by position;
+inline tuple spreads can be expanded, while mutable array aliases and unresolved
+spreads remain unknown. A bound service client selects a key from its owned
+method table and takes variadic arguments through the same contract.
 
 An arbitrary `rpc.call(target, method, args)` must not be guessed to belong to
 a workspace service. Existing direct-RPC validation continues to own that

@@ -38,7 +38,7 @@ import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getPhysicalAppPath, getEsbuildBinaryPath } from "@vibestudio/shared/runtimePaths";
 import { getCentralDataPath, getWorkspaceDir } from "@vibestudio/env-paths";
 import { readWorkspaceHostLaunchRecord } from "@vibestudio/workspace/hostLaunchRecord";
-import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { WORKSPACE_SYSTEM_EPOCH, WORKSPACE_APP_VERSION } from "@vibestudio/shared/vcs/systemEpoch";
 import {
   resolveHistoricalWorkspaceHost,
   semverMajor,
@@ -3345,8 +3345,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   process.env[INTERNAL_DO_BUNDLE_SNAPSHOT_ENV] =
     snapshotInternalDOBundleForHub(getCentralDataPath());
   recoverStagedWorkspaceDeletions(centralData, nativeWorkspaceCleanup(appRoot));
-  const version =
-    process.env["VIBESTUDIO_APP_VERSION"] ?? process.env["npm_package_version"] ?? "0.1.0";
+  const version = process.env["VIBESTUDIO_APP_VERSION"] ?? WORKSPACE_APP_VERSION;
   const serverEntryPath = process.argv[1];
   if (!serverEntryPath) {
     throw new Error("The hub requires an exact server entry artifact");

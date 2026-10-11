@@ -96,7 +96,18 @@ function signalOwnedProcessIdentity(identity, signal) {
   try {
     process.kill(-identity.processGroupId, signal);
   } catch (error) {
-    if (error.code !== "ESRCH") throw error;
+    if (error.code === "ESRCH") return;
+    // Native group membership can end between observation and signalling.
+    // Preserve genuine permission failures while recognizing an authoritative
+    // terminal observation of the exact owned group.
+    if (error.code === "EPERM") {
+      try {
+        if (observeOwnedProcessGroup(identity) === "absent") return;
+      } catch (observationError) {
+        throw new AggregateError([error, observationError], "Process signal and ownership observation failed", { cause: error });
+      }
+    }
+    throw error;
   }
 }
 function processGroupExists(processGroupId) {

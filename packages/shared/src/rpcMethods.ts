@@ -7,8 +7,16 @@ import {
 } from "./typedServiceClient.js";
 
 export type RpcMethods<M extends ServiceMethodSchemas> = {
-  [K in keyof M]: RpcMethod<Parameters<MethodFn<M[K]>>, Awaited<ReturnType<MethodFn<M[K]>>>>;
+  readonly [K in keyof M]: RpcMethod<
+    Parameters<MethodFn<M[K]>>,
+    Awaited<ReturnType<MethodFn<M[K]>>>
+  >;
 };
+
+function freezeRpcMethodTable<M extends object>(methods: M): Readonly<M> {
+  for (const method of Object.values(methods)) Object.freeze(method);
+  return Object.freeze(methods);
+}
 
 /** Derive transport method descriptors from the same schemas as the receiver. */
 export function createRpcMethods<M extends ServiceMethodSchemas>(
@@ -33,7 +41,7 @@ export function createLazyRpcMethods<M extends ServiceMethodSchemas>(
 ): RpcMethods<M> {
   let loaded: Promise<M> | undefined;
   const methods = () => (loaded ??= load());
-  return Object.fromEntries(
+  const descriptors = Object.fromEntries(
     names.map((method) => [
       method,
       {
@@ -55,6 +63,7 @@ export function createLazyRpcMethods<M extends ServiceMethodSchemas>(
       },
     ])
   ) as RpcMethods<M>;
+  return freezeRpcMethodTable(descriptors);
 }
 
 /** Decorated TypeScript receivers own their method signatures directly. Export
@@ -65,8 +74,8 @@ export function createReceiverRpcMethods<
 >(
   names: readonly (keyof T & string)[],
   namespace = ""
-): { [K in keyof T]: RpcMethod<Parameters<T[K]>, Awaited<ReturnType<T[K]>>> } {
-  return Object.fromEntries(
+): { readonly [K in keyof T]: RpcMethod<Parameters<T[K]>, Awaited<ReturnType<T[K]>>> } {
+  const methods = Object.fromEntries(
     names.map((method) => [
       method,
       {
@@ -79,7 +88,8 @@ export function createReceiverRpcMethods<
         },
       },
     ])
-  ) as { [K in keyof T]: RpcMethod<Parameters<T[K]>, Awaited<ReturnType<T[K]>>> };
+  ) as { readonly [K in keyof T]: RpcMethod<Parameters<T[K]>, Awaited<ReturnType<T[K]>>> };
+  return freezeRpcMethodTable(methods);
 }
 
 export type RpcMethodMap = Record<string, RpcMethod<unknown[], unknown>>;
@@ -106,8 +116,8 @@ export function createRpcMethodCaller<M extends RpcMethodMap>(
 export function createExtensionRpcMethods<M extends RpcMethodMap>(
   extensionId: string,
   methods: M
-): M {
-  return Object.fromEntries(
+): Readonly<M> {
+  const wrapped = Object.fromEntries(
     Object.entries(methods).map(([key, method]) => [
       key,
       {
@@ -121,4 +131,5 @@ export function createExtensionRpcMethods<M extends RpcMethodMap>(
       },
     ])
   ) as M;
+  return freezeRpcMethodTable(wrapped);
 }

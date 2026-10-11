@@ -490,14 +490,15 @@ function waitForSpawn(child, command, args, timeoutMs = 1_000) {
   });
 }
 
-function waitForChildExit(child, timeoutMs = 5 * 60_000) {
+function waitForChildExit(child) {
   if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, timeoutMs);
-    child.once("exit", () => {
-      clearTimeout(timer);
+    const exited = () => {
+      child.off("exit", exited);
       resolve();
-    });
+    };
+    child.once("exit", exited);
+    if (child.exitCode != null || child.signalCode != null) exited();
   });
 }
 
@@ -2790,7 +2791,10 @@ async function main(parentOwnerSignal) {
       "[desktop-smoke] Restarting the owned server with the desktop and device credential retained"
     );
     serverChild.kill("SIGTERM");
-    await waitForChildExit(serverChild, 60000);
+    // The owned remote-serve process also joins its template-release producer
+    // after the hub has completed ordered shutdown. Wait for that owner receipt;
+    // the smoke's overall deadline remains the bound for the whole scenario.
+    await waitForChildExit(serverChild);
     if (serverChild.exitCode == null && serverChild.signalCode == null) {
       throw new Error("Owned server did not stop for the reconnect scenario");
     }

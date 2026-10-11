@@ -243,31 +243,34 @@ const loaders = {
   hubControl: async () => (await import("./workspaceHubControl.js")).workspaceHubControlMethods,
 };
 type MainMethodDescriptors = {
-  [K in keyof MainRpcMethods]: RpcMethod<
+  readonly [K in keyof MainRpcMethods]: RpcMethod<
     Parameters<MainRpcMethods[K]>,
     Awaited<ReturnType<MainRpcMethods[K]>>
   >;
 };
 const descriptors = new Map<string, RpcMethod<unknown[], unknown>>();
-export const mainRpcMethods: MainMethodDescriptors = new Proxy({} as MainMethodDescriptors, {
-  get(_target, property) {
-    if (typeof property !== "string") return undefined;
-    const previous = descriptors.get(property);
-    if (previous) return previous;
-    const separator = property.indexOf(".");
-    const service = property.slice(0, separator);
-    const method = property.slice(separator + 1);
-    const loader = loaders[service as keyof typeof loaders];
-    if (!loader) throw new Error(`No main service contract for ${service}`);
-    const descriptor = createLazyRpcMethods(
-      service,
-      [method],
-      loader as () => Promise<ServiceMethodSchemas>
-    )[method]!;
-    descriptors.set(property, descriptor);
-    return descriptor;
-  },
-});
+export const mainRpcMethods: MainMethodDescriptors = new Proxy(
+  Object.freeze({}) as MainMethodDescriptors,
+  {
+    get(_target, property) {
+      if (typeof property !== "string") return undefined;
+      const previous = descriptors.get(property);
+      if (previous) return previous;
+      const separator = property.indexOf(".");
+      const service = property.slice(0, separator);
+      const method = property.slice(separator + 1);
+      const loader = loaders[service as keyof typeof loaders];
+      if (!loader) throw new Error(`No main service contract for ${service}`);
+      const descriptor = createLazyRpcMethods(
+        service,
+        [method],
+        loader as () => Promise<ServiceMethodSchemas>
+      )[method]!;
+      descriptors.set(property, descriptor);
+      return descriptor;
+    },
+  }
+);
 
 /** Runtime-selected operations retain unknown results and validate against the same receiver contract. */
 export function mainRpcMethod(name: string): RpcMethod<unknown[], unknown> {

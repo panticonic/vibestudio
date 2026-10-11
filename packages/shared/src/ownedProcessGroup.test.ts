@@ -86,6 +86,63 @@ describe.skipIf(process.platform === "win32")("durable owned process groups", ()
     }
   }, 10_000);
 
+  it("joins when permission denial races with the last executor retiring", async () => {
+    fixture = spawn(process.execPath, ["-e", "process.exit(0)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    let live = true;
+    const owner = OwnedProcessGroup.create(fixture, {
+      groupExists: () => live,
+      signalGroup: () => {
+        live = false;
+        throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      },
+    });
+    fixtureOwner = owner;
+    await expect(owner.join()).resolves.toBeUndefined();
+    expect(live).toBe(false);
+  });
+
+  it("preserves permission denial while live executors remain", async () => {
+    fixture = spawn(process.execPath, ["-e", "process.exit(0)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const closed = once(fixture, "close");
+    const denied = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    const owner = OwnedProcessGroup.create(fixture, {
+      groupExists: () => true,
+      signalGroup: () => { throw denied; },
+    });
+    await expect(owner.join()).rejects.toMatchObject({ code: "EOWNERSHIP", cause: denied });
+    // The real fixture's sole process has exited and its producer is closed;
+    // the injected live-membership observation exists only for this assertion.
+    await closed;
+    fixture = null;
+  });
+
+  it("preserves both signal denial and failed terminal observation", async () => {
+    fixture = spawn(process.execPath, ["-e", "process.exit(0)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const closed = once(fixture, "close");
+    const denied = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    const observation = new Error("Cannot observe owned members");
+    let signals = 0;
+    const owner = OwnedProcessGroup.create(fixture, {
+      groupExists: () => { if (signals) throw observation; return true; },
+      signalGroup: () => { signals++; throw denied; },
+    });
+    await expect(owner.join()).rejects.toMatchObject({
+      code: "EOWNERSHIP",
+      cause: { errors: [denied, observation], cause: denied },
+    });
+    await closed;
+    fixture = null;
+  });
+
   async function heldLeader() {
     const resistant = `
       process.on('SIGTERM', () => process.send({kind:'child-term'}));
