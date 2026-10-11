@@ -19,12 +19,12 @@ import {
   generateExposeModuleCode,
   generatePanelExposeEntryCode,
   generateWorkerEntry,
-  createDependencyEnvironmentResolvePlugin,
   WORKER_RUNTIME_EXTERNALS,
   injectHtmlTransforms,
   resolveEntryPoint,
 } from "./builder.js";
 import { getAdapter } from "./adapters/index.js";
+import { composePreparedDependencyPlugins } from "./preparedDependencyPlugins.js";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 
 describe("generatePanelEntry", () => {
@@ -271,7 +271,7 @@ describe("generateWorkerEntry", () => {
       write: false,
       external: [...WORKER_RUNTIME_EXTERNALS],
       plugins: [
-        createDependencyEnvironmentResolvePlugin([], WORKER_RUNTIME_EXTERNALS),
+        ...composePreparedDependencyPlugins([], [], [], WORKER_RUNTIME_EXTERNALS),
         {
           name: "application-fixture",
           setup(build) {

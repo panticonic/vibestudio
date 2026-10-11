@@ -32,7 +32,7 @@ import { ASSET_URL_EXTENSIONS } from "@vibestudio/shared/assetModules";
 import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
-import { builtinModules, createRequire, isBuiltin } from "module";
+import { builtinModules, createRequire } from "module";
 import { pathToFileURL } from "url";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import { resolveNativeTypeScriptServerPath } from "../appRoot.js";
@@ -97,6 +97,7 @@ import type {
   BuildProviderInput,
 } from "@vibestudio/shared/buildProvider";
 import { WorkspaceRpcCatalogWorkerClient } from "./workspaceRpcCatalogWorkerClient.js";
+import { composePreparedDependencyPlugins } from "./preparedDependencyPlugins.js";
 import {
   unknownWorkspaceRpcSchemaError,
   workspaceRpcSchema,
@@ -749,244 +750,6 @@ function createTsExtensionPlugin(sourceRoot: string): esbuild.Plugin {
 
 function isBareSpecifier(spec: string): boolean {
   return !spec.startsWith(".") && !path.isAbsolute(spec) && !spec.startsWith("node:");
-}
-
-function packageNameFromSpecifier(specifier: string): string {
-  const parts = specifier.split("/");
-  return specifier.startsWith("@") ? `${parts[0] ?? ""}/${parts[1] ?? ""}` : (parts[0] ?? "");
-}
-
-function canonicalFilesystemPath(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
-  }
-}
-
-function pathIsWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(canonicalFilesystemPath(root), canonicalFilesystemPath(candidate));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function externalSpecifierMatches(specifier: string, externals: readonly string[]): boolean {
-  return externals.some((external) => {
-    if (external.endsWith("/*")) {
-      return specifier.startsWith(external.slice(0, -1));
-    }
-    return specifier === external;
-  });
-}
-
-function isOptionalImportFromOwnedPackage(
-  resolveDir: string,
-  packageName: string,
-  ownerRoots: readonly string[]
-): boolean {
-  const ownerRoot = ownerRoots
-    .filter((root) => pathIsWithin(root, resolveDir))
-    .sort((a, b) => b.length - a.length)[0];
-  if (!ownerRoot) return false;
-  let directory = resolveDir;
-  while (pathIsWithin(ownerRoot, directory)) {
-    const manifestPath = path.join(directory, "package.json");
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
-        optionalDependencies?: Record<string, string>;
-        peerDependencies?: Record<string, string>;
-        peerDependenciesMeta?: Record<string, { optional?: boolean }>;
-      };
-      return Boolean(
-        manifest.optionalDependencies?.[packageName] ||
-        (manifest.peerDependencies?.[packageName] &&
-          manifest.peerDependenciesMeta?.[packageName]?.optional === true)
-      );
-    } catch {
-      // Continue to the package root containing this source file.
-    }
-    const parent = path.dirname(directory);
-    if (parent === directory) break;
-    directory = parent;
-  }
-  return false;
-}
-
-/**
- * Make the prepared dependency environment authoritative for every bare import.
- * esbuild's default resolver starts at the importing source file, which allows
- * a materialized workspace under ~/.config to discover ~/node_modules before
- * consulting nodePaths. That turns machine layout into build input. Resolve
- * source imports from the root that explicitly owns the requested package;
- * transitive imports stay within their owning installation.
- */
-export function createDependencyEnvironmentResolvePlugin(
-  nodePaths: readonly string[],
-  externals: readonly string[] = []
-): esbuild.Plugin {
-  const roots = nodePaths.filter(Boolean).map((entry) => path.resolve(entry));
-  const ownedPackageTargets = new Map<string, string>();
-  const workspaceDeclarations = new Map<string, ReadonlyMap<string, string>>();
-  const recursionKey = "vibestudioDependencyEnvironmentResolve";
-
-  const registerOwnedPackageTarget = (logicalPackageRoot: string): string => {
-    let realPackageRoot = logicalPackageRoot;
-    try {
-      realPackageRoot = fs.realpathSync(logicalPackageRoot);
-    } catch {
-      // build.resolve will report a useful resolution failure below.
-    }
-    ownedPackageTargets.set(realPackageRoot, logicalPackageRoot);
-    return realPackageRoot;
-  };
-
-  const translateOwnedResolveDir = (resolveDir: string): string | undefined => {
-    if (roots.some((root) => pathIsWithin(root, resolveDir))) return resolveDir;
-    const target = [...ownedPackageTargets.entries()]
-      .filter(([realRoot]) => pathIsWithin(realRoot, resolveDir))
-      .sort(([a], [b]) => b.length - a.length)[0];
-    if (!target) return undefined;
-    const [realRoot, logicalRoot] = target;
-    const canonicalResolveDir = canonicalFilesystemPath(resolveDir);
-    return path.join(logicalRoot, path.relative(realRoot, canonicalResolveDir));
-  };
-
-  return {
-    name: "dependency-environment",
-    setup(build) {
-      build.onResolve({ filter: /^[^./]|^@/ }, async (args) => {
-        // Drive-qualified and UNC file paths also match the bare-import filter.
-        // Leave filesystem resolution to esbuild on every host platform.
-        if (path.isAbsolute(args.path)) return null;
-        const priorData =
-          args.pluginData && typeof args.pluginData === "object"
-            ? (args.pluginData as Record<string, unknown>)
-            : {};
-        if (priorData[recursionKey] === true) return null;
-        // Prefix-only built-ins (including node:sqlite and node:test) are not
-        // listed by builtinModules. Ask Node about the exact specifier instead
-        // of treating its runtime modules as package-manager dependencies.
-        if (build.initialOptions.platform === "node" && isBuiltin(args.path)) {
-          return { path: args.path, external: true };
-        }
-        if (externalSpecifierMatches(args.path, externals)) {
-          return { path: args.path, external: true };
-        }
-
-        const ownedResolveDir = translateOwnedResolveDir(args.resolveDir);
-        const packageName = packageNameFromSpecifier(args.path);
-        // Owned workspace packages have pnpm links to other workspace sources
-        // outside node_modules. The declaring package's own installation is
-        // authoritative; an ambient ancestor must never supply this edge.
-        const declaringRoot = [...ownedPackageTargets.keys()]
-          .filter((root) => pathIsWithin(root, args.resolveDir))
-          .sort((left, right) => right.length - left.length)[0];
-        if (declaringRoot) {
-          let declarations = workspaceDeclarations.get(declaringRoot);
-          if (!declarations) {
-            const manifest = JSON.parse(
-              fs.readFileSync(path.join(declaringRoot, "package.json"), "utf8")
-            ) as {
-              dependencies?: Record<string, string>;
-              peerDependencies?: Record<string, string>;
-            };
-            declarations = new Map(
-              Object.entries({ ...manifest.peerDependencies, ...manifest.dependencies })
-            );
-            workspaceDeclarations.set(declaringRoot, declarations);
-          }
-          const declaration = declarations.get(packageName);
-          if (declaration?.startsWith("workspace:")) {
-            const installedRoot = path.join(
-              declaringRoot,
-              "node_modules",
-              ...packageName.split("/")
-            );
-            const installedManifest = path.join(installedRoot, "package.json");
-            if (fs.existsSync(installedManifest)) {
-              const installed = JSON.parse(fs.readFileSync(installedManifest, "utf8")) as {
-                name?: string;
-              };
-              if (installed.name !== packageName)
-                throw new Error(
-                  `Workspace dependency ${packageName} resolves to a different package`
-                );
-              registerOwnedPackageTarget(installedRoot);
-            }
-          }
-        }
-        const declaredRoot = roots.find((root) =>
-          fs.existsSync(path.join(root, ...packageName.split("/"), "package.json"))
-        );
-        const declaredPackageRoot = declaredRoot
-          ? path.join(declaredRoot, ...packageName.split("/"))
-          : undefined;
-        const declaredRealPackageRoot = declaredPackageRoot
-          ? registerOwnedPackageTarget(declaredPackageRoot)
-          : undefined;
-        const resolveDir = ownedResolveDir ?? declaredRoot;
-        if (!resolveDir) {
-          return {
-            errors: [
-              {
-                text:
-                  `Dependency ${packageName || args.path} is not present in the prepared build environment. ` +
-                  "Declare it in the owning workspace package.",
-              },
-            ],
-          };
-        }
-
-        const resolved = await build.resolve(args.path, {
-          kind: args.kind,
-          resolveDir,
-          pluginData: { ...priorData, [recursionKey]: true },
-        });
-        const optionalPeerImport = isOptionalImportFromOwnedPackage(args.resolveDir, packageName, [
-          ...roots,
-          ...ownedPackageTargets.keys(),
-        ]);
-        const resolvedIsWithinEnvironment =
-          resolved.errors.length === 0 &&
-          (roots.some((root) => pathIsWithin(root, resolved.path)) ||
-            [...ownedPackageTargets.keys()].some((root) => pathIsWithin(root, resolved.path)) ||
-            (declaredRealPackageRoot && pathIsWithin(declaredRealPackageRoot, resolved.path)));
-        const resolutionEscaped =
-          resolved.errors.length === 0 &&
-          !resolved.external &&
-          resolved.namespace === "file" &&
-          !resolvedIsWithinEnvironment;
-        if (optionalPeerImport && (resolved.errors.length > 0 || resolutionEscaped)) {
-          // An optional peer absent from the prepared graph stays absent. In
-          // particular, an ambient ancestor must not satisfy it by accident;
-          // preserve the package's own optional dynamic-import behavior.
-          return { path: args.path, external: true };
-        }
-        if (resolved.errors.length > 0 && ownedResolveDir === args.resolveDir) {
-          // The original import carries esbuild's try/catch optionality;
-          // returning plugin errors would discard it. Native resolution has
-          // exactly the authoritative directory we just tried, so letting it
-          // report the miss preserves guarded requires without admitting a
-          // different dependency environment. Unguarded imports still fail.
-          return null;
-        }
-        if (resolved.errors.length > 0 || resolved.external || resolved.namespace !== "file") {
-          return resolved;
-        }
-        if (resolutionEscaped) {
-          return {
-            errors: [
-              {
-                text:
-                  `Dependency ${args.path} escaped the prepared build environment to ${resolved.path}. ` +
-                  "Workspace builds cannot resolve ambient packages.",
-              },
-            ],
-          };
-        }
-        return resolved;
-      });
-    },
-  };
 }
 
 function normalizeManifestSpecList(specs: string[] | undefined): string[] {
@@ -3143,7 +2906,10 @@ async function buildWebsiteBundle(
     const dedupe = createDedupePlugin(env.resolveDir, dedupePackages);
     if (dedupe) plugins.push(dedupe);
     if (adapter.plugins) plugins.push(...(await adapter.plugins()));
-    plugins.push(createDependencyEnvironmentResolvePlugin(env.nodePaths, []));
+    const preparedPlugins = composePreparedDependencyPlugins(plugins, env.nodePaths, [
+      sourceRoot,
+      env.outdir,
+    ]);
 
     const options: esbuild.BuildOptions = {
       absWorkingDir: env.outdir,
@@ -3160,7 +2926,7 @@ async function buildWebsiteBundle(
       metafile: true,
       logLevel: "warning",
       conditions: [...WEBSITE_CONDITIONS],
-      plugins,
+      plugins: preparedPlugins,
       nodePaths: env.nodePaths,
       loader: PANEL_ASSET_LOADERS,
       assetNames: "assets/[name]-[hash]",
@@ -3337,7 +3103,12 @@ async function buildPanel(
   if (adapter.plugins) {
     plugins.push(...(await adapter.plugins()));
   }
-  plugins.push(createDependencyEnvironmentResolvePlugin(nodePaths, externalSpecifiers));
+  const preparedPlugins = composePreparedDependencyPlugins(
+    plugins,
+    nodePaths,
+    [sourceRoot, outdir],
+    externalSpecifiers
+  );
 
   // Build esbuild options with adapter-driven JSX settings
   const esbuildOptions: esbuild.BuildOptions = {
@@ -3370,7 +3141,7 @@ async function buildPanel(
     metafile: true,
     logLevel: "warning",
     conditions: [...PANEL_CONDITIONS],
-    plugins,
+    plugins: preparedPlugins,
     nodePaths,
     loader: PANEL_ASSET_LOADERS,
     assetNames: "assets/[name]-[hash]",
@@ -4077,11 +3848,12 @@ async function buildWorker(
   if (dedupePlugin) {
     plugins.push(dedupePlugin);
   }
-  plugins.push(
-    createDependencyEnvironmentResolvePlugin(nodePaths, [
-      ...WORKER_RUNTIME_EXTERNALS,
-      ...(terminalWorker ? ["yoga.wasm"] : []),
-    ])
+  const workerExternals = [...WORKER_RUNTIME_EXTERNALS, ...(terminalWorker ? ["yoga.wasm"] : [])];
+  const preparedPlugins = composePreparedDependencyPlugins(
+    plugins,
+    nodePaths,
+    [sourceRoot, outdir],
+    workerExternals
   );
   const configureReadyAt = Date.now();
 
@@ -4119,7 +3891,7 @@ async function buildWorker(
       // Terminal workers import "yoga.wasm" — workerd provides it as a
       // pre-compiled wasm module binding, so it stays external.
       external: [...WORKER_RUNTIME_EXTERNALS, ...(terminalWorker ? ["yoga.wasm"] : [])],
-      plugins,
+      plugins: preparedPlugins,
       nodePaths,
       tsconfigRaw: { compilerOptions: {} },
     });
@@ -4486,11 +4258,15 @@ async function buildTerminalApp(
       logLevel: "warning",
       conditions: [...NODE_CONDITIONS],
       external: [...WORKER_RUNTIME_EXTERNALS],
-      plugins: [
-        createWorkspaceResolvePlugin(graph, sourceRoot, NODE_CONDITIONS),
-        createTsExtensionPlugin(sourceRoot),
-        createDependencyEnvironmentResolvePlugin(nodePaths, WORKER_RUNTIME_EXTERNALS),
-      ],
+      plugins: composePreparedDependencyPlugins(
+        [
+          createWorkspaceResolvePlugin(graph, sourceRoot, NODE_CONDITIONS),
+          createTsExtensionPlugin(sourceRoot),
+        ],
+        nodePaths,
+        [sourceRoot, outdir],
+        WORKER_RUNTIME_EXTERNALS
+      ),
       nodePaths,
       absWorkingDir: resolveDir,
       tsconfigRaw: { compilerOptions: {} },
@@ -4742,12 +4518,16 @@ async function buildExtension(
   if (dedupePlugin) {
     plugins.push(dedupePlugin);
   }
-  plugins.push(
-    createDependencyEnvironmentResolvePlugin(nodePaths, [
-      ...KNOWN_NATIVE_EXTERNALS,
-      ...NODE_BUILTIN_EXTERNALS,
-      ...expandExternalSpecifiers(runtimeExternalDeps),
-    ])
+  const extensionExternals = [
+    ...KNOWN_NATIVE_EXTERNALS,
+    ...NODE_BUILTIN_EXTERNALS,
+    ...expandExternalSpecifiers(runtimeExternalDeps),
+  ];
+  const preparedPlugins = composePreparedDependencyPlugins(
+    plugins,
+    nodePaths,
+    [sourceRoot, outdir],
+    extensionExternals
   );
 
   try {
@@ -4775,7 +4555,7 @@ async function buildExtension(
       conditions: [...EXTENSION_CONDITIONS],
       mainFields: ["module", "main"],
       external: [...KNOWN_NATIVE_EXTERNALS, ...expandExternalSpecifiers(runtimeExternalDeps)],
-      plugins,
+      plugins: preparedPlugins,
       nodePaths,
       tsconfigRaw: { compilerOptions: {} },
     });
@@ -5070,23 +4850,27 @@ async function buildLibraryBundle(
       // the browser platform for its safe fs/path/buffer shims. A worker/eval
       // bundle must prefer `worker`/`workerd` exports throughout the graph.
       conditions: [...conditions],
-      plugins: [
-        // `conditions` selects each workspace package's export entry by execution
-        // target (panel vs worker/eval). Pass `externals` to the resolve plugin
-        // too: esbuild's `external` option alone is bypassed because this plugin's
-        // onResolve handles `@workspace/*` first. The host (EvalDO) provides those
-        // externals at runtime via its module map.
-        createWorkspaceResolvePlugin(graph, sourceRoot, conditions, libraryExternals),
-        createTsExtensionPlugin(sourceRoot),
-        createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
-        createPathShimPlugin(env.resolveDir),
-        createWorkerBufferShimPlugin(env.resolveDir),
-        ...(target === "worker" ? [createWorkerNodeStubPlugin()] : []),
-        createDependencyEnvironmentResolvePlugin(env.nodePaths, [
+      plugins: composePreparedDependencyPlugins(
+        [
+          // `conditions` selects each workspace package's export entry by execution
+          // target (panel vs worker/eval). Pass `externals` to the resolve plugin
+          // too: esbuild's `external` option alone is bypassed because this plugin's
+          // onResolve handles `@workspace/*` first. The host (EvalDO) provides those
+          // externals at runtime via its module map.
+          createWorkspaceResolvePlugin(graph, sourceRoot, conditions, libraryExternals),
+          createTsExtensionPlugin(sourceRoot),
+          createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
+          createPathShimPlugin(env.resolveDir),
+          createWorkerBufferShimPlugin(env.resolveDir),
+          ...(target === "worker" ? [createWorkerNodeStubPlugin()] : []),
+        ],
+        env.nodePaths,
+        [sourceRoot, env.outdir],
+        [
           ...libraryExternals,
           ...(target === "worker" ? WORKER_RUNTIME_EXTERNALS : NODE_BUILTIN_EXTERNALS),
-        ]),
-      ],
+        ]
+      ),
       nodePaths: env.nodePaths,
       loader: LIBRARY_ASSET_LOADERS,
       logLevel: "warning",
