@@ -7,15 +7,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { formatRpcFailure } from "@vibestudio/rpc";
 import { tsImport } from "tsx/esm/api";
 
-const { createDevelopmentClientLifetime } = await tsImport("./development-client-lifecycle.ts", import.meta.url);
+const { createDevelopmentClientLifetime } = await tsImport(
+  "./development-client-lifecycle.ts",
+  import.meta.url
+);
 
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
 let announcedTokenEnv = false;
 let tokenUserConfigPath = null;
+let tokenUserConfigDirectory = null;
 let resolvedAuthToken = undefined;
 const serverPackage = {
   name: "@panticonic/vibestudio-server",
@@ -23,12 +28,77 @@ const serverPackage = {
   smokePrefix: path.join(os.tmpdir(), "vibestudio-npm-server-check"),
 };
 
-try {
-  await main();
-} catch (err) {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`\n[publish-npm] ${message}`);
-  process.exit(1);
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  try {
+    await runWithOwnedCleanup(
+      () => main(),
+      () => {
+        if (tokenUserConfigDirectory)
+          fs.rmSync(tokenUserConfigDirectory, { recursive: true, force: true });
+      },
+      "npm publish operation and auth-config cleanup failed"
+    );
+  } catch (error) {
+    console.error(`\n[publish-npm] ${formatSafeRpcFailure(error)}`);
+    process.exitCode = 1;
+  }
+}
+
+export async function runWithOwnedCleanup(operation, cleanup, message) {
+  let value;
+  let operationFailure;
+  let hasOperationFailure = false;
+  try {
+    value = await operation();
+  } catch (error) {
+    operationFailure = error;
+    hasOperationFailure = true;
+  }
+
+  let cleanupFailure;
+  let hasCleanupFailure = false;
+  try {
+    await cleanup();
+  } catch (error) {
+    cleanupFailure = error;
+    hasCleanupFailure = true;
+  }
+
+  if (hasOperationFailure && hasCleanupFailure) {
+    throw new AggregateError([operationFailure, cleanupFailure], message, {
+      cause: operationFailure,
+    });
+  }
+  if (hasOperationFailure) throw operationFailure;
+  if (hasCleanupFailure) throw cleanupFailure;
+  return value;
+}
+
+export function spawnResultFailure(result, command) {
+  const details = [];
+  if (result.signal) details.push(new Error(`${command} was terminated by ${result.signal}`));
+  if (result.status !== 0 && result.status !== null && result.status !== undefined)
+    details.push(new Error(`${command} exited with status ${result.status}`));
+  if (result.error && details.length)
+    return new AggregateError([result.error, ...details], `${command} failed`, {
+      cause: result.error,
+    });
+  if (result.error) return result.error;
+  if (!details.length && result.status === 0) return undefined;
+  if (details.length === 1) return details[0];
+  if (details.length > 1)
+    return new AggregateError(details, `${command} failed`, { cause: details[0] });
+  return new Error(`${command} failed (status ${result.status ?? "unknown"})`);
+}
+
+function redactAuthToken(value) {
+  const token = resolvedAuthToken?.value;
+  const text = String(value);
+  return token ? text.split(token).join("[redacted]") : text;
+}
+
+function formatSafeRpcFailure(error) {
+  return redactAuthToken(formatRpcFailure(error));
 }
 
 async function main() {
@@ -107,13 +177,12 @@ async function main() {
       stdio: "inherit",
       env: npmEnv(),
     });
-    if (result.error) throw result.error;
-    if (result.status !== 0) {
-      console.error(
-        `\n[publish-npm] Publish failed for ${entry.pkg.name}. After addressing the npm error above, rerun the staged flow:`
+    const failure = spawnResultFailure(result, "npm publish");
+    if (failure) {
+      throw new Error(
+        `Publish failed for ${entry.pkg.name}. After addressing the npm error above, rerun: pnpm publish:server-npm:staged`,
+        { cause: failure }
       );
-      console.error("  pnpm publish:server-npm:staged");
-      process.exit(result.status ?? 1);
     }
   }
 
@@ -240,9 +309,16 @@ function npmView(name, version) {
   if (/E404|404 Not Found|is not in this registry/.test(`${result.stdout}\n${result.stderr}`)) {
     return null;
   }
-  throw result.error ?? new Error(
-    `Could not check npm registry for ${name}@${version}: ${result.stderr.trim() || result.stdout.trim()}`
-  );
+  const failure = spawnResultFailure(result, `npm view ${name}@${version}`);
+  if (failure) {
+    throw new Error(
+      redactAuthToken(
+        `Could not check npm registry for ${name}@${version}: ${result.stderr.trim() || result.stdout.trim()}`
+      ),
+      { cause: failure }
+    );
+  }
+  throw new Error(`Could not check npm registry for ${name}@${version}`);
 }
 
 async function verifyPublished(entry) {
@@ -253,7 +329,9 @@ async function verifyPublished(entry) {
     const published = npmView(entry.pkg.name, entry.version);
     if (published === entry.version) return published;
     if (published !== null) {
-      throw new Error(`Unexpected registry version for ${entry.pkg.name}@${entry.version}: ${published}`);
+      throw new Error(
+        `Unexpected registry version for ${entry.pkg.name}@${entry.version}: ${published}`
+      );
     }
     console.log(`[publish-npm] Waiting for ${entry.pkg.name}@${entry.version} to appear on npm...`);
     await delay(5000);
@@ -263,7 +341,8 @@ async function verifyPublished(entry) {
 function ensureTokenAuth() {
   const whoami = capture("npm", ["whoami"], { cwd: repoRoot });
   if (whoami.status !== 0) {
-    const detail = whoami.stderr.trim() || whoami.stdout.trim();
+    const detail = redactAuthToken(whoami.stderr.trim() || whoami.stdout.trim());
+    const failure = spawnResultFailure(whoami, "npm whoami");
     throw new Error(
       [
         "Saved npm publish token did not authenticate with npm.",
@@ -272,7 +351,8 @@ function ensureTokenAuth() {
         detail ? `npm said: ${detail}` : "",
       ]
         .filter(Boolean)
-        .join("\n")
+        .join("\n"),
+      { cause: failure }
     );
   }
   return whoami.stdout.trim();
@@ -280,51 +360,63 @@ function ensureTokenAuth() {
 
 async function runStagedInstallSmoke(entry) {
   const packDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-pack-"));
-  try {
-    run("npm", ["pack", "--silent", "--pack-destination", packDirectory], {
-      cwd: entry.pkg.dir,
-    });
-    const tarballs = fs
-      .readdirSync(packDirectory)
-      .filter((name) => name.endsWith(".tgz"))
-      .map((name) => path.join(packDirectory, name));
-    if (tarballs.length !== 1) {
-      throw new Error(
-        `Expected one staged tarball for ${entry.pkg.name}; found ${tarballs.length}`
-      );
-    }
-    await runInstallSmoke(entry, tarballs[0], "Staged install smoke");
-  } finally {
-    fs.rmSync(packDirectory, { recursive: true, force: true });
-  }
+  return runWithOwnedCleanup(
+    async () => {
+      run("npm", ["pack", "--silent", "--pack-destination", packDirectory], {
+        cwd: entry.pkg.dir,
+      });
+      const tarballs = fs
+        .readdirSync(packDirectory)
+        .filter((name) => name.endsWith(".tgz"))
+        .map((name) => path.join(packDirectory, name));
+      if (tarballs.length !== 1) {
+        throw new Error(
+          `Expected one staged tarball for ${entry.pkg.name}; found ${tarballs.length}`
+        );
+      }
+      await runInstallSmoke(entry, tarballs[0], "Staged install smoke");
+    },
+    () => fs.rmSync(packDirectory, { recursive: true, force: true }),
+    "Staged npm smoke and pack cleanup failed"
+  );
 }
 
 async function runInstallSmoke(entry, packageSpec, label) {
   const root = fs.mkdtempSync(`${entry.pkg.smokePrefix}-`);
-  const lifetime = createDevelopmentClientLifetime(root);
-  const prefix = path.join(root, "install");
-  const launchDirectory = path.join(root, "launch");
-  fs.mkdirSync(launchDirectory);
-  console.log(`\n[publish-npm] ${label} ${entry.pkg.name}@${entry.version}`);
-  try {
-    run("npm", ["install", "-g", "--prefix", prefix, packageSpec], {
-      cwd: launchDirectory,
-    });
-    run(path.join(prefix, "bin", "vibestudio"), ["--version"], { cwd: launchDirectory });
-    run(path.join(prefix, "bin", "vibestudio"), ["--help"], { cwd: launchDirectory });
-    run(path.join(prefix, "bin", "vibestudio"), ["remote", "serve", "--help"], {
-      cwd: launchDirectory,
-    });
-    run(path.join(prefix, "bin", "vibestudio"), ["remote", "doctor", "--json"], {
-      cwd: launchDirectory,
-    });
-    run(path.join(prefix, "bin", "vibestudio-server"), ["--help"], {
-      cwd: launchDirectory,
-    });
-    await runServerStartupSmoke(path.join(prefix, "bin", "vibestudio-server"), launchDirectory, lifetime.acquire);
-  } finally {
-    await lifetime.close();
-  }
+  let lifetime;
+  return runWithOwnedCleanup(
+    async () => {
+      lifetime = createDevelopmentClientLifetime(root);
+      const prefix = path.join(root, "install");
+      const launchDirectory = path.join(root, "launch");
+      fs.mkdirSync(launchDirectory);
+      console.log(`\n[publish-npm] ${label} ${entry.pkg.name}@${entry.version}`);
+      run("npm", ["install", "-g", "--prefix", prefix, packageSpec], {
+        cwd: launchDirectory,
+      });
+      run(path.join(prefix, "bin", "vibestudio"), ["--version"], { cwd: launchDirectory });
+      run(path.join(prefix, "bin", "vibestudio"), ["--help"], { cwd: launchDirectory });
+      run(path.join(prefix, "bin", "vibestudio"), ["remote", "serve", "--help"], {
+        cwd: launchDirectory,
+      });
+      run(path.join(prefix, "bin", "vibestudio"), ["remote", "doctor", "--json"], {
+        cwd: launchDirectory,
+      });
+      run(path.join(prefix, "bin", "vibestudio-server"), ["--help"], {
+        cwd: launchDirectory,
+      });
+      await runServerStartupSmoke(
+        path.join(prefix, "bin", "vibestudio-server"),
+        launchDirectory,
+        lifetime.acquire
+      );
+    },
+    () => {
+      if (lifetime) return lifetime.close();
+      return fs.promises.rm(root, { recursive: true, force: true });
+    },
+    "npm install smoke and owned process cleanup failed"
+  );
 }
 
 async function runServerStartupSmoke(serverBinary, launchDirectory, acquire) {
@@ -339,18 +431,18 @@ async function runServerStartupSmoke(serverBinary, launchDirectory, acquire) {
     delete env[key];
   }
   env.XDG_CONFIG_HOME = path.join(launchDirectory, "config");
-  const child = acquire(() => spawn(
-    serverBinary,
-    ["--bootstrap-workspace", "npm-install-smoke", "--ready-file", readyFile],
-    {
+  const child = acquire(() =>
+    spawn(serverBinary, ["--bootstrap-workspace", "npm-install-smoke", "--ready-file", readyFile], {
       cwd: launchDirectory,
       stdio: "inherit",
       env,
       detached: process.platform !== "win32",
-    }
-  ));
+    })
+  );
   let startupError;
-  child.once("error", (error) => { startupError = error; });
+  child.once("error", (error) => {
+    startupError = error;
+  });
   let exit = null;
   child.once("exit", (code, signal) => {
     exit = { code, signal };
@@ -381,10 +473,8 @@ function run(command, args, options) {
     stdio: "inherit",
     env: npmEnv(),
   });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`Command failed (${result.status ?? 1}): ${command} ${args.join(" ")}`);
-  }
+  const failure = spawnResultFailure(result, `${command} ${args.join(" ")}`);
+  if (failure) throw failure;
 }
 
 function capture(command, args, options) {
@@ -479,6 +569,7 @@ function tokenUserConfig() {
   if (tokenUserConfigPath) return tokenUserConfigPath;
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-auth-"));
+  tokenUserConfigDirectory = dir;
   tokenUserConfigPath = path.join(dir, ".npmrc");
   fs.writeFileSync(
     tokenUserConfigPath,
@@ -489,12 +580,6 @@ function tokenUserConfig() {
     ].join("\n"),
     { mode: 0o600 }
   );
-
-  process.once("exit", () => {
-    if (tokenUserConfigPath) {
-      fs.rmSync(path.dirname(tokenUserConfigPath), { recursive: true, force: true });
-    }
-  });
 
   return tokenUserConfigPath;
 }
