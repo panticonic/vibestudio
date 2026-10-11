@@ -1,4 +1,3 @@
-// @ts-expect-error Script modules are plain .mjs and intentionally untyped.
 import {
   inspectCredentialEndpoint,
   inspectIdentity,
@@ -8,6 +7,7 @@ import {
   runDoctor,
 } from "../scripts/cli/remote-doctor.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -31,6 +31,10 @@ const fakeBinding = {
     }),
   },
 };
+
+function fakeLoader() {
+  return Object.assign((_specifier: string) => fakeBinding, createRequire(import.meta.url));
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -61,46 +65,44 @@ describe("remote-doctor", () => {
 
   it("derives the advertised Endpoint ID from an exact 0600 32-byte secret", () => {
     const file = tmpFile(new Uint8Array(32).fill(0xab));
-    expect(inspectIdentity(file, () => fakeBinding)).toMatchObject({
+    expect(inspectIdentity(file, fakeLoader())).toMatchObject({
       ok: true,
       endpointId: "ab".repeat(32),
     });
   });
 
   it("rejects unsafe permissions and malformed secret lengths", () => {
-    expect(inspectIdentity(tmpFile(new Uint8Array(32), 0o644), () => fakeBinding).message).toMatch(
+    expect(inspectIdentity(tmpFile(new Uint8Array(32), 0o644), fakeLoader()).message).toMatch(
       /0600/
     );
-    expect(inspectIdentity(tmpFile(new Uint8Array(31)), () => fakeBinding).message).toMatch(
+    expect(inspectIdentity(tmpFile(new Uint8Array(31)), fakeLoader()).message).toMatch(
       /32 bytes/
     );
   });
 
   it("derives the client Endpoint ID owned by a paired credential", () => {
     const endpointSecret = Buffer.alloc(32, 0xcd).toString("base64url");
-    expect(inspectCredentialEndpoint({ endpointSecret }, () => fakeBinding)).toMatchObject({
+    expect(inspectCredentialEndpoint({ endpointSecret }, fakeLoader())).toMatchObject({
       ok: true,
       endpointId: "cd".repeat(32),
     });
-    expect(inspectCredentialEndpoint({ endpointSecret: "bad" }, () => fakeBinding)).toMatchObject({
+    expect(inspectCredentialEndpoint({ endpointSecret: "bad" }, fakeLoader())).toMatchObject({
       ok: false,
     });
   });
 
   it("fails when a retired dependency or environment setting survives", () => {
-    const resolver = Object.assign(() => fakeBinding, {
-      resolve: (name: string) => {
-        if (name.includes("datachannel")) return "/installed/retired-package";
-        throw new Error("missing");
-      },
+    const resolver = fakeLoader();
+    vi.spyOn(resolver, "resolve").mockImplementation((name) => {
+      if (name.includes("datachannel")) return "/installed/retired-package";
+      throw new Error("missing");
     });
     expect(inspectRetiredTransportDependencies(resolver)).toMatchObject({ ok: false });
 
     vi.stubEnv(["VIBESTUDIO", "WEB", "RTC", "MODE"].join("_"), "enabled");
-    const emptyResolver = Object.assign(() => fakeBinding, {
-      resolve: () => {
-        throw new Error("missing");
-      },
+    const emptyResolver = fakeLoader();
+    vi.spyOn(emptyResolver, "resolve").mockImplementation(() => {
+      throw new Error("missing");
     });
     expect(inspectRetiredTransportDependencies(emptyResolver)).toMatchObject({ ok: false });
   });
@@ -109,7 +111,7 @@ describe("remote-doctor", () => {
     const result = await runDoctor(
       { ...parseArgs([]), relayUrls: ["https://relay.example/"] },
       {
-        require: () => fakeBinding,
+        require: fakeLoader(),
         unitPath: "/nonexistent/unit.service",
         credential: null,
         workspaceIsolation: isolationGranted,
@@ -129,7 +131,7 @@ describe("remote-doctor", () => {
 
   it("uses the shipped public relay topology when no override or paired reach exists", async () => {
     const defaults = await runDoctor(parseArgs([]), {
-      require: () => fakeBinding,
+      require: fakeLoader(),
       unitPath: "/nonexistent/unit.service",
       credential: null,
       workspaceIsolation: isolationGranted,
@@ -147,7 +149,7 @@ describe("remote-doctor", () => {
     const malformed = await runDoctor(
       { ...parseArgs([]), relayUrls: ["http://relay.example/"] },
       {
-        require: () => fakeBinding,
+        require: fakeLoader(),
         unitPath: "/nonexistent/unit.service",
         credential: null,
         workspaceIsolation: isolationGranted,

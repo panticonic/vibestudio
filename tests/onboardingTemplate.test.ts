@@ -26,8 +26,10 @@ const baseRuntime = fs.readFileSync(basePath("meta/vibestudio.yml"), "utf8");
 const personalRuntime = fs.readFileSync(personalPath("meta/vibestudio.yml"), "utf8");
 const baseManifest = parseTemplateManifestContent(baseRuntime, WORKSPACE_SYSTEM_EPOCH);
 const personalManifest = parseTemplateManifestContent(personalRuntime, WORKSPACE_SYSTEM_EPOCH);
+const systemTestingRoot = exactTemplateRoots["system-testing"];
+if (!systemTestingRoot) throw new Error("The System-testing source checkout is required");
 const systemTestingManifest = parseTemplateManifestContent(
-  fs.readFileSync(path.join(exactTemplateRoots["system-testing"], "meta/vibestudio.yml"), "utf8"),
+  fs.readFileSync(path.join(systemTestingRoot, "meta/vibestudio.yml"), "utf8"),
   WORKSPACE_SYSTEM_EPOCH
 );
 const composedRuntime = canonicalTemplateYaml(
@@ -40,12 +42,8 @@ const composedRuntime = canonicalTemplateYaml(
 
 describe("shipped Personal first-run workspace", () => {
   it("is valid as its own source and with development layers", () => {
-    expect(() =>
-      parseWorkspace(personalRuntime, "personal-layer")
-    ).not.toThrow();
-    expect(() =>
-      parseWorkspace(composedRuntime, "personal-workspace")
-    ).not.toThrow();
+    expect(() => parseWorkspace(personalRuntime, "personal-layer")).not.toThrow();
+    expect(() => parseWorkspace(composedRuntime, "personal-workspace")).not.toThrow();
     expect(personalManifest.dependencies.map(({ url }) => url)).toEqual([
       "git+https://github.com/panticonic/vibestudio-base.git",
     ]);

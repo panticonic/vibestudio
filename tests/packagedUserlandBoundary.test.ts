@@ -55,13 +55,13 @@ describe("packaged host/userland boundary", () => {
     const app = path.join(root, "app");
     const resources = path.join(root, "out", "resources");
     const unpackedModules = path.join(resources, "app.asar.unpacked", "node_modules");
-    const nativeArtifact = {
-      "darwin-arm64": ["@number0", "iroh-darwin-arm64", "iroh.darwin-arm64.node"],
-      "linux-x64": ["@number0", "iroh-linux-x64-gnu", "iroh.linux-x64-gnu.node"],
-      "linux-arm64": ["@number0", "iroh-linux-arm64-gnu", "iroh.linux-arm64-gnu.node"],
-      "win32-x64": ["@number0", "iroh-win32-x64-msvc", "iroh.win32-x64-msvc.node"],
-      "win32-arm64": ["@number0", "iroh-win32-arm64-msvc", "iroh.win32-arm64-msvc.node"],
-    }[`${process.platform}-${process.arch}`];
+    const nativeArtifact = new Map([
+      ["darwin-arm64", ["@number0", "iroh-darwin-arm64", "iroh.darwin-arm64.node"]],
+      ["linux-x64", ["@number0", "iroh-linux-x64-gnu", "iroh.linux-x64-gnu.node"]],
+      ["linux-arm64", ["@number0", "iroh-linux-arm64-gnu", "iroh.linux-arm64-gnu.node"]],
+      ["win32-x64", ["@number0", "iroh-win32-x64-msvc", "iroh.win32-x64-msvc.node"]],
+      ["win32-arm64", ["@number0", "iroh-win32-arm64-msvc", "iroh.win32-arm64-msvc.node"]],
+    ]).get(`${process.platform}-${process.arch}`);
     if (!nativeArtifact) throw new Error("test host is not a retained Electron target");
     try {
       fs.mkdirSync(path.join(app, "dist"), { recursive: true });
@@ -80,7 +80,7 @@ describe("packaged host/userland boundary", () => {
       if (process.platform !== "win32") {
         const nativeTarget = nativeIsolationTarget(process.platform, process.arch);
         const artifactRoot = path.join(app, "native/isolation/artifacts");
-        writeNativeIsolationArtifacts(app, artifactRoot, [nativeTarget]);
+        writeNativeIsolationArtifacts(artifactRoot, [nativeTarget]);
         const nativeInput = path.join(
           artifactRoot,
           `native-isolation-${process.platform}-${process.arch}`

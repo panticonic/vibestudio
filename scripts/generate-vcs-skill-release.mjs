@@ -276,6 +276,7 @@ export function validateRepositoryReleaseGate(userlandRoot) {
   validateSchemaFixtures(userlandRoot);
 }
 
+/** @param {{ userlandRoot?: string, checkOnly?: boolean }} [options] */
 export function runReleaseGate({ userlandRoot, checkOnly = false } = {}) {
   userlandRoot = requireUserlandRoot(userlandRoot);
   const artifacts = buildGeneratedArtifacts(userlandRoot);

@@ -11,6 +11,8 @@ import {
 } from "./owned-process-group-observer.mjs";
 import { spawnPnpmSync } from "./cli/lib/package-manager.mjs";
 
+/** @typedef {(command: string, args: readonly string[], options: import("node:child_process").SpawnSyncOptionsWithStringEncoding) => import("node:child_process").SpawnSyncReturns<string>} SpawnSyncRunner */
+
 const dependencyContracts = [
   {
     packageName: "@number0/iroh",
@@ -87,6 +89,9 @@ function failureText(result) {
   ).trim();
 }
 
+/**
+ * @param {{cwd?: string, env?: NodeJS.ProcessEnv, run?: SpawnSyncRunner}} [options]
+ */
 export function inspectHostNativeDependencies({
   cwd = process.cwd(),
   env = process.env,
@@ -107,7 +112,10 @@ export function inspectHostNativeDependencies({
   });
 }
 
-/** Verify every contract, returning how many were confirmed. */
+/**
+ * Verify every contract, returning how many were confirmed.
+ * @param {{cwd?: string, env?: NodeJS.ProcessEnv, run?: SpawnSyncRunner, platform?: NodeJS.Platform, arch?: NodeJS.Architecture}} [options]
+ */
 export function assertHostNativeDependencies(options = {}) {
   const failures = inspectHostNativeDependencies(options).filter((result) => !result.ok);
   if (failures.length === 0) {
@@ -129,6 +137,9 @@ export function assertHostNativeDependencies(options = {}) {
   );
 }
 
+/**
+ * @param {{cwd?: string, env?: NodeJS.ProcessEnv, run?: SpawnSyncRunner, log?: typeof console.log}} [options]
+ */
 export function ensureHostNativeDependencies({
   cwd = process.cwd(),
   env = process.env,

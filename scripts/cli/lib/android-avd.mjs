@@ -30,6 +30,7 @@ export function parseReadyAndroidDevices(output) {
     .map(([serial]) => serial);
 }
 
+/** @param {string[]} readyDevices @param {string | null} [requestedDevice] */
 export function selectReadyAndroidDevice(readyDevices, requestedDevice = null) {
   if (requestedDevice) {
     return readyDevices.includes(requestedDevice) ? requestedDevice : null;
@@ -38,11 +39,7 @@ export function selectReadyAndroidDevice(readyDevices, requestedDevice = null) {
 }
 
 /** A booting device can reconnect to adb before its boot property is ready. */
-export async function waitForAndroidBoot(
-  device,
-  timeoutMs = 180_000,
-  exec = execFileAsync
-) {
+export async function waitForAndroidBoot(device, timeoutMs = 180_000, exec = execFileAsync) {
   const deadline = Date.now() + timeoutMs;
   let lastFailure = null;
   while (Date.now() < deadline) {
@@ -161,6 +158,7 @@ export function selectAndroidSystemImage(images, arch = os.arch()) {
   })[0];
 }
 
+/** @param {string[]} available @param {string | null} [requestedAvd] */
 export function selectExistingAndroidAvd(available, requestedAvd = null) {
   if (requestedAvd) {
     if (!available.includes(requestedAvd)) {

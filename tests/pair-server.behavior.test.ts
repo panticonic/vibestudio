@@ -1,4 +1,3 @@
-// @ts-expect-error Script modules are plain .mjs and intentionally untyped.
 import {
   hostBuildHasWorkspaceTemplatePins,
   parsePairArgs,
@@ -12,15 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
-import { hostArtifactRootForServerEntry } from "../scripts/host-build-generations.mjs";
+import { readCurrentHostBuildGeneration } from "../scripts/host-build-generations.mjs";
 
-vi.mock("../scripts/host-build-generations.mjs", () => ({
+vi.mock("../scripts/host-build-generations.mjs", async (importOriginal) => ({
+  ...(await importOriginal()),
   readCurrentHostBuildGeneration: vi.fn(() => "/isolated/host-generation"),
-  // Launchers share one derivation of the coordinate a host runs from, so the
-  // isolated generation has to answer through it too.
-  hostArtifactRootForServerEntry: vi.fn((_root: string, entry: string) =>
-    entry === "/isolated/host-generation/server.mjs" ? "/isolated/host-generation" : "/repo/dist"
-  ),
 }));
 
 class FakeChild extends EventEmitter {
@@ -97,7 +92,7 @@ describe("pair-server runner", () => {
     const prepareRelease = vi.fn(({ output, env }: { output: string; env: NodeJS.ProcessEnv }) => {
       preparationRoot = output;
       mkdirSync(output, { recursive: true });
-      env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = output;
+      env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = output;
       return {
         sourcesReady: Promise.resolve(),
         completed: Promise.resolve(),
@@ -111,21 +106,18 @@ describe("pair-server runner", () => {
       spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
         expect(prepareSourceServer).toHaveBeenCalledOnce();
         expect(prepareRelease).toHaveBeenCalledOnce();
-        expect(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT).toBe(preparationRoot);
+        expect(env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"]).toBe(preparationRoot);
         expect(fs.existsSync(preparationRoot)).toBe(true);
-        // Resolved through the derivation every launcher shares, so a launcher
-        // that reimplements it cannot quietly diverge from this guarantee.
-        expect(hostArtifactRootForServerEntry).toHaveBeenCalledWith(
+        expect(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]).toBe("/isolated/host-generation");
+        expect(readCurrentHostBuildGeneration).toHaveBeenCalledWith(
           expect.any(String),
-          "/isolated/host-generation/server.mjs"
+          "source"
         );
-        // And resolved only after the rebuild, which is what publishes the
-        // generation it names. Asking first reads a file that does not exist
-        // yet, and the server then exits before readiness.
+        // Resolve the source generation only after rebuilding it. Asking first
+        // reads a file that does not exist yet, and the server exits before readiness.
         expect(vi.mocked(prepareSourceServer).mock.invocationCallOrder[0]).toBeLessThan(
-          vi.mocked(hostArtifactRootForServerEntry).mock.invocationCallOrder[0]!
+          vi.mocked(readCurrentHostBuildGeneration).mock.invocationCallOrder[0]!
         );
-        expect(env.VIBESTUDIO_HOST_ARTIFACT_ROOT).toBe("/isolated/host-generation");
         queueMicrotask(() => child.emit("exit", 0, null));
         return child;
       },
@@ -164,8 +156,8 @@ describe("pair-server runner", () => {
         prepareSourceServer: () => undefined,
         developmentWorkspaceTemplateEnv: () => ({}),
         spawnServer({ env, serverArgs }: { env: NodeJS.ProcessEnv; serverArgs: string[] }) {
-          expect(env.VIBESTUDIO_HOST).toBeUndefined();
-          expect(env.VIBESTUDIO_IROH_RELAYS).toBe("https://one.example/,https://two.example/");
+          expect(env["VIBESTUDIO_HOST"]).toBeUndefined();
+          expect(env["VIBESTUDIO_IROH_RELAYS"]).toBe("https://one.example/,https://two.example/");
           expect(serverArgs).toContain("--ready-file");
           expect(serverArgs).not.toContain("--require-electron-ready");
           expect(serverArgs).not.toContain("--require-mobile-ready");

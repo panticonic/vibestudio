@@ -1,4 +1,6 @@
-import { createInternalRpcClient as createRpcClient } from "@vibestudio/rpc/internal";
+import { createRpcClient } from "@vibestudio/rpc";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
+import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import {
   bindNodeEndpoint,
   configureNodeConnection,
@@ -15,8 +17,24 @@ import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { RpcServer } from "./rpcServer.js";
+import { z } from "zod";
 
 const { SecretKey } = loadIrohNodeBinding();
+const irohServerTestMethods = createRpcMethods(
+  "test",
+  defineServiceMethods({
+    echo: {
+      website: { kind: "closed", reason: "Iroh server transport test receiver." },
+      args: z.tuple([z.string()]),
+      returns: z.unknown(),
+    },
+    large: {
+      website: { kind: "closed", reason: "Iroh server transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+  })
+);
 
 describe("RpcServer Iroh ingress over real local QUIC", () => {
   const endpoints = new Set<Awaited<ReturnType<typeof bindNodeEndpoint>>>();
@@ -107,7 +125,7 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
     // cold-start JS work could reset an otherwise valid independent stream.
     await new Promise((resolve) => setTimeout(resolve, 10_250));
 
-    const result = rpc.call("main", "test.echo", ["through-iroh"]);
+    const result = rpc.call("main", irohServerTestMethods.echo, ["through-iroh"]);
     await vi.waitFor(() => expect(dispatcher.dispatch).toHaveBeenCalled(), { timeout: 2_000 });
     await expect(result).resolves.toBe("through-iroh");
 
@@ -116,8 +134,8 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
     // old 8 MiB metadata-frame ceiling, and it cannot head-of-line block an
     // independent request on another stream.
     const [receivedLarge, concurrentEcho] = await Promise.all([
-      rpc.call("main", "test.large", []),
-      rpc.call("main", "test.echo", ["concurrent"]),
+      rpc.call("main", irohServerTestMethods.large, []),
+      rpc.call("main", irohServerTestMethods.echo, ["concurrent"]),
     ]);
     expect(receivedLarge).toHaveLength(largeResult.length);
     expect(typeof receivedLarge).toBe("string");

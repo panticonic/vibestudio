@@ -192,21 +192,22 @@ export function composePreparedDependencyPlugins(
     [...packageRoots].some((root) => within(root, candidate));
 
   const packageSearchRoots = (resolveDir: string | undefined): string[] => {
-    const result = [...roots, ...dependencySearchRoots];
-    if (!resolveDir) return result;
-    let directory = path.resolve(resolveDir);
-    while (
-      roots.some((root) => within(root, directory)) ||
-      [...packageRoots].some((root) => within(root, directory))
-    ) {
-      if (fs.existsSync(path.join(directory, "package.json"))) {
-        result.push(path.join(directory, "node_modules"));
+    const localRoots: string[] = [];
+    if (resolveDir) {
+      let directory = path.resolve(resolveDir);
+      while (
+        roots.some((root) => within(root, directory)) ||
+        [...packageRoots].some((root) => within(root, directory))
+      ) {
+        if (fs.existsSync(path.join(directory, "package.json"))) {
+          localRoots.push(path.join(directory, "node_modules"));
+        }
+        const parent = path.dirname(directory);
+        if (parent === directory) break;
+        directory = parent;
       }
-      const parent = path.dirname(directory);
-      if (parent === directory) break;
-      directory = parent;
     }
-    return [...new Set(result)];
+    return [...new Set([...localRoots, ...roots, ...dependencySearchRoots])];
   };
 
   const registerPackage = (specifier: string, resolveDir: string | undefined): void => {
@@ -477,7 +478,8 @@ export function composePreparedDependencyPlugins(
                 workspaceRoots.some((root) => within(root, physical)) || linkedOutsidePreparedRoots
               );
             });
-          if (workspaceTarget && !workspaceDependencyDeclared(resolveDir, name)) return null;
+          const declaredWorkspaceDependency = workspaceDependencyDeclared(resolveDir, name);
+          if (workspaceTarget && !declaredWorkspaceDependency) return null;
         }
         registerPackage(specifier, resolveDir);
         const declaredRoot = packageSearchRoots(resolveDir).find(
@@ -490,6 +492,10 @@ export function composePreparedDependencyPlugins(
               : path.resolve(args.resolveDir || process.cwd(), specifier)
             : undefined;
         const allowedResolveDir = owned ? resolveDir : declaredRoot;
+        const resolutionDir =
+          declaredRoot && nodePaths.some((root) => canonical(root) === canonical(declaredRoot))
+            ? path.dirname(declaredRoot)
+            : allowedResolveDir;
         if (args.kind !== "entry-point" && !allowedResolveDir) {
           return {
             errors: [
@@ -511,28 +517,19 @@ export function composePreparedDependencyPlugins(
 
         const resolved = await build.resolve(specifier, {
           kind: args.kind,
-          resolveDir: allowedResolveDir,
+          resolveDir: name ? resolutionDir : allowedResolveDir,
           pluginData: withResolveContext(args.pluginData, "skip"),
         });
         if (resolved.errors.length > 0) {
           if (owned && isOptionalPeer(resolveDir, name)) return { path: specifier, external: true };
-          return pluginRequest || !owned ? resolved : null;
+          return declaredRoot || pluginRequest || !owned ? resolved : null;
         }
         if (resolved.external || resolved.namespace !== "file") return resolved;
         registerPackage(specifier, allowedResolveDir);
         const pathIsOwned = allowedPath(resolved.path);
         if (!pathIsOwned) {
           if (owned && isOptionalPeer(resolveDir, name)) return { path: specifier, external: true };
-          if (pluginRequest) {
-            return {
-              errors: [
-                {
-                  text: `Dependency ${specifier} escaped the prepared build environment to ${resolved.path}.`,
-                },
-              ],
-            };
-          }
-          if (owned) return null;
+          if (!declaredRoot && owned && !pluginRequest) return null;
           return {
             errors: [
               {

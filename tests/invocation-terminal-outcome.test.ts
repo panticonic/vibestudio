@@ -158,6 +158,7 @@ describe("invocation terminal event literals", () => {
         for (const { fileName: file, content: source } of sources) {
           const sourceFile = project.program.getSourceFile(file);
           if (!sourceFile) throw new Error(`TypeScript did not parse ${file}`);
+          const parsedSourceFile = sourceFile;
 
           function visit(node: ts.Node): void {
             if (ts.isObjectLiteralExpression(node)) {
@@ -169,8 +170,8 @@ describe("invocation terminal event literals", () => {
                   !isMatcherExpectation(node) &&
                   (!payload || !hasValidTerminalPayloadSignal(payload, kind))
                 ) {
-                  const line = sourceFile.getLineAndCharacterOfPosition(
-                    node.getStart(sourceFile)
+                  const line = parsedSourceFile.getLineAndCharacterOfPosition(
+                    node.getStart(parsedSourceFile)
                   ).line;
                   misses.push(`${relative(exactTemplateRoots.base, file)}:${line + 1}`);
                 }

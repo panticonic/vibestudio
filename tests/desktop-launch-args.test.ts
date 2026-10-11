@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 
-// @ts-expect-error Script modules are plain .mjs and intentionally untyped.
 import {
   isDesktopPairingArgument,
   resolveDesktopLaunchArgs,
@@ -38,6 +37,6 @@ describe("desktop launcher argument routing", () => {
       fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
     ) as { bin?: Record<string, string> };
 
-    expect(manifest.bin?.vibestudio).toBe("scripts/vibestudio-cli-shim.mjs");
+    expect(manifest.bin?.["vibestudio"]).toBe("scripts/vibestudio-cli-shim.mjs");
   });
 });

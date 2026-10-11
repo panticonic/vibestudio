@@ -8,7 +8,11 @@ import {
 } from "../../scripts/node-runtime-artifacts.mjs";
 
 /** Synthetic complete receipt for packaging orchestration tests, never execution. */
-export function writeNodeRuntimeFixture(root: string, platform: string, arch: string) {
+export function writeNodeRuntimeFixture(
+  root: string,
+  platform: Parameters<typeof nodeRuntimeTarget>[0],
+  arch: Parameters<typeof nodeRuntimeTarget>[1]
+) {
   const target = nodeRuntimeTarget(platform, arch);
   const destination = nodeRuntimeDirectory(root, target);
   const executable = platform === "win32" ? "node.exe" : "bin/node";

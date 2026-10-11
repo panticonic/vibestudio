@@ -1,4 +1,3 @@
-// @ts-expect-error The shipped React Native bootstrap is plain JavaScript.
 import {
   createSuccessfulConnectCoalescer,
   routeIncomingConnectLink,

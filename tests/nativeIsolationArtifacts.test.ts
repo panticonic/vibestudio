@@ -14,6 +14,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import type { Configuration } from "app-builder-lib";
 import { copyFiles, getFileMatchers } from "app-builder-lib/out/fileMatcher.js";
 import {
   NATIVE_ISOLATION_TARGETS,
@@ -36,6 +37,14 @@ import {
   nativeIsolationBinary as binary,
   writeNativeIsolationArtifacts as writeArtifacts,
 } from "./helpers/nativeIsolationArtifacts.js";
+
+declare module "app-builder-lib/out/fileMatcher.js" {
+  export function copyFiles(
+    matchers: import("app-builder-lib/out/fileMatcher.js").FileMatcher[] | null,
+    transformer?: import("builder-util").FileTransformer | null,
+    isUseHardLink?: boolean
+  ): Promise<unknown>;
+}
 
 const roots: string[] = [];
 afterEach(() => {
@@ -60,16 +69,20 @@ describe("native isolation artifact matrix", () => {
 
   it("requires the complete matrix", () => {
     const { root, artifactRoot } = fixture();
-    writeArtifacts(root, artifactRoot, NATIVE_ISOLATION_TARGETS.slice(0, -1));
+    writeArtifacts(artifactRoot, NATIVE_ISOLATION_TARGETS.slice(0, -1));
     expect(() => assertNativeIsolationArtifacts(root, artifactRoot)).toThrow(/complete CI matrix/);
   });
 
   it("accepts the complete supported-target matrix and returns binary plus manifest descriptors", () => {
     const { root, artifactRoot } = fixture();
-    writeArtifacts(root, artifactRoot);
+    writeArtifacts(artifactRoot);
     const descriptors = assertNativeIsolationArtifacts(root, artifactRoot);
     expect(descriptors).toHaveLength(
-      NATIVE_ISOLATION_TARGETS.reduce((total, target) => total + target.mxcFiles.length + 1, 0)
+      NATIVE_ISOLATION_TARGETS.reduce(
+        (total: number, target: ReturnType<typeof nativeIsolationTarget>) =>
+          total + target.mxcFiles.length + 1,
+        0
+      )
     );
     expect(descriptors.filter(({ artifact }) => artifact.endsWith("manifest.json"))).toHaveLength(
       NATIVE_ISOLATION_TARGETS.length
@@ -81,27 +94,27 @@ describe("native isolation artifact matrix", () => {
     const config = {};
     const target = nativeIsolationTarget("linux", "arm64");
     writeNodeRuntimeFixture(root, "linux", "arm64");
-    writeArtifacts(root, artifactRoot, [target]);
+    writeArtifacts(artifactRoot, [target]);
     try {
       await stageElectronNativeIsolation({
         electronPlatformName: "linux",
         arch: 3,
         packager: { projectDir: root, config },
-      } as never);
+      });
       const destination = path.join(root, target.artifact);
       expect(readFileSync(destination)).toEqual(binary(target));
       await stageElectronNativeIsolation({
         electronPlatformName: "linux",
         arch: 3,
         packager: { projectDir: root, config },
-      } as never);
+      });
       if (process.platform !== "win32") expect(statSync(destination).mode & 0o111).toBeTruthy();
       await expect(
         stageElectronNativeIsolation({
           electronPlatformName: "linux",
           arch: 99,
           packager: { projectDir: root },
-        } as never)
+        })
       ).rejects.toThrow(/Unknown Electron packaging architecture/);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -114,7 +127,7 @@ describe("native isolation artifact matrix", () => {
     const target = nativeIsolationTarget("linux", "arm64");
     const runtimeTarget = nodeRuntimeTarget("linux", "arm64");
     writeNodeRuntimeFixture(root, "linux", "arm64");
-    writeArtifacts(root, artifactRoot, [target]);
+    writeArtifacts(artifactRoot, [target]);
     const source = path.join(
       artifactRoot,
       "native-isolation-linux-arm64",
@@ -124,7 +137,7 @@ describe("native isolation artifact matrix", () => {
     const installed = path.join(resources, "app.asar.unpacked", target.artifact);
     const context = { electronPlatformName: "linux", arch: 3, packager: { projectDir: root } };
     try {
-      await expect(assertPackagedNativeIsolation(resources, context as never)).rejects.toThrow(
+      await expect(assertPackagedNativeIsolation(resources, context)).rejects.toThrow(
         /differs|ENOENT/
       );
       mkdirSync(path.dirname(installed), { recursive: true });
@@ -145,10 +158,10 @@ describe("native isolation artifact matrix", () => {
       );
       writeFileSync(installedManifest, readFileSync(sourceManifest));
       await expect(
-        assertPackagedNativeIsolation(resources, context as never)
+        assertPackagedNativeIsolation(resources, context)
       ).resolves.not.toThrow();
       writeFileSync(installed, Buffer.from("changed"));
-      await expect(assertPackagedNativeIsolation(resources, context as never)).rejects.toThrow(
+      await expect(assertPackagedNativeIsolation(resources, context)).rejects.toThrow(
         /differs/
       );
     } finally {
@@ -173,7 +186,7 @@ describe("native isolation artifact matrix", () => {
       arch: 1,
       packager: { projectDir: root, config },
     };
-    await stageElectronNativeIsolation(context as never);
+    await stageElectronNativeIsolation(context);
     const resources = path.join(root, "resources");
     cpSync(path.join(root, "dist/node-payload"), path.join(resources, "app.asar.unpacked/dist/node"), {
       recursive: true,
@@ -184,7 +197,7 @@ describe("native isolation artifact matrix", () => {
       { recursive: true }
     );
     await expect(
-      assertPackagedNativeIsolation(resources, context as never)
+      assertPackagedNativeIsolation(resources, context)
     ).resolves.toBeUndefined();
     expect(() => statSync(path.join(root, "dist/mxc"))).toThrow();
     expect(() => statSync(path.join(resources, "app.asar.unpacked/dist/mxc"))).toThrow();
@@ -240,14 +253,14 @@ describe("native isolation artifact matrix", () => {
       JSON.stringify({ version: 1, platform: "linux", arch: "x64" })
     );
 
-    const builderConfig = parseYaml(readFileSync("electron-builder.yml", "utf8")) as {
-      win?: { extraResources?: unknown };
-    };
+    const builderConfig: Configuration = parseYaml(readFileSync("electron-builder.yml", "utf8"));
+    const windowsOptions = builderConfig.win;
+    if (!windowsOptions) throw new Error("electron-builder.yml has no Windows build options");
     const resources = path.join(root, "release/resources");
     const matchers = getFileMatchers({}, "extraResources", resources, {
       defaultSrc: root,
       globalOutDir: path.join(root, "release"),
-      customBuildOptions: builderConfig.win,
+      customBuildOptions: windowsOptions,
       macroExpander: (value: string) => value.replaceAll("${arch}", "x64"),
     });
     await copyFiles(matchers);
@@ -281,7 +294,7 @@ describe("native isolation artifact matrix", () => {
     "rejects a wrong %s artifact",
     (kind) => {
       const { root, artifactRoot } = fixture();
-      writeArtifacts(root, artifactRoot);
+      writeArtifacts(artifactRoot);
       const target = NATIVE_ISOLATION_TARGETS[0]!;
       const inputRoot = path.join(
         artifactRoot,

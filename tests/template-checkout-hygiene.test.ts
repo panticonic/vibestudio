@@ -40,7 +40,7 @@ describe("development template checkout hygiene", () => {
 
     expect(
       templateCheckoutHygieneFailures(selected)
-        .map(({ artifact }) => artifact)
+        .map(({ artifact }: { artifact: string }) => artifact)
         .sort()
     ).toEqual(["node_modules", "packages/runtime/dist", "packages/runtime/tsconfig.tsbuildinfo"]);
   });

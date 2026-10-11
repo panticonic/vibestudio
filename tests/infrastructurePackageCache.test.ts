@@ -23,13 +23,24 @@ function fixture(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-infra-cache-"));
   temporaryDirectories.push(root);
   for (const relative of [
-    "package.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
     "tsconfig.json",
   ]) {
     write(root, relative, `${relative}\n`);
   }
+  write(root, "package.json", JSON.stringify({ name: "fixture", type: "module" }));
+  write(
+    root,
+    "node_modules/typescript/package.json",
+    JSON.stringify({ name: "typescript", version: "1.0.0" })
+  );
+  write(root, "node_modules/typescript/bin/tsc", "compiler");
+  write(
+    root,
+    "node_modules/esbuild/package.json",
+    JSON.stringify({ name: "esbuild", version: "1.0.0" })
+  );
   write(
     root,
     "packages/base/package.json",
@@ -87,7 +98,7 @@ describe("infrastructure package cache", () => {
         })
       );
     }
-    let plan = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" });
+    let plan = inspectInfrastructurePackageBuilds({ cwd });
     const commands: string[][] = [];
     const run = (args: string[]) => {
       commands.push(args);
@@ -117,7 +128,7 @@ describe("infrastructure package cache", () => {
     );
     consumer.dependencies["@vibestudio/custom"] = "workspace:*";
     write(cwd, "packages/consumer/package.json", JSON.stringify(consumer));
-    plan = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" });
+    plan = inspectInfrastructurePackageBuilds({ cwd });
     commands.length = 0;
     emitInfrastructurePackages(
       plan,
@@ -154,7 +165,7 @@ describe("infrastructure package cache", () => {
       JSON.stringify({ name: "typescript" })
     );
     write(cwd, "packages/other/node_modules/typescript/bin/tsc", "other compiler");
-    plan = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" });
+    plan = inspectInfrastructurePackageBuilds({ cwd });
     commands.length = 0;
     emitInfrastructurePackages(plan, ["@vibestudio/base", "@vibestudio/other"], run);
     expect(commands).toHaveLength(2);
@@ -170,12 +181,12 @@ describe("infrastructure package cache", () => {
     write(cwd, "packages/base/dist/retired.js", "old output");
     write(cwd, "packages/base/dist/retired.d.ts", "old declaration");
     write(cwd, "packages/base/tsconfig.build.tsbuildinfo", "owned compiler state");
-    writeInfrastructurePackageCache(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }));
+    writeInfrastructurePackageCache(inspectInfrastructurePackageBuilds({ cwd }));
     write(cwd, "packages/base/src/index.test.ts", "a test-only edit");
-    expect(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty).toEqual([]);
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty).toEqual([]);
     fs.rmSync(path.join(cwd, "packages/base/src/retired.ts"));
     write(cwd, "packages/base/src/index.ts", "export const value = 2;");
-    buildInfrastructurePackages({ cwd, toolchainDigest: "toolchain", log: () => {}, run: () => {
+    buildInfrastructurePackages({ cwd, log: () => {}, run: () => {
       expect(fs.readFileSync(path.join(cwd, "packages/base/tsconfig.build.tsbuildinfo"), "utf8")).toBe("owned compiler state");
       write(cwd, "packages/base/dist/index.js", "new output");
       write(cwd, "packages/base/dist/index.d.ts", "new declaration");
@@ -183,7 +194,7 @@ describe("infrastructure package cache", () => {
     } });
     expect(fs.existsSync(path.join(cwd, "packages/base/dist/retired.js"))).toBe(false);
     expect(fs.existsSync(path.join(cwd, "packages/base/dist/retired.d.ts"))).toBe(false);
-    expect(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty).toEqual([]);
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty).toEqual([]);
   });
 
   it("tracks excluded sources when production actually imports them", () => {
@@ -191,9 +202,9 @@ describe("infrastructure package cache", () => {
     write(cwd, "packages/base/tsconfig.build.json", JSON.stringify({ compilerOptions: { rootDir: "src", outDir: "dist" }, include: ["src/**/*.ts"], exclude: ["**/*.test.ts"] }));
     write(cwd, "packages/base/src/index.ts", 'export { value } from "./fixture.test.js";');
     write(cwd, "packages/base/src/fixture.test.ts", "export const value = 1;");
-    writeInfrastructurePackageCache(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }));
+    writeInfrastructurePackageCache(inspectInfrastructurePackageBuilds({ cwd }));
     write(cwd, "packages/base/src/fixture.test.ts", "export const value = 2;");
-    expect(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty.map((unit) => unit.name)).toEqual(["@vibestudio/base", "@vibestudio/consumer"]);
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty.map((unit) => unit.name)).toEqual(["@vibestudio/base", "@vibestudio/consumer"]);
   });
   it("serializes independent builders and reuses the preceding exact output", async () => {
     const cwd = fixture();
@@ -210,7 +221,7 @@ describe("infrastructure package cache", () => {
         import * as fs from 'node:fs';
         import * as path from 'node:path';
         const cwd = ${JSON.stringify(cwd)};
-        const result = buildInfrastructurePackages({cwd, toolchainDigest:'toolchain', log:()=>{}, run:()=>{
+        const result = buildInfrastructurePackages({cwd, log:()=>{}, run:()=>{
           fs.appendFileSync(path.join(cwd,'executions'), 'build\\n');
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,200);
           for (const name of ['base','consumer']) {
@@ -238,27 +249,26 @@ describe("infrastructure package cache", () => {
     const results = (await Promise.all([run(), run()])).map((output) => JSON.parse(output));
     expect(results.map((result) => result.built.length).sort()).toEqual([0, 2]);
     expect(fs.readFileSync(path.join(cwd, "executions"), "utf8")).toBe("build\n");
-    expect(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty).toEqual(
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty).toEqual(
       []
     );
   });
   it("reuses only exact input and output bytes", () => {
     const cwd = fixture();
-    const initial = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" });
+    const initial = inspectInfrastructurePackageBuilds({ cwd });
     expect(initial.dirty.map((state) => state.name)).toEqual([
       "@vibestudio/base",
       "@vibestudio/consumer",
     ]);
     writeInfrastructurePackageCache(initial);
 
-    expect(inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty).toEqual(
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty).toEqual(
       []
     );
 
     write(cwd, "packages/base/dist/index.js", "corrupted\n");
     const corruptOutput = inspectInfrastructurePackageBuilds({
       cwd,
-      toolchainDigest: "toolchain",
     });
     expect(corruptOutput.dirty.map(({ name, reason }) => [name, reason])).toEqual([
       ["@vibestudio/base", "outputs changed"],
@@ -268,7 +278,6 @@ describe("infrastructure package cache", () => {
     write(cwd, "packages/base/src/index.ts", "export const value = 2;\n");
     const changedDependency = inspectInfrastructurePackageBuilds({
       cwd,
-      toolchainDigest: "toolchain",
     });
     expect(changedDependency.dirty.map((state) => state.name)).toEqual([
       "@vibestudio/base",
@@ -281,19 +290,15 @@ describe("infrastructure package cache", () => {
     expect(() =>
       buildInfrastructurePackages({
         cwd,
-        toolchainDigest: "toolchain",
         log: () => {},
         run: () => {
           throw new Error("compiler failed");
         },
       })
     ).toThrow("compiler failed");
-    expect(
-      inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty
-    ).toHaveLength(2);
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty).toHaveLength(2);
     const recovered = buildInfrastructurePackages({
       cwd,
-      toolchainDigest: "toolchain",
       log: () => {},
       run: () => {
         for (const name of ["base", "consumer"])
@@ -305,18 +310,28 @@ describe("infrastructure package cache", () => {
 
   it("fails closed for missing outputs and shared build-input changes", () => {
     const cwd = fixture();
-    const initial = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" });
+    const initial = inspectInfrastructurePackageBuilds({ cwd });
     writeInfrastructurePackageCache(initial);
 
-    expect(
-      inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "new-toolchain" }).dirty.map(
-        (state) => state.name
-      )
-    ).toEqual(["@vibestudio/base", "@vibestudio/consumer"]);
+    write(
+      cwd,
+      "node_modules/typescript/package.json",
+      JSON.stringify({ name: "typescript", version: "2.0.0" })
+    );
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty.map((state) => state.name)).toEqual([
+      "@vibestudio/base",
+      "@vibestudio/consumer",
+    ]);
+
+    write(
+      cwd,
+      "node_modules/typescript/package.json",
+      JSON.stringify({ name: "typescript", version: "1.0.0" })
+    );
 
     fs.rmSync(path.join(cwd, "packages/base/dist"), { recursive: true });
     expect(
-      inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty.map(
+      inspectInfrastructurePackageBuilds({ cwd }).dirty.map(
         ({ name, reason }) => [name, reason]
       )
     ).toEqual([["@vibestudio/base", "outputs missing"]]);
@@ -324,7 +339,7 @@ describe("infrastructure package cache", () => {
     write(cwd, "packages/base/dist/index.js", "export const value = 1;\n");
     write(cwd, "pnpm-lock.yaml", "changed lock\n");
     expect(
-      inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" }).dirty.map(
+      inspectInfrastructurePackageBuilds({ cwd }).dirty.map(
         (state) => state.name
       )
     ).toEqual(["@vibestudio/base", "@vibestudio/consumer"]);
@@ -332,7 +347,7 @@ describe("infrastructure package cache", () => {
 
   it("keeps source-only dependency bridges in pnpm's scheduling graph", () => {
     const cwd = fixture();
-    const initial = inspectInfrastructurePackageBuilds({ cwd, toolchainDigest: "toolchain" });
+    const initial = inspectInfrastructurePackageBuilds({ cwd });
     writeInfrastructurePackageCache(initial);
     write(cwd, "packages/consumer/dist/index.js", "corrupted\n");
     write(cwd, "packages/consumer/tsconfig.build.tsbuildinfo", "stale\n");
@@ -353,7 +368,6 @@ describe("infrastructure package cache", () => {
         );
       },
       log: () => {},
-      toolchainDigest: "toolchain",
     });
 
     expect(args).toContain("@vibestudio/consumer");

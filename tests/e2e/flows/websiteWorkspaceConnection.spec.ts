@@ -77,7 +77,7 @@ test("website SDK requires explicit connection and retires access on document re
     document.querySelector('#eval').onclick = () => attempt(async () => {
       const runId = crypto.randomUUID();
       const scope = { key: 'website-authority-acceptance', lifecycle: 'finite' };
-      const code = "const runtime = await import('@workspace/runtime'); const entries = await runtime.rpc.call('main', 'docs.listSurfaces', []); let closed = false; try { await runtime.rpc.call('main', 'websiteHosting.list', []); } catch (error) { closed = /closed to websites/.test(error.message); } return { discovered: Array.isArray(entries), closed };";
+      const code = "const runtime = await import('@workspace/runtime'); const entries = await runtime.services.docs.listSurfaces(); let closed = false; try { await runtime.services.websiteHosting.list(); } catch (error) { closed = /closed to websites/.test(error.message); } return { discovered: Array.isArray(entries), closed };";
       await callMain('eval.start', { runId, scope, source: { kind: 'inline', code } });
       for (let attempt = 0; attempt < 120; attempt++) {
         const state = await callMain('eval.get', { runId, scopeKey: scope.key });

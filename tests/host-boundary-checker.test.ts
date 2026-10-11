@@ -129,13 +129,13 @@ describe("collectFindings — import-violation category", () => {
   it("reports each import once", () => {
     const result = findings(`import a from "@workspace/runtime";`);
     expect(result).toHaveLength(1);
-    expect(result[0].category).toBe("import-violation");
+    expect(result[0]?.category).toBe("import-violation");
   });
   it("still flags hard imports in test files", () => {
     const text = `import a from "@workspace/runtime/worker/test-utils";`;
     const result = collectFindings({ text, absFile: "/repo/src/server/foo.test.ts", root: ROOT });
     expect(result).toHaveLength(1);
-    expect(result[0].category).toBe("import-violation");
+    expect(result[0]?.category).toBe("import-violation");
   });
 
   it("does not treat contract strings as dependencies", () => {

@@ -1,9 +1,18 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { decodeRpcJson, encodeRpcJson, envelopeFromMessage } from "@vibestudio/rpc";
+import {
+  decodeRpcJson,
+  deserializeRpcFailure,
+  encodeRpcJson,
+  envelopeFromMessage,
+  type RpcMethod,
+} from "@vibestudio/rpc";
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import {
@@ -20,17 +29,16 @@ interface ReadyPayload {
 }
 
 const RUN_SERVER_INTEGRATION = process.env["VIBESTUDIO_RUN_SERVER_INTEGRATION"] === "1";
+const hubControlRpcMethods = createRpcMethods("hubControl", hubControlMethods);
 const serverPath = path.resolve(process.cwd(), "dist", "server.mjs");
 const maybeDescribe =
   RUN_SERVER_INTEGRATION && fs.existsSync(serverPath) ? describe : describe.skip;
 
-let proc: ChildProcessWithoutNullStreams | null = null;
 let tempRoot: string | null = null;
 let serverOwner: ReturnType<typeof ownChild> | null = null;
 
 afterEach(async () => {
   await serverOwner?.retire();
-  proc = null;
   serverOwner = null;
   if (tempRoot) {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -46,7 +54,7 @@ maybeDescribe("image-service extension server smoke", () => {
       repoRoot: process.cwd(),
       checkpointRoot: path.join(tempRoot, "template-checkpoints"),
     });
-    proc = spawn(
+    const child = spawn(
       process.execPath,
       [
         serverPath,
@@ -67,21 +75,20 @@ maybeDescribe("image-service extension server smoke", () => {
         stdio: ["ignore", "pipe", "pipe"],
       }
     );
-
-    serverOwner = ownChild(proc);
+    serverOwner = ownChild(child);
 
     let serverOutput = "";
     const appendServerOutput = (chunk: Buffer | string): void => {
       serverOutput += String(chunk);
       if (serverOutput.length > 20_000) serverOutput = serverOutput.slice(-20_000);
     };
-    proc.stdout.on("data", appendServerOutput);
-    proc.stderr.on("data", (chunk) => {
+    child.stdout.on("data", appendServerOutput);
+    child.stderr.on("data", (chunk) => {
       appendServerOutput(chunk);
     });
 
     try {
-      const ready = await waitForReadyFile(readyFile, proc, () => serverOutput);
+      const ready = await waitForReadyFile(readyFile, child, () => serverOutput);
       const shellToken = await issueShellToken(ready);
 
       // This server-only smoke has no native bootstrap UI, so it settles both
@@ -93,7 +100,7 @@ maybeDescribe("image-service extension server smoke", () => {
       // image-service is declared onInvoke: startup admits it without spending
       // a cold build, and the first real operation owns materialization.
       await expect(
-        rpc(ready, shellToken, "extensions.invoke", [
+        rpc(ready, shellToken, mainRpcMethods["extensions.invoke"], [
           "@workspace-extensions/image-service",
           "detectMimeType",
           [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])],
@@ -115,23 +122,19 @@ async function approveStartupInstallReviews(
 ): Promise<void> {
   const deadline = Date.now() + 180_000;
   for (;;) {
-    const state = await rpc<
-      | { status: "preparing" | "not-required" | "resolved" | "unresolved" }
-      | { status: "pending"; approvalId: string; partCount: number }
-      | { status: "failed"; error: string }
-    >(ready, shellToken, "shellApproval.getWorkspaceCreationReviewState", []);
+    const state = await rpc(
+      ready,
+      shellToken,
+      mainRpcMethods["shellApproval.getWorkspaceCreationReviewState"],
+      []
+    );
     if (state.status === "failed") {
       throw new Error(`Workspace creation review failed: ${state.error}`);
     }
     if (state.status === "unresolved") {
       throw new Error("Workspace creation review was left unresolved");
     }
-    const pending = await rpc<PendingUnitInstallReviewApproval[]>(
-      ready,
-      shellToken,
-      "shellApproval.listPending",
-      []
-    );
+    const pending = await rpc(ready, shellToken, mainRpcMethods["shellApproval.listPending"], []);
     const installReviews = pending.filter(
       (approval): approval is PendingUnitInstallReviewApproval =>
         approval.kind === "unit-install-review"
@@ -140,7 +143,7 @@ async function approveStartupInstallReviews(
       await rpc(
         ready,
         shellToken,
-        "shellApproval.resolveInstallReview",
+        mainRpcMethods["shellApproval.resolveInstallReview"],
         [approval.approvalId, defaultAcceptance(approval.mode, approval.parts)],
         { timeoutMs: 180_000 }
       );
@@ -165,12 +168,7 @@ async function waitForExtensionAvailable(
 ): Promise<void> {
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
-    const extensions = await rpc<Array<{ name: string; status: string; lastError: string | null }>>(
-      ready,
-      shellToken,
-      "build.listUnits",
-      []
-    );
+    const extensions = await rpc(ready, shellToken, mainRpcMethods["build.listUnits"], []);
     const extension = extensions.find((entry) => entry.name === name);
     if (extension?.status === "available" || extension?.status === "ready") return;
     if (extension?.status === "error") throw new Error(`${name} failed: ${extension.lastError}`);
@@ -188,13 +186,9 @@ async function waitForExtensionRunning(
   // above the cold sequential reconcile time; subsequent invocations are fast.
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
-    const extensions = await rpc<
-      Array<{
-        identity: { kind: string; entityId: string };
-        status: string;
-        lastError: string | null;
-      }>
-    >(ready, shellToken, "runtime.supervision.list", [{ kind: "extension" }]);
+    const extensions = await rpc(ready, shellToken, mainRpcMethods["runtime.supervision.list"], [
+      { kind: "extension" },
+    ]);
     const entry = extensions.find((extension) => extension.identity.entityId === name);
     if (entry?.status === "running") return;
     if (entry?.status === "error") throw new Error(`${name} failed: ${entry.lastError}`);
@@ -205,7 +199,7 @@ async function waitForExtensionRunning(
 
 async function waitForReadyFile(
   readyFile: string,
-  child: ChildProcessWithoutNullStreams,
+  child: ChildProcess,
   getStderr: () => string
 ): Promise<ReadyPayload> {
   const deadline = Date.now() + 45_000;
@@ -249,18 +243,13 @@ async function issueShellToken(ready: ReadyPayload): Promise<string> {
       `failed to pair root device (${pairedResponse.status}): ${JSON.stringify(paired)}`
     );
   }
-  const workspaces = await rpc<Array<{ workspaceId: string; name: string }>>(
-    ready,
-    paired.shellToken,
-    "hubControl.listWorkspaces",
-    []
-  );
+  const workspaces = await rpc(ready, paired.shellToken, hubControlRpcMethods.listWorkspaces, []);
   const workspace = workspaces[0];
   if (!workspace?.workspaceId) throw new Error("hub exposed no exact workspace identity");
-  const route = await rpc<{ serverUrl: string }>(
+  const route = await rpc(
     ready,
     paired.shellToken,
-    "hubControl.routeWorkspace",
+    hubControlRpcMethods.routeWorkspace,
     [{ workspaceId: workspace.workspaceId }],
     { timeoutMs: 180_000 }
   );
@@ -280,48 +269,56 @@ async function issueShellToken(ready: ReadyPayload): Promise<string> {
   return refreshed.shellToken;
 }
 
-async function rpc<T = unknown>(
+async function rpc<Args extends unknown[], Result>(
   ready: ReadyPayload,
   shellToken: string,
-  method: string,
-  args: unknown[],
+  method: RpcMethod<Args, Result>,
+  args: NoInfer<Args>,
   options: { timeoutMs?: number } = {}
-): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`${ready.gatewayUrl}/rpc`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${shellToken}`,
-      },
-      body: encodeRpcJson(
-        envelopeFromMessage({
-          from: "extension-image-service-integration",
-          target: "main",
-          callerKind: "shell",
-          message: {
-            type: "request",
-            requestId: randomUUID(),
-            fromId: "extension-image-service-integration",
-            method,
-            args,
-          },
-        })
-      ),
-      signal: AbortSignal.timeout(options.timeoutMs ?? 15_000),
-    });
-  } catch (error) {
-    throw new Error(`RPC ${method} did not respond`, { cause: error });
-  }
-  const json = decodeRpcJson(await response.text()) as
-    | { error?: string }
-    | { message?: { result?: T; error?: string } }
-    | { envelope?: { message?: { result?: T; error?: string } } };
-  const body =
-    "envelope" in json ? json.envelope?.message : "message" in json ? json.message : json;
-  if (!response.ok || body?.error) {
-    throw new Error(body?.error ?? `RPC ${method} failed with status ${response.status}`);
-  }
-  return body?.result as T;
+): Promise<Result> {
+  return method.invoke(args, async (parsedArgs) => {
+    let response: Response;
+    try {
+      response = await fetch(`${ready.gatewayUrl}/rpc`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${shellToken}`,
+        },
+        body: encodeRpcJson(
+          envelopeFromMessage({
+            selfId: "extension-image-service-integration",
+            from: "extension-image-service-integration",
+            target: "main",
+            callerKind: "shell",
+            message: {
+              type: "request",
+              requestId: randomUUID(),
+              fromId: "extension-image-service-integration",
+              method: method.name,
+              args: parsedArgs,
+            },
+          })
+        ),
+        signal: AbortSignal.timeout(options.timeoutMs ?? 15_000),
+      });
+    } catch (error) {
+      throw new Error(`RPC ${method.name} did not respond`, { cause: error });
+    }
+    if (!response.ok) throw new Error(`RPC ${method.name} failed with status ${response.status}`);
+    const decoded: unknown = decodeRpcJson(await response.text());
+    const root = recordOf(decoded);
+    const message = recordOf(root?.["message"]);
+    if (message?.["type"] !== "response")
+      throw new Error(`RPC ${method.name} returned a malformed response envelope`);
+    if (Object.hasOwn(message, "error")) throw deserializeRpcFailure(message["error"]);
+    if (!Object.hasOwn(message, "result"))
+      throw new Error(`RPC ${method.name} response omitted its result`);
+    return message["result"];
+  });
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return Object.fromEntries(Object.entries(value));
 }

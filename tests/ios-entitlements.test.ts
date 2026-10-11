@@ -10,9 +10,9 @@ function generate(env: Record<string, string | undefined>, configuration = "Debu
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-ios-entitlements-"));
   const output = path.join(dir, "Generated.entitlements");
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
-  delete childEnv.VIBESTUDIO_IOS_APS_ENV;
-  delete childEnv.VIBESTUDIO_IOS_PAIR_HOST;
-  delete childEnv.VIBESTUDIO_IOS_ASSOCIATED_DOMAINS;
+  delete childEnv["VIBESTUDIO_IOS_APS_ENV"];
+  delete childEnv["VIBESTUDIO_IOS_PAIR_HOST"];
+  delete childEnv["VIBESTUDIO_IOS_ASSOCIATED_DOMAINS"];
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) delete childEnv[key];
     else childEnv[key] = value;
@@ -27,7 +27,9 @@ function generate(env: Record<string, string | undefined>, configuration = "Debu
     }
   );
   if (result.status !== 0) {
-    throw new Error(result.stderr || result.stdout || `entitlements generator exited ${result.status}`);
+    throw new Error(
+      result.stderr || result.stdout || `entitlements generator exited ${result.status}`
+    );
   }
   return fs.readFileSync(output, "utf8");
 }
@@ -35,7 +37,7 @@ function generate(env: Record<string, string | undefined>, configuration = "Debu
 describe("ios-entitlements", () => {
   it("keeps the iOS Podfile compatible with the pnpm workspace layout", () => {
     const podfile = fs.readFileSync(path.join(process.cwd(), "apps/mobile/ios/Podfile"), "utf8");
-    expect(podfile).toContain("require.resolve(\"react-native/scripts/react_native_pods.rb\"");
+    expect(podfile).toContain('require.resolve("react-native/scripts/react_native_pods.rb"');
     expect(podfile).toContain("prepare_react_native_project!");
     expect(podfile).not.toContain("require_relative '../node_modules");
   });

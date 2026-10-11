@@ -7,8 +7,9 @@ exact `typescript@7.0.2` dependency.
 
 ## Command-line checks
 
-- `pnpm type-check:host` checks the complete host graph and the separate
-  workerd-entry graph with TypeScript 7's native `tsc`.
+- `pnpm type-check:host` checks the complete host graph, the strict top-level
+  host test graph (including Playwright helpers), and the separate workerd-entry
+  graph with TypeScript 7's native `tsc`.
 - `pnpm type-check:watch` uses the native compiler's watch mode.
 - `pnpm type-check` adds the userland and React Native graphs.
 - Package scripts invoke the normal `typescript/bin/tsc` entry point. There is

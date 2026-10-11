@@ -7,7 +7,7 @@ export const NativeModules: Record<string, unknown> = {};
 export const Platform = {
   OS: "ios",
   select<T>(specifics: Record<string, T>): T | undefined {
-    return specifics.ios ?? specifics.native ?? specifics.default;
+    return specifics["ios"] ?? specifics["native"] ?? specifics["default"];
   },
 };
 

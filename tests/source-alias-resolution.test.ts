@@ -68,7 +68,7 @@ describe("source package resolution", () => {
       optionalPeerDependencies: [],
       dependencyOverrides: {},
       internalDeps: [],
-      manifest: { name: "@fixture/library", version: "1.0.0" },
+      manifest: {},
     };
     const projected = userlandDependencyAliases({
       graph: new PackageGraph(),

@@ -38,7 +38,7 @@ describe("published npm dependency surface", () => {
 
   it("never publishes Electron, which belongs to the natively packaged desktop", () => {
     expect(computeHostDependencies()).not.toHaveProperty("electron");
-    expect(rootPackage.devDependencies.electron).toBeTruthy();
+    expect(rootPackage.devDependencies["electron"]).toBeTruthy();
   });
 
   it("publishes every external native host runtime dependency", () => {

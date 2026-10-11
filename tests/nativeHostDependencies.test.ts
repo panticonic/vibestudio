@@ -1,17 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
+import type {
+  SpawnSyncOptionsWithStringEncoding,
+  SpawnSyncReturns,
+} from "node:child_process";
 import {
   assertHostNativeDependencies,
   ensureHostNativeDependencies,
   inspectHostNativeDependencies,
 } from "../scripts/native-host-dependencies.mjs";
 
-function result(status: number, stderr = "") {
-  return { status, stderr, stdout: "", error: undefined };
+function result(status: number, stderr = ""): SpawnSyncReturns<string> {
+  return {
+    pid: process.pid,
+    output: ["", "", ""],
+    status,
+    signal: null,
+    stderr,
+    stdout: "",
+  };
 }
 
 describe("host native dependency contracts", () => {
   it("checks every runtime dependency without mutating the install", () => {
-    const run = vi.fn(() => result(0));
+    const run = vi.fn(
+      (_command: string, _args: readonly string[], _options: SpawnSyncOptionsWithStringEncoding) =>
+        result(0)
+    );
 
     expect(inspectHostNativeDependencies({ run })).toEqual([
       { packageName: "@number0/iroh", ok: true },
@@ -24,7 +38,10 @@ describe("host native dependency contracts", () => {
 
   it("reports all unavailable dependencies and the exact repair command", () => {
     const run = vi
-      .fn()
+      .fn(
+        (_command: string, _args: readonly string[], _options: SpawnSyncOptionsWithStringEncoding) =>
+          result(0)
+      )
       .mockReturnValueOnce(result(1, "missing datachannel"))
       .mockReturnValueOnce(result(1, "missing pty"))
       .mockReturnValueOnce(result(0));
@@ -37,7 +54,10 @@ describe("host native dependency contracts", () => {
   it("repairs only failed dependencies and verifies the repaired install", () => {
     const log = vi.fn();
     const run = vi
-      .fn()
+      .fn(
+        (_command: string, _args: readonly string[], _options: SpawnSyncOptionsWithStringEncoding) =>
+          result(0)
+      )
       .mockReturnValueOnce(result(1, "missing datachannel"))
       .mockReturnValueOnce(result(0))
       .mockReturnValueOnce(result(0))

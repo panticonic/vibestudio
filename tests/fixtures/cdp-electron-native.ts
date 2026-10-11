@@ -38,6 +38,7 @@ void app.whenReady().then(async () => {
     getViewManager: () => ({
       getWebContents: () => target.webContents,
       openDevTools: () => {},
+      retryViewNavigation: async () => false,
       setAutomationSurfaceActive: async (_id, active) => {
         target.setBounds({ x: 0, y: 0, width: 817, height: 740 });
         target.setVisible(active);

@@ -13,15 +13,17 @@ import { exactUserlandRoot } from "./exactUserlandRoot";
 
 describe("VCS skill release generator", () => {
   it("keeps the generated contract and compact skill package manifest fresh", () => {
-    expect(() => runReleaseGate({ userlandRoot: exactUserlandRoot, checkOnly: true })).not.toThrow();
+    expect(() =>
+      runReleaseGate({ userlandRoot: exactUserlandRoot, checkOnly: true })
+    ).not.toThrow();
   });
 
   it("derives exactly the small public contract from the sole registry", () => {
     const contract = buildPublicContract();
     expect(Object.keys(contract.methods)).toEqual(Object.keys(vcsMethods));
-    expect(contract.methods.move.description).toContain("stable file or repository identities");
-    expect(contract.methods.copy.description).toContain("immediate coordinate provenance");
-    expect(contract.methods.commit.description).toContain("complete local application chain");
+    expect(contract.methods["move"]?.description).toContain("stable file or repository identities");
+    expect(contract.methods["copy"]?.description).toContain("immediate coordinate provenance");
+    expect(contract.methods["commit"]?.description).toContain("complete local application chain");
 
     const exactSchema = JSON.stringify(contract.exactSchema);
     expect(exactSchema).toContain("VcsPublicContract");

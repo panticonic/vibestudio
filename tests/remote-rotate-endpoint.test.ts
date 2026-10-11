@@ -1,4 +1,3 @@
-// @ts-expect-error Script modules are plain .mjs and intentionally untyped.
 import { parseArgs, rotateEndpoint } from "../scripts/cli/remote-rotate-endpoint.mjs";
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
@@ -23,6 +22,7 @@ describe("remote endpoint rotation", () => {
       { randomBytes: () => Buffer.alloc(32, 2), randomUUID: () => "fixed" }
     );
     expect(fs.readFileSync(identity)).toEqual(Buffer.alloc(32, 2));
+    if (!result.backup) throw new Error("Rotation did not retain the existing endpoint key");
     expect(fs.readFileSync(result.backup)).toEqual(Buffer.alloc(32, 1));
     expect(fs.statSync(identity).mode & 0o777).toBe(0o600);
   });

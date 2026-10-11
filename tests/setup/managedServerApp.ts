@@ -66,7 +66,7 @@ export async function launchManagedServerApp(
     pairingLink = ready.pairingLink;
     const secrets = ready.secrets;
     console.log(`[website-e2e] pairing disposable desktop to ${instance}`);
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...secrets.env,
       NODE_ENV: "development",
@@ -88,7 +88,9 @@ export async function launchManagedServerApp(
         pairingLink,
         "--dev-iroh-remote",
       ],
-      env,
+      env: Object.fromEntries(
+        Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+      ),
       timeout: 120_000,
     });
     app.process().stdout?.on("data", (chunk) => output.push(String(chunk)));

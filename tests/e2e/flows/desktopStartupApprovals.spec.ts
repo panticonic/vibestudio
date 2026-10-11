@@ -31,6 +31,28 @@ import {
   type TestApp,
 } from "../../setup/electronSetup";
 import { declineFirstRunReporting } from "../support/workspaceCreation";
+import { getChannelRpcReadBundle } from "../support/channelRpcReadBundle";
+
+const CHANNEL_RPC_READS_SYMBOL = "vibestudio.e2e.channelRpcReads.v1";
+
+async function channelRpcReadScript(
+  targetId: string,
+  operation: "participants" | "replay" | "snapshot"
+): Promise<string> {
+  const bundle = await getChannelRpcReadBundle();
+  const target = JSON.stringify(targetId);
+  const read =
+    operation === "participants"
+      ? `reads.readChannelParticipants(rpc, ${target})`
+      : operation === "replay"
+        ? `reads.readChannelReplay(rpc, ${target}, 0)`
+        : `reads.readChannelSnapshot(rpc, ${target})`;
+  return `${bundle}\n;(async () => {
+    const { rpc } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
+    const reads = globalThis[Symbol.for(${JSON.stringify(CHANNEL_RPC_READS_SYMBOL)})];
+    return ${read};
+  })()`;
+}
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -594,7 +616,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp,
             firstPanelId,
-            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getParticipants", []))`
+            await channelRpcReadScript(targetId, "participants")
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -604,7 +626,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp,
             firstPanelId,
-            `(() => globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }])).then((replay) => ({
+            `${await channelRpcReadScript(targetId, "replay")}.then((replay) => ({
               ready: replay?.ready,
               snapshots: replay?.snapshots,
               logEvents: (replay?.logEvents ?? []).map((event) => ({
@@ -617,7 +639,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
                 role: event.payload?.payload?.message?.role ?? event.payload?.message?.role,
                 content: String(event.payload?.payload?.blocks?.filter((block) => block.type === "text").map((block) => block.content).join("\n") ?? "").slice(0, 300),
               })),
-            })))()`
+              }))`
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -772,11 +794,14 @@ async function collectStartupAgentCompletion(
       continue;
     }
 
+    const snapshotBundle = await getChannelRpcReadBundle();
     const snapshot = await executePanelScript(
       testApp,
       firstPanelId,
-      `(async () => {
-        const { rpc } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
+      `${snapshotBundle}
+      ;(async () => {
+        const { rpc, services } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
+        const reads = globalThis[Symbol.for(${JSON.stringify(CHANNEL_RPC_READS_SYMBOL)})];
         const hydrateStoredValue = async (value) => {
           if (
             !value ||
@@ -786,7 +811,7 @@ async function collectStartupAgentCompletion(
           ) {
             return value;
           }
-          const text = await rpc.call("main", "blobstore.getText", [value.digest]);
+          const text = await services.blobstore.getText(value.digest);
           if (text === null) {
             throw new Error("Missing trajectory blob " + value.digest);
           }
@@ -833,8 +858,8 @@ async function collectStartupAgentCompletion(
           };
         };
         const [participants, replay] = await Promise.all([
-          rpc.call(${JSON.stringify(targetId)}, "getParticipants", []),
-          rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }]),
+          reads.readChannelParticipants(rpc, ${JSON.stringify(targetId)}),
+          reads.readChannelReplay(rpc, ${JSON.stringify(targetId)}, 0),
         ]);
         return {
           participants,

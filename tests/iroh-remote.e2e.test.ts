@@ -25,6 +25,10 @@ import {
   VIBESTUDIO_IROH_ALPN,
 } from "@vibestudio/iroh-transport/node";
 import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
+import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { gatewayMethods } from "@vibestudio/service-schemas/gateway";
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import {
   createIrohClientPipe,
   type IrohClientPipe,
@@ -37,6 +41,7 @@ import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
 import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
+import { z } from "zod";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startPanelAssetFacade } from "../src/node/panelAssets/panelAssetFacade.js";
 import { DeviceAuthStore } from "../src/server/hostCore/deviceAuthStore.js";
@@ -48,6 +53,35 @@ import { createHubCredentialRedeemer } from "../src/server/services/authService.
 const RUN = process.env["VIBESTUDIO_RUN_IROH_E2E"] === "1";
 const STARTUP_FAN_OUT_REGRESSION_COUNT = 320;
 const { SecretKey } = loadIrohNodeBinding();
+
+// This test dispatcher is the receiver for its demo methods. Keep its argument
+// contracts beside the receiver so the native transport cases exercise the
+// same descriptor-based caller surface as production services.
+const irohDemoMethods = createRpcMethods(
+  "demo",
+  defineServiceMethods({
+    echo: {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([z.string()]),
+      returns: z.unknown(),
+    },
+    stream: {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([z.string()]),
+      returns: z.unknown(),
+    },
+    "await-landing": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([z.number()]),
+      returns: z.unknown(),
+    },
+    hold: {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([z.number()]),
+      returns: z.unknown(),
+    },
+  })
+);
 
 interface ConnectedClient {
   endpoint: Endpoint;
@@ -153,7 +187,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     const code = mintInvite();
     let credential: DeviceCredential | null = null;
     const session = client.pipe.openSession({
-      sid: options.sid,
+      clientSessionId: options.sid,
       connectionId: options.connectionId,
       clientLabel: "Iroh native smoke",
       clientPlatform: "desktop",
@@ -231,7 +265,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
             .listDevices()
             .find((candidate) => candidate.deviceId === deviceId);
           const user = device ? userStore.getUser(device.userId) : null;
-          return user ? { userId: user.id, handle: user.handle } : undefined;
+          return user ? { userId: user.id, handle: user.handle } : null;
         },
       },
       redeemPairingCredential: createHubCredentialRedeemer({
@@ -287,7 +321,9 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     expect(paired.pipe.peerEndpointId).toBe(serverEndpoint.id().toString());
     expect(paired.pipe.diagnostics()?.paths.some((candidate) => candidate.selected)).toBe(true);
 
-    await expect(paired.rpc.call("main", "demo.echo", ["hello-iroh"])).resolves.toMatchObject({
+    await expect(
+      paired.rpc.call("main", irohDemoMethods.echo, ["hello-iroh"])
+    ).resolves.toMatchObject({
       method: "echo",
       args: ["hello-iroh"],
       subject: { handle: "root" },
@@ -301,10 +337,10 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   it("rejects replay of a consumed one-time pairing credential", async () => {
     const client = await createClient();
     const code = mintInvite();
-    const first = client.pipe.openSession({ sid: "first", getToken: () => code });
+    const first = client.pipe.openSession({ clientSessionId: "first", getToken: () => code });
     await first.ready?.();
     const devicesAfterPairing = deviceAuthStore.listDevices().length;
-    const replay = client.pipe.openSession({ sid: "replay", getToken: () => code });
+    const replay = client.pipe.openSession({ clientSessionId: "replay", getToken: () => code });
     await expect(replay.ready?.()).rejects.toThrow(/invalid|expired|pairing/iu);
     expect(deviceAuthStore.listDevices()).toHaveLength(devicesAfterPairing);
     await closeClient(client);
@@ -321,7 +357,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     expect(returning.endpoint.id().toString()).toBe(endpointId);
     let issuedAgain = false;
     const session = returning.pipe.openSession({
-      sid: "returning",
+      clientSessionId: "returning",
       connectionId: "stable-shell",
       getToken: () => refresh,
       onPaired: () => {
@@ -331,11 +367,11 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     await session.ready?.();
     expect(session.callerId()).toBe(`shell:${paired.credential.deviceId}`);
     expect(issuedAgain).toBe(false);
-    await expect(rpcFor(session).call("main", "demo.echo", ["reconnected"])).resolves.toMatchObject(
-      {
-        args: ["reconnected"],
-      }
-    );
+    await expect(
+      rpcFor(session).call("main", irohDemoMethods.echo, ["reconnected"])
+    ).resolves.toMatchObject({
+      args: ["reconnected"],
+    });
     await closeClient(returning);
   }, 30_000);
 
@@ -343,8 +379,8 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     const [left, right] = await Promise.all([pairFresh(), pairFresh()]);
     expect(left.credential.deviceId).not.toBe(right.credential.deviceId);
     const [leftResult, rightResult] = await Promise.all([
-      left.rpc.call("main", "demo.echo", ["left"]),
-      right.rpc.call("main", "demo.echo", ["right"]),
+      left.rpc.call("main", irohDemoMethods.echo, ["left"]),
+      right.rpc.call("main", irohDemoMethods.echo, ["right"]),
     ]);
     expect(leftResult).toMatchObject({ args: ["left"] });
     expect(rightResult).toMatchObject({ args: ["right"] });
@@ -357,7 +393,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     const paired = await pairFresh({ sid: "old-session", connectionId: "takeover-shell" });
     const refresh = `refresh:${paired.credential.deviceId}:${paired.credential.refreshToken}`;
     const replacement = paired.pipe.openSession({
-      sid: "replacement-session",
+      clientSessionId: "replacement-session",
       connectionId: "takeover-shell",
       getToken: () => refresh,
     });
@@ -366,7 +402,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     expect(replacement.isClosed()).toBe(false);
     expect(paired.pipe.status()).toBe("connected");
     await expect(
-      rpcFor(replacement).call("main", "demo.echo", ["replacement"])
+      rpcFor(replacement).call("main", irohDemoMethods.echo, ["replacement"])
     ).resolves.toMatchObject({
       args: ["replacement"],
     });
@@ -379,7 +415,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
       const refresh = `refresh:${paired.credential.deviceId}:${paired.credential.refreshToken}`;
       const additional = Array.from({ length: 64 }, (_, index) =>
         paired.pipe.openSession({
-          sid: `panel-${index}`,
+          clientSessionId: `panel-${index}`,
           connectionId: `panel-lease-${index}`,
           getToken: () => refresh,
         })
@@ -391,7 +427,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
         5_000
       );
       await expect(
-        rpcFor(additional.at(-1)!).call("main", "demo.echo", ["panel-64"])
+        rpcFor(additional.at(-1)!).call("main", irohDemoMethods.echo, ["panel-64"])
       ).resolves.toMatchObject({ args: ["panel-64"] });
       expect(paired.pipe.diagnostics()?.logicalSessions).toBe(65);
     } finally {
@@ -409,7 +445,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     });
     let response: Response;
     try {
-      response = await paired.rpc.stream("main", "demo.stream", ["asset"], {
+      response = await paired.rpc.stream("main", irohDemoMethods.stream, ["asset"], {
         body: upload,
         trafficClass: "bulk",
       });
@@ -506,7 +542,12 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     const facade = await startPanelAssetFacade(
       {
         stream: (_service, _method, args, options) =>
-          paired.rpc.stream("main", "gateway.fetch", args ?? [], options),
+          paired.rpc.stream(
+            "main",
+            mainRpcMethods["gateway.fetch"],
+            gatewayMethods.fetch.args.parse(args ?? []),
+            options
+          ),
       },
       { stateDir: path.join(tmp, `facade-${Date.now()}`) }
     );
@@ -541,7 +582,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
       expect(iconResponses.every((response) => response.status === 200)).toBe(true);
       await expect(
         within(
-          paired.rpc.call("main", "demo.echo", ["beside-prefetch"]),
+          paired.rpc.call("main", irohDemoMethods.echo, ["beside-prefetch"]),
           "short RPC waited behind panel prefetch",
           2_000
         )
@@ -562,7 +603,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   it("recycles native stream credit across a concurrent unary burst", async () => {
     const paired = await pairFresh();
     const calls = Array.from({ length: 96 }, (_, index) =>
-      paired.rpc.call("main", "demo.echo", [`credit-${index}`])
+      paired.rpc.call("main", irohDemoMethods.echo, [`credit-${index}`])
     );
 
     const results = await within(
@@ -589,14 +630,14 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
       };
 
       const pending = Array.from({ length: STARTUP_FAN_OUT_REGRESSION_COUNT }, (_, index) =>
-        paired.rpc.call("main", "demo.await-landing", [index])
+        paired.rpc.call("main", irohDemoMethods["await-landing"], [index])
       );
       const settled = Promise.allSettled(pending);
       try {
         await waitFor(() => (dispatchGate?.started ?? 0) >= 256);
         await expect(
           within(
-            paired.rpc.call("main", "demo.echo", ["beside-landing"]),
+            paired.rpc.call("main", irohDemoMethods.echo, ["beside-landing"]),
             "short RPC was blocked by unresolved startup dispatches",
             2_000
           )
@@ -620,11 +661,11 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     const held: Response[] = [];
     try {
       for (let index = 0; index < STARTUP_FAN_OUT_REGRESSION_COUNT; index += 1) {
-        held.push(await paired.rpc.stream("main", "demo.hold", [index]));
+        held.push(await paired.rpc.stream("main", irohDemoMethods.hold, [index]));
       }
       expect(paired.pipe.diagnostics()?.activeRequests).toBe(STARTUP_FAN_OUT_REGRESSION_COUNT);
       const calls = Array.from({ length: 8 }, (_, index) =>
-        paired.rpc.call("main", "demo.echo", [`beside-hold-${index}`])
+        paired.rpc.call("main", irohDemoMethods.echo, [`beside-hold-${index}`])
       );
       const results = await within(
         Promise.all(calls),

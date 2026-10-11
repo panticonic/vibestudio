@@ -1,7 +1,6 @@
 /** Test-owned smart-HTTP fixture. It is intentionally outside host runtime
  * code: production only ever receives an ordinary external Git URL. */
 import { execFile, spawn } from "node:child_process";
-import * as fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import * as path from "node:path";
 import { promisify } from "node:util";
@@ -97,9 +96,7 @@ export class SmartGitHttpFixture {
     repository.authorization = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
   }
 
-  private async handle(
-    request: IncomingMessage
-  ): Promise<{
+  private async handle(request: IncomingMessage): Promise<{
     statusCode: number;
     statusMessage: string;
     headers: Record<string, string>;
@@ -110,10 +107,7 @@ export class SmartGitHttpFixture {
     if (!match) throw new Error("Unknown fixture Git path");
     const repository = this.repositories.get(match[1]!);
     if (!repository) throw new Error("Unknown fixture Git path");
-    if (
-      repository.authorization &&
-      request.headers.authorization !== repository.authorization
-    ) {
+    if (repository.authorization && request.headers.authorization !== repository.authorization) {
       return {
         statusCode: 401,
         statusMessage: "Unauthorized",

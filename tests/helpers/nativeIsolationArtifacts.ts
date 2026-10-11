@@ -29,7 +29,6 @@ export function nativeIsolationBinary(target: (typeof NATIVE_ISOLATION_TARGETS)[
 }
 
 export function writeNativeIsolationArtifacts(
-  root: string,
   artifactRoot: string,
   targets = NATIVE_ISOLATION_TARGETS
 ) {

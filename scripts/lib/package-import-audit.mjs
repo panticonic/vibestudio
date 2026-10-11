@@ -243,6 +243,9 @@ function stringTargets(value) {
  * points and compare each bare import with that package's own manifest.
  * `jsxRuntime` is supplied by the owning build contract, never guessed from
  * the source extension.
+ * @param {string} packageDirectory
+ * @param {string} repositoryRoot
+ * @param {{ jsxRuntime?: string, runtimeModuleSpecifiers?: string[] }} [options]
  */
 export async function collectPackageManifestImportFindings(
   packageDirectory,

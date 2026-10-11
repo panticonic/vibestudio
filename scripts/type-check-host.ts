@@ -9,6 +9,7 @@ try {
   buildInfrastructurePackages({ cwd: appRoot });
   for (const [name, relative] of [
     ["host", "tsconfig.json"],
+    ["host tests", "tsconfig.host-tests.json"],
     ["validation tooling", "scripts/tsconfig.validation.json"],
     ["workerd programs", "src/server/workerdPrograms/tsconfig.json"],
   ] as const) {

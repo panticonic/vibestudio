@@ -13,7 +13,6 @@ import {
   stagePublishedPackage,
 } from "../scripts/build-server-npm-package.mjs";
 import { createRequire } from "node:module";
-import { NATIVE_ISOLATION_TARGETS } from "../scripts/native-isolation-artifacts.mjs";
 
 describe("npm CLI packaging", () => {
   it("stages the declared published files and assets without development source", () => {

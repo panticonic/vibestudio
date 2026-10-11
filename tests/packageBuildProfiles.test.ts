@@ -127,7 +127,7 @@ describe("package build profiles", () => {
           `${manifest.name} concrete source-only entrypoints must exist`
         ).toEqual([]);
         expect(
-          manifest.scripts?.build,
+          manifest.scripts?.["build"],
           "source-only packages do not emit build artifacts"
         ).toBeUndefined();
         expect(fs.existsSync(path.join(directory, "tsconfig.build.json"))).toBe(false);
@@ -147,19 +147,19 @@ describe("package build profiles", () => {
       expect(compilerOptions.noEmit).not.toBe(true);
 
       if (profile === "tsc-output") {
-        expect(manifest.scripts?.build).toBe("tsc --project tsconfig.build.json");
+        expect(manifest.scripts?.["build"]).toBe("tsc --project tsconfig['build'].json");
         expect(fs.existsSync(path.join(directory, "build.mjs"))).toBe(false);
         return;
       }
 
       if (profile === "tsc-build-incremental") {
-        expect(manifest.scripts?.build).toBe("tsc --build tsconfig.build.json");
+        expect(manifest.scripts?.["build"]).toBe("tsc --build tsconfig['build'].json");
         expect(compilerOptions.composite).toBe(true);
         expect(fs.existsSync(path.join(directory, "build.mjs"))).toBe(false);
         return;
       }
 
-      expect(manifest.scripts?.build).toBe("node build.mjs");
+      expect(manifest.scripts?.["build"]).toBe("node build.mjs");
       const customBuild = fs.readFileSync(path.join(directory, "build.mjs"), "utf8");
       expect(customBuild).toContain("esbuild.build");
     });

@@ -1,10 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { viewMethods } from "@vibestudio/service-schemas/view";
 import { vcsMethods } from "@vibestudio/service-schemas/vcs";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
-import { nativeUiRead } from "../support/nativeUiRead";
+import { nativeUiRead, nativeUiServiceInvoker } from "../support/nativeUiRead";
 
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
@@ -22,6 +24,9 @@ import {
 } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
+
+const hubControlRpcMethods = createRpcMethods("hubControl", hubControlMethods);
+const shellApprovalRpcMethods = createRpcMethods("shellApproval", shellApprovalMethods);
 
 type WebContentsSnapshot = {
   id: number;
@@ -168,7 +173,7 @@ async function workspaceReviewState(
   return nativeUiRead(
     page,
     { kind: "workspace", workspaceId },
-    "shellApproval.getWorkspaceCreationReviewState",
+    mainRpcMethods["shellApproval.getWorkspaceCreationReviewState"],
     []
   );
 }
@@ -281,10 +286,10 @@ test.describe("Desktop Shell Chrome", () => {
       // Personal's startup review consumes a worker receiver declaration even
       // though the worker itself does not require privileged-code admission.
       const shellPage = await findWorkspaceShellPage(testApp);
-      const workspaces = await nativeUiRead<Array<{ workspaceId: string; privateRole?: string }>>(
+      const workspaces = await nativeUiRead(
         shellPage,
         { kind: "hub" },
-        "hubControl.listWorkspaces",
+        hubControlRpcMethods.listWorkspaces,
         []
       );
       const personal = workspaces.find((workspace) => workspace.privateRole === "personal");
@@ -295,16 +300,16 @@ test.describe("Desktop Shell Chrome", () => {
       await expect
         .poll(
           async () => {
-            const pending = await nativeUiRead<
-              import("@vibestudio/shared/approvals").PendingApproval[]
-            >(
+            const pending = await nativeUiRead(
               shellPage,
               { kind: "workspace", workspaceId: personal!.workspaceId },
-              "shellApproval.listPending",
+              shellApprovalRpcMethods.listPending,
               []
             );
             browserReview = pending.find(
-              (approval) =>
+              (
+                approval
+              ): approval is import("@vibestudio/shared/approvals").PendingUnitInstallReviewApproval =>
                 approval.kind === "unit-install-review" &&
                 approval.parts.some((part) =>
                   part.identityKey.startsWith("extensions/browser-data@")
@@ -382,10 +387,10 @@ test.describe("Desktop Shell Chrome", () => {
         rendererDiagnostics.push(message.text());
     });
     chrome.on("pageerror", (error) => rendererDiagnostics.push(error.message));
-    const workspaces = await nativeUiRead<Array<{ workspaceId: string; privateRole?: string }>>(
+    const workspaces = await nativeUiRead(
       chrome,
       { kind: "hub" },
-      "hubControl.listWorkspaces",
+      hubControlRpcMethods.listWorkspaces,
       []
     );
     const privateWorkspaces = workspaces.filter(
@@ -397,10 +402,10 @@ test.describe("Desktop Shell Chrome", () => {
         .poll(
           async () =>
             (
-              await nativeUiRead<{ status: string }>(
+              await nativeUiRead(
                 chrome,
                 { kind: "workspace", workspaceId: workspace.workspaceId },
-                "shellApproval.getWorkspaceCreationReviewState",
+                mainRpcMethods["shellApproval.getWorkspaceCreationReviewState"],
                 []
               )
             ).status,
@@ -412,12 +417,10 @@ test.describe("Desktop Shell Chrome", () => {
       (
         await Promise.all(
           privateWorkspaces.map(async (workspace) => {
-            const pending = await nativeUiRead<
-              import("@vibestudio/shared/approvals").PendingApproval[]
-            >(
+            const pending = await nativeUiRead(
               chrome,
               { kind: "workspace", workspaceId: workspace.workspaceId },
-              "shellApproval.listPending",
+              shellApprovalRpcMethods.listPending,
               []
             );
             return pending
@@ -455,10 +458,10 @@ test.describe("Desktop Shell Chrome", () => {
         .poll(
           async () =>
             (
-              await nativeUiRead<{ status: string }>(
+              await nativeUiRead(
                 chrome,
                 { kind: "workspace", workspaceId: workspace.workspaceId },
-                "shellApproval.getWorkspaceCreationReviewState",
+                mainRpcMethods["shellApproval.getWorkspaceCreationReviewState"],
                 []
               )
             ).status,
@@ -528,7 +531,7 @@ test.describe("Desktop Shell Chrome", () => {
           pending: await nativeUiRead(
             chrome,
             { kind: "workspace", workspaceId: workspace.workspaceId },
-            "shellApproval.listPending",
+            shellApprovalRpcMethods.listPending,
             []
           ),
         }))
@@ -571,7 +574,7 @@ test.describe("Desktop Shell Chrome", () => {
       const hub = createTypedServiceClient(
         "hubControl",
         hubControlMethods,
-        (service, method, args) => nativeUiRead(page, { kind: "hub" }, `${service}.${method}`, args)
+        nativeUiServiceInvoker(page, { kind: "hub" }, "hubControl", hubControlMethods)
       );
       const workspaces = await hub.listWorkspaces();
       const personal = workspaces.find((workspace) => workspace.privateRole === "personal")!;
@@ -582,8 +585,12 @@ test.describe("Desktop Shell Chrome", () => {
         const approvals = createTypedServiceClient(
           "shellApproval",
           shellApprovalMethods,
-          (service, method, args) =>
-            nativeUiRead(page, { kind: "workspace", workspaceId }, `${service}.${method}`, args)
+          nativeUiServiceInvoker(
+            page,
+            { kind: "workspace", workspaceId },
+            "shellApproval",
+            shellApprovalMethods
+          )
         );
         await expect
           .poll(async () => (await approvals.getWorkspaceCreationReviewState()).status, {
@@ -636,10 +643,15 @@ test.describe("Desktop Shell Chrome", () => {
         "Personal workspace"
       );
       await approveVisibleStartupReviews(personal.workspaceId);
-      const vcs = (workspaceId: string) =>
-        createTypedServiceClient("vcs", vcsMethods, (service, method, args) =>
-          nativeUiRead(page, { kind: "workspace", workspaceId }, `${service}.${method}`, args)
+      const vcs = (workspaceId: string) => {
+        const invoke = nativeUiServiceInvoker(
+          page,
+          { kind: "workspace", workspaceId },
+          "vcs",
+          vcsMethods
         );
+        return createTypedServiceClient("vcs", vcsMethods, invoke);
+      };
       const sourceVcs = vcs(personal.workspaceId);
       const targetVcs = vcs(system.workspaceId);
       const sourceState = await sourceVcs.mainState();
@@ -665,13 +677,12 @@ test.describe("Desktop Shell Chrome", () => {
       const personalPanels = createTypedServiceClient(
         "view",
         viewMethods,
-        (service, method, args) =>
-          nativeUiRead(
-            page,
-            { kind: "workspace", workspaceId: personal.workspaceId },
-            `${service}.${method}`,
-            args
-          )
+        nativeUiServiceInvoker(
+          page,
+          { kind: "workspace", workspaceId: personal.workspaceId },
+          "view",
+          viewMethods
+        )
       );
       const panelId = await page
         .locator("[data-native-panel-slot-id][data-panel-id]")

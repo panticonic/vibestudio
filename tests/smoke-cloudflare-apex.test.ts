@@ -32,8 +32,8 @@ describe("Cloudflare apex smoke backhaul ownership", () => {
       webSocket.on("message", (raw) => {
         const frame = JSON.parse(String(raw)) as Record<string, unknown>;
         connection.frames.push(frame);
-        if (frame.t === "register-webhook") {
-          const id = String(frame.subscriptionId);
+        if (frame["t"] === "register-webhook") {
+          const id = String(frame["subscriptionId"]);
           registrations.set(id, relayId);
           acceptedRegisterFrames += 1;
           if (dropFirstRegisterAck && acceptedRegisterFrames === 1) {
@@ -41,8 +41,8 @@ describe("Cloudflare apex smoke backhaul ownership", () => {
             return;
           }
           webSocket.send(JSON.stringify({ t: "registered", kind: "webhook", id }));
-        } else if (frame.t === "unregister-webhook") {
-          const id = String(frame.subscriptionId);
+        } else if (frame["t"] === "unregister-webhook") {
+          const id = String(frame["subscriptionId"]);
           if (registrations.get(id) === relayId) registrations.delete(id);
           webSocket.send(JSON.stringify({ t: "unregistered", kind: "webhook", id }));
         }
@@ -67,12 +67,12 @@ describe("Cloudflare apex smoke backhaul ownership", () => {
 
     expect(registrations.size).toBe(0);
     expect(connections).toHaveLength(1);
-    expect(connections[0]!.frames.map((frame) => frame.t)).toEqual([
+    expect(connections[0]!.frames.map((frame) => frame["t"])).toEqual([
       "register-webhook",
       "unregister-webhook",
     ]);
-    expect(connections[0]!.frames[0]!.subscriptionId).toBe(
-      connections[0]!.frames[1]!.subscriptionId
+    expect(connections[0]!.frames[0]!["subscriptionId"]).toBe(
+      connections[0]!.frames[1]!["subscriptionId"]
     );
   });
 
@@ -86,9 +86,9 @@ describe("Cloudflare apex smoke backhaul ownership", () => {
     expect(registrations.size).toBe(0);
     expect(connections).toHaveLength(2);
     expect(connections[0]!.relayId).toBe(connections[1]!.relayId);
-    expect(connections[0]!.frames[0]!.subscriptionId).toBe(
-      connections[1]!.frames[0]!.subscriptionId
+    expect(connections[0]!.frames[0]!["subscriptionId"]).toBe(
+      connections[1]!.frames[0]!["subscriptionId"]
     );
-    expect(connections[1]!.frames[0]!.t).toBe("unregister-webhook");
+    expect(connections[1]!.frames[0]!["t"]).toBe("unregister-webhook");
   });
 });

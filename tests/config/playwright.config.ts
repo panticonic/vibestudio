@@ -1,4 +1,4 @@
-import { defineConfig } from "@playwright/test";
+import { defineConfig, type ReporterDescription } from "@playwright/test";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeE2eRun } from "../setup/e2eRun.js";
@@ -14,8 +14,8 @@ export default defineConfig({
   fullyParallel: false, // Electron tests run serially
   workers: 1, // Single worker for Electron
   timeout: 240000, // Electron cold-start builds can be slow for isolated workspaces
-  retries: process.env.CI ? 2 : 0,
-  forbidOnly: !!process.env.CI,
+  retries: process.env["CI"] ? 2 : 0,
+  forbidOnly: !!process.env["CI"],
   globalSetup: path.resolve(__dirname, "playwright.globalSetup.ts"),
 
   reporter: [
@@ -27,13 +27,13 @@ export default defineConfig({
         outputFile: path.join(run.artifactRoot, "results.json"),
       },
     ],
-    ...(process.env.CI ? [["github" as const]] : []),
+    ...(process.env["CI"] ? ([["github"]] satisfies ReporterDescription[]) : []),
   ],
 
   use: {
     trace: "on-first-retry",
     screenshot: "only-on-failure",
-    video: process.env.CI ? "on-first-retry" : "off",
+    video: process.env["CI"] ? "on-first-retry" : "off",
   },
 
   expect: {

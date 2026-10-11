@@ -2,26 +2,31 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import type { Readable } from "node:stream";
 import WebSocket from "ws";
 import { chromium } from "playwright";
 import {
   createRpcClient,
+  decodeRpcJson,
+  deserializeRpcFailure,
   envelopeFromMessage,
   type EnvelopeRpcTransport,
+  type RpcMethod,
   type RpcClient,
   type RpcEnvelope,
 } from "@vibestudio/rpc";
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import {
   requestRpcWebSocketAdmission,
   rpcWebSocketAdmissionUrl,
 } from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
-import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
-import type { PanelSlotObservation } from "@vibestudio/shared/panel/observation";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
+import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   developmentTemplateSetEnv,
@@ -39,14 +44,6 @@ interface ReadyPayload {
 interface ShellCredential {
   shellToken: string;
   callerId: string;
-}
-
-interface RuntimeEntityHandle {
-  id: string;
-  kind: string;
-  source: { repoPath: string; effectiveVersion: string };
-  contextId: string;
-  targetId: string;
 }
 
 interface BrowserPanelHandle {
@@ -70,13 +67,14 @@ const maybeDescribe =
     ? describe
     : describe.skip;
 
-let serverProc: ChildProcessWithoutNullStreams | null = null;
+type HeadlessServerProcess = ChildProcessByStdio<null, Readable, Readable>;
 let tempRoot: string | null = null;
 let serverOwner: ReturnType<typeof ownChild> | null = null;
 let fixtureServer: http.Server | null = null;
 let shellConnection: RpcWsConnection | null = null;
 let workerConnection: RpcWsConnection | null = null;
 let cdpClient: CdpClient | null = null;
+const hubControlRpcMethods = createRpcMethods("hubControl", hubControlMethods);
 
 afterEach(async () => {
   await attemptCleanup([
@@ -104,7 +102,6 @@ afterEach(async () => {
     async () => {
       await serverOwner?.retire();
       serverOwner = null;
-      serverProc = null;
     },
   ]);
   // Failed retirement preserves scratch and exact resource references.
@@ -125,7 +122,7 @@ maybeDescribe("headless browser panel integration", () => {
     });
     const playwrightChromiumPath = chromium.executablePath();
 
-    serverProc = spawn(
+    const child = spawn(
       process.execPath,
       [
         serverPath,
@@ -153,19 +150,19 @@ maybeDescribe("headless browser panel integration", () => {
       }
     );
 
-    serverOwner = ownChild(serverProc);
+    serverOwner = ownChild(child);
 
     let serverOutput = "";
     const appendServerOutput = (chunk: Buffer | string): void => {
       serverOutput += String(chunk);
       if (serverOutput.length > 100_000) serverOutput = serverOutput.slice(-100_000);
     };
-    serverProc.stdout.on("data", appendServerOutput);
-    serverProc.stderr.on("data", (chunk) => {
+    child.stdout.on("data", appendServerOutput);
+    child.stderr.on("data", (chunk) => {
       appendServerOutput(chunk);
     });
 
-    const ready = await waitForReadyFile(readyFile, serverProc, () => serverOutput);
+    const ready = await waitForReadyFile(readyFile, child, () => serverOutput);
     const shell = await issueShellToken(ready);
     await approveStartupInstallReviews(ready, shell.shellToken);
     shellConnection = await connectRpcWebSocket({
@@ -175,16 +172,16 @@ maybeDescribe("headless browser panel integration", () => {
       callerKind: "shell",
       clientLabel: "Vitest Shell",
     });
-    await shellConnection.rpc.call("main", "shellPresence.heartbeat", []);
+    await shellConnection.rpc.call("main", mainRpcMethods["shellPresence.heartbeat"], []);
 
-    const worker = await rpc<RuntimeEntityHandle>(ready, shell.shellToken, "runtime.createEntity", [
+    const worker = await rpc(ready, shell.shellToken, mainRpcMethods["runtime.createEntity"], [
       {
         kind: "worker",
         execution: { surface: "code", source: "workers/agent-worker" },
         key: `headless-panel-integration-${Date.now().toString(36)}`,
       },
     ]);
-    const grant = await rpc<{ token: string }>(ready, shell.shellToken, "auth.grantConnection", [
+    const grant = await rpc(ready, shell.shellToken, mainRpcMethods["auth.grantConnection"], [
       worker.id,
     ]);
     workerConnection = await connectRpcWebSocket({
@@ -198,13 +195,13 @@ maybeDescribe("headless browser panel integration", () => {
     const panel = await openBrowserPanelFromWorker(workerConnection, `${fixture.baseUrl}/first`);
     expect(panel.kind).toBe("browser");
 
-    const ensured = await workerConnection.rpc.call<{ status: string }>(
+    const ensured = await workerConnection.rpc.call(
       "main",
-      "panelRuntime.ensureSlot",
+      mainRpcMethods["panelRuntime.ensureSlot"],
       [panel.id]
     );
     if (ensured.status === "unavailable") {
-      const hostLogs = await shellConnection.rpc.call("main", "serverLog.query", [
+      const hostLogs = await shellConnection.rpc.call("main", mainRpcMethods["serverLog.query"], [
         { contains: "HeadlessHost", limit: 100 },
       ]);
       throw new Error(
@@ -220,15 +217,17 @@ maybeDescribe("headless browser panel integration", () => {
       serverOutput
     );
 
-    await shellConnection.rpc.call("main", "shellPresence.heartbeat", []);
+    await shellConnection.rpc.call("main", mainRpcMethods["shellPresence.heartbeat"], []);
     const endpoint = await callWithCapabilityApprovals(
       ready,
       shell.shellToken,
       new Set(["panel.inspect", "context.boundary"]),
-      () => workerConnection!.rpc.call<CdpEndpoint>("main", "panelCdp.getCdpEndpoint", [panel.id])
+      () =>
+        workerConnection!.rpc.call("main", mainRpcMethods["panelCdp.getCdpEndpoint"], [panel.id])
     );
 
-    cdpClient = await CdpClient.connect(endpoint);
+    if (!endpoint.token) throw new Error("Headless host returned no CDP inspection token");
+    cdpClient = await CdpClient.connect({ ...endpoint, token: endpoint.token });
     await cdpClient.send("Runtime.enable");
     await cdpClient.send("Page.enable");
 
@@ -281,12 +280,11 @@ maybeDescribe("headless browser panel integration", () => {
     });
     expect(Buffer.byteLength(screenshot.data, "base64")).toBeGreaterThan(500);
 
-    const hostScreenshot = await workerConnection.rpc.call<{
-      data: string;
-      mimeType: string;
-      width: number;
-      height: number;
-    }>("main", "panelCdp.screenshot", [panel.id, { format: "png" }]);
+    const hostScreenshot = await workerConnection.rpc.call(
+      "main",
+      mainRpcMethods["panelCdp.screenshot"],
+      [panel.id, { format: "png" }]
+    );
     expect(Buffer.byteLength(hostScreenshot.data, "base64")).toBeGreaterThan(500);
     expect(hostScreenshot.mimeType).toBe("image/png");
     expect(hostScreenshot.width).toBeGreaterThan(0);
@@ -301,22 +299,22 @@ maybeDescribe("headless browser panel integration", () => {
     await cdpClient.evaluate("console.error('headless-panel-integration-error')");
     await expect(
       waitFor(async () => {
-        const history = await workerConnection!.rpc.call<{
-          errors: Array<{ message: string }>;
-        }>("main", "panelCdp.consoleHistory", [panel.id, { errorLimit: 10 }]);
+        const history = await workerConnection!.rpc.call(
+          "main",
+          mainRpcMethods["panelCdp.consoleHistory"],
+          [panel.id, { errorLimit: 10 }]
+        );
         return history.errors.some((entry) =>
           entry.message.includes("headless-panel-integration-error")
         );
       }, true)
     ).resolves.toBe(true);
 
-    const leaseSnapshot = await workerConnection.rpc.call<{
-      leases: Array<{
-        slotId: string;
-        supportsCdp?: boolean;
-        hostConnectionId?: string;
-      }>;
-    }>("main", "panelRuntime.getSnapshot", []);
+    const leaseSnapshot = await workerConnection.rpc.call(
+      "main",
+      mainRpcMethods["panelRuntime.getSnapshot"],
+      []
+    );
     const lease = leaseSnapshot.leases.find((entry) => entry.slotId === panel.id);
     if (!lease) throw new Error("Expected panel runtime lease");
     expect(lease.supportsCdp).toBe(true);
@@ -331,27 +329,22 @@ async function approveStartupInstallReviews(
   const deadline = Date.now() + 180_000;
   const resolved = new Set<string>();
   for (;;) {
-    const pending = await rpc<PendingUnitInstallReviewApproval[]>(
-      ready,
-      shellToken,
-      "shellApproval.listPending",
-      []
-    );
+    const pending = await rpc(ready, shellToken, mainRpcMethods["shellApproval.listPending"], []);
     const reviews = pending.filter((approval) => approval.kind === "unit-install-review");
     let resolvedThisPass = false;
     for (const approval of reviews) {
       if (resolved.has(approval.approvalId)) continue;
-      await rpc(ready, shellToken, "shellApproval.resolveInstallReview", [
+      await rpc(ready, shellToken, mainRpcMethods["shellApproval.resolveInstallReview"], [
         approval.approvalId,
         defaultAcceptance(approval.mode, approval.parts),
       ]);
       resolved.add(approval.approvalId);
       resolvedThisPass = true;
     }
-    const state = await rpc<{ status: string }>(
+    const state = await rpc(
       ready,
       shellToken,
-      "shellApproval.getWorkspaceCreationReviewState",
+      mainRpcMethods["shellApproval.getWorkspaceCreationReviewState"],
       []
     );
     if (reviews.length === 0 && (state.status === "resolved" || state.status === "not-required")) {
@@ -413,7 +406,7 @@ async function startFixtureServer(): Promise<{ baseUrl: string }> {
 
 async function waitForReadyFile(
   readyFile: string,
-  child: ChildProcessWithoutNullStreams,
+  child: HeadlessServerProcess,
   getStderr: () => string
 ): Promise<ReadyPayload> {
   const deadline = Date.now() + 45_000;
@@ -457,20 +450,12 @@ async function issueShellToken(ready: ReadyPayload): Promise<ShellCredential> {
       `failed to pair root device (${pairedResponse.status}): ${JSON.stringify(paired)}`
     );
   }
-  const workspaces = await rpc<Array<{ workspaceId: string; name: string }>>(
-    ready,
-    paired.shellToken,
-    "hubControl.listWorkspaces",
-    []
-  );
+  const workspaces = await rpc(ready, paired.shellToken, hubControlRpcMethods.listWorkspaces, []);
   const workspace = workspaces[0];
   if (!workspace?.workspaceId) throw new Error("hub exposed no exact workspace identity");
-  const route = await rpc<{ serverUrl: string }>(
-    ready,
-    paired.shellToken,
-    "hubControl.routeWorkspace",
-    [{ workspaceId: workspace.workspaceId }]
-  );
+  const route = await rpc(ready, paired.shellToken, hubControlRpcMethods.routeWorkspace, [
+    { workspaceId: workspace.workspaceId },
+  ]);
   if (typeof route.serverUrl !== "string") throw new Error("workspace route had no server URL");
   ready.gatewayUrl = route.serverUrl;
   const refreshResponse = await fetch(`${route.serverUrl}/_r/s/auth/refresh-shell`, {
@@ -495,43 +480,46 @@ async function issueShellToken(ready: ReadyPayload): Promise<ShellCredential> {
   return { shellToken: body.shellToken, callerId: body.callerId };
 }
 
-async function rpc<T = unknown>(
+async function rpc<Args extends unknown[], Result>(
   ready: ReadyPayload,
   shellToken: string,
-  method: string,
-  args: unknown[]
-): Promise<T> {
-  const response = await fetch(`${ready.gatewayUrl}/rpc`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${shellToken}`,
-    },
-    body: JSON.stringify(
-      envelopeFromMessage({
-        from: "headless-panel-integration",
-        target: "main",
-        callerKind: "shell",
-        message: {
-          type: "request",
-          requestId: randomUUID(),
-          fromId: "headless-panel-integration",
-          method,
-          args,
-        },
-      })
-    ),
+  method: RpcMethod<Args, Result>,
+  args: NoInfer<Args>
+): Promise<Result> {
+  return method.invoke(args, async (parsedArgs) => {
+    const response = await fetch(`${ready.gatewayUrl}/rpc`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${shellToken}`,
+      },
+      body: JSON.stringify(
+        envelopeFromMessage({
+          selfId: "headless-panel-integration",
+          from: "headless-panel-integration",
+          target: "main",
+          callerKind: "shell",
+          message: {
+            type: "request",
+            requestId: randomUUID(),
+            fromId: "headless-panel-integration",
+            method: method.name,
+            args: parsedArgs,
+          },
+        })
+      ),
+    });
+    if (!response.ok) {
+      throw new Error(`RPC ${method.name} failed with status ${response.status}`);
+    }
+    const responseEnvelope = decodeRpcJson(await response.text()) as RpcEnvelope;
+    const responseMessage = responseEnvelope.message;
+    if (responseMessage.type !== "response") {
+      throw new Error(`RPC ${method.name} returned a non-response message`);
+    }
+    if ("error" in responseMessage) throw deserializeRpcFailure(responseMessage.error);
+    return responseMessage.result;
   });
-  const json = (await response.json()) as
-    | { error?: string }
-    | { message?: { result?: T; error?: string } }
-    | { envelope?: { message?: { result?: T; error?: string } } };
-  const body =
-    "envelope" in json ? json.envelope?.message : "message" in json ? json.message : json;
-  if (!response.ok || body?.error) {
-    throw new Error(body?.error ?? `RPC ${method} failed with status ${response.status}`);
-  }
-  return body?.result as T;
 }
 
 async function callWithCapabilityApprovals<T>(
@@ -546,15 +534,7 @@ async function callWithCapabilityApprovals<T>(
     } catch (error) {
       if (!(error instanceof Error) || !error.message.includes("approval-required")) throw error;
     }
-    const pending = await rpc<
-      Array<{
-        approvalId: string;
-        kind: string;
-        capability?: string;
-        title?: string;
-        allowedDecisions?: string[];
-      }>
-    >(ready, shellToken, "shellApproval.listPending", []);
+    const pending = await rpc(ready, shellToken, mainRpcMethods["shellApproval.listPending"], []);
     const approval = pending.find(
       (entry) =>
         entry.kind === "capability" &&
@@ -566,13 +546,16 @@ async function callWithCapabilityApprovals<T>(
         `Capability call required approval but no expected card was pending: ${JSON.stringify(pending)}`
       );
     }
-    const decision = approval.allowedDecisions?.[0];
+    const decision = "allowedDecisions" in approval ? approval.allowedDecisions?.[0] : undefined;
     if (!decision) {
       throw new Error(
         `Expected capability card exposed no grant decision: ${JSON.stringify(approval)}`
       );
     }
-    await rpc(ready, shellToken, "shellApproval.resolve", [approval.approvalId, decision]);
+    await rpc(ready, shellToken, mainRpcMethods["shellApproval.resolve"], [
+      approval.approvalId,
+      decision,
+    ]);
   }
   throw new Error(
     "Capability call still required approval after every expected grant was resolved"
@@ -584,7 +567,7 @@ interface RpcWsConnection {
   auth: {
     callerId: string;
     callerKind: string;
-    connectionId: string;
+    connectionId?: string;
   };
   close(): Promise<void>;
 }
@@ -598,11 +581,9 @@ async function waitForPanelReady(
 ): Promise<void> {
   const deadline = Date.now() + 90_000;
   for (;;) {
-    const runtime = await connection.rpc.call<PanelSlotObservation>(
-      "main",
-      "panelRuntime.observeSlot",
-      [panelId]
-    );
+    const runtime = await connection.rpc.call("main", mainRpcMethods["panelRuntime.observeSlot"], [
+      panelId,
+    ]);
     const exactAttempt =
       runtime.attempt?.runtimeEntityId === runtimeEntityId ? runtime.attempt : null;
     if (
@@ -614,8 +595,12 @@ async function waitForPanelReady(
       return;
     }
     if (exactAttempt?.phase === "failed") {
-      const leases = await connection.rpc.call("main", "panelRuntime.getSnapshot", []);
-      const hostLogs = await shellConnection!.rpc.call("main", "serverLog.query", [
+      const leases = await connection.rpc.call(
+        "main",
+        mainRpcMethods["panelRuntime.getSnapshot"],
+        []
+      );
+      const hostLogs = await shellConnection!.rpc.call("main", mainRpcMethods["serverLog.query"], [
         { contains: "HeadlessHost", limit: 100 },
       ]);
       throw new Error(
@@ -635,9 +620,9 @@ async function openBrowserPanelFromWorker(
   connection: RpcWsConnection,
   url: string
 ): Promise<BrowserPanelHandle> {
-  await shellConnection?.rpc.call("main", "shellPresence.heartbeat", []);
+  await shellConnection?.rpc.call("main", mainRpcMethods["shellPresence.heartbeat"], []);
   const runId = `headless-panel-open-${randomUUID()}`;
-  await connection.rpc.call("main", "eval.start", [
+  await connection.rpc.call("main", mainRpcMethods["eval.start"], [
     {
       runId,
       source: {
@@ -664,35 +649,28 @@ async function openBrowserPanelFromWorker(
   const deadline = Date.now() + 90_000;
   let lastSnapshot: unknown = null;
   while (Date.now() < deadline) {
-    const snapshot = await connection.rpc.call<{
-      status: string;
-      result?: { success: boolean; returnValue?: unknown; error?: string };
-      activity?: unknown;
-      checkpoint?: unknown;
-    }>("main", "eval.get", [{ runId }]);
+    const snapshot = await connection.rpc.call("main", mainRpcMethods["eval.get"], [{ runId }]);
     lastSnapshot = snapshot;
     if (
       snapshot.activity &&
       (snapshot.activity as { kind?: string }).kind === "authority-pending"
     ) {
-      await shellConnection?.rpc.call("main", "shellPresence.heartbeat", []);
-      const pending = await shellConnection?.rpc.call<
-        Array<{
-          approvalId: string;
-          kind: string;
-          capability?: string;
-          allowedDecisions?: string[];
-        }>
-      >("main", "shellApproval.listPending", []);
+      await shellConnection?.rpc.call("main", mainRpcMethods["shellPresence.heartbeat"], []);
+      const pending = await shellConnection?.rpc.call(
+        "main",
+        mainRpcMethods["shellApproval.listPending"],
+        []
+      );
       const approval = pending?.find(
         (entry) =>
           entry.kind === "capability" &&
           (entry.capability === "workspace.runtime-state.manage" ||
             entry.capability === "context.boundary")
       );
-      const decision = approval?.allowedDecisions?.[0];
+      const decision =
+        approval && "allowedDecisions" in approval ? approval.allowedDecisions?.[0] : undefined;
       if (approval && decision) {
-        await shellConnection?.rpc.call("main", "shellApproval.resolve", [
+        await shellConnection?.rpc.call("main", mainRpcMethods["shellApproval.resolve"], [
           approval.approvalId,
           decision,
         ]);
@@ -709,7 +687,11 @@ async function openBrowserPanelFromWorker(
     }
     await delay(50);
   }
-  const pending = await shellConnection?.rpc.call("main", "shellApproval.listPending", []);
+  const pending = await shellConnection?.rpc.call(
+    "main",
+    mainRpcMethods["shellApproval.listPending"],
+    []
+  );
   throw new Error(
     `Worker panel open did not settle: snapshot=${JSON.stringify(lastSnapshot)} pending=${JSON.stringify(pending)}`
   );
@@ -748,16 +730,8 @@ async function connectRpcWebSocket(options: {
     onStatusChange: () => () => {},
   };
   const lifetime = new AbortController();
-  const outbound = new Set<Promise<unknown>>();
   const rpcClient = createRpcClient({
     lifetime: lifetime.signal,
-    onOutboundOperation(operation) {
-      outbound.add(operation);
-      void operation.then(
-        () => outbound.delete(operation),
-        () => outbound.delete(operation)
-      );
-    },
     selfId: options.selfId,
     callerKind: options.callerKind,
     transport,
@@ -765,7 +739,6 @@ async function connectRpcWebSocket(options: {
 
   const retireRpc = async (): Promise<void> => {
     lifetime.abort(new Error("Test RPC owner retired"));
-    await Promise.allSettled([...outbound]);
   };
 
   let auth: RpcWsConnection["auth"];
@@ -802,7 +775,7 @@ async function connectRpcWebSocket(options: {
           resolve({
             callerId: message.callerId ?? options.selfId,
             callerKind: message.callerKind ?? options.callerKind,
-            connectionId: message.connectionId,
+            ...(message.connectionId ? { connectionId: message.connectionId } : {}),
           });
         }
       });
@@ -823,29 +796,9 @@ async function connectRpcWebSocket(options: {
     if (!message) return;
     let envelope: RpcEnvelope | null = null;
     if (message.type === "ws:rpc") {
-      envelope =
-        message.envelope ??
-        (message.message
-          ? envelopeFromMessage({
-              selfId: options.selfId,
-              from: "main",
-              target: options.selfId,
-              callerKind: "server",
-              message: message.message,
-            })
-          : null);
+      envelope = message.envelope;
     } else if (message.type === "ws:routed") {
-      envelope =
-        message.envelope ??
-        (message.message
-          ? envelopeFromMessage({
-              selfId: options.selfId,
-              from: message.fromId ?? "unknown",
-              target: options.selfId,
-              callerKind: message.fromKind ?? "unknown",
-              message: message.message,
-            })
-          : null);
+      envelope = message.envelope;
     }
     if (envelope) {
       for (const listener of listeners) listener(envelope);
@@ -945,15 +898,42 @@ class CdpClient {
   }
 
   private handleMessage(data: WebSocket.RawData): void {
-    const message = parseJson<{ id?: number; result?: unknown; error?: { message?: string } }>(
-      data
-    );
+    const message = parseJson<{
+      id?: number;
+      result?: unknown;
+      error?: { message?: string; data?: string };
+    }>(data);
     if (!message || typeof message.id !== "number") return;
     const pending = this.pending.get(message.id);
     if (!pending) return;
     this.pending.delete(message.id);
     if (message.error) {
-      pending.reject(new Error(message.error.message ?? "CDP command failed"));
+      const cdpMessage = message.error.message ?? "CDP command failed";
+      if (message.error.data) {
+        try {
+          const data = JSON.parse(message.error.data) as {
+            protocol?: unknown;
+            failure?: unknown;
+          };
+          if (data.protocol === "vibestudio.rpc-failure.v1") {
+            try {
+              pending.reject(deserializeRpcFailure(data.failure));
+            } catch (failure) {
+              pending.reject(
+                new AggregateError(
+                  [failure, new Error(cdpMessage)],
+                  "CDP failure metadata could not be restored",
+                  { cause: failure }
+                )
+              );
+            }
+            return;
+          }
+        } catch {
+          // CDP's data field is arbitrary text unless it carries our tagged RPC graph.
+        }
+      }
+      pending.reject(new Error(cdpMessage));
     } else {
       pending.resolve(message.result);
     }
@@ -965,12 +945,12 @@ class CdpClient {
   }
 }
 
-async function waitForEval<T>(
+async function waitForEval(
   client: CdpClient,
   expression: string,
-  expected: T,
+  expected: unknown,
   timeoutMs = 20_000
-): Promise<T> {
+): Promise<unknown> {
   return waitFor(async () => client.evaluate(expression), expected, timeoutMs);
 }
 

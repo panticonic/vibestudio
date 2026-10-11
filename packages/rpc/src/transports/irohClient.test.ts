@@ -1,4 +1,7 @@
-import { createInternalRpcClient as createRpcClient } from "@vibestudio/rpc/internal";
+import { createRpcClient } from "../client.js";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
+import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { z } from "zod";
 import {
   IROH_WIRE_VERSION,
   MAX_CONTROL_FRAME_BYTES,
@@ -39,6 +42,75 @@ import {
 import { createReconnectingIrohClientPipe } from "./reconnectingIrohClient.js";
 
 const { SecretKey } = loadIrohNodeBinding();
+
+// These transport scenarios use a test receiver with explicit schemas; the
+// RPC client still serializes the canonical method names over Iroh.
+const irohTransportMethods = createRpcMethods(
+  "iroh-transport-test",
+  defineServiceMethods({
+    echo: {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([z.string()]),
+      returns: z.unknown(),
+    },
+    "closed-before-first-write": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+    "upload-and-download": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+    "failed-upload": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+    "download-only": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+    "no-response": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+    "no-response-upload": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+    "aborted-during-open": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+    "response-before-upload": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+    "upload-fails-after-head": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+    "close-with-pending-upload": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+    "closed-during-open": {
+      website: { kind: "closed", reason: "Iroh transport test receiver." },
+      args: z.tuple([]),
+      returns: z.unknown(),
+    },
+  }),
+  ""
+);
 
 describe("Iroh RPC client over real local QUIC", () => {
   const endpoints = new Set<Awaited<ReturnType<typeof bindNodeEndpoint>>>();
@@ -606,7 +678,9 @@ describe("Iroh RPC client over real local QUIC", () => {
     });
     const abort = new AbortController();
     const cancellationReason = new Error("caller stopped waiting");
-    const call = rpc.call("main", "echo", ["hello"], { signal: abort.signal });
+    const call = rpc.call("main", irohTransportMethods.echo, ["hello"], {
+      signal: abort.signal,
+    });
     await requestReceivedPromise;
     abort.abort(cancellationReason);
     await expect(call).rejects.toMatchObject({
@@ -642,7 +716,9 @@ describe("Iroh RPC client over real local QUIC", () => {
       });
       return opened;
     });
-    await expect(rpc.call("main", "closed-before-first-write", [])).rejects.toThrow("closed");
+    await expect(
+      rpc.call("main", irohTransportMethods["closed-before-first-write"], [])
+    ).rejects.toThrow("closed");
     const canceledRequest = await server.acceptBi();
     await expect(readIrohStreamPreamble(canceledRequest.recv)).rejects.toThrow();
     expect(await canceledRequest.send.stopped()).toBe(0x201);
@@ -876,7 +952,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       let responseSettled = false;
       const pendingResponse = rpc
-        .stream("main", "upload-and-download", [], {
+        .stream("main", irohTransportMethods["upload-and-download"], [], {
           body: new ReadableStream<Uint8Array>({
             start(controller) {
               controller.enqueue(uploadBytes.subarray(0, 4));
@@ -907,7 +983,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       expect(await response.text()).toBe("response-body");
       const uploadFailure = new Error("Original upload provider failure");
       await expect(
-        rpc.stream("main", "failed-upload", [], {
+        rpc.stream("main", irohTransportMethods["failed-upload"], [], {
           body: new ReadableStream<Uint8Array>({
             start(controller) {
               controller.error(uploadFailure);
@@ -917,7 +993,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       ).rejects.toBe(uploadFailure);
       expect(pipe.diagnostics()?.activeRequests).toBe(0);
       progress.client = "bodyless download";
-      const download = await rpc.stream("main", "download-only", []);
+      const download = await rpc.stream("main", irohTransportMethods["download-only"], []);
       const reader = download.body!.getReader();
       const first = await reader.read();
       expect(new TextDecoder().decode(first.value)).toBe("hello");
@@ -955,7 +1031,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       const headDeadline = observeResponseDeadline();
       try {
         const rejected = expect(
-          rpc.stream("main", "no-response", [], { headTimeoutMs: 100 })
+          rpc.stream("main", irohTransportMethods["no-response"], [], { headTimeoutMs: 100 })
         ).rejects.toMatchObject({ code: "IROH_RESPONSE_HEAD_TIMEOUT" });
         // The peer can receive an envelope before its native write promise
         // resolves. Hold that completion to exercise the ordering explicitly;
@@ -985,7 +1061,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const uploadDeadline = observeResponseDeadline();
       const deadline = rpc
-        .stream("main", "no-response-upload", [], {
+        .stream("main", irohTransportMethods["no-response-upload"], [], {
           headTimeoutMs: 100,
           body: pendingUpload,
         })
@@ -1025,7 +1101,9 @@ describe("Iroh RPC client over real local QUIC", () => {
         return opened;
       });
       await expect(
-        rpc.stream("main", "aborted-during-open", [], { signal: abort.signal })
+        rpc.stream("main", irohTransportMethods["aborted-during-open"], [], {
+          signal: abort.signal,
+        })
       ).rejects.toBe(abortReason);
       expect(pipe.diagnostics()?.activeRequests).toBe(0);
       expect(session.isClosed()).toBe(false);
@@ -1034,10 +1112,15 @@ describe("Iroh RPC client over real local QUIC", () => {
       const eofCancelUpload = vi.fn();
       const eofUpload = new ReadableStream<Uint8Array>({ cancel: eofCancelUpload });
       progress.client = "early response with pending upload";
-      const earlyResponse = await rpc.stream("main", "response-before-upload", [], {
-        body: eofUpload,
-        signal: afterEofAbort.signal,
-      });
+      const earlyResponse = await rpc.stream(
+        "main",
+        irohTransportMethods["response-before-upload"],
+        [],
+        {
+          body: eofUpload,
+          signal: afterEofAbort.signal,
+        }
+      );
       expect(await earlyResponse.text()).toBe("");
       expect(pipe.diagnostics()?.activeRequests).toBe(1);
       expect(eofCancelUpload).not.toHaveBeenCalled();
@@ -1047,13 +1130,18 @@ describe("Iroh RPC client over real local QUIC", () => {
 
       let uploadController!: ReadableStreamDefaultController<Uint8Array>;
       progress.client = "duplex response before upload failure";
-      const failedResponse = await rpc.stream("main", "upload-fails-after-head", [], {
-        body: new ReadableStream<Uint8Array>({
-          start(controller) {
-            uploadController = controller;
-          },
-        }),
-      });
+      const failedResponse = await rpc.stream(
+        "main",
+        irohTransportMethods["upload-fails-after-head"],
+        [],
+        {
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              uploadController = controller;
+            },
+          }),
+        }
+      );
       const failedReader = failedResponse.body!.getReader();
       expect((await failedReader.read()).value).toEqual(new Uint8Array([1]));
       const bodyFailure = new Error("Original duplex upload failure");
@@ -1090,7 +1178,9 @@ describe("Iroh RPC client over real local QUIC", () => {
         return stream;
       });
       progress.client = "session pending upload admission";
-      await rpc.stream("main", "close-with-pending-upload", [], { body: sessionUpload });
+      await rpc.stream("main", irohTransportMethods["close-with-pending-upload"], [], {
+        body: sessionUpload,
+      });
       expect(pipe.diagnostics()?.activeRequests).toBe(1);
       let sessionCloseSettled = false;
       vi.spyOn(client, "openBi").mockImplementationOnce(async () => {
@@ -1101,7 +1191,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       });
       const openingCancelUpload = vi.fn();
       const openingRejected = expect(
-        rpc.stream("main", "closed-during-open", [], {
+        rpc.stream("main", irohTransportMethods["closed-during-open"], [], {
           body: new ReadableStream<Uint8Array>({ cancel: openingCancelUpload }),
         })
       ).rejects.toThrow("closed while opening request");

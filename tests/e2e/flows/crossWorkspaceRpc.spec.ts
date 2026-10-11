@@ -124,6 +124,10 @@ function readWorkspaceRpcPolicyEvidence(
   workspaceIds: readonly string[]
 ): Array<Record<string, unknown>> {
   const centralDataPath = path.dirname(path.dirname(workspacePath));
+  const firstWorkspaceId = workspaceIds[0];
+  const secondWorkspaceId = workspaceIds[1];
+  if (!firstWorkspaceId || !secondWorkspaceId)
+    throw new Error("Cross-workspace policy evidence requires two exact workspace IDs");
   const database = new DatabaseSync(path.join(centralDataPath, "server-auth", "identity.db"), {
     readOnly: true,
   });
@@ -139,7 +143,7 @@ function readWorkspaceRpcPolicyEvidence(
          WHERE w.workspace_id IN (?, ?)
          ORDER BY w.workspace_id`
       )
-      .all(workspaceIds[0], workspaceIds[1]);
+      .all(firstWorkspaceId, secondWorkspaceId);
   } finally {
     database.close();
   }
@@ -381,6 +385,7 @@ function configureCrossWorkspaceFixture(root: string) {
     version: "0.1.0",
     private: true,
     type: "module",
+    exports: { "./contract": "./contract.ts" },
     vibestudio: {
       title: "Cross-workspace receiver",
       kind: "worker",
@@ -401,11 +406,18 @@ function configureCrossWorkspaceFixture(root: string) {
         },
       ],
     },
-    dependencies: { "@workspace/runtime": "workspace:*" },
+    dependencies: {
+      "@workspace/runtime": "workspace:*",
+      "@vibestudio/shared": "workspace:*",
+    },
   });
   fs.writeFileSync(
     path.join(root, "workers/cross-workspace-receiver/index.ts"),
     `import { DurableObjectBase, rpc } from "@workspace/runtime/worker/kernel";\nexport class CrossWorkspaceReceiver extends DurableObjectBase {\n  protected createTables(): void {}\n\n  @rpc({ website: { kind: "closed", reason: "This receiver is available only to reviewed workspace code." }, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read", crossWorkspace: true })\n  async readGreeting() { return { greeting: "hello across workspaces", callerWorkspaceId: this.caller.workspaceId }; }\n}\n`
+  );
+  fs.writeFileSync(
+    path.join(root, "workers/cross-workspace-receiver/contract.ts"),
+    `import { createReceiverRpcMethods } from "@vibestudio/shared/rpcMethods";\nimport type { CrossWorkspaceReceiver } from "./index.js";\nexport const crossWorkspaceRpcMethods = createReceiverRpcMethods<Pick<CrossWorkspaceReceiver, "readGreeting">>(["readGreeting"]);\n`
   );
   writeJson(path.join(root, "panels/cross-workspace-caller/package.json"), {
     name: "@workspace-panels/cross-workspace-caller",
@@ -421,13 +433,14 @@ function configureCrossWorkspaceFixture(root: string) {
     },
     dependencies: {
       "@workspace/runtime": "workspace:*",
+      "@workspace-workers/cross-workspace-receiver": "workspace:*",
       react: "^19.0.0",
       "react-dom": "^19.0.0",
     },
   });
   fs.writeFileSync(
     path.join(root, "panels/cross-workspace-caller/index.tsx"),
-    `import React, { useEffect, useRef, useState } from "react"; import { createRoot } from "react-dom/client"; import { rpc, workers } from "@workspace/runtime";\ntype CallResult={callId:number,status:"idle"|"pending"|"fulfilled"|"rejected",value?:unknown,error?:string,code?:unknown,errorKind?:unknown};\ntype ReceiverReadiness={status:"pending"|"fulfilled"|"rejected",targetId?:string,error?:string};\nfunction App(){ const [workspaceId,setWorkspaceId]=useState(""); const [receiver,setReceiver]=useState<ReceiverReadiness>({status:"pending"}); const [result,setResult]=useState<CallResult>({callId:0,status:"idle"}); const nextCallId=useRef(0); useEffect(()=>{let active=true;void workers.resolveService("e2e.cross-workspace.v1").then(service=>{if(active)setReceiver({status:"fulfilled",targetId:service.targetId});},error=>{if(active)setReceiver({status:"rejected",error:String(error)});});return()=>{active=false;};},[]); const call=async()=>{if(receiver.status!=="fulfilled"||!receiver.targetId)return;const callId=++nextCallId.current;setResult({callId,status:"pending"});try{const value=await rpc.call(receiver.targetId,${JSON.stringify(METHOD)},[],{destination:{kind:"workspace",workspaceId}});setResult({callId,status:"fulfilled",value});}catch(e){const failure=e&&typeof e==="object"?e as {code?:unknown,errorKind?:unknown}:{ };setResult({callId,status:"rejected",error:String(e),code:failure.code,errorKind:failure.errorKind});}}; return <main><output aria-label="Receiver service readiness">{JSON.stringify(receiver)}</output><input aria-label="Destination workspace" value={workspaceId} onChange={e=>setWorkspaceId(e.target.value)}/><button disabled={receiver.status!=="fulfilled"||result.status==="pending"} onClick={call}>Call receiver</button><output aria-label="Call result">{JSON.stringify(result)}</output></main> }\nconst root=document.getElementById("root"); if(!root) throw new Error("Missing panel root"); createRoot(root).render(<App/>);\n`
+    `import React, { useEffect, useRef, useState } from "react"; import { createRoot } from "react-dom/client"; import { rpc, workers } from "@workspace/runtime"; import { crossWorkspaceRpcMethods } from "@workspace-workers/cross-workspace-receiver/contract";\ntype CallResult={callId:number,status:"idle"|"pending"|"fulfilled"|"rejected",value?:unknown,error?:string,code?:unknown,errorKind?:unknown};\ntype ReceiverReadiness={status:"pending"|"fulfilled"|"rejected",targetId?:string,error?:string};\nfunction App(){ const [workspaceId,setWorkspaceId]=useState(""); const [receiver,setReceiver]=useState<ReceiverReadiness>({status:"pending"}); const [result,setResult]=useState<CallResult>({callId:0,status:"idle"}); const nextCallId=useRef(0); useEffect(()=>{let active=true;void workers.resolveService("e2e.cross-workspace.v1").then(service=>{if(active)setReceiver({status:"fulfilled",targetId:service.targetId});},error=>{if(active)setReceiver({status:"rejected",error:String(error)});});return()=>{active=false;};},[]); const call=async()=>{if(receiver.status!=="fulfilled"||!receiver.targetId)return;const callId=++nextCallId.current;setResult({callId,status:"pending"});try{const value=await rpc.call(receiver.targetId,crossWorkspaceRpcMethods["readGreeting"],[],{destination:{kind:"workspace",workspaceId}});setResult({callId,status:"fulfilled",value});}catch(e){const failure=e&&typeof e==="object"?e as {code?:unknown,errorKind?:unknown}:{ };setResult({callId,status:"rejected",error:String(e),code:failure.code,errorKind:failure.errorKind});}}; return <main><output aria-label="Receiver service readiness">{JSON.stringify(receiver)}</output><input aria-label="Destination workspace" value={workspaceId} onChange={e=>setWorkspaceId(e.target.value)}/><button disabled={receiver.status!=="fulfilled"||result.status==="pending"} onClick={call}>Call receiver</button><output aria-label="Call result">{JSON.stringify(result)}</output></main> }\nconst root=document.getElementById("root"); if(!root) throw new Error("Missing panel root"); createRoot(root).render(<App/>);\n`
   );
   const configPath = path.join(root, "meta/vibestudio.yml");
   const config = YAML.parse(fs.readFileSync(configPath, "utf8"));

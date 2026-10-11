@@ -1,4 +1,3 @@
-// @ts-expect-error Script modules are plain .mjs and intentionally untyped.
 import { deploy, main, parseArgs, REQUIRED_NODE_VERSION } from "../scripts/cli/remote-deploy.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

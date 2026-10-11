@@ -20,6 +20,11 @@ import {
 import { findWorkspaceShellPage } from "../e2e/support/workspaceCreation";
 import { clickNativeApproval } from "../e2e/support/nativeApproval";
 import { hasOwnedX11Display } from "../setup/ownedXvfb";
+import { getChannelRpcReadBundle } from "../e2e/support/channelRpcReadBundle";
+import type { readChannelReplay } from "../e2e/support/channelRpcReads";
+import type { RpcCaller } from "@vibestudio/rpc";
+
+const CHANNEL_READS_SYMBOL = "vibestudio.e2e.channelRpcReads.v1";
 
 /** Shared native acceptance flow. By default inference uses the configured provider;
  * smoke coverage supplies host-only scripted inference through the environment. */
@@ -187,7 +192,9 @@ export async function websiteInventionScenario(environment: Record<string, strin
         if (browserErrors.length) throw new Error(browserErrors.join("\n"));
         const error = await page
           .locator("#lab-status")
-          .evaluate((element) => (element.dataset.error === "true" ? element.textContent : null));
+          .evaluate((element) =>
+            element.dataset["error"] === "true" ? element.textContent : null
+          );
         if (error) throw new Error(`${label}: ${error}`);
         if (await condition()) return;
         await new Promise((resolve) => setTimeout(resolve, 500));
@@ -239,35 +246,61 @@ export async function websiteInventionScenario(environment: Record<string, strin
         .filter((entity) => entity.source === "workers/pubsub-channel")
         .map((entity) => entity.id);
     }, app.workspaceId);
+    await page.addScriptTag({ content: await getChannelRpcReadBundle() });
     const modelReply = await page.evaluate(
-      async ({ channels, request }) => {
-        const runtime = (
-          window as unknown as {
-            inventionWorkspace: {
-              rpc: { call(target: string, method: string, args: unknown[]): Promise<any> };
-            };
-          }
-        ).inventionWorkspace;
+      async ({ channels, request, readerSymbol }) => {
+        type WorkspaceRuntime = typeof globalThis & {
+          inventionWorkspace: { rpc: RpcCaller };
+        };
+        const reader = (globalThis as unknown as Record<PropertyKey, unknown>)[
+          Symbol.for(readerSymbol)
+        ];
+        if (!reader || typeof reader !== "object") {
+          throw new Error("Channel replay reader is unavailable");
+        }
+        const readReplay = (reader as { readChannelReplay: typeof readChannelReplay })
+          .readChannelReplay;
         for (const channel of channels) {
-          const history = await runtime.rpc.call(channel, "getReplayAfter", [{ after: 0 }]);
-          for (const entry of history.logEvents ?? []) {
-            const event = entry.payload;
+          const history = await readReplay(
+            (globalThis as WorkspaceRuntime).inventionWorkspace.rpc,
+            channel,
+            0
+          );
+          if (!history || typeof history !== "object") continue;
+          const logEvents = (history as { logEvents?: unknown }).logEvents;
+          if (!Array.isArray(logEvents)) continue;
+          for (const entry of logEvents) {
+            if (!entry || typeof entry !== "object") continue;
+            const event = (entry as { payload?: unknown }).payload;
+            if (!event || typeof event !== "object") continue;
+            const payload = (event as { payload?: unknown }).payload;
+            if (!payload || typeof payload !== "object") continue;
+            const model = (payload as { model?: unknown }).model;
+            if (!model || typeof model !== "object") continue;
+            const modelRef = (model as { ref?: unknown }).ref;
             if (
-              event?.kind !== "message.completed" ||
-              event.payload?.role !== "assistant" ||
-              !event.payload.model?.ref
+              (event as { kind?: unknown }).kind !== "message.completed" ||
+              (payload as { role?: unknown }).role !== "assistant" ||
+              typeof modelRef !== "string"
             )
               continue;
-            const text = (event.payload.blocks ?? [])
-              .filter((block: any) => block.type === "text")
-              .map((block: any) => block.content)
+            const blocks = (payload as { blocks?: unknown }).blocks;
+            const text = (Array.isArray(blocks) ? blocks : [])
+              .filter(
+                (block): block is { type: string; content: string } =>
+                  !!block &&
+                  typeof block === "object" &&
+                  (block as { type?: unknown }).type === "text" &&
+                  typeof (block as { content?: unknown }).content === "string"
+              )
+              .map((block) => block.content)
               .join("\n");
-            if (text.includes(request)) return { channel, model: event.payload.model.ref, text };
+            if (text.includes(request)) return { channel, model: modelRef, text };
           }
         }
         return null;
       },
-      { channels, request }
+      { channels, request, readerSymbol: CHANNEL_READS_SYMBOL }
     );
     expect(
       modelReply,

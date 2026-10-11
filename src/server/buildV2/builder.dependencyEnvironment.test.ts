@@ -243,6 +243,56 @@ describe("dependency-environment resolver", () => {
     }
   );
 
+  it("prefers an importer's owned dependency over the app-level copy", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-nearest-prepared-dependency-"));
+    try {
+      const modules = path.join(root, "installed", "server", "node_modules");
+      const workspace = path.join(root, "producer", "workspaces", "base", "source");
+      const owner = path.join(workspace, "packages", "owner");
+      const child = path.join(workspace, "packages", "child");
+      fs.mkdirSync(owner, { recursive: true });
+      fs.mkdirSync(child, { recursive: true });
+      writePackage(modules, "child", "app-level");
+      fs.mkdirSync(modules, { recursive: true });
+      fs.writeFileSync(
+        path.join(owner, "package.json"),
+        JSON.stringify({
+          name: "owner",
+          version: "1.0.0",
+          type: "module",
+          exports: "./index.js",
+          dependencies: { child: "workspace:*" },
+        })
+      );
+      fs.writeFileSync(path.join(owner, "index.js"), 'export { marker } from "child";');
+      fs.writeFileSync(
+        path.join(child, "package.json"),
+        JSON.stringify({ name: "child", version: "1.0.0", type: "module", exports: "./index.js" })
+      );
+      fs.writeFileSync(path.join(child, "index.js"), 'export const marker = "importer-local";');
+      fs.mkdirSync(path.join(owner, "node_modules"), { recursive: true });
+      fs.symlinkSync(child, path.join(owner, "node_modules", "child"), "junction");
+      fs.symlinkSync(owner, path.join(modules, "owner"), "junction");
+      const entry = path.join(root, "entry.js");
+      fs.writeFileSync(entry, 'export { marker } from "owner";');
+
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        write: false,
+        logLevel: "silent",
+        nodePaths: [modules],
+        plugins: composePreparedDependencyPlugins([], [modules], [workspace]),
+      });
+      expect(result.outputFiles[0]?.text).toContain('var marker = "importer-local"');
+      expect(result.outputFiles[0]?.text).not.toContain('var marker = "app-level"');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not inherit workspace dependency declarations from an ancestor package", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-nearest-workspace-owner-"));
     try {
@@ -602,6 +652,138 @@ describe("dependency-environment resolver", () => {
       const output = result.outputFiles[0]?.text ?? "";
       expect(output).toContain('var marker = "owned"');
       expect(output).not.toContain("ambient");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves owned prepared source against the configured installed package root", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-installed-projection-"));
+    try {
+      const appRoot = path.join(root, "installed", "server");
+      const appNodeModules = path.join(appRoot, "node_modules");
+      const dependency = path.join(appNodeModules, "@fixture", "runtime-api");
+      const sourceRoot = path.join(root, "producer", "workspaces", "base", "source");
+      fs.mkdirSync(path.join(dependency, "dist"), { recursive: true });
+      fs.mkdirSync(sourceRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependency, "package.json"),
+        JSON.stringify({
+          name: "@fixture/runtime-api",
+          version: "1.0.0",
+          type: "module",
+          exports: { "./contract": "./dist/contract.js" },
+        })
+      );
+      fs.writeFileSync(
+        path.join(dependency, "dist/contract.js"),
+        'export const marker = "installed-contract";\n'
+      );
+      fs.writeFileSync(
+        path.join(sourceRoot, "package.json"),
+        JSON.stringify({ dependencies: { "@fixture/runtime-api": "1.0.0" } })
+      );
+      const entry = path.join(sourceRoot, "entry.js");
+      fs.writeFileSync(entry, "prepared source entry");
+      const preparedSourcePlugin: esbuild.Plugin = {
+        name: "installed-prepared-source",
+        setup(build) {
+          build.onResolve({ filter: /entry\.js$/ }, (args) => ({
+            path: args.path,
+            namespace: "installed-prepared-source",
+          }));
+          build.onLoad({ filter: /.*/, namespace: "installed-prepared-source" }, () => ({
+            contents:
+              'import { marker } from "@fixture/runtime-api/contract"; export default marker;\n',
+            loader: "js",
+            resolveDir: sourceRoot,
+          }));
+        },
+      };
+
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        write: false,
+        logLevel: "silent",
+        nodePaths: [appNodeModules],
+        // The composition owns this installation root. The prepared source
+        // remains elsewhere, matching package-preflight production layout.
+        plugins: composePreparedDependencyPlugins(
+          [preparedSourcePlugin],
+          [appNodeModules],
+          [sourceRoot]
+        ),
+      });
+      expect(result.outputFiles[0]?.text).toContain('var marker = "installed-contract"');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves bare imports from the prepared installation before ancestor node_modules", async () => {
+    const root = fs.mkdtempSync(path.join(process.cwd(), ".cache", "vibestudio-installed-alias-"));
+    try {
+      const appRoot = path.join(root, "installed", "server");
+      const appNodeModules = path.join(appRoot, "node_modules");
+      const dependency = path.join(appNodeModules, "@vibestudio", "shared");
+      const sourceRoot = path.join(root, "producer", "workspaces", "base", "source");
+      fs.mkdirSync(path.join(dependency, "dist"), { recursive: true });
+      fs.mkdirSync(sourceRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependency, "package.json"),
+        JSON.stringify({
+          name: "@vibestudio/shared",
+          version: "1.0.0",
+          type: "module",
+          exports: { "./typedRpcServiceClient": "./dist/typedRpcServiceClient.js" },
+        })
+      );
+      fs.writeFileSync(
+        path.join(dependency, "dist/typedRpcServiceClient.js"),
+        'export const marker = "installed-contract";\n'
+      );
+      fs.writeFileSync(
+        path.join(sourceRoot, "package.json"),
+        JSON.stringify({ dependencies: { "@vibestudio/shared": "workspace:*" } })
+      );
+      const entry = path.join(sourceRoot, "entry.js");
+      fs.writeFileSync(entry, "prepared source entry");
+      const preparedSourcePlugin: esbuild.Plugin = {
+        name: "installed-prepared-source",
+        setup(build) {
+          build.onResolve({ filter: /entry\.js$/ }, (args) => ({
+            path: args.path,
+            namespace: "installed-prepared-source",
+          }));
+          build.onLoad({ filter: /.*/, namespace: "installed-prepared-source" }, () => ({
+            contents:
+              'import { marker } from "@vibestudio/shared/typedRpcServiceClient"; export default marker;\n',
+            loader: "js",
+            resolveDir: sourceRoot,
+          }));
+        },
+      };
+
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        absWorkingDir: root,
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        write: false,
+        logLevel: "silent",
+        nodePaths: [appNodeModules],
+        tsconfigRaw: { compilerOptions: {} },
+        plugins: composePreparedDependencyPlugins(
+          [preparedSourcePlugin],
+          [appNodeModules],
+          [sourceRoot]
+        ),
+      });
+      expect(result.outputFiles[0]?.text).toContain('var marker = "installed-contract"');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

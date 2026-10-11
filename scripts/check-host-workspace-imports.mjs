@@ -187,6 +187,11 @@ export function collectConcreteWorkspaceIdentityFindings({ text, absFile, root =
  * Collect boundary findings from a single file's source text.
  * @returns {Array<{file:string, line:number, specifier:string, category:string}>}
  */
+/**
+ * @param {{ text: string, absFile: string, root?: string,
+ * workspacePackageNames?: Set<string>,
+ * resolveImport?: (specifier: string, absFile: string) => boolean }} input
+ */
 export function collectFindings({
   text,
   absFile,

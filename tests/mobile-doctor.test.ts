@@ -38,7 +38,7 @@ describe("mobile doctor targets", () => {
     expect(
       checks(parseDoctorArgs([]), deps)
         .filter((check) => check.name.startsWith("ios."))
-        .every((check) => check.skipped)
+        .every((check) => "skipped" in check && check.skipped === true)
     ).toBe(true);
   });
 

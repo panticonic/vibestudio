@@ -16,7 +16,7 @@ import {
 
 describe("collectPackageManifestImportFindings", () => {
   it("allows the host terminal binding only for its declared runtime owner", async () => {
-    const isTerminalWorker = (manifest) => manifest.terminal === true;
+    const isTerminalWorker = (manifest: { terminal?: boolean }) => manifest.terminal === true;
     const terminalOwner = {
       name: TERMINAL_SHIM_MODULE,
       kind: "package",

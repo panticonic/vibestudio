@@ -26,7 +26,10 @@ import {
 import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
 import { closeOwnedDesktop } from "../../scripts/lib/owned-desktop-close.mjs";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
-import { inspectWorkspaceSources } from "../../src/workspaceTemplateSource.js";
+import {
+  canonicalTemplateUrlFromCheckout,
+  inspectWorkspaceSources,
+} from "../../src/workspaceTemplateSource.js";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
@@ -400,7 +403,10 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     if (options.templateCheckouts.length > 1)
       throw new Error("A desktop launch can review only one template checkout");
     const templates = await inspectWorkspaceSources({
-      checkouts: options.templateCheckouts,
+      sources: options.templateCheckouts.map((checkout) => ({
+        checkout,
+        url: canonicalTemplateUrlFromCheckout(checkout),
+      })),
       checkpointRoot: path.join(workspaceInfo.testRoot, "selected-templates"),
     });
     const sources = JSON.parse(

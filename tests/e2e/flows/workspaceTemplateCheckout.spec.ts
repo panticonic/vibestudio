@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import YAML from "yaml";
 import type { HubWorkspaceEntry } from "@vibestudio/service-schemas/hubControl";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
+import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import {
   requireE2eRootTemplate,
   WORKSPACE_CREATION_DESCRIPTOR_PATH,
@@ -24,6 +26,7 @@ import { nativeUiRead } from "../support/nativeUiRead";
 import { presentApprovalCard } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
+const hubControlRpcMethods = createRpcMethods("hubControl", hubControlMethods);
 
 test("opens one explicit checkout directly at its exact dirty review", async () => {
   test.setTimeout(300_000);
@@ -47,13 +50,14 @@ test("opens one explicit checkout directly at its exact dirty review", async () 
     fs.writeFileSync(manifestPath, YAML.stringify(manifest));
 
     app = await launchTestApp({ templateCheckouts: [checkout], launchTimeout: 240_000 });
-    await waitHostedShellReady(app);
-    await approvePendingWorkspaceCreationReview(app);
+    const activeApp = app;
+    await waitHostedShellReady(activeApp);
+    await approvePendingWorkspaceCreationReview(activeApp);
     let shell: Page | undefined;
     await expect
       .poll(
         async () => {
-          for (const page of app!.app.context().pages()) {
+          for (const page of activeApp.app.context().pages()) {
             if (await page.getByRole("heading", { name: "Dirty launch workspace" }).count()) {
               shell = page;
               return true;
@@ -109,10 +113,11 @@ test("opens the selected local checkout as a separate workspace after exact revi
       fs.writeFileSync(manifestPath, YAML.stringify(manifest));
     }
     app = await launchTestApp({ launchTimeout: 300_000 });
-    await waitHostedShellReady(app);
-    await approvePendingWorkspaceCreationReview(app);
-    for (const workspaceId of [app.systemWorkspaceId, app.workspaceId]) {
-      const ids = await app.app.evaluate(async (_electron, workspaceId) => {
+    const activeApp = app;
+    await waitHostedShellReady(activeApp);
+    await approvePendingWorkspaceCreationReview(activeApp);
+    for (const workspaceId of [activeApp.systemWorkspaceId, activeApp.workspaceId]) {
+      const ids = await activeApp.app.evaluate(async (_electron, workspaceId) => {
         const api = await globalThis.__testApi!.forWorkspace(workspaceId);
         const pending = (await api.rpcCall("shellApproval", "listPending", [])) as Array<{
           kind: string;
@@ -122,13 +127,13 @@ test("opens the selected local checkout as a separate workspace after exact revi
           .filter((item) => item.kind === "unit-install-review")
           .map((item) => item.approvalId);
       }, workspaceId);
-      await approvePendingWorkspaceCreationReview({ app: app.app, workspaceId }, ids);
+      await approvePendingWorkspaceCreationReview({ app: activeApp.app, workspaceId }, ids);
     }
     let chrome: Page | undefined;
     await expect
       .poll(
         async () => {
-          for (const candidate of app!.app.context().pages()) {
+          for (const candidate of activeApp.app.context().pages()) {
             if (
               await candidate.getByRole("button", { name: "Add workspace", exact: true }).count()
             ) {
@@ -142,13 +147,13 @@ test("opens the selected local checkout as a separate workspace after exact revi
       )
       .toBe(true);
     const page = chrome!;
-    const before = await nativeUiRead<HubWorkspaceEntry[]>(
+    const before = await nativeUiRead(
       page,
       { kind: "hub" },
-      "hubControl.listWorkspaces",
+      hubControlRpcMethods.listWorkspaces,
       []
     );
-    await app.app.evaluate(({ dialog }, folder) => {
+    await activeApp.app.evaluate(({ dialog }, folder) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
     }, checkout);
     await page.getByRole("button", { name: "Add workspace", exact: true }).click();
@@ -157,12 +162,7 @@ test("opens the selected local checkout as a separate workspace after exact revi
     await expect(page.getByRole("textbox", { name: "Workspace name" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Unpublished local workspace" })).toBeVisible();
     expect(
-      await nativeUiRead<HubWorkspaceEntry[]>(
-        page,
-        { kind: "hub" },
-        "hubControl.listWorkspaces",
-        []
-      )
+      await nativeUiRead(page, { kind: "hub" }, hubControlRpcMethods.listWorkspaces, [])
     ).toHaveLength(before.length);
     await test.info().attach("local-workspace-review.png", {
       body: await page.screenshot(),
@@ -174,10 +174,10 @@ test("opens the selected local checkout as a separate workspace after exact revi
     await expect
       .poll(
         async () => {
-          after = await nativeUiRead<HubWorkspaceEntry[]>(
+          after = await nativeUiRead(
             page,
             { kind: "hub" },
-            "hubControl.listWorkspaces",
+            hubControlRpcMethods.listWorkspaces,
             []
           );
           return after.length;
@@ -192,7 +192,7 @@ test("opens the selected local checkout as a separate workspace after exact revi
     for (const previous of before)
       expect(after.some((entry) => entry.workspaceId === previous.workspaceId)).toBe(true);
     const descriptorPath = path.join(
-      path.dirname(app.workspacePath),
+      path.dirname(activeApp.workspacePath),
       created.name,
       "state",
       WORKSPACE_CREATION_DESCRIPTOR_PATH
@@ -204,7 +204,7 @@ test("opens the selected local checkout as a separate workspace after exact revi
     );
     expect(descriptor.rootTemplate.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(descriptor.rootTemplate.snapshot).toMatch(/^v1-sha256:[0-9a-f]{64}$/);
-    const owner = { app: app.app, workspaceId: created.workspaceId };
+    const owner = { app: activeApp.app, workspaceId: created.workspaceId };
     let creationReview: string | null = null;
     await expect
       .poll(
@@ -271,6 +271,9 @@ test("opens the selected local checkout as a separate workspace after exact revi
     const readiness = await getPanelReadiness(owner, initialPanel!.id);
     if (readiness.presentation.state === "failed")
       throw new Error(`Initial panel failed: ${readiness.presentation.message}`);
+    if (readiness.presentation.state !== "ready")
+      throw new Error(`Initial panel is not ready: ${readiness.presentation.state}`);
+    const readyPresentation = readiness.presentation;
 
     await expect
       .poll(
@@ -303,7 +306,7 @@ test("opens the selected local checkout as a separate workspace after exact revi
         .toContain(settledPanelText);
     }
     if (panelActionLabel) {
-      await app.app.evaluate(
+      await activeApp.app.evaluate(
         ({ webContents }, input) => {
           const contents = webContents.fromId(input.webContentsId);
           if (!contents) throw new Error("The initial panel was destroyed");
@@ -320,7 +323,7 @@ test("opens the selected local checkout as a separate workspace after exact revi
           })()`);
         },
         {
-          webContentsId: readiness.presentation.webContentsId,
+          webContentsId: readyPresentation.webContentsId,
           label: panelActionLabel,
         }
       );
@@ -333,40 +336,38 @@ test("opens the selected local checkout as a separate workspace after exact revi
       }
     }
     if (process.env["VIBESTUDIO_E2E_ASSERT_NO_HORIZONTAL_OVERFLOW"] === "1") {
-      await app.app.evaluate(({ BaseWindow }) => {
+      await activeApp.app.evaluate(({ BaseWindow }) => {
         const window = BaseWindow.getAllWindows().find((candidate) => candidate.isVisible());
         if (!window) throw new Error("The workspace window is not visible");
         const bounds = window.getBounds();
         window.setBounds({ ...bounds, width: 720 });
       });
       const readPanelWidth = () =>
-        app.app.evaluate(async ({ webContents }, id) => {
+        activeApp.app.evaluate(async ({ webContents }, id) => {
           const contents = webContents.fromId(id);
           if (!contents) throw new Error("The initial panel was destroyed");
           return contents.executeJavaScript(`({
             clientWidth: document.documentElement.clientWidth,
             scrollWidth: document.documentElement.scrollWidth
           })`);
-        }, readiness.presentation.webContentsId);
+        }, readyPresentation.webContentsId);
       await expect
         .poll(async () => (await readPanelWidth()).clientWidth, { timeout: 30_000 })
         .toBeLessThan(720);
       const narrowPanel = await readPanelWidth();
       expect(narrowPanel.scrollWidth).toBeLessThanOrEqual(narrowPanel.clientWidth);
       await test.info().attach("narrow-panel.png", {
-        body: await app.app.evaluate(async ({ webContents }, id) => {
+        body: await activeApp.app.evaluate(async ({ webContents }, id) => {
           const contents = webContents.fromId(id);
           if (!contents) throw new Error("The initial panel was destroyed");
           return (await contents.capturePage()).toPNG();
-        }, readiness.presentation.webContentsId),
+        }, readyPresentation.webContentsId),
         contentType: "image/png",
       });
     }
     // Capture the actual native panel pixels before the whole display. DOM text
     // and animation callbacks can precede compositor delivery under Xvfb.
-    if (readiness.presentation.state !== "ready")
-      throw new Error("The initial panel is not presented");
-    const nativeState = await app.app.evaluate(async ({ BaseWindow, webContents }, id) => {
+    const nativeState = await activeApp.app.evaluate(async ({ BaseWindow, webContents }, id) => {
       const contents = webContents.fromId(id);
       if (!contents) throw new Error("The initial panel was destroyed");
       return {
@@ -381,7 +382,7 @@ test("opens the selected local checkout as a separate workspace after exact revi
           })),
         })),
       };
-    }, readiness.presentation.webContentsId);
+    }, readyPresentation.webContentsId);
     await test.info().attach("initial-panel.png", {
       body: Buffer.from(nativeState.panelImage, "base64"),
       contentType: "image/png",
@@ -392,7 +393,7 @@ test("opens the selected local checkout as a separate workspace after exact revi
     });
     await test.info().attach("created-workspace.png", {
       body: Buffer.from(
-        await app.app.evaluate(async ({ BaseWindow, desktopCapturer, screen }) => {
+        await activeApp.app.evaluate(async ({ BaseWindow, desktopCapturer, screen }) => {
           const window = BaseWindow.getAllWindows().find((candidate) => candidate.isVisible());
           if (!window) throw new Error("The workspace window is not visible");
           const bounds = window.getBounds();
