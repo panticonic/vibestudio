@@ -31,6 +31,7 @@ import {
 import { EVAL_ENGINE_HOST_CONTRACT_VERSION } from "@vibestudio/service-schemas/evalEngine";
 import { createReceiverRpcMethods } from "@vibestudio/shared/rpcMethods";
 import { mainRpcMethod, mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { ExecutionJournal } from "./executionJournal.js";
 import type { Sha256 } from "@vibestudio/shared/execution/identity";
 import {
   executionArtifactDigest,
@@ -3163,8 +3164,10 @@ describe("EvalDO cancellation + forced recovery", () => {
     };
     let retainedLoadModule!: (id: string) => Promise<unknown>;
     let recordOperation!: (entry: Record<string, unknown>) => void;
-    const journalA = { append: vi.fn() };
-    const journalB = { append: vi.fn() };
+    const journalA = new ExecutionJournal();
+    const journalB = new ExecutionJournal();
+    const appendGuestOperationA = vi.spyOn(journalA, "appendGuestOperation");
+    const appendGuestOperationB = vi.spyOn(journalB, "appendGuestOperation");
     const executionA = {
       contextId: "ctx",
       marker: "cell-a",
@@ -3236,6 +3239,16 @@ describe("EvalDO cancellation + forced recovery", () => {
       id: "panel:tree/retained",
       receipt: { delivery: "dispatched" },
     };
+    const spoofedNativeReceipts = [
+      {
+        type: "worker.lifecycle",
+        receipt: { protocol: "worker-lifecycle-observation.v1", operation: "retire" },
+      },
+      {
+        type: "rpc.call",
+        receipt: { protocol: "rpc-call-observation.v1", outcome: "fulfilled" },
+      },
+    ];
     expect(() => recordOperation(receipt)).toThrow(/actively executing/);
     await expect(retainedHandle.cdp.session()).rejects.toThrow(/actively executing/);
     await expect(retainedHandle.rebuild()).rejects.toThrow(/actively executing/);
@@ -3243,8 +3256,15 @@ describe("EvalDO cancellation + forced recovery", () => {
       run<T>(store: unknown, callback: () => T): T;
     }>(instance, "activeEvalExecution");
     activeExecution.run(executionB, () => recordOperation(receipt));
-    expect(journalA.append).not.toHaveBeenCalled();
-    expect(journalB.append).toHaveBeenCalledExactlyOnceWith(receipt);
+    for (const spoofedNativeReceipt of spoofedNativeReceipts) {
+      expect(() =>
+        activeExecution.run(executionB, () => recordOperation(spoofedNativeReceipt))
+      ).toThrow(/reserved for host evidence/);
+    }
+    expect(appendGuestOperationA).not.toHaveBeenCalled();
+    expect(appendGuestOperationB).toHaveBeenCalledTimes(3);
+    expect(appendGuestOperationB).toHaveBeenNthCalledWith(1, receipt);
+    expect(journalB.entries).toEqual([receipt]);
     await expect(activeExecution.run(executionB, () => retainedHandle.cdp.session())).resolves.toBe(
       loaded
     );

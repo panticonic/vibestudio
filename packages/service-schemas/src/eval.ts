@@ -11,6 +11,231 @@ import { z } from "zod";
 import { rpcFailureSchema } from "./rpcFailure.js";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { CapabilityScopeSchema } from "./build.js";
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
+
+const EVAL_RPC_FINGERPRINT_MAX_CHARS = 64 * 1024;
+const EVAL_RPC_FINGERPRINT_MAX_NODES = 8192;
+const EVAL_RPC_FINGERPRINT_MAX_DEPTH = 64;
+
+export const evalRpcFingerprintSchema = z.discriminatedUnion("available", [
+  z
+    .object({ available: z.literal(true), fingerprint: z.string().regex(/^[0-9a-f]{64}$/u) })
+    .strict(),
+  z
+    .object({
+      available: z.literal(false),
+      reason: z.enum(["unsupported", "too-large", "unreadable"]),
+    })
+    .strict(),
+]);
+export type EvalRpcFingerprint = z.infer<typeof evalRpcFingerprintSchema>;
+/**
+ * Host evidence for one evaluated-code RPC dispatch. Receiver results are
+ * committed only as bounded one-way fingerprints; arguments and main-service
+ * results remain covered by existing semantic projections. A fingerprint is
+ * evidence identity, not a confidentiality boundary.
+ */
+export const evalRpcCallObservationSchema = z
+  .object({
+    protocol: z.literal("rpc-call-observation.v1"),
+    callId: z.number().int().nonnegative(),
+    admissionOrder: z.number().int().nonnegative(),
+    settlementOrder: z.number().int().nonnegative(),
+    targetId: z.string().min(1),
+    method: z.string().min(1),
+    outcome: z.enum(["fulfilled", "rejected"]),
+    result: evalRpcFingerprintSchema.optional(),
+  })
+  .strict()
+  .superRefine((receipt, ctx) => {
+    if (receipt.settlementOrder <= receipt.admissionOrder) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "RPC settlement must follow admission in the execution event order",
+      });
+    }
+    if (receipt.outcome === "rejected" && receipt.result !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Rejected RPC calls cannot carry a result fingerprint",
+      });
+    }
+  });
+export type EvalRpcCallObservation = z.infer<typeof evalRpcCallObservationSchema>;
+
+export const evalWorkerLifecycleObservationSchema = z.discriminatedUnion("operation", [
+  z
+    .object({
+      protocol: z.literal("worker-lifecycle-observation.v1"),
+      callId: z.number().int().nonnegative(),
+      operation: z.literal("create"),
+      entityId: z.string().min(1),
+      targetId: z.string().min(1),
+      kind: z.literal("do"),
+      source: z.string().min(1),
+      className: z.string().min(1),
+      objectKey: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("worker-lifecycle-observation.v1"),
+      callId: z.number().int().nonnegative(),
+      operation: z.literal("resolve"),
+      targetId: z.string().min(1),
+      source: z.string().min(1),
+      className: z.string().min(1),
+      objectKey: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("worker-lifecycle-observation.v1"),
+      callId: z.number().int().nonnegative(),
+      operation: z.literal("retire"),
+      entityId: z.string().min(1),
+    })
+    .strict(),
+]);
+export type EvalWorkerLifecycleObservation = z.infer<typeof evalWorkerLifecycleObservationSchema>;
+
+export type CapturedEvalRpcFingerprint =
+  | { available: true; encoding: string }
+  | { available: false; reason: "unsupported" | "too-large" | "unreadable" };
+
+function compareEvalFingerprintKeys(left: string, right: string): number {
+  const encoder = new TextEncoder();
+  const a = encoder.encode(left);
+  const b = encoder.encode(right);
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    const delta = a[index]! - b[index]!;
+    if (delta !== 0) return delta;
+  }
+  return a.length - b.length;
+}
+
+/** Capture deterministic canonical JSON under strict per-value size/depth/node bounds. */
+function captureEvalRpcFingerprintWithin(
+  value: unknown,
+  maxChars: number
+): CapturedEvalRpcFingerprint {
+  let nodes = 0;
+  let characters = 0;
+  const spend = (count: number): void => {
+    characters += count;
+    if (characters > maxChars) throw "too-large";
+  };
+  const ancestors = new Set<object>();
+  const encode = (current: unknown, depth: number, arrayValue = false): string => {
+    nodes += 1;
+    if (nodes > EVAL_RPC_FINGERPRINT_MAX_NODES || depth > EVAL_RPC_FINGERPRINT_MAX_DEPTH) {
+      throw "too-large";
+    }
+    let encoded: string;
+    if (current === null) encoded = "null";
+    else if (typeof current === "string") {
+      if (current.length > maxChars) throw "too-large";
+      encoded = JSON.stringify(current);
+    } else if (typeof current === "boolean") encoded = current ? "true" : "false";
+    else if (typeof current === "number") {
+      if (!Number.isFinite(current)) throw "unsupported";
+      encoded = JSON.stringify(Object.is(current, -0) ? 0 : current);
+    } else if (current === undefined && arrayValue) encoded = "null";
+    else if (typeof current !== "object" || current === undefined) throw "unsupported";
+    else {
+      if (ancestors.has(current)) throw "unsupported";
+      ancestors.add(current);
+      try {
+        if (Array.isArray(current)) {
+          if (current.length > EVAL_RPC_FINGERPRINT_MAX_NODES) throw "too-large";
+          spend(2 + Math.max(0, current.length - 1));
+          const items: string[] = [];
+          for (let index = 0; index < current.length; index += 1) {
+            const descriptor = Object.getOwnPropertyDescriptor(current, String(index));
+            if (!descriptor) {
+              spend(4);
+              items.push("null");
+            } else if (!("value" in descriptor)) throw "unreadable";
+            else items.push(encode(descriptor.value, depth + 1, true));
+          }
+          encoded = `[${items.join(",")}]`;
+        } else {
+          const prototype = Object.getPrototypeOf(current);
+          if (prototype !== Object.prototype && prototype !== null) throw "unsupported";
+          const keys: string[] = [];
+          for (const key in current) {
+            if (!Object.prototype.hasOwnProperty.call(current, key)) continue;
+            keys.push(key);
+            if (keys.length > EVAL_RPC_FINGERPRINT_MAX_NODES) throw "too-large";
+          }
+          let keyCharacters = 0;
+          const normalized = keys.map((original) => {
+            if (original.length > maxChars) throw "too-large";
+            const key = original;
+            keyCharacters += key.length;
+            if (keyCharacters > maxChars) throw "too-large";
+            return { original, key };
+          });
+          normalized.sort((left, right) => compareEvalFingerprintKeys(left.key, right.key));
+          const seen = new Set<string>();
+          const fields: string[] = [];
+          spend(2);
+          for (const { original, key } of normalized) {
+            if (seen.has(key)) throw "unsupported";
+            seen.add(key);
+            const descriptor = Object.getOwnPropertyDescriptor(current, original);
+            if (!descriptor || !descriptor.enumerable) continue;
+            if (!("value" in descriptor)) throw "unreadable";
+            const child = descriptor.value;
+            if (child === undefined) continue;
+            if (fields.length > 0) spend(1);
+            spend(JSON.stringify(key).length + 1);
+            fields.push(`${JSON.stringify(key)}:${encode(child, depth + 1)}`);
+          }
+          encoded = `{${fields.join(",")}}`;
+        }
+      } finally {
+        ancestors.delete(current);
+      }
+    }
+    if (typeof current !== "object" || current === null) spend(encoded.length);
+    if (encoded.length > maxChars) throw "too-large";
+    return encoded;
+  };
+  try {
+    return { available: true, encoding: encode(value, 0) };
+  } catch (reason) {
+    return {
+      available: false,
+      reason:
+        reason === "too-large"
+          ? "too-large"
+          : reason === "unreadable"
+            ? "unreadable"
+            : "unsupported",
+    };
+  }
+}
+
+export function captureEvalRpcFingerprint(value: unknown): CapturedEvalRpcFingerprint {
+  return captureEvalRpcFingerprintWithin(value, EVAL_RPC_FINGERPRINT_MAX_CHARS);
+}
+
+/** Hash the captured canonical encoding; hashing never needs the mutable guest value again. */
+export function finishEvalRpcFingerprint(captured: CapturedEvalRpcFingerprint): EvalRpcFingerprint {
+  if (!captured.available) return captured;
+  try {
+    return { available: true, fingerprint: sha256HexSyncText(captured.encoding) };
+  } catch {
+    return { available: false, reason: "unreadable" };
+  }
+}
+
+/** Convenience for validators fingerprinting values they actually observed. */
+export function fingerprintEvalRpcValue(value: unknown): EvalRpcFingerprint {
+  return finishEvalRpcFingerprint(captureEvalRpcFingerprint(value));
+}
+
 export { mapEvalResultLeaves } from "./eval/resultTree.js";
 
 /**

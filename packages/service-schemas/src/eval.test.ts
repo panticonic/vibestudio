@@ -6,10 +6,92 @@ import {
   evalLifecycleFailureCodes,
   evalMethods,
   evalStartInputSchema,
+  captureEvalRpcFingerprint,
+  fingerprintEvalRpcValue,
+  evalRpcCallObservationSchema,
+  evalWorkerLifecycleObservationSchema,
   type EvalCall,
 } from "./eval.js";
 
 const SUCCESS = { success: true, console: "", returnValue: 42 };
+
+describe("eval RPC observation fingerprints", () => {
+  it("sorts canonical object keys while preserving exact Unicode code points", () => {
+    const left = fingerprintEvalRpcValue({ z: 2, label: "e\u0301", rows: [{ b: 1, a: true }] });
+    const right = fingerprintEvalRpcValue({ rows: [{ a: true, b: 1 }], label: "é", z: 2 });
+    expect(left).not.toEqual(right);
+    expect(fingerprintEvalRpcValue({ label: "e\u0301", rows: [{ b: 1, a: true }], z: 2 })).toEqual(
+      left
+    );
+    expect(fingerprintEvalRpcValue({ "e\u0301": 1 })).not.toEqual(
+      fingerprintEvalRpcValue({ é: 1 })
+    );
+    expect(captureEvalRpcFingerprint({ b: 2, a: 1 })).toEqual({
+      available: true,
+      encoding: '{"a":1,"b":2}',
+    });
+  });
+
+  it("marks unsupported, cyclic, accessor, and oversized receiver results unavailable without running getters", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic["self"] = cyclic;
+    let getterRuns = 0;
+    const accessor = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        getterRuns += 1;
+        return "private";
+      },
+    });
+    expect(fingerprintEvalRpcValue(cyclic)).toEqual({ available: false, reason: "unsupported" });
+    expect(fingerprintEvalRpcValue(accessor)).toEqual({ available: false, reason: "unreadable" });
+    expect(fingerprintEvalRpcValue("x".repeat(65 * 1024))).toEqual({
+      available: false,
+      reason: "too-large",
+    });
+    expect(getterRuns).toBe(0);
+  });
+
+  it("validates fulfilled result commitments and preserves lifecycle target identity fields", () => {
+    expect(
+      evalRpcCallObservationSchema.parse({
+        protocol: "rpc-call-observation.v1",
+        callId: 2,
+        admissionOrder: 0,
+        settlementOrder: 1,
+        targetId: "do:example:NotesDO:key-1",
+        method: "notes.readRows",
+        outcome: "fulfilled",
+        result: fingerprintEvalRpcValue([{ id: 1 }]),
+      }).result
+    ).toEqual(fingerprintEvalRpcValue([{ id: 1 }]));
+    expect(
+      evalRpcCallObservationSchema.safeParse({
+        protocol: "rpc-call-observation.v1",
+        callId: 3,
+        admissionOrder: 3,
+        settlementOrder: 1,
+        targetId: "main",
+        method: "runtime.createEntity",
+        outcome: "rejected",
+        result: { available: true, fingerprint: "0".repeat(64) },
+      }).success
+    ).toBe(false);
+    expect(
+      evalWorkerLifecycleObservationSchema.parse({
+        protocol: "worker-lifecycle-observation.v1",
+        callId: 2,
+        operation: "create",
+        entityId: "do:workers/test:NotesDO:key-1",
+        targetId: "do:workers/test:NotesDO:key-1",
+        kind: "do",
+        source: "workers/test",
+        className: "NotesDO",
+        objectKey: "key-1",
+      })
+    ).toMatchObject({ targetId: "do:workers/test:NotesDO:key-1" });
+  });
+});
 
 describe("eval lifecycle contract", () => {
   it("requires a caller-owned runId and rejects relationship facts", () => {

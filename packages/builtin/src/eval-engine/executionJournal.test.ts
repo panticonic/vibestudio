@@ -4,9 +4,17 @@ import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import type { BuildPerformanceProfileWire } from "@vibestudio/service-schemas/build";
-import { EVAL_OPERATION_JOURNAL_PREVIEW_CHARS } from "@vibestudio/service-schemas/eval";
+import {
+  EVAL_OPERATION_JOURNAL_PREVIEW_CHARS,
+  fingerprintEvalRpcValue,
+  type EvalRpcCallObservation,
+} from "@vibestudio/service-schemas/eval";
 import { EvalDO } from "./EvalDO.js";
 import { ExecutionJournal } from "./executionJournal.js";
+
+function nonRpcEntries(entries: Record<string, unknown>[]) {
+  return entries.filter((entry) => entry["type"] !== "rpc.call");
+}
 
 function profile(): BuildPerformanceProfileWire {
   return {
@@ -41,6 +49,39 @@ function profile(): BuildPerformanceProfileWire {
 }
 
 describe("execution-owned native operation evidence", () => {
+  it("keeps reserved receipt types host-owned while accepting trusted native recording", () => {
+    const journal = new ExecutionJournal();
+    const receipt: EvalRpcCallObservation = {
+      protocol: "rpc-call-observation.v1",
+      callId: 0,
+      admissionOrder: 0,
+      settlementOrder: 1,
+      targetId: "do:notes:NotesDO:key-1",
+      method: "notes.readRows",
+      outcome: "fulfilled",
+    };
+    const spoofedEntries = [
+      { type: "rpc.call", receipt },
+      {
+        type: "worker.lifecycle",
+        receipt: {
+          protocol: "worker-lifecycle-observation.v1",
+          callId: 0,
+          operation: "retire",
+          entityId: "entity:spoofed",
+        },
+      },
+    ];
+
+    for (const entry of spoofedEntries) {
+      expect(() => journal.appendGuestOperation(entry)).toThrow(/reserved for host evidence/);
+    }
+    expect(journal.entries).toEqual([]);
+
+    journal.recordRpcCall(receipt);
+    expect(journal.entries).toEqual([{ type: "rpc.call", receipt }]);
+  });
+
   it("records a settled provider transport call before guest mutation without retaining secrets", async () => {
     const { instance } = await createTestDO(EvalDO);
     const nativeRpc = wireClientFor(
@@ -63,7 +104,7 @@ describe("execution-owned native operation evidence", () => {
     ])) as unknown[];
     returned.push({ secret: "PRIVATE GUEST MUTATION" });
     const journal = owner.operationJournal.close();
-    expect(journal.entries).toEqual([
+    expect(nonRpcEntries(journal.entries)).toEqual([
       {
         type: "extension.invocation",
         receipt: {
@@ -76,6 +117,238 @@ describe("execution-owned native operation evidence", () => {
       },
     ]);
     expect(JSON.stringify(journal)).not.toContain("PRIVATE");
+  });
+
+  it("records receiver results in settlement order before guest mutation and retains rejection receipts", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const nativeRpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
+    let resolveFirst!: (value: unknown) => void;
+    let resolveSecond!: (value: unknown) => void;
+    const firstResult = new Promise<unknown>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const secondResult = new Promise<unknown>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const rejection = new Error("receiver failed");
+    vi.spyOn(nativeRpc, "call")
+      .mockImplementationOnce(() => firstResult)
+      .mockImplementationOnce(() => secondResult)
+      .mockRejectedValueOnce(rejection);
+    const owner = (
+      instance as unknown as {
+        createExecutionContext: (input: { contextId: string }) => {
+          rpc: typeof nativeRpc;
+          operationJournal: ExecutionJournal;
+        };
+      }
+    ).createExecutionContext({ contextId: "owner" });
+
+    const first = owner.rpc.call("do:notes:NotesDO:key-1", "notes.readRows", []);
+    const second = owner.rpc.call("do:notes:NotesDO:key-1", "notes.readRows", []);
+    const secondRows = [{ id: 2, label: "second" }];
+    const secondFingerprint = fingerprintEvalRpcValue(secondRows);
+    resolveSecond(secondRows);
+    const guestSecondRows = (await second) as typeof secondRows;
+    guestSecondRows.push({ id: 999, label: "guest mutation" });
+    const firstRows = [{ id: 1, label: "first" }];
+    resolveFirst(firstRows);
+    await first;
+    await expect(owner.rpc.call("do:notes:NotesDO:key-1", "notes.readRows", [])).rejects.toBe(
+      rejection
+    );
+
+    const receipts = owner.operationJournal
+      .close()
+      .entries.filter((entry) => entry["type"] === "rpc.call")
+      .map((entry) => entry["receipt"]);
+    expect(receipts).toEqual([
+      {
+        protocol: "rpc-call-observation.v1",
+        callId: 1,
+        admissionOrder: 1,
+        settlementOrder: 2,
+        targetId: "do:notes:NotesDO:key-1",
+        method: "notes.readRows",
+        outcome: "fulfilled",
+        result: secondFingerprint,
+      },
+      {
+        protocol: "rpc-call-observation.v1",
+        callId: 0,
+        admissionOrder: 0,
+        settlementOrder: 3,
+        targetId: "do:notes:NotesDO:key-1",
+        method: "notes.readRows",
+        outcome: "fulfilled",
+        result: fingerprintEvalRpcValue(firstRows),
+      },
+      {
+        protocol: "rpc-call-observation.v1",
+        callId: 2,
+        admissionOrder: 4,
+        settlementOrder: 5,
+        targetId: "do:notes:NotesDO:key-1",
+        method: "notes.readRows",
+        outcome: "rejected",
+      },
+    ]);
+    expect(JSON.stringify(receipts)).not.toContain("guest mutation");
+  });
+
+  it("records only canonical DO owner identities for create, resolve, and retire", () => {
+    const journal = new ExecutionJournal();
+    const createArgs = [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/notes" },
+        className: "NotesDO",
+        key: "probe-1",
+      },
+    ];
+    journal.recordWorkerLifecycle(
+      journal.captureWorkerLifecycleRequest("runtime.createEntity", createArgs),
+      {
+        id: "do:workers/notes:NotesDO:probe-1",
+        kind: "do",
+        source: { repoPath: "workers/notes", effectiveVersion: "v1" },
+        contextId: "context:1",
+        targetId: "do:workers/notes:NotesDO:probe-1",
+      },
+      0
+    );
+    journal.recordWorkerLifecycle(
+      journal.captureWorkerLifecycleRequest("workers.resolveDurableObject", [
+        "workers/notes",
+        "NotesDO",
+        "probe-1",
+      ]),
+      {
+        kind: "durable-object",
+        source: "workers/notes",
+        className: "NotesDO",
+        objectKey: "probe-1",
+        targetId: "do:workers/notes:NotesDO:probe-1",
+      },
+      1
+    );
+    journal.recordWorkerLifecycle(
+      journal.captureWorkerLifecycleRequest("runtime.retireEntity", [
+        { id: "do:workers/notes:NotesDO:probe-1" },
+      ]),
+      undefined,
+      2
+    );
+    const lifecycle = journal
+      .close()
+      .entries.filter((entry) => entry["type"] === "worker.lifecycle");
+    expect(lifecycle.map((entry) => entry["receipt"])).toEqual([
+      {
+        protocol: "worker-lifecycle-observation.v1",
+        callId: 0,
+        operation: "create",
+        entityId: "do:workers/notes:NotesDO:probe-1",
+        targetId: "do:workers/notes:NotesDO:probe-1",
+        kind: "do",
+        source: "workers/notes",
+        className: "NotesDO",
+        objectKey: "probe-1",
+      },
+      {
+        protocol: "worker-lifecycle-observation.v1",
+        callId: 1,
+        operation: "resolve",
+        targetId: "do:workers/notes:NotesDO:probe-1",
+        source: "workers/notes",
+        className: "NotesDO",
+        objectKey: "probe-1",
+      },
+      {
+        protocol: "worker-lifecycle-observation.v1",
+        callId: 2,
+        operation: "retire",
+        entityId: "do:workers/notes:NotesDO:probe-1",
+      },
+    ]);
+  });
+
+  it("captures canonical lifecycle request identity before an RPC settles", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const nativeRpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
+    let resolveCreate!: (value: unknown) => void;
+    let resolveRetire!: (value: unknown) => void;
+    const createResult = new Promise<unknown>((resolve) => {
+      resolveCreate = resolve;
+    });
+    const retireResult = new Promise<unknown>((resolve) => {
+      resolveRetire = resolve;
+    });
+    vi.spyOn(nativeRpc, "call")
+      .mockImplementationOnce(() => createResult)
+      .mockImplementationOnce(() => retireResult);
+    const owner = (
+      instance as unknown as {
+        createExecutionContext: (input: { contextId: string }) => {
+          rpc: typeof nativeRpc;
+          operationJournal: ExecutionJournal;
+        };
+      }
+    ).createExecutionContext({ contextId: "owner" });
+
+    const createSpec = {
+      kind: "do",
+      execution: { surface: "code", source: "workers/notes" },
+      className: "NotesDO",
+      key: "probe-original",
+    };
+    const createArgs: unknown[] = [createSpec];
+    const creating = owner.rpc.call("main", "runtime.createEntity", createArgs);
+    createSpec.className = "MutatedDO";
+    createSpec.key = "probe-mutated";
+    resolveCreate({
+      id: "do:workers/notes:NotesDO:probe-original",
+      kind: "do",
+      source: { repoPath: "workers/notes", effectiveVersion: "v1" },
+      contextId: "context:1",
+      targetId: "do:workers/notes:NotesDO:probe-original",
+    });
+    await creating;
+
+    const retireRequest = { id: "do:workers/notes:NotesDO:probe-original" };
+    const retiring = owner.rpc.call("main", "runtime.retireEntity", [retireRequest]);
+    retireRequest.id = "do:workers/notes:NotesDO:probe-mutated";
+    resolveRetire(undefined);
+    await retiring;
+
+    const lifecycle = owner.operationJournal
+      .close()
+      .entries.filter((entry) => entry["type"] === "worker.lifecycle")
+      .map((entry) => entry["receipt"]);
+    expect(lifecycle).toEqual([
+      {
+        protocol: "worker-lifecycle-observation.v1",
+        callId: 0,
+        operation: "create",
+        entityId: "do:workers/notes:NotesDO:probe-original",
+        targetId: "do:workers/notes:NotesDO:probe-original",
+        kind: "do",
+        source: "workers/notes",
+        className: "NotesDO",
+        objectKey: "probe-original",
+      },
+      {
+        protocol: "worker-lifecycle-observation.v1",
+        callId: 1,
+        operation: "retire",
+        entityId: "do:workers/notes:NotesDO:probe-original",
+      },
+    ]);
   });
 
   it.each([
@@ -134,7 +407,7 @@ describe("execution-owned native operation evidence", () => {
       "upstreamStatus",
       [],
     ]);
-    expect(owner.operationJournal.close().entries).toEqual([]);
+    expect(nonRpcEntries(owner.operationJournal.close().entries)).toEqual([]);
   });
 
   it("rejects malformed invocation observations and ignores unrelated or closed operations", () => {
@@ -180,7 +453,7 @@ describe("execution-owned native operation evidence", () => {
     const returned = (await owner.rpc.call("main", "permissions.list", [])) as unknown[];
     returned.length = 0;
     const journal = owner.operationJournal.close();
-    expect(journal.entries).toEqual([
+    expect(nonRpcEntries(journal.entries)).toEqual([
       {
         type: "permissions.inventory",
         receipt: {
@@ -311,7 +584,7 @@ describe("execution-owned native operation evidence", () => {
     ]);
     const summary = { measured: !!returned };
     expect(summary).toEqual({ measured: true });
-    expect(owner.operationJournal.close().entries).toHaveLength(1);
+    expect(nonRpcEntries(owner.operationJournal.close().entries)).toHaveLength(1);
   });
 
   it("records bounded native log facts before guest summarization and mutation", async () => {
@@ -350,7 +623,7 @@ describe("execution-owned native operation evidence", () => {
     returned.records[0]!.level = "error";
     returned.records.length = 0;
     const result = owner.operationJournal.close();
-    expect(result.entries).toEqual([
+    expect(nonRpcEntries(result.entries)).toEqual([
       {
         type: "server-log.observation",
         receipt: {
@@ -438,20 +711,21 @@ describe("execution-owned native operation evidence", () => {
     await owner.rpc.call("main", "blobstore.grep", [digest, "PRIVATE MARKER"]);
     matches.length = 0;
     const result = owner.operationJournal.close();
-    expect(result.entries).toHaveLength(4);
-    expect(result.entries[0]).toMatchObject({
+    const entries = nonRpcEntries(result.entries);
+    expect(entries).toHaveLength(4);
+    expect(entries[0]).toMatchObject({
       receipt: { digest, contentDigest: digest, lineCount: 3 },
     });
-    expect(result.entries[1]).toMatchObject({
+    expect(entries[1]).toMatchObject({
       receipt: { digest, contentDigest: digest, size: new TextEncoder().encode(text).length },
     });
-    expect(result.entries[2]).toMatchObject({
+    expect(entries[2]).toMatchObject({
       receipt: { digest, offset: 0, length: 7, present: true, decodedSize: 7 },
     });
-    expect(result.entries[3]).toMatchObject({ receipt: { digest, matchCount: 1, maxMatches: 50 } });
+    expect(entries[3]).toMatchObject({ receipt: { digest, matchCount: 1, maxMatches: 50 } });
     expect(JSON.stringify(result)).not.toContain("PRIVATE");
     owner.operationJournal.recordBlobTextOperation("blobstore.getText", [], "late malformed read");
-    expect(result.entries).toHaveLength(4);
+    expect(nonRpcEntries(result.entries)).toHaveLength(4);
   });
 
   it("retains missing blobs and byte coordinates at partial UTF-8 boundaries", () => {
@@ -513,14 +787,15 @@ describe("execution-owned native operation evidence", () => {
     page.entries.length = 0;
     diff.changed.length = 0;
     const result = owner.operationJournal.close();
-    expect(result.entries).toHaveLength(4);
-    expect(result.entries[1]).toMatchObject({
+    const entries = nonRpcEntries(result.entries);
+    expect(entries).toHaveLength(4);
+    expect(entries[1]).toMatchObject({
       receipt: { ref: stateHash, page: { entries: [{ path: "note.txt" }] } },
     });
-    expect(result.entries[2]).toMatchObject({
+    expect(entries[2]).toMatchObject({
       receipt: { from: stateHash, to: second, diff: { changed: [{ path: "note.txt" }] } },
     });
-    expect(result.entries[3]).toMatchObject({
+    expect(entries[3]).toMatchObject({
       receipt: { ref: stateHash, written: 1, unchanged: 0 },
     });
   });
@@ -589,24 +864,25 @@ describe("execution-owned native operation evidence", () => {
     await owner.rpc.call("main", "webhookIngress.listSubscriptions", [{ includeRevoked: false }]);
     list.length = 0;
     const result = owner.operationJournal.close();
-    expect(result.entries).toHaveLength(5);
-    expect(result.entries[1]).toMatchObject({
+    const entries = nonRpcEntries(result.entries);
+    expect(entries).toHaveLength(5);
+    expect(entries[1]).toMatchObject({
       receipt: {
         includeRevoked: false,
         subscriptions: [{ subscriptionId: "subscription-a", revoked: false }],
       },
     });
-    expect(result.entries[2]).toMatchObject({
+    expect(entries[2]).toMatchObject({
       receipt: { subscriptionId: "subscription-a", secretPresent: true },
     });
-    expect(result.entries[4]).toMatchObject({ receipt: { subscriptions: [] } });
+    expect(entries[4]).toMatchObject({ receipt: { subscriptions: [] } });
     expect(JSON.stringify(result)).not.toContain("PRIVATE");
     owner.operationJournal.recordWebhookOperation(
       "webhookIngress.rotateSecret",
       [],
       "late malformed result"
     );
-    expect(result.entries).toHaveLength(5);
+    expect(nonRpcEntries(result.entries)).toHaveLength(5);
   });
 
   it("records filesystem access from native dispatch without copying file contents", async () => {
@@ -628,7 +904,7 @@ describe("execution-owned native operation evidence", () => {
     await owner.rpc.call("main", "problemReports.create", [
       { description: "skills/system-testing/tests/example.ts" },
     ]);
-    expect(owner.operationJournal.close().entries).toEqual([
+    expect(nonRpcEntries(owner.operationJournal.close().entries)).toEqual([
       { type: "fs.read", method: "fs.readFile", path: "skills/system-testing/tests/example.ts" },
     ]);
     expect(JSON.stringify(owner.operationJournal.entries)).not.toContain("PRIVATE FILE CONTENT");
@@ -746,7 +1022,7 @@ describe("execution-owned native operation evidence", () => {
     await runtime.supervision.list();
     await runtime.supervision.describe(entity.identity);
 
-    expect(owner.operationJournal.close().entries).toEqual([
+    expect(nonRpcEntries(owner.operationJournal.close().entries)).toEqual([
       {
         type: "runtime.units",
         receipt: {

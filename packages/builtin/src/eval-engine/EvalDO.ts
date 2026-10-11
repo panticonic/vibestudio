@@ -19,6 +19,7 @@ import {
   type RpcFailure,
   type RpcStreamOptions,
   type RpcTargetOptions,
+  formatRpcFailure,
   serializeRpcFailure,
   deserializeRpcFailure,
 } from "@vibestudio/rpc";
@@ -41,6 +42,8 @@ import {
   EVAL_RESULT_RETURN_PREVIEW_CHARS,
   evalLifecycleFailureCodes,
   evalImagePayloadSchema,
+  captureEvalRpcFingerprint,
+  finishEvalRpcFingerprint,
   mapEvalResultLeaves,
 } from "@vibestudio/service-schemas/eval";
 import {
@@ -793,6 +796,8 @@ export class EvalDO extends DurableObjectBase {
     const readOnly = input.readOnly === true;
     const base = wireClientFor(this.rpc);
     const operationJournal = new ExecutionJournal();
+    let rpcCallSequence = 0;
+    let rpcEventOrder = 0;
     const mergeOptions = <T extends RpcCallOptions | RpcStreamOptions>(value?: T): T => {
       const options = {
         ...(value ?? {}),
@@ -812,6 +817,12 @@ export class EvalDO extends DurableObjectBase {
       args: unknown[],
       options?: RpcCallOptions
     ): Promise<unknown> => {
+      const callId = rpcCallSequence++;
+      const admissionOrder = rpcEventOrder++;
+      const workerLifecycleRequest =
+        targetId === "main"
+          ? operationJournal.captureWorkerLifecycleRequest(method, args)
+          : undefined;
       const progressSemantics = progressSemanticsForRpcMethod(method);
       const checkpoint =
         progressSemantics?.kind === "external-wait"
@@ -836,9 +847,24 @@ export class EvalDO extends DurableObjectBase {
       ) {
         operationJournal.append({ type: "fs.read", method, path: args[0] });
       }
+      let rpcReceiptRecorded = false;
       try {
         const result = await base.call(targetId, method, args, mergeOptions(options));
+        operationJournal.recordRpcCall({
+          protocol: "rpc-call-observation.v1",
+          callId,
+          admissionOrder,
+          settlementOrder: rpcEventOrder++,
+          targetId,
+          method,
+          outcome: "fulfilled",
+          ...(targetId === "main"
+            ? {}
+            : { result: finishEvalRpcFingerprint(captureEvalRpcFingerprint(result)) }),
+        });
+        rpcReceiptRecorded = true;
         if (targetId === "main") {
+          operationJournal.recordWorkerLifecycle(workerLifecycleRequest, result, callId);
           operationJournal.recordExtensionInvocation(method, args, result);
           operationJournal.recordServerLogRead(method, args, result);
           operationJournal.recordBlobTextOperation(method, args, result);
@@ -861,11 +887,22 @@ export class EvalDO extends DurableObjectBase {
         }
         return result;
       } catch (error) {
+        if (!rpcReceiptRecorded) {
+          operationJournal.recordRpcCall({
+            protocol: "rpc-call-observation.v1",
+            callId,
+            admissionOrder,
+            settlementOrder: rpcEventOrder++,
+            targetId,
+            method,
+            outcome: "rejected",
+          });
+        }
         if (input.runId) {
           this.completeRunCheckpoint(input.runId, {
             ...checkpoint,
             state: "failed",
-            error: error instanceof Error ? error.message : String(error),
+            error: formatRpcFailure(error),
           });
         }
         throw error;
@@ -3721,7 +3758,7 @@ export class EvalDO extends DurableObjectBase {
     // run or maintenance invocation happened to initialize it.
     const support = await this.ensureRuntimeSupport(execution);
     const panels = this.createEvalPanelRuntime(support, execution.contextId, null, (entry) =>
-      this.requireActiveEvalExecution().operationJournal.append(entry)
+      this.requireActiveEvalExecution().operationJournal.appendGuestOperation(entry)
     );
     const mgr = new engine.ScopeManager({
       rehydrators: support.createRuntimeScopeRehydrators((id) => panels.getPanelHandle(id)),
@@ -4151,7 +4188,7 @@ export class EvalDO extends DurableObjectBase {
     // All native receipts use the invoking execution's private journal.
     // Imported modules and retained page handles cannot own an earlier cell.
     const recordOperation = (entry: Record<string, unknown>) =>
-      this.requireActiveEvalExecution().operationJournal.append(entry);
+      this.requireActiveEvalExecution().operationJournal.appendGuestOperation(entry);
     const panelRuntime = this.createEvalPanelRuntime(
       support,
       execution.contextId,

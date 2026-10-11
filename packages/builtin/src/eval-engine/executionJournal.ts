@@ -19,7 +19,11 @@ import {
 import {
   EVAL_OPERATION_JOURNAL_MAX_ENTRIES,
   EVAL_OPERATION_JOURNAL_PREVIEW_CHARS,
+  evalRpcCallObservationSchema,
+  evalWorkerLifecycleObservationSchema,
+  type EvalRpcCallObservation,
   type EvalOperationJournal,
+  type EvalWorkerLifecycleObservation,
 } from "@vibestudio/service-schemas/eval";
 import {
   serverLogMethods,
@@ -31,8 +35,20 @@ import {
   permissionsMethods,
   NativePermissionInventoryObservationSchema,
 } from "@vibestudio/service-schemas/permissions";
-import { credentialsMethods, NativeCredentialResolutionObservationSchema } from "@vibestudio/service-schemas/credentials";
-import { notificationMethods, NativeNotificationLifecycleObservationSchema } from "@vibestudio/service-schemas/notification";
+import {
+  credentialsMethods,
+  NativeCredentialResolutionObservationSchema,
+} from "@vibestudio/service-schemas/credentials";
+import {
+  notificationMethods,
+  NativeNotificationLifecycleObservationSchema,
+} from "@vibestudio/service-schemas/notification";
+import { workersMethods } from "@vibestudio/service-schemas/workers";
+
+type WorkerLifecycleRequest =
+  | { method: "runtime.createEntity"; className: string; objectKey?: string }
+  | { method: "workers.resolveDurableObject" }
+  | { method: "runtime.retireEntity"; entityId: string };
 
 import {
   extensionsMethods,
@@ -47,6 +63,15 @@ export class ExecutionJournal {
   private characters = 0;
   private closed = false;
 
+  /** Guest-visible runtime hooks may record descriptive effects, but native
+   * execution receipts are written only by this journal's owning host path. */
+  appendGuestOperation(entry: Record<string, unknown>): void {
+    if (entry["type"] === "rpc.call" || entry["type"] === "worker.lifecycle") {
+      throw new Error(`Operation type ${String(entry["type"])} is reserved for host evidence`);
+    }
+    this.append(entry);
+  }
+
   append(entry: Record<string, unknown>): void {
     if (this.closed) return;
     const encoded = JSON.stringify(entry);
@@ -60,6 +85,89 @@ export class ExecutionJournal {
     // Guest code can later mutate a returned object; it cannot mutate this copy.
     this.entries.push(JSON.parse(encoded) as Record<string, unknown>);
     this.characters += encoded.length;
+  }
+
+  recordRpcCall(receipt: EvalRpcCallObservation): void {
+    if (this.closed) return;
+    this.append({
+      type: "rpc.call",
+      receipt: evalRpcCallObservationSchema.parse(receipt),
+    });
+  }
+
+  captureWorkerLifecycleRequest(
+    method: string,
+    args: unknown[]
+  ): WorkerLifecycleRequest | undefined {
+    try {
+      if (method === "runtime.createEntity") {
+        const [spec] = runtimeMethods.createEntity.args.parse(args);
+        if (spec.kind !== "do") return undefined;
+        return {
+          method,
+          className: spec.className,
+          ...(spec.key === undefined ? {} : { objectKey: spec.key }),
+        };
+      }
+      if (method === "workers.resolveDurableObject") {
+        workersMethods.resolveDurableObject.args.parse(args);
+        return { method };
+      }
+      if (method === "runtime.retireEntity") {
+        const [request] = runtimeMethods.retireEntity.args.parse(args);
+        return { method, entityId: request.id };
+      }
+    } catch {
+      // Receipt capture must not change the RPC's actual validation/dispatch result.
+    }
+    return undefined;
+  }
+
+  recordWorkerLifecycle(
+    request: WorkerLifecycleRequest | undefined,
+    result: unknown,
+    callId: number
+  ): void {
+    if (this.closed) return;
+    if (!request) return;
+    let receipt: EvalWorkerLifecycleObservation;
+    if (request.method === "runtime.createEntity") {
+      const entity = runtimeMethods.createEntity.returns!.parse(result);
+      receipt = {
+        protocol: "worker-lifecycle-observation.v1",
+        callId,
+        operation: "create",
+        entityId: entity.id,
+        targetId: entity.targetId,
+        kind: "do",
+        source: entity.source.repoPath,
+        className: request.className,
+        ...(request.objectKey === undefined ? {} : { objectKey: request.objectKey }),
+      };
+    } else if (request.method === "workers.resolveDurableObject") {
+      const target = workersMethods.resolveDurableObject.returns!.parse(result);
+      receipt = {
+        protocol: "worker-lifecycle-observation.v1",
+        callId,
+        operation: "resolve",
+        targetId: target.targetId,
+        source: target.source,
+        className: target.className,
+        objectKey: target.objectKey,
+      };
+    } else if (request.method === "runtime.retireEntity") {
+      runtimeMethods.retireEntity.returns!.parse(result);
+      receipt = {
+        protocol: "worker-lifecycle-observation.v1",
+        callId,
+        operation: "retire",
+        entityId: request.entityId,
+      };
+    } else return;
+    this.append({
+      type: "worker.lifecycle",
+      receipt: evalWorkerLifecycleObservationSchema.parse(receipt),
+    });
   }
 
   recordExtensionInvocation(method: string, args: unknown[], result: unknown): void {
@@ -177,24 +285,38 @@ export class ExecutionJournal {
     const health = runtimeMethods["supervision.health"].returns!.parse(result);
     const sameIdentity = (candidate: typeof identity) =>
       candidate.kind === identity.kind && candidate.entityId === identity.entityId;
-    if (!sameIdentity(health.entity.identity) ||
-        !health.logs.every((entry) => sameIdentity(entry.identity)) ||
-        !health.errors.every((entry) => sameIdentity(entry.identity)))
+    if (
+      !sameIdentity(health.entity.identity) ||
+      !health.logs.every((entry) => sameIdentity(entry.identity)) ||
+      !health.errors.every((entry) => sameIdentity(entry.identity))
+    )
       throw new Error("Runtime health read returned a different supervised entity identity");
     const limit = options?.limit ?? health.capacity.entries;
     const errorLimit = options?.errorLimit ?? health.capacity.errors;
     if (health.logs.length > limit || health.errors.length > errorLimit) {
       throw new Error("Runtime health read returned more records than its reported bounds");
     }
-    this.append({ type: "runtime.health", receipt: NativeRuntimeHealthObservationSchema.parse({
-      protocol: "runtime-health-observation.v1", identity, source: health.entity.source,
-      logCount: health.logs.length, errorCount: health.errors.length,
-      limit, errorLimit, dropped: health.dropped, capacity: health.capacity,
-    }) });
+    this.append({
+      type: "runtime.health",
+      receipt: NativeRuntimeHealthObservationSchema.parse({
+        protocol: "runtime-health-observation.v1",
+        identity,
+        source: health.entity.source,
+        logCount: health.logs.length,
+        errorCount: health.errors.length,
+        limit,
+        errorLimit,
+        dropped: health.dropped,
+        capacity: health.capacity,
+      }),
+    });
   }
 
   recordRuntimeUnits(method: string, result: unknown): void {
-    if (this.closed || !["runtime.supervision.list", "runtime.supervision.describe"].includes(method))
+    if (
+      this.closed ||
+      !["runtime.supervision.list", "runtime.supervision.describe"].includes(method)
+    )
       return;
     const entities =
       method === "runtime.supervision.list"
@@ -232,12 +354,20 @@ export class ExecutionJournal {
     if (method === "notification.show") {
       const [input] = notificationMethods.show.args.parse(args);
       const notificationId = notificationMethods.show.returns!.parse(result);
-      receipt = { protocol, method, notificationId, actionLabels: (input.actions ?? []).map((action) => action.label) };
+      receipt = {
+        protocol,
+        method,
+        notificationId,
+        actionLabels: (input.actions ?? []).map((action) => action.label),
+      };
     } else if (method === "notification.dismiss") {
       const [notificationId] = notificationMethods.dismiss.args.parse(args);
       receipt = { protocol, method, notificationId };
     } else return;
-    this.append({ type: "notification.lifecycle", receipt: NativeNotificationLifecycleObservationSchema.parse(receipt) });
+    this.append({
+      type: "notification.lifecycle",
+      receipt: NativeNotificationLifecycleObservationSchema.parse(receipt),
+    });
   }
 
   recordBlobTreeOperation(method: string, args: unknown[], result: unknown): void {
