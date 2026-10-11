@@ -1,4 +1,4 @@
-import { serializeRpcFailure } from "@vibestudio/rpc";
+import { formatRpcFailure, isRpcAbortedBy, serializeRpcFailure } from "@vibestudio/rpc";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
@@ -138,10 +138,13 @@ export function createDurableWorkOwnerScanner(
           reportedPermanentFailures.delete(`${owner.source}:${owner.className}:${owner.objectKey}`);
           if (readyQueues.length > 0) ready.push({ owner, queues: readyQueues });
         } catch (error) {
-          if (signal.aborted) throw signal.reason ?? error;
+          if (signal.aborted) {
+            if (isRpcAbortedBy(error, signal.reason)) throw signal.reason;
+            throw error;
+          }
           const failure = {
             owner: `${owner.source}:${owner.className}:${owner.objectKey}`,
-            error: error instanceof Error ? error.message : String(error),
+            error: formatRpcFailure(error),
           };
           if (isPermanentRuntimeReadinessError(error)) {
             if (reportedPermanentFailures.get(failure.owner) !== failure.error) {
@@ -157,9 +160,29 @@ export function createDurableWorkOwnerScanner(
     const results = await Promise.allSettled(
       Array.from({ length: Math.min(concurrency, registered.length) }, () => worker())
     );
-    if (signal.aborted) throw signal.reason;
-    const rejected = results.find((result) => result.status === "rejected");
-    if (rejected?.status === "rejected") throw rejected.reason;
+    const rejected = results.filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected"
+    );
+    if (signal.aborted) {
+      const independentFailures = rejected
+        .map((result) => result.reason)
+        .filter((error) => !isRpcAbortedBy(error, signal.reason));
+      if (independentFailures.length > 0) {
+        throw new AggregateError(
+          [signal.reason, ...independentFailures],
+          "Durable-work readiness scan was cancelled after independent owner failures",
+          { cause: signal.reason }
+        );
+      }
+      throw signal.reason;
+    }
+    if (rejected.length > 0) {
+      const errors = rejected.map((result) => result.reason);
+      if (errors.length === 1) throw errors[0];
+      throw new AggregateError(errors, "Multiple durable-work readiness workers failed", {
+        cause: errors[0],
+      });
+    }
     if (failures.length > 0) {
       log.warn(
         `readiness scan failed for ${failures.length}/${registered.length} durable-work owner(s); sample=${JSON.stringify(failures.slice(0, 5))}`

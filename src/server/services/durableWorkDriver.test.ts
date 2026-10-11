@@ -1,4 +1,9 @@
-import { encodeRpcJson, decodeRpcJson, deserializeRpcFailure } from "@vibestudio/rpc";
+import {
+  encodeRpcJson,
+  decodeRpcJson,
+  deserializeRpcFailure,
+  rpcCallerAbortedError,
+} from "@vibestudio/rpc";
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -631,6 +636,100 @@ describe("DurableWorkDriver", () => {
     expect(
       consoleWarn.mock.calls.filter(([message]) => String(message).includes("readiness blocked"))
     ).toHaveLength(1);
+  });
+
+  it("retains independent owner failures when the readiness scan is cancelled", async () => {
+    const cancellation = new Error("scanner stopped");
+    const primary = new Error("owner dispatch failed");
+    const cleanup = new Error("owner cleanup failed");
+    const independent = new AggregateError(
+      [primary, cleanup],
+      "owner operation and cleanup failed",
+      {
+        cause: primary,
+      }
+    );
+    const registrations = ["cancelled", "independent"].map((key) => ({
+      owner: owner(key),
+      queues: ["channel-delivery"] as const,
+    }));
+    let started = 0;
+    let releaseStarted!: () => void;
+    const bothStarted = new Promise<void>((resolve) => {
+      releaseStarted = resolve;
+    });
+    const dispatchHeldWithSignal = vi.fn((_ref: DORef, signal: AbortSignal, method: string) => {
+      if (method === "durableWorkOwnerList") return Promise.resolve(registrations);
+      if (method !== "adoptDurableWorkWorker") {
+        return Promise.reject(new Error(`unexpected readiness method ${method}`));
+      }
+      const key = _ref.objectKey;
+      started++;
+      if (started === registrations.length) releaseStarted();
+      return new Promise((_, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => reject(key === "cancelled" ? rpcCallerAbortedError(signal.reason) : independent),
+          { once: true }
+        );
+      });
+    });
+    const scan = createDurableWorkOwnerScanner(
+      { dispatchHeldWithSignal } as never,
+      {
+        source: "vibestudio/internal",
+        className: "WorkspaceDO",
+        objectKey: "workspace",
+      },
+      "driver-generation-1",
+      2
+    );
+    const controller = new AbortController();
+    const result = scan(controller.signal);
+
+    await bothStarted;
+    controller.abort(cancellation);
+
+    const failure = await result.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([cancellation, independent]);
+    expect((failure as AggregateError).cause).toBe(cancellation);
+    expect((failure as AggregateError).errors[1]).toBe(independent);
+  });
+
+  it("keeps nested owner failure details in transient readiness warnings", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const primary = new Error("owner request failed");
+    const cleanup = new Error("owner cleanup failed");
+    const ownerFailure = new AggregateError([primary, cleanup], "owner operation failed", {
+      cause: primary,
+    });
+    const dispatchHeldWithSignal = vi.fn(
+      async (_ref: DORef, _signal: AbortSignal, method: string) => {
+        if (method === "durableWorkOwnerList") {
+          return [{ owner: owner("transient"), queues: ["channel-delivery"] as const }];
+        }
+        throw ownerFailure;
+      }
+    );
+    const scan = createDurableWorkOwnerScanner(
+      { dispatchHeldWithSignal } as never,
+      {
+        source: "vibestudio/internal",
+        className: "WorkspaceDO",
+        objectKey: "workspace",
+      },
+      "driver-generation-1"
+    );
+
+    await scan(new AbortController().signal);
+
+    const warning = consoleWarn.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.includes("readiness scan failed"));
+    expect(warning).toContain("owner operation failed");
+    expect(warning).toContain("owner request failed");
+    expect(warning).toContain("owner cleanup failed");
   });
 
   it.each(["root", "append", "fork"] as const)(
