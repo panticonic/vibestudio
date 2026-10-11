@@ -2,8 +2,7 @@
 export function generateExtensionSmokeScript(runtimeExternalDeps: string[]): string {
   return `
 import { createRequire } from "node:module";
-import { pathToFileURL, fileURLToPath } from "node:url";
-process.chdir(fileURLToPath(new URL(".", import.meta.url)));
+import { pathToFileURL } from "node:url";
 const bundlePath = process.env.VIBESTUDIO_EXTENSION_SMOKE_BUNDLE;
 if (!bundlePath) throw new Error("Missing native smoke bundle");
 const runtimeExternalDeps = ${JSON.stringify(runtimeExternalDeps)};
