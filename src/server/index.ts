@@ -1479,7 +1479,7 @@ async function main() {
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
-  const { collectTreeReachableDigestsBatch, putBootstrapBytes } =
+  const { proveTreeReachabilityBatch, putBootstrapBytes } =
     await import("./services/blobstoreService.js");
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
@@ -1494,11 +1494,11 @@ async function main() {
     // be a well-formed tree fully present in the content store — userland can
     // never publish a hash the store cannot expand. Fails closed before any prompt.
     assertTreesComplete: async (stateHashes) => {
-      const outcomes = await collectTreeReachableDigestsBatch(layout.blobsDir, stateHashes);
+      const proof = await proveTreeReachabilityBatch(layout.blobsDir, stateHashes);
       const failures: unknown[] = [];
       for (let index = 0; index < stateHashes.length; index += 1) {
         const stateHash = stateHashes[index]!;
-        const outcome = outcomes[index];
+        const outcome = proof.outcomes[index];
         if (!outcome) {
           failures.push(
             new Error(`updateMains: no completeness result for candidate main ${stateHash}`)
@@ -1512,6 +1512,18 @@ async function main() {
             )
           );
         }
+      }
+      if (proof.profile.totalMs >= 100) {
+        console.info("[VcsProfile] protected ref tree completeness", {
+          roots: proof.profile.roots,
+          uniqueTreeNodes: proof.profile.uniqueTreeNodes,
+          uniqueTreeBytes: proof.profile.uniqueTreeBytes,
+          resolveRefsMs: proof.profile.resolveRefsMs,
+          loadTreesMs: proof.profile.loadTreesMs,
+          proofMs: proof.profile.proofMs,
+          inventoryMs: 0,
+          totalMs: proof.profile.totalMs,
+        });
       }
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1) {

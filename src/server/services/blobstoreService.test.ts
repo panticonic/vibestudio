@@ -31,6 +31,7 @@ import {
   materializeTree,
   MerkleTreeComposer,
   mirrorWorktreeTree,
+  proveTreeReachabilityBatch,
   putBootstrapBytes,
   putBytes,
   putTree,
@@ -356,13 +357,16 @@ describe("blobstoreService", () => {
     const treePath = blobPath(blobsDir, treeHashDigest(tree.treeHash));
     const readFile = vi.spyOn(fsp, "readFile");
 
-    const outcomes = await collectTreeReachableDigestsBatch(blobsDir, [
-      tree.stateHash!,
-      tree.stateHash!,
-    ]);
+    const proof = await proveTreeReachabilityBatch(blobsDir, [tree.stateHash!, tree.stateHash!]);
 
-    expect(outcomes).toHaveLength(2);
-    expect(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
+    expect(proof.outcomes).toHaveLength(2);
+    expect(proof.outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
+    expect(proof.outcomes).toEqual([
+      { status: "fulfilled", value: { ref: tree.stateHash, treeHash: tree.treeHash } },
+      { status: "fulfilled", value: { ref: tree.stateHash, treeHash: tree.treeHash } },
+    ]);
+    expect(proof.profile).toMatchObject({ roots: 2, uniqueTreeNodes: 1 });
+    expect([...proof.graph.keys()]).toEqual([tree.treeHash]);
     expect(readFile.mock.calls.filter(([file]) => file === statePath)).toHaveLength(1);
     expect(readFile.mock.calls.filter(([file]) => file === treePath)).toHaveLength(1);
     readFile.mockRestore();
@@ -400,6 +404,22 @@ describe("blobstoreService", () => {
     expect(outcomes[1]).toMatchObject({ status: "rejected" });
     if (outcomes[1]?.status === "rejected") {
       expect((outcomes[1].reason as Error).message).toMatch(/max depth/);
+    }
+    // Publication consumes the compact proof directly, without inventory
+    // projection. Shared height memoization must enforce the same bound there.
+    for (const refs of [
+      [shallowRoot.treeHash, tooDeepRoot.treeHash],
+      [tooDeepRoot.treeHash, shallowRoot.treeHash],
+    ]) {
+      const proof = await proveTreeReachabilityBatch(blobsDir, refs);
+      expect(proof.outcomes[refs.indexOf(shallowRoot.treeHash)]).toMatchObject({
+        status: "fulfilled",
+      });
+      const rejected = proof.outcomes[refs.indexOf(tooDeepRoot.treeHash)];
+      expect(rejected).toMatchObject({ status: "rejected" });
+      if (rejected?.status === "rejected") {
+        expect((rejected.reason as Error).message).toMatch(/max depth/);
+      }
     }
   });
 

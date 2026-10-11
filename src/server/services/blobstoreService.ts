@@ -530,12 +530,20 @@ async function readTreeNode(
   blobsDir: string,
   treeHash: string
 ): Promise<ManifestHashEntry[] | null> {
+  const node = await readTreeNodeWithSize(blobsDir, treeHash);
+  return node?.entries ?? null;
+}
+
+async function readTreeNodeWithSize(
+  blobsDir: string,
+  treeHash: string
+): Promise<{ entries: ManifestHashEntry[]; byteLength: number } | null> {
   const expectedDigest = treeHashDigest(treeHash);
   const bytes = await getBytes(blobsDir, expectedDigest);
   if (!bytes) return null;
   const entries = decodeTreeNode(bytes.toString("utf8"));
   assertObjectAddress(bytes, expectedDigest, "Tree object");
-  return entries;
+  return { entries, byteLength: bytes.byteLength };
 }
 
 /** Resolve a `manifest:`/`state:` reference to its root `manifest:` hash;
@@ -1000,21 +1008,42 @@ export type TreeReachabilityOutcome =
   | { status: "fulfilled"; value: { treeDigests: string[]; contentDigests: string[] } | null }
   | { status: "rejected"; reason: unknown };
 
+export type TreeReachabilityProofOutcome =
+  | { status: "fulfilled"; value: { ref: string; treeHash: string } | null }
+  | { status: "rejected"; reason: unknown };
+
+export interface TreeReachabilityProfile {
+  roots: number;
+  uniqueTreeNodes: number;
+  uniqueTreeBytes: number;
+  resolveRefsMs: number;
+  loadTreesMs: number;
+  proofMs: number;
+  totalMs: number;
+}
+
+export interface TreeReachabilityBatchProof {
+  outcomes: TreeReachabilityProofOutcome[];
+  profile: TreeReachabilityProfile;
+  /** One immutable, authenticated node graph shared by all root proofs. */
+  graph: ReadonlyMap<string, readonly ManifestHashEntry[]>;
+}
+
 /**
- * Check multiple roots as one immutable-store operation. Tree nodes shared by
- * roots are read and authenticated once, while each root keeps an independent
- * depth/cycle proof and result. Outcomes are returned in input order so a
- * caller can join all roots and report every failure before publishing.
+ * Resolve, authenticate, and prove every root against one operation-scoped
+ * immutable graph. The proof result deliberately carries no per-root digest
+ * inventory; callers that need one can project it from this same graph.
  */
-export async function collectTreeReachableDigestsBatch(
+export async function proveTreeReachabilityBatch(
   blobsDir: string,
-  refs: readonly string[],
-  options: { verifyContent?: boolean } = {}
-): Promise<TreeReachabilityOutcome[]> {
-  const results: TreeReachabilityOutcome[] = new Array(refs.length);
+  refs: readonly string[]
+): Promise<TreeReachabilityBatchProof> {
+  const startedAt = performance.now();
+  const results: TreeReachabilityProofOutcome[] = new Array(refs.length);
   const roots: Array<{ index: number; treeHash: string }> = [];
   const resolvedRefs = new Map<string, Promise<string | null>>();
   let nextRef = 0;
+  const resolveStartedAt = performance.now();
   const refWorkers = Array.from({ length: Math.min(4, refs.length) }, async () => {
     while (nextRef < refs.length) {
       const index = nextRef++;
@@ -1034,11 +1063,13 @@ export async function collectTreeReachableDigestsBatch(
     }
   });
   await Promise.all(refWorkers);
+  const resolveRefsMs = performance.now() - resolveStartedAt;
 
-  // Load the union of referenced tree graphs. The queue and attempted set
-  // form operation-scoped single-flight reads without retaining any global
-  // cache or changing the CAS validation performed by readTreeNode.
-  const entriesByHash = new Map<string, ManifestHashEntry[]>();
+  // Load each authenticated tree node once. The breadth frontier ensures the
+  // union includes every node that can be reached within the depth bound.
+  const loadStartedAt = performance.now();
+  const entriesByHash = new Map<string, readonly ManifestHashEntry[]>();
+  let uniqueTreeBytes = 0;
   const failuresByHash = new Map<string, unknown>();
   const attempted = new Set<string>();
   let frontier = new Set(roots.map(({ treeHash }) => treeHash));
@@ -1052,10 +1083,11 @@ export async function collectTreeReachableDigestsBatch(
         const treeHash = current[cursor++]!;
         attempted.add(treeHash);
         try {
-          const entries = await readTreeNode(blobsDir, treeHash);
-          if (!entries) throw missingTreeObjectError(treeHash);
-          entriesByHash.set(treeHash, entries);
-          for (const entry of entries) {
+          const node = await readTreeNodeWithSize(blobsDir, treeHash);
+          if (!node) throw missingTreeObjectError(treeHash);
+          entriesByHash.set(treeHash, node.entries);
+          uniqueTreeBytes += node.byteLength;
+          for (const entry of node.entries) {
             if (entry.kind !== "dir") continue;
             if (depth === MAX_TREE_DEPTH) depthLimited.add(entry.childHash);
             else if (!attempted.has(entry.childHash)) frontier.add(entry.childHash);
@@ -1067,13 +1099,18 @@ export async function collectTreeReachableDigestsBatch(
     });
     await Promise.all(treeWorkers);
   }
+  const loadTreesMs = performance.now() - loadStartedAt;
 
+  // Height memoization proves shared subtrees once while each root still
+  // checks its own occurrence depth. Cycles and failed/missing nodes remain
+  // failures of every root that reaches them.
+  const proofStartedAt = performance.now();
   const heights = new Map<string, number>();
   const heightOf = (treeHash: string, ancestry: Set<string>, depth = 0): number => {
-    if (depth > MAX_TREE_DEPTH)
+    if (depth > MAX_TREE_DEPTH) {
       throw new Error("collectTreeReachableDigests: tree exceeds max depth");
-    const failure = failuresByHash.get(treeHash);
-    if (failuresByHash.has(treeHash)) throw failure;
+    }
+    if (failuresByHash.has(treeHash)) throw failuresByHash.get(treeHash);
     const entries = entriesByHash.get(treeHash);
     if (!entries) {
       if (depthLimited.has(treeHash)) {
@@ -1081,61 +1118,109 @@ export async function collectTreeReachableDigestsBatch(
       }
       throw missingTreeObjectError(treeHash);
     }
-    if (ancestry.has(treeHash))
+    if (ancestry.has(treeHash)) {
       throw new Error("collectTreeReachableDigests: cyclic tree reference");
+    }
     const cached = heights.get(treeHash);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      if (depth + cached > MAX_TREE_DEPTH) {
+        throw new Error("collectTreeReachableDigests: tree exceeds max depth");
+      }
+      return cached;
+    }
     ancestry.add(treeHash);
     let height = 0;
     for (const entry of entries) {
-      if (entry.kind === "dir") {
-        if (depth === MAX_TREE_DEPTH) {
-          throw new Error("collectTreeReachableDigests: tree exceeds max depth");
-        }
-        height = Math.max(height, 1 + heightOf(entry.childHash, ancestry, depth + 1));
+      if (entry.kind !== "dir") continue;
+      if (depth === MAX_TREE_DEPTH) {
+        throw new Error("collectTreeReachableDigests: tree exceeds max depth");
       }
+      height = Math.max(height, 1 + heightOf(entry.childHash, ancestry, depth + 1));
     }
     ancestry.delete(treeHash);
     heights.set(treeHash, height);
     return height;
   };
 
-  const closures = new Map<number, { treeDigests: Set<string>; contentDigests: Set<string> }>();
   for (const { index, treeHash } of roots) {
     try {
-      const treeDigests = new Set<string>();
-      const contentDigests = new Set<string>();
-      const visited = new Set<string>();
-      if (STATE_HASH_RE.test(refs[index]!)) treeDigests.add(treeHashDigest(refs[index]!));
-      const walk = (currentHash: string, depth: number, ancestry: Set<string>): void => {
-        if (depth > MAX_TREE_DEPTH || depth + heightOf(currentHash, new Set()) > MAX_TREE_DEPTH) {
-          throw new Error("collectTreeReachableDigests: tree exceeds max depth");
-        }
-        if (ancestry.has(currentHash)) {
-          throw new Error("collectTreeReachableDigests: cyclic tree reference");
-        }
-        if (visited.has(currentHash)) return;
-        visited.add(currentHash);
-        treeDigests.add(treeHashDigest(currentHash));
-        const entries = entriesByHash.get(currentHash);
-        if (!entries) {
-          if (failuresByHash.has(currentHash)) throw failuresByHash.get(currentHash);
-          throw missingTreeObjectError(currentHash);
-        }
-        ancestry.add(currentHash);
-        for (const entry of entries) {
-          if (entry.kind === "file") contentDigests.add(entry.contentHash);
-          else walk(entry.childHash, depth + 1, ancestry);
-        }
-        ancestry.delete(currentHash);
-      };
-      walk(treeHash, 0, new Set());
-      closures.set(index, { treeDigests, contentDigests });
+      heightOf(treeHash, new Set());
+      results[index] = { status: "fulfilled", value: { ref: refs[index]!, treeHash } };
     } catch (reason) {
       results[index] = { status: "rejected", reason };
     }
   }
+  const proofMs = performance.now() - proofStartedAt;
+  return {
+    outcomes: results,
+    profile: {
+      roots: refs.length,
+      uniqueTreeNodes: entriesByHash.size,
+      uniqueTreeBytes,
+      resolveRefsMs,
+      loadTreesMs,
+      proofMs,
+      totalMs: performance.now() - startedAt,
+    },
+    graph: entriesByHash,
+  };
+}
 
+function inventoryFromProof(
+  ref: string,
+  treeHash: string,
+  graph: ReadonlyMap<string, readonly ManifestHashEntry[]>
+): { treeDigests: string[]; contentDigests: string[] } {
+  const treeDigests = new Set<string>();
+  const contentDigests = new Set<string>();
+  const visited = new Set<string>();
+  if (STATE_HASH_RE.test(ref)) treeDigests.add(treeHashDigest(ref));
+  const visit = (currentHash: string): void => {
+    if (visited.has(currentHash)) return;
+    visited.add(currentHash);
+    treeDigests.add(treeHashDigest(currentHash));
+    const entries = graph.get(currentHash);
+    if (!entries) throw missingTreeObjectError(currentHash);
+    for (const entry of entries) {
+      if (entry.kind === "file") contentDigests.add(entry.contentHash);
+      else visit(entry.childHash);
+    }
+  };
+  visit(treeHash);
+  return {
+    treeDigests: [...treeDigests],
+    contentDigests: [...contentDigests],
+  };
+}
+
+/**
+ * Check multiple roots as one immutable-store operation. Tree nodes shared by
+ * roots are read and authenticated once, while each root keeps an independent
+ * depth/cycle proof and result. Outcomes are returned in input order so a
+ * caller can join all roots and report every failure before publishing.
+ */
+export async function collectTreeReachableDigestsBatch(
+  blobsDir: string,
+  refs: readonly string[],
+  options: { verifyContent?: boolean } = {}
+): Promise<TreeReachabilityOutcome[]> {
+  const startedAt = performance.now();
+  const proof = await proveTreeReachabilityBatch(blobsDir, refs);
+  const results: TreeReachabilityOutcome[] = new Array(refs.length);
+  const closures = new Map<number, { treeDigests: string[]; contentDigests: string[] }>();
+  const inventoryStartedAt = performance.now();
+  for (let index = 0; index < proof.outcomes.length; index += 1) {
+    const outcome = proof.outcomes[index]!;
+    if (outcome.status === "rejected") results[index] = outcome;
+    else if (outcome.value === null) results[index] = { status: "fulfilled", value: null };
+    else {
+      const inventory = inventoryFromProof(outcome.value.ref, outcome.value.treeHash, proof.graph);
+      closures.set(index, inventory);
+    }
+  }
+  const inventoryMs = performance.now() - inventoryStartedAt;
+
+  const contentVerificationStartedAt = performance.now();
   const contentOwners = new Map<string, number[]>();
   if (options.verifyContent) {
     for (const [index, closure] of closures) {
@@ -1186,8 +1271,12 @@ export async function collectTreeReachableDigestsBatch(
     }
   }
 
-  for (const { index } of roots) {
+  const contentVerificationMs = performance.now() - contentVerificationStartedAt;
+
+  for (let index = 0; index < proof.outcomes.length; index += 1) {
     if (results[index]) continue;
+    const outcome = proof.outcomes[index];
+    if (!outcome || outcome.status !== "fulfilled" || outcome.value === null) continue;
     const closure = closures.get(index);
     if (!closure) continue;
     results[index] = {
@@ -1197,6 +1286,20 @@ export async function collectTreeReachableDigestsBatch(
         contentDigests: [...closure.contentDigests].sort(compareUtf16CodeUnits),
       },
     };
+  }
+  const totalMs = performance.now() - startedAt;
+  if (totalMs >= 100) {
+    console.info("[VcsProfile] tree reachability inventory", {
+      roots: proof.profile.roots,
+      uniqueTreeNodes: proof.profile.uniqueTreeNodes,
+      uniqueTreeBytes: proof.profile.uniqueTreeBytes,
+      resolveRefsMs: proof.profile.resolveRefsMs,
+      loadTreesMs: proof.profile.loadTreesMs,
+      proofMs: proof.profile.proofMs,
+      inventoryMs,
+      contentVerificationMs,
+      totalMs,
+    });
   }
   return results;
 }

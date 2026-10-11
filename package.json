@@ -3,7 +3,7 @@
   "name": "@panticonic/vibestudio",
   "productName": "Vibestudio",
   "homepage": "https://github.com/panticonic/vibestudio",
-  "version": "0.1.84",
+  "version": "0.1.85",
   "private": true,
   "bin": {
     "vibestudio": "scripts/vibestudio-cli-shim.mjs",
