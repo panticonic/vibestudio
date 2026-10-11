@@ -36,7 +36,11 @@ import {
   type BuildPerformanceProfileWire,
 } from "@vibestudio/service-schemas/build";
 import { ExecutionJournal } from "./executionJournal.js";
-import type { EvalOperationJournal, EvalResultReceipt } from "@vibestudio/service-schemas/eval";
+import {
+  evalOwnerCallbackRpcMethods,
+  type EvalOperationJournal,
+  type EvalResultReceipt,
+} from "@vibestudio/service-schemas/eval";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import {
   EVAL_RESULT_RETURN_PREVIEW_CHARS,
@@ -780,7 +784,20 @@ export class EvalDO extends DurableObjectBase {
     // A cancelling row means the old activation had already prevented normal
     // completion, but its in-memory cleanup phase was lost in the restart.
     // It is terminal cancellation, never an execution to replay.
-    this.sql.exec(`UPDATE runs SET status = 'cancelled' WHERE status = 'cancelling'`);
+    const cancelledResult = JSON.stringify(this.canonicalCancelledRunResult());
+    this.sql.exec(
+      `UPDATE runs
+          SET status = 'cancelled', result = COALESCE(result, ?)
+        WHERE status = 'cancelling'`,
+      cancelledResult
+    );
+    // Older terminal rows may predate durable cancellation payloads. Materialize
+    // their domain result once during activation so receipt digests stay stable
+    // across reads and exact acknowledgements.
+    this.sql.exec(
+      `UPDATE runs SET result = ? WHERE status = 'cancelled' AND result IS NULL`,
+      cancelledResult
+    );
   }
 
   private createExecutionContext(
@@ -1483,7 +1500,7 @@ export class EvalDO extends DurableObjectBase {
     const args = JSON.parse(String(row["args"])) as RunArgs;
     if (!args.resultReceiverRef) return;
     try {
-      await this.deliverTerminalResult(runId, args, receipt.result);
+      await this.deliverTerminalResult(runId, args);
     } catch (error) {
       console.warn(
         `[EvalDO] completion hint for ${runId} failed; retained until exact acknowledgement:`,
@@ -1492,20 +1509,16 @@ export class EvalDO extends DurableObjectBase {
     }
   }
 
-  private async deliverTerminalResult(
-    runId: string,
-    args: RunArgs,
-    result: RunResult
-  ): Promise<void> {
+  private async deliverTerminalResult(runId: string, args: RunArgs): Promise<void> {
     if (!args.executionSessionNonce) {
       throw new Error(`eval: run ${runId} has no execution session for terminal delivery`);
     }
     const options: RpcCallOptions = {};
     await this.runDetached(() =>
-      wireClientFor(this.rpc).call(
+      this.rpc.call(
         args.resultReceiverRef!,
-        "onEvalComplete",
-        [{ runId, agentInvocationId: args.agentInvocationId, result, channelId: args.channelId }],
+        evalOwnerCallbackRpcMethods.onEvalComplete,
+        [{ runId }],
         options
       )
     );
@@ -1998,14 +2011,6 @@ export class EvalDO extends DurableObjectBase {
     if (!args.runDigest) throw new Error(`eval: run ${runId} has no immutable admission identity`);
     let result: RunResult;
     if (row["result"] != null) result = JSON.parse(String(row["result"])) as RunResult;
-    else if (row["status"] === "cancelled")
-      result = {
-        success: false,
-        console: "",
-        error: serializeRpcFailure(new Error("eval: run cancelled")),
-        failureKind: "cancelled",
-        failureCode: evalLifecycleFailureCodes.cancelled,
-      };
     else throw new Error(`eval: terminal run ${runId} has no result`);
     const resultDigest = createHash("sha256").update(canonicalJson(result)).digest("hex");
     const retained = this.getStateValue(this.resultAcknowledgementKey(runId));
@@ -2041,6 +2046,16 @@ export class EvalDO extends DurableObjectBase {
       this.sql.exec(`DELETE FROM eval_result_redeliveries WHERE run_id = ?`, runId);
       return { acknowledged: true, duplicate: receipt.acknowledged };
     });
+  }
+
+  private canonicalCancelledRunResult(): RunResult {
+    return {
+      success: false,
+      console: "",
+      error: serializeRpcFailure(new Error("eval: run cancelled")),
+      failureKind: "cancelled",
+      failureCode: evalLifecycleFailureCodes.cancelled,
+    };
   }
 
   private resultAcknowledgementKey(runId: string): string {
@@ -2230,7 +2245,10 @@ export class EvalDO extends DurableObjectBase {
   private async deliverEvalProgress(
     runId: string | undefined,
     args: RunArgs,
-    progress: { output?: string; activity?: { kind: string; detail?: unknown } },
+    progress: {
+      output?: string;
+      activity?: { kind: "authority-requested" | "authority-decided"; detail?: unknown };
+    },
     signal?: AbortSignal
   ): Promise<void> {
     if (
@@ -2244,15 +2262,17 @@ export class EvalDO extends DurableObjectBase {
     }
     const options: RpcCallOptions = signal ? { signal } : {};
     const agentRef = args.agentRef;
+    const agentInvocationId = args.agentInvocationId;
+    const channelId = args.channelId;
     await this.runDetached(() =>
-      wireClientFor(this.rpc).call(
+      this.rpc.call(
         agentRef,
-        "onEvalProgress",
+        evalOwnerCallbackRpcMethods.onEvalProgress,
         [
           {
             runId,
-            agentInvocationId: args.agentInvocationId,
-            channelId: args.channelId,
+            agentInvocationId,
+            channelId,
             ...progress,
           },
         ],
@@ -2849,7 +2869,10 @@ export class EvalDO extends DurableObjectBase {
       // cancel RPC still rejects in that case, but admission monitors can now
       // retire the failed run instead of leaking a permanent cancelling fact.
       this.sql.exec(
-        `UPDATE runs SET status = 'cancelled' WHERE run_id = ? AND status = 'cancelling'`,
+        `UPDATE runs
+            SET status = 'cancelled', result = COALESCE(result, ?)
+          WHERE run_id = ? AND status = 'cancelling'`,
+        JSON.stringify(this.canonicalCancelledRunResult()),
         runId
       );
       this.appendRunEvent(runId, "cleanup", { status: "settled" });
@@ -2940,8 +2963,10 @@ export class EvalDO extends DurableObjectBase {
    */
   private async forceReset(): Promise<{ ok: boolean }> {
     this.sql.exec(
-      `UPDATE runs SET status = 'cancelled'
-       WHERE status IN ('pending', 'running', 'cancelling')`
+      `UPDATE runs
+          SET status = 'cancelled', result = COALESCE(result, ?)
+        WHERE status IN ('pending', 'running', 'cancelling')`,
+      JSON.stringify(this.canonicalCancelledRunResult())
     );
     const runIds = new Set([
       ...this.runAborts.keys(),

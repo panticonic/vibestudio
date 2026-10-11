@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import type { RpcCaller } from "@vibestudio/rpc";
 import {
   createEvalExecutor,
   createDeferredEvalExecutor,
   evalAuthorityInputSchema,
   evalLifecycleFailureCodes,
   evalMethods,
+  evalOwnerCallbackMethods,
+  evalOwnerCallbackRpcMethods,
   evalStartInputSchema,
   captureEvalRpcFingerprint,
   fingerprintEvalRpcValue,
@@ -14,6 +17,109 @@ import {
 } from "./eval.js";
 
 const SUCCESS = { success: true, console: "", returnValue: 42 };
+
+describe("eval owner callback RPC contracts", () => {
+  it("shares namesless descriptors with strict completion and progress payload schemas", async () => {
+    expect(evalOwnerCallbackRpcMethods.onEvalComplete.name).toBe("onEvalComplete");
+    expect(evalOwnerCallbackRpcMethods.onEvalProgress.name).toBe("onEvalProgress");
+
+    const completionArgs = [{ runId: "run:1" }];
+    expect(evalOwnerCallbackMethods.onEvalComplete.args.safeParse(completionArgs).success).toBe(
+      true
+    );
+    expect(
+      evalOwnerCallbackMethods.onEvalComplete.args.safeParse([
+        { ...completionArgs[0], result: SUCCESS },
+      ]).success
+    ).toBe(false);
+    expect(
+      evalOwnerCallbackMethods.onEvalComplete.returns.safeParse({ accepted: true }).success
+    ).toBe(true);
+    expect(
+      evalOwnerCallbackMethods.onEvalComplete.returns.safeParse({ accepted: "yes" }).success
+    ).toBe(false);
+
+    const progress = {
+      runId: "run:1",
+      agentInvocationId: "invocation:1",
+      channelId: "channel:1",
+      activity: { kind: "authority-requested", detail: { capability: "browser.read" } },
+    };
+    expect(evalOwnerCallbackMethods.onEvalProgress.args.safeParse([progress]).success).toBe(true);
+    expect(
+      evalOwnerCallbackMethods.onEvalProgress.args.safeParse([
+        { ...progress, activity: { ...progress.activity, kind: "arbitrary" } },
+      ]).success
+    ).toBe(false);
+    expect(
+      evalOwnerCallbackMethods.onEvalProgress.args.safeParse([{ ...progress, unexpected: true }])
+        .success
+    ).toBe(false);
+    expect(evalOwnerCallbackMethods.onEvalProgress.returns.safeParse(undefined).success).toBe(true);
+  });
+
+  it("validates callback arguments before dispatch and validates receiver results", async () => {
+    const completion = evalOwnerCallbackRpcMethods.onEvalComplete;
+    const completionDispatch = vi.fn(async () => ({ accepted: true }));
+    await expect(
+      completion.invoke(
+        [
+          {
+            runId: "run:1",
+            // @ts-expect-error completion callbacks receive only their owner run id
+            result: SUCCESS,
+          },
+        ],
+        completionDispatch
+      )
+    ).rejects.toThrow();
+    expect(completionDispatch).not.toHaveBeenCalled();
+
+    await expect(
+      completion.invoke([{ runId: "run:1" }], async () => ({ accepted: "yes" }))
+    ).rejects.toThrow();
+
+    const progress = evalOwnerCallbackRpcMethods.onEvalProgress;
+    const progressDispatch = vi.fn(async () => undefined);
+    await expect(
+      progress.invoke(
+        [
+          {
+            runId: "run:1",
+            agentInvocationId: "invocation:1",
+            channelId: "channel:1",
+            activity: {
+              // @ts-expect-error progress activity is restricted to the owner protocol
+              kind: "not-an-authority-event",
+            },
+          },
+        ],
+        progressDispatch
+      )
+    ).rejects.toThrow();
+    expect(progressDispatch).not.toHaveBeenCalled();
+    await expect(
+      progress.invoke(
+        [{ runId: "run:1", agentInvocationId: "invocation:1", channelId: "channel:1" }],
+        async () => undefined
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps compile-time callback result types exact", () => {
+    void callbackRpcTypecheck;
+  });
+});
+
+function callbackRpcTypecheck(caller: Pick<RpcCaller, "call">): void {
+  // @ts-expect-error a caller cannot substitute its own completion result type
+  const wrongCompletionResult: Promise<{ accepted: "yes" }> = caller.call(
+    "do:agent:owner",
+    evalOwnerCallbackRpcMethods.onEvalComplete,
+    [{ runId: "run:1" }]
+  );
+  void wrongCompletionResult;
+}
 
 describe("eval RPC observation fingerprints", () => {
   it("sorts canonical object keys while preserving exact Unicode code points", () => {

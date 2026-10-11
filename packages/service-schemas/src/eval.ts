@@ -10,6 +10,7 @@
 import { z } from "zod";
 import { rpcFailureSchema } from "./rpcFailure.js";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
 import { CapabilityScopeSchema } from "./build.js";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 
@@ -700,6 +701,67 @@ export const evalDeleteScopeValueArgsSchema = z
     key: z.string().min(1).max(512),
   })
   .strict();
+
+/** Internal callbacks from an EvalDO to the owner of an agent-run execution. */
+export const evalOwnerCallbackMethods = defineServiceMethods({
+  onEvalComplete: {
+    website: {
+      kind: "closed",
+      reason: "Eval completion delivery is an internal callback to the owning agent.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "untrusted-execution",
+      family: "eval.owner-callback",
+      rationale: "Host-delivered completion settles one previously admitted owner eval run",
+    },
+    args: z.tuple([z.object({ runId: z.string().min(1) }).strict()]),
+    returns: z.object({ accepted: z.boolean() }).strict(),
+    description: "Deliver the terminal hint for an eval run to its owning agent.",
+    access: { sensitivity: "write" },
+  },
+  onEvalProgress: {
+    website: {
+      kind: "closed",
+      reason: "Eval progress delivery is an internal callback to the owning agent.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "observability",
+      family: "eval.owner-callback",
+      rationale: "Host-delivered progress reports one admitted owner eval run",
+    },
+    args: z.tuple([
+      z
+        .object({
+          runId: z.string().min(1),
+          agentInvocationId: z.string().min(1),
+          channelId: z.string().min(1),
+          output: z.string().optional(),
+          activity: z
+            .object({
+              kind: z.enum(["authority-requested", "authority-decided"]),
+              detail: z.unknown().optional(),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict(),
+    ]),
+    returns: z.void(),
+    description: "Deliver bounded console or authority activity progress to the owning agent.",
+    access: { sensitivity: "write" },
+  },
+});
+
+/** Namesless descriptors are shared by the host sender and owner receiver contract. */
+export const evalOwnerCallbackRpcMethods = createRpcMethods(
+  "evalOwnerCallbacks",
+  evalOwnerCallbackMethods,
+  ""
+);
 
 export const evalMethods = defineServiceMethods({
   start: {

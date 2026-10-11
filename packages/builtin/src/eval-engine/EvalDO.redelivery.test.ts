@@ -13,6 +13,10 @@ type Fixture = Awaited<ReturnType<typeof createTestDO<typeof TestEvalDO>>>;
 const receiver = "do:workers/test:Agent:owner";
 const result = { success: true, console: "domain truth", returnValue: 42 };
 
+function methodName(method: string | { name: string }): string {
+  return typeof method === "string" ? method : method.name;
+}
+
 function seed(f: Fixture, id: string, status = "done") {
   f.sql.exec(
     "INSERT INTO runs (run_id, args, status, result, started_at) VALUES (?, ?, ?, ?, 1)",
@@ -36,10 +40,15 @@ function deadlines(f: Fixture) {
 function installRpc(f: Fixture, receive: (id: string) => Promise<unknown>) {
   const call = vi
     .spyOn(wireClientFor(f.instance.rpcForTest), "call")
-    .mockImplementation(async (_target: string, method: string, args: unknown[]) => {
-      if (method === "onEvalComplete") return receive((args[0] as { runId: string }).runId);
-      return undefined;
-    });
+    .mockImplementation(
+      async (_target: string, method: string | { name: string }, args: unknown[]) => {
+        if (methodName(method) === "onEvalComplete") {
+          await receive((args[0] as { runId: string }).runId);
+          return { accepted: true };
+        }
+        return undefined;
+      }
+    );
   return call;
 }
 async function reopen(f: Fixture) {
@@ -118,7 +127,9 @@ describe("EvalDO durable exact-ack redelivery", () => {
     f.sql.exec("UPDATE eval_result_redeliveries SET wake_at = 0");
     const call = installRpc(fresh, async () => undefined);
     await fresh.instance.alarm();
-    expect(call.mock.calls.filter(([, method]) => method === "onEvalComplete")).toEqual([]);
+    expect(call.mock.calls.filter(([, method]) => methodName(method) === "onEvalComplete")).toEqual(
+      []
+    );
     expect(fresh.instance.getRunReceipt("pending")).toBeNull();
     expect(fresh.instance.getRunReceipt("cleanup")).toBeNull();
     expect(deadlines(fresh)).toHaveLength(2);
@@ -135,20 +146,14 @@ describe("EvalDO durable exact-ack redelivery", () => {
         failureKind: "cancelled",
         failureCode: "eval_cancelled",
       });
-      return fresh.instance.acknowledgeRunResult(id, receipt);
+      expect(fresh.instance.getRunReceipt(id)).toEqual(receipt);
+      return fresh.instance.acknowledgeRunResult(id, {
+        runDigest: receipt.runDigest,
+        resultDigest: receipt.resultDigest,
+      });
     });
     await expect(fresh.instance.alarm()).resolves.toBeNull();
-    expect(call).toHaveBeenCalledWith(
-      receiver,
-      "onEvalComplete",
-      [
-        expect.objectContaining({
-          runId: "cancelled",
-          result: expect.objectContaining({ failureKind: "cancelled" }),
-        }),
-      ],
-      {}
-    );
+    expect(call).toHaveBeenCalledWith(receiver, "onEvalComplete", [{ runId: "cancelled" }], {});
     expect(deadlines(fresh)).toEqual([]);
   });
 
@@ -242,7 +247,12 @@ describe("EvalDO durable exact-ack redelivery", () => {
     seed(f, "acked");
     await f.instance.acknowledgeRunResult("acked", f.instance.getRunReceipt("acked")!);
     const retained = f.sql.exec("SELECT * FROM runs ORDER BY run_id").toArray();
-    const descriptor = { className: "EvalDO", version: 5, freshSchemaFingerprint: fingerprint };
+    const descriptor = {
+      className: "EvalDO",
+      version: 5,
+      freshSchemaFingerprint: fingerprint,
+      durableWorkQueues: [],
+    };
     const reopened = await createTestDO(
       TestEvalDO,
       {

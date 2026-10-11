@@ -20,6 +20,15 @@ implementation retains one public eval execution method (`start`), owner-scoped
 `events.watch` for live observers; it does not retain the former `run`,
 `startRun`, or `getRun` service methods.
 
+The historical raw RPC snippets below describe the reviewed source, not the
+current caller API. Eval owner callbacks now share checked descriptors and
+payload schemas in
+[`packages/service-schemas/src/eval.ts`](../packages/service-schemas/src/eval.ts).
+Completion delivers only the retained run identity; the owner reads the durable
+receipt and acknowledges its exact digests. Progress follows the same shared
+contract. The earlier proposal to push the terminal snapshot itself is superseded
+by that retained-receipt protocol.
+
 ## Executive decision
 
 The source branch must not be merged or broadly cherry-picked. It is an
@@ -2520,7 +2529,7 @@ Revision 2 drew this lifecycle as `start -> get/events -> terminal`, which
 described polling as the mechanism. That is wrong about the current system and
 would be a serious regression if implemented literally.
 
-Today the EvalDO pushes the terminal result to the initiating receiver:
+In the reviewed source, the EvalDO pushed the terminal result to the initiating receiver:
 `this.rpc.call(args.agentRef, "onEvalComplete", [...])`
 (`packages/builtin/src/eval-engine/EvalDO.ts:874`). The agent vessel's own comment states
 the relationship explicitly — `getRun` is "a poll BACKSTOP, not the primary

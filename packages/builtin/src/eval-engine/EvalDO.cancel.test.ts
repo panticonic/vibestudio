@@ -110,9 +110,10 @@ function mockOwnedCall(
   ) => Promise<unknown>
 ): void {
   const owner = wireClientFor(stablePublicRpc(instance));
-  vi.spyOn(owner, "call").mockImplementation((target, method, args, options) =>
-    implementation(target, method, args, options)
-  );
+  vi.spyOn(owner, "call").mockImplementation(async (target, method, args, options) => {
+    const result = await implementation(target, method, args, options);
+    return method === "onEvalComplete" ? { accepted: true } : result;
+  });
 }
 
 function mockOwnedCallOnce(
@@ -125,7 +126,10 @@ function mockOwnedCallOnce(
   ) => Promise<unknown>
 ): void {
   vi.spyOn(wireClientFor(stablePublicRpc(instance)), "call").mockImplementationOnce(
-    (target, method, args, options) => implementation(target, method, args, options)
+    async (target, method, args, options) => {
+      const result = await implementation(target, method, args, options);
+      return method === "onEvalComplete" ? { accepted: true } : result;
+    }
   );
 }
 
@@ -843,7 +847,9 @@ describe("EvalDO cancellation + forced recovery", () => {
 
   it("runs startRun in the DO lifetime and delivers its terminal result directly to its agent", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const call = vi.fn(() => Promise.resolve(undefined));
+    const call = vi.fn((_target: string, method: string) =>
+      Promise.resolve(method === "onEvalComplete" ? { accepted: true } : undefined)
+    );
     mockOwnedCall(instance, call);
     setPriv(instance, "runLocked", () =>
       Promise.resolve({ success: true, console: "ok", returnValue: 7 })
@@ -868,14 +874,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(call).toHaveBeenCalledWith(
       "do:workers/agent-worker:AiChatWorker:agent-1",
       "onEvalComplete",
-      [
-        expect.objectContaining({
-          runId: "background-run",
-          agentInvocationId: "invocation-1",
-          channelId: "channel-1",
-          result: expect.objectContaining({ success: true, returnValue: 7 }),
-        }),
-      ],
+      [{ runId: "background-run" }],
       expect.any(Object)
     );
     const deliveryCalls = call.mock.calls as unknown as Array<
@@ -3640,8 +3639,14 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
     // User cancellation stays untyped-by-lifecycle: no infrastructure stamp.
     const userRun = instance.getRun("user-cancelled");
-    expect(userRun.status).toBe("cancelled");
-    expect(userRun.result).toBeUndefined();
+    expect(userRun).toMatchObject({
+      status: "cancelled",
+      result: {
+        success: false,
+        failureKind: "cancelled",
+        failureCode: "eval_cancelled",
+      },
+    });
   });
 
   it("retries a failed terminal hint and stops only after an exact acknowledgement", async () => {
