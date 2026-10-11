@@ -59,11 +59,13 @@ globalThis.fetch = async (url, options) => {
     );
     assert.equal(check.status, 0, check.stderr);
     assert.match(check.stdout, /authenticates as test-publisher/);
-    const pnpmCheck = noSecrets(spawnSync("pnpm", ["setup:npm-token", "--check"], {
-      cwd: fileURLToPath(new URL("../", import.meta.url)),
-      env: { ...env, NODE_OPTIONS: `--import=${preload}` },
-      encoding: "utf8",
-    }));
+    const pnpmCheck = noSecrets(
+      spawnSync("pnpm", ["setup:npm-token", "--check"], {
+        cwd: fileURLToPath(new URL("../", import.meta.url)),
+        env: { ...env, NODE_OPTIONS: `--import=${preload}` },
+        encoding: "utf8",
+      })
+    );
     assert.equal(pnpmCheck.status, 0, pnpmCheck.stderr);
     assert.match(pnpmCheck.stdout, /authenticates as test-publisher/);
     assert.equal(readFileSync(tokenFile, "utf8"), "stdin_secret\n");

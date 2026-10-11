@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 const cache = vi.hoisted(() => ({ root: "" }));
@@ -11,14 +11,45 @@ import {
   pruneUnreferencedDependencyContent,
 } from "./dependencyContentStore.js";
 let root: string;
+const publisherChildren = new Set<{
+  child: ChildProcess;
+  closed: Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }>;
+}>();
 beforeEach(async () => {
   root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "dependency-content-publication-"));
   cache.root = path.join(root, "cache");
 });
 afterEach(async () => {
   vi.restoreAllMocks();
-  await closeDerivedCacheCoordinators();
-  await fs.promises.rm(root, { recursive: true, force: true });
+  const cleanupErrors: unknown[] = [];
+  const children = [...publisherChildren];
+  for (const { child } of children) {
+    if (child.exitCode === null && child.signalCode === null) {
+      try {
+        child.kill();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+  }
+  const childResults = await Promise.allSettled(children.map(({ closed }) => closed));
+  for (const result of childResults) {
+    if (result.status === "rejected") cleanupErrors.push(result.reason);
+  }
+  publisherChildren.clear();
+  try {
+    await closeDerivedCacheCoordinators();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    await fs.promises.rm(root, { recursive: true, force: true });
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, "Failed to retire dependency publisher children");
+  }
 });
 it("deduplicates dependency payloads without changing their original modes", async () => {
   const first = path.join(root, "first");
@@ -81,51 +112,202 @@ it("starts another verified replica before the Windows hardlink ceiling", async 
 });
 
 it("coordinates digest capacity across independent publisher processes", async () => {
+  const seedTree = path.join(root, "seed");
+  await fs.promises.mkdir(seedTree);
+  const seedFile = path.join(seedTree, "package.js");
+  await fs.promises.writeFile(seedFile, "cross-process payload");
+  await deduplicateDependencyContent(seedTree);
+
+  const anchorDirectory = path.join(root, "anchors");
+  await fs.promises.mkdir(anchorDirectory);
+  for (let index = 0; index < 1_021; index += 1) {
+    await fs.promises.link(seedFile, path.join(anchorDirectory, `anchor-${index}`));
+  }
+  const anchoredStat = await fs.promises.stat(seedFile, { bigint: true });
+  expect(anchoredStat.nlink).toBe(1_023n);
+  await closeDerivedCacheCoordinators();
+
   const trees = ["publisher-a", "publisher-b"].map((name) => path.join(root, name));
   for (const tree of trees) {
     await fs.promises.mkdir(tree);
-    await Promise.all(
-      Array.from({ length: 520 }, (_, index) =>
-        fs.promises.writeFile(path.join(tree, `package-${index}.js`), "cross-process payload")
-      )
-    );
+    await fs.promises.writeFile(path.join(tree, "package.js"), "cross-process payload");
   }
 
   const moduleUrl = new URL("./dependencyContentStore.ts", import.meta.url).href;
-  const childCode = `import { deduplicateDependencyContent } from ${JSON.stringify(moduleUrl)}; await deduplicateDependencyContent(process.argv[1]);`;
-  const runPublisher = (tree: string): Promise<void> =>
-    new Promise((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        ["--import", "tsx", "--input-type=module", "-e", childCode, tree],
-        {
-          cwd: process.cwd(),
-          env: { ...process.env, VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: cache.root },
-          stdio: ["ignore", "ignore", "pipe"],
+  const childCode = `
+    import { deduplicateDependencyContent } from ${JSON.stringify(moduleUrl)};
+    import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
+    const failures = [];
+    process.send({ type: "publisher-ready" });
+    try {
+      await new Promise((resolve, reject) => {
+        process.once("message", (message) => {
+          if (message?.type === "publish") resolve();
+          else reject(new Error("Publisher received an invalid release message"));
+        });
+      });
+      await deduplicateDependencyContent(process.argv[1]);
+    }
+    catch (error) { failures.push(error); }
+    try { await closeDerivedCacheCoordinators(); }
+    catch (error) { failures.push(error); }
+    process.disconnect();
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Publisher operation and cleanup failed", { cause: failures[0] });
+    }
+  `;
+  const publishers = trees.map((tree) => {
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", childCode, tree],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: cache.root },
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
+      }
+    );
+    let stderr = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    let spawnError: Error | undefined;
+    child.once("error", (error) => {
+      spawnError = error;
+    });
+    const closed = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      stderr: string;
+      spawnError: Error | undefined;
+    }>((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal, stderr, spawnError }));
+    });
+    const ready = new Promise<void>((resolve, reject) => {
+      child.once("message", (message: unknown) => {
+        if (
+          message &&
+          typeof message === "object" &&
+          (message as { type?: unknown }).type === "publisher-ready"
+        ) {
+          resolve();
+        } else {
+          reject(new Error("Publisher sent an invalid readiness message"));
         }
-      );
-      let stderr = "";
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => {
-        stderr += chunk;
       });
       child.once("error", reject);
-      child.once("exit", (code, signal) => {
-        if (code === 0) resolve();
-        else reject(new Error(`Publisher exited (${code ?? signal}): ${stderr}`));
+      child.once("close", (code, signal) => {
+        reject(new Error(`Publisher closed before readiness (${code ?? signal}): ${stderr}`));
       });
     });
+    const owned = { child, closed };
+    publisherChildren.add(owned);
+    return { child, ready, closed };
+  });
 
-  await Promise.all(trees.map(runPublisher));
-
-  const files = trees.flatMap((tree) =>
-    Array.from({ length: 520 }, (_, index) => path.join(tree, `package-${index}.js`))
+  const readinessResults = await Promise.allSettled(
+    publishers.map(({ child, ready }) =>
+      ready.catch((error: unknown) => {
+        for (const sibling of publishers) {
+          if (
+            sibling.child !== child &&
+            sibling.child.exitCode === null &&
+            sibling.child.signalCode === null
+          ) {
+            sibling.child.kill();
+          }
+        }
+        throw error;
+      })
+    )
   );
+  const readinessFailures = readinessResults.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : []
+  );
+  if (readinessFailures.length > 0) {
+    for (const { child } of publishers) {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    }
+    const closedResults = await Promise.allSettled(publishers.map(({ closed }) => closed));
+    const closeFailures = closedResults.flatMap((result) => {
+      if (result.status === "rejected") return [result.reason];
+      const { code, signal, spawnError, stderr } = result.value;
+      if (spawnError !== undefined) return [spawnError];
+      if (code !== 0 || signal !== null)
+        return [new Error(`Publisher closed during readiness (${code ?? signal}): ${stderr}`)];
+      return [];
+    });
+    const failures = [...readinessFailures, ...closeFailures];
+    if (failures.length === 1) throw failures[0];
+    throw new AggregateError(failures, "Publisher readiness and retirement failed", {
+      cause: failures[0],
+    });
+  }
+
+  const releaseResults = await Promise.allSettled(
+    publishers.map(
+      ({ child }) =>
+        new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const fail = (error: unknown) => {
+            if (settled) return;
+            settled = true;
+            reject(error);
+          };
+          child.once("close", (code, signal) => {
+            fail(new Error(`Publisher closed before release confirmation (${code ?? signal})`));
+          });
+          child.send({ type: "publish" }, (error) => {
+            if (error !== null && error !== undefined) {
+              fail(error);
+              return;
+            }
+            if (settled) return;
+            settled = true;
+            resolve();
+          });
+        })
+    )
+  );
+  const releaseFailures = releaseResults.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : []
+  );
+  if (releaseFailures.length > 0) {
+    for (const { child } of publishers) {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    }
+  }
+
+  const processResults = await Promise.allSettled(
+    publishers.map(({ closed }) =>
+      closed.then(({ code, signal, stderr: childStderr, spawnError }) => {
+        if (spawnError !== undefined) throw spawnError;
+        if (code !== 0) {
+          throw new Error(`Publisher exited (${code ?? signal}): ${childStderr}`);
+        }
+      })
+    )
+  );
+  const publisherResults = [...releaseResults, ...processResults];
+  const publisherFailures = publisherResults.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : []
+  );
+  if (publisherFailures.length > 0) {
+    if (publisherFailures.length === 1) throw publisherFailures[0];
+    throw new AggregateError(publisherFailures, "Dependency publisher process failed", {
+      cause: publisherFailures[0],
+    });
+  }
+
+  const files = trees.map((tree) => path.join(tree, "package.js"));
   const stats = await Promise.all(files.map((file) => fs.promises.stat(file, { bigint: true })));
   const inodes = new Set(stats.map((stat) => `${stat.dev}:${stat.ino}`));
   if (process.platform === "win32") {
     expect(inodes.size).toBeGreaterThan(1);
     expect(stats.every((stat) => stat.nlink <= 1_024n)).toBe(true);
+  } else {
+    expect(inodes.size).toBe(1);
   }
 });
 

@@ -56,9 +56,7 @@ async function main() {
   console.log(
     "[setup-npm-token] Kept until replaced or removed; npm controls the token's expiry (write tokens: at most 90 days)."
   );
-  console.log(
-    "[setup-npm-token] Check this saved credential with: pnpm setup:npm-token --check"
-  );
+  console.log("[setup-npm-token] Check this saved credential with: pnpm setup:npm-token --check");
   console.log("[setup-npm-token] Next publish command: pnpm publish:server-npm");
 }
 
