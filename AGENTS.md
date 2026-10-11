@@ -8,6 +8,28 @@ So when you hit a wall -- a case that doesn't fit, a spec that breaks, an assump
 
 What you must NEVER do is patch around the wall to comply with my words: a flag, a special case, a conversion shim, a second channel, a parallel path, a test rewritten to dodge a broken rule. The patch IS the failure. Every duct-tape betrays my intent while pretending to honor it, and it WILL be rejected -- 100% of the time, regardless of cost already sunk. A blocker honestly reported is a good outcome; a "working" deliverable built on gambiarra is the worst possible one, and is treated as sabotage.
 
+## Parallel execution
+
+Prefer parallel execution for independent implementation, investigation, build,
+verification, and release work. Establish the actual dependency graph first:
+wait for required inputs, not for unrelated checks or an entire verification
+stage. In CI, separate artifact production from verification so consumers can
+start as soon as their exact inputs exist. Keep every required check in the
+final publication gate. Document dependency edges that constrain the critical
+path so future changes do not accidentally serialize independent work.
+
+Use bounded concurrency appropriate to CPU, memory, external quotas, and
+resource ownership. Give concurrent agents disjoint edit ownership; coordinate
+shared files, commits, and generated outputs. Join all admitted work and retain
+every failure before reporting completion or retiring shared resources.
+Parallelism must not duplicate builds, bypass validation, or introduce a second
+implementation path. Measure the real critical path before claiming a speedup.
+
+For agentic latency verification, use one managed run with its explicit
+`--concurrency` setting for independent cases, so the allowance accounts for all
+test agents. Do not overlap it with unrelated heavy host work. The detailed
+instance and cleanup rules below still apply.
+
 ## Timeouts and error propagation
 
 We normally do not want blanket timeouts, time-based watchdogs, TTLs, or

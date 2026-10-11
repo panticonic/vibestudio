@@ -25,4 +25,30 @@ Build ownership and reuse live in `build.mjs`, so direct builds and desktop laun
 
 Infrastructure package builds hash their compiler inputs and verify emitted output. Source edits retain incremental compiler state; missing or changed output resets it. Files retired from the compiler program are removed from `dist` after compilation. An excluded test only invalidates production output when production code imports it.
 
+## CI and release parallelism
+
+The CI graph in `.github/workflows/ci.yml` expresses artifact dependencies,
+rather than broad verification barriers. `native-inputs` produces the native
+executor payloads and source-attested Darwin observers once. After that job
+succeeds, `native-isolation`, `application-candidates`, and
+`npm-server-preflight` run independently. `packaged-acceptance` waits for
+`application-candidates`, which supplies the application it installs; it does
+not wait for unrelated native or npm checks. Consumers verify their downloaded
+inputs before use. Artifact names and observer attestations bind them to the
+current workflow revision.
+
+The reusable CI workflow must still succeed in full before the release
+workflow creates its draft. Parallel candidate preparation is not publication
+authority: all required verification remains part of the release gate. Keep
+new `needs` edges tied to a consumed artifact or another concrete prerequisite;
+record that reason beside the edge. Independent checks should overlap, without
+rebuilding the same candidate or weakening its installed acceptance tests.
+
+`pnpm check:workflows` runs a checksum-pinned actionlint against every workflow,
+including expression-context and dependency validation, both locally through
+the commit/quality gates and in CI. Its semantic checks do not depend on
+optional shellcheck or pyflakes installations. Focused workflow tests protect
+the actual artifact dependency graph. Use observed job durations to assess the
+critical path; a parallel graph alone does not establish a measured speedup.
+
 `pnpm type-check:host` and `pnpm type-check:userland` retain each original compiler program, including its global/module augmentations, source aliases, tests, and compiler options. Compiler realms and template compositions run sequentially. Incremental no-emit state is seeded privately and retained when the compiler completes, including cached diagnostics from a failed check. Compiler errors still propagate; cancellation or launch failure retains the preceding state. Temporary configurations and unpublished state are removed. State lives under the host checkout's `.cache/typecheck-state`, with derived-cache leases and quotas. Template source and installed dependencies are projected into host-owned temporary directories, so no compiler state is written into external template checkouts.

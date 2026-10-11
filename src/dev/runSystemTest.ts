@@ -31,7 +31,8 @@ Self-provisions one isolated Vibestudio server for headless agentic acceptance.
 Commands:
   doctor                         Provision, pair, and check infrastructure
   list --json                    List tests from the live system-test runner
-  run TEST_NAME                  Run one exact test
+  run TEST_NAME [TEST_NAME...]    Run selected exact tests; use --concurrency N
+                                 for independent cases in one accounted run
   inspect RUN_ID --json          Inspect a bounded failed-run packet
   trajectory RUN_ID TEST --full --json
                                  Inspect the full trajectory when needed
