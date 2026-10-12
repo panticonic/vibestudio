@@ -2695,7 +2695,17 @@ describe("RpcServer relay behavior", () => {
   });
 
   it("routes server-initiated stream frames from a connected extension back to the pending stream", async () => {
-    const { server, tokenManager } = createServer();
+    let delayNextFrame = false;
+    let releaseDelayedFrame: (() => void) | undefined;
+    const { server, tokenManager } = createServer({
+      liveCallerGate: () => {
+        if (!delayNextFrame) return true;
+        delayNextFrame = false;
+        return new Promise<boolean>((resolve) => {
+          releaseDelayedFrame = () => resolve(true);
+        });
+      },
+    });
     const extensionToken = tokenManager.ensureToken("@workspace-extensions/shell", "extension");
     const ws = createTestWs();
 
@@ -2736,6 +2746,9 @@ describe("RpcServer relay behavior", () => {
     });
     const response = await responsePromise;
 
+    // A live-caller check can resolve after the checks for later frames. The
+    // session must still deliver the chunks in their original wire order.
+    delayNextFrame = true;
     const chunkFrame: RpcMessage = {
       type: "stream-frame",
       requestId,
@@ -2747,21 +2760,31 @@ describe("RpcServer relay behavior", () => {
       type: "ws:rpc",
       envelope: makeEnvelope("@workspace-extensions/shell", "server", "extension", chunkFrame),
     });
+    ws.emitMessage({
+      type: "ws:rpc",
+      envelope: makeEnvelope("@workspace-extensions/shell", "server", "extension", {
+        ...chunkFrame,
+        payload: Buffer.from("world").toString("base64"),
+      }),
+    });
     const endFrame: RpcMessage = {
       type: "stream-frame",
       requestId,
       fromId: "@workspace-extensions/shell",
       frameType: 0x03,
-      payload: JSON.stringify({ bytesIn: 5 }),
+      payload: JSON.stringify({ bytesIn: 10 }),
     };
     ws.emitMessage({
       type: "ws:rpc",
       envelope: makeEnvelope("@workspace-extensions/shell", "server", "extension", endFrame),
     });
+    await Promise.resolve();
+    expect(releaseDelayedFrame).toBeDefined();
+    releaseDelayedFrame?.();
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/plain");
-    await expect(response.text()).resolves.toBe("hello");
+    await expect(response.text()).resolves.toBe("helloworld");
   });
 
   it("rejects server bridge calls when a client routes a response to server", async () => {

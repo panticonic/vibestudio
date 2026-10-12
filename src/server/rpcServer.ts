@@ -2242,8 +2242,17 @@ export class RpcServer {
     // Install teardown immediately after registry admission. Any exception in
     // the remaining setup is rolled back by abortFailedAuthentication; a real
     // network close from this point onward must run the normal close path.
+    // Identity admission may await the live caller store. Admit frames from one
+    // connection in wire order: otherwise a later DATA/END can overtake an
+    // earlier DATA frame and silently corrupt a streamed response. handleMessage
+    // detaches long-running requests after admission, so this queue serializes
+    // only the per-frame gate and immediate routing.
+    let admissionTail: Promise<void> | undefined;
     ws.onMessage((message) => {
-      void this.handleMessage(client, message).catch((error) => {
+      const admitted = admissionTail
+        ? admissionTail.then(() => this.handleMessage(client, message))
+        : this.handleMessage(client, message);
+      admissionTail = admitted.catch((error) => {
         log.error("RPC session message handling failed", {
           callerId: client.caller.runtime.id,
           cause: formatRpcFailure(error),
