@@ -67,6 +67,7 @@ jobs:
       - name: Restore and verify exact Darwin production host inputs
         id: restore-host-inputs
         if: ${{ inputs.target == 'darwin-arm64' }}
+        shell: bash
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: |
@@ -75,6 +76,7 @@ jobs:
 
       - name: Verify exact release version and source commit
         if: ${{ inputs.release-candidate }}
+        shell: bash
         env:
           RELEASE_TAG: ${{ inputs.release-tag }}
           SOURCE_SHA: ${{ github.sha }}
@@ -121,6 +123,7 @@ jobs:
       - name: Package the application
         id: package
         if: ${{ success() && ((inputs.target == 'darwin-arm64' && steps.restore-host-inputs.outcome == 'success') || (inputs.target != 'darwin-arm64' && steps.native-check.outcome == 'success')) }}
+        shell: bash
         env:
           CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
@@ -167,6 +170,7 @@ jobs:
 
       - name: Attest the exact macOS release candidate
         if: ${{ inputs.package == 'mac' && inputs.release-candidate }}
+        shell: bash
         env:
           RELEASE_DIR: release
           RELEASE_TAG: ${{ inputs.release-tag }}

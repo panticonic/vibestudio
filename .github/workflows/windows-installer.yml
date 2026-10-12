@@ -39,6 +39,7 @@ jobs:
 
       - name: Verify requested release version and source commit
         if: ${{ inputs.release-tag != '' }}
+        shell: bash
         env:
           RELEASE_TAG: ${{ inputs.release-tag }}
           SOURCE_SHA: ${{ github.sha }}

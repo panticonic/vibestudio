@@ -68,6 +68,26 @@ test("release workflow shell steps never interpolate workflow inputs into script
   }
 });
 
+test("Windows reusable workflows declare the shell for multi-line or environment-dependent scripts", async () => {
+  for (const fileName of [
+    "application-candidate.yml",
+    "windows-installer.yml",
+    "packaged-acceptance.yml",
+  ]) {
+    const workflow = await readWorkflow(fileName);
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
+      for (const step of job.steps ?? []) {
+        if (typeof step.run !== "string") continue;
+        if (!step.run.includes("\n") && !/\$[A-Z_][A-Z_0-9]*/u.test(step.run)) continue;
+        assert.ok(
+          step.shell === "bash" || step.shell === "pwsh",
+          `${fileName}:${jobName}:${step.name ?? "unnamed"} must select its script's shell explicitly`
+        );
+      }
+    }
+  }
+});
+
 async function readWorkflow(fileName) {
   const source = await fs.readFile(
     path.join(repositoryRoot, ".github/workflows", fileName),
