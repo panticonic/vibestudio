@@ -136,7 +136,7 @@ jobs:
           if [ "$TARGET" = "darwin-arm64" ] && [ "$RELEASE_CANDIDATE" = "true" ]; then
             missing=0
             for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-              eval "value=\${$name}"
+              value="${!name}"
               if [ -z "$value" ]; then missing=$((missing + 1)); fi
             done
             if [ "$missing" -eq 0 ]; then
