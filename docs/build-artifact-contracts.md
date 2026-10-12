@@ -186,7 +186,10 @@ producer's full input validation. The source server validates and reuses the
 completed release through the normal producer. Device installation and preparation retain owned process lifetimes;
 cleanup joins them before retiring the generation lease or scratch. The nightly
 workflow invokes those public entrypoints instead of substituting a production
-build or bypassing their prerequisites with a raw test command.
+build or bypassing their prerequisites with a raw test command. Linux source
+runners share one setup action for bubblewrap, credential-service dependencies,
+and the exact checkout MXC AppArmor permission; desktop consumers also request
+Xvfb. Packaged-app and npm consumers retain their own artifact-path profiles.
 
 The npm preflight retains its canonical `npm pack` archive after staging,
 dry-run, and fresh-install smoke checks succeed. Its artifact name includes the

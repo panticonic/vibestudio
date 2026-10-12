@@ -60,22 +60,10 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install Linux sandbox and desktop credential runtimes
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap gnome-keyring dbus-x11
-
-      - name: Allow bundled MXC user namespace under AppArmor
-        run: |
-          profile="$RUNNER_TEMP/vibestudio-mxc-lxc-exec.apparmor"
-          cat > "$profile" <<EOF
-          abi <abi/4.0>,
-          include <tunables/global>
-
-          profile vibestudio_mxc_lxc_exec "$GITHUB_WORKSPACE/dist/mxc/linux-x64/lxc-exec" flags=(unconfined) {
-            userns,
-          }
-          EOF
-          sudo install -m 0644 "$profile" /etc/apparmor.d/vibestudio-mxc-lxc-exec
-          sudo apparmor_parser -r /etc/apparmor.d/vibestudio-mxc-lxc-exec
+      - name: Set up Linux source runtime
+        uses: ./.github/actions/setup-linux-source-runtime
+        with:
+          desktop: "true"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

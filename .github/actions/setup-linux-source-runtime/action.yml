@@ -1,0 +1,36 @@
+name: Set up Linux source runtime
+description: Install the Linux sandbox, credential, and optional desktop smoke prerequisites
+inputs:
+  desktop:
+    description: Install Xvfb for Linux desktop smoke tests
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Install Linux sandbox and credential runtimes
+      shell: bash
+      env:
+        VIBESTUDIO_SETUP_DESKTOP_RUNTIME: ${{ inputs.desktop }}
+      run: |
+        packages=(bubblewrap gnome-keyring dbus-x11)
+        if [[ "$VIBESTUDIO_SETUP_DESKTOP_RUNTIME" == "true" ]]; then
+          packages+=(xvfb)
+        fi
+        sudo apt-get update
+        sudo apt-get install -y "${packages[@]}"
+
+    - name: Allow bundled MXC user namespace under AppArmor
+      shell: bash
+      run: |
+        profile="$RUNNER_TEMP/vibestudio-mxc-lxc-exec.apparmor"
+        cat > "$profile" <<EOF
+        abi <abi/4.0>,
+        include <tunables/global>
+
+        profile vibestudio_mxc_lxc_exec "$GITHUB_WORKSPACE/dist/mxc/linux-x64/lxc-exec" flags=(unconfined) {
+          userns,
+        }
+        EOF
+        sudo install -m 0644 "$profile" /etc/apparmor.d/vibestudio-mxc-lxc-exec
+        sudo apparmor_parser -r /etc/apparmor.d/vibestudio-mxc-lxc-exec

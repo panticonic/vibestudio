@@ -41,8 +41,10 @@ jobs:
       - name: Acquire complete template source set
         run: pnpm dev:templates setup "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
 
-      - name: Install desktop smoke runtime
-        run: sudo apt-get update && sudo apt-get install -y xvfb gnome-keyring dbus-x11
+      - name: Set up Linux desktop source runtime
+        uses: ./.github/actions/setup-linux-source-runtime
+        with:
+          desktop: "true"
 
       - name: Iroh remote transport and lifecycle suites
         run: pnpm test:remote-transport
@@ -81,6 +83,9 @@ jobs:
 
       - name: Acquire complete template source set
         run: pnpm dev:templates setup "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
+
+      - name: Set up Linux mobile source runtime
+        uses: ./.github/actions/setup-linux-source-runtime
 
       - name: Android Iroh pairing, approvals, panel lifecycle, and recovery
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
