@@ -2230,19 +2230,45 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private async onProtectedRefsPublished(publication: ProtectedRefPublication): Promise<void> {
     if (!this.attached) return;
     const workspaceStateHash = (await this.ensureFresh()).stateHash;
-    const repositories: ProtectedPublicationEvent["repositories"] = [];
-    for (const change of publication.changes) {
-      const repoPath = normalizeRepositoryPath(change.repoPath);
-      const fileChanges = await this.diffFileChanges(
-        change.previousContentRoot,
-        change.nextContentRoot
-      );
-      const reroot = (relativePath: string) => joinRepoPrefix(repoPath, relativePath);
-      repositories.push({
-        repoPath,
-        previousStateHash: change.previousContentRoot,
-        nextStateHash: change.nextContentRoot,
-        fileChanges: fileChanges.map((file) => ({ ...file, path: reroot(file.path) })),
+    const repositories: ProtectedPublicationEvent["repositories"] = new Array(
+      publication.changes.length
+    );
+    const failures: Array<{ error: unknown } | undefined> = new Array(publication.changes.length);
+    let nextChange = 0;
+    // Each repository diff reads immutable CAS trees and writes only its own
+    // result slot. Join a bounded set of independent diffs before exposing the
+    // publication, keeping event order equal to the store's canonical order.
+    const workers = Array.from(
+      { length: Math.min(CONTENT_OBSERVATION_CONCURRENCY, publication.changes.length) },
+      async () => {
+        while (nextChange < publication.changes.length) {
+          const index = nextChange++;
+          const change = publication.changes[index]!;
+          try {
+            const repoPath = normalizeRepositoryPath(change.repoPath);
+            const fileChanges = await this.diffFileChanges(
+              change.previousContentRoot,
+              change.nextContentRoot
+            );
+            const reroot = (relativePath: string) => joinRepoPrefix(repoPath, relativePath);
+            repositories[index] = {
+              repoPath,
+              previousStateHash: change.previousContentRoot,
+              nextStateHash: change.nextContentRoot,
+              fileChanges: fileChanges.map((file) => ({ ...file, path: reroot(file.path) })),
+            };
+          } catch (error) {
+            failures[index] = { error };
+          }
+        }
+      }
+    );
+    await Promise.all(workers);
+    const diffFailures = failures.flatMap((failure) => (failure ? [failure.error] : []));
+    if (diffFailures.length === 1) throw diffFailures[0];
+    if (diffFailures.length > 1) {
+      throw new AggregateError(diffFailures, "Protected publication repository diffs failed", {
+        cause: diffFailures[0],
       });
     }
     const changedPaths = [

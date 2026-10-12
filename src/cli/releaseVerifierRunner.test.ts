@@ -15,7 +15,7 @@ function buildResult(buildKey: string): BuildResultWire {
       ev: "fixture",
       sourceStateHash: null,
       sourcemap: false,
-      details: { kind: "fixture" },
+      details: { kind: "generic" },
       builtAt: "2026-10-12T00:00:00.000Z",
     },
     artifacts: [],

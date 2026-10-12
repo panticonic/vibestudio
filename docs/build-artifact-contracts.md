@@ -31,6 +31,14 @@ that exact installed entry, multiplexes calls on one owned connection, and joins
 calls and client retirement before reporting results. Authentication and RPC
 remain owned by the ordinary CLI client implementation.
 
+Build metadata has one strict wire schema in `packages/service-schemas/src/build.ts`.
+The producer's RPC catalog and per-kind details types derive from that schema,
+including argument/result schemas, argument names, and immutable policy scopes.
+Persistence validates the same contract before writing and after decoding.
+Invalid cached metadata is a cache miss; filesystem and ownership failures retain
+their original errors. New producer fields must update this canonical contract
+and its complete-record tests, rather than a separate host-only interface.
+
 `pnpm type-check:host` and `pnpm type-check:userland` retain each original compiler program, including its global/module augmentations, source aliases, tests, and compiler options. Compiler realms and template compositions run sequentially. Incremental no-emit state is seeded privately and retained when the compiler completes, including cached diagnostics from a failed check. Compiler errors still propagate; cancellation or launch failure retains the preceding state. Temporary configurations and unpublished state are removed. State lives under the host checkout's `.cache/typecheck-state`, with derived-cache leases and quotas. Template source and installed dependencies are projected into host-owned temporary directories, so no compiler state is written into external template checkouts.
 
 ## CI and release parallelism
@@ -58,11 +66,14 @@ otherwise a slow unrelated producer serializes those consumers. Keep platform
 variation in shared reusable workflows rather than copying build recipes.
 
 The reusable CI workflow must still succeed in full before the release
-workflow creates its draft. Linux and Windows installer jobs can prepare private,
-run-scoped candidates alongside that validation: they have read-only repository
-permissions and do not receive publication credentials. Signing, artifact
-attachment, and making the release public still wait for the validated draft
-and exact candidate; installed acceptance remains a required gate where defined.
+workflow creates its draft. Windows installer jobs prepare private, run-scoped
+candidates alongside that validation, using read-only repository permissions.
+Linux installers wait for the reusable CI boundary because their native input
+producers are internal jobs of that workflow. Exposing those exact producer edges
+at the caller is the prerequisite for overlapping Linux packaging with unrelated
+checks. Signing, artifact attachment, and making the release public still wait
+for the validated draft and exact candidate; installed acceptance remains a
+required gate where defined.
 The Apple-credentialed macOS build stays behind the draft. Keep `needs` edges
 tied to a consumed artifact or another concrete prerequisite, and record that
 reason beside the edge. Independent checks should overlap, without rebuilding
@@ -74,6 +85,15 @@ the commit/quality gates and in CI. Its semantic checks do not depend on
 optional shellcheck or pyflakes installations. Focused workflow tests protect
 the actual artifact dependency graph. Use observed job durations to assess the
 critical path; a parallel graph alone does not establish a measured speedup.
+
+Local release work should use the available CPU and memory to reduce that critical
+path. An aggregate memory limit protects the host from an OOM; it is a ceiling,
+not a target for keeping workloads small. Choose build admission from the host's
+available capacity and observed peak of the owned workload, leaving room for
+unrelated applications. Increase independent admission when those resources are
+idle. Account for builds and verification together, and distinguish reclaimable
+file cache from process memory before attributing growth to a leak. Avoid duplicate
+builds and keep shared mutable artifact production under its existing owner.
 
 ## Compiler memory and ownership
 

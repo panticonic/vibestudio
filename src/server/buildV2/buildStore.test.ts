@@ -10,6 +10,7 @@ import {
   collectRetention,
   configureReleaseBuilds,
   drainBuildStorePublications,
+  findSharedStyleBuild,
   get,
   getByExecution,
   getOrHydrate,
@@ -840,6 +841,33 @@ describe("build artifact helpers", () => {
       const result = get("legacy-key");
 
       expect(result).toBeNull();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats invalid metadata as a cache miss during direct and shared-style reads", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-metadata-validation-"));
+    const buildKey = "d".repeat(64);
+    try {
+      setUserDataPath(path.join(root, "producer"));
+      const produced = await put(
+        buildKey,
+        { entries: build().artifacts },
+        { ...build().metadata, buildKey }
+      );
+
+      const corruptRoot = path.join(root, "corrupt-reader");
+      const corruptDir = path.join(corruptRoot, "builds", buildKey);
+      fs.mkdirSync(path.dirname(corruptDir), { recursive: true });
+      fs.cpSync(produced.dir, corruptDir, { recursive: true });
+      const metadataPath = path.join(corruptDir, "metadata.json");
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as Record<string, unknown>;
+      metadata["details"] = { kind: "generic", unowned: true };
+      fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+      setUserDataPath(corruptRoot);
+      expect(get(buildKey)).toBeNull();
+      expect(findSharedStyleBuild("e".repeat(64))).toBeNull();
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

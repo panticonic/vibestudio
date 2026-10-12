@@ -52,6 +52,17 @@ import {
   derivedCacheCoordinator,
   scheduleDerivedCachePrune,
 } from "@vibestudio/shared/derivedCache";
+import {
+  buildArtifactManifestSchema,
+  buildMetadataSchema,
+  executableModulesSchema,
+  type BuildArtifactManifestEntryWire,
+  type BuildArtifactWire,
+  type BuildMetadataWire,
+  type BuildResultWire,
+  type BuildMetadataDetailsWire,
+  type ExecutableModuleWire,
+} from "@vibestudio/service-schemas/build";
 export { contentTypeForPath } from "@vibestudio/shared/contentType";
 
 // ---------------------------------------------------------------------------
@@ -62,38 +73,17 @@ export interface BuildArtifacts {
   entries: BuildArtifactInput[];
 }
 
-export type BuildArtifactRole =
-  | "primary"
-  | "asset"
-  | "html"
-  | "css"
-  | "shared-style"
-  | "map"
-  | "wasm";
-export type BuildArtifactEncoding = "utf8" | "base64";
+export type BuildArtifactRole = BuildArtifactWire["role"];
+export type BuildArtifactEncoding = BuildArtifactWire["encoding"];
 
-export interface BuildArtifactInput {
-  path: string;
-  role: BuildArtifactRole;
-  contentType: string;
+/** Producer input may omit encoding; persisted/wire artifacts always include it. */
+export type BuildArtifactInput = Omit<BuildArtifactWire, "encoding" | "byteLength"> & {
   encoding?: BuildArtifactEncoding;
-  platform?: string;
-  integrity?: string;
-  content: string;
-}
+};
 
-export interface BuildArtifactManifestEntry {
-  path: string;
-  role: BuildArtifactRole;
-  contentType: string;
-  encoding: BuildArtifactEncoding;
-  /** Stored byte length, used to reject truncation without loading the payload. */
-  byteLength?: number;
-  platform?: string;
-  integrity?: string;
-}
+export type BuildArtifactManifestEntry = BuildArtifactManifestEntryWire;
 
-export type BuildArtifactWithContent = BuildArtifactManifestEntry & { content: string };
+export type BuildArtifactWithContent = BuildArtifactWire;
 
 /**
  * Immutable executable identity sealed at the build-store boundary.
@@ -104,159 +94,51 @@ export type BuildArtifactWithContent = BuildArtifactManifestEntry & { content: s
  */
 export type BuildExecutionIdentity = ExecutionArtifactRefV1;
 
-export type ExtensionMethodAuthority = Record<
-  string,
-  | { website: import("@vibestudio/rpc").WebsiteMethodPolicy; effect: { kind: "open" } }
-  | {
-      website: import("@vibestudio/rpc").WebsiteMethodPolicy;
-      effect: {
-        kind: "userland-capability";
-        capability: string;
-        resource: { kind: "receiver" };
-      };
-      userlandCapability: {
-        canonicalCapability: string;
-        definitionDigest: string;
-        resourceType: string;
-        grantScopes: readonly import("@vibestudio/shared/authorityManifest").UserlandGrantScope[];
-        title: string;
-        action: string;
-        description?: string;
-      };
-    }
->;
+export type ExtensionMethodAuthority = Extract<
+  BuildMetadataDetailsWire,
+  { kind: "extension" }
+>["methodAuthority"];
 
-export interface ExecutableModuleInput {
-  moduleId: string;
-  contentDigest: string;
-  package:
-    | { kind: "first-party" }
-    | { kind: "workspace"; name: string; effectiveVersion: string }
-    | { kind: "external"; name: string; version: string; packageDigest: string };
-  format: "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs";
-  source: string;
+export type ExecutableModuleInput = ExecutableModuleWire;
+
+export type BuildMetadataDetails = BuildMetadataDetailsWire;
+
+class InvalidStoredBuildMetadataError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+    this.name = "InvalidStoredBuildMetadataError";
+  }
 }
 
-export type BuildMetadataDetails =
-  | {
-      kind: "extension";
-      runtimeDepsKey: string | null;
-      runtimeAbi: string | null;
-      providerContracts: Record<string, { methods: string[] }>;
-      methodAuthority: ExtensionMethodAuthority;
-      dependencyMode?: "auto" | "bundle" | "external";
-      externalDeps?: Record<string, string>;
-      dependencyOverrides?: Record<string, string>;
-      dependencyPatches?: Array<{
-        selector: string;
-        packageName: string;
-        version: string;
-        owner: string;
-        roots: string[];
-        content: string;
-        digest: string;
-      }>;
-      classifiedDeps?: Array<{
-        name: string;
-        version: string;
-        external: boolean;
-        format: "cjs" | "esm" | "unknown";
-        reasons: string[];
-        explanation: string;
-      }>;
-      smokeTest?: {
-        mode: "child-process";
-        passed: boolean;
-      };
-    }
-  | {
-      kind: "app";
-      target: "electron" | "react-native" | "terminal";
-      platform?: "electron" | "ios" | "android" | "terminal";
-      integrity?: string | null;
-      rnHostAbi?: string | null;
-      provider?: {
-        name: string;
-        activeEv: string | null;
-        activeBuildKey: string | null;
-        contractVersion: string;
-      } | null;
-    }
-  | {
-      kind: "library";
-      format: "cjs" | "async-cjs" | "stylesheet";
-      requiredModules: readonly string[];
-    }
-  | {
-      kind: "website-bundle";
-      entryArtifact: string;
-      declaration: Record<string, unknown>;
-    }
-  | {
-      kind: "test";
-      suite: string;
-      runtime: "browser" | "workerd";
-      selectedFiles: string[];
-    }
-  | { kind: "generic" };
-
-export interface BuildMetadata {
-  kind: "panel" | "package" | "worker" | "extension" | "app" | "template";
-  name: string;
-  /** Canonical identity of this exact immutable executable artifact. */
-  buildKey: string;
-  /** Workspace-relative repository path; null for external library builds. */
-  sourcePath: string | null;
-  ev: string;
-  /** Workspace state this artifact was materialized from; null for non-workspace builds. */
-  sourceStateHash: string | null;
-  /** Exact immutable source provenance paired with sourceStateHash. */
-  sourceState?: ExecutionSourceStateRef | null;
-  sourcemap: boolean;
-  framework?: string;
-  /** Deterministic report-only panel payload baseline derived from esbuild. */
-  bundleReport?: import("./panelBundleReport.js").PanelBundleReport;
-  /** Content-addressed base styles loaded before panel-specific CSS. */
-  sharedStyles?: Array<{
-    digest: string;
-    contentType: string;
-    url: string;
-  }>;
-  /** Authority sealed from the exact materialized source manifest. */
-  authority?: UnitAuthorityManifest;
-  /** Exact service binding/review identity sealed at source materialization. */
-  serviceAuthorityDigest?: string;
-  /** Exact implementation modules selected by the successful executable build. */
-  executableModules?: ExecutableModuleInput[];
-  /** Panel state-argument schema sealed from the exact materialized manifest. */
-  stateArgsSchema?: import("@vibestudio/shared/stateArgs").StateArgsSchema;
-  /**
-   * Caller-facing direct-RPC documentation extracted from this exact worker
-   * source state. Discovery only: grants and receiver enforcement never consume it.
-   */
-  workspaceRpcCatalog?: import("./workspaceRpcCatalog.js").WorkspaceRpcMethodDoc[];
-  /** Derived by the store from immutable inputs; callers may not supply it. */
-  execution?: BuildExecutionIdentity;
-  details: BuildMetadataDetails;
-  builtAt: string;
+function invalidStoredBuildMetadata(message: string, cause?: unknown): never {
+  throw new InvalidStoredBuildMetadataError(message, cause);
 }
 
-export interface BuildResult {
-  /** Absolute path to the build directory */
-  dir: string;
-  /** Full BuildV2 input digest used only as the immutable cache locator. */
-  buildKey: string;
-  /** Workspace state resolved for this build request; null for non-workspace builds. */
-  sourceStateHash: string | null;
-  /** Build metadata */
-  metadata: BuildMetadata;
-  /**
-   * Target-agnostic artifact manifest. Persisted payloads are loaded and
-   * integrity-checked when `content` is explicitly requested, without retaining
-   * the source string in the verified build cache.
-   */
-  artifacts: BuildArtifactWithContent[];
+function parseStoredBuildMetadata(content: string): BuildMetadata {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      invalidStoredBuildMetadata("Stored build metadata is not valid JSON", error);
+    }
+    throw error;
+  }
+  const result = buildMetadataSchema.safeParse(parsed);
+  if (!result.success) {
+    invalidStoredBuildMetadata(
+      "Stored build metadata does not match its wire schema",
+      result.error
+    );
+  }
+  return result.data;
 }
+
+/** The wire schema is the authority for every persisted metadata field. */
+export type BuildMetadata = BuildMetadataWire;
+
+/** A build result is exactly the returned schema payload. */
+export type BuildResult = BuildResultWire;
 
 // ---------------------------------------------------------------------------
 // Build Store
@@ -298,29 +180,48 @@ function gzipJson(value: unknown): Promise<Buffer> {
 
 /** Hot metadata never owns executable source payloads. */
 export function readBuildMetadata(dir: string): BuildMetadata {
-  const metadata = JSON.parse(
-    fs.readFileSync(path.join(dir, "metadata.json"), "utf-8")
-  ) as BuildMetadata;
+  const content = fs.readFileSync(path.join(dir, "metadata.json"), "utf-8");
+  const metadata = parseStoredBuildMetadata(content);
   const { executableModules: _modules, ...compact } = metadata;
   return compact;
 }
 
 /** Read source evidence only at the compiler/diagnostic consumer that needs it. */
 export function readExecutableModules(dir: string): ExecutableModuleInput[] | undefined {
-  const metadata = JSON.parse(
-    fs.readFileSync(path.join(dir, "metadata.json"), "utf8")
-  ) as BuildMetadata;
+  const content = fs.readFileSync(path.join(dir, "metadata.json"), "utf8");
+  const metadata = parseStoredBuildMetadata(content);
   if (metadata.executableModules !== undefined) return metadata.executableModules;
   const modulesPath = path.join(dir, EXECUTABLE_MODULES_FILE);
   if (!fs.existsSync(modulesPath)) return undefined;
-  return JSON.parse(
-    gunzipSync(fs.readFileSync(modulesPath)).toString("utf-8")
-  ) as ExecutableModuleInput[];
+  let modulesJson: string;
+  try {
+    modulesJson = gunzipSync(fs.readFileSync(modulesPath)).toString("utf-8");
+  } catch (error) {
+    if (["Z_DATA_ERROR", "Z_BUF_ERROR"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      invalidStoredBuildMetadata("Stored executable module inventory is corrupt", error);
+    }
+    throw error;
+  }
+  let parsedModules: unknown;
+  try {
+    parsedModules = JSON.parse(modulesJson);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      invalidStoredBuildMetadata("Stored executable module inventory is not valid JSON", error);
+    }
+    throw error;
+  }
+  const result = executableModulesSchema.safeParse(parsedModules);
+  if (!result.success) {
+    invalidStoredBuildMetadata("Stored executable module inventory is invalid", result.error);
+  }
+  return result.data;
 }
 
 /** Keep the verbose source inventory compressed and separate from hot metadata. */
 export async function writeBuildMetadata(dir: string, metadata: BuildMetadata): Promise<void> {
-  const { executableModules: suppliedModules, ...compactMetadata } = metadata;
+  const wireMetadata: BuildMetadata = buildMetadataSchema.parse(metadata);
+  const { executableModules: suppliedModules, ...compactMetadata } = wireMetadata;
   const modulesPath = path.join(dir, EXECUTABLE_MODULES_FILE);
   const metadataPath = path.join(dir, "metadata.json");
   const executableModules =
@@ -909,13 +810,17 @@ function readBuildDir(
     ) {
       return null;
     }
-    const authority =
-      rawMetadata.authority === undefined
-        ? undefined
-        : parseUnitAuthorityManifest(
-            rawMetadata.authority,
-            `build ${expectedBuildKey} metadata.authority`
-          );
+    let authority: UnitAuthorityManifest | undefined;
+    if (rawMetadata.authority !== undefined) {
+      try {
+        authority = parseUnitAuthorityManifest(
+          rawMetadata.authority,
+          `build ${expectedBuildKey} metadata.authority`
+        );
+      } catch (error) {
+        invalidStoredBuildMetadata("Stored build authority is invalid", error);
+      }
+    }
     // Every workspace-derived build must carry authority from the exact source
     // state. Only library builds with no workspace source coordinate may omit it.
     if (
@@ -928,17 +833,35 @@ function readBuildDir(
     const metadata: BuildMetadata = { ...rawMetadata, ...(authority ? { authority } : {}) };
     const manifestPath = path.join(dir, "artifacts.json");
     if (!fs.existsSync(manifestPath)) return null;
-    const storedManifest = JSON.parse(
-      fs.readFileSync(manifestPath, "utf-8")
-    ) as BuildArtifactManifestEntry[];
-    assertCanonicalArtifactManifestPaths(storedManifest);
+    let manifestJson: unknown;
+    try {
+      manifestJson = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        invalidStoredBuildMetadata("Stored build artifact manifest is not valid JSON", error);
+      }
+      throw error;
+    }
+    const manifestResult = buildArtifactManifestSchema.safeParse(manifestJson);
+    if (!manifestResult.success) {
+      invalidStoredBuildMetadata("Stored build artifact manifest is invalid", manifestResult.error);
+    }
+    const storedManifest: BuildArtifactManifestEntry[] = manifestResult.data;
+    try {
+      assertCanonicalArtifactManifestPaths(storedManifest);
+    } catch (error) {
+      invalidStoredBuildMetadata("Stored build artifact paths are invalid", error);
+    }
     const artifacts = storedManifest.map((entry) => {
       const artifactPath = path.join(dir, entry.path);
       let stat: fs.Stats;
       try {
         stat = fs.statSync(artifactPath);
-      } catch {
-        throw new Error(`Build artifact is missing: ${entry.path}`);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          invalidStoredBuildMetadata(`Build artifact is missing: ${entry.path}`, error);
+        }
+        throw error;
       }
       if (
         !stat.isFile() ||
@@ -946,12 +869,16 @@ function readBuildDir(
         (entry.byteLength ?? -1) < 0 ||
         stat.size !== entry.byteLength
       ) {
-        throw new Error(`Build artifact size mismatch: ${entry.path}`);
+        invalidStoredBuildMetadata(`Build artifact size mismatch: ${entry.path}`);
       }
       return lazyArtifactContent(dir, entry);
     });
     if (options.verifyExecution !== false) {
-      verifiedExecutionIdentity(metadata, storedManifest);
+      try {
+        verifiedExecutionIdentity(metadata, storedManifest);
+      } catch (error) {
+        invalidStoredBuildMetadata("Stored build execution identity is invalid", error);
+      }
     }
     return {
       dir,
@@ -960,8 +887,14 @@ function readBuildDir(
       metadata: metadataForEntries(metadata, storedManifest),
       artifacts,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (
+      error instanceof InvalidStoredBuildMetadataError ||
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return null;
+    }
+    throw error;
   }
 }
 
@@ -1042,7 +975,11 @@ export function findSharedStyleBuild(digest: string): BuildResult | null {
     try {
       metadata = readBuildMetadata(getBuildDir(entry.name));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      if (
+        (error as NodeJS.ErrnoException).code === "ENOENT" ||
+        error instanceof InvalidStoredBuildMetadataError
+      )
+        continue;
       throw error;
     }
     if (!metadata.sharedStyles?.some((style) => style.digest === digest)) continue;

@@ -14,14 +14,12 @@ import type { AuthorityRequirement } from "@vibestudio/rpc";
 import { usingTypeScriptProject } from "@vibestudio/typecheck";
 import { BuildDiagnosticsError, type BuildDiagnostic } from "./diagnostics.js";
 import type { Project, Symbol as TypeScriptSymbol } from "typescript/unstable/sync";
+import type { WorkspaceRpcMethodDocWire } from "@vibestudio/service-schemas/build";
 
 /** A malformed authored declaration, distinct from parser/IO failures. */
 class WorkspaceRpcDeclarationError extends Error {}
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
-import type {
-  UnitAuthorityManifest,
-  UserlandCapabilityDefinition,
-} from "@vibestudio/shared/authorityManifest";
+import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 
 export type WorkspaceRpcSchemaMetadata = Pick<
@@ -51,55 +49,10 @@ function authorityPrincipals(
   return [...principals].sort();
 }
 
-export interface WorkspaceRpcMethodDoc {
-  className: string;
-  name: string;
-  signature: string;
-  argsSchema?: Record<string, unknown>;
-  returnsSchema?: Record<string, unknown>;
-  argumentNames?: string[];
-  description?: string;
-  effect:
-    | { kind: "open" }
-    | {
-        kind: "userland-capability";
-        capability: string;
-        resource: { kind: "receiver-object" } | { kind: "opaque-handle"; argument: number };
-      }
-    | {
-        kind: "host-capability";
-        capability: string;
-        resource: { kind: "receiver-object" };
-      };
-  website: import("@vibestudio/rpc").WebsiteMethodPolicy;
-  access?: {
-    principals?: string[];
-    tier?: "open" | "gated" | "critical";
-    sensitivity?: "read" | "write" | "admin" | "destructive";
-    codeOnly?: boolean;
-    crossWorkspace?: boolean;
-  };
-  execution?: { harness: "attested-system-test" };
-  inputContractDigest: string;
-  producesHandle?: {
-    localName: string;
-    canonicalCapability: string;
-    definitionDigest: string;
-    resourceType: string;
-  };
+export type WorkspaceRpcMethodDoc = WorkspaceRpcMethodDocWire & {
   /** Extractor-only local name; removed before the sealed catalog is returned. */
   _handleCapability?: string;
-  userlandCapability?: {
-    localName: string;
-    canonicalCapability: string;
-    definitionDigest: string;
-    resourceType: string;
-    grantScopes: UserlandCapabilityDefinition["grantScopes"];
-    title: string;
-    action: string;
-    description?: string;
-  };
-}
+};
 
 type PolicyFields = ReadonlyMap<string, ts.Node>;
 

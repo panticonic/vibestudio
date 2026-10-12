@@ -152,6 +152,164 @@ describe("WorkspaceVcs protected publication notification", () => {
     );
   });
 
+  it("joins bounded independent repo diffs and retains every failure before notification", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "vcs-publication-diffs-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const contentHash = (await putBytes(blobsDir, Buffer.from("published\n"))).digest;
+    const stateHash = (
+      await mirrorWorktreeTree(blobsDir, [{ path: "index.ts", contentHash, mode: 0o100644 }])
+    ).stateHash;
+    const refs = createProtectedRefStore({
+      statePath: path.join(root, "refs"),
+      gate: async () => undefined,
+    });
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, ".context-projections", "v5"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    await vcs.attachGad(
+      createWorkspaceSemanticPort({ dispatch: async () => undefined as never } as never, {
+        source: "test/provider",
+        className: "TestProvider",
+        objectKey: "test",
+      })
+    );
+    const notification = vi.fn();
+    vcs.onProtectedPublication(notification);
+
+    const expectedFailures = [
+      new Error("first repository diff failed"),
+      new Error("later repository diff failed"),
+    ];
+    let active = 0;
+    let maximumActive = 0;
+    let calls = 0;
+    let releaseBatch!: () => void;
+    const batchGate = new Promise<void>((resolve) => {
+      releaseBatch = resolve;
+    });
+    let initialBatchStarted!: () => void;
+    const initialBatch = new Promise<void>((resolve) => {
+      initialBatchStarted = resolve;
+    });
+    vi.spyOn(vcs, "diffStates").mockImplementation(async () => {
+      const index = calls++;
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      if (calls === 32) initialBatchStarted();
+      await batchGate;
+      active -= 1;
+      if (index === 0) throw expectedFailures[0];
+      if (index === 7) throw expectedFailures[1];
+      return { added: [], removed: [], changed: [] };
+    });
+
+    const entries = Array.from({ length: 36 }, (_, index) => ({
+      repoPath: `packages/repo-${String(index).padStart(2, "0")}`,
+      expectedOld: null,
+      next: stateHash,
+    }));
+    const publication = refs.updateMains({
+      entries,
+      evidence: {
+        publicationId: "publication:parallel-diffs",
+        previousEventId: "event:genesis",
+        publishedEventId: "event:parallel-diffs",
+        hostRefsBasisDigest: hostRefBasisDigest([]),
+      },
+    });
+    let timeoutHandle!: ReturnType<typeof setTimeout>;
+    const reachedBound = await Promise.race([
+      initialBatch.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(false), 1_000);
+      }),
+    ]);
+    clearTimeout(timeoutHandle);
+    releaseBatch();
+    const failure = await publication.then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(reachedBound).toBe(true);
+    expect(maximumActive).toBe(32);
+    expect(calls).toBe(entries.length);
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) throw failure;
+    expect(failure.errors).toEqual(expectedFailures);
+    expect(failure.cause).toBe(expectedFailures[0]);
+    expect(notification).not.toHaveBeenCalled();
+  });
+
+  it("keeps published repository order when independent diffs finish out of order", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "vcs-publication-order-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const contentHash = (await putBytes(blobsDir, Buffer.from("published\n"))).digest;
+    const stateHash = (
+      await mirrorWorktreeTree(blobsDir, [{ path: "index.ts", contentHash, mode: 0o100644 }])
+    ).stateHash;
+    const refs = createProtectedRefStore({
+      statePath: path.join(root, "refs"),
+      gate: async () => undefined,
+    });
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, ".context-projections", "v5"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    await vcs.attachGad(
+      createWorkspaceSemanticPort({ dispatch: async () => undefined as never } as never, {
+        source: "test/provider",
+        className: "TestProvider",
+        objectKey: "test",
+      })
+    );
+    const observed: ProtectedPublicationEvent[] = [];
+    vcs.onProtectedPublication((event) => {
+      observed.push(event);
+    });
+    const completionOrder: number[] = [];
+    let diffIndex = 0;
+    vi.spyOn(vcs, "diffStates").mockImplementation(async () => {
+      const index = diffIndex++;
+      await new Promise<void>((resolve) => setTimeout(resolve, [20, 10, 1][index]));
+      completionOrder.push(index);
+      return { added: [], removed: [], changed: [] };
+    });
+
+    const entries = ["zeta", "alpha", "mu"].map((name) => ({
+      repoPath: `packages/${name}`,
+      expectedOld: null,
+      next: stateHash,
+    }));
+    await refs.updateMains({
+      entries,
+      evidence: {
+        publicationId: "publication:ordered-diffs",
+        previousEventId: "event:genesis",
+        publishedEventId: "event:ordered-diffs",
+        hostRefsBasisDigest: hostRefBasisDigest([]),
+      },
+    });
+
+    expect(observed[0]?.repositories.map((repository) => repository.repoPath)).toEqual([
+      "packages/alpha",
+      "packages/mu",
+      "packages/zeta",
+    ]);
+    expect(completionOrder).toEqual([2, 1, 0]);
+  });
+
   it("serializes every protected-main author while allowing one authoring lease to publish", async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "vcs-publication-lease-"));
     const blobsDir = path.join(root, "blobs");

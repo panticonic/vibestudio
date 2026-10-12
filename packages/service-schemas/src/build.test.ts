@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
 import {
   buildDiagnosticSchema,
+  buildMetadataDetailsSchema,
   buildMetadataSchema,
   buildMethods,
   buildResultSchema,
   executionArtifactRefSchema,
+  workspaceRpcMethodDocSchema,
 } from "./build.js";
 
 const digest = "0".repeat(64);
@@ -115,9 +117,9 @@ describe("build method effects", () => {
     };
     expect(buildMethods.getBuildMetadata.returns.parse(metadata)).toEqual(metadata);
     for (const serviceAuthorityDigest of ["", "not-a-digest", "A".repeat(64)]) {
-      expect(
-        buildMetadataSchema.safeParse({ ...metadata, serviceAuthorityDigest }).success
-      ).toBe(false);
+      expect(buildMetadataSchema.safeParse({ ...metadata, serviceAuthorityDigest }).success).toBe(
+        false
+      );
     }
   });
 
@@ -213,7 +215,41 @@ describe("build method effects", () => {
     ).toBe(true);
   });
 
-  it("accepts receiver execution contracts in the sealed workspace RPC catalog", () => {
+  it("preserves optional authority fields on the build wire", () => {
+    const metadata = {
+      kind: "worker" as const,
+      name: "worker:test",
+      buildKey: digest,
+      sourcePath: "workers/test",
+      ev: "ev:test",
+      sourceStateHash: digest,
+      sourcemap: false,
+      authority: { requests: [], provides: [] },
+      details: { kind: "generic" as const },
+      builtAt: new Date(0).toISOString(),
+    };
+
+    expect(buildMetadataSchema.parse(metadata).authority).toEqual(metadata.authority);
+  });
+
+  it("preserves the complete producer workspace RPC contract in build metadata", () => {
+    const method = {
+      website: { kind: "eligible" as const, rationale: "An explicitly exposed receiver method." },
+      className: "TestWorker",
+      name: "runTest",
+      signature: "runTest(input: Input): Promise<Output>",
+      argsSchema: { type: "object", properties: { id: { type: "string" } } },
+      returnsSchema: { type: "object", properties: { ok: { type: "boolean" } } },
+      argumentNames: ["input"],
+      effect: { kind: "open" as const },
+      access: { tier: "open" as const, sensitivity: "read" as const, crossWorkspace: true },
+      execution: { harness: "attested-system-test" as const },
+      inputContractDigest: digest,
+    };
+    expect(workspaceRpcMethodDocSchema.parse(method)).toEqual(method);
+    expect(workspaceRpcMethodDocSchema.safeParse({ ...method, unownedField: true }).success).toBe(
+      false
+    );
     expect(
       buildMetadataSchema.safeParse({
         kind: "worker",
@@ -223,20 +259,10 @@ describe("build method effects", () => {
         ev: "ev:test",
         sourceStateHash: digest,
         sourcemap: false,
-        workspaceRpcCatalog: [
-          {
- website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
-            className: "TestWorker",
-            name: "runTest",
-            signature: "runTest(): Promise<void>",
-            effect: { kind: "open" },
-            execution: { harness: "attested-system-test" },
-            inputContractDigest: digest,
-          },
-        ],
+        workspaceRpcCatalog: [method],
         details: { kind: "generic" },
         builtAt: new Date(0).toISOString(),
-      }).success,
+      }).success
     ).toBe(true);
   });
 
@@ -269,5 +295,100 @@ describe("build method effects", () => {
         ],
       }).success
     ).toBe(true);
+  });
+});
+
+describe("BuildV2 metadata details", () => {
+  const details = [
+    {
+      kind: "extension",
+      runtimeDepsKey: digest,
+      runtimeAbi: "extension-runtime.v1",
+      providerContracts: { "vibestudio.example.v1": { methods: ["read"] } },
+      methodAuthority: {
+        openMethod: {
+          website: { kind: "eligible", rationale: "Explicitly available to callers." },
+          effect: { kind: "open" },
+        },
+        capabilityMethod: {
+          website: { kind: "closed", reason: "Receiver-owned capability operation." },
+          effect: {
+            kind: "userland-capability",
+            capability: "workspace.read",
+            resource: { kind: "receiver" },
+          },
+          userlandCapability: {
+            canonicalCapability: "userland:extensions/test/workspace.read#digest",
+            definitionDigest: digest,
+            resourceType: "workspace-file",
+            grantScopes: ["task"],
+            title: "Read a workspace file",
+            action: "read",
+          },
+        },
+      },
+      dependencyMode: "external",
+      externalDeps: { example: "1.0.0" },
+      dependencyOverrides: {},
+      dependencyPatches: [
+        {
+          selector: "example@1",
+          packageName: "example",
+          version: "1.0.0",
+          owner: "extensions/test",
+          roots: ["extensions/test"],
+          content: "patch",
+          digest,
+        },
+      ],
+      classifiedDeps: [
+        {
+          name: "example",
+          version: "1.0.0",
+          external: true,
+          format: "esm",
+          reasons: ["runtime dependency"],
+          explanation: "Loaded by the extension host.",
+        },
+      ],
+      smokeTest: { mode: "child-process", passed: true },
+    },
+    {
+      kind: "app",
+      target: "react-native",
+      platform: "ios",
+      integrity: null,
+      rnHostAbi: "rn-host.v1",
+      provider: {
+        name: "provider",
+        activeEv: digest,
+        activeBuildKey: digest,
+        contractVersion: "1",
+      },
+    },
+    { kind: "library", format: "async-cjs", requiredModules: ["node:fs"] },
+    {
+      kind: "website-bundle",
+      entryArtifact: "website/index.js",
+      declaration: { title: "Example" },
+    },
+    { kind: "test", suite: "system", runtime: "workerd", selectedFiles: ["test.ts"] },
+    { kind: "generic" },
+  ] as const;
+
+  it("accepts every producer metadata variant and rejects unknown variants and fields", () => {
+    for (const detail of details) {
+      expect(buildMetadataDetailsSchema.parse(detail)).toEqual(detail);
+    }
+    expect(buildMetadataDetailsSchema.safeParse({ kind: "future-kind" }).success).toBe(false);
+    expect(buildMetadataDetailsSchema.safeParse({ ...details[2], unowned: true }).success).toBe(
+      false
+    );
+    expect(
+      buildMetadataDetailsSchema.safeParse({
+        ...details[2],
+        format: "made-up-format",
+      }).success
+    ).toBe(false);
   });
 });

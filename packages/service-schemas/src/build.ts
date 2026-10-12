@@ -80,7 +80,7 @@ export const UnitAuthorityManifestSchema = z
           .strict() satisfies z.ZodType<WorkspaceServiceProtocolRequest>
       )
       .readonly()
-      .default([]),
+      .optional(),
     provides: z.array(UserlandCapabilityDefinitionSchema).readonly(),
   })
   .strict() satisfies z.ZodType<UnitAuthorityManifest>;
@@ -121,8 +121,11 @@ export const buildArtifactSchema = z
     content: z.string(),
   })
   .strict();
+export type BuildArtifactWire = z.infer<typeof buildArtifactSchema>;
 
 export const buildArtifactManifestEntrySchema = buildArtifactSchema.omit({ content: true });
+export type BuildArtifactManifestEntryWire = z.infer<typeof buildArtifactManifestEntrySchema>;
+export const buildArtifactManifestSchema = z.array(buildArtifactManifestEntrySchema);
 export const buildArtifactHandleSchema = z
   .object({
     buildKey: z.string().min(1),
@@ -138,6 +141,135 @@ export const buildArtifactHandleSchema = z
   })
   .strict();
 export type BuildArtifactHandleWire = z.infer<typeof buildArtifactHandleSchema>;
+
+const extensionDependencyPatchSchema = z
+  .object({
+    selector: z.string(),
+    packageName: z.string(),
+    version: z.string(),
+    owner: z.string(),
+    roots: z.array(z.string()),
+    content: z.string(),
+    digest: z.string(),
+  })
+  .strict();
+
+const extensionClassifiedDependencySchema = z
+  .object({
+    name: z.string(),
+    version: z.string(),
+    external: z.boolean(),
+    format: z.enum(["cjs", "esm", "unknown"]),
+    reasons: z.array(z.string()),
+    explanation: z.string(),
+  })
+  .strict();
+
+const extensionWebsitePolicySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("closed"), reason: z.string() }).strict(),
+  z.object({ kind: z.literal("eligible"), rationale: z.string() }).strict(),
+]);
+
+const extensionMethodAuthoritySchema = z.record(
+  z.union([
+    z
+      .object({
+        website: extensionWebsitePolicySchema,
+        effect: z.object({ kind: z.literal("open") }).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        website: extensionWebsitePolicySchema,
+        effect: z
+          .object({
+            kind: z.literal("userland-capability"),
+            capability: z.string(),
+            resource: z.object({ kind: z.literal("receiver") }).strict(),
+          })
+          .strict(),
+        userlandCapability: z
+          .object({
+            canonicalCapability: z.string(),
+            definitionDigest: z.string(),
+            resourceType: z.string(),
+            grantScopes: z
+              .array(z.enum(["once", "task", "agent", "mission", "version", "session"]))
+              .readonly(),
+            title: z.string(),
+            action: z.string(),
+            description: z.string().optional(),
+          })
+          .strict(),
+      })
+      .strict(),
+  ])
+);
+
+/** Exact per-kind metadata carried by immutable BuildV2 artifacts. */
+export const buildMetadataDetailsSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("extension"),
+      runtimeDepsKey: z.string().nullable(),
+      runtimeAbi: z.string().nullable(),
+      providerContracts: z.record(z.object({ methods: z.array(z.string()) }).strict()),
+      methodAuthority: extensionMethodAuthoritySchema,
+      dependencyMode: z.enum(["auto", "bundle", "external"]).optional(),
+      externalDeps: z.record(z.string()).optional(),
+      dependencyOverrides: z.record(z.string()).optional(),
+      dependencyPatches: z.array(extensionDependencyPatchSchema).optional(),
+      classifiedDeps: z.array(extensionClassifiedDependencySchema).optional(),
+      smokeTest: z
+        .object({ mode: z.literal("child-process"), passed: z.boolean() })
+        .strict()
+        .optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("app"),
+      target: z.enum(["electron", "react-native", "terminal"]),
+      platform: z.enum(["electron", "ios", "android", "terminal"]).optional(),
+      integrity: z.string().nullable().optional(),
+      rnHostAbi: z.string().nullable().optional(),
+      provider: z
+        .object({
+          name: z.string(),
+          activeEv: z.string().nullable(),
+          activeBuildKey: z.string().nullable(),
+          contractVersion: z.string(),
+        })
+        .strict()
+        .nullable()
+        .optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("library"),
+      format: z.enum(["cjs", "async-cjs", "stylesheet"]),
+      requiredModules: z.array(z.string()).readonly(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("website-bundle"),
+      entryArtifact: z.string(),
+      declaration: z.record(z.unknown()),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("test"),
+      suite: z.string(),
+      runtime: z.enum(["browser", "workerd"]),
+      selectedFiles: z.array(z.string()),
+    })
+    .strict(),
+  z.object({ kind: z.literal("generic") }).strict(),
+]);
+export type BuildMetadataDetailsWire = z.infer<typeof buildMetadataDetailsSchema>;
 
 const panelBundlePayloadReportSchema = z
   .object({
@@ -172,7 +304,7 @@ const workspaceRpcEffectResourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("opaque-handle"), argument: z.number().int().nonnegative() }).strict(),
 ]);
 
-const workspaceRpcMethodDocSchema = z
+export const workspaceRpcMethodDocSchema = z
   .object({
     website: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("closed"), reason: z.string().min(1) }).strict(),
@@ -181,6 +313,9 @@ const workspaceRpcMethodDocSchema = z
     className: z.string(),
     name: z.string(),
     signature: z.string(),
+    argsSchema: z.record(z.unknown()).optional(),
+    returnsSchema: z.record(z.unknown()).optional(),
+    argumentNames: z.array(z.string()).optional(),
     description: z.string().optional(),
     effect: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("open") }).strict(),
@@ -205,6 +340,7 @@ const workspaceRpcMethodDocSchema = z
         tier: z.enum(["open", "gated", "critical"]).optional(),
         sensitivity: z.enum(["read", "write", "admin", "destructive"]).optional(),
         codeOnly: z.boolean().optional(),
+        crossWorkspace: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -228,7 +364,9 @@ const workspaceRpcMethodDocSchema = z
         canonicalCapability: z.string(),
         definitionDigest: z.string(),
         resourceType: z.string(),
-        grantScopes: z.array(z.enum(["once", "task", "agent", "mission", "version", "session"])),
+        grantScopes: z
+          .array(z.enum(["once", "task", "agent", "mission", "version", "session"]))
+          .readonly(),
         title: z.string(),
         action: z.string(),
         description: z.string().optional(),
@@ -237,8 +375,9 @@ const workspaceRpcMethodDocSchema = z
       .optional(),
   })
   .strict();
+export type WorkspaceRpcMethodDocWire = z.infer<typeof workspaceRpcMethodDocSchema>;
 
-const executableModuleSchema = z
+export const executableModuleSchema = z
   .object({
     moduleId: z.string(),
     contentDigest: z.string(),
@@ -264,6 +403,8 @@ const executableModuleSchema = z
     source: z.string(),
   })
   .strict();
+export const executableModulesSchema = z.array(executableModuleSchema);
+export type ExecutableModuleWire = z.infer<typeof executableModuleSchema>;
 
 export const buildMetadataSchema = z
   .object({
@@ -301,13 +442,13 @@ export const buildMetadataSchema = z
       .string()
       .regex(/^[0-9a-f]{64}$/u)
       .optional(),
-    executableModules: z.array(executableModuleSchema).optional(),
+    executableModules: executableModulesSchema.optional(),
     stateArgsSchema: z
       .record(z.unknown())
       .optional()
       .describe("Panel state-argument schema sealed from this exact source artifact."),
     workspaceRpcCatalog: z.array(workspaceRpcMethodDocSchema).optional(),
-    details: z.object({ kind: z.string() }).passthrough(),
+    details: buildMetadataDetailsSchema,
     builtAt: z.string(),
   })
   .strict();
