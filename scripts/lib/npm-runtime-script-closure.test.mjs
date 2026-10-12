@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -173,6 +174,43 @@ test("rejects a bare runtime import absent from package dependencies and vendor"
       /undeclared runtime packages: missing/u
     );
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("checks packaged membership without enumerating unrelated generated trees", () => {
+  const root = fixtureRoot();
+  const originalGlobSync = fs.globSync;
+  try {
+    write(root, "scripts/entry.mjs", `import "../dist/used.mjs";\n`);
+    write(root, "scripts/private-entry.mjs", `import "../dist/private/excluded.mjs";\n`);
+    write(root, "dist/used.mjs", `export const used = true;\n`);
+    write(root, "dist/private/excluded.mjs", `export const excluded = true;\n`);
+
+    fs.globSync = () => {
+      throw new Error("packaged path membership must not enumerate directory trees");
+    };
+    syncBuiltinESMExports();
+    const result = completeRuntimeScriptClosure({
+      sourceRoot: root,
+      packageRoot: root,
+      entryRoots: ["scripts/entry.mjs"],
+      packagedPaths: ["scripts/**/*", "dist/**/*", "!dist/private/**/*"],
+    });
+    assert.deepEqual(result.files, ["dist/used.mjs", "scripts/entry.mjs"]);
+    assert.throws(
+      () =>
+        completeRuntimeScriptClosure({
+          sourceRoot: root,
+          packageRoot: root,
+          entryRoots: ["scripts/private-entry.mjs"],
+          packagedPaths: ["scripts/**/*", "dist/**/*", "!dist/private/**/*"],
+        }),
+      /outside allowed artifact paths/u
+    );
+  } finally {
+    fs.globSync = originalGlobSync;
+    syncBuiltinESMExports();
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -211,12 +211,7 @@ function asFileSet(value) {
 function sameFileSetMapping(fileSet) {
   const from = normalizeMappingPath(fileSet.from);
   const to = normalizeMappingPath(fileSet.to);
-  return (
-    from === to &&
-    !path.posix.isAbsolute(from) &&
-    from !== ".." &&
-    !from.startsWith("../")
-  );
+  return from === to && !path.posix.isAbsolute(from) && from !== ".." && !from.startsWith("../");
 }
 
 function normalizeMappingPath(value) {
@@ -507,9 +502,7 @@ function isPackagedPath(root, candidate, patterns) {
         // A missing exact artifact path is not permission to read a source file.
       }
     } else if (!matches) {
-      matches = fs
-        .globSync(pattern, { cwd: root })
-        .some((match) => match.replaceAll("\\", "/") === relative);
+      matches = path.matchesGlob(relative, pattern);
     }
     if (matches) included = !excluded;
   }

@@ -255,6 +255,9 @@ using the same implementation as desktop packaging and npm staging. Shared
 script helpers must live in the packaged script boundary; source-only adapters
 may re-export them, but packaged scripts cannot import those adapters. This
 check rejects missing imports and undeclared runtime dependencies before builds.
+Path membership is matched directly against the declared patterns; it must not
+enumerate unrelated generated directories once for every import. Ordered
+exclusions and exact-directory declarations still determine the same closure.
 It then runs a checksum-pinned actionlint against every workflow,
 including expression-context and dependency validation, both locally through
 the commit/quality gates and in CI. Its semantic checks do not depend on
