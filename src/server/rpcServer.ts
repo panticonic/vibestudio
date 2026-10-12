@@ -5942,8 +5942,7 @@ export class RpcServer {
         receivedAt: Date.now(),
         preambleToEnvelopeMs: Math.round((performance.now() - acceptedAt) * 100) / 100,
         sid: streamPreamble.sid,
-        requestId:
-          "requestId" in envelope.message ? envelope.message.requestId : undefined,
+        requestId: "requestId" in envelope.message ? envelope.message.requestId : undefined,
         kind: streamPreamble.k,
       });
       const body =
@@ -5987,8 +5986,7 @@ export class RpcServer {
     void streamLoop().catch(fail);
     void connection.closed().then(
       (reason) => closeAll(reason, "closed-resolved"),
-      (error) =>
-        closeAll(error instanceof Error ? error.message : String(error), "closed-rejected")
+      (error) => closeAll(error instanceof Error ? error.message : String(error), "closed-rejected")
     );
   }
 
