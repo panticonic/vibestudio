@@ -19,8 +19,9 @@ For authoring guidance, see `workspace/skills/appdev/SKILL.md`.
   - `electron` runs as a hosted shell view.
   - `react-native` is delivered to the native mobile host through a signed build
     provider bootstrap.
-  - `terminal` currently produces a Node ESM artifact. It is intentionally
-    `artifact-only` until terminal app launch orchestration is made first-class.
+  - `terminal` produces one primary Node ESM (`.mjs`) artifact that the
+    `vibestudio terminal` CLI downloads over its own connection and runs
+    in-process (`launchMode: "client-module"`).
 
 ## App Update Adoption
 
@@ -32,8 +33,9 @@ Trusted app activation is server-side; client adoption is target-specific.
 - React Native clients use a native prompt. `Install` prepares and activates the
   current trusted bundle; `Roll back` switches the server to a retained previous
   build before activating it.
-- Terminal clients are artifact-only today. Updates are announced as new trusted
-  artifacts rather than host-supervised process replacements.
+- Terminal clients keep the loaded module until `vibestudio terminal` loads the
+  app again: on the next run, or when the CLI reconnects and its renewed app
+  principal grant names a newer build.
 
 The protocol surface is `apps:available`, `apps:status`, `apps:lifecycle`,
 `runtime.supervision.versions`, and `runtime.supervision.rollback`. Release
@@ -48,15 +50,20 @@ Remote clients use two layers of identity:
 - A `DeviceCredential` is long-lived and native/client-held. It contains a
   device id and refresh token.
 - A `PrincipalGrant` is short-lived and scoped to one concrete runtime
-  principal, such as a React Native app principal.
+  principal, such as a device's React Native or terminal app principal.
 - A `PairingInvite` is one-time bootstrap material used to create a new device
   credential.
 - `ConnectionInfo` describes the server URL clients should use for HTTP/RPC and
   pairing deep links.
 
 Desktop and mobile remote shells refresh a `shell` token from their device
-credential. Mobile native hosts may also refresh a principal grant with
-`/_r/s/auth/refresh-principal-grant` and `principal: "react-native-app"`.
+credential. A paired device shell that runs a workspace app itself (the mobile
+native host, the `vibestudio terminal` CLI) obtains that app's principal grant
+over its existing authenticated connection with the RPC
+`auth.grantAppPrincipal([{ principal: "react-native-app" | "terminal-app",
+source }])`. The grant names the device-scoped principal
+`app:<source>:<deviceId>` and the exact build it may run, and is bound to the
+caller's transport endpoint, so it works over loopback and Iroh alike.
 
 ## Capability Checks
 

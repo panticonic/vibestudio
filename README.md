@@ -112,11 +112,18 @@ Then:
 
 ```bash
 vibestudio             # launch the desktop app
+vibestudio terminal    # or: work in this terminal (starts a local server when needed)
 vibestudio --help      # CLI overview: remote, mobile, fs, vcs, agent, eval, …
 ```
 
 On first launch, pick or create a workspace. A chat opens with the onboarding
 agent, which asks what you want to do and helps you set things up.
+
+`vibestudio terminal` attaches to the server this CLI is paired with; when it
+isn't paired, it starts this machine's server in the background, pairs with
+it, and stops it again when you quit (`--keep-server` leaves it running). Pass
+a pairing link to connect to a remote server instead. See
+[docs/cli.md](docs/cli.md#terminal).
 
 ### Updates
 
@@ -305,6 +312,7 @@ pnpm dev             # launch a fresh disposable development workspace
 pnpm dev:production  # fresh disposable instance using the pinned production templates
 pnpm dev:iroh        # build + start a local hub, then connect through Iroh
 pnpm cli --help      # run the CLI live from TypeScript
+pnpm terminal        # run this checkout's server and open the terminal browser
 pnpm server:live --help
 ```
 
@@ -474,6 +482,7 @@ Windows builds include MXC's `wxc-host-prep.exe` alongside the executor so its O
 - `pnpm deploy:cloudflare` - Deploy the callback/apex Worker
 - `pnpm smoke:cloudflare` - Smoke the deployed callback/apex Worker
 - `pnpm start` - Build unpublished code and launch it with normal desktop semantics
+- `pnpm terminal` - Run this checkout's server (same supervisor as `pnpm server:live`; output in `<instanceRoot>/logs/server.log`) and open the terminal browser; quitting stops the server
 - `pnpm lint` - Run ESLint with strict rules
 - `pnpm format` - Format code with Prettier
 - `pnpm format:check` - Check formatting

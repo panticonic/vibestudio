@@ -117,8 +117,10 @@ since the hub owns the identity DB (the sole writer):
 - **Subject resolution happens at the child** on connect (WP0 §5.1), by reading the shared DB
   — not at the hub. The hub only needs identity to filter `hubControl.listWorkspaces` and run
   pairing surface.
-- **Loopback refresh endpoints** (`/_r/s/auth/refresh-shell` `:412-435`,
-  `refresh-principal-grant` `:485-498`) are fronted by the hub (it owns the writer).
+- **Loopback refresh endpoint** `/_r/s/auth/refresh-shell` (`:412-435`) is fronted by the
+  hub (it owns the writer). App principal grants are not an HTTP route: a paired device
+  requests them with the authenticated RPC `auth.grantAppPrincipal` over its existing
+  connection.
 
 ---
 
@@ -195,14 +197,14 @@ ready payload; first redemption creates root and terminates renewal.
 
 ## 9. File-change checklist
 
-| File                                                             | Change                                                                                                                                                                                                                                                      |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/server/irohIngress.ts`                                    | **unchanged topology** — ingress stays in each child with its own Endpoint ID identity                                                                                                                                                                             |
+| File                                                           | Change                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/server/irohIngress.ts`                                    | **unchanged topology** — ingress stays in each child with its own Endpoint ID identity                                                                                                                                                                      |
 | `src/server/irohSessionShim.ts`                                | unchanged — session terminates at the child; device credential as `ws:auth`                                                                                                                                                                                 |
-| `src/server/hubServer.ts`                                        | own identity DB + pairing; `hubControl.routeWorkspace` (spawn child + return dual reach coordinates); membership-filtered `listWorkspaces`; `inviteUser`/`pairDevice`; pass the read-only identity-DB path to children; root bootstrap on empty identity DB |
-| `src/server/hubServer.ts`                                        | pairing/refresh at hub; user-scoped device credentials; typed `inviteUser`/`pairDevice`; role gates resolve the subject's current account row                                                                                                               |
-| `src/server/index.ts`                                            | child validates device credential + reads subject/membership from the shared identity DB; refuses remote user sessions without it (dev workspace mode)                                                                                                      |
-| `deploy/iroh-relay/*`                                               | unchanged (per-device, per-child room model retained)                                                                                                                                                                                                       |
+| `src/server/hubServer.ts`                                      | own identity DB + pairing; `hubControl.routeWorkspace` (spawn child + return dual reach coordinates); membership-filtered `listWorkspaces`; `inviteUser`/`pairDevice`; pass the read-only identity-DB path to children; root bootstrap on empty identity DB |
+| `src/server/hubServer.ts`                                      | pairing/refresh at hub; user-scoped device credentials; typed `inviteUser`/`pairDevice`; role gates resolve the subject's current account row                                                                                                               |
+| `src/server/index.ts`                                          | child validates device credential + reads subject/membership from the shared identity DB; refuses remote user sessions without it (dev workspace mode)                                                                                                      |
+| `deploy/iroh-relay/*`                                          | unchanged (per-device, per-child room model retained)                                                                                                                                                                                                       |
 | `STATE_DIRECTORY.md`, `docs/iroh-deployment.md`, `docs/cli.md` | hub-owned identity/pairing; children keep ingress; new pair/invite/list/route surface                                                                                                                                                                       |
 
 ---

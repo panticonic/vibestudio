@@ -5,7 +5,7 @@
  * The CLI fetches the server-built primary artifact of the terminal app,
  * imports it in the CLI process, and calls its exported `run(host)`. The
  * browser owns the TTY until `run` settles. The CLI owns the RPC connection,
- * the app-principal identity, and (for `--local`) the server process.
+ * the app-principal identity, and (when it started one) the local server process.
  */
 import type { RpcClient } from "@vibestudio/rpc";
 

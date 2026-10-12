@@ -25,8 +25,18 @@ standalone server from `src/server/index.ts`.
 
 ```sh
 pnpm server:live --help
+pnpm terminal --help
 pnpm system-test --instance test-a doctor --approve-startup
 ```
+
+`pnpm terminal [--instance ID] [--ephemeral] [--workspace <name>] [--yes]`
+runs this checkout's server under the same instance supervisor as
+`pnpm server:live` and then opens the terminal browser through the same code
+path as `vibestudio terminal`. Build, template, and server output go to
+`<instanceRoot>/logs/server.log`, so the terminal stays free for the browser.
+Quitting the browser stops and joins the server this command started. When the
+selected instance is already running, it attaches to it instead (through
+`vibestudio terminal`) and leaves that server alone.
 
 `pnpm dev` and `pnpm server:live` use the same instance supervisor. A developer
 instance owns one isolated hub state root: lease, server/device identity,
@@ -109,6 +119,56 @@ From a source checkout, run the built CLI directly without a global install:
 node dist/cli/client.mjs --help     # or: pnpm cli --help
 ```
 
+## Terminal
+
+`vibestudio terminal` opens the terminal browser: a full-screen TUI for your
+workspaces that runs in this terminal. It is one command; there are no
+subcommands.
+
+```sh
+vibestudio terminal ["<pairing-link>"] [--workspace <name>] [--yes] [--keep-server] [--label <name>]
+```
+
+How it connects:
+
+- **Paired with a reachable server** (`vibestudio remote pair`): it attaches,
+  over loopback for a local server or over an encrypted Iroh link for a
+  remote one.
+- **Not paired, or paired with this machine's local server while it is not
+  running:** it starts the local server in the background in the default
+  persistent state directory (`${XDG_CONFIG_HOME:-~/.config}/vibestudio`), so
+  conversations survive restarts. On first use it pairs this CLI by redeeming
+  the server's local root invite. Server output goes to
+  `<stateDir>/logs/server.log`, never to the terminal. When you quit the
+  browser, the command stops the server it started and waits for it to exit.
+- **With a pairing link argument:** it pairs first, exactly like
+  `vibestudio remote pair "<link>"`, then attaches. `--label` names that device
+  (default `Terminal on <host>`).
+
+To use a different server, run `vibestudio remote logout` and pair again.
+
+The browser opens in your account's System workspace, where client apps live
+(the desktop shell's own connection routes there too); `--workspace <name>`
+opens another. Before the browser takes over the screen, the command prepares
+the workspace's terminal app and asks any startup approvals as ordinary
+questions; `--yes` approves each startup request once, for automation.
+
+`--keep-server` leaves a server this command started running after you quit.
+The exit message prints its pid and log path; a later `vibestudio terminal`
+attaches to it. Stop it with `kill <pid>`.
+
+```sh
+vibestudio terminal                                  # local server, or the server you paired with
+vibestudio terminal "<compact-payload>"              # pair with a remote server, then open it
+vibestudio terminal --workspace dev --keep-server
+```
+
+The terminal browser is a client app: the command fetches the build that the
+server made for the workspace's `hostTargets.terminal.app` over its own
+connection and runs it in this process. A newer adopted build is loaded the
+next time the browser reconnects or the command is run again. From a source
+checkout, use `pnpm terminal` (see [Development](#development)).
+
 ## Workspace template registry
 
 The workspace chooser reads the versioned JSON catalog at
@@ -181,8 +241,7 @@ runner’s policy is intentionally separate from remote pairing. Do not use an
 undocumented `remote serve --auto-approve` flag; it is not a supported CLI
 option.
 
-Pair this terminal, choose a workspace, start the terminal app, and mint
-account-bound device links:
+Pair this terminal, choose a workspace, and mint account-bound device links:
 
 ```sh
 vibestudio remote pair "<compact-payload>"
@@ -190,8 +249,6 @@ vibestudio remote pair "<compact-payload>"
 vibestudio remote pair "https://vibestudio.app/p#<compact-payload>"
 vibestudio remote workspaces
 vibestudio remote select dev
-vibestudio terminal start --pair "<compact-payload>"
-vibestudio terminal start
 vibestudio remote pair-device
 vibestudio remote invite-user --handle alice --workspace dev
 vibestudio remote status
@@ -228,12 +285,8 @@ identity and replaces only the routed child reach; it does not require pairing
 again.
 
 Desktop pairing and workspace selection happen in the desktop bootstrap UI.
-`terminal start` runs fully in the CLI; use `--yes` only for automation that
-should approve each startup request once. It reports a heartbeat while the host
-is preparing and waits until the terminal is ready; pass `--timeout 30s`,
-`--timeout 20m`, or a similar duration to stop this CLI from waiting earlier.
-The workspace supervisor owns activation, so it continues startup if the CLI
-wait ends.
+`vibestudio terminal` asks its startup approvals in the CLI before the browser
+starts; see [Terminal](#terminal).
 
 CLI credentials and agent sessions are stored below
 `${XDG_CONFIG_HOME:-~/.config}/vibestudio` with file mode `0600` for credential

@@ -17,7 +17,7 @@ real TTY ── terminal-browser (trusted app) ──RPC──▶ terminal-chat 
 - **Sandbox.** Userland terminal apps run in workerd as Durable Objects, governed
   by the same capability/approval/RPC machinery as every other unit — not as
   trusted Node processes.
-- **One screen owner.** Ink redraws with *relative* cursor motion (climb up N
+- **One screen owner.** Ink redraws with _relative_ cursor motion (climb up N
   lines, erase, rewrite) and assumes it solely owns the terminal. Two Inks (host
   chrome + worker) on one TTY corrupt each other. So the host runs a **headless
   VT emulator per session** (`@xterm/headless`), parses each worker's byte
@@ -35,14 +35,14 @@ Declare it in `package.json`:
     "entry": "worker.tsx",
     "durable": { "classes": [{ "className": "MyTerminalWorker" }] },
     "terminal": { "renderer": "ink" }, // marks it terminal-renderable
-    "persistent": true                  // resident DO (holds the live render tree)
+    "persistent": true, // resident DO (holds the live render tree)
   },
   "dependencies": {
     "@workspace/terminal-shim": "workspace:*",
     "@workspace/terminal-host-protocol": "workspace:*",
     "ink": "^6.0.0",
-    "react": "^19.0.0"
-  }
+    "react": "^19.0.0",
+  },
 }
 ```
 
@@ -77,7 +77,7 @@ bootstrap, persistence).
   Ink itself is unmodified.
 - **node shims.** `signal-exit` and `terminal-size` break in workerd; the build
   aliases them to terminal-shim replacements. `nodejs_compat` supplies
-  process/stream/events/Buffer, so those are *not* shimmed.
+  process/stream/events/Buffer, so those are _not_ shimmed.
 - **transport.** Terminal output is delivered as ordered discrete
   `terminal.onFrame` RPC calls (frames are small — Ink only redraws changed
   lines). The unified RPC transport work is adding stream routing everywhere,
@@ -102,7 +102,7 @@ core as the chat panel:
   identical message stream, so behavior matches: streaming deltas, thinking,
   tool-invocation cards, approval cards, model/provider config.
 - `HeadlessSession.createWithAgent({ model, thinkingLevel, approvalLevel,
-  systemPrompt })` does the panel-equivalent bootstrap (create channel +
+systemPrompt })` does the panel-equivalent bootstrap (create channel +
   subscribe agent DO + connect). `/model`, `/connect`, `/agents` reuse the same
   `providerConnect` presets and RPC the panel uses.
 
@@ -110,15 +110,33 @@ The one addition to the shared core was a public `HeadlessSession.onMessage()`
 (fires on every channel update incl. deltas) so non-React renderers can drive a
 re-render the same way the hooks do.
 
-## Interactive launch
+## Launching the browser
 
-Terminal apps that render a TUI declare `vibestudio.app.interactive: true`. The
-runner then launches them with stdio `"inherit"` (the process-adapter gained a
-`stdio` option), giving the app the real terminal (stdin/stdout/stderr) while
-keeping the IPC channel for graceful shutdown. This yields a usable TTY only
-when the server itself runs attached to an interactive terminal; the app exits
-with a clear message if stdin/stdout are not TTYs. Headless terminal CLIs (e.g.
-`remote-cli`) omit the flag and keep piped, log-captured stdio.
+The terminal browser (`system/apps/terminal-browser`, declared as the
+workspace's `hostTargets.terminal.app`) is a client app, like the desktop
+shell: the server builds it and the client runs it. It never runs as a server
+process. `vibestudio terminal` (or `pnpm terminal` from a source checkout; see
+[cli.md](cli.md#terminal)):
+
+1. Connects with its paired device credential, starting this machine's local
+   server first when it is not paired or that server is not running, and
+   routes to the account's System workspace unless `--workspace` names another.
+2. Runs the launch gate for the `terminal` target while the TTY is still in
+   line mode: build, startup approvals (asked as questions, or `--yes`), and
+   activation. `apps:available` reports terminal targets with
+   `launchMode: "client-module"`.
+3. Calls `auth.grantAppPrincipal([{ principal: "terminal-app", source }])` over
+   its own connection. The grant is bound to that connection's transport
+   endpoint, so it works over loopback and Iroh alike, and names the device's
+   app principal (`app:<source>:<deviceId>`) and the exact build it may run.
+4. Downloads that build's primary `index.mjs` through `gateway.fetch` of its
+   `/_a/<buildKey>/index.mjs` route, imports it in-process, and calls its
+   exported `run(host)`. The host contract is
+   `packages/shell-core/src/terminal/terminalBrowserHost.ts`.
+
+The CLI owns the TTY: it restores the terminal when the browser exits and runs
+another pass when the browser switches workspace or an adopted app update is
+observed while reconnecting.
 
 ## Color & attributes
 
@@ -137,6 +155,7 @@ identity from the `RpcEnvelope.delivery.caller`, never the self-reported
 provenance chain.
 
 How each layer obtains it:
+
 - **Point-to-point client** → `rpc.expose(method, (req) => …)`, with
   `req.caller`, `req.origin`, `req.args`, and provenance-scoped `req.rpc`.
 - **Durable Objects/workers** → the HTTP ingress receives an envelope from the
