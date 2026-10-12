@@ -64,8 +64,11 @@ transcript.
    and turn transitions.
 4. The driver appends canonical trajectory outcomes to GAD; selected events
    publish to the channel from that authoritative append.
-5. `useChannelMessages()` subscribes to replay + live channel events and
-   reduces them into `ChatMessage[]`.
+5. The client's `ChatSession` (`@workspace/agentic-core/chat-store`) feeds
+   replay + live channel events, including `message.delta` streaming signals,
+   into its `ChannelViewFeed`, which reduces them into `ChatMessage[]`. The
+   chat panel, `HeadlessSession` and the terminal chat all use this one
+   reduction.
 
 ## Application-owned orchestration
 
@@ -194,9 +197,11 @@ turn:
 
 The chat panel advertises its own methods, which agents see as tools through
 the mechanism above: `inline_ui`, `load_action_bar`, `inspect_card`,
-`client_eval` (`workspace/packages/agentic-chat/hooks/useAgenticChat.ts`) and
-`feedback_form` / `feedback_custom`
-(`hooks/features/useChatFeedback.ts`). Model-facing guidance lives in
+`client_eval` (`workspace/packages/agentic-chat/hooks/features/browserChatMethods.ts`,
+`hooks/features/clientEval.ts`) and `feedback_form` / `feedback_custom`
+(`hooks/features/useChatFeedback.ts`). Each browser feature registers its
+group through the session's method-provider port (`session.registerMethods`);
+a participant that cannot render a feature does not advertise it. Model-facing guidance lives in
 `workspace/skills/visualize` and `workspace/skills/sandbox`.
 
 When an inline UI, action bar, or card fails to render or rejects its props,
@@ -253,8 +258,8 @@ workspace/
 | Channel client package       | workspace package                     | Panel-side channel client and protocol types                                                  |
 | `@workspace/runtime`         | `workspace/packages/runtime/`         | DurableObjectBase, HttpRpcBridge                                                              |
 | `@workspace/agentic-do`      | `workspace/packages/agentic-do/`      | AgentVesselBase, AgentWorkerBase, ChannelClient, SubscriptionManager                        |
-| `@workspace/agentic-core`    | `workspace/packages/agentic-core/`    | Derived UI types, channel-view to chat projection, ConnectionManager                          |
-| `@workspace/agentic-chat`    | `workspace/packages/agentic-chat/`    | useChannelMessages, useChatCore, useAgenticChat                                               |
+| `@workspace/agentic-core`    | `workspace/packages/agentic-core/`    | Derived UI types, channel-view to chat projection, ConnectionManager, headless chat core (`/chat-store`: ChatSession, ChannelViewFeed, ChatHostController) |
+| `@workspace/agentic-chat`    | `workspace/packages/agentic-chat/`    | React UI and thin store bindings (useAgenticChat, useChatCore, useChatStore)                  |
 | Workers                      | `workspace/workers/`                  | e.g. `agent-worker`, `silent-agent-worker`                                                    |
 
 ## Further reading

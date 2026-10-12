@@ -71,8 +71,9 @@ exists now. The worker builds `ToolRegistration`s directly
   participants (or the one in `to`) and return the answer.
 - **Panel UI tools** — `inline_ui`, `load_action_bar`, `feedback_form`,
   `feedback_custom`, `client_eval`, `inspect_card` are methods advertised by
-  the chat panel (`agentic-chat/hooks/useAgenticChat.ts`,
-  `hooks/features/useChatFeedback.ts`). Render failures are reported back as
+  the chat panel (`agentic-chat/hooks/features/browserChatMethods.ts`,
+  `hooks/features/useChatFeedback.ts`), registered through the chat session's
+  method-provider port. Render failures are reported back as
   `ui.feedback` events (`UiFeedbackReporter.tsx`, `agentic-do/src/feedback-ingest.ts`).
   Model guidance: `workspace/skills/visualize`, `workspace/skills/sandbox`.
 - **Approval** — permission cards come from the host for sensitive

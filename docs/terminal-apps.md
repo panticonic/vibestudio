@@ -90,25 +90,21 @@ bootstrap, persistence).
 
 ## Shared chat core (terminal chat ≡ panel)
 
-The terminal chat is **not a reimplementation** — it runs on the same headless
-core as the chat panel:
+A terminal chat is **not a reimplementation** — it runs on the same headless
+core as the chat panel, `@workspace/agentic-core/chat-store`:
 
-- `@workspace/agentic-session` `HeadlessSession` (over `@workspace/agentic-core`
-  `ConnectionManager` + `reduceChannelView` + `chatMessagesFromChannelView`)
-  drives connection, agent subscription, the send/receive protocol, streaming,
-  and the `ChatMessage` model.
-- The panel wraps that core in React hooks (`useAgenticChat`/`useChatCore`); the
-  terminal wraps it in a thin `ChatViewModel` (the Ink analog). Both consume the
-  identical message stream, so behavior matches: streaming deltas, thinking,
-  tool-invocation cards, approval cards, model/provider config.
-- `HeadlessSession.createWithAgent({ model, thinkingLevel, approvalLevel,
-  systemPrompt })` does the panel-equivalent bootstrap (create channel +
-  subscribe agent DO + connect). `/model`, `/connect`, `/agents` reuse the same
-  `providerConnect` presets and RPC the panel uses.
+- `ChatSession` owns the connection (`stream` or `resident` delivery), the
+  transcript (`ChannelViewFeed`: durable events, `message.delta` streaming,
+  replay paging), roster, composer, outbox, first-agent bootstrap
+  (`session.deferredAgent`) and fork lineage (`session.forks`).
+- `ChatHostController` owns the host side (model settings, agent catalog,
+  channel bootstrap, installed agents and recovery) over a `StateArgsPort`
+  that a Durable Object can back with its own storage.
+- The panel binds these stores to React (`useAgenticChat`, `useChatCore`,
+  `useChatStore`); `HeadlessSession` wraps a resident `ChatSession` for tests;
+  an Ink UI subscribes to the same snapshots.
 
-The one addition to the shared core was a public `HeadlessSession.onMessage()`
-(fires on every channel update incl. deltas) so non-React renderers can drive a
-re-render the same way the hooks do.
+See `workspace/packages/agentic-core/src/chat-store/README.md` for the API.
 
 ## Interactive launch
 
