@@ -40,18 +40,21 @@ test("macOS candidate provenance binds the archive, afterPack receipt, version, 
     fs.writeFileSync(provenancePath, JSON.stringify(manifest));
 
     assert.equal(
-      (await verifyReleaseAppProvenance({
-        archivePath,
-        provenancePath,
-        packagePath,
-        releaseTag: "v1.2.3",
-        sourceSha,
-      })).sourceSha,
+      (
+        await verifyReleaseAppProvenance({
+          archivePath,
+          provenancePath,
+          packagePath,
+          releaseTag: "v1.2.3",
+          sourceSha,
+        })
+      ).sourceSha,
       sourceSha
     );
     fs.writeFileSync(archivePath, "different archive");
     await assert.rejects(
-      () => verifyReleaseAppProvenance({
+      () =>
+        verifyReleaseAppProvenance({
           archivePath,
           provenancePath,
           packagePath,

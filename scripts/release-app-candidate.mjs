@@ -115,7 +115,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         sourceSha,
       });
     } else {
-      throw new Error("Usage: release-app-candidate.mjs create|verify ARCHIVE PROVENANCE TAG SOURCE_SHA");
+      throw new Error(
+        "Usage: release-app-candidate.mjs create|verify ARCHIVE PROVENANCE TAG SOURCE_SHA"
+      );
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

@@ -174,7 +174,10 @@ test("native artifact consumers wait for their exact producers without unrelated
   const linuxDownload = appSteps.find(
     (step) => step.name === "Download this architecture's tested MXC payload"
   );
-  assert.equal(linuxDownload.with.name, "native-isolation-linux-\${{ inputs.arch }}-\${{ github.sha }}");
+  assert.equal(
+    linuxDownload.with.name,
+    "native-isolation-linux-\${{ inputs.arch }}-\${{ github.sha }}"
+  );
   assert.equal(
     linuxDownload.with.path,
     "native/isolation/artifacts/native-isolation-linux-\${{ inputs.arch }}"
@@ -575,10 +578,17 @@ test("native artifact consumers wait for their exact producers without unrelated
   const ciJobs = await readCiJobs();
   const linuxSigner = ciJobs["sign-linux-release-candidate"];
   assert.deepEqual(dependenciesOf(linuxSigner), ["linux-installer-x64", "linux-installer-arm64"]);
-  assert.equal(linuxSigner.if, "\${{ inputs.release-preparation && vars.RELEASE_LINUX == 'true' }}");
+  assert.equal(
+    linuxSigner.if,
+    "\${{ inputs.release-preparation && vars.RELEASE_LINUX == 'true' }}"
+  );
   assert.match(JSON.stringify(linuxSigner.steps), /scripts\/publish\/sign-linux-installers\.sh/u);
   assert.match(JSON.stringify(linuxSigner.steps), /verify-rpm-signatures|SHA256SUMS-linux/u);
-  assert.ok(linuxSigner.steps.some((step) => step.with?.name === "vibestudio-linux-release-\${{ github.sha }}"));
+  assert.ok(
+    linuxSigner.steps.some(
+      (step) => step.with?.name === "vibestudio-linux-release-\${{ github.sha }}"
+    )
+  );
   assert.doesNotMatch(JSON.stringify(releaseJobs["publish-linux"]), /LINUX_SIGNING_KEY/u);
   assert.ok(
     releaseJobs["publish-linux"].steps.some(
@@ -591,15 +601,21 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.equal(macJob.if, "\${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' }}");
   const macSteps = macJob.steps;
   assert.ok(macSteps.some((step) => step.name === "Verify exact macOS app archive provenance"));
-  assert.ok(macSteps.some((step) => /--prepackaged release\/Vibestudio\.app/u.test(step.run ?? "")));
-  assert.ok(macSteps.some((step) => step.name === "Restore and verify the exact tested application"));
+  assert.ok(
+    macSteps.some((step) => /--prepackaged release\/Vibestudio\.app/u.test(step.run ?? ""))
+  );
+  assert.ok(
+    macSteps.some((step) => step.name === "Restore and verify the exact tested application")
+  );
   assert.doesNotMatch(JSON.stringify(macSteps), /pnpm build(?:\s|$)/u);
   assert.ok(
     macSteps.some((step) => step.name === "Download source-attested Darwin process observers"),
     "the release candidate packages CI's source-attested observers"
   );
 
-  assert.deepEqual(dependenciesOf(ciJobs["accept-macos-release-candidate"]), ["macos-release-candidate"]);
+  assert.deepEqual(dependenciesOf(ciJobs["accept-macos-release-candidate"]), [
+    "macos-release-candidate",
+  ]);
   assert.ok(
     !transitiveDependencies(ciJobs, "macos-release-candidate").has("quality"),
     "macOS installer production starts from the candidate without waiting for unrelated quality checks"

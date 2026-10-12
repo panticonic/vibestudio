@@ -53,9 +53,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
     const version = checkCommittedReleaseVersion(tag);
     const sourceShaIndex = process.argv.indexOf("--source-sha");
-    const sourceSha = sourceShaIndex >= 0
-      ? process.argv[sourceShaIndex + 1]
-      : process.env.RELEASE_SOURCE_SHA;
+    const sourceSha =
+      sourceShaIndex >= 0 ? process.argv[sourceShaIndex + 1] : process.env.RELEASE_SOURCE_SHA;
     if (sourceShaIndex >= 0 && !sourceSha) {
       throw new Error("--source-sha requires a full Git object ID");
     }
