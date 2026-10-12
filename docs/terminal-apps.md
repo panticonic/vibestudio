@@ -198,6 +198,24 @@ Only the attached browser may call `terminalInput`, `terminalResize`,
 `terminalFocus` and `terminalReply`; `InkTerminalSessionHost` rejects every
 other caller.
 
+## Chat in a terminal app
+
+A terminal chat is not a reimplementation of the chat panel: both run on the
+same headless core, `@workspace/agentic-core/chat-store`.
+
+- `ChatSession` owns the connection (`stream` or `resident` delivery), the
+  transcript (`ChannelViewFeed`: durable events, `message.delta` streaming,
+  replay paging), roster, composer, outbox, first-agent bootstrap
+  (`session.deferredAgent`) and fork lineage (`session.forks`).
+- `ChatHostController` owns the host side (model settings, agent catalog,
+  channel bootstrap, installed agents and recovery) over a `StateArgsPort`
+  that a Durable Object backs with its own storage.
+- The panel binds these stores to React (`useAgenticChat`, `useChatCore`,
+  `useChatStore`); `HeadlessSession` wraps a resident `ChatSession` for tests;
+  an Ink UI subscribes to the same snapshots.
+
+See `workspace/packages/agentic-core/src/chat-store/README.md` for the API.
+
 ## Protocol reference
 
 `@workspace/terminal-host-protocol` defines one method table,
