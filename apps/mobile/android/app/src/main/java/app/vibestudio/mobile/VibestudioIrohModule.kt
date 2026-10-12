@@ -1,6 +1,7 @@
 package app.vibestudio.mobile
 
 import android.content.Context
+import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -172,13 +173,32 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     }
 
     @ReactMethod fun openBi(handle: String, promise: Promise) = launch(promise) {
-        streamResult(requireConnection(handle).openBi(), handle)
+        val startedAt = SystemClock.elapsedRealtimeNanos()
+        Log.i(TAG, "diagnostic openBi start connection=$handle atNs=$startedAt")
+        streamResult(requireConnection(handle).openBi(), handle).also {
+            Log.i(
+                TAG,
+                "diagnostic openBi complete connection=$handle elapsedNs=${SystemClock.elapsedRealtimeNanos() - startedAt}"
+            )
+        }
     }
     @ReactMethod fun acceptBi(handle: String, promise: Promise) = launch(promise) {
         streamResult(requireConnection(handle).acceptBi(), handle)
     }
     @ReactMethod fun write(handle: String, value: String, promise: Promise) = launch(promise) {
-        requireSend(handle).writeAll(Base64.decode(value, Base64.NO_WRAP)); null
+        val bytes = Base64.decode(value, Base64.NO_WRAP)
+        val byteLength = bytes.size
+        val startedAt = SystemClock.elapsedRealtimeNanos()
+        Log.i(
+            TAG,
+            "diagnostic write start send=$handle byteLength=$byteLength atNs=$startedAt"
+        )
+        requireSend(handle).writeAll(bytes)
+        Log.i(
+            TAG,
+            "diagnostic write complete send=$handle byteLength=$byteLength elapsedNs=${SystemClock.elapsedRealtimeNanos() - startedAt}"
+        )
+        null
     }
     @ReactMethod fun finish(handle: String, promise: Promise) = launch(promise) {
         requireSend(handle).finish(); removeSend(handle); null
@@ -215,7 +235,16 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     }
 
     @ReactMethod fun connectionClosed(handle: String, promise: Promise) = launch(promise) {
-        requireConnection(handle).closed()
+        Log.i(
+            TAG,
+            "diagnostic connectionClosed wait connection=$handle atNs=${SystemClock.elapsedRealtimeNanos()}"
+        )
+        requireConnection(handle).closed().also {
+            Log.i(
+                TAG,
+                "diagnostic connectionClosed settled connection=$handle atNs=${SystemClock.elapsedRealtimeNanos()}"
+            )
+        }
     }
 
     private fun connectionResult(connection: Connection) = Arguments.createMap().apply {
@@ -233,6 +262,10 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
             }
             connections[handle] = connection
         }
+        Log.i(
+            TAG,
+            "diagnostic connection created connection=$handle peerEndpointId=${connection.remoteId()} atNs=${SystemClock.elapsedRealtimeNanos()}"
+        )
         putString("connectionHandle", handle)
         putString("peerEndpointId", connection.remoteId().toString())
     }

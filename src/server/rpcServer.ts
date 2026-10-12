@@ -29,6 +29,7 @@ import { isLocalWorkspaceTarget, WORKSPACE_RPC_NOT_ADMITTED } from "./rpcServer/
 
 import { WebSocketServer } from "ws";
 import { createHmac, randomBytes, randomUUID } from "crypto";
+import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { WorkspaceChildHubPort } from "./workspaceChildHubPort.js";
@@ -212,6 +213,7 @@ import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
 
 const log = createDevLogger("RpcServer");
+let nextIrohDiagnosticConnectionId = 1;
 const RPC_RUNTIME_ID_HEADER = "x-vibestudio-runtime-id";
 const ADMIN_RPC_AUTH_ERROR =
   "Admin token cannot authenticate RPC; use a caller-scoped token or connection grant.";
@@ -5722,6 +5724,8 @@ export class RpcServer {
     if (this.isShuttingDown()) {
       throw new Error("RpcServer has stopped and cannot attach an Iroh connection");
     }
+    const diagnosticConnectionId = nextIrohDiagnosticConnectionId++;
+    const attachStartedAt = performance.now();
     const preauth = async <T>(operation: Promise<T>): Promise<T> => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -5739,7 +5743,14 @@ export class RpcServer {
         if (timer) clearTimeout(timer);
       }
     };
+    const controlAcceptStartedAt = performance.now();
     const control = await preauth(connection.acceptBi());
+    log.info("Iroh diagnostic control stream accepted", {
+      diagnosticConnectionId,
+      acceptMs: Math.round((performance.now() - controlAcceptStartedAt) * 100) / 100,
+      attachMs: Math.round((performance.now() - attachStartedAt) * 100) / 100,
+      peerEndpointId: connection.peerEndpointId,
+    });
     const preamble = await preauth(readIrohStreamPreamble(control.recv));
     if (preamble.k !== "control") {
       throw new Error(`First Iroh stream must be control, received ${preamble.k}`);
@@ -5750,6 +5761,31 @@ export class RpcServer {
     if (hello.t !== IROH_SESSION_HELLO || hello.contractVersion !== RPC_CONTRACT_VERSION) {
       throw new Error("Iroh peer has an incompatible RPC contract");
     }
+    log.info("Iroh diagnostic connection attached", {
+      diagnosticConnectionId,
+      peerEndpointId: connection.peerEndpointId,
+      attachedAt: Date.now(),
+      elapsedMs: Math.round((performance.now() - attachStartedAt) * 100) / 100,
+    });
+    const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+    eventLoopDelay.enable();
+    const eventLoopTimer = setInterval(() => {
+      log.info("Iroh diagnostic event loop", {
+        diagnosticConnectionId,
+        sampledAt: Date.now(),
+        p99Ms: Math.round((eventLoopDelay.percentile(99) / 1e6) * 100) / 100,
+        maxMs: Math.round((eventLoopDelay.max / 1e6) * 100) / 100,
+      });
+      eventLoopDelay.reset();
+    }, 1_000);
+    eventLoopTimer.unref();
+    let eventLoopDiagnosticsStopped = false;
+    const stopEventLoopDiagnostics = (): void => {
+      if (eventLoopDiagnosticsStopped) return;
+      eventLoopDiagnosticsStopped = true;
+      clearInterval(eventLoopTimer);
+      eventLoopDelay.disable();
+    };
 
     let controlTail = Promise.resolve();
     const writeControl = (frame: IrohSessionControlFrame): Promise<void> => {
@@ -5771,9 +5807,16 @@ export class RpcServer {
     // the expensive unauthenticated phase regardless of transport.
     const sessions = new Map<string, IrohRpcSessionChannel>();
     let stopped = false;
-    const closeAll = (reason: string): void => {
+    const closeAll = (reason: string, outcome = "connection-closed"): void => {
       if (stopped) return;
       stopped = true;
+      stopEventLoopDiagnostics();
+      log.info("Iroh diagnostic connection closed", {
+        diagnosticConnectionId,
+        peerEndpointId: connection.peerEndpointId,
+        closedAt: Date.now(),
+        outcome,
+      });
       for (const session of sessions.values()) session.remoteClosed(1006, reason);
       sessions.clear();
     };
@@ -5849,10 +5892,20 @@ export class RpcServer {
       // ConnectionLost(LocallyClosed) from inside this detached catch handler.
       if (stopped) return;
       const reason = error instanceof Error ? error.message : String(error);
-      closeAll(reason);
+      log.warn("Iroh diagnostic connection failed", {
+        diagnosticConnectionId,
+        peerEndpointId: connection.peerEndpointId,
+        failedAt: Date.now(),
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      closeAll(reason, "control-or-stream-loop-failure");
       connection.close(0x200n, new TextEncoder().encode(reason));
     };
-    const handleStream = async (stream: IrohPhysicalBiStream): Promise<void> => {
+    const handleStream = async (
+      stream: IrohPhysicalBiStream,
+      acceptStartedAt: number,
+      acceptedAt: number
+    ): Promise<void> => {
       const streamPreamble = await readIrohStreamPreamble(stream.recv);
       if (streamPreamble.k === "control") {
         throw new Error("Duplicate Iroh control stream");
@@ -5860,6 +5913,15 @@ export class RpcServer {
       if (streamPreamble.k === "message") {
         throw new Error("Client-opened Iroh message streams are not valid");
       }
+      log.info("Iroh diagnostic stream preamble received", {
+        diagnosticConnectionId,
+        peerEndpointId: connection.peerEndpointId,
+        preambleAt: Date.now(),
+        acceptMs: Math.round((acceptedAt - acceptStartedAt) * 100) / 100,
+        sid: streamPreamble.sid,
+        requestId: streamPreamble.k === "stream" ? streamPreamble.requestId : undefined,
+        kind: streamPreamble.k,
+      });
       const session = sessions.get(streamPreamble.sid);
       if (!session) {
         await Promise.all([
@@ -5874,6 +5936,16 @@ export class RpcServer {
           await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES)
         )
       ) as RpcEnvelope;
+      log.info("Iroh diagnostic RPC stream received", {
+        diagnosticConnectionId,
+        peerEndpointId: connection.peerEndpointId,
+        receivedAt: Date.now(),
+        preambleToEnvelopeMs: Math.round((performance.now() - acceptedAt) * 100) / 100,
+        sid: streamPreamble.sid,
+        requestId:
+          "requestId" in envelope.message ? envelope.message.requestId : undefined,
+        kind: streamPreamble.k,
+      });
       const body =
         streamPreamble.k === "stream" && streamPreamble.body
           ? irohReceiveStreamBody(stream.recv)
@@ -5887,13 +5959,15 @@ export class RpcServer {
           await Promise.race(pendingHeaders);
           continue;
         }
+        const acceptStartedAt = performance.now();
         const stream = await connection.acceptBi();
+        const acceptedAt = performance.now();
         // Reading one stream's bounded preamble/envelope must not block
         // admission of independent later streams. The replenishing native
         // stream window is the finite resource boundary; a second pending-
         // header ceiling would reject valid startup work merely because an
         // unrelated stream is waiting on a busy JS scheduler.
-        const work = handleStream(stream)
+        const work = handleStream(stream, acceptStartedAt, acceptedAt)
           .catch((error) => {
             // QUIC request streams are independent failure domains. A bad or
             // partial stream is reset without discarding healthy logical
@@ -5911,9 +5985,11 @@ export class RpcServer {
 
     void controlLoop().catch(fail);
     void streamLoop().catch(fail);
-    void connection
-      .closed()
-      .then(closeAll, (error) => closeAll(error instanceof Error ? error.message : String(error)));
+    void connection.closed().then(
+      (reason) => closeAll(reason, "closed-resolved"),
+      (error) =>
+        closeAll(error instanceof Error ? error.message : String(error), "closed-rejected")
+    );
   }
 
   /** Handle an HTTP POST /rpc from the gateway (in-process dispatch). */

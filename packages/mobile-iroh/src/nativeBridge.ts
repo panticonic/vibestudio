@@ -60,6 +60,10 @@ interface IrohNativeModule {
   connectionClosed(connectionHandle: string): Promise<string>;
 }
 
+function logIrohDiagnostic(event: string, fields: Record<string, string | number>): void {
+  console.info("[mobile-iroh-diagnostic]", JSON.stringify({ event, at: Date.now(), ...fields }));
+}
+
 function module(): IrohNativeModule {
   const native = NativeModules["VibestudioIroh"] as IrohNativeModule | undefined;
   if (!native) throw new Error("The Vibestudio Iroh native module is not installed");
@@ -84,10 +88,29 @@ function decodeBase64(value: string): Uint8Array {
 class MobileSendStream implements IrohPhysicalSendStream {
   constructor(private readonly handle: string) {}
   writeAll(bytes: Uint8Array): Promise<void> {
-    return module().write(this.handle, encodeBase64(bytes));
+    const startedAt = Date.now();
+    logIrohDiagnostic("write-start", { sendHandle: this.handle, byteLength: bytes.byteLength });
+    return module()
+      .write(this.handle, encodeBase64(bytes))
+      .then(() =>
+        logIrohDiagnostic("write-complete", {
+          sendHandle: this.handle,
+          byteLength: bytes.byteLength,
+          elapsedMs: Date.now() - startedAt,
+        })
+      );
   }
   finish(): Promise<void> {
-    return module().finish(this.handle);
+    const startedAt = Date.now();
+    logIrohDiagnostic("finish-start", { sendHandle: this.handle });
+    return module()
+      .finish(this.handle)
+      .then(() =>
+        logIrohDiagnostic("finish-complete", {
+          sendHandle: this.handle,
+          elapsedMs: Date.now() - startedAt,
+        })
+      );
   }
   reset(errorCode: bigint): Promise<void> {
     return module().reset(this.handle, errorCode.toString());
@@ -129,18 +152,33 @@ export class MobileConnection implements IrohPhysicalConnection {
     peerEndpointId: string
   ) {
     this.peerEndpointId = peerEndpointId;
+    logIrohDiagnostic("connection-created", { connectionHandle: handle, peerEndpointId });
   }
   async openBi(): Promise<IrohPhysicalBiStream> {
-    return stream(await module().openBi(this.handle));
+    const startedAt = Date.now();
+    logIrohDiagnostic("open-bi-start", { connectionHandle: this.handle });
+    const pair = await module().openBi(this.handle);
+    logIrohDiagnostic("open-bi-complete", {
+      connectionHandle: this.handle,
+      sendHandle: pair.sendHandle,
+      receiveHandle: pair.receiveHandle,
+      elapsedMs: Date.now() - startedAt,
+    });
+    return stream(pair);
   }
   async acceptBi(): Promise<IrohPhysicalBiStream> {
     return stream(await module().acceptBi(this.handle));
   }
   close(code: bigint, reason: Uint8Array): void {
+    logIrohDiagnostic("connection-close-requested", { connectionHandle: this.handle });
     module().closeConnection(this.handle, code.toString(), encodeBase64(reason));
   }
   closed(): Promise<string> {
-    return module().connectionClosed(this.handle);
+    logIrohDiagnostic("connection-closed-wait-start", { connectionHandle: this.handle });
+    return module().connectionClosed(this.handle).then((reason) => {
+      logIrohDiagnostic("connection-closed", { connectionHandle: this.handle });
+      return reason;
+    });
   }
 }
 
