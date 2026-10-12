@@ -22,6 +22,79 @@ function setup() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("mobile smoke log lifecycle", () => {
+  it("streams bounded Iroh diagnostics with redacted handles despite AndroidRuntime noise", async () => {
+    const { child, log } = setup();
+    const connection = "native-connection-secret";
+    const send = "native-send-secret";
+    child.stdout.write(
+      `I/VibestudioIroh( 3938): diagnostic connection created connection=${connection} ` +
+        "peerEndpointId=private-peer-id atNs=100\n"
+    );
+    child.stdout.write(
+      `I/ReactNativeJS( 3938): [mobile-iroh-diagnostic] ${JSON.stringify({
+        event: "open-bi-start",
+        at: 101,
+        connectionHandle: connection,
+        peerEndpointId: "private-peer-id",
+      })}\n`
+    );
+    child.stdout.write(
+      `I/VibestudioIroh( 3938): diagnostic openBi start connection=${connection} atNs=102\n`
+    );
+    child.stdout.write(
+      `I/VibestudioIroh( 3938): diagnostic write start send=${send} byteLength=12 atNs=103\n`
+    );
+    child.stdout.write(
+      `I/ReactNativeJS( 3938): [mobile-iroh-diagnostic] ${JSON.stringify({
+        event: "write-start",
+        at: 104,
+        sendHandle: send,
+        byteLength: 12,
+        payload: "must-not-be-forwarded",
+      })}\n`
+    );
+    for (let index = 0; index < 250; index += 1) {
+      child.stdout.write(`D/AndroidRuntime( ${index}): uiautomator polling noise\n`);
+    }
+
+    await expect(log.waitForPhase("missing", Date.now() - 1)).rejects.toThrow(
+      "Timed out waiting for smoke phase missing"
+    );
+    const forwarded = vi
+      .mocked(console.log)
+      .mock.calls.map(([line]) => String(line))
+      .filter((line) => line.startsWith("[mobile-iroh-diagnostic]"));
+    expect(forwarded).toHaveLength(5);
+    expect(forwarded.join("\n")).toContain('"event":"connection-created"');
+    expect(forwarded.join("\n")).toContain('"event":"open-bi-start"');
+    expect(forwarded.join("\n")).toContain('"event":"write-start"');
+    expect(forwarded.join("\n")).toContain('"connection":"connection-1"');
+    expect(forwarded.join("\n")).toContain('"send":"send-1"');
+    expect(forwarded.join("\n")).not.toContain(connection);
+    expect(forwarded.join("\n")).not.toContain(send);
+    expect(forwarded.join("\n")).not.toContain("private-peer-id");
+    expect(forwarded.join("\n")).not.toContain("must-not-be-forwarded");
+    expect(forwarded.join("\n")).not.toContain("uiautomator polling noise");
+  });
+
+  it("caps forwarded Iroh diagnostics and reports truncation once", () => {
+    const { child } = setup();
+    for (let index = 0; index < 2_005; index += 1) {
+      child.stdout.write(
+        `I/ReactNativeJS( 3938): [mobile-iroh-diagnostic] ${JSON.stringify({
+          event: "write-start",
+          at: index,
+        })}\n`
+      );
+    }
+    const forwarded = vi
+      .mocked(console.log)
+      .mock.calls.map(([line]) => String(line))
+      .filter((line) => line.startsWith("[mobile-iroh-diagnostic]"));
+    expect(forwarded).toHaveLength(2_001);
+    expect(forwarded.at(-1)).toContain('"event":"truncated"');
+  });
+
   it("reports destruction of the active app process with Android's original cause", async () => {
     const { child, log } = setup();
     child.stdout.write("I/ReactNativeJS( 4457): [VibestudioMobileSmoke] phase=ready\n");
