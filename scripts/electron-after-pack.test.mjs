@@ -35,7 +35,7 @@ test("after-pack diagnostics render nested operation and cleanup failures", asyn
   assert.match(diagnostic, /owned package process exited with status 7/);
 });
 
-test("hook module imports without loading the RPC build output", () => {
+test("prepackaged Electron hooks import without loading the RPC build output", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "after-pack-import-test-"));
   roots.push(root);
   const loader = path.join(root, "block-rpc-loader.mjs");
@@ -54,7 +54,7 @@ test("hook module imports without loading the RPC build output", () => {
       loader,
       "--input-type=module",
       "-e",
-      'await import("./scripts/electron-after-pack.mjs")',
+      'await Promise.all([import("./scripts/stage-electron-native-isolation.mjs"), import("./scripts/electron-runtime-module-files.mjs"), import("./scripts/electron-after-pack.mjs")])',
     ],
     { cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."), encoding: "utf8" }
   );

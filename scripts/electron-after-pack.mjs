@@ -6,25 +6,28 @@ import { writeAfterPackCompletion } from "./lib/after-pack-completion.mjs";
  */
 export async function afterPack(context) {
   try {
-    const { failIfOperationOutlivesEventLoop } = await import(
-      "./lib/pending-operation-lifecycle.mjs"
-    );
+    const { failIfOperationOutlivesEventLoop } =
+      await import("./lib/pending-operation-lifecycle.mjs");
     await failIfOperationOutlivesEventLoop(
       completeAfterPack(context),
       `electron-builder afterPack for ${context.electronPlatformName}/${context.arch}`
     );
   } catch (error) {
     process.exitCode = 1;
-    await reportAfterPackFailure(error);
+    try {
+      await reportAfterPackFailure(error);
+    } catch (diagnosticError) {
+      // The formatter itself may be unavailable when a build dependency failed
+      // to load. Reporting must never replace the failure from the hook.
+      console.error(error);
+      console.error("Failed to format electron afterPack error", diagnosticError);
+    }
     throw error;
   }
 }
 
 /** Run every configured hook stage before publishing the owned completion witness. */
-export async function completeAfterPack(
-  context,
-  overrides = {}
-) {
+export async function completeAfterPack(context, overrides = {}) {
   // electron-builder imports this module even for --prepackaged, where it
   // skips afterPack. Keep application-build dependencies out of that import.
   const [boundary, release, signing] = await Promise.all([
