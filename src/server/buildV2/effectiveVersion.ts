@@ -249,7 +249,8 @@ export async function persistEvState(
 // "34": module registries distinguish owned exports from missing and inherited entries.
 // "35": owned dependency resolution preserves esbuild's guarded optional imports.
 // "36": worker entries expose constructor-free preparation of exact executable units.
-const BUILD_CACHE_VERSION = "36";
+// "37": worker and terminal app builds compile TSX with the automatic JSX runtime.
+const BUILD_CACHE_VERSION = "37";
 
 /** Build identity shared by runtime artifact manifests and build-key derivation. */
 export function buildCompilerProtocolIdentity(): {

@@ -88,7 +88,7 @@ describe("buildUnit terminal worker builds", () => {
           entry: "worker.ts",
           sourcemap: true,
           durable: { classes: [{ className: "TerminalMin" }] },
-          terminal: { renderer: "ink" },
+          terminal: { renderer: "ink", title: "Terminal min" },
         },
         dependencies: { "@workspace/terminal-shim": "workspace:*", "yoga-layout": "^3.2.1" },
       })
@@ -142,6 +142,54 @@ describe("buildUnit terminal worker builds", () => {
     expect(bundle).toContain("yoga.wasm");
     expect(bundle).toContain("//# sourceMappingURL=bundle.js.map");
     expect(bundle).not.toContain("sourceMappingURL=data:");
+  }, 60_000);
+
+  it("compiles TSX with the automatic JSX runtime, like the userland type-check", async () => {
+    const workerDir = path.join(workspaceRoot, "workers", "jsx-worker");
+    fs.mkdirSync(workerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(workerDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-workers/jsx-worker",
+        version: "0.1.0",
+        private: true,
+        type: "module",
+        vibestudio: {
+          entry: "worker.tsx",
+          durable: { classes: [{ className: "JsxWorker" }] },
+        },
+        dependencies: { react: "^19.0.0" },
+      })
+    );
+    // No React import: a classic-runtime build would fail with "React is not defined".
+    fs.writeFileSync(
+      path.join(workerDir, "worker.tsx"),
+      [
+        "export class JsxWorker {",
+        "  async fetch() {",
+        '    const element = <span title="x" />;',
+        "    return new Response(String(element.type));",
+        "  }",
+        "}",
+      ].join("\n")
+    );
+    commit(workerDir, "jsx worker");
+
+    const graph = discoverPackageGraph(workspaceRoot);
+    const result = await buildUnit(
+      session,
+      graph.get("@workspace-workers/jsx-worker"),
+      "b".repeat(64),
+      graph,
+      workspaceRoot,
+      SOURCE_STATE_HASH
+    );
+    const bundle = result.artifacts
+      .filter((artifact) => artifact.encoding !== "base64")
+      .map((artifact) => artifact.content)
+      .join("\n");
+    expect(bundle).not.toMatch(/createElement\("span"/);
+    expect(bundle).toMatch(/jsx(?:DEV)?\)?\("span"/);
   }, 60_000);
 
   it("prefers workspace package source over stale build-output exports", async () => {
