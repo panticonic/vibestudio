@@ -5093,68 +5093,72 @@ export class RpcServer {
   ): Promise<unknown> {
     const workerAdmission = (await this.resolveWorkerAdmissionFn?.(targetId)) ?? null;
     if (!workerAdmission) throw new Error(`Worker not found: ${targetId}`);
-    if (!this.workerdUrl) throw new Error("workerdUrl not configured");
+    try {
+      if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
-    const caller = { callerId, callerKind };
-    const envelope = envelopeFromMessage({
-      selfId: callerId,
-      from: callerId,
-      target: targetId,
-      caller,
-      ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
-      ...(meta?.readOnly ? { readOnly: true } : {}),
-      message: {
-        type: "request",
-        requestId: meta?.requestId ?? randomUUID(),
-        fromId: callerId,
-        method,
-        args,
-        ...(meta?.causalParent ? { causalParent: meta.causalParent } : {}),
-      },
-    });
+      const caller = { callerId, callerKind };
+      const envelope = envelopeFromMessage({
+        selfId: callerId,
+        from: callerId,
+        target: targetId,
+        caller,
+        ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
+        ...(meta?.readOnly ? { readOnly: true } : {}),
+        message: {
+          type: "request",
+          requestId: meta?.requestId ?? randomUUID(),
+          fromId: callerId,
+          method,
+          args,
+          ...(meta?.causalParent ? { causalParent: meta.causalParent } : {}),
+        },
+      });
 
-    const url = `${this.workerdUrl}/${encodeURIComponent(workerAdmission.name)}/__rpc`;
-    const { getWorkerdConnectionDispatcher } = await import("./workerdRpcRelay.js");
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...workerExecutableHeaders(workerAdmission),
-        ...(this.workerdGatewayToken
-          ? { Authorization: `Bearer ${this.workerdGatewayToken}` }
-          : {}),
-      },
-      body: encodeRpcJson(envelope),
-      ...(meta?.signal ? { signal: meta.signal } : {}),
-      dispatcher: getWorkerdConnectionDispatcher(url),
-    } as RequestInit);
+      const url = `${this.workerdUrl}/${encodeURIComponent(workerAdmission.name)}/__rpc`;
+      const { getWorkerdConnectionDispatcher } = await import("./workerdRpcRelay.js");
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...workerExecutableHeaders(workerAdmission),
+          ...(this.workerdGatewayToken
+            ? { Authorization: `Bearer ${this.workerdGatewayToken}` }
+            : {}),
+        },
+        body: encodeRpcJson(envelope),
+        ...(meta?.signal ? { signal: meta.signal } : {}),
+        dispatcher: getWorkerdConnectionDispatcher(url),
+      } as RequestInit);
 
-    if (!res.ok) {
-      let text: string;
-      try {
-        text = await res.text();
-      } catch (error) {
-        throw new Error(
-          `Worker relay to ${targetId} failed (${res.status}) and response body could not be read: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
+      if (!res.ok) {
+        let text: string;
+        try {
+          text = await res.text();
+        } catch (error) {
+          throw new Error(
+            `Worker relay to ${targetId} failed (${res.status}) and response body could not be read: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+        throw workerRelayFailure(targetId, res.status, text);
       }
-      throw workerRelayFailure(targetId, res.status, text);
-    }
 
-    const responseEnvelope = decodeRpcJson(await res.text()) as RpcEnvelope | undefined;
-    const responseMessage = responseEnvelope?.message as RpcResponse | undefined;
-    if (responseMessage && responseMessage.type === "response") {
-      if ("error" in responseMessage) {
-        const error = deserializeRpcFailure(responseMessage.error);
-        if (responseMessage.error.diagnosticId)
-          attachRpcDiagnosticId(error, responseMessage.error.diagnosticId);
-        throw error;
+      const responseEnvelope = decodeRpcJson(await res.text()) as RpcEnvelope | undefined;
+      const responseMessage = responseEnvelope?.message as RpcResponse | undefined;
+      if (responseMessage && responseMessage.type === "response") {
+        if ("error" in responseMessage) {
+          const error = deserializeRpcFailure(responseMessage.error);
+          if (responseMessage.error.diagnosticId)
+            attachRpcDiagnosticId(error, responseMessage.error.diagnosticId);
+          throw error;
+        }
+        return responseMessage.result;
       }
-      return responseMessage.result;
+      throw new Error(`Worker relay to ${targetId} returned a malformed response envelope`);
+    } finally {
+      workerAdmission.release?.();
     }
-    throw new Error(`Worker relay to ${targetId} returned a malformed response envelope`);
   }
 
   /**
@@ -5260,43 +5264,47 @@ export class RpcServer {
     if (targetId.startsWith("worker:")) {
       const workerAdmission = (await this.resolveWorkerAdmissionFn?.(targetId)) ?? null;
       if (!workerAdmission) throw new Error(`Worker not found: ${targetId}`);
-      if (!this.workerdUrl) throw new Error("workerdUrl not configured");
+      try {
+        if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
-      const eventEnvelope = envelopeFromMessage({
-        selfId: fromId,
-        from: fromId,
-        target: targetId,
-        caller: { callerId: fromId, callerKind: fromKind },
-        message: { type: "event", fromId, event, payload },
-      });
-      const { getWorkerdConnectionDispatcher } = await import("./workerdRpcRelay.js");
-      const url = `${this.workerdUrl}/${encodeURIComponent(workerAdmission.name)}/__rpc`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...workerExecutableHeaders(workerAdmission),
-          ...(this.workerdGatewayToken
-            ? { Authorization: `Bearer ${this.workerdGatewayToken}` }
-            : {}),
-        },
-        body: encodeRpcJson(eventEnvelope),
-        dispatcher: getWorkerdConnectionDispatcher(url),
-      } as RequestInit);
-      if (!res.ok) {
-        let text: string;
-        try {
-          text = await res.text();
-        } catch (error) {
-          throw new Error(
-            `Event relay to ${targetId} failed (${res.status}) and response body could not be read: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
+        const eventEnvelope = envelopeFromMessage({
+          selfId: fromId,
+          from: fromId,
+          target: targetId,
+          caller: { callerId: fromId, callerKind: fromKind },
+          message: { type: "event", fromId, event, payload },
+        });
+        const { getWorkerdConnectionDispatcher } = await import("./workerdRpcRelay.js");
+        const url = `${this.workerdUrl}/${encodeURIComponent(workerAdmission.name)}/__rpc`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...workerExecutableHeaders(workerAdmission),
+            ...(this.workerdGatewayToken
+              ? { Authorization: `Bearer ${this.workerdGatewayToken}` }
+              : {}),
+          },
+          body: encodeRpcJson(eventEnvelope),
+          dispatcher: getWorkerdConnectionDispatcher(url),
+        } as RequestInit);
+        if (!res.ok) {
+          let text: string;
+          try {
+            text = await res.text();
+          } catch (error) {
+            throw new Error(
+              `Event relay to ${targetId} failed (${res.status}) and response body could not be read: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+          throw workerRelayFailure(targetId, res.status, text);
         }
-        throw workerRelayFailure(targetId, res.status, text);
+        return;
+      } finally {
+        workerAdmission.release?.();
       }
-      return;
     }
 
     throw createRelayError(`Unknown target kind: ${targetId}`, "UNKNOWN_TARGET_KIND");

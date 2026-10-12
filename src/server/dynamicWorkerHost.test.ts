@@ -1,4 +1,4 @@
-import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
+import { serializeRpcFailure } from "@vibestudio/rpc";
 import { workerExecutableHeaders } from "./workerExecutableDispatch.js";
 /**
  * Integration test for the Phase 1 dynamic worker host — exercises the REAL
@@ -259,14 +259,18 @@ async function createHarness(
       decodeURIComponent(path.split("/")[1] ?? "")
     );
     if (!admission) return new Response("Worker not found", { status: 404 });
-    return fetch(`http://127.0.0.1:${port}${path}`, {
-      ...init,
-      headers: {
-        Authorization: "Bearer test-gateway-token",
-        ...workerExecutableHeaders(admission),
-        ...(init.headers ?? {}),
-      },
-    });
+    try {
+      return await fetch(`http://127.0.0.1:${port}${path}`, {
+        ...init,
+        headers: {
+          Authorization: "Bearer test-gateway-token",
+          ...workerExecutableHeaders(admission),
+          ...(init.headers ?? {}),
+        },
+      });
+    } finally {
+      admission.release?.();
+    }
   };
 
   return { manager, gateway, egress, egressHits, workerdCall, codeFetches };
@@ -334,7 +338,7 @@ describe("dynamic worker host (real workerd)", () => {
     expect(codeFetches).toEqual([original.version, updated.version, recreated.version]);
   }, 30_000);
 
-  it("rejects a changed cold selection without caching replacement code under the old admission", async () => {
+  it("serves the exact cold admission across isolates while a newer selection is published", async () => {
     let enter!: () => void;
     let release!: () => void;
     const entered = new Promise<void>((resolve) => {
@@ -360,9 +364,11 @@ describe("dynamic worker host (real workerd)", () => {
     const pending = workerdCall("/echo/snapshot");
     await entered;
     let sibling: Promise<Response> | undefined;
+    let releaseOldAdmission: (() => void) | undefined;
     try {
       const oldAdmission = await manager.getWorkerAdmission("echo");
       if (!oldAdmission) throw new Error("Worker admission disappeared before the update");
+      releaseOldAdmission = oldAdmission.release;
       const port = manager.getPort();
       if (!port) throw new Error("workerd did not start");
       sibling = fetch(`http://127.0.0.1:${port}/echo/snapshot`, {
@@ -374,14 +380,9 @@ describe("dynamic worker host (real workerd)", () => {
       await manager.updateInstance("echo", { env: { FEATURE: "new" } });
       held = false;
       release();
-      for (const failureResponse of await Promise.all([pending, sibling])) {
-        expect(failureResponse.status).toBe(500);
-        const failure = (await failureResponse.json()) as { error: RpcFailure };
-        expect(failure.error).toMatchObject({
-          code: "WORKER_ADMISSION_CHANGED",
-          message: "Worker admission changed before code selection",
-          errorKind: "application",
-        });
+      for (const response of await Promise.all([pending, sibling])) {
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ feature: "old" });
       }
       expect(await (await workerdCall("/echo/snapshot")).json()).toEqual({
         feature: "new",
@@ -389,6 +390,7 @@ describe("dynamic worker host (real workerd)", () => {
         calls: 1,
       });
     } finally {
+      releaseOldAdmission?.();
       release();
       await Promise.allSettled(sibling ? [pending, sibling] : [pending]);
     }
