@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events";
 import * as http from "node:http";
-import type { ProcessAdapter } from "@vibestudio/process-adapter";
+import { createNodeProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
 import { afterAll, afterEach, beforeAll, describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { evaluateAuthority, requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { authorizeVerifiedCaller } from "./services/authorityRuntime.js";
 import { createAuthorityService } from "./services/authorityService.js";
@@ -7054,6 +7055,116 @@ describe("RpcServer native process sessions", () => {
       );
       expect(proc.listenerCount("message")).toBe(0);
     } finally {
+      await server.stop();
+    }
+  });
+
+  it("roundtrips concurrent large extension streams through the native process session", async () => {
+    const { server, tokenManager } = createServer();
+    const extensionId = "@workspace-extensions/stream-roundtrip";
+    const token = tokenManager.ensureToken(extensionId, "extension");
+    const chunkBytes = 64 * 1024;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-process-stream-"));
+    const bundlePath = path.join(root, "extension.js");
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+    fs.writeFileSync(
+      bundlePath,
+      [
+        "export async function activate() {",
+        "  return { produce(seed, length) {",
+        "    const bytes = new Uint8Array(length);",
+        `    for (let i = 0; i < length; i++) bytes[i] = (i * 31 + seed + Math.floor(i / ${chunkBytes}) * 53) & 0xff;`,
+        `    const chunkBytes = ${chunkBytes}; let offset = 0;`,
+        "    const body = new ReadableStream({ pull(controller) {",
+        "      if (offset >= bytes.length) { controller.close(); return; }",
+        "      const end = Math.min(offset + chunkBytes, bytes.length);",
+        "      controller.enqueue(bytes.subarray(offset, end)); offset = end;",
+        "    } });",
+        "    return new Response(body, { headers: { 'content-type': 'application/octet-stream' } });",
+        "  } };",
+        "}",
+      ].join("\n")
+    );
+    const runtimeBundle = fileURLToPath(
+      new URL("../../packages/extension-host/dist/childRuntime.js", import.meta.url)
+    );
+    const proc = createNodeProcessAdapter(runtimeBundle, {
+      VIBESTUDIO_EXTENSION_NAME: extensionId,
+      VIBESTUDIO_EXTENSION_VERSION: "0.0.0",
+      VIBESTUDIO_EXTENSION_BUNDLE_PATH: bundlePath,
+      VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
+      VIBESTUDIO_EXTENSION_RPC_TOKEN: token,
+    });
+    const detach = server.attachNativeProcess(proc, token);
+    const length = 6 * 1024 * 1024 + 37;
+    const expected = (seed: number) => {
+      const bytes = new Uint8Array(length);
+      for (let i = 0; i < length; i++)
+        bytes[i] = (i * 31 + seed + Math.floor(i / chunkBytes) * 53) & 0xff;
+      return Buffer.from(bytes);
+    };
+    const firstExpected = expected(17);
+    const secondExpected = expected(93);
+    const consume = async (seed: number, requestId: string) => {
+      const response = await testServer(server).streamCallTarget(
+        extensionId,
+        "extension.invokeStream",
+        "produce",
+        [seed, length],
+        {
+          requestId,
+          extensionName: extensionId,
+          method: "produce",
+          caller: { callerId: "server", callerKind: "server" },
+        }
+      );
+      expect(response.status).toBe(200);
+      return Buffer.from(await response.arrayBuffer());
+    };
+    const connected = new Promise<void>((resolve) => {
+      if (server.getConnectionForPrincipal(extensionId)) {
+        resolve();
+        return;
+      }
+      const unsubscribe = server.onConnectionsChanged(() => {
+        if (!server.getConnectionForPrincipal(extensionId)) return;
+        unsubscribe();
+        resolve();
+      });
+    });
+    try {
+      await connected;
+      expect(firstExpected.subarray(0, chunkBytes)).not.toEqual(
+        firstExpected.subarray(chunkBytes, chunkBytes * 2)
+      );
+      expect(firstExpected.subarray(0, chunkBytes)).not.toEqual(
+        secondExpected.subarray(0, chunkBytes)
+      );
+      const [first, second] = await Promise.all([
+        consume(17, "large-stream-a"),
+        consume(93, "large-stream-b"),
+      ]);
+      const assertExact = (actual: Buffer, expected: Buffer, requestId: string) => {
+        if (actual.equals(expected)) return;
+        let offset = 0;
+        while (
+          offset < Math.min(actual.length, expected.length) &&
+          actual[offset] === expected[offset]
+        )
+          offset++;
+        throw new Error(
+          `${requestId} bytes differ at offset ${offset}: actual length ${actual.length}, expected length ${expected.length}`
+        );
+      };
+      assertExact(first, firstExpected, "large-stream-a");
+      assertExact(second, secondExpected, "large-stream-b");
+    } finally {
+      detach();
+      await new Promise<void>((resolve) => {
+        proc.on("exit", () => resolve());
+        if (!proc.kill()) resolve();
+      });
+      fs.rmSync(root, { recursive: true, force: true });
       await server.stop();
     }
   });
