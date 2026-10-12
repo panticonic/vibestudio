@@ -331,3 +331,82 @@ Hard parts:
 The ~100 `renderHook` tests keep passing via thin compatibility hooks, and new
 tests target the store directly through the existing Node-capable
 `transcriptTestHarness`.
+
+---
+
+## Revision (2026-10-12): terminal apps run as Node programs in the workspace native runtime
+
+Status: approved direction (user, 2026-10-12). Supersedes the workerd-DO design for
+terminal apps (§2.2, §2.3 sources, §2.5 hosting). The user authorized deleting,
+moving and refactoring whatever is needed and ripping out all legacy infrastructure.
+
+## Shape
+
+- A **terminal app** is a workspace-bound unit: an ordinary Node program (Ink renders
+  natively) that runs in a PTY owned by the Base `shell` extension, inside that
+  workspace's native runtime sandbox (MXC/bubblewrap on Linux, Seatbelt on macOS,
+  unconfined on Windows per docs/isolation-plan.md). It is NOT trusted code and NOT
+  an `app` (apps remain trusted client units: the terminal browser, the Electron
+  shell, mobile).
+- The **terminal browser** (System app run by the CLI on the user's machine, already
+  built) is a tmux-like client: each tab attaches to a shell-extension session
+  stream, feeds the bytes into its headless VT grid and composites; keys/resizes go
+  back via `write`/`resize`. Approvals overlay stays un-spoofable (bytes never reach
+  the real TTY). The same sessions are visible in the desktop terminal panel.
+- Protocol = standard terminal conventions: OSC 0/2 title, BEL / OSC 9 / OSC 777
+  attention, OSC 8 links (browser offers to open on the user's machine after
+  confirmation), OSC 52 copy. No custom attach protocol, no host methods.
+
+## Pieces
+
+1. **Unit kind + build.** A terminal-app manifest kind (choose location/name, e.g.
+   `<template>/terminal-apps/<name>` with `vibestudio.terminal {title, description,
+   icon?, entry}`), built as a bundled Node ESM like `buildTerminalApp`, with native
+   deps materialized like extensions (`populateExtensionRuntimeDeps`) so it runs from
+   `builds/` inside the sandbox. Launcher discovery lists these units per workspace.
+2. **Launch service (trusted, server-side).** One call, e.g.
+   `terminalApps.launch({source, contextId?, cols, rows})`, that: resolves the unit's
+   active build artifact (callers never pass paths); creates/resolves a code entity
+   for the session (bound to the build's execution digest, like workers); mints a
+   connection grant for that principal; opens the PTY through the shell extension
+   with `command = <dist node>`, `args = [artifact]`, and the connection material
+   (gateway URL, principal id, context id) — pass the grant through an inherited fd
+   or one-shot channel rather than a long-lived env var where feasible, and document
+   that inside one native runtime processes are not separate security domains
+   (attribution, not isolation, per the platform contract). Gated by the existing
+   `native.shell.execute` capability (grant scopes once/task/session/version), so
+   approval is "run <app> vX in <workspace>". Approvals the app itself triggers are
+   attributed to its code identity.
+3. **Session ownership.** Today shell sessions are owned by exact `callerId`. Terminal
+   sessions must be resumable by the same user from any device/client in that
+   workspace: design ownership accordingly (e.g. user-owned sessions launched via the
+   service, with the launching principal recorded) and keep the desktop terminal
+   panel on the same model — one path.
+4. **Attach protocol fixes (shell extension, used by panel and browser alike).**
+   Framed attach with explicit cursor/epoch and gap/reset events (trimmed window,
+   clearScrollback), byte-correct replay (no UTF-8 string decoding of partial
+   windows), per-attacher flow control with consistent units, and a clean redraw on
+   attach for full-screen apps (replay into the VT, then resize/SIGWINCH). Migrate the
+   terminal panel off its reconnect loop and 150 ms watchdog onto the fixed stream.
+5. **Per-session state.** A `stateArgs`-equivalent for terminal sessions held by the
+   launch service, so apps (the chat's ChatHostController StateArgsPort) persist
+   state server-side and a relaunch after a runtime restart resumes. One per-user tab
+   registry (decide whether it is the launch service or the existing
+   workers/terminal-sessions; keep exactly one).
+6. **Rip out**: `@workspace/terminal-shim`, `@workspace/terminal-host-protocol`,
+   `InkTerminalSessionHost`, `terminalAttach` stream protocol, Ink-in-workerd builder
+   support (yoga alias plugin, wasm extraction, `isTerminalWorker`, `role:"wasm"`
+   artifacts, workerdManager/universalDo wasm modules if nothing else uses them),
+   `vibestudio.terminal` worker block semantics, DO-based terminal sessions. Port
+   `workers/terminal-server-logs` to a terminal-app unit. Sweep docs/skills.
+7. **Chat**: `base/terminal-apps/chat` (or chosen location): Node program, Ink over
+   `ChatSession` (stream delivery) + `ChatHostController` with StateArgsPort backed
+   by (5), RpcClient over the gateway with the minted grant.
+
+## Known risks to check
+
+- Extension child env holds `VIBESTUDIO_EXTENSION_RPC_TOKEN`; PTY children share the
+  uid/sandbox and might read `/proc/<pid>/environ` (unverified) — check and fix.
+- `requireContextAttachApproval` in the shell extension is a no-op — fix or delete.
+- Sessions die with the extension/runtime; the browser must show that clearly and
+  offer relaunch (state survives via (5)).
