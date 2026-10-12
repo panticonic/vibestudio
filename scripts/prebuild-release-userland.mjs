@@ -398,39 +398,41 @@ async function withReleaseConsumerSession(
           if (serverError) throw serverError;
           const controller = new AbortController();
           const onServerClose = () => controller.abort(cancellation.signal.reason ?? serverError);
+          const onCancellation = () => controller.abort(cancellation.signal.reason);
           server.once("exit", onServerClose);
           server.once("error", onServerClose);
+          cancellation.signal.addEventListener("abort", onCancellation, { once: true });
+          if (cancellation.signal.aborted) onCancellation();
           let output = "",
             errorOutput = "";
-          const child = spawn(executable, [cliEntry, ...args, "--json"], {
-            env,
-            cwd: scratch,
-            signal: controller.signal,
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-          const joined = joinChildProcess(child);
-          let failure;
-          child.on("error", (error) => {
-            failure = error;
-          });
-          child.stdout.on("data", (chunk) => {
-            output += chunk;
-          });
-          child.stderr.on("data", (chunk) => {
-            errorOutput = (errorOutput + chunk).slice(-8192);
-          });
           try {
+            const child = spawn(executable, [cliEntry, ...args, "--json"], {
+              env,
+              cwd: scratch,
+              signal: controller.signal,
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            const joined = joinChildProcess(child);
+            let failure;
+            child.on("error", (error) => {
+              failure = error;
+            });
+            child.stdout.on("data", (chunk) => {
+              output += chunk;
+            });
+            child.stderr.on("data", (chunk) => {
+              errorOutput = (errorOutput + chunk).slice(-8192);
+            });
             const { code } = await joined;
+            if (serverError) throw serverError;
+            if (cancellation.signal.aborted) throw cancellation.signal.reason;
             if (failure || code !== 0)
-              throw (
-                serverError ??
-                failure ??
-                new Error(`Release build CLI failed: ${errorOutput}\n${output}`)
-              );
+              throw failure ?? new Error(`Release build CLI failed: ${errorOutput}\n${output}`);
             return JSON.parse(output.trim());
           } finally {
             server.off("exit", onServerClose);
             server.off("error", onServerClose);
+            cancellation.signal.removeEventListener("abort", onCancellation);
           }
         };
         await cli(["remote", "pair", ready.rootInvite.deepLink]);

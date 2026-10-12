@@ -490,6 +490,94 @@ test("installed verification carries the supported build concurrency into server
   assert.deepEqual(await fs.readdir(scratchParent), []);
 });
 
+test("release-session cancellation aborts and joins an admitted CLI call before server shutdown", async () => {
+  const root = await fixture();
+  const appRoot = path.join(root, "app");
+  const scratchParent = path.join(root, "scratch");
+  const serverEntry = path.join(appRoot, "dist/server.mjs");
+  const cliEntry = path.join(appRoot, "dist/cli/client.mjs");
+  await fs.mkdir(scratchParent, { recursive: true });
+  await fs.mkdir(path.dirname(serverEntry), { recursive: true });
+  await fs.mkdir(path.dirname(cliEntry), { recursive: true });
+  const pairing = {
+    endpointId: "1".repeat(64),
+    relays: DEFAULT_IROH_RELAYS,
+    v: PAIRING_PROTOCOL_VERSION,
+    code: Buffer.alloc(16, 7).toString("base64url"),
+  };
+  const serverId = `srv_${"s".repeat(24)}`;
+  const serverBootId = `boot_${"b".repeat(24)}`;
+  const ready = {
+    mode: "hub",
+    gatewayUrl: "https://example.test",
+    rootInvite: {
+      ...pairing,
+      deepLink: createConnectDeepLink(pairing),
+      pairUrl: createConnectPairUrl(pairing),
+      expiresInMs: 60_000,
+      expiresAt: 60_000,
+      serverId,
+      serverBootId,
+    },
+    serverId,
+    serverBootId,
+    gatewayPort: 1234,
+    pid: process.pid,
+    version: "test",
+    buildId: "a".repeat(64),
+    workspaces: [],
+  };
+  await fs.writeFile(
+    serverEntry,
+    `import fs from "node:fs";
+     const readyArg = process.argv.indexOf("--ready-file");
+     fs.writeFileSync(process.argv[readyArg + 1], ${JSON.stringify(JSON.stringify(ready))});
+     process.on("message", message => { if (message?.type === "vibestudio:parent-owned-stop") process.exit(0); });
+     setInterval(() => {}, 1000);`
+  );
+  const running = path.join(root, "cli-running");
+  const retired = path.join(root, "cli-retired");
+  await fs.writeFile(
+    cliEntry,
+    `import fs from "node:fs";
+     if (process.argv.includes("wait")) {
+       fs.writeFileSync(${JSON.stringify(running)}, "running");
+       process.on("SIGTERM", () => {
+         fs.writeFileSync(${JSON.stringify(retired)}, "joined");
+         process.exit(0);
+       });
+       setInterval(() => {}, 1000);
+     } else console.log(JSON.stringify({}));`
+  );
+
+  const watcher = (await import("node:fs")).watch(root);
+  const cliStarted = new Promise((resolve, reject) => {
+    watcher.on("change", (_event, file) => {
+      if (String(file) === path.basename(running)) resolve();
+    });
+    watcher.on("error", reject);
+  });
+  try {
+    const session = withStandaloneReleaseSession(
+      appRoot,
+      process.execPath,
+      scratchParent,
+      async ({ cli }) => cli(["wait"])
+    );
+    const cancelled = assert.rejects(session, (error) => {
+      assert.match(error.cause?.message ?? error.message, /cancelled by SIGTERM/u);
+      return true;
+    });
+    await cliStarted;
+    process.emit("SIGTERM");
+    await cancelled;
+    assert.equal(await fs.readFile(retired, "utf8"), "joined");
+    assert.deepEqual(await fs.readdir(scratchParent), []);
+  } finally {
+    watcher.close();
+  }
+});
+
 test("exports only immutable records and verifies every payload before publication", async () => {
   const root = await fixture();
   const source = path.join(root, "source"),
