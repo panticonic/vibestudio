@@ -185,7 +185,7 @@
       "surface": "terminal-app",
       "selector": "resolved-exact-artifact",
       "executableIdentity": "full-execution-digest",
-      "adoption": "process-restart",
+      "adoption": "client-relaunch",
       "rollback": "last-good-remains-authoritative",
       "inFlightWork": "preserved-until-surface-boundary",
       "durableStorage": "stable-logical-entity-namespace",

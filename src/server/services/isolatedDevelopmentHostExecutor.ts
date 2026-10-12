@@ -9,7 +9,7 @@ import {
   signalOwnedProcessIdentity,
   type OwnedProcessIdentity,
 } from "../../dev/ownedProcessIdentity.js";
-import { bootstrapInstanceCli } from "../../dev/bootstrapInstanceCli.js";
+import { pairLocalCli } from "../../cli/localPairing.js";
 import { loadCliCredentials, requireDeviceCliCredentials } from "../../cli/credentialStore.js";
 import { pairRemoteDevice } from "../../cli/remoteClient.js";
 import { RpcClient } from "../../cli/rpcClient.js";
@@ -91,7 +91,7 @@ export class IsolatedDevelopmentHostExecutor {
       resolve?: typeof resolveDevInstance;
       adopt?: typeof adoptDevInstance;
       unregister?: typeof unregisterDevInstance;
-      bootstrap?: typeof bootstrapInstanceCli;
+      bootstrap?: typeof pairLocalCli;
       supervisor?: (
         options: ConstructorParameters<typeof DevInstanceSupervisor>[0]
       ) => DevInstanceSupervisor;
@@ -228,7 +228,7 @@ export class IsolatedDevelopmentHostExecutor {
             );
           }
           assertLoopbackGateway(ready.gatewayUrl);
-          const bootstrap = await (this.deps.bootstrap ?? bootstrapInstanceCli)(ready, {
+          const bootstrap = await (this.deps.bootstrap ?? pairLocalCli)(ready, {
             credentialFile,
           });
           if (bootstrap.status === "invite-required") {

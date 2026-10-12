@@ -322,12 +322,12 @@ describe("buildUnit app builds", () => {
       "-m",
       "initial rpc package",
     ]);
-    const appDir = path.join(workspaceRoot, "apps", "remote-cli");
+    const appDir = path.join(workspaceRoot, "apps", "terminal-browser");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
       path.join(appDir, "package.json"),
       JSON.stringify({
-        name: "@workspace-apps/remote-cli",
+        name: "@workspace-apps/terminal-browser",
         version: "0.1.0",
         private: true,
         vibestudio: {
@@ -350,7 +350,7 @@ describe("buildUnit app builds", () => {
         "import WebSocket from 'ws';",
         "export function main() {",
         "  const registry = createHandlerRegistry();",
-        "  return { label: 'remote-cli', hasWs: typeof WebSocket === 'function', registry };",
+        "  return { label: 'terminal-browser', hasWs: typeof WebSocket === 'function', registry };",
         "}",
         "",
       ].join("\n")
@@ -370,7 +370,7 @@ describe("buildUnit app builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       session,
-      graph.get("@workspace-apps/remote-cli"),
+      graph.get("@workspace-apps/terminal-browser"),
       "b".repeat(64),
       graph,
       workspaceRoot,

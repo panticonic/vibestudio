@@ -357,19 +357,20 @@ describe("createLiveCallerGate", () => {
     ).toBe(false);
   });
 
-  it("keeps a live server-spawned shared app authorized without inventing a user owner", async () => {
+  it("never treats an app principal as a system-owned runtime", async () => {
+    // Apps run on client devices under their user's device principal; no
+    // server-spawned app process exists to carry the system subject.
     const state = fixture();
     const app = createVerifiedCaller(
-      "@workspace-apps/remote-cli",
+      "@workspace-apps/terminal-browser",
       "app",
-      codeIdentity("@workspace-apps/remote-cli", "app", "apps/shared"),
+      codeIdentity("@workspace-apps/terminal-browser", "app", "apps/shared"),
       null,
       { userId: "system", handle: "system" }
     );
 
-    expect(await state.gate(app, "server")).toBe(true);
+    expect(await state.gate(app, "server")).toBe(false);
     expect(await state.gate(app)).toBe(false);
-    expect(await state.gate(app, "shell:dev_1")).toBe(false);
   });
 
   it("admits only the declared system-owned runtime identity", async () => {

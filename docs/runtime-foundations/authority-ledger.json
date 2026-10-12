@@ -6903,6 +6903,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:auth.grantAppPrincipal",
+      "rpcPlane": "host-service",
+      "owner": "auth",
+      "method": "grantAppPrincipal",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "auth.read",
+      "reviewRationale": "An authenticated device shell obtains the device-scoped identity of an approved app it runs itself; the app's authority was admitted at its launch gate.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:auth.grantAppPrincipal"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user"
+      ],
+      "sensitivity": "admin",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:auth.grantAppPrincipal),allOf(capability(user,service:auth.grantAppPrincipal),workspace-member))",
+      "r3b": {
+        "review": "device-shell-own-app-principal-grant",
+        "change": "Replaces the public /refresh-principal-grant HTTP route. Only an authenticated device shell may call it, and only for its own device: it activates that device's principal for an approved, running client app (react-native or terminal) and mints a one-use connection grant bound to the caller's transport endpoint and the app's exact execution identity. It grants no authority beyond the app's admitted manifest."
+      },
+      "capability": "service:auth.grantAppPrincipal",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:auth.grantConnection",
       "rpcPlane": "host-service",
       "owner": "auth",

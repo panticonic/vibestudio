@@ -605,6 +605,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "auth.grantAppPrincipal": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "auth.read",
+      rationale:
+        "An authenticated device shell obtains the device-scoped identity of an approved app it runs itself; the app's authority was admitted at its launch gate.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "auth.grantConnection": {
     tier: {
       tier: "gated",

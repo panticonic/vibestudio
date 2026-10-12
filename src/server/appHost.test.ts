@@ -138,8 +138,6 @@ async function makeHarness(
     affectedBuildUnits?: string[];
     isSystemWorkspace?: () => boolean;
     getWorkspaceTrustGrants?: AppHostDeps["getWorkspaceTrustGrants"];
-    connectionGrants?: AppHostDeps["connectionGrants"];
-    configureTerminalRunner?: boolean;
     ensureHostTargetExtensions?: AppHostDeps["ensureHostTargetExtensions"];
     beforeInitialize?: (
       host: AppHost,
@@ -346,14 +344,10 @@ async function makeHarness(
     approvalCoordinator,
     notificationService,
     entityCache,
-    connectionGrants:
-      opts.connectionGrants ??
-      (opts.configureTerminalRunner ? new ConnectionGrantService({ entityCache }) : undefined),
     readWorkspaceFileAtState: async (stateHash, filePath) =>
       filePath === "apps/shell/package.json"
         ? fs.readFileSync(path.join(appPath, "package.json"), "utf8")
         : ((await opts.readWorkspaceFileAtState?.(stateHash, filePath)) ?? null),
-    getGatewayUrl: () => "http://127.0.0.1:1234",
     getReactNativeAppArtifactBaseUrl: () =>
       opts.reactNativeAppArtifactBaseUrl ?? "http://127.0.0.1:1234",
     getTerminalAppArtifactBaseUrl: () => opts.terminalAppArtifactBaseUrl ?? "http://127.0.0.1:1234",
@@ -365,7 +359,7 @@ async function makeHarness(
         ? { appSource: "apps/shell", requiresExtensions: [] }
         : target === "react-native"
           ? { appSource: "apps/mobile", requiresExtensions: ["extensions/react-native"] }
-          : { appSource: "apps/remote-cli", requiresExtensions: [] },
+          : { appSource: "apps/terminal-browser", requiresExtensions: [] },
     ...(opts.ensureHostTargetExtensions
       ? { ensureHostTargetExtensions: opts.ensureHostTargetExtensions }
       : {}),
@@ -375,7 +369,7 @@ async function makeHarness(
     await opts.beforeInitialize?.(host, buildSystem.getBuildByKey);
     await host.initialize();
   } catch (error) {
-    // Failed fixture creation still owns initialization and terminal work.
+    // Failed fixture creation still owns initialization work.
     // Shutdown joins it before the test is allowed to retire its scratch root.
     let cleanupFailure: unknown;
     try {
@@ -455,7 +449,7 @@ function createAppGraphNode(
         displayName: opts.displayName ?? opts.name,
         app: {
           target: opts.target,
-          renderer: opts.target === "terminal" ? "index.mjs" : "index.tsx",
+          ...(opts.target === "terminal" ? { entry: "index.ts" } : { renderer: "index.tsx" }),
           capabilities: opts.capabilities ?? [],
         },
         authority: { requests: [], provides: [] },
@@ -463,7 +457,7 @@ function createAppGraphNode(
     })
   );
   fs.writeFileSync(
-    path.join(appPath, opts.target === "terminal" ? "index.mjs" : "index.tsx"),
+    path.join(appPath, opts.target === "terminal" ? "index.ts" : "index.tsx"),
     "export default null;\n"
   );
   return {
@@ -739,8 +733,8 @@ describe("AppHost", () => {
       name: "@workspace-apps/mobile",
       target: "react-native",
     });
-    const terminal = createAppGraphNode(workspacePath, "apps/remote-cli", {
-      name: "@workspace-apps/remote-cli",
+    const terminal = createAppGraphNode(workspacePath, "apps/terminal-browser", {
+      name: "@workspace-apps/terminal-browser",
       target: "terminal",
     });
     const nodes = [graphNode, mobile, terminal];
@@ -766,13 +760,11 @@ describe("AppHost", () => {
     "rejects stale %s runtime authority when the protected System designation is absent",
     async (target) => {
       let system = true;
-      const connectionGrants = { grant: vi.fn(), revokeForPrincipal: vi.fn() };
       const { host, graphNode, entityCache } = await makeHarness({
         isSystemWorkspace: () => system,
-        connectionGrants,
       });
       installApp(host, graphNode);
-      const entry = host.registry.patch(graphNode.name, { target });
+      host.registry.patch(graphNode.name, { target });
       expect(host.hasAppCapability(graphNode.name, "notifications")).toBe(true);
       system = false;
       expect(host.hasAppCapability(graphNode.name, "notifications")).toBe(false);
@@ -783,10 +775,11 @@ describe("AppHost", () => {
         await expect(host.reactNative.getBootstrap(graphNode.relativePath)).rejects.toThrow(
           "designated System workspace"
         );
-      if (target === "terminal")
-        await expect(host.terminal.start(entry)).rejects.toThrow("designated System workspace");
+      if (target !== "electron")
+        await expect(
+          host.registerDevicePrincipal(target, "device-1", graphNode.relativePath)
+        ).rejects.toThrow("designated System workspace");
       expect(entityCache.listActive()).toEqual([]);
-      expect(connectionGrants.grant).not.toHaveBeenCalled();
     }
   );
 
@@ -1770,9 +1763,10 @@ describe("AppHost", () => {
       buildKey: "field-key",
       effectiveVersion: "ev-field",
     });
-    expect(await host.reactNative.registerPrincipal("device-1", "apps/field-mobile")).toBe(
-      "app:apps/field-mobile:device-1"
-    );
+    expect(
+      (await host.registerDevicePrincipal("react-native", "device-1", "apps/field-mobile"))
+        ?.principalId
+    ).toBe("app:apps/field-mobile:device-1");
     expect(host.hasAppCapability("app:apps/field-mobile:device-1", "panel-hosting")).toBe(false);
     expect(host.hasAppCapability("app:apps/mobile:device-1", "panel-hosting")).toBe(false);
   });
@@ -1966,7 +1960,7 @@ describe("AppHost", () => {
       },
     } as never);
 
-    const callerId = await host.reactNative.registerPrincipal("device-1");
+    const callerId = (await host.registerDevicePrincipal("react-native", "device-1"))?.principalId;
 
     expect(callerId).toBe("app:apps/mobile:device-1");
     expect(entityCache.resolveActive("app:apps/mobile:device-1")).toMatchObject({
@@ -1982,7 +1976,7 @@ describe("AppHost", () => {
     expect(() => connectionGrants.grant(callerId!, "native-mobile:device-1")).not.toThrow();
     connectionGrants.stop();
 
-    expect(host.reactNative.retirePrincipal("device-1")).toBe(1);
+    expect(host.principals.retireDevice("device-1")).toBe(1);
     expect(entityCache.resolveActive("app:apps/mobile:device-1")).toBeNull();
   });
 
@@ -2030,7 +2024,7 @@ describe("AppHost", () => {
       capabilities: ["notifications"],
     });
 
-    const callerId = await host.reactNative.registerPrincipal("device-1");
+    const callerId = (await host.registerDevicePrincipal("react-native", "device-1"))?.principalId;
 
     expect(callerId).toBe("app:apps/mobile:device-1");
     expect(entityCache.resolveActive("app:apps/mobile:device-1")).toMatchObject({
@@ -2050,7 +2044,7 @@ describe("AppHost", () => {
       activeExecutionDigest: TEST_EXECUTION_IDENTITY.executionDigest,
     });
 
-    await expect(host.reactNative.registerPrincipal("device-1")).rejects.toThrow(
+    await expect(host.registerDevicePrincipal("react-native", "device-1")).rejects.toThrow(
       "immutable build missing-build is unavailable"
     );
     expect(entityCache.resolve("app:apps/mobile:device-1")).toBeNull();
@@ -2086,39 +2080,40 @@ describe("AppHost", () => {
     ).toMatchObject({ allowed: false });
   });
 
-  it("publishes terminal availability only after its process start succeeds", async () => {
-    const { host, buildSystem, eventService, graphNode, approvalQueue, entityCache } =
+  ledgerTest("execution.terminal-app", async () => {
+    // A terminal app is built, admitted and activated like any other app: no
+    // server process exists. The `vibestudio terminal` client imports the
+    // exact module through a device-scoped principal bound to the active build.
+    const { host, buildSystem, eventService, approvalQueue, entityCache, workspacePath, root } =
       await makeHarness({
         isAdmitted: () => true,
-        configureTerminalRunner: true,
+        readWorkspaceFileAtState: async (_stateHash, filePath) =>
+          filePath === "apps/terminal-browser/package.json"
+            ? fs.readFileSync(path.join(workspacePath, filePath), "utf8")
+            : null,
       });
-    fs.writeFileSync(
-      path.join(graphNode.path, "package.json"),
-      JSON.stringify({
-        name: "@workspace-apps/shell",
-        version: "1.0.0",
-        vibestudio: {
-          displayName: "Remote CLI",
-          app: {
-            target: "terminal",
-            entry: "index.ts",
-            capabilities: ["clipboard"],
-          },
-          authority: { requests: [], provides: [] },
-        },
-      })
+    const graphNode = createAppGraphNode(workspacePath, "apps/terminal-browser", {
+      name: "@workspace-apps/terminal-browser",
+      target: "terminal",
+      capabilities: ["clipboard"],
+    });
+    buildSystem.getGraph.mockReturnValue({ allNodes: () => [graphNode] } as never);
+    buildSystem.getEffectiveVersion.mockImplementation((name: string) =>
+      name === graphNode.name ? "ev-terminal" : null
     );
-    graphNode.manifest = {
-      displayName: "Remote CLI",
-      app: { target: "terminal", capabilities: ["clipboard"] },
-    } as never;
+    buildSystem.listAffectedBuildUnits.mockResolvedValue([graphNode.name]);
+    const unitIdentity = await buildSystem.resolveBuildUnitIdentity();
+    buildSystem.resolveBuildUnitIdentity.mockResolvedValue({
+      ...unitIdentity,
+      unitPath: graphNode.relativePath,
+      unitName: graphNode.name,
+      effectiveVersion: "ev-terminal",
+    });
+    const buildDir = path.join(root, "state", "builds");
     const terminalBuild = {
-      buildKey: path.basename(
-        path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key")
-      ),
+      buildKey: "terminal-key",
       sourceStateHash: "state:test",
-
-      dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
+      dir: path.join(buildDir, "terminal-key"),
       metadata: {
         ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-terminal",
@@ -2132,17 +2127,14 @@ describe("AppHost", () => {
           rnHostAbi: null,
           provider: null,
         },
-        buildKey: path.basename(
-          path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key")
-        ),
+        buildKey: "terminal-key",
       },
       artifacts: [
-        storedArtifact(
-          path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
-          "index.mjs",
-          "export {};\n",
-          { role: "primary", contentType: "text/javascript; charset=utf-8", encoding: "utf8" }
-        ),
+        storedArtifact(path.join(buildDir, "terminal-key"), "index.mjs", "export {};\n", {
+          role: "primary",
+          contentType: "text/javascript; charset=utf-8",
+          encoding: "utf8",
+        }),
       ],
     };
     buildSystem.getStoredBuild.mockResolvedValueOnce(terminalBuild as never);
@@ -2150,18 +2142,12 @@ describe("AppHost", () => {
       key === "terminal-key" ? (terminalBuild as never) : null
     );
 
-    await host.reconcileDeclared([
-      {
-        source: graphNode.relativePath,
-        ref: "main",
-      },
-    ]);
+    await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "main" }]);
     await host.whenSettled();
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "unit-install-review",
-        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "app",
@@ -2175,133 +2161,88 @@ describe("AppHost", () => {
     expect(host.registry.get(graphNode.name)).toMatchObject({
       target: "terminal",
       activeBundleKey: "terminal-key",
-      capabilities: ["clipboard" as const],
-      status: "available",
+      capabilities: ["clipboard"],
     });
+    // Before activation the app has no running build, so no device can take
+    // its principal.
+    host.registry.patch(graphNode.name, { status: "available" });
+    expect(await host.registerDevicePrincipal("terminal", "device-1")).toBeNull();
+    expect(entityCache.resolve("app:apps/terminal-browser:device-1")).toBeNull();
+
     await host.activateRelease(graphNode.name);
+
+    expect(host.registry.get(graphNode.name)).toMatchObject({
+      status: "running",
+      lastError: null,
+    });
+    expect(entityCache.resolveActive(graphNode.name)).toMatchObject({
+      kind: "app",
+      activeBuildKey: "terminal-key",
+      activeExecutionDigest: TEST_EXECUTION_IDENTITY.executionDigest,
+      status: "active",
+    });
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:available",
       expect.objectContaining({
-        appId: "@workspace-apps/shell",
+        appId: graphNode.name,
+        source: "apps/terminal-browser",
         target: "terminal",
-        launchMode: "terminal-process",
+        launchMode: "client-module",
+        buildKey: "terminal-key",
+        artifactRoute: "/_a/terminal-key/index.mjs",
         url: "http://127.0.0.1:1234/_a/terminal-key/index.mjs",
-      })
-    );
-    expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:status",
-      expect.objectContaining({
-        name: "@workspace-apps/shell",
-        status: "running",
-        error: null,
-      })
-    );
-
-    const failedUpdate = {
-      ...terminalBuild,
-      dir: path.join(path.dirname(terminalBuild.dir), "terminal-key-update"),
-      buildKey: "terminal-key-update",
-      sourceStateHash: "state:terminal-update",
-      metadata: {
-        ...terminalBuild.metadata,
-        buildKey: "terminal-key-update",
-        ev: "ev-terminal-update",
-        sourceStateHash: "state:terminal-update",
-      },
-      artifacts: [
-        storedArtifact(
-          path.join(path.dirname(terminalBuild.dir), "terminal-key-update"),
-          "index.mjs",
-          "export {};\n",
-          {
+        artifacts: [
+          expect.objectContaining({
+            path: "index.mjs",
             role: "primary",
-            contentType: "text/javascript; charset=utf-8",
-            encoding: "utf8",
-          }
-        ),
+            route: "/_a/terminal-key/index.mjs",
+          }),
+        ],
+      })
+    );
+
+    const principal = await host.registerDevicePrincipal("terminal", "device-1");
+    expect(principal).toEqual({
+      principalId: "app:apps/terminal-browser:device-1",
+      appId: graphNode.name,
+      source: "apps/terminal-browser",
+      target: "terminal",
+      buildKey: "terminal-key",
+      effectiveVersion: "ev-terminal",
+      artifacts: [
+        {
+          path: "index.mjs",
+          role: "primary",
+          contentType: "text/javascript; charset=utf-8",
+          route: "/_a/terminal-key/index.mjs",
+        },
       ],
-    };
-    buildSystem.getBuildByKey.mockImplementation(async (key: string) =>
-      key === "terminal-key"
-        ? (terminalBuild as never)
-        : key === "terminal-key-update"
-          ? (failedUpdate as never)
-          : null
-    );
-    const priorRelease = {
-      version: "1.0.0",
-      activatedAt: 1,
-      target: "terminal" as const,
-      capabilities: ["clipboard" as const],
-      activeEv: "ev-terminal",
-      activeSourceHash: "state:test",
-      activeBundleKey: "terminal-key",
-      executionDigest: TEST_EXECUTION_IDENTITY.executionDigest,
-      activeDependencyEvs: {},
-      activeExternalDeps: {},
-      activeRuntimeDepsKey: null,
-    };
-    const selectFailedCandidate = () =>
-      host.registry.patch(graphNode.name, {
-        version: "2.0.0",
-        activeEv: "ev-terminal-update",
-        activeSourceHash: "state:terminal-update",
-        activeBundleKey: "terminal-key-update",
-        activeExecutionDigest: TEST_EXECUTION_IDENTITY.executionDigest,
-        previousVersions: [priorRelease],
-        activationTrust: { source: "candidate" } as never,
-      });
-    const terminalStart = vi.spyOn(host.terminal, "start");
-    const liveFailure = new Error("candidate terminal process failed before replacing prior build");
-    selectFailedCandidate();
-    terminalStart.mockRejectedValue(liveFailure);
-    await expect(host.activateRelease(graphNode.name)).rejects.toBe(liveFailure);
-    expect(host.registry.get(graphNode.name)).toMatchObject({
-      activeBundleKey: "terminal-key",
-      status: "running",
-      lastError: liveFailure.message,
-      activationTrust: null,
     });
-    expect(entityCache.resolveActive(graphNode.name)).toMatchObject({
+    expect(entityCache.resolveActive("app:apps/terminal-browser:device-1")).toMatchObject({
+      kind: "app",
+      source: { repoPath: "apps/terminal-browser", effectiveVersion: "ev-terminal" },
       activeBuildKey: "terminal-key",
+      activeExecutionDigest: TEST_EXECUTION_IDENTITY.executionDigest,
+      status: "active",
     });
+    expect(host.hasAppCapability("app:apps/terminal-browser:device-1", "clipboard")).toBe(true);
+    const connectionGrants = new ConnectionGrantService({ entityCache });
+    try {
+      expect(() => connectionGrants.grant(principal!.principalId, "shell:device-1")).not.toThrow();
+    } finally {
+      connectionGrants.stop();
+    }
 
-    selectFailedCandidate();
-    const stoppedFailure = new Error(
-      "candidate terminal process failed after replacing prior build"
-    );
-    terminalStart.mockImplementation(async () => {
-      await host.terminal.stop(graphNode.name);
-      throw stoppedFailure;
-    });
-    await expect(host.activateRelease(graphNode.name)).rejects.toBe(stoppedFailure);
-    expect(host.registry.get(graphNode.name)).toMatchObject({
-      activeBundleKey: "terminal-key",
-      status: "available",
-      lastError: stoppedFailure.message,
-      previousVersions: [expect.objectContaining({ activeBundleKey: "terminal-key-update" })],
-      activationTrust: null,
-    });
-    expect(entityCache.resolveActive(graphNode.name)).toBeNull();
-
-    await host.terminal.stop(graphNode.name);
-    host.registry.patch(graphNode.name, { status: "available", lastError: null });
-    eventService.emit.mockClear();
-    const launchFailure = new Error("terminal process could not start");
-    vi.spyOn(host.terminal, "start").mockRejectedValue(launchFailure);
-    await expect(host.ensureActivated(graphNode.name)).rejects.toBe(launchFailure);
-    expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
-    expect(entityCache.resolveActive(graphNode.name)).toBeNull();
-    expect(host.registry.get(graphNode.name)).toMatchObject({ status: "error" });
+    expect(host.principals.retireDevice("device-1")).toBe(1);
+    expect(entityCache.resolveActive("app:apps/terminal-browser:device-1")).toBeNull();
   });
 
   it("keeps an unaccepted terminal build inspectable but prevents promotion and launch", async () => {
-    const review = { approvalId: "review-terminal", title: "Review Remote CLI" };
+    const review = { approvalId: "review-terminal", title: "Review Terminal Browser" };
     let openReview = true;
     const { host, buildSystem, eventService, graphNode, entityCache } = await makeHarness({
       isAdmitted: () => false,
       openUnitReviewFor: () => (openReview ? review : null),
-      configureTerminalRunner: true,
     });
     setAppManifestTarget(graphNode, "terminal", ["clipboard"]);
     const terminalBuild = {
@@ -2368,7 +2309,6 @@ describe("AppHost", () => {
       lastError: null,
       previousVersions: [],
     });
-    const terminalStart = vi.spyOn(host.terminal, "start");
     await expect(host.activateRelease(graphNode.name)).rejects.toMatchObject({
       name: "ServiceAccessError",
       service: "runtime.supervision",
@@ -2382,13 +2322,15 @@ describe("AppHost", () => {
         },
       },
     });
-    expect(terminalStart).not.toHaveBeenCalled();
     expect(entityCache.resolveActive(graphNode.name)).toBeNull();
     expect(host.registry.get(graphNode.name)).toMatchObject({
       activeBundleKey: "terminal-key",
       status: "available",
     });
     expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
+    expect(
+      await host.registerDevicePrincipal("terminal", "device-1", graphNode.relativePath)
+    ).toBeNull();
 
     openReview = false;
     await expect(host.activateRelease(graphNode.name)).rejects.toMatchObject({
@@ -2402,14 +2344,13 @@ describe("AppHost", () => {
         },
       },
     });
-    expect(terminalStart).not.toHaveBeenCalled();
+    expect(entityCache.listActive()).toEqual([]);
   });
 
-  it("keeps the prior admitted terminal image live when a candidate lacks exact admission", async () => {
+  it("keeps the prior admitted terminal build active when a candidate lacks exact admission", async () => {
     const admitted = new Set(["ev-terminal-old"]);
     const { host, buildSystem, graphNode, entityCache } = await makeHarness({
       isAdmitted: (_repo, ev) => admitted.has(ev),
-      configureTerminalRunner: true,
     });
     setAppManifestTarget(graphNode, "terminal", ["clipboard"]);
     const makeTerminalBuild = (key: string, ev: string) => ({
@@ -2472,10 +2413,6 @@ describe("AppHost", () => {
       lastError: null,
       previousVersions: [],
     });
-    vi.spyOn(host.terminal, "isRunningBuild").mockImplementation(
-      (_name, buildKey) => buildKey === "terminal-old"
-    );
-    const terminalStart = vi.spyOn(host.terminal, "start");
     await host.activateRelease(graphNode.name);
     const priorPrincipal = entityCache.resolveActive(graphNode.name);
     expect(priorPrincipal).toMatchObject({ activeBuildKey: "terminal-old" });
@@ -2483,74 +2420,17 @@ describe("AppHost", () => {
     await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "candidate-ref" }]);
     await host.whenSettled();
 
-    expect(terminalStart).not.toHaveBeenCalled();
+    // The candidate is reported as the entry's error; the admitted build
+    // stays selected and its app entity stays active.
     expect(host.registry.get(graphNode.name)).toMatchObject({
       activeBundleKey: "terminal-old",
       activeEv: "ev-terminal-old",
-      status: "running",
+      status: "error",
+      lastError: expect.stringContaining("has not been accepted to run"),
     });
     expect(entityCache.resolveActive(graphNode.name)).toMatchObject({
       activeBuildKey: "terminal-old",
     });
-  });
-
-  it("preserves an already-running terminal build during reconciliation and launch refresh", async () => {
-    const { host, buildSystem, graphNode } = await makeHarness();
-    setAppManifestTarget(graphNode, "terminal", ["clipboard"]);
-    const terminalBuild = {
-      buildKey: path.basename(
-        path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key")
-      ),
-      sourceStateHash: "state:test",
-
-      dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
-      metadata: {
-        ...TEST_SEALED_APP_BUILD_METADATA,
-        ev: "ev-terminal",
-        sourceStateHash: "state:test",
-        execution: TEST_EXECUTION_IDENTITY,
-        authority: { requests: [], provides: [] },
-        details: {
-          kind: "app" as const,
-          target: "terminal" as const,
-          integrity: null,
-          rnHostAbi: null,
-          provider: null,
-        },
-        buildKey: path.basename(
-          path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key")
-        ),
-      },
-      artifacts: [
-        storedArtifact(
-          path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
-          "index.mjs",
-          "export {};\n",
-          { role: "primary", contentType: "text/javascript; charset=utf-8", encoding: "utf8" }
-        ),
-      ],
-    };
-    buildSystem.getStoredBuild.mockResolvedValueOnce(terminalBuild as never);
-    buildSystem.getBuildByKey.mockImplementation(async (key: string) =>
-      key === "terminal-key" ? (terminalBuild as never) : null
-    );
-
-    await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "main" }]);
-    await host.whenSettled();
-
-    const isRunningBuild = vi.spyOn(host.terminal, "isRunningBuild").mockReturnValue(true);
-    const start = vi.spyOn(host.terminal, "start");
-    const stop = vi.spyOn(host.terminal, "stop");
-    host.registry.patch(graphNode.name, { status: "running" });
-
-    await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "main" }]);
-    await host.whenSettled();
-    expect(stop).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
-
-    await expect(host.activateRelease(graphNode.name)).resolves.toBeUndefined();
-    expect(isRunningBuild).toHaveBeenCalledWith(graphNode.name, "terminal-key");
-    expect(start).not.toHaveBeenCalled();
   });
 
   it("rolls terminal apps back to a retained terminal build", async () => {
@@ -2708,7 +2588,7 @@ describe("AppHost", () => {
 
     expect(host.registry.get(graphNode.name)).toMatchObject({
       target: "terminal",
-      status: "available",
+      status: "running",
       activeBundleKey: "terminal-key-1",
       activeEv: "ev-terminal-1",
       previousVersions: [
@@ -2728,15 +2608,14 @@ describe("AppHost", () => {
     expect(notificationService.show).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Terminal app update available",
-        actions: expect.arrayContaining([
-          expect.objectContaining({
-            command: {
-              type: "runtime.supervision.restart",
-              identity: { kind: "app", entityId: graphNode.name },
-            },
-          }),
-        ]),
+        message: expect.stringContaining("Restart `vibestudio terminal`"),
       })
+    );
+    const notification = (notificationService.show.mock.calls as unknown as unknown[][]).at(
+      -1
+    )?.[0] as { actions?: Array<{ id: string }> };
+    expect(notification.actions?.map((action) => action.id)).not.toContain(
+      "runtime.supervision.restart"
     );
   });
 

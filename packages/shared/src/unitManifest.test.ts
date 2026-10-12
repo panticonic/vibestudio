@@ -268,7 +268,7 @@ describe("validateUnitManifest", () => {
             capabilities: ["clipboard"],
           },
         },
-        { unitName: "@workspace-apps/remote-cli" }
+        { unitName: "@workspace-apps/terminal-browser" }
       )
     ).not.toThrow();
   });

@@ -90,9 +90,58 @@ export const MobileAppBootstrapResponseSchema = z
   })
   .strict();
 
+/** Device-run app targets whose clients exchange their device identity for an app principal. */
+export const AppPrincipalTargetSchema = z.enum(["react-native-app", "terminal-app"]);
+export type AppPrincipalTarget = z.infer<typeof AppPrincipalTargetSchema>;
+
+export const AppPrincipalGrantRequestSchema = z
+  .object({
+    principal: AppPrincipalTargetSchema,
+    /** App source; defaults to the workspace's `hostTargets.<target>.app`. */
+    source: z.string().min(1).max(256).nullable().optional(),
+  })
+  .strict();
+
+export const AppPrincipalGrantResponseSchema = z
+  .object({
+    /** One-use connection grant; redeem it as the auth token of a new RPC session. */
+    connectionGrant: z.string().min(1),
+    expiresAt: z.number().int(),
+    /** Device-scoped app principal (`app:<source>:<deviceId>`) the grant authenticates. */
+    callerId: z.string().min(1),
+    deviceId: z.string().min(1),
+    serverId: z.string().min(1),
+    serverBootId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    /** The exact app incarnation the principal is bound to; clients run these artifacts. */
+    app: z
+      .object({
+        appId: z.string().min(1),
+        source: z.string().min(1),
+        buildKey: z.string().min(1),
+        effectiveVersion: z.string().min(1),
+        artifacts: z.array(
+          z
+            .object({
+              path: z.string().min(1),
+              role: z.string().min(1),
+              contentType: z.string(),
+              route: z.string().min(1),
+            })
+            .strict()
+        ),
+      })
+      .strict(),
+  })
+  .strict();
+export type AppPrincipalGrantResponse = z.infer<typeof AppPrincipalGrantResponseSchema>;
+
 export const authMethods = defineServiceMethods({
   grantConnection: {
-    website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
+    website: {
+      kind: "closed",
+      reason: "Transport credentials and principal admission belong to authenticated hosts.",
+    } as const,
     capability: "connections.approve",
     tier: {
       tier: "gated",
@@ -120,7 +169,10 @@ export const authMethods = defineServiceMethods({
     access: AUTH_GRANT_ACCESS,
   },
   getConnectionInfo: {
-    website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
+    website: {
+      kind: "closed",
+      reason: "Transport credentials and principal admission belong to authenticated hosts.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -136,7 +188,10 @@ export const authMethods = defineServiceMethods({
     access: AUTH_READ_ACCESS,
   },
   getMobileAppBootstrap: {
-    website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
+    website: {
+      kind: "closed",
+      reason: "Transport credentials and principal admission belong to authenticated hosts.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -151,8 +206,31 @@ export const authMethods = defineServiceMethods({
     authority: { principals: ["host", "user"] },
     access: AUTH_READ_ACCESS,
   },
+  grantAppPrincipal: {
+    website: {
+      kind: "closed",
+      reason: "Transport credentials and principal admission belong to authenticated hosts.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "auth.read",
+      rationale:
+        "An authenticated device shell obtains the device-scoped identity of an approved app it runs itself; the app's authority was admitted at its launch gate.",
+    },
+    description:
+      "Activate the calling device's principal for an approved, running device-run app (the mobile app or the terminal browser) and mint a one-use connection grant for it, bound to the caller's transport endpoint. Returns the grant and the exact app artifacts the principal is bound to.",
+    args: z.tuple([AppPrincipalGrantRequestSchema]),
+    returns: AppPrincipalGrantResponseSchema,
+    authority: { principals: ["host", "user"] },
+    access: AUTH_GRANT_ACCESS,
+  },
   mintAgentCredential: {
-    website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
+    website: {
+      kind: "closed",
+      reason: "Transport credentials and principal admission belong to authenticated hosts.",
+    } as const,
     capability: "subagents.create",
     tier: {
       tier: "gated",
@@ -194,7 +272,10 @@ export const authMethods = defineServiceMethods({
     examples: [{ args: [{ entityId: "session:s1" }] }],
   },
   revokeAgentCredential: {
-    website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
+    website: {
+      kind: "closed",
+      reason: "Transport credentials and principal admission belong to authenticated hosts.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

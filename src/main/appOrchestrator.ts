@@ -29,7 +29,7 @@ export interface AppAvailableEvent {
   appId: string;
   source?: string;
   target?: "electron" | "react-native" | "terminal";
-  launchMode?: "hosted-view" | "native-bootstrap" | "terminal-process";
+  launchMode?: "hosted-view" | "native-bootstrap" | "client-module";
   url: string;
   artifactRoute?: string;
   contextId?: string | null;

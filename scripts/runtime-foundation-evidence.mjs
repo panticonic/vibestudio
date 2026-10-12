@@ -25,7 +25,7 @@ export const runtimeFoundationEvidence = Object.freeze({
       path: "src/server/services/runtimeService.test.ts",
     },
     "execution.terminal-app": {
-      path: "src/server/terminalAppRunner.test.ts",
+      path: "src/server/appHost.test.ts",
     },
     "execution.vcs-store": {
       path: "packages/builtin/src/workspace-state/WorkspaceDO.test.ts",

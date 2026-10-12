@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:d77c33d05340fbf63a7a3d01a83ce8365c2af41f8607bfba586bf1236cf85eb8",
+  "censusDigest": "sha256:3bc4a461459fb11f41ba1baa0b6334a2080231705e9255d8db3d84f98521fa0c",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -117,6 +117,10 @@
       "review": "host-only-runtime-resource-binding-commit",
       "change": "Commits the generic resource relationships already validated by runtime.createEntity into the workspace runtime registry. The method is host-only, requires runtime-state authority, accepts no executable policy, and records only entity, resource, capability, and agent-channel coordinates."
     },
+    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPatchCurrentStateArgs": {
+      "review": "owner-serialized-current-panel-state-patch",
+      "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
+    },
     "host:app.describeShellSurfaces": {
       "review": "read-only-shell-surface-capability-list",
       "change": "Adds a read-only list of the shell surface kinds the current host can open, so callers offer only supported chrome instead of probing openShellSurface; it exposes no private shell state."
@@ -156,6 +160,10 @@
     "host:attachedHosts.presentApproval": {
       "review": "parent-presented-exact-child-approval",
       "change": "Adds the host-only parent presentation of one verified signed child challenge. The acquisition request is derived from the canonical invocation snapshot and prepared operation, and the signed terminal decision cannot authorize a different request."
+    },
+    "host:auth.grantAppPrincipal": {
+      "review": "device-shell-own-app-principal-grant",
+      "change": "Replaces the public /refresh-principal-grant HTTP route. Only an authenticated device shell may call it, and only for its own device: it activates that device's principal for an approved, running client app (react-native or terminal) and mints a one-use connection grant bound to the caller's transport endpoint and the app's exact execution identity. It grants no authority beyond the app's admitted manifest."
     },
     "host:auth.mintAgentCredential": {
       "review": "reviewed-subagent-launch-agent-login",
@@ -425,6 +433,10 @@
       "review": "website-eligible-proxy-dispatch",
       "change": "Records website in the credential service default only for the explicitly eligible proxy operations. Credential inventory, input, OAuth lifecycle, revocation, and storage remain website-closed. Method eligibility and exact credential/destination authorization remain independent of this service-level principal vocabulary."
     },
+    "host:credentials.observeChanges": {
+      "review": "profile-credential-opaque-revision-observation",
+      "change": "Authenticated workspace clients observe an opaque revision of credential and provider-client configuration owners. The receiver returns no record, secret, or mutation authority; cancellation closes and joins both file observations, preserving independent failures."
+    },
     "host:credentials.openWebSocketScope": {
       "review": "originating-caller-owned-credential-websocket-scope",
       "change": "Adds one caller-owned scope for a credentialed WebSocket request. Opening does not authorize credential use; the eventual upgrade still requires exact credential, destination, caller, and executable authorization, and scope closure cancels and joins pending work."
@@ -601,13 +613,13 @@
       "review": "canonical-provider-method-read-only-containment",
       "change": "Provider dispatch performs routing only. Read-only admission is checked against the exact host-owned provider method schema in ExtensionHost before executing the selected implementation; write and unknown methods fail closed. This removes the blanket write classification that rejected upstream status queries. Provider contracts replace the previous names-only inventory, and the real dispatcher regression checks reads, writes and unknown methods. No capability grant or credential authority is added."
     },
-    "host:extensions.streamingMethods": {
-      "review": "admitted-session-extension-metadata",
-      "change": "Allows admitted execution sessions to discover the extension streaming method manifest required by the invocation router. Metadata grants no invocation authority; the selected extension receiver still authorizes every effect."
-    },
     "host:extensions.status": {
       "review": "admitted-session-extension-metadata",
       "change": "Read-only projection of one declared extension's registry, build staleness, pending review, health, and live supervision identity. It discloses no inspector endpoint and grants no invocation or lifecycle authority."
+    },
+    "host:extensions.streamingMethods": {
+      "review": "admitted-session-extension-metadata",
+      "change": "Allows admitted execution sessions to discover the extension streaming method manifest required by the invocation router. Metadata grants no invocation authority; the selected extension receiver still authorizes every effect."
     },
     "host:extensions.update": {
       "review": "declared-extension-reconcile-through-unit-review",
@@ -859,15 +871,19 @@
     },
     "host:hubControl.deleteWorkspace": {
       "review": "workspace-membership-owned-deletion",
-      "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
+      "change": "Keeps the critical capability tier while enforcing the selected workspace\u2019s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
     },
     "host:hubControl.ensureUserWorkspaces": {
       "review": "authenticated-private-workspace-pair",
-      "change": "Idempotently creates only the authenticated active account’s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
+      "change": "Idempotently creates only the authenticated active account\u2019s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
     },
     "host:hubControl.getWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-read",
-      "change": "Reads the selected workspace’s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
+      "change": "Reads the selected workspace\u2019s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
+    },
+    "host:hubControl.observeDevices": {
+      "review": "caller-visible-device-readiness-observation",
+      "change": "Observe an opaque revision of the paired-device configuration visible to the authenticated caller. Membership and role changes re-evaluate visibility; activity timestamps do not self-invalidate the observation. No device mutation or device-detail inspection authority is granted. Both the workspace route and hub route declare user, host, and code callers consistently; website callers remain excluded. The hub route derives workspace access from the authenticated subject and existing membership before observing devices."
     },
     "host:hubControl.registerLocalTemplateSource": {
       "review": "host-owned-exact-source-registration",
@@ -895,7 +911,7 @@
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
-      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
+      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan \u00a74.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
     },
     "host:notification.showToUser": {
       "review": "code-owned-addressed-transient-notification",
@@ -928,14 +944,6 @@
     "host:panelRuntime.getAttempt": {
       "review": "exact-panel-attempt-resolution-read",
       "change": "Adds an open, read-only resolution of one opaque attempt reference. The receiver returns bounded lifecycle identity and state without panel mutation or authority acquisition."
-    },
-    "host:presence.markPanelActive": {
-      "review": "write-classified-panel-presence-mutation",
-      "change": "Classifies marking one panel active as a write. Existing panel.presence.update capability, gated presence.control tier, and caller principals remain unchanged."
-    },
-    "host:presence.markPanelsOwned": {
-      "review": "write-classified-panel-ownership-mutation",
-      "change": "Classifies claiming panel ownership as a write. Existing panel.presence.update capability, gated presence.control tier, and caller principals remain unchanged."
     },
     "host:permissions.listPendingRequests": {
       "review": "bounded-waiting-authority-request-read",
@@ -972,6 +980,14 @@
     "host:phoneNativeEndpoint.readiness": {
       "review": "exact-account-paired-mobile-readiness",
       "change": "Only the exact approved phone-provisioning provider may query the fixed mobileWorkspace.readiness method on the exact paired mobile connection belonging to the initiating account. This read does not install, pair, mint credentials, or grant authority; the public mobile.devices.read gate remains authoritative."
+    },
+    "host:presence.markPanelActive": {
+      "review": "write-classified-panel-presence-mutation",
+      "change": "Classifies marking one panel active as a write. Existing panel.presence.update capability, gated presence.control tier, and caller principals remain unchanged."
+    },
+    "host:presence.markPanelsOwned": {
+      "review": "write-classified-panel-ownership-mutation",
+      "change": "Classifies claiming panel ownership as a write. Existing panel.presence.update capability, gated presence.control tier, and caller principals remain unchanged."
     },
     "host:problemReports.appendNarrative": {
       "review": "owner-scoped-revisioned-narrative-append",
@@ -1689,9 +1705,17 @@
       "review": "receiver-owned-context-boundary-principals",
       "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
     },
+    "host:workspace-state.slot.patchCurrentStateArgs": {
+      "review": "owner-serialized-current-panel-state-patch",
+      "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
+    },
     "host:workspace-state.slot.patchCurrentStateArgs#capability:context.boundary": {
       "review": "receiver-owned-context-boundary-principals",
       "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
+    },
+    "host:workspace.getAgentResources": {
+      "review": "exact-context-agent-resource-snapshot",
+      "change": "Capture workspace instructions and agent-visible skill definitions together through one semantic corpus read in the authenticated runtime context. Preserve existing skill visibility and path validation, admit only host, user and code callers with workspace membership, and grant no website access or mutation authority."
     },
     "host:workspaceTemplateSource.composeExact": {
       "review": "reviewed-exact-workspace-source-consumer",
@@ -1716,26 +1740,6 @@
     "host:workspaceTemplateSource.resolveLocal": {
       "review": "reviewed-exact-workspace-source-consumer",
       "change": "Records the existing exact checkpoint lookup for the reviewed templates extension and authenticated shell. It returns the designated pin for one template URL without exposing native checkout paths or executing its source."
-    },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPatchCurrentStateArgs": {
-      "review": "owner-serialized-current-panel-state-patch",
-      "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
-    },
-    "host:workspace-state.slot.patchCurrentStateArgs": {
-      "review": "owner-serialized-current-panel-state-patch",
-      "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
-    },
-    "host:credentials.observeChanges": {
-      "review": "profile-credential-opaque-revision-observation",
-      "change": "Authenticated workspace clients observe an opaque revision of credential and provider-client configuration owners. The receiver returns no record, secret, or mutation authority; cancellation closes and joins both file observations, preserving independent failures."
-    },
-    "host:hubControl.observeDevices": {
-      "review": "caller-visible-device-readiness-observation",
-      "change": "Observe an opaque revision of the paired-device configuration visible to the authenticated caller. Membership and role changes re-evaluate visibility; activity timestamps do not self-invalidate the observation. No device mutation or device-detail inspection authority is granted. Both the workspace route and hub route declare user, host, and code callers consistently; website callers remain excluded. The hub route derives workspace access from the authenticated subject and existing membership before observing devices."
-    },
-    "host:workspace.getAgentResources": {
-      "review": "exact-context-agent-resource-snapshot",
-      "change": "Capture workspace instructions and agent-visible skill definitions together through one semantic corpus read in the authenticated runtime context. Preserve existing skill visibility and path validation, admit only host, user and code callers with workspace membership, and grant no website access or mutation authority."
     }
   },
   "version": 1

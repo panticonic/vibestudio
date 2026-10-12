@@ -12,7 +12,6 @@ const expected = new Set([
   "runtime-entity",
   "panel-history",
   "app-generation",
-  "terminal-app",
   "runtime-image",
   "extension-generation",
   "eval-run",

@@ -5982,25 +5982,6 @@ describe("RpcServer caller identity", () => {
     expect(testServer(server).connections.getCallerConnections("electron-main")).toHaveLength(2);
   });
 
-  it("attributes a server-spawned app grant to the canonical system subject", async () => {
-    const membershipGate = vi.fn((subject) => subject?.userId === "system");
-    const { server, connectionGrants, entityCache } = createServer({ membershipGate });
-    entityCache._onActivate(makeRecord("@workspace-apps/remote-cli", "app"));
-    const grant = connectionGrants.grant("@workspace-apps/remote-cli", "server", {
-      subject: { userId: "system", handle: "system" },
-    }).token;
-    const ws = createTestWs();
-
-    await testServer(server).handleAuth(ws, grant, "terminal-app");
-
-    expect(ws.close).not.toHaveBeenCalled();
-    expect(membershipGate).toHaveBeenCalledWith({ userId: "system", handle: "system" });
-    expect(
-      testServer(server).connections.getCallerConnections("@workspace-apps/remote-cli")[0]?.caller
-        .subject
-    ).toEqual({ userId: "system", handle: "system" });
-  });
-
   it("rejects WS authentication when a connection grant has no runtime entity kind", async () => {
     const { server, connectionGrants, entityCache } = createServer();
     const principal = makeRecord("missing-principal", "app");

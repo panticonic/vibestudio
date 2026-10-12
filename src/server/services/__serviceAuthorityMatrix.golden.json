@@ -312,6 +312,26 @@
         "capability": null,
         "presentation": null
       },
+      "grantAppPrincipal": {
+        "authority": {
+          "principals": [
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "identity",
+          "family": "auth.read",
+          "rationale": "An authenticated device shell obtains the device-scoped identity of an approved app it runs itself; the app's authority was admitted at its launch gate."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "grantConnection": {
         "authority": {
           "principals": [

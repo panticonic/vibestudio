@@ -2589,56 +2589,22 @@ async function main() {
             buildKeys() {
               const appHost = appHostForGateway;
               if (!appHost) throw new Error("App registry is not available");
-              return appHost.registry
-                .list()
-                .filter((entry) => entry.target !== "terminal")
-                .flatMap((entry) => [
-                  ...(entry.activeBundleKey
-                    ? [
-                        {
-                          ownerId: entry.name,
-                          buildKey: entry.activeBundleKey,
-                          reason: "active" as const,
-                        },
-                      ]
-                    : []),
-                  ...entry.previousVersions.map((version) => ({
-                    ownerId: entry.name,
-                    buildKey: version.activeBundleKey,
-                    reason: "rollback" as const,
-                  })),
-                ]);
-            },
-            resolve: async ({ buildKey }) => {
-              const build = await buildSystemInstance?.peekBuildByKey(buildKey);
-              return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
-            },
-          }),
-          buildKeyRootProvider({
-            id: "terminal-app",
-            owner: "terminal-app",
-            buildKeys() {
-              const appHost = appHostForGateway;
-              if (!appHost) throw new Error("App registry is not available");
-              return appHost.registry
-                .list()
-                .filter((entry) => entry.target === "terminal")
-                .flatMap((entry) => [
-                  ...(entry.activeBundleKey
-                    ? [
-                        {
-                          ownerId: entry.name,
-                          buildKey: entry.activeBundleKey,
-                          reason: "active" as const,
-                        },
-                      ]
-                    : []),
-                  ...entry.previousVersions.map((version) => ({
-                    ownerId: entry.name,
-                    buildKey: version.activeBundleKey,
-                    reason: "rollback" as const,
-                  })),
-                ]);
+              return appHost.registry.list().flatMap((entry) => [
+                ...(entry.activeBundleKey
+                  ? [
+                      {
+                        ownerId: entry.name,
+                        buildKey: entry.activeBundleKey,
+                        reason: "active" as const,
+                      },
+                    ]
+                  : []),
+                ...entry.previousVersions.map((version) => ({
+                  ownerId: entry.name,
+                  buildKey: version.activeBundleKey,
+                  reason: "rollback" as const,
+                })),
+              ]);
             },
             resolve: async ({ buildKey }) => {
               const build = await buildSystemInstance?.peekBuildByKey(buildKey);
@@ -6339,10 +6305,8 @@ async function main() {
         openUnitReviewFor: unitReviewLookup.forUnavailableCode,
         notificationService: notificationResult.internal,
         entityCache,
-        connectionGrants,
         readWorkspaceFileAtState,
         describeCapability,
-        getGatewayUrl: () => getLocalGatewayUrl("app startup"),
         getReactNativeAppArtifactBaseUrl: () => getLocalGatewayUrl("React Native app artifact"),
         getTerminalAppArtifactBaseUrl: () => getLocalGatewayUrl("Terminal app artifact"),
         // Manifest-declared preferred app per host target (meta/vibestudio.yml
@@ -7350,11 +7314,8 @@ async function main() {
             },
           getMobileAppBootstrap: async (source) =>
             appHostForGateway?.reactNative.getBootstrap(source) ?? null,
-          registerMobileAppPrincipal: (deviceId, source) =>
-            appHostForGateway?.reactNative.registerPrincipal(deviceId, source) ?? null,
-          retireMobileAppPrincipal: (deviceId) => {
-            appHostForGateway?.reactNative.retirePrincipal(deviceId);
-          },
+          registerDevicePrincipal: async (target, deviceId, source) =>
+            (await appHostForGateway?.registerDevicePrincipal(target, deviceId, source)) ?? null,
           resolveRuntimeEntity: (id) => getEntityStore().resolveActiveRecord(id),
         }),
         routeRegistry

@@ -517,22 +517,6 @@ function validateAppBlock(
     );
   }
 
-  // Interactive (TUI) terminal apps get the real TTY (stdio inherit) at launch.
-  if (appRecord["interactive"] !== undefined) {
-    if (typeof appRecord["interactive"] !== "boolean") {
-      throw new UnitManifestError(
-        `App ${options.unitName} vibestudio.app.interactive must be a boolean`,
-        "MANIFEST_APP_INTERACTIVE"
-      );
-    }
-    if (target !== "terminal" && appRecord["interactive"] === true) {
-      throw new UnitManifestError(
-        `App ${options.unitName} vibestudio.app.interactive is only supported for terminal apps`,
-        "MANIFEST_APP_INTERACTIVE_TARGET"
-      );
-    }
-  }
-
   for (const forbidden of ["main", "preload", "window"]) {
     if (appRecord[forbidden] !== undefined) {
       throw new UnitManifestError(

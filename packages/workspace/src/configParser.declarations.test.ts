@@ -88,7 +88,7 @@ hostTargets:
     requiresExtensions:
       - extensions/react-native
   terminal:
-    app: apps/remote-cli
+    app: apps/terminal-browser
 `;
 
 describe("manifest declarations: providers / trust / hostTargets", () => {

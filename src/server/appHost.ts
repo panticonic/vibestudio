@@ -82,8 +82,7 @@ import {
   createCapabilityAuthorizer,
   type CapabilityAuthorizer,
 } from "./services/capabilityAuthorizer.js";
-import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
-import { TerminalAppRuntime } from "./terminalAppRuntime.js";
+import { DeviceAppPrincipals, type DeviceAppPrincipal } from "./deviceAppPrincipals.js";
 import type { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import {
   ReactNativeAppAdapter,
@@ -132,8 +131,6 @@ export interface AppRegistryEntry extends UnitRegistryEntryBase {
   target: WorkspaceAppTarget;
   capabilities: AppCapability[];
   activeExecutionDigest: string | null;
-  /** Terminal apps that render an interactive TUI (inherit the real TTY). */
-  interactive?: boolean;
   previousVersions: AppVersionRecord[];
   lastErrorDetails?: AppUpdateErrorDiagnostic | null;
   activationTrust?: AppActivationTrustRecord | null;
@@ -165,7 +162,7 @@ interface AppAvailablePayload {
   appId: string;
   source: string;
   target: WorkspaceAppTarget;
-  launchMode: "hosted-view" | "native-bootstrap" | "terminal-process";
+  launchMode: AppLaunchMode;
   url?: string;
   artifactRoute: string;
   artifacts: Array<{
@@ -369,8 +366,6 @@ export interface AppHostDeps {
   }): ExactUnitAdmissionReview | null;
   entityCache?: Pick<EntityCache, "resolve" | "listActive" | "_onActivate" | "_onRetire">;
   executionPublicationPort?: ExecutionPublicationPort;
-  connectionGrants?: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
-  getGatewayUrl(): string;
   getReactNativeAppArtifactBaseUrl(): string;
   getTerminalAppArtifactBaseUrl(): string;
   /**
@@ -389,7 +384,7 @@ export interface AppHostDeps {
 export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   readonly registry: UnitRegistry<AppRegistryEntry>;
   readonly reactNative: ReactNativeAppAdapter;
-  readonly terminal: TerminalAppRuntime;
+  readonly principals: DeviceAppPrincipals;
   private readonly trustResolver: UnitTrustResolver<AppRegistryEntry>;
   private readonly unitHost: UnitHost<
     AppRegistryEntry,
@@ -442,7 +437,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           })),
         ];
         return {
-          owner: entry.target === "terminal" ? "terminal-app" : "app-generation",
+          owner: "app-generation",
           ownerId: entry.name,
           artifacts: builds.map(({ buildKey, executionDigest }) => {
             if (!executionDigest) {
@@ -486,8 +481,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       makePendingEntry: (node, decl, building) => this.pendingEntryFor(node, decl, building),
       applyTrusted: (node, decl) => this.applyDeclared(node, decl),
       removeUndeclared: async (entry) => {
-        await this.terminal.stop(entry.name);
-        this.reactNative.retirePrincipalsForEntry(entry);
+        this.principals.retireForEntry(entry);
         this.retireAppEntity(entry.name);
         this.emitStatus(entry.name, "stopped", null);
       },
@@ -546,7 +540,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       buildSystem: deps.buildSystem,
       resolveActiveBuild: (entry) => this.resolveActiveAppBuild(entry),
       approvalCoordinator: deps.approvalCoordinator,
-      entityCache: deps.entityCache,
       getArtifactBaseUrl: () => deps.getReactNativeAppArtifactBaseUrl(),
       selectedSource: () => deps.getHostTargetDecl?.("react-native")?.appSource ?? null,
       listCandidates: () => this.listHostTargetCandidates("react-native"),
@@ -563,16 +556,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       acceptPreapprovedTrust: (keys) => this.unitHost.acceptPreapprovedTrust(keys),
       emitStatus: (appId, status, error) => this.emitStatus(appId, status, error),
     });
-    this.terminal = new TerminalAppRuntime({
+    this.principals = new DeviceAppPrincipals({
       workspaceId: deps.workspaceId,
       registry: this.registry,
-      buildSystem: deps.buildSystem,
-      diagnostics: deps.diagnostics,
-      connectionGrants: deps.connectionGrants,
       entityCache: deps.entityCache,
-      getGatewayUrl: () => deps.getGatewayUrl(),
-      validateBuild: (appId, build) => this.validateBuildForTarget(appId, "terminal", build),
-      emitStatus: (appId, status, error) => this.emitStatus(appId, status, error),
+      resolveActiveBuild: (entry) => this.resolveActiveAppBuild(entry),
     });
     deps.buildSystem.onPushBuild((source, trigger) => {
       this.admitEventWork(() => this.handleSourceRebuilt(source, trigger));
@@ -762,7 +750,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       ...this.activationFlights.values(),
       ...this.eventFlights,
       ...(this.initialization ? [this.initialization] : []),
-      this.terminal.shutdown(),
     ];
     const lifecycle = await Promise.allSettled(lifecyclePromises);
     const failures = [
@@ -1178,7 +1165,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
 
     const updated = this.selectAppVersion(entry, selected, "running", null);
     await this.activateAppEntity(updated, build);
-    await this.terminal.sync(updated, entry);
     const activated = this.registry.get(updated.name) ?? updated;
     await this.emitAvailable(
       activated,
@@ -1196,10 +1182,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     await this.initialize();
     const entry = this.findRegistryEntry(sourceOrName);
     if (!entry) throw new Error(`Unknown app: ${sourceOrName}`);
-    if (entry.target === "terminal") {
-      await this.terminal.restart(entry.name);
-      return;
-    }
     if (!entry.activeBundleKey) throw new Error(`App ${entry.name} has no active build`);
     const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
     if (!build) throw new Error(`Active app build is missing: ${entry.activeBundleKey}`);
@@ -1291,86 +1273,17 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         openReviewFor: this.deps.openUnitReviewFor,
       });
     }
-    const previousPrincipal =
-      prepared.target === "terminal" ? this.deps.entityCache?.resolve(prepared.name) : null;
     const entry = this.registry.patch(prepared.name, { status: "running", lastError: null });
     await this.activateAppEntity(entry, build);
-    if (entry.target === "terminal") {
-      if (this.terminal.isRunningBuild(entry.name, prepared.activeBundleKey)) {
-        return;
-      } else {
-        try {
-          await this.terminal.start(entry);
-        } catch (error) {
-          try {
-            this.reconcileTerminalActivationFailure(entry, prepared, previousPrincipal, error);
-          } catch (reconciliationError) {
-            throw new AggregateError(
-              [error, reconciliationError],
-              `Terminal app ${entry.name} failed to start and its release state could not be reconciled`,
-              { cause: error }
-            );
-          }
-          throw error;
-        }
-      }
-    }
     await this.emitAvailable(entry, { lifecycleType: "available" }, build);
   }
 
   async retire(sourceOrName: string): Promise<void> {
     const entry = this.findRegistryEntry(sourceOrName);
     if (!entry) throw new Error(`Unknown app: ${sourceOrName}`);
-    await this.terminal.stop(entry.name);
     this.retireAppEntity(entry.name);
     this.registry.patch(entry.name, { status: "stopped", lastError: null });
     this.emitStatus(entry.name, "stopped", null);
-  }
-
-  private reconcileTerminalActivationFailure(
-    failedEntry: AppRegistryEntry,
-    previousEntry: AppRegistryEntry,
-    previousPrincipal: EntityRecord | null | undefined,
-    error: unknown
-  ): void {
-    const message = error instanceof Error ? error.message : String(error);
-    const currentPrincipal = this.deps.entityCache?.resolve(failedEntry.name);
-    if (
-      currentPrincipal?.kind === "app" &&
-      currentPrincipal.status === "active" &&
-      currentPrincipal.activeBuildKey === failedEntry.activeBundleKey
-    ) {
-      this.retireAppEntity(failedEntry.name);
-    }
-
-    if (
-      !previousPrincipal ||
-      previousPrincipal.kind !== "app" ||
-      previousPrincipal.status !== "active"
-    ) {
-      this.registry.patch(failedEntry.name, { status: "error", lastError: message });
-      return;
-    }
-    const previousBuildKey = previousPrincipal.activeBuildKey;
-    const priorRelease = previousEntry.previousVersions.find(
-      (version) => version.activeBundleKey === previousBuildKey
-    );
-    if (!priorRelease) {
-      this.registry.patch(failedEntry.name, { status: "error", lastError: message });
-      return;
-    }
-
-    const oldBuildIsRunning =
-      !!previousBuildKey && this.terminal.isRunningBuild(failedEntry.name, previousBuildKey);
-    if (oldBuildIsRunning) this.deps.entityCache?._onActivate(previousPrincipal);
-    const current = this.registry.get(failedEntry.name) ?? failedEntry;
-    this.selectAppVersion(
-      current,
-      priorRelease,
-      oldBuildIsRunning ? "running" : "available",
-      message
-    );
-    this.emitStatus(failedEntry.name, oldBuildIsRunning ? "running" : "available", message);
   }
 
   private selectAppVersion(
@@ -1420,6 +1333,24 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       level: entry.level === "error" ? "error" : "info",
       message: entry.message,
     }));
+  }
+
+  /**
+   * Activate the device-scoped principal through which a client device runs
+   * the selected app of `target` (`hostTargets.<target>.app` unless `source`
+   * names another app). Returns null while that app has no running build.
+   */
+  async registerDevicePrincipal(
+    target: WorkspaceAppTarget,
+    deviceId: string,
+    source?: string | null
+  ): Promise<DeviceAppPrincipal | null> {
+    // Client apps are System-workspace units; nowhere else can mint their principals.
+    this.assertAppHosting();
+    await this.initialize();
+    const resolvedSource = source ?? this.deps.getHostTargetDecl?.(target)?.appSource;
+    if (!resolvedSource) return null;
+    return this.principals.register(target, deviceId, resolvedSource);
   }
 
   hasAppCapability(callerId: string, capability: AppCapability): boolean {
@@ -1893,20 +1824,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         this.emitStatus(entry.name, entry.status, null);
       },
       onError: (_node, _decl, message) => {
-        const current = this.registry.get(node.name);
-        if (
-          current?.target === "terminal" &&
-          current.activeBundleKey &&
-          this.terminal.isRunningBuild(node.name, current.activeBundleKey)
-        ) {
-          // UnitHost marks every failed update as an error. The process owner
-          // is authoritative for whether the prior exact image is still live.
-          // Keep that real service available while reporting the candidate error.
-          this.registry.patch(node.name, {
-            status: "running",
-            lastError: message,
-          });
-        }
         this.emitStatus(node.name, this.registry.get(node.name)?.status ?? "error", message);
       },
     });
@@ -1958,7 +1875,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         extra: {
           target,
           capabilities,
-          interactive: this.appInteractive(node),
           activeExecutionDigest: build.metadata.execution?.executionDigest ?? null,
           activationTrust: null,
         },
@@ -2054,7 +1970,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       previousBuildKey: opts.previousBuildKey ?? null,
       previousEffectiveVersion: opts.previousEffectiveVersion ?? null,
       canRollback: entry.previousVersions.length > 0,
-      adoptionPolicy: appAdoptionPolicy(entry.target, opts.lifecycleType ?? "available"),
+      adoptionPolicy: appAdoptionPolicy(opts.lifecycleType ?? "available"),
       selectedForHost,
       integrity: details?.integrity ?? null,
       rnHostAbi: details?.rnHostAbi ?? null,
@@ -2072,8 +1988,8 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       previousBuildKey: opts.previousBuildKey ?? null,
       previousEffectiveVersion: opts.previousEffectiveVersion ?? null,
       canRollback: entry.previousVersions.length > 0,
-      requiresReload: entry.target !== "terminal",
-      adoptionPolicy: appAdoptionPolicy(entry.target, opts.lifecycleType ?? "available"),
+      requiresReload: true,
+      adoptionPolicy: appAdoptionPolicy(opts.lifecycleType ?? "available"),
       ...(selectedForHost === undefined ? {} : { selectedForHost }),
     });
     if (opts.notify) this.notifyAppUpdateAvailable(entry);
@@ -2239,19 +2155,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
             },
           ]
         : []),
-      ...(entry.target === "terminal"
-        ? [
-            {
-              id: "runtime.supervision.restart",
-              label: entry.status === "running" ? "Restart" : "Start",
-              variant: "solid" as const,
-              command: {
-                type: "runtime.supervision.restart" as const,
-                identity: { kind: "app" as const, entityId: entry.name },
-              },
-            },
-          ]
-        : []),
       ...(entry.previousVersions.length > 0
         ? [
             {
@@ -2326,12 +2229,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       target: previous.target,
       capabilities: previous.capabilities,
       previousVersions: previous.previousVersions ?? [],
-      status:
-        previous.target === "terminal" &&
-        previous.activeBundleKey &&
-        this.terminal.isRunningBuild(name, previous.activeBundleKey)
-          ? "running"
-          : "error",
+      status: "error",
       lastError: message,
       lastErrorDetails: diagnostic,
       activationTrust: previous.activationTrust ?? null,
@@ -2772,8 +2670,8 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           previousBuildKey: entry.activeBundleKey,
           previousEffectiveVersion: entry.activeEv,
           canRollback: prepared.previousVersions.length > 0,
-          requiresReload: prepared.target !== "terminal",
-          adoptionPolicy: appAdoptionPolicy(prepared.target, "update-available"),
+          requiresReload: true,
+          adoptionPolicy: appAdoptionPolicy("update-available"),
         });
         this.notifyAppUpdateAvailable(prepared);
       }
@@ -2925,10 +2823,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     return [...(node.manifest.app?.capabilities ?? [])].sort();
   }
 
-  private appInteractive(node: AppGraphNode): boolean {
-    return (node.manifest.app as { interactive?: unknown } | undefined)?.interactive === true;
-  }
-
   private currentDependencyEvs(node: AppGraphNode): Record<string, string> {
     return collectTransitiveUnitDependencyEvs(
       this.deps.buildSystem.getGraph().allNodes(),
@@ -3018,12 +2912,18 @@ function buildProviderIdentityValue(provider: AppBuildProviderDetails): string {
   );
 }
 
-function appLaunchMode(
-  target: WorkspaceAppTarget
-): "hosted-view" | "native-bootstrap" | "terminal-process" {
+/**
+ * How a client runs an app of each target. Electron hosts the artifact in a
+ * view, the mobile native host bootstraps its bundle, and `vibestudio terminal`
+ * imports the terminal app's ESM module into its own process. No target runs
+ * as a server process.
+ */
+export type AppLaunchMode = "hosted-view" | "native-bootstrap" | "client-module";
+
+function appLaunchMode(target: WorkspaceAppTarget): AppLaunchMode {
   if (target === "electron") return "hosted-view";
   if (target === "react-native") return "native-bootstrap";
-  return "terminal-process";
+  return "client-module";
 }
 
 function appRegistryStatusForTarget(): AppRegistryEntry["status"] {
@@ -3174,12 +3074,9 @@ function appVersionHistory(
 }
 
 function appAdoptionPolicy(
-  target: WorkspaceAppTarget,
   lifecycleType: "available" | "update-available" | "rolled-back"
 ): "immediate" | "prompt" {
-  if (target === "terminal") return "immediate";
-  if (lifecycleType === "update-available") return "prompt";
-  return "immediate";
+  return lifecycleType === "update-available" ? "prompt" : "immediate";
 }
 
 function appUpdateTargetCopy(target: WorkspaceAppTarget): { title: string; message: string } {
@@ -3192,7 +3089,7 @@ function appUpdateTargetCopy(target: WorkspaceAppTarget): { title: string; messa
   if (target === "terminal") {
     return {
       title: "Terminal app update available",
-      message: "a new trusted terminal build is ready.",
+      message: "a new trusted terminal build is ready. Restart `vibestudio terminal` to use it.",
     };
   }
   return {
