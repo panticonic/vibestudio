@@ -1,6 +1,6 @@
 import { createMobileHubControlClient } from "./hubControlClient.js";
 import type { IrohConnection } from "./connect.js";
-import { composeMobileSession } from "./connectionPair.js";
+import { combineMobileFailures, composeMobileSession } from "./connectionPair.js";
 import {
   createPairedMobileConnection,
   createRoutedMobileConnection,
@@ -74,11 +74,7 @@ export async function completeFreshMobilePairing(
     try {
       await closeControl();
     } catch (closeError) {
-      const failure = error instanceof Error ? error.message : String(error);
-      const cleanup = closeError instanceof Error ? closeError.message : String(closeError);
-      throw new Error(
-        `Fresh pairing failed (${failure}) and connection cleanup failed (${cleanup})`
-      );
+      throw combineMobileFailures(error, closeError, "Fresh pairing failed");
     }
     throw error;
   }

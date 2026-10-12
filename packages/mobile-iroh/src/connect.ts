@@ -221,14 +221,12 @@ function collectRetirementFailures(results: readonly PromiseSettledResult<unknow
 }
 
 async function retireOwnedConnection(
-  session: IrohClientSession,
   transport: LifecycleIrohClientPipe,
   getTerminalRetirement: () => Promise<void> | null
 ): Promise<unknown[]> {
-  const results = await Promise.allSettled([
-    Promise.resolve().then(() => session.close()),
-    Promise.resolve().then(() => transport.close()),
-  ]);
+  // The reconnect owner owns and joins its logical sessions. Closing one here
+  // races its control write against that owner's physical pipe retirement.
+  const results = await Promise.allSettled([transport.close()]);
   const terminalRetirement = getTerminalRetirement();
   if (terminalRetirement) {
     results.push(...(await Promise.allSettled([terminalRetirement])));
@@ -344,7 +342,7 @@ export async function establishIrohConnection(
     await session.ready?.();
     console.log("[mobile-iroh] authenticated session ready");
   } catch (error) {
-    const failures = await retireOwnedConnection(session, transport, () => terminalRetirement);
+    const failures = await retireOwnedConnection(transport, () => terminalRetirement);
     if (failures.length > 0) {
       throw new AggregateError([error, ...failures], "Iroh session opening and cleanup failed", {
         cause: error,
@@ -372,7 +370,7 @@ export async function establishIrohConnection(
     waitUntilConnected: (timeoutMs) => waitUntilConnected(transport, session, timeoutMs),
     async close() {
       removeLifecycle();
-      const failures = await retireOwnedConnection(session, transport, () => terminalRetirement);
+      const failures = await retireOwnedConnection(transport, () => terminalRetirement);
       throwRetirementFailures(failures, "Mobile Iroh connection cleanup failed");
     },
   };

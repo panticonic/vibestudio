@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IrohConnection } from "./connect.js";
 import { completeFreshMobilePairing } from "./freshPairing.js";
+import { MobileConnectionAggregateError } from "./connectionPair.js";
 import type { StoredMobileConnection } from "./storedCredential.js";
 
 const credential = {
@@ -173,16 +174,21 @@ describe("fresh mobile Iroh pairing commit", () => {
   });
 
   it("reports both the pairing failure and cleanup failure", async () => {
+    const pairingFailure = new Error("keychain locked");
+    const cleanupFailure = new Error("pipe close failed");
     const fixtureValue = fixture({
-      persist: async () => Promise.reject(new Error("keychain locked")),
-      close: async () => Promise.reject(new Error("pipe close failed")),
+      persist: async () => Promise.reject(pairingFailure),
+      close: async () => Promise.reject(cleanupFailure),
     });
-    await expect(
-      completeFreshMobilePairing({
-        ...fixtureValue,
-        credential,
-        controlPairing,
-      })
-    ).rejects.toThrow(/keychain locked.*pipe close failed/u);
+    const failure = await completeFreshMobilePairing({
+      ...fixtureValue,
+      credential,
+      controlPairing,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(MobileConnectionAggregateError);
+    if (!(failure instanceof MobileConnectionAggregateError)) throw failure;
+    expect(failure.errors).toEqual([pairingFailure, cleanupFailure]);
+    expect(failure.cause).toBe(pairingFailure);
+    expect(failure.message).toMatch(/keychain locked.*pipe close failed/u);
   });
 });

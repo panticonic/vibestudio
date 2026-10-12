@@ -35,17 +35,28 @@ vi.mock("@vibestudio/rpc", async (original) => ({
   createRpcClient: () => ({}),
 }));
 vi.mock("@vibestudio/rpc/transports/reconnectingIrohClient", () => ({
-  createReconnectingIrohClientPipe: () => ({
-    close: fixture.close,
-    openSession: (options: { onTerminalClose: (error: Error) => void }) => {
-      fixture.terminal = options.onTerminalClose;
-      return {
-        ready: fixture.ready,
-        callerId: () => "shell:test",
-        close: fixture.sessionClose,
-      };
-    },
-  }),
+  createReconnectingIrohClientPipe: () => {
+    let closing: Promise<void> | null = null;
+    return {
+      // The transport owns its logical sessions and shares concurrent close.
+      close: () =>
+        (closing ??= (async () => {
+          const results = await Promise.allSettled([fixture.close(), fixture.sessionClose()]);
+          const failures = results.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : []
+          );
+          if (failures.length) throw new AggregateError(failures, "Reconnect owner cleanup failed");
+        })()),
+      openSession: (options: { onTerminalClose: (error: Error) => void }) => {
+        fixture.terminal = options.onTerminalClose;
+        return {
+          ready: fixture.ready,
+          callerId: () => "shell:test",
+          close: fixture.sessionClose,
+        };
+      },
+    };
+  },
 }));
 import {
   establishIrohConnection,
@@ -85,6 +96,14 @@ describe("MobileEndpointPool relay configuration", () => {
 });
 
 describe("mobile device revocation", () => {
+  it("closes each logical session through its reconnect owner exactly once", async () => {
+    const provider = makeReturningShellTokenProvider(credential);
+    const connection = await establishIrohConnection(pairing, provider, "identity", "app-scheme");
+    await connection.close();
+    expect(fixture.close).toHaveBeenCalledOnce();
+    expect(fixture.sessionClose).toHaveBeenCalledOnce();
+  });
+
   it("clears the revoked credential, retires foreground reconnect, and joins secure-store deletion", async () => {
     const provider = makeReturningShellTokenProvider(credential);
     await persistStoredMobileConnection(

@@ -48,6 +48,7 @@ import {
   createMobileIrohIdentity,
   deleteMobileIrohIdentity,
   activateApprovedWorkspaceApp as activateApprovedWorkspaceAppShared,
+  combineMobileFailures,
 } from "@vibestudio/mobile-iroh";
 import { launchGateView } from "@vibestudio/shared/bootstrapLaunchGate";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
@@ -177,11 +178,7 @@ async function closeBootstrapConnectionAfterFailure(connection, error) {
     await connection.close();
     return error;
   } catch (closeError) {
-    const failure = error instanceof Error ? error.message : String(error);
-    const cleanup = closeError instanceof Error ? closeError.message : String(closeError);
-    return new Error(
-      `Mobile bootstrap failed (${failure}) and connection cleanup failed (${cleanup})`
-    );
+    return combineMobileFailures(error, closeError, "Mobile bootstrap failed");
   }
 }
 

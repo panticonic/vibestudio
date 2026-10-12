@@ -1,6 +1,6 @@
 import { createMobileHubControlClient } from "./hubControlClient.js";
 import type { IrohConnection } from "./connect.js";
-import { composeMobileSession } from "./connectionPair.js";
+import { combineMobileFailures, composeMobileSession } from "./connectionPair.js";
 import {
   createRoutedMobileConnection,
   selectMobileConnectionWorkspace,
@@ -25,9 +25,7 @@ async function closeAfterFailure(
   try {
     await close();
   } catch (closeError) {
-    const failureMessage = failure instanceof Error ? failure.message : String(failure);
-    const closeMessage = closeError instanceof Error ? closeError.message : String(closeError);
-    throw new Error(`${context} (${failureMessage}) and cleanup failed (${closeMessage})`);
+    throw combineMobileFailures(failure, closeError, context);
   }
 }
 

@@ -8,7 +8,7 @@ export type {
   ActivateWorkspaceAppOptions,
 } from "./bundleDelivery.js";
 export { completeFreshMobilePairing } from "./freshPairing.js";
-export { MobileConnectionAggregateError } from "./connectionPair.js";
+export { MobileConnectionAggregateError, combineMobileFailures } from "./connectionPair.js";
 export {
   createPairedMobileConnection,
   createRoutedMobileConnection,

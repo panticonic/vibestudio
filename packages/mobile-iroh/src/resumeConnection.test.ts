@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { IROH_REACH_VERSION } from "@vibestudio/iroh-transport";
 import { resumeMobileConnection } from "./resumeConnection.js";
+import { MobileConnectionAggregateError } from "./connectionPair.js";
 import { createPairedMobileConnection, createRoutedMobileConnection } from "./storedCredential.js";
 import type { IrohConnection } from "./connect.js";
 
@@ -113,11 +114,15 @@ describe("returning mobile app source", () => {
 
   it("preserves both routing and cleanup failures", async () => {
     const value = fixture();
-    value.call.mockRejectedValue(new Error("account unavailable"));
-    vi.mocked(value.control.close).mockRejectedValue(new Error("cleanup failed"));
-    await expect(resumeMobileConnection(stored, value)).rejects.toThrow(
-      "account unavailable) and cleanup failed (cleanup failed)"
-    );
+    const routingFailure = new Error("account unavailable");
+    const cleanupFailure = new Error("cleanup failed");
+    value.call.mockRejectedValue(routingFailure);
+    vi.mocked(value.control.close).mockRejectedValue(cleanupFailure);
+    const failure = await resumeMobileConnection(stored, value).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(MobileConnectionAggregateError);
+    if (!(failure instanceof MobileConnectionAggregateError)) throw failure;
+    expect(failure.errors).toEqual([routingFailure, cleanupFailure]);
+    expect(failure.message).toMatch(/account unavailable.*cleanup failed/u);
     expect(value.control.close).toHaveBeenCalledOnce();
   });
 });
