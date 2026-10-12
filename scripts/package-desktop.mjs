@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { Arch, Platform, build } from "electron-builder";
+import { includeDesktopRuntimeScriptClosure } from "./lib/npm-runtime-script-closure.mjs";
 
 function supports(values, target) {
   if (!values || values.length === 0) return true;
@@ -57,6 +58,7 @@ export async function packageDesktop(
   try {
     const config = structuredClone(base);
     config.directories.output = staging;
+    includeDesktopRuntimeScriptClosure(appRoot, config);
     config.files.push(
       ...excludedNativePackages(appRoot, platform.nodeName, arch).map(
         (name) => `!node_modules/${name}{,/**/*}`

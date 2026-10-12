@@ -367,6 +367,9 @@ importers:
       tldts:
         specifier: ^7.0.19
         version: 7.0.21
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typebox:
         specifier: ^1.1.38
         version: 1.1.38
@@ -446,9 +449,6 @@ importers:
       prettier:
         specifier: ^3.6.2
         version: 3.8.1
-      tsx:
-        specifier: ^4.21.0
-        version: 4.21.0
       vitest:
         specifier: ^3.2.7
         version: 3.2.7(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.7)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)

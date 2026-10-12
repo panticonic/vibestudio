@@ -39,6 +39,10 @@ import { fileURLToPath } from "node:url";
 import { formatRpcFailure } from "@vibestudio/rpc";
 import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
+import {
+  assertRuntimeScriptDependencies,
+  completeRuntimeScriptClosure,
+} from "./lib/npm-runtime-script-closure.mjs";
 import { STANDALONE_SERVER_RUNTIME_ARTIFACTS } from "./server-runtime-artifacts.mjs";
 import {
   assertSelectedNodeRuntimeArtifacts,
@@ -58,6 +62,16 @@ const outRoot = path.join(repoRoot, "dist-packages");
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
 const VERSION = rootPkg.version;
 const PUBLIC_SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
+const SERVER_PACKAGE_FILES = [
+  "dist",
+  "vendor",
+  "scripts",
+  "build-resources",
+  "workspace-templates",
+  "userland-builds",
+  "native/node/distribution.json",
+  ".nvmrc",
+];
 export const SERVER_RUNTIME_ARTIFACTS = STANDALONE_SERVER_RUNTIME_ARTIFACTS;
 
 // Only run the build when invoked directly (`node scripts/build-server-npm-package.mjs`),
@@ -296,15 +310,7 @@ export async function stageServer(nativeArtifacts) {
   // Passthrough CLI commands resolve these scripts relative to the installed
   // package root. Keep the CLI tree and its shared script imports together.
   copyTree(path.join(repoRoot, "scripts/cli"), path.join(root, "scripts/cli"), defaultSkip);
-  for (const script of [
-    "host-build-generations.mjs",
-    "server-runtime-artifacts.mjs",
-    "owned-process-tree.mjs",
-    "owned-process-identity.mjs",
-  ]) {
-    copyFile(`scripts/${script}`, path.join(root, "scripts", script));
-  }
-  assertPassthroughScriptsStaged(root);
+  stagePassthroughScriptClosure(root);
 
   // Vendor the host's @vibestudio/* packages under vendor/ (NOT node_modules). A
   // partial node_modules shipped in the tarball perturbs npm's reify ordering —
@@ -319,6 +325,16 @@ export async function stageServer(nativeArtifacts) {
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
   stageNodeRuntimeInstaller(root);
 
+  // The CLI's script dispatch is partly data-driven. Derive its local runtime
+  // closure from the scripts actually staged above before the later package
+  // preparation installs dependencies and builds the prepared userland.
+  const scriptClosure = completeRuntimeScriptClosure({
+    sourceRoot: repoRoot,
+    packageRoot: root,
+    packagedPaths: SERVER_PACKAGE_FILES,
+  });
+  const dependencies = computeHostDependencies();
+
   writeJson(path.join(root, "package.json"), {
     name: PUBLIC_SERVER_PACKAGE_NAME,
     version: VERSION,
@@ -331,60 +347,52 @@ export async function stageServer(nativeArtifacts) {
       vibestudio: "scripts/vibestudio-cli-shim.mjs",
     },
     engines: { node: ">=22.13.0" },
-    files: [
-      "dist",
-      "vendor",
-      "scripts",
-      "build-resources",
-      "workspace-templates",
-      "userland-builds",
-      "native/node/distribution.json",
-      ".nvmrc",
-    ],
+    files: SERVER_PACKAGE_FILES,
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     // Full host build-dependency surface (app minus electron).
-    dependencies: computeHostDependencies(),
+    dependencies,
     optionalDependencies: rootPkg.optionalDependencies,
     publishConfig: { access: "public" },
   });
+  assertRuntimeScriptDependencies({
+    packageRoot: root,
+    importedPackages: scriptClosure.bareImports,
+  });
+  assertPassthroughScriptsStaged(root);
 }
 
 export function stageNodeRuntimeInstaller(root) {
-  copyFile(
-    "scripts/node-runtime-artifacts.mjs",
-    path.join(root, "scripts/node-runtime-artifacts.mjs")
-  );
   copyFile("native/node/distribution.json", path.join(root, "native/node/distribution.json"));
   copyFile(".nvmrc", path.join(root, ".nvmrc"));
 }
 
 function copyWorkerdWindowsMetadata(root) {
-  copyFile(
-    "scripts/workerd-windows-metadata.mjs",
-    path.join(root, "scripts/workerd-windows-metadata.mjs")
-  );
   copyFile("scripts/workerd.exe.manifest", path.join(root, "scripts/workerd.exe.manifest"));
 }
 
-export function assertPassthroughScriptsStaged(root) {
-  const required = [
-    "scripts/cli/remote-serve.mjs",
-    "scripts/cli/remote-doctor.mjs",
-    "scripts/cli/lib/server-entry.mjs",
-    "scripts/cli/lib/pair-server.mjs",
-    "scripts/cli/lib/connect-grammar.generated.mjs",
-    "scripts/cli/lib/config-paths.mjs",
-    "scripts/cli/lib/smoke-remote-server.mjs",
-    "scripts/cli/lib/mobile-native-android.mjs",
-    "scripts/host-build-generations.mjs",
-    "scripts/server-runtime-artifacts.mjs",
-    "scripts/owned-process-tree.mjs",
-    "scripts/owned-process-identity.mjs",
-  ];
-  const missing = required.filter((relative) => !fs.existsSync(path.join(root, relative)));
-  if (missing.length > 0) {
-    throw new Error(`Staged package is missing CLI support files: ${missing.join(", ")}`);
+export function stagePassthroughScriptClosure(root) {
+  const stagedScripts = path.join(root, "scripts");
+  if (!fs.existsSync(stagedScripts)) {
+    throw new Error(`Staged package is missing CLI support directory: ${stagedScripts}`);
   }
+  return completeRuntimeScriptClosure({
+    sourceRoot: repoRoot,
+    packageRoot: root,
+    packagedPaths: SERVER_PACKAGE_FILES,
+  });
+}
+
+export function assertPassthroughScriptsStaged(root) {
+  const stagedScripts = path.join(root, "scripts");
+  if (!fs.existsSync(stagedScripts)) {
+    throw new Error(`Staged package is missing CLI support directory: ${stagedScripts}`);
+  }
+  return completeRuntimeScriptClosure({
+    sourceRoot: repoRoot,
+    packageRoot: root,
+    packagedPaths: SERVER_PACKAGE_FILES,
+    copyMissing: false,
+  });
 }
 
 // ---------------------------------------------------------------------------

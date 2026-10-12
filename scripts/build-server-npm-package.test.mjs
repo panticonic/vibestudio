@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   SERVER_RUNTIME_ARTIFACTS,
+  assertPassthroughScriptsStaged,
+  stagePassthroughScriptClosure,
   stageDarwinProcessObserverArtifacts,
   withOwnedCleanup,
 } from "./build-server-npm-package.mjs";
@@ -18,6 +20,38 @@ test("stages every standalone child required by source-server readiness", () => 
       SOURCE_SERVER_PREREQUISITE_ARTIFACTS.includes(artifact),
       `${artifact} must be required before a source-server launch`
     );
+  }
+});
+
+test("rejects a missing transitive CLI helper before package preparation starts", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "npm-missing-script-helper-"));
+  const missing = `missing-${process.pid}-${Date.now()}.mjs`;
+  try {
+    const entry = path.join(root, "scripts/cli/entry.mjs");
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.writeFileSync(entry, `import "./${missing}";\n`);
+    assert.throws(
+      () => stagePassthroughScriptClosure(root),
+      new RegExp(`Missing local runtime import \\.\\/${missing}`)
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("final script-closure assertion validates without copying missing package files", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "npm-unstaged-script-helper-"));
+  try {
+    const entry = path.join(root, "scripts/cli/entry.mjs");
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.writeFileSync(entry, `import "./lib/args.mjs";\n`);
+    assert.throws(
+      () => assertPassthroughScriptsStaged(root),
+      /Missing staged local runtime import \.\/lib\/args\.mjs/u
+    );
+    assert.equal(fs.existsSync(path.join(root, "scripts/cli/lib/args.mjs")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

@@ -73,6 +73,24 @@ this reader lifecycle; cancellation never emits a successful end frame.
 
 `pnpm type-check:host` and `pnpm type-check:userland` retain each original compiler program, including its global/module augmentations, source aliases, tests, and compiler options. Compiler realms and template compositions run sequentially. Incremental no-emit state is seeded privately and retained when the compiler completes, including cached diagnostics from a failed check. Compiler errors still propagate; cancellation or launch failure retains the preceding state. Temporary configurations and unpublished state are removed. State lives under the host checkout's `.cache/typecheck-state`, with derived-cache leases and quotas. Template source and installed dependencies are projected into host-owned temporary directories, so no compiler state is written into external template checkouts.
 
+## Packaged script dependency closure
+
+Npm and desktop producers use `scripts/lib/npm-runtime-script-closure.mjs`
+to derive the local dependency graph of their shipped runtime scripts. The
+entry roots come from the actual package selection, including every routable
+CLI module. Literal imports, re-exports, dynamic imports, CommonJS loads and
+`tsImport` targets contribute edges. Helpers under `scripts` are staged at
+their original relative paths; existing generated artifacts must already exist
+inside the declared artifact boundary. Missing targets and escaping paths fail
+packaging before expensive runtime preparation.
+
+Bare imports must be Node builtins, declared production dependencies, or actual
+vendored packages. Development dependencies do not satisfy a runtime contract.
+The source-only Shared SDK is loaded through `tsx`, so that loader is a production
+dependency for both npm and desktop. Desktop file selection and `asarUnpack`
+include the same discovered helper closure. Keep the installed-package command
+and runtime smoke checks as the final verification of the produced artifact.
+
 ## CI and release parallelism
 
 The CI graph in `.github/workflows/ci.yml` expresses per-platform artifact

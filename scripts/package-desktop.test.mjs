@@ -22,9 +22,20 @@ function fixture() {
       JSON.stringify({ name: `@cloudflare/${name}`, os: ["linux"], cpu: [cpu] })
     );
   }
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ dependencies: {} }));
+  fs.mkdirSync(path.join(root, "scripts/cli"), { recursive: true });
+  fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "scripts/cli/entry.mjs"),
+    `import "../lib/runtime-helper.mjs";\n`
+  );
+  fs.writeFileSync(
+    path.join(root, "scripts/lib/runtime-helper.mjs"),
+    `export const ready = true;\n`
+  );
   fs.writeFileSync(
     path.join(root, "electron-builder.yml"),
-    `directories:\n  output: release\nfiles: ["dist/**/*", "node_modules/**/*"]\nlinux:\n  target:\n    - target: deb\n      arch: [x64, arm64]\n`
+    `directories:\n  output: release\nfiles: ["dist/**/*", "scripts/cli/**/*", "node_modules/**/*"]\nasarUnpack: ["scripts/cli/**/*"]\nlinux:\n  target:\n    - target: deb\n      arch: [x64, arm64]\n`
   );
   return root;
 }
@@ -105,7 +116,7 @@ test("promotes final installers and retires each joined staging tree", async () 
     runBuild: async ({ config: configPath, targets }) => {
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
       const arch = [...targets.values()][0].keys().next().value;
-      seen.push(config.files.filter((file) => file.startsWith("!")));
+      seen.push(config);
       fs.mkdirSync(path.join(config.directories.output, "linux-unpacked"));
       const installer = path.join(config.directories.output, `installer-${arch}.deb`);
       fs.writeFileSync(installer, "verified final artifact");
@@ -113,7 +124,11 @@ test("promotes final installers and retires each joined staging tree", async () 
     },
   });
   assert.equal(outputs.length, 1);
-  assert.ok(seen[0][0].includes("arm64"));
+  assert.ok(
+    seen[0].files.some((file) => file.startsWith("!node_modules/@cloudflare/workerd-linux-arm64"))
+  );
+  assert.ok(seen[0].files.includes("scripts/lib/runtime-helper.mjs"));
+  assert.ok(seen[0].asarUnpack.includes("scripts/lib/runtime-helper.mjs"));
   assert.deepEqual(fs.readdirSync(path.join(root, "release")).sort(), ["installer-1.deb"]);
 });
 

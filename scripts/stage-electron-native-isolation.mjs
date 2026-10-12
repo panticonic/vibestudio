@@ -32,6 +32,7 @@ import {
   darwinProcessObserverDigest,
   darwinProcessObserverPath,
 } from "./owned-process-group-observer.mjs";
+import { includeDesktopRuntimeScriptClosure } from "./lib/npm-runtime-script-closure.mjs";
 
 /** electron-builder's requested architecture is independent of its build host. */
 function electronNativeArtifacts(context) {
@@ -60,6 +61,7 @@ export function publishNativeArtifact(source, destination, executable) {
 export default async function stageElectronNativeIsolation(context) {
   if (typeof Arch[context.arch] !== "string")
     throw new Error("Unknown Electron packaging architecture");
+  includeElectronRuntimeScriptClosure(context);
   const target = nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch]);
   await stageNodeRuntime(context.packager.projectDir, target);
   await stageNodeRuntimePayload(context.packager.projectDir, target);
@@ -78,6 +80,10 @@ export default async function stageElectronNativeIsolation(context) {
       !artifact.endsWith(".json") && !artifact.endsWith(".exe")
     );
   }
+}
+
+export function includeElectronRuntimeScriptClosure(context) {
+  return includeDesktopRuntimeScriptClosure(context.packager.projectDir, context.packager.config);
 }
 
 /** afterPack runs before signing changes the executable bytes. */
