@@ -334,7 +334,22 @@ export async function prepareWorkspaceTemplates(input: {
                     path.join(input.output, "userland-builds", binding.buildKey),
                     binding.buildKey
                   ),
-                input.signal
+                input.signal,
+                (event) => {
+                  if (event.type === "started") {
+                    console.log(`[workspace-release] Runtime ${role}/${event.source}: started`);
+                  } else if (event.type === "completed") {
+                    console.log(
+                      `[workspace-release] Runtime ${role}/${event.source}: completed in ${Math.round(event.durationMs)}ms`
+                    );
+                  } else {
+                    const detail =
+                      event.error instanceof Error ? event.error.message : String(event.error);
+                    console.error(
+                      `[workspace-release] Runtime ${role}/${event.source}: failed during ${event.phase}: ${detail}`
+                    );
+                  }
+                }
               )
             );
             for (const { source, binding } of runtimeBuilds) {

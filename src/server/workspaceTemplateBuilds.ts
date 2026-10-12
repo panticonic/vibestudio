@@ -3,13 +3,24 @@ import type { GraphNode } from "./buildV2/packageGraph.js";
 
 type RuntimeBuild = Awaited<ReturnType<BuildSystemV2["getBuild"]>>;
 
+export type WorkspaceRuntimeProgressEvent =
+  | { type: "started"; source: string }
+  | { type: "completed"; source: string; durationMs: number }
+  | {
+      type: "failed";
+      source: string;
+      phase: "build" | "publish";
+      error: unknown;
+    };
+
 /** Submit the release's runtimes to the builder's existing concurrency budget.
  * Every admitted build and export settles before the caller retires its workers. */
 export async function prepareWorkspaceRuntimeBuilds(
   nodes: readonly GraphNode[],
   build: (source: string) => Promise<RuntimeBuild>,
   publish: (binding: RuntimeBuild) => Promise<void>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  reportProgress?: (event: WorkspaceRuntimeProgressEvent) => void
 ): Promise<Array<{ source: string; binding: RuntimeBuild }>> {
   signal?.throwIfAborted();
   const runtimes = nodes.filter(
@@ -21,10 +32,25 @@ export async function prepareWorkspaceRuntimeBuilds(
   const outcomes = await Promise.allSettled(
     runtimes.map(async (node) => {
       signal?.throwIfAborted();
-      const binding = await build(node.relativePath);
-      signal?.throwIfAborted();
-      await publish(binding);
-      return { source: node.relativePath, binding };
+      const source = node.relativePath;
+      const startedAt = Date.now();
+      reportProgress?.({ type: "started", source });
+      let phase: "build" | "publish" = "build";
+      try {
+        const binding = await build(source);
+        signal?.throwIfAborted();
+        phase = "publish";
+        await publish(binding);
+        reportProgress?.({
+          type: "completed",
+          source,
+          durationMs: Date.now() - startedAt,
+        });
+        return { source, binding };
+      } catch (error) {
+        reportProgress?.({ type: "failed", source, phase, error });
+        throw error;
+      }
     })
   );
   const builds: Array<{ source: string; binding: RuntimeBuild }> = [];

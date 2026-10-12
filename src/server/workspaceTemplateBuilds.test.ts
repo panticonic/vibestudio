@@ -84,6 +84,75 @@ describe("prepareWorkspaceRuntimeBuilds", () => {
     });
   });
 
+  it("reports each runtime's start and completion around build and publication", async () => {
+    const progress = vi.fn();
+    await prepareWorkspaceRuntimeBuilds(
+      [node("workers/first")],
+      async () => binding("first"),
+      async () => undefined,
+      undefined,
+      progress
+    );
+    expect(progress.mock.calls).toEqual([
+      [{ type: "started", source: "workers/first" }],
+      [
+        expect.objectContaining({
+          type: "completed",
+          source: "workers/first",
+        }),
+      ],
+    ]);
+    expect(progress.mock.calls[1]?.[0].durationMs).toEqual(expect.any(Number));
+  });
+
+  it("reports whether a runtime failed during build or publication", async () => {
+    const buildError = new Error("compile failed");
+    const buildProgress = vi.fn();
+    await expect(
+      prepareWorkspaceRuntimeBuilds(
+        [node("workers/build-failure")],
+        async () => {
+          throw buildError;
+        },
+        async () => undefined,
+        undefined,
+        buildProgress
+      )
+    ).rejects.toBe(buildError);
+    expect(buildProgress.mock.calls.map(([event]) => event)).toEqual([
+      { type: "started", source: "workers/build-failure" },
+      {
+        type: "failed",
+        source: "workers/build-failure",
+        phase: "build",
+        error: buildError,
+      },
+    ]);
+
+    const publishError = new Error("export failed");
+    const publishProgress = vi.fn();
+    await expect(
+      prepareWorkspaceRuntimeBuilds(
+        [node("workers/publish-failure")],
+        async () => binding("publish-failure"),
+        async () => {
+          throw publishError;
+        },
+        undefined,
+        publishProgress
+      )
+    ).rejects.toBe(publishError);
+    expect(publishProgress.mock.calls.map(([event]) => event)).toEqual([
+      { type: "started", source: "workers/publish-failure" },
+      {
+        type: "failed",
+        source: "workers/publish-failure",
+        phase: "publish",
+        error: publishError,
+      },
+    ]);
+  });
+
   it("joins admitted builds when cancelled without publishing their results", async () => {
     const work = deferred<Binding>();
     const abort = new AbortController();
