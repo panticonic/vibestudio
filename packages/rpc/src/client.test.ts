@@ -1,4 +1,4 @@
-import { schemaRpcClient, wireClientFor } from "./schemaClient.js";
+import { schemaRpcClient, schemaRpcStream, wireClientFor } from "./schemaClient.js";
 import { dispatchRpcCall } from "@vibestudio/rpc/internal";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { defineContract, withCausalParent, withRpcAbortSignal, withRpcContext } from "./client.js";
@@ -2724,6 +2724,23 @@ it.each(["call", "peer", "stream", "readable"] as const)(
     expect(fake.sent).toHaveLength(0);
   }
 );
+
+it("runs schema stream lifecycle checks with Hermes AbortSignals", async () => {
+  const wireStream = vi.fn(async () => new Response(null));
+  const stream = schemaRpcStream(wireStream);
+  const method = {
+    name: "portable",
+    parseArgs: async (args: unknown[]) => args,
+    invoke: async (args: unknown[], dispatch: (args: unknown[]) => Promise<unknown>) =>
+      dispatch(args),
+  };
+  // Hermes exposes aborted/reason on its signals but does not implement
+  // AbortSignal.throwIfAborted().
+  const signal = { aborted: false } as AbortSignal;
+
+  await expect(stream("server", method, [], { signal })).resolves.toBeInstanceOf(Response);
+  expect(wireStream).toHaveBeenCalledWith("server", "portable", [], { signal });
+});
 
 describe("schema client transport identity", () => {
   const method = {
