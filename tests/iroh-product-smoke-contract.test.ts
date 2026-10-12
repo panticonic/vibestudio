@@ -65,6 +65,9 @@ describe("Iroh product E2E entry points", () => {
     expect(desktop).toContain("processLifetime.requestStop();");
     expect(desktop).toContain("requestWorkspacePreparationStop();");
     expect(desktop).toContain("ownerSignal.aborted && isCancellationOnly(original)");
+    expect(desktop).toContain("composeDesktopSmokeFailure(");
+    expect(desktop).toContain("formatRpcFailure(finalFailure)");
+    expect(desktop).not.toContain("deadlineFailure ?? error");
   });
 
   it("drives native Android approvals, panels, app relaunch, and server recovery over Iroh", () => {

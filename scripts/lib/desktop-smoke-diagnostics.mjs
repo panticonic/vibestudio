@@ -10,6 +10,37 @@ const BENIGN_RENDERER_CONSOLE_MESSAGES = [
   /^Electron Security Warning \(Insecure Content-Security-Policy\)/,
 ];
 
+function containsFailureIdentity(error, target, seen = new Set()) {
+  if (error === target) return true;
+  if (!error || typeof error !== "object" || seen.has(error)) return false;
+  seen.add(error);
+  return (
+    containsFailureIdentity(error.cause, target, seen) ||
+    (Array.isArray(error.errors) &&
+      error.errors.some((child) => containsFailureIdentity(child, target, seen)))
+  );
+}
+
+/** Compose deadline, operation, and retirement failures without dropping an
+ * error graph already retained by another failure or repeating its identity. */
+export function composeDesktopSmokeFailure(failures, message = "Desktop smoke failed") {
+  const distinct = [...new Set(failures)];
+  const retained = distinct.filter(
+    (failure, index) =>
+      !distinct.some(
+        (other, otherIndex) =>
+          otherIndex !== index &&
+          failure !== null &&
+          typeof failure === "object" &&
+          containsFailureIdentity(other, failure) &&
+          !containsFailureIdentity(failure, other)
+      )
+  );
+  if (retained.length === 0) return undefined;
+  if (retained.length === 1) return retained[0];
+  return new AggregateError(retained, message, { cause: retained[0] });
+}
+
 export function isUnexpectedDesktopDiagnostic(diagnostic) {
   if (
     diagnostic.type === "did-fail-load" &&

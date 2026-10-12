@@ -24,6 +24,7 @@ import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import { tsImport } from "tsx/esm/api";
+import { formatRpcFailure } from "@vibestudio/rpc";
 import { startEphemeralLinuxSecretService } from "./lib/linux-secret-service.mjs";
 import { developmentTemplateSetEnv } from "./lib/development-template-set.mjs";
 import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
@@ -64,6 +65,7 @@ import {
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 import { createMacosTestKeychain } from "./macos-test-keychain.mjs";
 import {
+  composeDesktopSmokeFailure,
   formatDesktopDiagnostics,
   unexpectedDesktopDiagnostics,
 } from "./lib/desktop-smoke-diagnostics.mjs";
@@ -533,17 +535,6 @@ function runOwnedCommand(lifetime, command, args, options = {}) {
       }
     });
   });
-}
-
-function containsErrorIdentity(error, target, seen = new Set()) {
-  if (error === target) return true;
-  if (!error || typeof error !== "object" || seen.has(error)) return false;
-  seen.add(error);
-  return (
-    containsErrorIdentity(error.cause, target, seen) ||
-    (Array.isArray(error.errors) &&
-      error.errors.some((child) => containsErrorIdentity(child, target, seen)))
-  );
 }
 
 async function waitForServerReady(readyFile, serverChild, timeoutMs) {
@@ -3160,13 +3151,12 @@ async function main(parentOwnerSignal) {
     );
     await cleanup();
   } catch (error) {
-    const original = deadlineFailure ?? error;
+    const original = composeDesktopSmokeFailure(
+      deadlineFailure === undefined ? [error] : [deadlineFailure, error],
+      "Desktop smoke deadline and operation failed"
+    );
     operationFailure = original;
     const cancellationOnly = ownerSignal.aborted && isCancellationOnly(original);
-    if (!cancellationOnly)
-      console.error(
-        `[desktop-smoke] ${original instanceof Error ? (original.stack ?? original.message) : String(original)}`
-      );
     if (!cancellationOnly) {
       for (const app of desktopApps) {
         try {
@@ -3178,13 +3168,21 @@ async function main(parentOwnerSignal) {
         }
       }
     }
+    let finalFailure = original;
+    let cleanupFailed = false;
     try {
       await cleanup();
     } catch (cleanupError) {
-      if (containsErrorIdentity(cleanupError, original)) throw cleanupError;
-      throw new AggregateError([original, cleanupError], "Desktop smoke and cleanup failed");
+      cleanupFailed = true;
+      finalFailure = composeDesktopSmokeFailure(
+        [original, cleanupError],
+        "Desktop smoke operation and cleanup failed"
+      );
     }
-    if (!cancellationOnly) process.exitCode = 1;
+    const finalCancellationOnly = ownerSignal.aborted && isCancellationOnly(finalFailure);
+    if (!finalCancellationOnly) console.error(`[desktop-smoke] ${formatRpcFailure(finalFailure)}`);
+    if (!finalCancellationOnly) process.exitCode = 1;
+    if (cleanupFailed && !finalCancellationOnly) throw finalFailure;
   } finally {
     clearTimeout(testDeadline);
     ownerSignal.removeEventListener("abort", ownerLost);

@@ -10,6 +10,7 @@ export interface DesktopSmokeDiagnostic {
   lineNumber?: number;
 }
 
+export function composeDesktopSmokeFailure(failures: readonly unknown[], message?: string): unknown;
 export function isUnexpectedDesktopDiagnostic(diagnostic: DesktopSmokeDiagnostic): boolean;
 export function unexpectedDesktopDiagnostics(
   diagnostics: readonly DesktopSmokeDiagnostic[]

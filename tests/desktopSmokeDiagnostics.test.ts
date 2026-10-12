@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { formatRpcFailure } from "@vibestudio/rpc";
+import { isCancellationOnly } from "../scripts/prepare-workspace-release.mjs";
+import { hasOwnershipFailure } from "../scripts/lib/owned-cleanup.mjs";
 import {
+  composeDesktopSmokeFailure,
   formatDesktopDiagnostics,
   isUnexpectedDesktopDiagnostic,
   unexpectedDesktopDiagnostics,
@@ -19,6 +23,56 @@ function diagnostic(overrides: Partial<DesktopSmokeDiagnostic> = {}): DesktopSmo
 }
 
 describe("desktop pairing smoke diagnostics", () => {
+  it("preserves distinct deadline, operation, and cleanup failure details", () => {
+    const deadline = new Error("acceptance deadline reached");
+    const operation = new Error("workspace launch failed");
+    const cleanup = new Error("owned child did not retire");
+    const composed = composeDesktopSmokeFailure(
+      [deadline, operation, cleanup],
+      "Desktop smoke failed"
+    );
+
+    expect(composed).toBeInstanceOf(AggregateError);
+    expect((composed as AggregateError).errors).toEqual([deadline, operation, cleanup]);
+    expect((composed as AggregateError).cause).toBe(deadline);
+    const formatted = formatRpcFailure(composed);
+    expect(formatted).toContain("acceptance deadline reached");
+    expect(formatted).toContain("workspace launch failed");
+    expect(formatted).toContain("owned child did not retire");
+  });
+
+  it("does not repeat nested error identities while retaining their full graph", () => {
+    const deadline = new Error("deadline");
+    const operation = new Error("operation");
+    const cleanup = new Error("cleanup");
+    const operationGraph = new AggregateError([deadline, operation], "operation failed", {
+      cause: deadline,
+    });
+    const cleanupGraph = new AggregateError([operationGraph, cleanup], "cleanup failed", {
+      cause: operationGraph,
+    });
+    const composed = composeDesktopSmokeFailure(
+      [deadline, operationGraph, cleanupGraph],
+      "Desktop smoke failed"
+    );
+
+    expect(composed).toBe(cleanupGraph);
+    const formatted = formatRpcFailure(composed);
+    expect(formatted).toBe("cleanup failed: operation failed: deadline; operation; cleanup");
+  });
+
+  it("retains nested ownership and mixed-cancellation failures", () => {
+    const cancellation = Object.assign(new Error("cancelled"), { code: "ECANCELLED" });
+    const ownership = Object.assign(new Error("child remains owned"), { code: "EOWNERSHIP" });
+    const operation = new AggregateError([new Error("operation failed"), ownership]);
+    const composed = composeDesktopSmokeFailure([cancellation, operation]);
+
+    expect(hasOwnershipFailure(composed)).toBe(true);
+    expect(isCancellationOnly(composed)).toBe(false);
+    expect(formatRpcFailure(composed)).toContain("child remains owned");
+    expect(formatRpcFailure(composed)).toContain("cancelled");
+  });
+
   it("retains cross-origin embed diagnostics without attributing them to the app", () => {
     const embed = diagnostic({
       frameUrl: "https://media.example/player",
