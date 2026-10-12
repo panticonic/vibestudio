@@ -240,18 +240,55 @@ separate named jobs when consumers need different subsets of its outputs;
 otherwise a slow unrelated producer serializes those consumers. Keep platform
 variation in shared reusable workflows rather than copying build recipes.
 
-Release preparation is a manual dispatch from `main` with an exact version tag
-and full source SHA. The workflow checks that SHA against the checked-out commit
-and stable package version, then runs the reusable CI graph before creating an
-annotated tag and draft release. Prerelease and build-metadata versions are not
-accepted in this `--latest` release lane. The tag is never moved or overwritten.
-Every
-enabled desktop installer candidate and its required acceptance must succeed
-before that tag exists; publication consumes those same run-scoped artifacts
-and does not rebuild them. Candidate artifacts are SHA-qualified and immutable
-within the workflow run. After a pre-tag failure, start a fresh dispatch; after
-a post-tag publisher failure, use **Re-run failed jobs** so successful candidate
-producers and their artifacts remain untouched. The final publication job
+The protected-main push CI run is the authoritative release candidate run for
+its exact source SHA. It resolves the stable committed version, runs every
+quality and native check, produces each enabled signed installer candidate,
+and installs and launches each required candidate. Its final candidate gate
+requires every applicable result to succeed and emits a receipt binding the
+source SHA, version, enabled platforms, canonical Windows runner, and the exact
+commit and tree of every official template consumed by the quality checks.
+The Darwin development source and npm preflight consume the quality producer's
+manifest and pin every official template to its recorded commit and tree before
+building. Independent producers still start when their own inputs are ready;
+the final gate joins them without serializing their builds. PR and ordinary
+manually dispatched diagnostic CI runs cannot
+supply a release candidate. If a push candidate fails for an external reason,
+manually dispatch the same CI workflow at the same `main` commit with
+`release-candidate=true`; it executes the same complete graph and creates a
+new authoritative run ID without requiring a no-op source commit. Candidate
+retries must use the canonical `base-ref=main` and `windows-runner=windows-2025`
+inputs; diagnostics can still select alternatives but cannot publish. The
+release dispatcher verifies the receipt's complete template identities and
+runner before tagging.
+
+While a version tag does not yet exist, any protected-main push could become
+the requested release SHA, so enabled candidate packages are produced in that
+CI run. Once the version is tagged, subsequent same-version pushes skip only
+release-candidate packaging and signing; normal quality and application checks
+continue. The next version bump admits candidate production again. This keeps
+the release source selectable by exact SHA without rebuilding its full CI
+graph at publication time.
+
+Release publication is a manual dispatch from `main` with that CI run ID, the
+exact version tag, and full source SHA. Before creating an annotated tag, the
+workflow checks the tag against the checked-out commit and stable package
+version, verifies the run belongs to this repository's CI workflow and a
+successful protected-main push or explicit candidate retry at the exact SHA,
+checks its required unexpired artifacts, and reads the final gate receipt. It
+rejects a changed platform configuration. Prerelease and build-metadata versions
+are not accepted in this
+`--latest` release lane. The tag is never moved or overwritten. Publication
+pins the verified run's exact attempt and each required artifact ID and archive
+SHA-256 digest. Publishers recheck that CI attempt, download by artifact ID,
+verify the archive digest, and then check installer checksums. A concurrent CI
+rerun can invalidate an old artifact ID and fail publication, but cannot replace
+the accepted bytes under the same name. Publication does not rebuild the
+application or re-run CI. If the candidate CI run fails, repair it before
+dispatching Release. After a pre-tag dispatch failure, rerun
+the dispatch against the same successful CI run while its artifacts are
+retained; after a post-tag publisher failure, use **Re-run failed jobs** so
+successful candidate producers and their artifacts remain untouched. The final
+publication job
 serializes only the shared latest-release promotion and compares stable semantic
 versions, so an older release cannot demote a newer latest release. GitHub keeps
 one running and one pending job per concurrency group; a third concurrent
@@ -262,7 +299,7 @@ Mobile and nightly workflows remain separate checks.
 Keep the workflow name `Release`: the Linux repository publisher is triggered
 by its successful `workflow_run` completion.
 
-The release CI graph keeps quality checks and native-input production
+The CI graph keeps quality checks and native-input production
 independent. On configured Windows releases, the installer candidate consumes
 the exact `packaged-app-win32-x64` layout produced by the Windows
 application-candidate job. The artifact name includes the exact workflow SHA.
@@ -281,8 +318,8 @@ their matching native inputs. After both architectures pass, a pre-tag signer
 validates their original checksums, signs the RPMs with the repository key,
 verifies those signatures, and uploads one immutable candidate with canonical
 final checksums. The post-tag publisher only verifies those checksums and
-attaches the candidate. The final release job joins every enabled publisher
-and the full quality workflow.
+attaches the candidate. The final release job joins every enabled publisher;
+the exact successful CI candidate gate is checked before tagging.
 The prepackaged installer job runs `pnpm build:infrastructure` before invoking
 electron-builder: it eagerly imports configured hooks even when `--prepackaged`
 skips their execution, and the hook import closure needs the built RPC package.
@@ -302,9 +339,9 @@ so the copies are required to keep format jobs independent. The candidate job
 joins all three format results and uploads checksum-protected installers bound
 to the exact source SHA. Neither architecture waits for the other, native
 verification, or the quality suite. These candidates run for configured Linux
-release preparations before the workflow creates its tag.
-All post-tag publishers wait for the complete reusable CI workflow and its
-validated draft. Keep `needs` edges tied to a consumed artifact or another
+protected-main push runs before the release workflow creates its tag.
+All post-tag publishers wait for the validated draft and consume artifacts from
+the previously verified CI run. Keep `needs` edges tied to a consumed artifact or another
 concrete prerequisite, and record that reason beside the edge. Independent
 checks should overlap, without rebuilding the same candidate or weakening its
 installed acceptance tests.

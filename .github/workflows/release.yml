@@ -23,6 +23,10 @@ on:
         description: Full commit SHA to validate and tag
         type: string
         required: true
+      candidate-run-id:
+        description: Successful protected-main CI run that produced the exact release candidates
+        type: string
+        required: true
 
 # Jobs opt into only the token authority they need. Artifact upload/download uses
 # GitHub's run-scoped artifact token, not a repository-write GITHUB_TOKEN.
@@ -34,6 +38,17 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      actions: read
+    outputs:
+      candidate-attempt: ${{ steps.candidate.outputs.candidate-attempt }}
+      linux-id: ${{ steps.candidate.outputs.linux-id }}
+      linux-digest: ${{ steps.candidate.outputs.linux-digest }}
+      mac-id: ${{ steps.candidate.outputs.mac-id }}
+      mac-digest: ${{ steps.candidate.outputs.mac-digest }}
+      observers-id: ${{ steps.candidate.outputs.observers-id }}
+      observers-digest: ${{ steps.candidate.outputs.observers-digest }}
+      windows-id: ${{ steps.candidate.outputs.windows-id }}
+      windows-digest: ${{ steps.candidate.outputs.windows-digest }}
     steps:
       - name: Checkout requested workflow commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,40 +63,39 @@ jobs:
           RELEASE_TAG: ${{ inputs.release-tag }}
           SOURCE_SHA: ${{ inputs.source-sha }}
         run: node scripts/check-release-version.mjs "$RELEASE_TAG" --source-sha "$SOURCE_SHA"
-      - name: Verify Linux repository signing is configured
-        if: ${{ vars.RELEASE_LINUX == 'true' }}
+      - name: Verify the exact successful candidate run and required artifacts
+        id: candidate
         env:
-          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
-        run: test -n "$LINUX_SIGNING_KEY"
-
-  release-quality:
-    name: Validate release commit
-    needs: validate-release-input
-    uses: ./.github/workflows/ci.yml
-    with:
-      release-preparation: true
-      release-tag: ${{ inputs.release-tag }}
-    permissions:
-      contents: read
-    secrets:
-      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
-      APPLE_CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
-      APPLE_CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate-run-id }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          RELEASE_LINUX: ${{ vars.RELEASE_LINUX }}
+          RELEASE_MAC: ${{ vars.RELEASE_MAC }}
+          RELEASE_WINDOWS: ${{ vars.RELEASE_WINDOWS }}
+        run: node scripts/verify-release-ci-run.mjs
 
   create-release-tag:
     name: Create immutable release tag after all candidate gates
-    needs: release-quality
+    needs: validate-release-input
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.release-tag }}
       SOURCE_SHA: ${{ inputs.source-sha }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate-run-id }}
+      CANDIDATE_ATTEMPT: ${{ needs.validate-release-input.outputs.candidate-attempt }}
     steps:
+      - name: Recheck exact successful CI attempt before creating the tag
+        run: |
+          run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID")"
+          test "$(jq -r '.run_attempt' <<<"$run_json")" = "$CANDIDATE_ATTEMPT"
+          test "$(jq -r '.head_sha' <<<"$run_json")" = "$SOURCE_SHA"
+          test "$(jq -r '.status' <<<"$run_json")" = completed
+          test "$(jq -r '.conclusion' <<<"$run_json")" = success
       - name: Create the tag at the exact validated commit
         run: |
           verify_existing_tag() {
@@ -186,19 +200,28 @@ jobs:
 
   publish-linux:
     name: Verify and publish Linux installers
-    # release-quality includes both architectures, pre-tag signature verification,
-    # and every other required check; publication only attaches the signed candidate.
-    needs: [github-release, release-quality]
+    # Validated protected-main CI includes every check and the signed candidate.
+    needs: [github-release, validate-release-input]
     if: ${{ vars.RELEASE_LINUX == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
     steps:
-      - name: Download immutable Linux release candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Checkout exact publication helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: vibestudio-linux-release-${{ inputs.source-sha }}
-          path: release
+          ref: ${{ inputs.source-sha }}
+          persist-credentials: false
+      - name: Download immutable Linux release candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.validate-release-input.outputs.linux-id }}
+          ARTIFACT_DIGEST: ${{ needs.validate-release-input.outputs.linux-digest }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate-run-id }}
+          CANDIDATE_ATTEMPT: ${{ needs.validate-release-input.outputs.candidate-attempt }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        run: node scripts/download-release-artifact.mjs "$ARTIFACT_ID" "$ARTIFACT_DIGEST" release "$CANDIDATE_RUN_ID" "$CANDIDATE_ATTEMPT" "$SOURCE_SHA"
 
       - name: Verify Linux installer checksums
         working-directory: release
@@ -217,27 +240,41 @@ jobs:
 
   publish-macos:
     name: Verify and publish macOS DMG
-    needs: [github-release, release-quality]
+    needs: [github-release, validate-release-input]
     if: ${{ vars.RELEASE_MAC == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
     steps:
-      - name: Download immutable macOS release candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Checkout exact publication helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: vibestudio-macos-${{ inputs.source-sha }}
-          path: release
+          ref: ${{ inputs.source-sha }}
+          persist-credentials: false
+      - name: Download immutable macOS release candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.validate-release-input.outputs.mac-id }}
+          ARTIFACT_DIGEST: ${{ needs.validate-release-input.outputs.mac-digest }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate-run-id }}
+          CANDIDATE_ATTEMPT: ${{ needs.validate-release-input.outputs.candidate-attempt }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        run: node scripts/download-release-artifact.mjs "$ARTIFACT_ID" "$ARTIFACT_DIGEST" release "$CANDIDATE_RUN_ID" "$CANDIDATE_ATTEMPT" "$SOURCE_SHA"
 
       - name: Verify DMG checksums
         working-directory: release
         run: sha256sum --check SHA256SUMS-macos
 
       - name: Download Darwin process observer candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: darwin-process-observers-release-${{ inputs.source-sha }}
-          path: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.validate-release-input.outputs.observers-id }}
+          ARTIFACT_DIGEST: ${{ needs.validate-release-input.outputs.observers-digest }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate-run-id }}
+          CANDIDATE_ATTEMPT: ${{ needs.validate-release-input.outputs.candidate-attempt }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        run: node scripts/download-release-artifact.mjs "$ARTIFACT_ID" "$ARTIFACT_DIGEST" release "$CANDIDATE_RUN_ID" "$CANDIDATE_ATTEMPT" "$SOURCE_SHA"
 
       - name: Verify Darwin process observer candidate
         working-directory: release
@@ -259,17 +296,27 @@ jobs:
 
   publish-windows:
     name: Verify and publish Windows installer
-    needs: [github-release, release-quality]
+    needs: [github-release, validate-release-input]
     if: ${{ vars.RELEASE_WINDOWS == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
     steps:
-      - name: Download immutable Windows release candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Checkout exact publication helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: vibestudio-windows-${{ inputs.source-sha }}
-          path: release
+          ref: ${{ inputs.source-sha }}
+          persist-credentials: false
+      - name: Download immutable Windows release candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.validate-release-input.outputs.windows-id }}
+          ARTIFACT_DIGEST: ${{ needs.validate-release-input.outputs.windows-digest }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate-run-id }}
+          CANDIDATE_ATTEMPT: ${{ needs.validate-release-input.outputs.candidate-attempt }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        run: node scripts/download-release-artifact.mjs "$ARTIFACT_ID" "$ARTIFACT_DIGEST" release "$CANDIDATE_RUN_ID" "$CANDIDATE_ATTEMPT" "$SOURCE_SHA"
       - name: Verify installer checksums
         working-directory: release
         run: sha256sum --check SHA256SUMS-windows

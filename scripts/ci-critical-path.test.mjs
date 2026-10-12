@@ -196,10 +196,17 @@ test("native artifact consumers wait for their exact producers without unrelated
     ],
   ]) {
     const job = jobs[candidate];
-    assert.deepEqual(dependenciesOf(job), [producer]);
-    assert.equal(job.if, "\${{ vars.RELEASE_LINUX == 'true' && inputs.release-preparation }}");
+    assert.deepEqual(dependenciesOf(job), [producer, "release-metadata"]);
+    assert.equal(
+      job.if,
+      "\${{ vars.RELEASE_LINUX == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}"
+    );
     assert.equal(job.uses, "./.github/workflows/linux-installer.yml");
-    assert.deepEqual(job.with, { runner, arch, "release-tag": "\${{ inputs.release-tag }}" });
+    assert.deepEqual(job.with, {
+      runner,
+      arch,
+      "release-tag": "\${{ needs.release-metadata.outputs.tag }}",
+    });
     assert.ok(
       !transitiveDependencies(jobs, candidate).has(verifier),
       `${candidate} must not wait for its native verification job`
@@ -331,14 +338,20 @@ test("native artifact consumers wait for their exact producers without unrelated
     "./.github/workflows/darwin-production-host.yml"
   );
   assert.deepEqual(jobs["darwin-production-host"].with, { runner: "macos-14" });
-  assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), ["darwin-production-host"]);
+  assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), [
+    "darwin-production-host",
+    "release-metadata",
+  ]);
   assert.equal(
     jobs["application-candidate-mac"].uses,
     "./.github/workflows/application-candidate.yml"
   );
   assert.equal(jobs["application-candidate-mac"].with.target, "darwin-arm64");
   assert.equal(jobs["application-candidate-mac"].with.package, "mac");
-  assert.deepEqual(dependenciesOf(jobs["darwin-development-inputs"]), ["darwin-production-host"]);
+  assert.deepEqual(dependenciesOf(jobs["darwin-development-inputs"]), [
+    "darwin-production-host",
+    "quality-inputs",
+  ]);
   assert.ok(
     !transitiveDependencies(jobs, "darwin-development-inputs").has("application-candidate-mac"),
     "source preparation must start from the production host artifact without waiting for app packaging"
@@ -349,7 +362,6 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.deepEqual(jobs["darwin-development-inputs"].with, {
     runner: "macos-14",
-    "base-ref": "${{ inputs.base-ref || 'main' }}",
   });
   assert.deepEqual(dependenciesOf(jobs["desktop-source-integration-macos-14"]), [
     "darwin-development-inputs",
@@ -370,15 +382,18 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.equal(jobs["application-candidate-windows"].with.target, "win32-x64");
   assert.equal(jobs["application-candidate-windows"].with.package, "windows");
   const windowsInstallerCandidate = jobs["windows-installer-candidate"];
-  assert.deepEqual(dependenciesOf(windowsInstallerCandidate), ["application-candidate-windows"]);
+  assert.deepEqual(dependenciesOf(windowsInstallerCandidate), [
+    "application-candidate-windows",
+    "release-metadata",
+  ]);
   assert.equal(
     windowsInstallerCandidate.if,
-    "\${{ vars.RELEASE_WINDOWS == 'true' && inputs.release-preparation }}"
+    "\${{ vars.RELEASE_WINDOWS == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}"
   );
   assert.equal(windowsInstallerCandidate.uses, "./.github/workflows/windows-installer.yml");
   assert.deepEqual(windowsInstallerCandidate.with, {
     runner: "\${{ inputs.windows-runner || 'windows-2025' }}",
-    "release-tag": "\${{ inputs.release-tag }}",
+    "release-tag": "\${{ needs.release-metadata.outputs.tag }}",
   });
   assert.ok(
     !transitiveDependencies(jobs, "windows-installer-candidate").has(
@@ -451,7 +466,10 @@ test("native artifact consumers wait for their exact producers without unrelated
     "Windows installer acceptance retains its diagnostics"
   );
 
-  assert.deepEqual(dependenciesOf(jobs["npm-server-preflight"]), producerJobs);
+  assert.deepEqual(dependenciesOf(jobs["npm-server-preflight"]), [
+    ...producerJobs,
+    "quality-inputs",
+  ]);
   const npmDownloads = jobs["npm-server-preflight"].steps
     .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
     .map((step) => step.with.name)
@@ -466,6 +484,16 @@ test("native artifact consumers wait for their exact producers without unrelated
     "darwin-process-observers-ci-${{ github.sha }}",
   ]);
   const npmPreflightSteps = jobs["npm-server-preflight"].steps;
+  const npmIndex = (name) => npmPreflightSteps.findIndex((step) => step.name === name);
+  assert.ok(npmIndex("Download exact official template input manifest") >= 0);
+  assert.ok(
+    npmIndex("Acquire complete template source set") <
+      npmIndex("Pin every official template to the tested input")
+  );
+  assert.ok(
+    npmIndex("Pin every official template to the tested input") <
+      npmIndex("Build, stage, verify, and retain the npm candidate")
+  );
   const candidateStepIndex = npmPreflightSteps.findIndex(
     (step) => step.name === "Build, stage, verify, and retain the npm candidate"
   );
@@ -584,23 +612,22 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.ok(producerJobs.includes("native-input-darwin-arm64"));
   const releaseJobs = (await readWorkflow("release.yml")).jobs;
-  assert.equal(releaseJobs["release-quality"].uses, "./.github/workflows/ci.yml");
+  assert.equal(
+    releaseJobs["release-quality"],
+    undefined,
+    "release must reuse the completed CI run"
+  );
   assert.match(
     JSON.stringify(releaseJobs["validate-release-input"]),
     /refs\/heads\/main/u,
     "release preparation is restricted to the protected main ref"
   );
-  assert.deepEqual(dependenciesOf(releaseJobs["release-quality"]), ["validate-release-input"]);
-  assert.equal(releaseJobs["release-quality"].with["release-preparation"], true);
-  assert.deepEqual(releaseJobs["release-quality"].secrets, {
-    LINUX_SIGNING_KEY: "\${{ secrets.LINUX_SIGNING_KEY }}",
-    APPLE_CSC_LINK: "\${{ secrets.APPLE_CSC_LINK }}",
-    APPLE_CSC_KEY_PASSWORD: "\${{ secrets.APPLE_CSC_KEY_PASSWORD }}",
-    APPLE_ID: "\${{ secrets.APPLE_ID }}",
-    APPLE_APP_SPECIFIC_PASSWORD: "\${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}",
-    APPLE_TEAM_ID: "\${{ secrets.APPLE_TEAM_ID }}",
-  });
-  assert.deepEqual(dependenciesOf(releaseJobs["create-release-tag"]), ["release-quality"]);
+  assert.match(
+    JSON.stringify(releaseJobs["validate-release-input"]),
+    /verify-release-ci-run\.mjs/u,
+    "the requested candidate run must pass exact source, result, and artifact validation before tagging"
+  );
+  assert.deepEqual(dependenciesOf(releaseJobs["create-release-tag"]), ["validate-release-input"]);
   assert.deepEqual(dependenciesOf(releaseJobs["github-release"]), ["create-release-tag"]);
   assert.match(
     JSON.stringify(releaseJobs["create-release-tag"]),
@@ -617,18 +644,18 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.equal(releaseJobs["linux-installers"], undefined);
   assert.deepEqual(dependenciesOf(releaseJobs["publish-linux"]), [
     "github-release",
-    "release-quality",
+    "validate-release-input",
   ]);
   assert.match(
     JSON.stringify(releaseJobs["publish-linux"]),
-    /vibestudio-linux-release-/,
-    "Linux publication consumes the pre-tag signed candidate"
+    /outputs\.linux-id.*outputs\.linux-digest/u,
+    "Linux publication consumes the validated immutable artifact identity"
   );
   assert.equal(releaseJobs["windows-installer"], undefined);
   assert.equal(releaseJobs["accept-windows-installer"], undefined);
   assert.deepEqual(dependenciesOf(releaseJobs["publish-windows"]), [
     "github-release",
-    "release-quality",
+    "validate-release-input",
   ]);
 
   const ciJobs = await readCiJobs();
@@ -636,7 +663,7 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.deepEqual(dependenciesOf(linuxSigner), ["linux-installer-x64", "linux-installer-arm64"]);
   assert.equal(
     linuxSigner.if,
-    "\${{ inputs.release-preparation && vars.RELEASE_LINUX == 'true' }}"
+    "\${{ needs.linux-installer-x64.result == 'success' && needs.linux-installer-arm64.result == 'success' && vars.RELEASE_LINUX == 'true' }}"
   );
   assert.match(JSON.stringify(linuxSigner.steps), /scripts\/publish\/sign-linux-installers\.sh/u);
   assert.match(JSON.stringify(linuxSigner.steps), /verify-rpm-signatures|SHA256SUMS-linux/u);
@@ -648,13 +675,16 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.doesNotMatch(JSON.stringify(releaseJobs["publish-linux"]), /LINUX_SIGNING_KEY/u);
   assert.ok(
     releaseJobs["publish-linux"].steps.some(
-      (step) => step.with?.name === "vibestudio-linux-release-\${{ inputs.source-sha }}"
+      (step) => step.env?.ARTIFACT_ID === "\${{ needs.validate-release-input.outputs.linux-id }}"
     ),
-    "the publisher consumes the signed pre-tag candidate"
+    "the publisher consumes the signed pre-tag candidate by its validated artifact ID"
   );
   const macJob = ciJobs["macos-release-candidate"];
-  assert.deepEqual(dependenciesOf(macJob), ["application-candidate-mac"]);
-  assert.equal(macJob.if, "\${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' }}");
+  assert.deepEqual(dependenciesOf(macJob), ["application-candidate-mac", "release-metadata"]);
+  assert.equal(
+    macJob.if,
+    "\${{ vars.RELEASE_MAC == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}"
+  );
   const macSteps = macJob.steps;
   assert.ok(macSteps.some((step) => step.name === "Verify exact macOS app archive provenance"));
   assert.ok(
@@ -676,33 +706,43 @@ test("native artifact consumers wait for their exact producers without unrelated
     !transitiveDependencies(ciJobs, "macos-release-candidate").has("quality"),
     "macOS installer production starts from the candidate without waiting for unrelated quality checks"
   );
-  const macAncestors = transitiveDependencies(releaseJobs, "publish-macos");
+  const gate = ciJobs["release-candidate-gate"];
+  const ciWorkflow = await readWorkflow("ci.yml");
+  assert.deepEqual(ciWorkflow.on.push.branches, ["main"]);
+  assert.equal(ciWorkflow.on.workflow_dispatch.inputs["release-candidate"].default, false);
+  assert.match(ciJobs["release-metadata"].if, /refs\/heads\/main/u);
+  assert.match(ciJobs["release-metadata"].if, /inputs\.release-candidate/u);
+  assert.match(gate.if, /candidate-needed/u);
   assert.ok(
-    macAncestors.has("release-quality"),
-    "publication remains behind all release candidate and acceptance gates"
+    ciJobs["release-metadata"].steps.some(
+      (step) => step.name === "Restrict explicit candidate retries to canonical inputs"
+    )
   );
-
-  for (const [publisher, producer, acceptance] of [
-    ["publish-linux", "release-quality", undefined],
-    ["publish-windows", "release-quality", undefined],
-    ["publish-macos", "release-quality", undefined],
-  ]) {
+  assert.ok(
+    ciJobs["release-metadata"].steps.some(
+      (step) => step.name === "Skip candidate packaging when this version is already tagged"
+    )
+  );
+  assert.ok(gate.steps.some((step) => step.name === "Download exact quality template inputs"));
+  assert.ok(gate.needs.includes("quality"));
+  assert.ok(gate.needs.includes("quality-desktop"));
+  assert.ok(gate.needs.includes("npm-server-preflight"));
+  assert.ok(gate.needs.includes("sign-linux-release-candidate"));
+  assert.ok(gate.needs.includes("windows-installer-candidate"));
+  assert.ok(gate.needs.includes("accept-macos-release-candidate"));
+  assert.match(JSON.stringify(gate), /release-ci-gate\.mjs/u);
+  for (const publisher of ["publish-linux", "publish-windows", "publish-macos"]) {
     const job = releaseJobs[publisher];
     const dependencies = dependenciesOf(job);
+    assert.deepEqual(dependencies, ["github-release", "validate-release-input"]);
+    assert.ok(job.steps.some((step) => /download-release-artifact\.mjs/u.test(step.run ?? "")));
     assert.ok(
-      dependencies.includes("github-release"),
-      `${publisher} must wait for the validated draft`
+      job.steps.some(
+        (step) =>
+          step.env?.CANDIDATE_ATTEMPT ===
+          "\${{ needs.validate-release-input.outputs.candidate-attempt }}"
+      )
     );
-    assert.ok(
-      dependencies.includes(producer),
-      `${publisher} must wait for its exact immutable candidate`
-    );
-    if (acceptance) {
-      assert.ok(
-        dependencies.includes(acceptance),
-        `${publisher} must wait for installed acceptance`
-      );
-    }
     assert.doesNotMatch(
       job.if ?? "",
       /always\(\)|!cancelled\(\)/,
@@ -710,11 +750,7 @@ test("native artifact consumers wait for their exact producers without unrelated
     );
   }
 
-  const releaseAncestors = transitiveDependencies(releaseJobs, "publish-release");
-  assert.ok(
-    releaseAncestors.has("release-quality"),
-    "the public release must remain behind full quality validation"
-  );
+  assert.ok(transitiveDependencies(releaseJobs, "publish-release").has("validate-release-input"));
 });
 
 test("Darwin production and development host inputs are immutable producer artifacts", async () => {
@@ -808,15 +844,16 @@ test("Darwin production and development host inputs are immutable producer artif
   const sourceIndex = (name) => sourceSteps.findIndex((step) => step.name === name);
   assert.deepEqual(sourceProducer.on.workflow_call.inputs, {
     runner: { type: "string", required: true },
-    "base-ref": { type: "string", default: "main" },
   });
   assert.ok(sourceIndex("Download exact production host inputs") >= 0);
-  const pairedBase = sourceSteps[sourceIndex("Checkout paired Base template")];
-  assert.equal(pairedBase.with.ref, "${{ inputs.base-ref }}");
-  assert.equal(pairedBase.with.path, ".cache/template-checkouts/base");
+  assert.equal(
+    sourceSteps[sourceIndex("Download exact official template input manifest")].with.name,
+    "vibestudio-quality-manifest-${{ github.sha }}"
+  );
   assert.ok(
-    sourceIndex("Checkout paired Base template") < sourceIndex("Acquire exact template source set"),
-    "the complete official template setup must preserve the caller's exact Base source input"
+    sourceIndex("Acquire exact template source set") <
+      sourceIndex("Pin every official template to the tested input"),
+    "Darwin development source must use the quality producer's exact template commits"
   );
   assert.ok(
     sourceIndex("Restore and verify production host inputs") <

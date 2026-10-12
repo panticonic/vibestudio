@@ -4,35 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_call:
-    inputs:
-      release-preparation:
-        type: boolean
-        default: false
-      release-tag:
-        type: string
-        default: ""
-      base-ref:
-        type: string
-        default: main
-      windows-runner:
-        type: string
-        default: windows-2025
-    secrets:
-      LINUX_SIGNING_KEY:
-        required: false
-      APPLE_CSC_LINK:
-        required: false
-      APPLE_CSC_KEY_PASSWORD:
-        required: false
-      APPLE_ID:
-        required: false
-      APPLE_APP_SPECIFIC_PASSWORD:
-        required: false
-      APPLE_TEAM_ID:
-        required: false
   workflow_dispatch:
     inputs:
+      release-candidate:
+        description: Produce a complete protected-main release candidate (for an exact-SHA CI retry)
+        type: boolean
+        default: false
+        required: true
       base-ref:
         description: Exact Base template commit or branch paired with this host revision
         type: string
@@ -47,6 +25,58 @@ on:
 permissions: {}
 
 jobs:
+  release-metadata:
+    name: Resolve protected-main release version
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release-candidate)) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      candidate-needed: ${{ steps.availability.outputs.needed }}
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify stable committed version and source
+        id: version
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          tag="v$(node -p 'require("./package.json").version')"
+          node scripts/check-release-version.mjs "$tag" --source-sha "$SOURCE_SHA"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+      - name: Restrict explicit candidate retries to canonical inputs
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          BASE_REF: ${{ inputs.base-ref }}
+          WINDOWS_RUNNER: ${{ inputs.windows-runner }}
+        run: |
+          test "$BASE_REF" = main
+          test "$WINDOWS_RUNNER" = windows-2025
+      - name: Skip candidate packaging when this version is already tagged
+        id: availability
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          tag_error="$RUNNER_TEMP/vibestudio-release-tag-query-error"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>"$tag_error"; then
+            needed=false
+          elif grep -q 'HTTP 404' "$tag_error"; then
+            needed=true
+          else
+            cat "$tag_error" >&2
+            exit 1
+          fi
+          printf 'needed=%s\n' "$needed" >> "$GITHUB_OUTPUT"
+      - name: Require Linux repository signing before candidate production
+        if: ${{ vars.RELEASE_LINUX == 'true' && steps.availability.outputs.needed == 'true' }}
+        env:
+          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+        run: test -n "$LINUX_SIGNING_KEY"
+
   quality-inputs:
     name: Prepare exact Linux quality inputs
     runs-on: ubuntu-24.04
@@ -107,6 +137,16 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+      - name: Stage exact quality input manifest
+        run: cp .cache/ci-quality-inputs.json release-quality-inputs.json
+
+      - name: Upload exact quality input manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibestudio-quality-manifest-${{ github.sha }}
+          path: release-quality-inputs.json
+          if-no-files-found: error
+          retention-days: 14
 
   quality:
     name: Quality Checks
@@ -365,26 +405,26 @@ jobs:
   linux-installer-x64:
     name: Build Linux x64 installer candidate
     # Release candidates need only their matching native input. These jobs run
-    # inside release-quality for an explicit pre-tag release preparation.
-    needs: native-input-linux-x64
-    if: ${{ vars.RELEASE_LINUX == 'true' && inputs.release-preparation }}
+    # Protected-main CI produces the canonical pre-tag candidate once.
+    needs: [native-input-linux-x64, release-metadata]
+    if: ${{ vars.RELEASE_LINUX == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}
     uses: ./.github/workflows/linux-installer.yml
     with:
       runner: ubuntu-24.04
       arch: x64
-      release-tag: ${{ inputs.release-tag }}
+      release-tag: ${{ needs.release-metadata.outputs.tag }}
     permissions:
       contents: read
 
   linux-installer-arm64:
     name: Build Linux arm64 installer candidate
-    needs: native-input-linux-arm64
-    if: ${{ vars.RELEASE_LINUX == 'true' && inputs.release-preparation }}
+    needs: [native-input-linux-arm64, release-metadata]
+    if: ${{ vars.RELEASE_LINUX == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}
     uses: ./.github/workflows/linux-installer.yml
     with:
       runner: ubuntu-24.04-arm
       arch: arm64
-      release-tag: ${{ inputs.release-tag }}
+      release-tag: ${{ needs.release-metadata.outputs.tag }}
     permissions:
       contents: read
 
@@ -431,30 +471,30 @@ jobs:
 
   application-candidate-mac:
     name: Package macOS application candidate from tested host inputs
-    needs: darwin-production-host
+    needs: [darwin-production-host, release-metadata]
+    if: ${{ !cancelled() && needs.darwin-production-host.result == 'success' }}
     uses: ./.github/workflows/application-candidate.yml
     with:
       runner: macos-14
       target: darwin-arm64
       package: mac
-      release-candidate: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' }}
-      release-tag: ${{ inputs.release-tag }}
+      release-candidate: ${{ needs.release-metadata.outputs.candidate-needed == 'true' && vars.RELEASE_MAC == 'true' }}
+      release-tag: ${{ needs.release-metadata.outputs.tag }}
     secrets:
-      APPLE_CSC_LINK: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' && secrets.APPLE_CSC_LINK || '' }}
-      APPLE_CSC_KEY_PASSWORD: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' && secrets.APPLE_CSC_KEY_PASSWORD || '' }}
-      APPLE_ID: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' && secrets.APPLE_ID || '' }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-      APPLE_TEAM_ID: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' && secrets.APPLE_TEAM_ID || '' }}
+      APPLE_CSC_LINK: ${{ needs.release-metadata.outputs.candidate-needed == 'true' && vars.RELEASE_MAC == 'true' && secrets.APPLE_CSC_LINK || '' }}
+      APPLE_CSC_KEY_PASSWORD: ${{ needs.release-metadata.outputs.candidate-needed == 'true' && vars.RELEASE_MAC == 'true' && secrets.APPLE_CSC_KEY_PASSWORD || '' }}
+      APPLE_ID: ${{ needs.release-metadata.outputs.candidate-needed == 'true' && vars.RELEASE_MAC == 'true' && secrets.APPLE_ID || '' }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ needs.release-metadata.outputs.candidate-needed == 'true' && vars.RELEASE_MAC == 'true' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ needs.release-metadata.outputs.candidate-needed == 'true' && vars.RELEASE_MAC == 'true' && secrets.APPLE_TEAM_ID || '' }}
     permissions:
       contents: read
 
   darwin-development-inputs:
     name: Prepare exact Darwin development host and workspace release
-    needs: darwin-production-host
+    needs: [darwin-production-host, quality-inputs]
     uses: ./.github/workflows/darwin-host-inputs.yml
     with:
       runner: macos-14
-      base-ref: ${{ inputs.base-ref || 'main' }}
     permissions:
       contents: read
 
@@ -479,12 +519,12 @@ jobs:
 
   windows-installer-candidate:
     name: Package NSIS installer from the tested Windows application
-    needs: application-candidate-windows
-    if: ${{ vars.RELEASE_WINDOWS == 'true' && inputs.release-preparation }}
+    needs: [application-candidate-windows, release-metadata]
+    if: ${{ vars.RELEASE_WINDOWS == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}
     uses: ./.github/workflows/windows-installer.yml
     with:
       runner: ${{ inputs.windows-runner || 'windows-2025' }}
-      release-tag: ${{ inputs.release-tag }}
+      release-tag: ${{ needs.release-metadata.outputs.tag }}
     permissions:
       contents: read
 
@@ -495,6 +535,7 @@ jobs:
       - native-input-linux-x64
       - native-input-linux-arm64
       - native-input-darwin-arm64
+      - quality-inputs
     runs-on: ubuntu-24.04
     env:
       VIBESTUDIO_TEMPLATE_CHECKOUTS: ${{ github.workspace }}/vibestudio-templates
@@ -556,6 +597,17 @@ jobs:
 
       - name: Acquire complete template source set
         run: pnpm dev:templates setup "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
+
+      - name: Download exact official template input manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vibestudio-quality-manifest-${{ github.sha }}
+          path: .cache/ci-template-inputs
+
+      - name: Pin every official template to the tested input
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: node scripts/pin-ci-template-inputs.mjs "$SOURCE_SHA" "$GITHUB_WORKSPACE/.cache/ci-template-inputs/release-quality-inputs.json" "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
 
       - name: Check declared template runtime dependencies
         run: pnpm check:userland-dependencies
@@ -652,7 +704,7 @@ jobs:
   sign-linux-release-candidate:
     name: Sign and verify the Linux release candidate before tagging
     needs: [linux-installer-x64, linux-installer-arm64]
-    if: ${{ inputs.release-preparation && vars.RELEASE_LINUX == 'true' }}
+    if: ${{ needs.linux-installer-x64.result == 'success' && needs.linux-installer-arm64.result == 'success' && vars.RELEASE_LINUX == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -698,8 +750,8 @@ jobs:
 
   macos-release-candidate:
     name: Package macOS release installers from the accepted app candidate
-    needs: application-candidate-mac
-    if: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' }}
+    needs: [application-candidate-mac, release-metadata]
+    if: ${{ vars.RELEASE_MAC == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}
     runs-on: macos-14
     permissions:
       contents: read
@@ -720,7 +772,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Verify release version and source commit
         env:
-          RELEASE_TAG: ${{ inputs.release-tag }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
           SOURCE_SHA: ${{ github.sha }}
         run: node scripts/check-release-version.mjs "$RELEASE_TAG" --source-sha "$SOURCE_SHA"
       - name: Download the canonical tested macOS application
@@ -740,7 +792,7 @@ jobs:
           path: candidate-provenance
       - name: Verify exact macOS app archive provenance
         env:
-          RELEASE_TAG: ${{ inputs.release-tag }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
           SOURCE_SHA: ${{ github.sha }}
         run: >-
           node scripts/release-app-candidate.mjs verify
@@ -816,7 +868,7 @@ jobs:
   accept-macos-release-candidate:
     name: Install and launch the exact macOS release candidate
     needs: macos-release-candidate
-    if: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' }}
+    if: ${{ needs.macos-release-candidate.result == 'success' && vars.RELEASE_MAC == 'true' }}
     runs-on: macos-14
     permissions:
       contents: read
@@ -875,3 +927,54 @@ jobs:
           path: test-results/packaged-isolation
           if-no-files-found: warn
           retention-days: 7
+
+  release-candidate-gate:
+    name: Release candidate gate
+    needs:
+      - release-metadata
+      - quality
+      - quality-desktop
+      - mac-portability
+      - native-isolation-linux-x64
+      - native-isolation-linux-arm64
+      - native-isolation-darwin-arm64
+      - desktop-source-integration-macos-14
+      - npm-server-preflight
+      - packaged-acceptance-macos-14
+      - packaged-acceptance-macos-26
+      - packaged-acceptance-windows
+      - sign-linux-release-candidate
+      - windows-installer-candidate
+      - accept-macos-release-candidate
+    if: ${{ always() && needs.release-metadata.outputs.candidate-needed == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout candidate gate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download exact quality template inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vibestudio-quality-manifest-${{ github.sha }}
+          path: .cache/release-gate
+      - name: Require every applicable quality and candidate result
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+          CANDIDATE_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_LINUX: ${{ vars.RELEASE_LINUX }}
+          RELEASE_MAC: ${{ vars.RELEASE_MAC }}
+          RELEASE_WINDOWS: ${{ vars.RELEASE_WINDOWS }}
+          WINDOWS_RUNNER: ${{ inputs.windows-runner || 'windows-2025' }}
+        run: node scripts/release-ci-gate.mjs
+      - name: Upload exact candidate gate receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibestudio-release-gate-${{ github.sha }}
+          path: release-candidate-gate.json
+          if-no-files-found: error
+          retention-days: 14
