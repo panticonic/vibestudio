@@ -28,9 +28,16 @@ export async function prepareWorkspaceRuntimeBuilds(
     })
   );
   const builds: Array<{ source: string; binding: RuntimeBuild }> = [];
+  const failures: unknown[] = [];
   for (const outcome of outcomes) {
-    if (outcome.status === "rejected") throw outcome.reason;
-    builds.push(outcome.value);
+    if (outcome.status === "rejected") failures.push(outcome.reason);
+    else builds.push(outcome.value);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Workspace runtime preparation failed", {
+      cause: failures[0],
+    });
   }
   return builds;
 }

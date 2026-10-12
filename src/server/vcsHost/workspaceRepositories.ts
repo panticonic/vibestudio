@@ -1,7 +1,7 @@
 import {
-  collectTreeReachableDigests,
   hasTreeObject,
   MerkleTreeComposer,
+  type TreeReachabilityOutcome,
 } from "../services/blobstoreService.js";
 import type { ProtectedRefStore } from "../services/protectedRefStore.js";
 import type { PackageGraph } from "../buildV2/packageGraph.js";
@@ -9,6 +9,7 @@ import { EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { normalizeRepositoryPath } from "./paths.js";
 import { discoverRepos, type DiscoveredRepo } from "@vibestudio/shared/runtime/repoDiscovery";
 import { collectTreeFiles, type ContentProjectionStore } from "./contentProjectionStore.js";
+import { withBlobContentLock } from "../storage/blobRetentions.js";
 
 export interface WorkspaceRepositoriesDeps {
   blobsDir: string;
@@ -81,28 +82,43 @@ export class WorkspaceRepositories {
   }
 
   /** Reachable CAS objects held only by cached composed views, for GC rooting. */
-  async collectCachedReachableDigests(): Promise<{
+  cachedViewRoots(): Array<{ key: string; stateHash: string }> {
+    return [...this.composedViewCache].map(([key, stateHash]) => ({ key, stateHash }));
+  }
+
+  /**
+   * Project outcomes from the operation-wide GC proof into the cached-view
+   * roots. A broken disposable view is evicted, while valid views keep every
+   * tree and content digest live for the sweep.
+   */
+  collectCachedReachableDigests(
+    cachedRoots: readonly { key: string; stateHash: string }[],
+    outcomes: ReadonlyMap<string, TreeReachabilityOutcome>
+  ): {
     contentDigests: string[];
     treeDigests: string[];
-  }> {
+  } {
     const contentDigests = new Set<string>();
     const treeDigests = new Set<string>();
-    for (const [key, stateHash] of this.composedViewCache) {
-      try {
-        const reachable = await collectTreeReachableDigests(this.deps.blobsDir, stateHash);
-        if (!reachable) {
-          this.composedViewCache.delete(key);
-          continue;
-        }
-        for (const digest of reachable.contentDigests) contentDigests.add(digest);
-        for (const digest of reachable.treeDigests) treeDigests.add(digest);
-      } catch (error) {
+    for (const { key, stateHash } of cachedRoots) {
+      const outcome = outcomes.get(stateHash);
+      if (!outcome) {
+        throw new Error(`GC proof is missing cached workspace view ${stateHash}`);
+      }
+      if (outcome.status === "rejected") {
         console.warn(
           `[WorkspaceRepositories] dropping composed cache entry during GC root collection: ${key}`,
-          error
+          outcome.reason
         );
-        this.composedViewCache.delete(key);
+        if (this.composedViewCache.get(key) === stateHash) this.composedViewCache.delete(key);
+        continue;
       }
+      if (!outcome.value) {
+        if (this.composedViewCache.get(key) === stateHash) this.composedViewCache.delete(key);
+        continue;
+      }
+      for (const digest of outcome.value.contentDigests) contentDigests.add(digest);
+      for (const digest of outcome.value.treeDigests) treeDigests.add(digest);
     }
     return {
       contentDigests: [...contentDigests],
@@ -148,29 +164,47 @@ export class WorkspaceRepositories {
       this.composedViewCache.delete(key);
     }
 
-    const compositionStartedAt = performance.now();
-    await Promise.all(
-      normalized.map((repo) => this.deps.contentProjection.ensureStateMirrored(repo.stateHash))
-    );
-    const mirrorsCompletedAt = performance.now();
-    const { stateHash } = await this.composer.composeStateGrafts(
-      normalized.map((repo) => ({ path: repo.repoPath, stateHash: repo.stateHash }))
-    );
-    const compositionCompletedAt = performance.now();
-    if (compositionCompletedAt - compositionStartedAt >= 100) {
-      console.info("[VcsProfile] workspace repository composition", {
-        repositories: normalized.length,
-        mirrorChecksMs: mirrorsCompletedAt - compositionStartedAt,
-        composeStateGraftsMs: compositionCompletedAt - mirrorsCompletedAt,
-        totalMs: compositionCompletedAt - compositionStartedAt,
-      });
-    }
-    if (this.composedViewCache.size >= 128) {
-      const oldest = this.composedViewCache.keys().next().value;
-      if (oldest !== undefined) this.composedViewCache.delete(oldest);
-    }
-    this.composedViewCache.set(key, stateHash);
-    return stateHash;
+    // Composition publishes CAS scaffolds and the root pointer. Keep that
+    // write-to-root interval atomic with content GC so an older unrooted
+    // scaffold cannot be swept after the operation has started rebuilding it.
+    return withBlobContentLock(this.deps.blobsDir, async () => {
+      const current = this.composedViewCache.get(key);
+      if (current && (await this.cachedViewIsResolvable(key, current))) return current;
+      if (current) this.composedViewCache.delete(key);
+
+      const compositionStartedAt = performance.now();
+      const mirrors = await Promise.allSettled(
+        normalized.map((repo) => this.deps.contentProjection.ensureStateMirrored(repo.stateHash))
+      );
+      const failures = mirrors.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Workspace repository mirror validation failed", {
+          cause: failures[0],
+        });
+      }
+      const mirrorsCompletedAt = performance.now();
+      const { stateHash } = await this.composer.composeStateGrafts(
+        normalized.map((repo) => ({ path: repo.repoPath, stateHash: repo.stateHash }))
+      );
+      const compositionCompletedAt = performance.now();
+      if (compositionCompletedAt - compositionStartedAt >= 100) {
+        console.info("[VcsProfile] workspace repository composition", {
+          repositories: normalized.length,
+          mirrorChecksMs: mirrorsCompletedAt - compositionStartedAt,
+          composeStateGraftsMs: compositionCompletedAt - mirrorsCompletedAt,
+          totalMs: compositionCompletedAt - compositionStartedAt,
+        });
+      }
+      if (this.composedViewCache.size >= 128) {
+        const oldest = this.composedViewCache.keys().next().value;
+        if (oldest !== undefined) this.composedViewCache.delete(oldest);
+      }
+      this.composedViewCache.set(key, stateHash);
+      return stateHash;
+    });
   }
 
   private async cachedViewIsResolvable(key: string, stateHash: string): Promise<boolean> {

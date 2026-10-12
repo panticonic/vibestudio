@@ -86,6 +86,12 @@ optional shellcheck or pyflakes installations. Focused workflow tests protect
 the actual artifact dependency graph. Use observed job durations to assess the
 critical path; a parallel graph alone does not establish a measured speedup.
 
+Release preparation and dependency-maintenance children inherit their owner's
+OS scheduling priority. They must not silently lower it: maintenance holds shared
+cache writer authority and becomes required work when its owner retires. Resource
+admission and the caller's scheduling policy govern throughput and host usability;
+an OOM ceiling does not require conserving otherwise available memory.
+
 Local release work should use the available CPU and memory to reduce that critical
 path. An aggregate memory limit protects the host from an OOM; it is a ceiling,
 not a target for keeping workloads small. Choose build admission from the host's
@@ -125,6 +131,18 @@ admit maintenance, then join maintenance and artifact publications, then close
 their coordinators and remove scratch. Both servers and release producers retain
 all failures through this dependency order; an ownership failure keeps its state
 anchor until the owner has actually retired.
+
+Each semantic GC snapshot proves semantic, protected-main, execution, and cached
+workspace roots through one operation-scoped batch. Shared tree nodes and content
+are verified once within that snapshot. Strict-root failures prevent sweeping and
+retain every original failure; disposable cached views are evicted using the exact
+captured cache identity. The final GC snapshot remains a separate lifecycle edge
+that captures roots admitted during the first snapshot.
+
+A required build-state publication observer returns its original operation failure
+to the protected-ref store, which retains the pending observer receipt for replay.
+Its recovered admission queue permits later publications; joining that queue is a
+terminal barrier, not evidence that every publication succeeded.
 
 BuildV2's three build lanes belong to one Node process. They are not a host-wide
 resource budget: the Hub's template preparation and each workspace server have

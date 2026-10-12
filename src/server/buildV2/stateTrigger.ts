@@ -241,7 +241,11 @@ export class StateTransitionTrigger extends EventEmitter {
     });
   }
 
-  /** Wait for all queued processing to finish (launch_panel: commit → settle → getBuild). */
+  /**
+   * Wait until every admitted publication has reached a terminal state
+   * (launch_panel: commit → settle → getBuild). Individual failures reject
+   * their publication listener; this barrier only joins the recovered queue.
+   */
   whenSettled(): Promise<void> {
     return this.queue.then(() => undefined);
   }
@@ -253,13 +257,17 @@ export class StateTransitionTrigger extends EventEmitter {
 
   private handlePublication(event: ProtectedPublicationEvent): Promise<void> {
     const revision = ++this.queuedRevision;
-    this.queue = this.queue
-      .then(() => this.process(event))
+    const operation = this.queue.then(() => this.process(event));
+    // Keep queue admission live after one failed transition, but return the
+    // original operation to the publication owner. The protected-ref store
+    // must observe a failed listener so it leaves the durable observer receipt
+    // pending for replay instead of recording a false successful settlement.
+    this.queue = operation
       .catch((error) => console.error(`[StateTrigger] Error processing publication:`, error))
       .finally(() => {
         this.settledRevision = revision;
       });
-    return this.queue;
+    return operation;
   }
 
   private async process(event: ProtectedPublicationEvent): Promise<void> {

@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import { readExactGitSnapshot, discoverTrackedGitSnapshot } from "@vibestudio/git";
 import { getUserDataPath, setUserDataPath } from "@vibestudio/env-paths";
@@ -213,9 +212,6 @@ export async function prepareWorkspaceTemplates(input: {
     publishManifest();
     input.signal?.throwIfAborted();
     await input.onSourcesPrepared?.();
-    // Exhaustive compilation is batch work. Its compiler and native children
-    // inherit this priority so interactive hosts get CPU first under contention.
-    os.setPriority(Math.max(os.getPriority(), os.constants.priority.PRIORITY_BELOW_NORMAL));
     for (const {
       role,
       statePath,

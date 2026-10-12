@@ -827,6 +827,7 @@ export class MerkleTreeComposer {
   async composeStateGrafts(
     grafts: readonly MerkleTreeGraft[]
   ): Promise<{ stateHash: string; treeHash: string }> {
+    const startedAt = performance.now();
     const normalized = grafts.map((graft) => ({
       path: graft.path,
       segments: splitTreePath(graft.path),
@@ -843,12 +844,25 @@ export class MerkleTreeComposer {
       seenPaths.add(graft.path);
     }
 
-    const inspected = await Promise.all(
+    const inspections = await Promise.allSettled(
       normalized.map(async (graft) => ({
         ...graft,
         root: await this.inspectStateRoot(graft.stateHash),
       }))
     );
+    const failures = inspections.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Repository graft inspection failed", {
+        cause: failures[0],
+      });
+    }
+    const inspected = inspections.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : []
+    );
+    const inspectedAt = performance.now();
 
     // The empty worktree state has no directory entries. A repository's
     // semantic existence is represented by the repository map, not by an
@@ -882,12 +896,23 @@ export class MerkleTreeComposer {
     }
 
     const treeHash = await this.writeScaffold(trie);
+    const scaffoldPublishedAt = performance.now();
     const state = encodeStateNode(treeHash);
     const stateWrite = await putBytes(this.blobsDir, Buffer.from(state.canonicalText, "utf8"));
     if (stateWrite.digest !== treeHashDigest(state.stateHash)) {
       throw new Error(
         `MerkleTreeComposer: CAS digest ${stateWrite.digest} disagrees with state hash ${state.stateHash} (hashing bug)`
       );
+    }
+    const completedAt = performance.now();
+    if (completedAt - startedAt >= 100) {
+      console.info("[VcsProfile] Merkle tree composition", {
+        grafts: grafts.length,
+        inspectRootsMs: inspectedAt - startedAt,
+        scaffoldPublicationMs: scaffoldPublishedAt - inspectedAt,
+        statePublicationMs: completedAt - scaffoldPublishedAt,
+        totalMs: completedAt - startedAt,
+      });
     }
     return { stateHash: state.stateHash, treeHash };
   }

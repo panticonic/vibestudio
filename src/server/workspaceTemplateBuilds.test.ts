@@ -65,6 +65,25 @@ describe("prepareWorkspaceRuntimeBuilds", () => {
     await expect(result).rejects.toBe(failure);
   });
 
+  it("preserves independent build and publication failures", async () => {
+    const compilation = new Error("compile failed");
+    const publication = new Error("publish failed");
+    const result = prepareWorkspaceRuntimeBuilds(
+      [node("workers/first"), node("workers/second")],
+      async (source) => {
+        if (source === "workers/first") throw compilation;
+        return binding("second");
+      },
+      async () => {
+        throw publication;
+      }
+    );
+    await expect(result).rejects.toMatchObject({
+      errors: [compilation, publication],
+      cause: compilation,
+    });
+  });
+
   it("joins admitted builds when cancelled without publishing their results", async () => {
     const work = deferred<Binding>();
     const abort = new AbortController();

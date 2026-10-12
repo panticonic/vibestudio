@@ -13,6 +13,7 @@ import {
 } from "../services/blobstoreService.js";
 import { collectTreeFiles } from "./contentProjectionStore.js";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
+import { withBlobContentLock } from "../storage/blobRetentions.js";
 
 describe("WorkspaceRepositories Merkle composition", () => {
   let root: string;
@@ -57,6 +58,53 @@ describe("WorkspaceRepositories Merkle composition", () => {
       discoverGraph: async () => graph as never,
     });
   }
+
+  it("joins failed mirror checks before releasing publication ownership", async () => {
+    const first = new Error("first repository is incomplete");
+    const second = new Error("second repository is incomplete");
+    let rejectSecond!: (error: unknown) => void;
+    let enteredSecond!: () => void;
+    const secondEntered = new Promise<void>((resolve) => {
+      enteredSecond = resolve;
+    });
+    const secondInspection = new Promise<void>((_, reject) => {
+      rejectSecond = reject;
+    });
+    let inspections = 0;
+    const repositories = new WorkspaceRepositories({
+      blobsDir,
+      refs: { listMains: () => [] },
+      contentProjection: {
+        ensureStateMirrored: async () => {
+          if (inspections++ === 0) throw first;
+          enteredSecond();
+          return secondInspection;
+        },
+      },
+      discoverGraph: async () => {
+        throw new Error("Failed mirrors must not discover a graph");
+      },
+    });
+    const composition = repositories.contentView([
+      { repoPath: "packages/first", stateHash: `state:${"1".repeat(64)}` },
+      { repoPath: "packages/second", stateHash: `state:${"2".repeat(64)}` },
+    ]);
+    const failed = expect(composition).rejects.toMatchObject({
+      errors: [first, second],
+      cause: first,
+    });
+    await secondEntered;
+    let nextOwnerEntered = false;
+    const nextOwner = withBlobContentLock(blobsDir, async () => {
+      nextOwnerEntered = true;
+    });
+    await Promise.resolve();
+    expect(nextOwnerEntered).toBe(false);
+    rejectSecond(second);
+    await failed;
+    await nextOwner;
+    expect(nextOwnerEntered).toBe(true);
+  });
 
   it("composes protected roots into one walkable view and derives the repository catalog", async () => {
     mains = [

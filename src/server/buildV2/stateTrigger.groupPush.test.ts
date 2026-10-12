@@ -145,6 +145,53 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
     expect(changed).toContain("packages/b");
   });
 
+  it("reports a failed publication to its owner and admits the next revision", async () => {
+    const graph = discoverPackageGraph(workspaceRoot);
+    const { evMap, contentHashes } = computeEffectiveVersions(graph, {});
+    const publicationFailure = new Error("graph rediscovery failed");
+    let publicationCb: ((event: ProtectedPublicationEvent) => void | Promise<void>) | null = null;
+    const source = {
+      workspaceId: "workspace:test",
+      discoverGraph: vi.fn().mockRejectedValueOnce(publicationFailure),
+      unitHashes: vi.fn(),
+      onProtectedPublication: (cb: (event: ProtectedPublicationEvent) => void | Promise<void>) => {
+        publicationCb = cb;
+        return () => {};
+      },
+    } as unknown as WorkspaceStateSource;
+    trigger = new StateTransitionTrigger({
+      graph,
+      evMap,
+      contentHashes,
+      stateHash: "state:0",
+      workspaceRoot,
+      source,
+    });
+    trigger.start();
+    expect(publicationCb).not.toBeNull();
+    const logFailure = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const failed = publicationCb!({
+      ...makeEvent("state:failed"),
+      changedPaths: ["packages/a/package.json"],
+    });
+    const next = publicationCb!({ ...makeEvent("state:next"), changedPaths: [] });
+    try {
+      await expect(failed).rejects.toBe(publicationFailure);
+      await expect(next).resolves.toBeUndefined();
+      await expect(trigger.whenSettled()).resolves.toBeUndefined();
+      expect(trigger.isSettled()).toBe(true);
+      expect(trigger.getState().stateHash).toBe("state:next");
+      expect(source.discoverGraph).toHaveBeenCalledTimes(1);
+      expect(logFailure).toHaveBeenCalledWith(
+        "[StateTrigger] Error processing publication:",
+        publicationFailure
+      );
+    } finally {
+      logFailure.mockRestore();
+    }
+  });
+
   it("settles graph state without waiting for speculative cache warming", async () => {
     initBuilder(path.join(process.cwd(), "node_modules"), process.cwd(), runIsolatedBuildJob);
     const panelDir = path.join(workspaceRoot, "workers", "slow-worker");

@@ -8,6 +8,7 @@ import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceP
 import type { ContextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
 import { buildWorktreeManifest, EMPTY_STATE_HASH, sha256Hex } from "@vibestudio/content-addressing";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import * as blobstoreService from "../services/blobstoreService.js";
 import {
   blobPath,
   ensureLayout,
@@ -18,6 +19,7 @@ import {
 } from "../services/blobstoreService.js";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";
+import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
 const roots: string[] = [];
@@ -833,7 +835,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await vcs.attachGad({
       contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
     } as never);
-    vi.spyOn(vcs.repositories, "collectCachedReachableDigests").mockResolvedValue({
+    vi.spyOn(vcs.repositories, "collectCachedReachableDigests").mockReturnValue({
       treeDigests: [],
       contentDigests: [cached.digest],
     });
@@ -915,6 +917,240 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         ],
       })
     ).rejects.toThrow("is missing from the content store");
+    await expect(getBytes(blobsDir, unreachable.digest)).resolves.toEqual(
+      Buffer.from("unreachable")
+    );
+  });
+
+  it("proves shared semantic, execution, and cached roots in one graph before GC", async () => {
+    const { blobsDir, vcs } = await harness();
+    const sharedContent = await putBytes(blobsDir, Buffer.from("shared subtree content"));
+    const sharedTree = await putTree(blobsDir, [
+      { name: "shared.txt", kind: "file", contentHash: sharedContent.digest, mode: 0o100644 },
+    ]);
+    const semanticRoot = await putTree(
+      blobsDir,
+      [{ name: "shared", kind: "dir", childHash: sharedTree.treeHash }],
+      { root: true }
+    );
+    const executionOnly = await putBytes(blobsDir, Buffer.from("execution-only content"));
+    const executionRoot = await putTree(
+      blobsDir,
+      [
+        { name: "shared", kind: "dir", childHash: sharedTree.treeHash },
+        {
+          name: "execution-only.txt",
+          kind: "file",
+          contentHash: executionOnly.digest,
+          mode: 0o100644,
+        },
+      ],
+      { root: true }
+    );
+    const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
+    const cachedView = await vcs.repositories.contentView([
+      { repoPath: "packages/cached", stateHash: semanticRoot.stateHash! },
+    ]);
+    await vcs.attachGad({
+      contentGcRoots: vi.fn(async () => ({
+        contentRoots: [semanticRoot.stateHash!],
+        contentHashes: [],
+      })),
+    } as never);
+
+    const collect = vi.spyOn(blobstoreService, "collectTreeReachableDigestsBatch");
+    await expect(
+      vcs.runGc({
+        minAgeMs: 0,
+        epoch: 1,
+        executionSourceRoots: [
+          { repoPath: "panels/execution", stateHash: executionRoot.stateHash! },
+        ],
+      })
+    ).resolves.toMatchObject({ swept: 1 });
+
+    expect(collect).toHaveBeenCalledTimes(2);
+    expect(collect).toHaveBeenCalledWith(
+      blobsDir,
+      expect.arrayContaining([
+        semanticRoot.stateHash,
+        executionRoot.stateHash,
+        cachedView.stateHash,
+      ]),
+      { verifyContent: true }
+    );
+    await expect(getBytes(blobsDir, sharedContent.digest)).resolves.toEqual(
+      Buffer.from("shared subtree content")
+    );
+    await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
+    await expect(getBytes(blobsDir, executionOnly.digest)).resolves.toEqual(
+      Buffer.from("execution-only content")
+    );
+  });
+
+  it("evicts a missing cached composition during the shared GC proof", async () => {
+    const { blobsDir, vcs } = await harness();
+    const content = await putBytes(blobsDir, Buffer.from("cached source"));
+    const source = await putTree(
+      blobsDir,
+      [{ name: "index.ts", kind: "file", contentHash: content.digest, mode: 0o100644 }],
+      { root: true }
+    );
+    await vcs.repositories.contentView([
+      { repoPath: "packages/cached", stateHash: source.stateHash! },
+    ]);
+    const cachedRoots = vcs.repositories.cachedViewRoots();
+    expect(cachedRoots).toHaveLength(1);
+    await fsp.unlink(blobPath(blobsDir, cachedRoots[0]!.stateHash.slice("state:".length)));
+    await vcs.attachGad({
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
+    } as never);
+
+    await expect(
+      vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] })
+    ).resolves.toBeDefined();
+    expect(vcs.repositories.cachedViewRoots()).toEqual([]);
+  });
+
+  it("keeps cache views admitted after the GC root snapshot out of that batch", async () => {
+    const { blobsDir, vcs } = await harness();
+    const initialContent = await putBytes(blobsDir, Buffer.from("initial cached source"));
+    const initialSource = await putTree(
+      blobsDir,
+      [{ name: "index.ts", kind: "file", contentHash: initialContent.digest, mode: 0o100644 }],
+      { root: true }
+    );
+    await vcs.repositories.contentView([
+      { repoPath: "packages/cached", stateHash: initialSource.stateHash! },
+    ]);
+    const initialCachedRoots = vcs.repositories.cachedViewRoots();
+    await vcs.attachGad({
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
+    } as never);
+
+    let started!: () => void;
+    const batchStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let resume!: () => void;
+    const batchGate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const collectBatch = blobstoreService.collectTreeReachableDigestsBatch;
+    vi.spyOn(blobstoreService, "collectTreeReachableDigestsBatch").mockImplementation(
+      async (...args) => {
+        started();
+        await batchGate;
+        return collectBatch(...args);
+      }
+    );
+
+    const prepared = vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
+    await batchStarted;
+    const laterContent = await putBytes(blobsDir, Buffer.from("later cached source"));
+    const laterSource = await putTree(
+      blobsDir,
+      [{ name: "index.ts", kind: "file", contentHash: laterContent.digest, mode: 0o100644 }],
+      { root: true }
+    );
+    await vcs.repositories.contentView([
+      { repoPath: "packages/later", stateHash: laterSource.stateHash! },
+    ]);
+    resume();
+
+    await expect(prepared).resolves.toBeDefined();
+    expect(vcs.repositories.cachedViewRoots()).toEqual(
+      expect.arrayContaining([
+        ...initialCachedRoots,
+        expect.objectContaining({ stateHash: expect.any(String) }),
+      ])
+    );
+  });
+
+  it("serializes a cache-miss composition with the final GC proof and sweep", async () => {
+    const { blobsDir, refs, vcs } = await harness();
+    const sourceContent = await putBytes(blobsDir, Buffer.from("source for composed view"));
+    const source = await putTree(
+      blobsDir,
+      [{ name: "index.ts", kind: "file", contentHash: sourceContent.digest, mode: 0o100644 }],
+      { root: true }
+    );
+    await vcs.attachGad({
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [source.stateHash!], contentHashes: [] })),
+    } as never);
+    const repositories = [{ repoPath: "packages/old-scaffold", stateHash: source.stateHash! }];
+    const otherCache = new WorkspaceRepositories({
+      blobsDir,
+      refs,
+      contentProjection: vcs.contentProjection,
+      discoverGraph: async () => {
+        throw new Error("graph discovery is not used by contentView");
+      },
+    });
+    const originalView = await otherCache.contentView(repositories);
+
+    const prepared = await vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
+    let batchStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      batchStarted = resolve;
+    });
+    let resumeBatch!: () => void;
+    const batchGate = new Promise<void>((resolve) => {
+      resumeBatch = resolve;
+    });
+    const collectBatch = blobstoreService.collectTreeReachableDigestsBatch;
+    vi.spyOn(blobstoreService, "collectTreeReachableDigestsBatch").mockImplementation(
+      async (...args) => {
+        batchStarted();
+        await batchGate;
+        return collectBatch(...args);
+      }
+    );
+
+    const gc = prepared.commit();
+    await started;
+    let compositionSettled = false;
+    const composition = vcs.repositories.contentView(repositories).then((view) => {
+      compositionSettled = true;
+      return view;
+    });
+    await Promise.resolve();
+    expect(compositionSettled).toBe(false);
+
+    resumeBatch();
+    await gc;
+    const rebuiltView = await composition;
+    expect(rebuiltView.stateHash).toBe(originalView.stateHash);
+    await expect(
+      blobstoreService.collectTreeReachableDigestsBatch(blobsDir, [rebuiltView.stateHash], {
+        verifyContent: true,
+      })
+    ).resolves.toMatchObject([{ status: "fulfilled", value: expect.any(Object) }]);
+    await expect(getBytes(blobsDir, sourceContent.digest)).resolves.toEqual(
+      Buffer.from("source for composed view")
+    );
+  });
+
+  it("joins every invalid strict GC root before refusing the sweep", async () => {
+    const { blobsDir, vcs } = await harness();
+    const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
+    const missingA = `state:${"a".repeat(64)}`;
+    const missingB = `state:${"b".repeat(64)}`;
+    await vcs.attachGad({
+      contentGcRoots: vi.fn(async () => ({
+        contentRoots: [missingA, missingB],
+        contentHashes: [],
+      })),
+    } as never);
+
+    const failure = await vcs.runGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] }).then(
+      () => null,
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toHaveLength(2);
+    expect(String(failure)).toContain(missingA);
+    expect(String(failure)).toContain(missingB);
     await expect(getBytes(blobsDir, unreachable.digest)).resolves.toEqual(
       Buffer.from("unreachable")
     );

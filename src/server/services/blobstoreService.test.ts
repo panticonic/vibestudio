@@ -769,6 +769,28 @@ describe("blobstoreService", () => {
       }
     });
 
+    it("retains every failed repository inspection before rejecting composition", async () => {
+      const missing = ["1", "2"].map((digit) => `state:${digit.repeat(64)}`);
+      const failure = await new MerkleTreeComposer(blobsDir)
+        .composeStateGrafts(
+          missing.map((stateHash, index) => ({ path: `packages/missing-${index}`, stateHash }))
+        )
+        .then(
+          () => {
+            throw new Error("Missing repository roots unexpectedly composed");
+          },
+          (error: unknown) => error
+        );
+
+      expect(failure).toBeInstanceOf(AggregateError);
+      const aggregate = failure as AggregateError;
+      expect(aggregate.errors).toHaveLength(2);
+      expect(aggregate.cause).toBe(aggregate.errors[0]);
+      for (const [index, stateHash] of missing.entries()) {
+        expect(aggregate.errors[index].message).toContain(stateHash);
+      }
+    });
+
     it("bounds state-root facts with LRU recency and recomputes evicted states", async () => {
       const digest = await seed("one body, distinct repository coordinates\n");
       const stateA = await mirrorWorktreeTree(blobsDir, [

@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { formatRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
@@ -10,11 +9,6 @@ import {
 } from "./dependencyContentStore.js";
 
 async function main(): Promise<void> {
-  try {
-    os.setPriority(0, os.constants.priority.PRIORITY_LOW);
-  } catch {
-    // Priority adjustment is advisory and unavailable on some platforms.
-  }
   const owners = new Map<string, DerivedCacheCoordinator>();
   let primaryFailure: unknown;
   let hasPrimaryFailure = false;

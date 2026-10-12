@@ -41,6 +41,7 @@ import {
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
 import {
   collectTreeReachableDigests,
+  collectTreeReachableDigestsBatch,
   diffTrees,
   getBytes,
   hasTreeObject,
@@ -50,6 +51,7 @@ import {
   readTreeDirectory,
   resolveTreePath,
   sweepUnreachableBlobs,
+  type TreeReachabilityOutcome,
   type TreeDiff,
 } from "../services/blobstoreService.js";
 import {
@@ -435,10 +437,40 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       ...semantic.contentHashes,
       ...retainedBlobDigests(this.deps.blobsDir),
     ]);
-    for (const root of roots) {
-      const tree = await collectTreeReachableDigests(this.deps.blobsDir, root, {
-        verifyContent: true,
-      });
+    const cachedViewRoots = this.repositories.cachedViewRoots();
+    const allRoots = [
+      ...new Set([...roots, ...cachedViewRoots.map(({ stateHash }) => stateHash)]),
+    ].sort(compareUtf16CodeUnits);
+    const outcomes = await collectTreeReachableDigestsBatch(this.deps.blobsDir, allRoots, {
+      verifyContent: true,
+    });
+    const outcomesByRoot = new Map<string, TreeReachabilityOutcome>();
+    for (let index = 0; index < allRoots.length; index += 1) {
+      const root = allRoots[index]!;
+      const outcome = outcomes[index];
+      if (!outcome) throw new Error(`GC batch proof omitted root ${root}`);
+      outcomesByRoot.set(root, outcome);
+    }
+
+    // Cached workspace compositions are disposable. Preserve the existing
+    // policy of evicting a broken cached root while the semantic/main/execution
+    // roots below remain strict publication inputs.
+    const cachedReachable = this.repositories.collectCachedReachableDigests(
+      cachedViewRoots,
+      outcomesByRoot
+    );
+    for (const digest of cachedReachable.treeDigests) reachable.add(digest);
+    for (const digest of cachedReachable.contentDigests) reachable.add(digest);
+
+    const failures: Array<{ root: string; reason: unknown }> = [];
+    for (const root of [...roots].sort(compareUtf16CodeUnits)) {
+      const outcome = outcomesByRoot.get(root);
+      if (!outcome) throw new Error(`GC batch proof omitted strict root ${root}`);
+      if (outcome.status === "rejected") {
+        failures.push({ root, reason: outcome.reason });
+        continue;
+      }
+      const tree = outcome.value;
       if (!tree) {
         const provenance = semantic.contentRoots.includes(root)
           ? "semantic materialization/pending effect"
@@ -449,22 +481,26 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
                   ", "
                 )})`
               : "unknown";
-        throw new Error(
-          `GC root ${root} is missing from the content store (provenance: ${provenance})`
-        );
+        failures.push({
+          root,
+          reason: new Error(
+            `GC root ${root} is missing from the content store (provenance: ${provenance})`
+          ),
+        });
+        continue;
       }
       for (const digest of tree.treeDigests) reachable.add(digest);
       for (const digest of tree.contentDigests) reachable.add(digest);
     }
-    // Workspace/context views are immutable CAS compositions, not semantic
-    // history nodes. They are nevertheless live build inputs while retained
-    // by WorkspaceRepositories, so their scaffold nodes must participate in
-    // the same reachability snapshot as semantic repository roots. Omitting
-    // them leaves a cached state pointer whose interior directory manifests
-    // have been swept, and the next exact build fails while walking the tree.
-    const cachedViews = await this.repositories.collectCachedReachableDigests();
-    for (const digest of cachedViews.treeDigests) reachable.add(digest);
-    for (const digest of cachedViews.contentDigests) reachable.add(digest);
+    if (failures.length === 1) throw failures[0]!.reason;
+    if (failures.length > 1) {
+      const failedRoots = failures.map(({ root }) => root).join(", ");
+      throw new AggregateError(
+        failures.map(({ reason }) => reason),
+        `GC reachability validation failed for ${failures.length} roots: ${failedRoots}`,
+        { cause: failures[0]!.reason }
+      );
+    }
     return reachable;
   }
 
@@ -2229,80 +2265,121 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async onProtectedRefsPublished(publication: ProtectedRefPublication): Promise<void> {
     if (!this.attached) return;
-    const workspaceStateHash = (await this.ensureFresh()).stateHash;
-    const repositories: ProtectedPublicationEvent["repositories"] = new Array(
-      publication.changes.length
-    );
-    const failures: Array<{ error: unknown } | undefined> = new Array(publication.changes.length);
-    let nextChange = 0;
-    // Each repository diff reads immutable CAS trees and writes only its own
-    // result slot. Join a bounded set of independent diffs before exposing the
-    // publication, keeping event order equal to the store's canonical order.
-    const workers = Array.from(
-      { length: Math.min(CONTENT_OBSERVATION_CONCURRENCY, publication.changes.length) },
-      async () => {
-        while (nextChange < publication.changes.length) {
-          const index = nextChange++;
-          const change = publication.changes[index]!;
-          try {
-            const repoPath = normalizeRepositoryPath(change.repoPath);
-            const fileChanges = await this.diffFileChanges(
-              change.previousContentRoot,
-              change.nextContentRoot
-            );
-            const reroot = (relativePath: string) => joinRepoPrefix(repoPath, relativePath);
-            repositories[index] = {
-              repoPath,
-              previousStateHash: change.previousContentRoot,
-              nextStateHash: change.nextContentRoot,
-              fileChanges: fileChanges.map((file) => ({ ...file, path: reroot(file.path) })),
-            };
-          } catch (error) {
-            failures[index] = { error };
+    const profileStartedAt = performance.now();
+    const profile = {
+      ensureFreshMs: 0,
+      repositoryDiffsMs: 0,
+      listenersMs: 0,
+      sourceMirrorMs: 0,
+      repositoryCount: publication.changes.length,
+      listenerCount: this.protectedPublicationListeners.size,
+      mirroredRepositoryCount: this.deps.extractMainToSource ? publication.changes.length : 0,
+    };
+    try {
+      let phaseStartedAt = performance.now();
+      let workspaceStateHash: string;
+      try {
+        workspaceStateHash = (await this.ensureFresh()).stateHash;
+      } finally {
+        profile.ensureFreshMs = performance.now() - phaseStartedAt;
+      }
+      const repositories: ProtectedPublicationEvent["repositories"] = new Array(
+        publication.changes.length
+      );
+      const failures: Array<{ error: unknown } | undefined> = new Array(publication.changes.length);
+      let nextChange = 0;
+      // Each repository diff reads immutable CAS trees and writes only its own
+      // result slot. Join a bounded set of independent diffs before exposing the
+      // publication, keeping event order equal to the store's canonical order.
+      const workers = Array.from(
+        { length: Math.min(CONTENT_OBSERVATION_CONCURRENCY, publication.changes.length) },
+        async () => {
+          while (nextChange < publication.changes.length) {
+            const index = nextChange++;
+            const change = publication.changes[index]!;
+            try {
+              const repoPath = normalizeRepositoryPath(change.repoPath);
+              const fileChanges = await this.diffFileChanges(
+                change.previousContentRoot,
+                change.nextContentRoot
+              );
+              const reroot = (relativePath: string) => joinRepoPrefix(repoPath, relativePath);
+              repositories[index] = {
+                repoPath,
+                previousStateHash: change.previousContentRoot,
+                nextStateHash: change.nextContentRoot,
+                fileChanges: fileChanges.map((file) => ({ ...file, path: reroot(file.path) })),
+              };
+            } catch (error) {
+              failures[index] = { error };
+            }
           }
         }
+      );
+      phaseStartedAt = performance.now();
+      try {
+        await Promise.all(workers);
+      } finally {
+        profile.repositoryDiffsMs = performance.now() - phaseStartedAt;
       }
-    );
-    await Promise.all(workers);
-    const diffFailures = failures.flatMap((failure) => (failure ? [failure.error] : []));
-    if (diffFailures.length === 1) throw diffFailures[0];
-    if (diffFailures.length > 1) {
-      throw new AggregateError(diffFailures, "Protected publication repository diffs failed", {
-        cause: diffFailures[0],
-      });
-    }
-    const changedPaths = [
-      ...new Set(repositories.flatMap(({ fileChanges }) => fileChanges.map(({ path }) => path))),
-    ].sort(compareUtf16CodeUnits);
-    const event = {
-      publicationId: publication.publicationId,
-      resultHostRefsBasisDigest: publication.resultHostRefsBasisDigest,
-      appliedAt: publication.appliedAt,
-      workspaceStateHash,
-      changedPaths,
-      repositories,
-    } satisfies ProtectedPublicationEvent;
+      const diffFailures = failures.flatMap((failure) => (failure ? [failure.error] : []));
+      if (diffFailures.length === 1) throw diffFailures[0];
+      if (diffFailures.length > 1) {
+        throw new AggregateError(diffFailures, "Protected publication repository diffs failed", {
+          cause: diffFailures[0],
+        });
+      }
+      const changedPaths = [
+        ...new Set(repositories.flatMap(({ fileChanges }) => fileChanges.map(({ path }) => path))),
+      ].sort(compareUtf16CodeUnits);
+      const event = {
+        publicationId: publication.publicationId,
+        resultHostRefsBasisDigest: publication.resultHostRefsBasisDigest,
+        appliedAt: publication.appliedAt,
+        workspaceStateHash,
+        changedPaths,
+        repositories,
+      } satisfies ProtectedPublicationEvent;
 
-    // Protected-ref publication is not settled until exact-state consumers have
-    // observed it. In particular, BuildV2 must install the new graph/EV state
-    // before vcs.push returns so an immediate open/build cannot see stale HEAD.
-    // The protected-ref store durably replays this observer phase if a listener
-    // is interrupted after the CAS has committed.
-    for (const listener of this.protectedPublicationListeners) {
-      await listener(event);
-    }
-
-    // Source checkout mirroring is an observer, never part of publication
-    // authority. Its failure must not suppress the CAS-derived notification.
-    if (this.deps.extractMainToSource) {
-      for (const change of publication.changes) {
-        const repoPath = normalizeRepositoryPath(change.repoPath);
-        try {
-          if (change.nextContentRoot === null) await this.projector.removeRepo(repoPath);
-          else await this.projector.exportMainToSource(repoPath, change.nextContentRoot);
-        } catch (error) {
-          console.error(`[Vcs] protected publication source mirror failed for ${repoPath}:`, error);
+      // Protected-ref publication is not settled until exact-state consumers have
+      // observed it. In particular, BuildV2 must install the new graph/EV state
+      // before vcs.push returns so an immediate open/build cannot see stale HEAD.
+      // The protected-ref store durably replays this observer phase if a listener
+      // is interrupted after the CAS has committed.
+      phaseStartedAt = performance.now();
+      try {
+        for (const listener of this.protectedPublicationListeners) {
+          await listener(event);
         }
+      } finally {
+        profile.listenersMs = performance.now() - phaseStartedAt;
+      }
+
+      // Source checkout mirroring is an observer, never part of publication
+      // authority. Its failure must not suppress the CAS-derived notification.
+      if (this.deps.extractMainToSource) {
+        phaseStartedAt = performance.now();
+        try {
+          for (const change of publication.changes) {
+            const repoPath = normalizeRepositoryPath(change.repoPath);
+            try {
+              if (change.nextContentRoot === null) await this.projector.removeRepo(repoPath);
+              else await this.projector.exportMainToSource(repoPath, change.nextContentRoot);
+            } catch (error) {
+              console.error(
+                `[Vcs] protected publication source mirror failed for ${repoPath}:`,
+                error
+              );
+            }
+          }
+        } finally {
+          profile.sourceMirrorMs = performance.now() - phaseStartedAt;
+        }
+      }
+    } finally {
+      const totalMs = performance.now() - profileStartedAt;
+      if (totalMs >= 100) {
+        console.info("[VcsProfile] protected refs observer", { ...profile, totalMs });
       }
     }
   }
