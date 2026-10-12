@@ -1377,12 +1377,7 @@ export async function ensureExtensionRuntimeDeps(
     return { key: null, nodeModulesDir: "", release() {} };
   }
   const overrides = { ...dependencyOverrides };
-  const key = [
-    hashDeps(deps, overrides, validatedPatches),
-    process.platform,
-    process.arch,
-    `node${getInstalledNodeRuntime(appRoot).version}`,
-  ].join("-");
+  const key = extensionRuntimeDependencyKey(appRoot, deps, overrides, validatedPatches)!;
   return acquireDependencyCache(deps, {
     baseDir: getExtensionRuntimeDepsBaseDir(),
     key,
@@ -1393,6 +1388,24 @@ export async function ensureExtensionRuntimeDeps(
     signal,
     hostArtifactRoot,
   });
+}
+
+/** Runtime projection identity is platform-specific even when bundle bytes are shared. */
+export function extensionRuntimeDependencyKey(
+  appRoot: string,
+  deps: Record<string, string>,
+  dependencyOverrides: Record<string, string> = {},
+  patches: readonly ExternalDependencyPatch[] = []
+): string | null {
+  if (Object.keys(deps).length === 0) return null;
+  const validatedPatches = validateDependencyPatches(patches);
+  assertDependencyPatchRootsPresent(validatedPatches, deps);
+  return [
+    hashDeps(deps, dependencyOverrides, validatedPatches),
+    process.platform,
+    process.arch,
+    `node${getInstalledNodeRuntime(appRoot).version}`,
+  ].join("-");
 }
 
 type EnsureDepsOptions = {

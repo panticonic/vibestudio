@@ -2913,9 +2913,12 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!entry.activeBundleKey || !entry.activeRuntimeDepsKey) return false;
     const build = await this.readCurrentActiveBuild(entry);
     if (!build) return false;
-    const externalDeps = extensionMetadataDetails(build.metadata)?.externalDeps ?? {};
+    const details = extensionMetadataDetails(build.metadata);
+    const externalDeps = details?.externalDeps ?? {};
     if (Object.keys(externalDeps).length === 0) return true;
-    return fs.existsSync(path.join(build.dir, "node_modules"));
+    // getBuildByKey joins the build system's current-runtime projection before
+    // returning. A directory's mere existence says nothing about completion.
+    return details?.runtimeDepsKey === entry.activeRuntimeDepsKey;
   }
 
   private findExtensionNode(nameOrRepo: string) {

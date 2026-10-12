@@ -69,6 +69,12 @@ export async function materializeImmutableTree(source: string, target: string): 
       } else if (child.isFile()) {
         entries.push({ source: childSource, target: childTarget, kind: "file" });
       } else if (child.isSymbolicLink()) {
+        if (path.isAbsolute(await fs.promises.readlink(childSource)))
+          throw new Error(`Immutable dependency link is absolute: ${childSource}`);
+        const resolved = await fs.promises.realpath(childSource);
+        const relative = path.relative(sourceRoot, resolved);
+        if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+          throw new Error(`Immutable dependency link escapes its source tree: ${childSource}`);
         entries.push({ source: childSource, target: childTarget, kind: "symlink" });
       } else {
         throw new Error(`Unsupported runtime dependency entry: ${childSource}`);

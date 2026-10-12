@@ -57,7 +57,9 @@ describe("buildUnit extension builds", () => {
 
     // Node's ordinary resolver walks from the bundle into the host's node_modules.
     expect(() => createRequire(bundlePath).resolve("fixture-dependency")).not.toThrow();
-    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"])).toBe(false);
+    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"], "fixture-key")).toBe(
+      false
+    );
 
     // Immutable dependency projections preserve links to their content store. The
     // store may live outside the build directory, but its package entry is owned
@@ -66,7 +68,9 @@ describe("buildUnit extension builds", () => {
     const projectedDependency = path.join(buildDir, "node_modules", "fixture-dependency");
     fs.mkdirSync(projectedDependency, { recursive: true });
     fs.writeFileSync(path.join(projectedDependency, "package.json"), '{"main":"missing.js"}');
-    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"])).toBe(false);
+    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"], "fixture-key")).toBe(
+      false
+    );
 
     fs.rmSync(projectedDependency, { recursive: true, force: true });
     fs.mkdirSync(storePackage, { recursive: true });
@@ -75,7 +79,21 @@ describe("buildUnit extension builds", () => {
     fs.mkdirSync(path.dirname(projectedDependency), { recursive: true });
     fs.symlinkSync(storePackage, projectedDependency, "dir");
 
-    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"])).toBe(true);
+    // A resolvable entrypoint alone is not proof that the rest of the tree
+    // finished copying; only a receipt written after projection establishes it.
+    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"], "fixture-key")).toBe(
+      false
+    );
+    fs.writeFileSync(
+      path.join(buildDir, "node_modules", ".vibestudio-runtime-projection.json"),
+      JSON.stringify({ version: 1, runtimeDepsKey: "fixture-key" })
+    );
+    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"], "wrong-key")).toBe(
+      false
+    );
+    expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"], "fixture-key")).toBe(
+      true
+    );
   });
 
   it("builds a workspace extension package as a node ESM bundle with inline sourcemaps", async () => {

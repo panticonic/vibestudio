@@ -59,6 +59,18 @@ that transaction; the journal lookup must not grow a second hydration path.
 Fresh publication must admit the promoted descriptor to this same cache after
 verification and before returning it, just as a verified cache read does.
 
+An extension with external runtime dependencies publishes its bundle and a
+complete `node_modules` projection in the same temporary build directory before
+the build-store rename exposes either. The projection receipt records the
+platform-specific dependency key only after all copies have joined and the
+declared packages resolve inside that tree. The shared build cache carries
+compiler artifacts only; each local owner projects the runtime closure for its
+host after hydration. A cached projection from an earlier host runtime is
+repaired in a private staging directory, then promoted by the process owner
+before any BuildSystem runtime accessor returns the extension. Extension
+activation uses those accessors; directory existence alone is never a
+readiness check.
+
 Async state watches register the subscriber before hydrating their initial
 snapshot at a captured sequence watermark. Snapshot records and intervening
 live events share one byte budget; snapshots precede newer buffered events.

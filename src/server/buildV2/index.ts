@@ -58,6 +58,7 @@ import {
   BuildProcessOwner,
   createBuilderSession,
   buildUnitStored,
+  ensureExtensionBuildReady,
   resolveBuildUnitKey,
   buildNpmLibrary,
   buildPlatformLibrary,
@@ -3031,8 +3032,10 @@ export async function initBuildSystemV2(
       return store.findSharedStyleBuild(digest);
     },
 
-    getBuildByKey(key: string): Promise<StoredBuildResult | null> {
-      return store.get(key);
+    async getBuildByKey(key: string): Promise<StoredBuildResult | null> {
+      const build = await store.get(key);
+      if (build) await ensureExtensionBuildReady(builderSession, build);
+      return build;
     },
 
     rebindBuildSourceState(build: StoredBuildResult, sourceStateHash: string) {
@@ -3079,8 +3082,13 @@ export async function initBuildSystemV2(
       return store.buildDescriptorBytes(build);
     },
 
-    getBuildByExecution(key: string, executionDigest: string): Promise<StoredBuildResult | null> {
-      return store.getByExecution(key, executionDigest);
+    async getBuildByExecution(
+      key: string,
+      executionDigest: string
+    ): Promise<StoredBuildResult | null> {
+      const build = await store.getByExecution(key, executionDigest);
+      if (build) await ensureExtensionBuildReady(builderSession, build);
+      return build;
     },
 
     peekBuildByKey(key: string): Promise<StoredBuildResult | null> {
