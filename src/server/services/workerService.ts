@@ -28,6 +28,28 @@ import {
 } from "@vibestudio/shared/productBuiltinCatalog.generated";
 import { resolveWorkspaceService, type ResolvedWorkspaceService } from "../workspaceServices.js";
 import { browserEnvironmentIdentityFromContext } from "../browserEnvironmentIdentity.js";
+import { UnitManifestError, workerTerminalConfig } from "@vibestudio/shared/unitManifest";
+
+/**
+ * The launcher metadata of a terminal app. A malformed block is reported by
+ * the unit's build (which refuses it with the exact field to fix); listing
+ * every source must not fail because one unit is mid-edit, so such a unit is
+ * listed without terminal metadata until its manifest is repaired.
+ */
+function terminalListing(
+  unitName: string,
+  manifest: Record<string, unknown>
+): { terminal?: { title: string; description?: string; icon?: string; className: string } } {
+  try {
+    const config = workerTerminalConfig(manifest, unitName);
+    if (!config) return {};
+    const { renderer: _renderer, ...terminal } = config;
+    return { terminal };
+  } catch (error) {
+    if (error instanceof UnitManifestError) return {};
+    throw error;
+  }
+}
 
 type ServiceListRow =
   | {
@@ -265,6 +287,7 @@ export function createWorkerService(deps: {
           entry: n.manifest.entry,
           classes: n.manifest.durable?.classes ?? [],
           agent: n.manifest.agent,
+          ...terminalListing(n.unitName, n.manifest as unknown as Record<string, unknown>),
         }));
       },
       listServices: async (ctx) => {

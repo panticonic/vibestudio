@@ -144,9 +144,20 @@ export interface PackageManifest {
    * (pubsub-channel, semantic control plane, fork, …) in the chat panel's agent picker.
    */
   agent?: { displayName?: string; description?: string };
+  /**
+   * Marks this worker as a terminal app: its Durable Object renders Ink and
+   * serves the terminal session protocol, and the terminal browser's launcher
+   * lists it. Validated by `workerTerminalConfig` in `unitManifest.ts`.
+   */
+  terminal?: {
+    renderer: "ink";
+    title: string;
+    description?: string;
+    icon?: string;
+    className?: string;
+  };
   /** Named service contracts exported by this repository. Workspace wiring selects source/name. */
   services?: import("@vibestudio/workspace-contracts/types").WorkspaceServiceExport[];
-
 }
 
 export type WorkspaceTestRuntime = "browser" | "workerd" | "native";

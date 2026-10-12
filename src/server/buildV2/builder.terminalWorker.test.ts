@@ -88,7 +88,7 @@ describe("buildUnit terminal worker builds", () => {
           entry: "worker.ts",
           sourcemap: true,
           durable: { classes: [{ className: "TerminalMin" }] },
-          terminal: { renderer: "ink" },
+          terminal: { renderer: "ink", title: "Terminal min" },
         },
         dependencies: { "@workspace/terminal-shim": "workspace:*", "yoga-layout": "^3.2.1" },
       })

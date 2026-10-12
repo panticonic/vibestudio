@@ -4190,7 +4190,7 @@ async function buildWorker(
   const rpcCatalogReadyAt = Date.now();
   const exposeModules = normalizeManifestSpecList(extractedManifest.exposeModules);
   const dedupePackages = normalizeManifestSpecList(extractedManifest.dedupeModules);
-  const terminalWorker = isTerminalWorker(extractedManifest);
+  const terminalWorker = isTerminalWorker(extractedManifest, node.name);
 
   // Generate the expose entry (always — even with empty exposeModules, this
   // sets up __vibestudioRequire__/__vibestudioModuleMap__ so eval has a working
