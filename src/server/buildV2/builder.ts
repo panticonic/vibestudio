@@ -4284,7 +4284,8 @@ async function buildWorker(
       ],
       plugins: preparedPlugins,
       nodePaths,
-      tsconfigRaw: { compilerOptions: {} },
+      // Same automatic JSX runtime the userland type-check and panel builds use.
+      tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
     });
     const compileReadyAt = Date.now();
     const executableModules = executableModulesFromMetafile(
@@ -4673,7 +4674,8 @@ async function buildTerminalApp(
       ),
       nodePaths,
       absWorkingDir: resolveDir,
-      tsconfigRaw: { compilerOptions: {} },
+      // Same automatic JSX runtime the userland type-check and panel builds use.
+      tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
     });
     const bundle = fs.readFileSync(path.join(outdir, "index.mjs"), "utf8");
     return session.store.putStored(
