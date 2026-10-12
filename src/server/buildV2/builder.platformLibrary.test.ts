@@ -3,34 +3,43 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@vibestudio/env-paths";
 
-import { primaryTextArtifactContent } from "./buildStore.js";
-import { buildPlatformLibrary, closeBuilder, initBuilder } from "./builder.js";
-import { setBuildRootConfig } from "./effectiveVersion.js";
+import { buildPlatformLibrary, type BuilderSession } from "./builder.js";
+import { createBuilderTestSession } from "./builderTestSession.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 describe("buildPlatformLibrary", () => {
   let root: string;
   let previousSharedDerivedCacheDir: string | undefined;
+  let session: BuilderSession;
+  let closeSession: () => Promise<void>;
+
+  async function openSession(appRoot: string, appNodeModules: readonly string[]): Promise<void> {
+    await closeSession?.();
+    const context = await createBuilderTestSession({
+      appRoot,
+      workspaceRoot: appRoot,
+      stateRoot: path.join(root, "state"),
+      appNodeModules,
+      runNativeJob: runIsolatedBuildJob,
+    });
+    session = context.session;
+    closeSession = context.close;
+  }
 
   beforeAll(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-platform-library-"));
     previousSharedDerivedCacheDir = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
     process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = path.join(root, "derived-cache");
-    setUserDataPath(path.join(root, "state"));
-    initBuilder(
-      [path.join(REPO_ROOT, "node_modules"), path.join(process.cwd(), "node_modules")],
-      REPO_ROOT,
-      runIsolatedBuildJob
-    );
-    await setBuildRootConfig({ appRoot: REPO_ROOT });
+    await openSession(REPO_ROOT, [
+      path.join(REPO_ROOT, "node_modules"),
+      path.join(process.cwd(), "node_modules"),
+    ]);
   });
 
   afterAll(async () => {
-    await closeBuilder();
-    await setBuildRootConfig(null);
+    await closeSession?.();
     if (previousSharedDerivedCacheDir === undefined) {
       delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
     } else {
@@ -40,15 +49,15 @@ describe("buildPlatformLibrary", () => {
   });
 
   it("builds package export subpaths without using the specifier as a cache path", async () => {
-    const bundle = await buildPlatformLibrary("@vibestudio/shared/shellSurface", []);
+    const bundle = await buildPlatformLibrary(session, "@vibestudio/shared/shellSurface", []);
 
-    await expect(primaryTextArtifactContent(bundle)).resolves.toContain(
+    await expect(session.store.primaryTextArtifactContent(bundle)).resolves.toContain(
       "validateShellSurfaceTarget"
     );
   });
 
   it("rebuilds an edited platform implementation without changing its package coordinates", async () => {
-    await closeBuilder();
+    await closeSession();
     const appRoot = path.join(root, "host");
     const packageRoot = path.join(appRoot, "packages/probe");
     const installedRoot = path.join(appRoot, "node_modules/@vibestudio");
@@ -63,18 +72,20 @@ describe("buildPlatformLibrary", () => {
     const source = path.join(packageRoot, "index.js");
     const build = async (value: string) => {
       fs.writeFileSync(source, `module.exports = ${JSON.stringify(value)};`);
-      await setBuildRootConfig({ appRoot });
-      initBuilder(
-        [path.join(appRoot, "node_modules"), path.join(REPO_ROOT, "node_modules")],
-        appRoot,
-        runIsolatedBuildJob
-      );
-      return buildPlatformLibrary("@vibestudio/probe", []);
+      await openSession(appRoot, [
+        path.join(appRoot, "node_modules"),
+        path.join(REPO_ROOT, "node_modules"),
+      ]);
+      return buildPlatformLibrary(session, "@vibestudio/probe", []);
     };
     const first = await build("first implementation");
     const second = await build("second implementation");
     expect(second.buildKey).not.toBe(first.buildKey);
-    await expect(primaryTextArtifactContent(second)).resolves.toContain("second implementation");
-    await expect(primaryTextArtifactContent(second)).resolves.not.toContain("first implementation");
+    await expect(session.store.primaryTextArtifactContent(second)).resolves.toContain(
+      "second implementation"
+    );
+    await expect(session.store.primaryTextArtifactContent(second)).resolves.not.toContain(
+      "first implementation"
+    );
   });
 });

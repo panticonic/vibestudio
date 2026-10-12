@@ -59,18 +59,22 @@ import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
-import * as buildStore from "./buildStore.js";
+import {
+  createBuildStoreProcessOwner,
+  type BuildStore,
+  type BuildStoreProcessOwner,
+} from "./buildStore.js";
 import {
   contentTypeForPath,
-  primaryArtifactFilePath,
   type BuildArtifactInput,
   type BuildArtifactWithContent,
   type BuildArtifacts,
   type BuildMetadata,
+  type BuildMetadataDetails,
   type BuildResult,
   type StoredBuildResult,
 } from "./buildStore.js";
-import { computeBuildKey } from "./effectiveVersion.js";
+import { computeBuildKey, type RootDependencyFingerprintInfo } from "./effectiveVersion.js";
 import {
   dependencyPatchesForExternalRoots,
   acquireExternalDeps,
@@ -78,7 +82,7 @@ import {
   prepareExternalDependencyEnvironment,
   type ExternalDependencyPatch,
 } from "./externalDeps.js";
-import { collectTransitiveInternalDeps, getBuildSourceProvider } from "./buildSource.js";
+import { collectTransitiveInternalDeps, type BuildSourceProvider } from "./buildSource.js";
 import { assertUnitIconSize, declaredUnitIconPath } from "./unitIcon.js";
 import { PANEL_CSP_META } from "@vibestudio/shared/constants";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
@@ -101,7 +105,6 @@ import { peerConflictRefusal, unownedPeerRefusal } from "./dependencyAudit.js";
 import { createBuildScratchDir } from "./buildScratch.js";
 import { prepareBuildProviderResources } from "./buildProviderResources.js";
 import { stateLayout } from "../stateLayout.js";
-import { getUserDataPath } from "@vibestudio/env-paths";
 import type {
   BuildProvider,
   BuildProviderArtifact,
@@ -153,31 +156,368 @@ async function buildWithEsbuild<T extends esbuild.BuildOptions>(
  * packages do not depend on a host-generated source census.
  */
 // ---------------------------------------------------------------------------
-// Module Initialization
+// Process-owned compiler resources and role-owned build sessions
 // ---------------------------------------------------------------------------
 
-/**
- * Absolute paths to the app's node_modules directories, where runtime packages
- * and @vibestudio/* platform packages are installed. Packaged builds may need
- * both app.asar.unpacked/node_modules for physical packages and app.asar/node_modules
- * for workspace-linked packages that electron-builder stores in the archive.
- */
-let _appNodeModules: string[] = [];
-let _appRoot = "";
-let _runNativeJob: RunNativeWorkspaceJob;
-let _ensureBuildProvider: ((target: "react-native") => Promise<void>) | undefined;
-let _hostWorkspacePackageManifests = new Map<string, string>();
-let _libraryLoweringWorker: LibraryLoweringWorkerClient | null = null;
-let _workspaceRpcCatalogWorker: WorkspaceRpcCatalogWorkerClient | null = null;
-let _immutableTreeWorker: ImmutableTreeWorkerClient | null = null;
+/** Absolute app configuration shared by build sessions in one host process. */
+export class BuildProcessOwner {
+  readonly appRoot: string;
+  readonly appNodeModules: readonly string[];
+  readonly hostWorkspacePackageManifests: ReadonlyMap<string, string>;
+  readonly buildSlotQueue: BuildSlotQueue;
+  readonly buildSlotQueueCapacity: number;
+  readonly lifetime = new BuilderLifetime();
+  readonly buildStoreProcessOwner: BuildStoreProcessOwner;
+  readonly libraryLoweringWorker: LibraryLoweringWorkerClient;
+  readonly workspaceRpcCatalogWorker: WorkspaceRpcCatalogWorkerClient;
+  readonly immutableTreeWorker: ImmutableTreeWorkerClient;
 
-let workerBatches = 0;
-let workerRetirement: Promise<void> | undefined;
-let builderLifetime = new BuilderLifetime();
-let buildSlotQueue: BuildSlotQueue | undefined;
-let builderShutdown: Promise<void> | undefined;
-let builderShutdownComplete = false;
-let builderConfigured = false;
+  private workerBatches = 0;
+  private readonly sharedBuildFlights = new Map<string, SharedBuildFlightEntry>();
+  private runningBuilds = 0;
+  private runningNonInteractiveBuilds = 0;
+  private runningSpeculativeBuilds = 0;
+  private workerRetirement: Promise<void> | undefined;
+  private workersRetired = false;
+  private shutdownFlight: Promise<void> | undefined;
+
+  constructor(input: {
+    appRoot: string;
+    appNodeModules: string | readonly string[];
+    buildConcurrency?: number;
+  }) {
+    this.appRoot = path.resolve(input.appRoot);
+    this.appNodeModules = Object.freeze(
+      (typeof input.appNodeModules === "string"
+        ? [input.appNodeModules]
+        : [...input.appNodeModules]
+      ).map((root) => path.resolve(root))
+    );
+    this.hostWorkspacePackageManifests = discoverHostWorkspacePackageManifests(this.appRoot);
+    this.buildSlotQueueCapacity = input.buildConcurrency ?? MAX_CONCURRENT_BUILDS;
+    this.buildSlotQueue = new BuildSlotQueue(this.buildSlotQueueCapacity);
+    this.buildStoreProcessOwner = createBuildStoreProcessOwner();
+    this.libraryLoweringWorker = new LibraryLoweringWorkerClient();
+    this.workspaceRpcCatalogWorker = new WorkspaceRpcCatalogWorkerClient(
+      resolveNativeTypeScriptServerPath(this.appRoot)
+    );
+    this.immutableTreeWorker = new ImmutableTreeWorkerClient();
+  }
+
+  async withWorkers<T>(operation: () => Promise<T>): Promise<T> {
+    return this.lifetime.run(async () => {
+      this.workerBatches++;
+      this.workersRetired = false;
+      let value!: T;
+      let operationFailure: unknown;
+      let operationFailed = false;
+      try {
+        await this.workerRetirement;
+        this.lifetime.assertOpen();
+        value = await operation();
+      } catch (error) {
+        operationFailure = error;
+        operationFailed = true;
+      }
+
+      let retirementFailure: unknown;
+      let retirementFailed = false;
+      try {
+        this.workerBatches--;
+        if (this.workerBatches === 0 && !this.lifetime.isClosing) {
+          const retirement = joinWorkerRetirement([
+            this.libraryLoweringWorker.close(),
+            this.workspaceRpcCatalogWorker.close(),
+            this.immutableTreeWorker.close(),
+          ]);
+          this.workerRetirement = retirement;
+          try {
+            await retirement;
+            this.workersRetired = true;
+          } finally {
+            if (this.workerRetirement === retirement) this.workerRetirement = undefined;
+          }
+        }
+      } catch (error) {
+        retirementFailure = error;
+        retirementFailed = true;
+      }
+
+      const failures: unknown[] = [];
+      if (operationFailed) failures.push(operationFailure);
+      if (retirementFailed) failures.push(retirementFailure);
+      const failure = joinedFailure(failures, "Build operation and worker retirement failed");
+      if (failure !== undefined || failures.length > 0) throw failure;
+      return value;
+    });
+  }
+
+  async shutdown(): Promise<void> {
+    if (this.shutdownFlight) return this.shutdownFlight;
+    const closing = new Error("Build process owner is shutting down");
+    this.buildSlotQueue.close(closing);
+    this.shutdownFlight = (async () => {
+      const operationFailures = await this.lifetime.close(closing);
+      const workerRetirement = this.workersRetired
+        ? undefined
+        : joinWorkerRetirement([
+            this.workerRetirement,
+            this.libraryLoweringWorker.close(),
+            this.workspaceRpcCatalogWorker.close(),
+            this.immutableTreeWorker.close(),
+          ]);
+      const workerOutcomes = await Promise.allSettled([
+        workerRetirement,
+        this.buildStoreProcessOwner.drain(),
+      ]);
+      const failures = [
+        ...operationFailures,
+        ...workerOutcomes.flatMap((outcome) =>
+          outcome.status === "rejected" ? [outcome.reason] : []
+        ),
+      ];
+      const failure = joinedFailure(failures, "Build process owner shutdown failed");
+      if (failure !== undefined || failures.length > 0) throw failure;
+    })();
+    return this.shutdownFlight;
+  }
+
+  get activeBuilds(): number {
+    return this.runningBuilds;
+  }
+
+  /**
+   * Coalesce a build only when callers share the same durable result-cache
+   * destination. A caller with a different role store waits for the producer,
+   * then hydrates its own descriptor and rebinds role-local source authority.
+   */
+  admitSharedBuild(
+    key: string,
+    create: (signal: AbortSignal) => BuildFlight<StoredBuildResult>
+  ): { readonly entry: SharedBuildFlightEntry; readonly owner: boolean } {
+    const existing = this.sharedBuildFlights.get(key);
+    if (existing) return { entry: existing, owner: false };
+    this.lifetime.assertOpen();
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, this.lifetime.signal]);
+    const flight = create(signal);
+    // Shared work belongs to the process even when the requesting role withdraws.
+    // The process lifetime is the terminal cancellation owner and joins this
+    // compiler flight during shutdown.
+    void this.lifetime.run(() => flight.promise).catch(() => {});
+    const entry: SharedBuildFlightEntry = {
+      flight,
+      controller,
+      borrowers: 0,
+      settled: false,
+    };
+    this.sharedBuildFlights.set(key, entry);
+    void flight.promise.then(
+      () => {
+        entry.settled = true;
+        if (this.sharedBuildFlights.get(key) === entry) this.sharedBuildFlights.delete(key);
+      },
+      () => {
+        entry.settled = true;
+        if (this.sharedBuildFlights.get(key) === entry) this.sharedBuildFlights.delete(key);
+      }
+    );
+    return { entry, owner: true };
+  }
+
+  async borrowSharedBuild(
+    entry: SharedBuildFlightEntry,
+    signal: AbortSignal,
+    priority: BuildPriority
+  ): Promise<StoredBuildResult> {
+    entry.borrowers++;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      entry.borrowers--;
+      if (entry.borrowers === 0 && !entry.settled && !entry.controller.signal.aborted) {
+        entry.controller.abort(new Error("All shared build requesters withdrew"));
+      }
+    };
+    if (signal.aborted) {
+      release();
+      throw signal.reason;
+    }
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      return await Promise.race([entry.flight.adopt(priority), aborted]);
+    } finally {
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+      release();
+    }
+  }
+
+  get activeNonInteractiveBuilds(): number {
+    return this.runningNonInteractiveBuilds;
+  }
+
+  get activeSpeculativeBuilds(): number {
+    return this.runningSpeculativeBuilds;
+  }
+
+  get queuedBuilds(): number {
+    return this.buildSlotQueue.queuedCount;
+  }
+
+  async withBuildSlot<T>(
+    signal: AbortSignal,
+    run: () => Promise<T>,
+    priority: BuildPriority = "interactive",
+    priorityOwner?: BuildPriorityOwner
+  ): Promise<T> {
+    this.lifetime.assertOpen();
+    if (buildSlotHeld.getStore()) return run();
+    let lease: Awaited<ReturnType<BuildSlotQueue["acquire"]>>;
+    try {
+      lease = await this.buildSlotQueue.acquire(
+        priorityOwner?.priority ?? priority,
+        hasBuildSlotCapacity,
+        signal,
+        priorityOwner ? (promote) => priorityOwner.bindQueuedPromotion(promote) : undefined
+      );
+    } finally {
+      priorityOwner?.clearQueuedPromotion();
+    }
+    this.runningBuilds++;
+    if (lease.priority !== "interactive") this.runningNonInteractiveBuilds++;
+    if (lease.priority === "speculative") this.runningSpeculativeBuilds++;
+    try {
+      return await buildSlotHeld.run(true, run);
+    } finally {
+      this.runningBuilds--;
+      if (lease.priority !== "interactive") this.runningNonInteractiveBuilds--;
+      if (lease.priority === "speculative") this.runningSpeculativeBuilds--;
+      lease.release();
+    }
+  }
+}
+
+interface SharedBuildFlightEntry {
+  readonly flight: BuildFlight<StoredBuildResult>;
+  readonly controller: AbortController;
+  borrowers: number;
+  settled: boolean;
+}
+
+export function createBuildProcessOwner(input: {
+  appRoot: string;
+  appNodeModules: string | readonly string[];
+  buildConcurrency?: number;
+}): BuildProcessOwner {
+  return new BuildProcessOwner(input);
+}
+
+/** Immutable role-bound inputs captured by every build operation. */
+export interface BuilderSession {
+  readonly processOwner: BuildProcessOwner;
+  readonly runNativeJob: RunNativeWorkspaceJob;
+  readonly ensureBuildProvider?: (target: "react-native") => Promise<void>;
+  readonly signal: AbortSignal;
+  readonly inFlightBuilds: Map<string, BuildFlight<StoredBuildResult>>;
+  readonly inFlightLibraryBuilds: Map<string, Promise<StoredBuildResult>>;
+  readonly source: BuildSourceProvider & { readonly workspaceId: string };
+  readonly store: BuildStore;
+  readonly sharedBuildResultCacheRoot: string | null;
+  readonly rootFingerprint: RootDependencyFingerprintInfo;
+  readonly lifetime: BuilderLifetime;
+  close(): Promise<void>;
+}
+
+export function createBuilderSession(input: {
+  processOwner: BuildProcessOwner;
+  runNativeJob: RunNativeWorkspaceJob;
+  ensureBuildProvider?: (target: "react-native") => Promise<void>;
+  signal?: AbortSignal;
+  ownerSignal?: AbortSignal;
+  source: BuildSourceProvider & { readonly workspaceId: string };
+  store: BuildStore;
+  sharedBuildResultCacheRoot: string | null;
+  rootFingerprint: RootDependencyFingerprintInfo;
+}): BuilderSession {
+  const lifetime = new BuilderLifetime();
+  // Session retirement closes admission and joins borrowed compiler work; it
+  // must not abort a process-owned shared build that another role still needs.
+  // Individual requests and process shutdown remain authoritative cancellation
+  // owners, while the session lifetime itself prevents new work and retains
+  // this session's captured inputs until its admitted operations settle.
+  const signals = [input.signal, input.ownerSignal, input.processOwner.lifetime.signal].filter(
+    (signal): signal is AbortSignal => signal !== undefined
+  );
+  const signal = AbortSignal.any(signals);
+  const session: BuilderSession = {
+    processOwner: input.processOwner,
+    runNativeJob: input.runNativeJob,
+    ...(input.ensureBuildProvider ? { ensureBuildProvider: input.ensureBuildProvider } : {}),
+    signal,
+    inFlightBuilds: new Map(),
+    inFlightLibraryBuilds: new Map(),
+    source: input.source,
+    store: input.store,
+    sharedBuildResultCacheRoot: input.sharedBuildResultCacheRoot
+      ? path.resolve(input.sharedBuildResultCacheRoot)
+      : null,
+    rootFingerprint: input.rootFingerprint,
+    lifetime,
+    close: async () => {
+      const failures = await lifetime.close();
+      let publicationFailure: unknown;
+      let publicationFailed = false;
+      try {
+        await input.store.drainPublications();
+      } catch (error) {
+        publicationFailure = error;
+        publicationFailed = true;
+      }
+      const allFailures = [...failures, ...(publicationFailed ? [publicationFailure] : [])];
+      const failure = joinedFailure(allFailures, "Build session retirement failed");
+      if (failure !== undefined || allFailures.length > 0) throw failure;
+    },
+  };
+  return session;
+}
+
+/** Join a same-key build only when a shared result cache can hydrate this role. */
+function admitSessionBuild(
+  session: BuilderSession,
+  buildKey: string,
+  priority: BuildPriority,
+  create: (signal: AbortSignal) => BuildFlight<StoredBuildResult>,
+  sourceStateHash?: string
+): BuildFlight<StoredBuildResult> {
+  const cacheRoot = session.sharedBuildResultCacheRoot;
+  if (!cacheRoot) return create(session.signal);
+  const sharedKey = `${cacheRoot}\0${buildKey}`;
+  const admitted = session.processOwner.admitSharedBuild(sharedKey, create);
+
+  return new BuildFlight(priority, async (adopter) => {
+    adopter.bindQueuedPromotion((promoted) => admitted.entry.flight.priority.promote(promoted));
+    try {
+      const result = await withBuilderWorkers(session, () =>
+        session.processOwner.borrowSharedBuild(admitted.entry, session.signal, adopter.priority)
+      );
+      if (admitted.owner) return result;
+      const hydrated = await session.store.getOrHydrate(buildKey, sourceStateHash);
+      if (!hydrated) {
+        throw new Error(
+          `Shared build ${buildKey} completed without a hydratable result in this role store`
+        );
+      }
+      return hydrated;
+    } finally {
+      adopter.clearQueuedPromotion();
+    }
+  });
+}
 
 async function joinWorkerRetirement(operations: Array<Promise<void> | undefined>): Promise<void> {
   const outcomes = await Promise.allSettled(operations);
@@ -193,59 +533,20 @@ async function joinWorkerRetirement(operations: Array<Promise<void> | undefined>
 }
 
 /** A build closure owns compiler residency, including concurrent dependency builds. */
-export async function withBuilderWorkers<T>(operation: () => Promise<T>): Promise<T> {
-  return builderLifetime.run(async () => {
-    workerBatches++;
-    let value!: T;
-    let operationFailure: unknown;
-    let operationFailed = false;
-    try {
-      await workerRetirement;
-      builderLifetime.assertOpen();
-      value = await operation();
-    } catch (error) {
-      operationFailure = error;
-      operationFailed = true;
-    }
-
-    let retirementFailure: unknown;
-    let retirementFailed = false;
-    try {
-      workerBatches--;
-      if (workerBatches === 0 && !builderLifetime.isClosing) {
-        const retirement = joinWorkerRetirement([
-          _libraryLoweringWorker?.close(),
-          _workspaceRpcCatalogWorker?.close(),
-          _immutableTreeWorker?.close(),
-        ]);
-        workerRetirement = retirement;
-        try {
-          await retirement;
-        } finally {
-          if (workerRetirement === retirement) workerRetirement = undefined;
-        }
-      }
-    } catch (error) {
-      retirementFailure = error;
-      retirementFailed = true;
-    }
-
-    const failures: unknown[] = [];
-    if (operationFailed) failures.push(operationFailure);
-    if (retirementFailed) failures.push(retirementFailure);
-    const failure = joinedFailure(failures, "Build operation and worker retirement failed");
-    if (failure !== undefined || failures.length > 0) throw failure;
-    return value;
-  });
+export async function withBuilderWorkers<T>(
+  session: BuilderSession,
+  operation: () => Promise<T>
+): Promise<T> {
+  return session.lifetime.run(() => session.processOwner.withWorkers(operation));
 }
 
 function createHostRequire(nodeModulesRoot: string): NodeJS.Require {
   return createRequire(path.join(nodeModulesRoot, "__vibestudio_host_resolver.cjs"));
 }
 
-function resolveHostDependency(specifier: string): string {
+function resolveHostDependency(specifier: string, appNodeModules: readonly string[]): string {
   let cause: unknown;
-  for (const nodeModulesRoot of _appNodeModules) {
+  for (const nodeModulesRoot of appNodeModules) {
     try {
       return createHostRequire(nodeModulesRoot).resolve(specifier);
     } catch (error) {
@@ -253,116 +554,19 @@ function resolveHostDependency(specifier: string): string {
     }
   }
   throw new Error(
-    `Could not resolve host dependency ${JSON.stringify(specifier)} from configured app node_modules roots: ${_appNodeModules.join(", ") || "(none)"}`,
+    `Could not resolve host dependency ${JSON.stringify(specifier)} from configured app node_modules roots: ${appNodeModules.join(", ") || "(none)"}`,
     { cause }
   );
 }
 
-let buildSignal: AbortSignal | undefined;
-
-/**
- * Initialize the builder with the app's node_modules paths.
- * Must be called once before any buildUnit() calls.
- */
 /** Compilation, authority and documentation use the same owned extractor. */
 export function collectWorkspaceRpcMethods(
+  owner: BuildProcessOwner,
   ...args: Parameters<WorkspaceRpcCatalogWorkerClient["collect"]>
 ): ReturnType<WorkspaceRpcCatalogWorkerClient["collect"]> {
-  return withBuilderWorkers(async () => {
-    if (!_workspaceRpcCatalogWorker) throw new Error("builder is not initialized");
-    return _workspaceRpcCatalogWorker.collect(...args);
+  return owner.withWorkers(async () => {
+    return owner.workspaceRpcCatalogWorker.collect(...args);
   });
-}
-
-export function initBuilder(
-  appNodeModules: string | string[],
-  appRoot: string,
-  runNativeJob: RunNativeWorkspaceJob,
-  ensureBuildProvider?: (target: "react-native") => Promise<void>,
-  signal?: AbortSignal
-): void {
-  if (builderLifetime.isClosing && !builderShutdownComplete) {
-    throw new Error("Cannot initialize the builder while its previous lifetime is retiring");
-  }
-  if (builderShutdownComplete) {
-    builderLifetime = new BuilderLifetime();
-    buildSlotQueue = new BuildSlotQueue(MAX_CONCURRENT_BUILDS);
-    builderShutdown = undefined;
-    builderShutdownComplete = false;
-    workerBatches = 0;
-    workerRetirement = undefined;
-    _libraryLoweringWorker = null;
-    _workspaceRpcCatalogWorker = null;
-    _immutableTreeWorker = null;
-    builderConfigured = false;
-  }
-  const resolvedAppRoot = path.resolve(appRoot);
-  if (builderConfigured && _appRoot !== resolvedAppRoot) {
-    throw new Error("Cannot reconfigure the builder before closing its current lifetime");
-  }
-  const reuseWorkers = _appRoot === resolvedAppRoot && _libraryLoweringWorker !== null;
-  _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
-  _appRoot = resolvedAppRoot;
-  _runNativeJob = runNativeJob;
-  _ensureBuildProvider = ensureBuildProvider;
-  buildSignal = signal ? AbortSignal.any([signal, builderLifetime.signal]) : builderLifetime.signal;
-  buildSlotQueue ??= new BuildSlotQueue(MAX_CONCURRENT_BUILDS);
-  _hostWorkspacePackageManifests = discoverHostWorkspacePackageManifests(_appRoot);
-  if (!reuseWorkers) {
-    workerRetirement = joinWorkerRetirement([
-      workerRetirement,
-      _libraryLoweringWorker?.close(),
-      _workspaceRpcCatalogWorker?.close(),
-      _immutableTreeWorker?.close(),
-    ]);
-    // Initialization is synchronous; admitted builds and closeBuilder consume
-    // this same retirement promise and receive its original failure.
-    void workerRetirement.catch(() => undefined);
-    _libraryLoweringWorker = new LibraryLoweringWorkerClient();
-    _workspaceRpcCatalogWorker = new WorkspaceRpcCatalogWorkerClient(
-      resolveNativeTypeScriptServerPath(_appRoot)
-    );
-    _immutableTreeWorker = new ImmutableTreeWorkerClient();
-  }
-  builderConfigured = true;
-}
-
-export async function closeBuilder(): Promise<void> {
-  if (builderShutdown) return builderShutdown;
-  const closing = new Error("Build system is shutting down");
-  buildSlotQueue?.close(closing);
-  builderShutdown = (async () => {
-    try {
-      const operationFailures = await builderLifetime.close(closing);
-      const worker = _libraryLoweringWorker;
-      const catalogWorker = _workspaceRpcCatalogWorker;
-      const immutableTreeWorker = _immutableTreeWorker;
-      _libraryLoweringWorker = null;
-      _workspaceRpcCatalogWorker = null;
-      _immutableTreeWorker = null;
-      let workerFailure: unknown;
-      let workerFailed = false;
-      try {
-        await joinWorkerRetirement([
-          workerRetirement,
-          worker?.close(),
-          catalogWorker?.close(),
-          immutableTreeWorker?.close(),
-        ]);
-      } catch (error) {
-        workerFailure = error;
-        workerFailed = true;
-      }
-      workerRetirement = undefined;
-      const failures = [...operationFailures];
-      if (workerFailed) failures.push(workerFailure);
-      const failure = joinedFailure(failures, "Build system shutdown failed");
-      if (failure !== undefined || failures.length > 0) throw failure;
-    } finally {
-      builderShutdownComplete = true;
-    }
-  })();
-  return builderShutdown;
 }
 
 // ---------------------------------------------------------------------------
@@ -465,9 +669,6 @@ function sourcePathForNode(node: GraphNode, sourceRoot: string): string {
 // Concurrency
 // ---------------------------------------------------------------------------
 
-let runningBuilds = 0;
-let runningNonInteractiveBuilds = 0;
-let runningSpeculativeBuilds = 0;
 /**
  * Speculative preparation must not occupy every build lane. Required
  * background work still belongs to workspace startup and may use a free lane;
@@ -503,20 +704,22 @@ export function hasBuildSlotCapacity(
  */
 const STAGE_STALL_NOTICE_MS = 30_000;
 
-function traceBuildStages(label: string): { enter(stage: string): void; done(): void } {
+function traceBuildStages(
+  owner: BuildProcessOwner,
+  label: string
+): { enter(stage: string): void; done(): void } {
   const started = Date.now();
   let stage = "queued";
   let stageStarted = started;
   const timer = setInterval(() => {
-    const queuedBuilds = buildSlotQueue?.queuedCount ?? 0;
     logVerbose(
       "BuildV2",
       `${label} still in ${stage} after ` +
         `${Math.round((Date.now() - stageStarted) / 1000)}s ` +
         `(${Math.round((Date.now() - started) / 1000)}s total; ` +
-        `${runningBuilds}/${MAX_CONCURRENT_BUILDS} permits held ` +
-        `(${runningNonInteractiveBuilds} non-interactive, ` +
-        `${runningSpeculativeBuilds} speculative), ${queuedBuilds} waiting)`
+        `${owner.activeBuilds}/${owner.buildSlotQueueCapacity} permits held ` +
+        `(${owner.activeNonInteractiveBuilds} non-interactive, ` +
+        `${owner.activeSpeculativeBuilds} speculative), ${owner.queuedBuilds} waiting)`
     );
   }, STAGE_STALL_NOTICE_MS);
   timer.unref?.();
@@ -539,61 +742,10 @@ function traceBuildStages(label: string): { enter(stage: string): void; done(): 
   };
 }
 
-/**
- * Run one build against the concurrency budget.
- *
- * The budget is deliberately soft. It exists so a burst of builds does not
- * thrash the machine, not because any count is correct: builds already
- * parallelize internally, and a slot held a moment too long costs latency
- * while a slot never returned costs the build system entirely. So the only
- * way to occupy a slot is to run inside this function, which returns it in a
- * `finally` -- there is no permit to forget, hand out twice, or return from a
- * path that never took one.
- *
- * A build reached from inside another build rides its caller's slot rather
- * than queueing behind it. Nesting does not happen today (all three callers
- * are service entry points), but a nested acquire under a saturated budget is
- * a deadlock with an idle event loop and nothing to read, which is far worse
- * than briefly exceeding a number the budget never promised to hold exactly.
- */
 const buildSlotHeld = new AsyncLocalStorage<true>();
 
-async function withBuildSlot<T>(
-  run: () => Promise<T>,
-  priority: BuildPriority = "interactive",
-  priorityOwner?: BuildPriorityOwner
-): Promise<T> {
-  builderLifetime.assertOpen();
-  if (buildSlotHeld.getStore()) return run();
-  const queue = buildSlotQueue;
-  if (!queue) throw new Error("Build scheduler is not initialized");
-  let lease: Awaited<ReturnType<BuildSlotQueue["acquire"]>>;
-  try {
-    lease = await queue.acquire(
-      priorityOwner?.priority ?? priority,
-      hasBuildSlotCapacity,
-      buildSignal,
-      priorityOwner ? (promote) => priorityOwner.bindQueuedPromotion(promote) : undefined
-    );
-  } finally {
-    priorityOwner?.clearQueuedPromotion();
-  }
-  runningBuilds++;
-  if (lease.priority !== "interactive") runningNonInteractiveBuilds++;
-  if (lease.priority === "speculative") runningSpeculativeBuilds++;
-  try {
-    return await buildSlotHeld.run(true, run);
-  } finally {
-    runningBuilds--;
-    if (lease.priority !== "interactive") runningNonInteractiveBuilds--;
-    if (lease.priority === "speculative") runningSpeculativeBuilds--;
-    lease.release();
-  }
-}
-
-// Build coalescing: dedup concurrent builds of the same key
-const inFlightBuilds = new Map<string, BuildFlight<StoredBuildResult>>();
-const inFlightLibraryBuilds = new Map<string, Promise<StoredBuildResult>>();
+// Build coalescing is scoped to the build session because a stored descriptor
+// belongs to that session's state root even when artifact bytes are shared.
 
 // ---------------------------------------------------------------------------
 // Resolve Plugin
@@ -1354,8 +1506,11 @@ export default { promises: _fs, readFile, writeFile, readdir, stat, lstat, mkdir
   };
 }
 
-function createPathShimPlugin(resolveDir: string): esbuild.Plugin {
-  const reviewedPatheEntry = resolveHostDependency("pathe");
+function createPathShimPlugin(
+  resolveDir: string,
+  appNodeModules: readonly string[]
+): esbuild.Plugin {
+  const reviewedPatheEntry = resolveHostDependency("pathe", appNodeModules);
   return {
     name: "path-shim",
     setup(build) {
@@ -1434,8 +1589,11 @@ export default { getRandomValues, randomBytes, createHash };`,
   };
 }
 
-function createWorkerBufferShimPlugin(_resolveDir: string): esbuild.Plugin {
-  const reviewedBufferEntry = resolveHostDependency("buffer/");
+function createWorkerBufferShimPlugin(
+  _resolveDir: string,
+  appNodeModules: readonly string[]
+): esbuild.Plugin {
+  const reviewedBufferEntry = resolveHostDependency("buffer/", appNodeModules);
   return {
     name: "worker-buffer-shim",
     setup(build) {
@@ -1997,6 +2155,23 @@ export interface BuildUnitOptions {
   priority?: BuildPriority;
 }
 
+function captureBuildUnitOptions(
+  options: BuildUnitOptions | undefined
+): BuildUnitOptions | undefined {
+  if (!options) return undefined;
+  const test = options.test
+    ? {
+        ...options.test,
+        include: [...options.test.include],
+      }
+    : undefined;
+  return {
+    ...options,
+    ...(options.externals ? { externals: [...options.externals] } : {}),
+    ...(test ? { test } : {}),
+  };
+}
+
 // Bump whenever the generated sandbox test entry or its execution metadata
 // changes. Test artifacts are immutable and must never reuse an older recipe.
 const TEST_ARTIFACT_FORMAT_VERSION = 2;
@@ -2054,11 +2229,13 @@ export function buildSourcemapForNode(node: GraphNode, options?: BuildUnitOption
 }
 
 export function computeBuildUnitKey(
+  rootFingerprint: RootDependencyFingerprintInfo,
   node: GraphNode,
   ev: string,
   options?: BuildUnitOptions
 ): string {
   return computeBuildKey(
+    rootFingerprint,
     node.name,
     effectiveBuildVersion(node, ev, options),
     buildSourcemapForNode(node, options)
@@ -2066,6 +2243,7 @@ export function computeBuildUnitKey(
 }
 
 function preparedRuntimeBuild(
+  source: BuildSourceProvider,
   node: GraphNode,
   ev: string,
   stateRef: string,
@@ -2078,7 +2256,7 @@ function preparedRuntimeBuild(
     node.kind !== "package" &&
     node.kind !== "template" &&
     !(node.kind === "app" && node.manifest.app?.target === "react-native")
-      ? getBuildSourceProvider().preparedBuildForContent?.(stateRef, node.relativePath)
+      ? source.preparedBuildForContent?.(stateRef, node.relativePath)
       : null;
   if (prepared && prepared.effectiveVersion !== ev) {
     throw new Error(`Installed template artifact does not match its source: ${node.relativePath}`);
@@ -2088,14 +2266,16 @@ function preparedRuntimeBuild(
 
 /** Resolve the installed artifact or the recipe for a future compilation. */
 export function resolveBuildUnitKey(
+  rootFingerprint: RootDependencyFingerprintInfo,
+  source: BuildSourceProvider,
   node: GraphNode,
   ev: string,
   stateRef: string,
   options?: BuildUnitOptions
 ): string {
   return (
-    preparedRuntimeBuild(node, ev, stateRef, options)?.buildKey ??
-    computeBuildUnitKey(node, ev, options)
+    preparedRuntimeBuild(source, node, ev, stateRef, options)?.buildKey ??
+    computeBuildUnitKey(rootFingerprint, node, ev, options)
   );
 }
 
@@ -2109,6 +2289,7 @@ export function resolveBuildUnitKey(
  * @param options - Optional build options (library mode, externals).
  */
 export async function buildUnitStored(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   graph: PackageGraph,
@@ -2116,24 +2297,27 @@ export async function buildUnitStored(
   stateRef: string,
   options?: BuildUnitOptions
 ): Promise<StoredBuildResult> {
-  const sourcemap = buildSourcemapForNode(node, options);
+  const capturedOptions = captureBuildUnitOptions(options);
+  const sourcemap = buildSourcemapForNode(node, capturedOptions);
   let provider: BuildProvider | null = null;
-  const prepared = preparedRuntimeBuild(node, ev, stateRef, options);
+  const prepared = preparedRuntimeBuild(session.source, node, ev, stateRef, capturedOptions);
   // A release manifest selects finished bytes. The consumer's npm installation
   // is an input to future compilation, not to selection of published artifacts.
-  let buildKey = prepared?.buildKey ?? computeBuildUnitKey(node, ev, options);
+  let buildKey =
+    prepared?.buildKey ?? computeBuildUnitKey(session.rootFingerprint, node, ev, capturedOptions);
   if (
-    !options?.library &&
-    !options?.test &&
-    !options?.website &&
+    !capturedOptions?.library &&
+    !capturedOptions?.test &&
+    !capturedOptions?.website &&
     node.kind === "app" &&
     node.manifest.app?.target === "react-native"
   ) {
     // The provider is an input to the artifact, so resolve it before cache
     // lookup, coalescing, or taking a compilation slot.
-    await _ensureBuildProvider?.("react-native");
+    await session.ensureBuildProvider?.("react-native");
     provider = resolveBuildProvider("react-native");
     buildKey = computeBuildKey(
+      session.rootFingerprint,
       node.name,
       [
         ev,
@@ -2147,14 +2331,14 @@ export async function buildUnitStored(
   }
 
   // Check store first
-  const cachedRecord = await buildStore.getOrHydrate(buildKey, stateRef);
+  const cachedRecord = await session.store.getOrHydrate(buildKey, stateRef);
   let cached = cachedRecord;
   if (cached && cached.sourceStateHash !== stateRef && cached.sourceStateHash !== null) {
-    cached = await buildStore.rebindSourceState(cached, stateRef);
+    cached = await session.store.rebindSourceState(cached, stateRef);
   }
   if (cached) {
     if (node.kind === "extension") {
-      await refreshCachedExtensionRuntimeDeps(cached);
+      await refreshCachedExtensionRuntimeDeps(session, cached);
     }
     return cached;
   }
@@ -2165,40 +2349,50 @@ export async function buildUnitStored(
   // Check for in-flight build (coalescing). An adopted promise is worth saying
   // out loud: if the original never settles, every adopter inherits that, and
   // this line is the only place the adoption is visible.
-  const requestedPriority = options?.priority ?? "interactive";
-  const inFlight = inFlightBuilds.get(buildKey);
+  const requestedPriority = capturedOptions?.priority ?? "interactive";
+  const inFlight = session.inFlightBuilds.get(buildKey);
   if (inFlight) {
     logVerbose("BuildV2", `${node.name}: adopting in-flight build ${buildKey}`);
     return inFlight.adopt(requestedPriority);
   }
 
-  const flight = new BuildFlight<StoredBuildResult>(requestedPriority, (priority) =>
-    withBuilderWorkers(() =>
-      doBuild(
-        node,
-        ev,
-        buildKey,
-        graph,
-        workspaceRoot,
-        sourcemap,
-        stateRef,
-        provider,
-        options,
-        priority
-      )
-    )
+  const flight = admitSessionBuild(
+    session,
+    buildKey,
+    requestedPriority,
+    (sharedSignal) =>
+      new BuildFlight<StoredBuildResult>(requestedPriority, (priority) =>
+        withBuilderWorkers(session, () =>
+          doBuild(
+            session,
+            node,
+            ev,
+            buildKey,
+            graph,
+            workspaceRoot,
+            sourcemap,
+            stateRef,
+            provider,
+            capturedOptions,
+            priority,
+            sharedSignal
+          )
+        )
+      ),
+    stateRef
   );
-  inFlightBuilds.set(buildKey, flight);
+  session.inFlightBuilds.set(buildKey, flight);
 
   try {
     return await flight.promise;
   } finally {
-    if (inFlightBuilds.get(buildKey) === flight) inFlightBuilds.delete(buildKey);
+    if (session.inFlightBuilds.get(buildKey) === flight) session.inFlightBuilds.delete(buildKey);
   }
 }
 
 /** Materialize artifact strings only for callers crossing the build RPC wire boundary. */
 export async function buildUnit(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   graph: PackageGraph,
@@ -2206,8 +2400,8 @@ export async function buildUnit(
   stateRef: string,
   options?: BuildUnitOptions
 ): Promise<BuildResult> {
-  return buildStore.materializeStoredBuild(
-    await buildUnitStored(node, ev, graph, workspaceRoot, stateRef, options)
+  return session.store.materializeStoredBuild(
+    await buildUnitStored(session, node, ev, graph, workspaceRoot, stateRef, options)
   );
 }
 
@@ -2253,6 +2447,7 @@ function authorityFromMaterializedSource(
 }
 
 async function doBuild(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   buildKey: string,
@@ -2262,9 +2457,10 @@ async function doBuild(
   stateRef: string,
   provider: BuildProvider | null,
   options?: BuildUnitOptions,
-  priorityOwner?: BuildPriorityOwner
+  priorityOwner?: BuildPriorityOwner,
+  signal: AbortSignal = session.signal
 ): Promise<StoredBuildResult> {
-  const trace = traceBuildStages(`${node.name}@${buildKey.slice(0, 12)}`);
+  const trace = traceBuildStages(session.processOwner, `${node.name}@${buildKey.slice(0, 12)}`);
   trace.enter("semaphore");
   try {
     const runBuild = async () => {
@@ -2272,7 +2468,7 @@ async function doBuild(
       // immutable workspace state. The provider caches per-state checkouts; no
       // per-build temp dir, no cleanup.
       trace.enter("materialize");
-      const extracted = await getBuildSourceProvider().materializeForBuild(
+      const extracted = await session.source.materializeForBuild(
         collectTransitiveInternalDeps(node, graph),
         stateRef,
         workspaceRoot
@@ -2285,6 +2481,7 @@ async function doBuild(
 
       if (options?.test) {
         return await buildTestBundle(
+          session,
           node,
           ev,
           buildKey,
@@ -2293,7 +2490,8 @@ async function doBuild(
           extracted.sourceRoot,
           stateRef,
           authority,
-          options.test
+          options.test,
+          signal
         );
       } else if (options?.library) {
         if (!options.libraryTarget) {
@@ -2302,6 +2500,7 @@ async function doBuild(
           );
         }
         return await buildLibraryBundle(
+          session,
           node,
           ev,
           buildKey,
@@ -2315,13 +2514,15 @@ async function doBuild(
           options.libraryEntrySubpath ?? ".",
           conditionsForLibraryTarget(options.libraryTarget),
           authority,
-          options.libraryTarget
+          options.libraryTarget,
+          signal
         );
       } else if (options?.website) {
         if (node.kind !== "panel") {
           throw new Error(`website builds require a panel package: ${node.name}`);
         }
         return await buildWebsiteBundle(
+          session,
           node,
           ev,
           buildKey,
@@ -2329,33 +2530,12 @@ async function doBuild(
           workspaceRoot,
           extracted.sourceRoot,
           stateRef,
-          authority
+          authority,
+          signal
         );
       } else if (node.kind === "worker") {
         return await buildWorker(
-          node,
-          ev,
-          buildKey,
-          graph,
-          workspaceRoot,
-          sourcemap,
-          extracted.sourceRoot,
-          stateRef,
-          authority
-        );
-      } else if (node.kind === "extension") {
-        return await buildExtension(
-          node,
-          ev,
-          buildKey,
-          graph,
-          workspaceRoot,
-          extracted.sourceRoot,
-          stateRef,
-          authority
-        );
-      } else if (node.kind === "app") {
-        return await buildApp(
+          session,
           node,
           ev,
           buildKey,
@@ -2365,7 +2545,36 @@ async function doBuild(
           extracted.sourceRoot,
           stateRef,
           authority,
-          provider
+          undefined,
+          signal
+        );
+      } else if (node.kind === "extension") {
+        return await buildExtension(
+          session,
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          extracted.sourceRoot,
+          stateRef,
+          authority,
+          signal
+        );
+      } else if (node.kind === "app") {
+        return await buildApp(
+          session,
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          sourcemap,
+          extracted.sourceRoot,
+          stateRef,
+          authority,
+          provider,
+          signal
         );
       } else if (node.kind === "template") {
         throw new Error(`Templates are not buildable: ${node.name}`);
@@ -2378,6 +2587,7 @@ async function doBuild(
         );
       } else {
         return await buildPanel(
+          session,
           node,
           ev,
           buildKey,
@@ -2386,11 +2596,18 @@ async function doBuild(
           sourcemap,
           extracted.sourceRoot,
           stateRef,
-          authority
+          authority,
+          undefined,
+          signal
         );
       }
     };
-    return await withBuildSlot(runBuild, options?.priority ?? "interactive", priorityOwner);
+    return await session.processOwner.withBuildSlot(
+      signal,
+      runBuild,
+      options?.priority ?? "interactive",
+      priorityOwner
+    );
   } finally {
     trace.done();
   }
@@ -2483,6 +2700,7 @@ function selectTestFiles(
 }
 
 async function buildTestBundle(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   buildKey: string,
@@ -2491,7 +2709,8 @@ async function buildTestBundle(
   sourceRoot: string,
   sourceStateHash: string,
   authority: UnitAuthorityManifest,
-  test: NonNullable<BuildUnitOptions["test"]>
+  test: NonNullable<BuildUnitOptions["test"]>,
+  signal: AbortSignal
 ): Promise<StoredBuildResult> {
   if (test.runtime === "native") {
     throw new BuildRequestError(
@@ -2508,6 +2727,7 @@ async function buildTestBundle(
   const runtimeTest = { suite: test.suite, runtime: test.runtime, selectedFiles } as const;
   return test.runtime === "browser"
     ? buildPanel(
+        session,
         node,
         ev,
         buildKey,
@@ -2517,9 +2737,11 @@ async function buildTestBundle(
         sourceRoot,
         sourceStateHash,
         authority,
-        runtimeTest
+        runtimeTest,
+        signal
       )
     : buildWorker(
+        session,
         node,
         ev,
         buildKey,
@@ -2529,7 +2751,8 @@ async function buildTestBundle(
         sourceRoot,
         sourceStateHash,
         authority,
-        runtimeTest
+        runtimeTest,
+        signal
       );
 }
 
@@ -2577,12 +2800,14 @@ type BuildComposition = "runtime-root" | "library";
  * unrelated default export.
  */
 async function prepareBuildEnv(
+  session: BuilderSession,
   node: GraphNode,
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
   sourceRoot: string,
-  composition: BuildComposition
+  composition: BuildComposition,
+  signal: AbortSignal
 ): Promise<BuildEnv> {
   const outdir = createBuildScratchDir(`build-${buildKey}`);
 
@@ -2592,9 +2817,9 @@ async function prepareBuildEnv(
     node,
     graph,
     sourceRoot,
-    _appRoot,
-    _appNodeModules,
-    buildSignal
+    session.processOwner.appRoot,
+    [...session.processOwner.appNodeModules],
+    signal
   );
   const {
     externalDeps,
@@ -2654,6 +2879,7 @@ async function prepareBuildEnv(
  * Store a simple bundle-only build result (used by worker builds).
  */
 async function storeSimpleBuild(
+  session: BuilderSession,
   buildKey: string,
   bundle: string,
   node: GraphNode,
@@ -2677,7 +2903,7 @@ async function storeSimpleBuild(
     ...extraMetadata,
     builtAt: new Date().toISOString(),
   };
-  return buildStore.putStored(buildKey, artifacts, metadata);
+  return session.store.putStored(buildKey, artifacts, metadata);
 }
 
 function bundleArtifacts(bundle: string): BuildArtifacts {
@@ -2950,6 +3176,7 @@ function workerTestEntry(outdir: string, sourcePath: string, test: RuntimeTestBu
 }
 
 async function buildWebsiteBundle(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   buildKey: string,
@@ -2957,15 +3184,18 @@ async function buildWebsiteBundle(
   workspaceRoot: string,
   sourceRoot: string,
   sourceStateHash: string,
-  authority: UnitAuthorityManifest
+  authority: UnitAuthorityManifest,
+  signal: AbortSignal
 ): Promise<StoredBuildResult> {
   const env = await prepareBuildEnv(
+    session,
     node,
     buildKey,
     graph,
     workspaceRoot,
     sourceRoot,
-    "runtime-root"
+    "runtime-root",
+    signal
   );
   try {
     const packageJson = JSON.parse(
@@ -3022,7 +3252,7 @@ async function buildWebsiteBundle(
       createWorkspaceResolvePlugin(graph, sourceRoot, WEBSITE_CONDITIONS),
       createTsExtensionPlugin(sourceRoot),
       createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
-      createPathShimPlugin(env.resolveDir),
+      createPathShimPlugin(env.resolveDir, session.processOwner.appNodeModules),
       createCryptoShimPlugin({ resolveDir: env.resolveDir }),
     ];
     const dedupe = createDedupePlugin(env.resolveDir, dedupePackages);
@@ -3107,13 +3337,14 @@ async function buildWebsiteBundle(
       },
       builtAt: new Date().toISOString(),
     };
-    return await buildStore.putStored(buildKey, { entries: artifacts }, metadata);
+    return await session.store.putStored(buildKey, { entries: artifacts }, metadata);
   } finally {
     await env.cleanup();
   }
 }
 
 async function buildPanel(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   buildKey: string,
@@ -3123,17 +3354,20 @@ async function buildPanel(
   sourceRoot: string,
   sourceStateHash: string,
   authority: UnitAuthorityManifest,
-  runtimeTest?: RuntimeTestBuild
+  runtimeTest?: RuntimeTestBuild,
+  signal: AbortSignal = session.signal
 ): Promise<StoredBuildResult> {
   const profileStartedAt = Date.now();
   const profileStartedRss = process.memoryUsage().rss;
   const env = await prepareBuildEnv(
+    session,
     node,
     buildKey,
     graph,
     workspaceRoot,
     sourceRoot,
-    "runtime-root"
+    "runtime-root",
+    signal
   );
   const environmentReadyAt = Date.now();
   const { outdir, nodePaths } = env;
@@ -3214,7 +3448,7 @@ async function buildPanel(
     createWorkspaceResolvePlugin(graph, sourceRoot, PANEL_CONDITIONS),
     createTsExtensionPlugin(sourceRoot),
     createFsShimPlugin({ runtimeBacked: node.kind !== "app", resolveDir }),
-    createPathShimPlugin(resolveDir),
+    createPathShimPlugin(resolveDir, session.processOwner.appNodeModules),
     createCryptoShimPlugin({ resolveDir }),
   ];
   const dedupePlugin = createDedupePlugin(resolveDir, dedupePackages);
@@ -3509,7 +3743,7 @@ async function buildPanel(
       builtAt: new Date().toISOString(),
     };
 
-    const stored = await buildStore.putStored(buildKey, { entries: artifactEntries }, metadata);
+    const stored = await session.store.putStored(buildKey, { entries: artifactEntries }, metadata);
     const storedAt = Date.now();
     const totalMs = storedAt - profileStartedAt;
     if (isVerboseBuildLogEnabled()) {
@@ -3866,6 +4100,7 @@ export const WORKER_RUNTIME_EXTERNALS: readonly string[] = [
 ];
 
 async function buildWorker(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   buildKey: string,
@@ -3875,17 +4110,20 @@ async function buildWorker(
   sourceRoot: string,
   sourceStateHash: string,
   authority: UnitAuthorityManifest,
-  runtimeTest?: RuntimeTestBuild
+  runtimeTest?: RuntimeTestBuild,
+  signal: AbortSignal = session.signal
 ): Promise<StoredBuildResult> {
   const profileStartedAt = Date.now();
   const profileStartedRss = process.memoryUsage().rss;
   const env = await prepareBuildEnv(
+    session,
     node,
     buildKey,
     graph,
     workspaceRoot,
     sourceRoot,
-    "runtime-root"
+    "runtime-root",
+    signal
   );
   const environmentReadyAt = Date.now();
   const { outdir, nodePaths, resolveDir } = env;
@@ -3922,12 +4160,16 @@ async function buildWorker(
         return [entry.className, workspaceRpcSchemaMetadata(schema)];
       })
   );
-  const workspaceRpcCatalog = await collectWorkspaceRpcMethods(workerSourcePath, {
-    provider: node.relativePath,
-    authority,
-    rpcSchemas,
-    durableObjects: (extractedManifest.durable?.classes ?? []).length > 0,
-  });
+  const workspaceRpcCatalog = await collectWorkspaceRpcMethods(
+    session.processOwner,
+    workerSourcePath,
+    {
+      provider: node.relativePath,
+      authority,
+      rpcSchemas,
+      durableObjects: (extractedManifest.durable?.classes ?? []).length > 0,
+    }
+  );
   const rpcCatalogReadyAt = Date.now();
   const exposeModules = normalizeManifestSpecList(extractedManifest.exposeModules);
   const dedupePackages = normalizeManifestSpecList(extractedManifest.dedupeModules);
@@ -3959,7 +4201,7 @@ async function buildWorker(
     ...(terminalWorker ? [createTerminalWorkerAliasPlugin(resolveDir)] : []),
     createWorkspaceResolvePlugin(graph, sourceRoot, WORKER_CONDITIONS),
     createTsExtensionPlugin(sourceRoot),
-    createWorkerBufferShimPlugin(resolveDir),
+    createWorkerBufferShimPlugin(resolveDir, session.processOwner.appNodeModules),
     // CommonJS dependencies such as isomorphic-git use require("crypto").
     // workerd's nodejs_compat can satisfy ESM imports of node:crypto, but
     // dynamic CommonJS require is rejected at module startup, so bundle the
@@ -4104,12 +4346,13 @@ async function buildWorker(
           : { kind: "generic" },
         builtAt: new Date().toISOString(),
       };
-      const stored = await buildStore.putStored(buildKey, artifacts, metadata);
+      const stored = await session.store.putStored(buildKey, artifacts, metadata);
       logProfile(Date.now());
       return stored;
     }
 
     const stored = await storeSimpleBuild(
+      session,
       buildKey,
       bundle,
       node,
@@ -4146,6 +4389,7 @@ async function buildWorker(
 // ---------------------------------------------------------------------------
 
 async function buildApp(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   buildKey: string,
@@ -4155,7 +4399,8 @@ async function buildApp(
   sourceRoot: string,
   sourceStateHash: string,
   authority: UnitAuthorityManifest,
-  provider: BuildProvider | null
+  provider: BuildProvider | null,
+  signal: AbortSignal
 ): Promise<StoredBuildResult> {
   const appSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(appSourcePath, "package.json");
@@ -4168,6 +4413,7 @@ async function buildApp(
   const appManifest = extractedManifest["app"] as Record<string, unknown>;
   if (appManifest["target"] === "terminal") {
     return buildTerminalApp(
+      session,
       node,
       ev,
       buildKey,
@@ -4177,18 +4423,21 @@ async function buildApp(
       sourceRoot,
       appManifest,
       sourceStateHash,
-      authority
+      authority,
+      signal
     );
   }
   if (appManifest["target"] === "react-native") {
     if (!provider) throw new Error("React Native build identity has no resolved provider");
     const env = await prepareBuildEnv(
+      session,
       node,
       buildKey,
       graph,
       workspaceRoot,
       sourceRoot,
-      "runtime-root"
+      "runtime-root",
+      signal
     );
     let dependencies: Awaited<ReturnType<typeof acquireExternalDeps>> | undefined;
     let resources: Awaited<ReturnType<typeof prepareBuildProviderResources>> | undefined;
@@ -4196,8 +4445,9 @@ async function buildApp(
       // A provider executes in the workspace native domain. Its npm input must
       // be the exact declared closure, never the host-wide resolution fallback.
       dependencies = await acquireExternalDeps(env.externalDeps, env.dependencyOverrides, {
-        appRoot: _appRoot,
+        appRoot: session.processOwner.appRoot,
         patches: env.dependencyPatches,
+        signal,
       });
       const input: BuildProviderInput = {
         target: "react-native",
@@ -4205,15 +4455,14 @@ async function buildApp(
         sourcePath: appSourcePath,
         dependencyProjection: {
           nodeModulesPath: dependencies.nodeModulesDir || null,
-          modules: collectBuildProviderModules(node, graph, sourceRoot, env.outdir),
+          modules: collectBuildProviderModules(session, node, graph, sourceRoot, env.outdir),
         },
         effectiveVersion: ev,
         manifest: extractedManifest,
       };
-      const worker = _immutableTreeWorker;
-      if (!worker) throw new Error("builder is not initialized");
+      const worker = session.processOwner.immutableTreeWorker;
       resources = await prepareBuildProviderResources({
-        inputsRoot: stateLayout(getUserDataPath()).buildProviderInputsDir,
+        inputsRoot: stateLayout(session.store.stateRoot).buildProviderInputsDir,
         sourceRoot,
         input,
         materialize: (source, destination) => worker.materialize(source, destination),
@@ -4249,7 +4498,7 @@ async function buildApp(
         },
         builtAt: new Date().toISOString(),
       };
-      return buildStore.putStored(buildKey, { entries }, metadata);
+      return session.store.putStored(buildKey, { entries }, metadata);
     } finally {
       try {
         await resources?.dispose();
@@ -4261,6 +4510,7 @@ async function buildApp(
   }
 
   return buildPanel(
+    session,
     node,
     ev,
     buildKey,
@@ -4274,6 +4524,7 @@ async function buildApp(
 }
 
 function collectBuildProviderModules(
+  session: BuilderSession,
   node: GraphNode,
   graph: PackageGraph,
   sourceRoot: string,
@@ -4298,8 +4549,8 @@ function collectBuildProviderModules(
     visitedExternal.add(packageName);
     const packageJsonPath = resolveHostWorkspacePackageManifest(
       packageName,
-      _hostWorkspacePackageManifests,
-      _appNodeModules
+      session.processOwner.hostWorkspacePackageManifests,
+      session.processOwner.appNodeModules
     );
     if (!packageJsonPath) {
       throw new Error(`Build dependency projection cannot locate workspace package ${packageName}`);
@@ -4344,6 +4595,7 @@ function collectBuildProviderModules(
 }
 
 async function buildTerminalApp(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   buildKey: string,
@@ -4353,15 +4605,18 @@ async function buildTerminalApp(
   sourceRoot: string,
   appManifest: Record<string, unknown>,
   sourceStateHash: string,
-  authority: UnitAuthorityManifest
+  authority: UnitAuthorityManifest,
+  signal: AbortSignal
 ): Promise<StoredBuildResult> {
   const env = await prepareBuildEnv(
+    session,
     node,
     buildKey,
     graph,
     workspaceRoot,
     sourceRoot,
-    "runtime-root"
+    "runtime-root",
+    signal
   );
   const { outdir, nodePaths, resolveDir, sourcePath } = env;
   const entry = appManifest["entry"];
@@ -4404,7 +4659,7 @@ async function buildTerminalApp(
       tsconfigRaw: { compilerOptions: {} },
     });
     const bundle = fs.readFileSync(path.join(outdir, "index.mjs"), "utf8");
-    return buildStore.putStored(
+    return session.store.putStored(
       buildKey,
       {
         entries: [
@@ -4587,6 +4842,7 @@ function sealedExtensionMethodAuthority(
 }
 
 async function buildExtension(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   buildKey: string,
@@ -4594,15 +4850,18 @@ async function buildExtension(
   workspaceRoot: string,
   sourceRoot: string,
   sourceStateHash: string,
-  authority: UnitAuthorityManifest
+  authority: UnitAuthorityManifest,
+  signal: AbortSignal
 ): Promise<StoredBuildResult> {
   const env = await prepareBuildEnv(
+    session,
     node,
     buildKey,
     graph,
     workspaceRoot,
     sourceRoot,
-    "runtime-root"
+    "runtime-root",
+    signal
   );
   const { outdir, nodePaths, resolveDir } = env;
   const entryFile = await resolveEntryPoint(node, env.sourcePath, {
@@ -4693,11 +4952,11 @@ async function buildExtension(
     });
 
     const runtimeDeps = await ensureExtensionRuntimeDeps(
-      _appRoot,
+      session.processOwner.appRoot,
       runtimeExternalDeps,
       env.dependencyOverrides,
       runtimeDependencyPatches,
-      buildSignal
+      signal
     );
     try {
       const bundlePath = path.join(outdir, "bundle.js");
@@ -4741,12 +5000,13 @@ async function buildExtension(
         },
         artifacts: smokeArtifacts,
       };
-      await smokeTestExtensionBuild(smokeResult, node, {
+      await smokeTestExtensionBuild(session, smokeResult, node, {
         dependencyDiagnostics,
         runtimeNodeModulesDir: runtimeDeps.nodeModulesDir,
       });
 
       const result = await storeSimpleBuild(
+        session,
         buildKey,
         bundle,
         node,
@@ -4772,7 +5032,12 @@ async function buildExtension(
         extensionArtifacts
       );
       if (runtimeDeps.nodeModulesDir) {
-        await materializeExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, node.name);
+        await materializeExtensionRuntimeDeps(
+          session,
+          result.dir,
+          runtimeDeps.nodeModulesDir,
+          node.name
+        );
       }
 
       return result;
@@ -4785,6 +5050,7 @@ async function buildExtension(
 }
 
 async function smokeTestExtensionBuild(
+  session: BuilderSession,
   result: BuildResult,
   node: GraphNode,
   details: {
@@ -4793,11 +5059,11 @@ async function smokeTestExtensionBuild(
   }
 ): Promise<void> {
   try {
-    await _runNativeJob({
+    await session.runNativeJob({
       script: generateExtensionSmokeScript(
         Object.keys(details.dependencyDiagnostics.runtimeExternalDeps)
       ),
-      bundle: fs.readFileSync(primaryArtifactFilePath(result), "utf8"),
+      bundle: fs.readFileSync(session.store.primaryArtifactFilePath(result), "utf8"),
       dependencies: details.runtimeNodeModulesDir,
     });
   } catch (err) {
@@ -4814,7 +5080,7 @@ async function smokeTestExtensionBuild(
     const smokeError = new Error(
       [
         `Extension smoke test failed for ${node.name}: ${err instanceof Error ? err.message : String(err)}`,
-        `bundle=${primaryArtifactFilePath(result)}`,
+        `bundle=${session.store.primaryArtifactFilePath(result)}`,
         `dependencyMode=${diagnostics.dependencyMode}`,
         `runtimeDeps=${Object.keys(diagnostics.runtimeExternalDeps).join(",") || "none"}`,
         `classifiedDeps=${depSummary.join(";") || "none"}`,
@@ -4829,23 +5095,30 @@ async function smokeTestExtensionBuild(
   }
 }
 
-async function refreshCachedExtensionRuntimeDeps(result: StoredBuildResult): Promise<void> {
+async function refreshCachedExtensionRuntimeDeps(
+  session: BuilderSession,
+  result: StoredBuildResult
+): Promise<void> {
   const extensionDetails =
     result.metadata.details.kind === "extension" ? result.metadata.details : null;
   const deps = extensionDetails?.externalDeps ?? {};
   if (Object.keys(deps).length === 0) return;
-  if (extensionRuntimeDepsProjected(primaryArtifactFilePath(result), Object.keys(deps))) return;
+  if (
+    extensionRuntimeDepsProjected(session.store.primaryArtifactFilePath(result), Object.keys(deps))
+  )
+    return;
 
   const runtimeDeps = await ensureExtensionRuntimeDeps(
-    _appRoot,
+    session.processOwner.appRoot,
     deps,
     extensionDetails?.dependencyOverrides ?? {},
     extensionDetails?.dependencyPatches ?? [],
-    buildSignal
+    session.signal
   );
   try {
     if (runtimeDeps.nodeModulesDir) {
       await materializeExtensionRuntimeDeps(
+        session,
         result.dir,
         runtimeDeps.nodeModulesDir,
         result.metadata.name
@@ -4853,7 +5126,7 @@ async function refreshCachedExtensionRuntimeDeps(result: StoredBuildResult): Pro
     }
     if (extensionDetails && extensionDetails.runtimeDepsKey !== runtimeDeps.key) {
       extensionDetails.runtimeDepsKey = runtimeDeps.key;
-      await buildStore.writeBuildMetadata(result.dir, result.metadata);
+      await session.store.writeBuildMetadata(result.dir, result.metadata);
     }
   } finally {
     runtimeDeps.release();
@@ -4886,6 +5159,7 @@ export function extensionRuntimeDepsProjected(bundlePath: string, deps: string[]
 }
 
 async function materializeExtensionRuntimeDeps(
+  session: BuilderSession,
   buildDir: string,
   nodeModulesDir: string,
   extensionName: string
@@ -4898,8 +5172,7 @@ async function materializeExtensionRuntimeDeps(
   const link = path.join(buildDir, "node_modules");
   try {
     await fs.promises.rm(link, { recursive: true, force: true });
-    const worker = _immutableTreeWorker;
-    if (!worker) throw new Error("builder is not initialized");
+    const worker = session.processOwner.immutableTreeWorker;
     await worker.materialize(nodeModulesDir, link);
   } catch (err) {
     throw new Error(
@@ -4917,7 +5190,7 @@ async function materializeExtensionRuntimeDeps(
 function libraryBuildDetails(
   format: "cjs" | "async-cjs" | "stylesheet",
   metafile: esbuild.Metafile | undefined
-): Extract<buildStore.BuildMetadataDetails, { kind: "library" }> {
+): Extract<BuildMetadataDetails, { kind: "library" }> {
   if (!metafile) throw new Error("Library compiler did not report module dependencies");
   // Compiler imports retain the original specifiers even when esbuild rewrites
   // CommonJS require() to a generated helper. Conditional dynamic imports stay
@@ -4938,6 +5211,7 @@ function libraryBuildDetails(
 }
 
 async function buildLibraryBundle(
+  session: BuilderSession,
   node: GraphNode,
   ev: string,
   buildKey: string,
@@ -4949,9 +5223,19 @@ async function buildLibraryBundle(
   entrySubpath = ".",
   conditions: readonly string[],
   authority: UnitAuthorityManifest,
-  target: LibraryBuildTarget
+  target: LibraryBuildTarget,
+  signal: AbortSignal
 ): Promise<StoredBuildResult> {
-  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot, "library");
+  const env = await prepareBuildEnv(
+    session,
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "library",
+    signal
+  );
 
   try {
     // A library's provided peers belong to the realm that loads it, so they are
@@ -5004,8 +5288,8 @@ async function buildLibraryBundle(
           createWorkspaceResolvePlugin(graph, sourceRoot, conditions, libraryExternals),
           createTsExtensionPlugin(sourceRoot),
           createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
-          createPathShimPlugin(env.resolveDir),
-          createWorkerBufferShimPlugin(env.resolveDir),
+          createPathShimPlugin(env.resolveDir, session.processOwner.appNodeModules),
+          createWorkerBufferShimPlugin(env.resolveDir, session.processOwner.appNodeModules),
           ...(target === "worker" ? [createWorkerNodeStubPlugin()] : []),
         ],
         env.nodePaths,
@@ -5035,11 +5319,11 @@ async function buildLibraryBundle(
     const primary = artifacts.entries.find((entry) => entry.role === "primary")!;
     const format = primary.path === "bundle.css" ? "stylesheet" : "async-cjs";
     if (format === "async-cjs") {
-      const loweringWorker = _libraryLoweringWorker;
-      if (!loweringWorker) throw new Error("builder is not initialized");
+      const loweringWorker = session.processOwner.libraryLoweringWorker;
       primary.content = await loweringWorker.lower(primary.content);
     }
     return storeSimpleBuild(
+      session,
       buildKey,
       primary.content,
       node,
@@ -5141,12 +5425,14 @@ function validateNpmVersion(version: string): void {
  * one canonical, opaque identity at the storage boundary.
  */
 function externalLibraryBuildKey(
+  rootFingerprint: RootDependencyFingerprintInfo,
   source:
     | { kind: "npm"; specifier: string; version: string }
     | { kind: "platform"; specifier: string },
   externals: readonly string[]
 ): string {
   return computeBuildKey(
+    rootFingerprint,
     `external-library:${source.kind}:${source.specifier}`,
     sha256Canonical({
       artifactFormat: LIBRARY_ARTIFACT_FORMAT_VERSION,
@@ -5173,6 +5459,7 @@ function externalLibraryBuildKey(
  * - Bundle size is bounded by esbuild timeout / memory limits
  */
 export async function buildNpmLibrary(
+  session: BuilderSession,
   specifier: string,
   version: string,
   externals: string[]
@@ -5181,37 +5468,59 @@ export async function buildNpmLibrary(
   validateSandboxNpmLibrarySpecifier(specifier);
   validateNpmVersion(version);
 
-  const buildKey = externalLibraryBuildKey({ kind: "npm", specifier, version }, externals);
+  const buildKey = externalLibraryBuildKey(
+    session.rootFingerprint,
+    { kind: "npm", specifier, version },
+    externals
+  );
 
   // Check store cache
-  const cached = await buildStore.getOrHydrate(buildKey);
+  const cached = await session.store.getOrHydrate(buildKey);
   if (cached) return cached;
 
   // Check in-flight builds (coalescing)
-  const inFlight = inFlightBuilds.get(buildKey);
-  if (inFlight) return inFlight.promise;
+  const inFlight = session.inFlightLibraryBuilds.get(buildKey);
+  if (inFlight) return inFlight;
 
-  const flight = new BuildFlight<StoredBuildResult>("interactive", () =>
-    withBuilderWorkers(() => doNpmBuild(specifier, version, externals, buildKey))
+  const flight = admitSessionBuild(
+    session,
+    buildKey,
+    "interactive",
+    (signal) =>
+      new BuildFlight<StoredBuildResult>("interactive", () =>
+        withBuilderWorkers(session, () =>
+          doNpmBuild(session, specifier, version, externals, buildKey, signal)
+        )
+      )
   );
-  inFlightBuilds.set(buildKey, flight);
+  session.inFlightLibraryBuilds.set(buildKey, flight.promise);
 
   try {
     return await flight.promise;
   } finally {
-    if (inFlightBuilds.get(buildKey) === flight) inFlightBuilds.delete(buildKey);
+    if (session.inFlightLibraryBuilds.get(buildKey) === flight.promise)
+      session.inFlightLibraryBuilds.delete(buildKey);
   }
 }
 
 async function doNpmBuild(
+  session: BuilderSession,
   specifier: string,
   version: string,
   externals: string[],
-  buildKey: string
+  buildKey: string,
+  signal: AbortSignal
 ): Promise<StoredBuildResult> {
-  return withBuildSlot(async () => {
+  return session.processOwner.withBuildSlot(signal, async () => {
     const deps: Record<string, string> = { [specifier]: version };
-    const borrowedDeps = await acquireExternalDeps(deps, {}, { appRoot: _appRoot });
+    const borrowedDeps = await acquireExternalDeps(
+      deps,
+      {},
+      {
+        appRoot: session.processOwner.appRoot,
+        signal,
+      }
+    );
     const nodeModulesDir = borrowedDeps.nodeModulesDir;
 
     if (!nodeModulesDir) {
@@ -5221,8 +5530,8 @@ async function doNpmBuild(
     const outdir = createBuildScratchDir(`npm-${specifier.replace(/[/@]/g, "_")}`);
 
     const nodePaths = [nodeModulesDir];
-    if (_appNodeModules.length > 0) {
-      nodePaths.push(..._appNodeModules);
+    if (session.processOwner.appNodeModules.length > 0) {
+      nodePaths.push(...session.processOwner.appNodeModules);
     }
 
     // Use a virtual entry file instead of string interpolation to avoid injection
@@ -5269,7 +5578,7 @@ async function doNpmBuild(
         details: libraryBuildDetails("cjs", result.metafile),
         builtAt: new Date().toISOString(),
       };
-      return buildStore.putStored(buildKey, bundleArtifacts(bundleContent), metadata);
+      return session.store.putStored(buildKey, bundleArtifacts(bundleContent), metadata);
     } finally {
       borrowedDeps.release();
       try {
@@ -5293,42 +5602,60 @@ async function doNpmBuild(
  * as npm packages — esbuild with a virtual entry file.
  */
 export async function buildPlatformLibrary(
+  session: BuilderSession,
   specifier: string,
   externals: string[]
 ): Promise<StoredBuildResult> {
-  if (_appNodeModules.length === 0) {
+  if (session.processOwner.appNodeModules.length === 0) {
     throw new Error("App node_modules not configured — cannot build @vibestudio/* packages");
   }
 
-  const buildKey = externalLibraryBuildKey({ kind: "platform", specifier }, externals);
+  const buildKey = externalLibraryBuildKey(
+    session.rootFingerprint,
+    { kind: "platform", specifier },
+    externals
+  );
 
   // Check cache
-  const cached = await buildStore.getOrHydrate(buildKey);
+  const cached = await session.store.getOrHydrate(buildKey);
   if (cached) return cached;
 
   // Check in-flight
-  const inFlight = inFlightLibraryBuilds.get(buildKey);
+  const inFlight = session.inFlightLibraryBuilds.get(buildKey);
   if (inFlight) return inFlight;
 
-  const buildPromise = withBuilderWorkers(() => doPlatformBuild(specifier, externals, buildKey));
-  inFlightLibraryBuilds.set(buildKey, buildPromise);
+  const buildPromise = admitSessionBuild(
+    session,
+    buildKey,
+    "interactive",
+    (signal) =>
+      new BuildFlight<StoredBuildResult>("interactive", () =>
+        withBuilderWorkers(session, () =>
+          doPlatformBuild(session, specifier, externals, buildKey, signal)
+        )
+      )
+  );
+  session.inFlightLibraryBuilds.set(buildKey, buildPromise.promise);
 
   try {
-    return await buildPromise;
+    return await buildPromise.promise;
   } finally {
-    inFlightLibraryBuilds.delete(buildKey);
+    if (session.inFlightLibraryBuilds.get(buildKey) === buildPromise.promise)
+      session.inFlightLibraryBuilds.delete(buildKey);
   }
 }
 
 async function doPlatformBuild(
+  session: BuilderSession,
   specifier: string,
   externals: string[],
-  buildKey: string
+  buildKey: string,
+  signal: AbortSignal
 ): Promise<StoredBuildResult> {
-  return withBuildSlot(async () => {
+  return session.processOwner.withBuildSlot(signal, async () => {
     const outdir = createBuildScratchDir(`platform-${specifier.replace(/[/@]/g, "_")}`);
 
-    const nodePaths = [..._appNodeModules];
+    const nodePaths = [...session.processOwner.appNodeModules];
 
     // Virtual entry file
     const entryFile = path.join(outdir, "_entry.js");
@@ -5370,7 +5697,7 @@ async function doPlatformBuild(
         details: libraryBuildDetails("cjs", result.metafile),
         builtAt: new Date().toISOString(),
       };
-      return buildStore.putStored(buildKey, bundleArtifacts(bundleContent), metadata);
+      return session.store.putStored(buildKey, bundleArtifacts(bundleContent), metadata);
     } finally {
       try {
         await fs.promises.rm(outdir, { recursive: true, force: true });

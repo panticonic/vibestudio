@@ -34,16 +34,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@vibestudio/env-paths";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { buildUnit, initBuilder } from "./builder.js";
+import { buildUnit, type BuilderSession } from "./builder.js";
 import { BuildDiagnosticsError, diagnosticsFromError } from "./diagnostics.js";
-import { setBuildRootConfig } from "./effectiveVersion.js";
-import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
-import { setBuildExecutionIdentityContext } from "./buildStore.js";
-beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
-afterAll(() => setBuildSourceProvider(null));
+import { createBuilderTestSession } from "./builderTestSession.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 
 const REPO_ROOT = process.cwd();
@@ -74,25 +69,25 @@ function writeJson(file: string, value: unknown): void {
 describe("buildUnit framework-agnostic panel builds", () => {
   let root: string;
   let workspaceRoot: string;
+  let session: BuilderSession;
+  let closeSession: () => Promise<void>;
 
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-frameworks-build-"));
     workspaceRoot = path.join(root, "workspace");
-    await setBuildRootConfig({ appRoot: REPO_ROOT, workspaceRoot });
-    setUserDataPath(path.join(root, "state"));
-    setBuildExecutionIdentityContext({
-      serviceAuthorityForSource: async () =>
-        "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
-      workspaceId: "workspace:test",
-      executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+    const context = await createBuilderTestSession({
+      appRoot: REPO_ROOT,
+      workspaceRoot,
+      stateRoot: path.join(root, "state"),
+      appNodeModules: [path.join(REPO_ROOT, "node_modules")],
+      runNativeJob: runIsolatedBuildJob,
     });
-    // Resolve esbuild-svelte / svelte (and any other npm deps) from the repo's
-    // real node_modules instead of a fresh install.
-    initBuilder([path.join(REPO_ROOT, "node_modules")], REPO_ROOT, runIsolatedBuildJob);
+    session = context.session;
+    closeSession = context.close;
   });
 
   afterEach(async () => {
-    await setBuildRootConfig(null);
+    await closeSession?.();
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -199,6 +194,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
       const graph = discoverPackageGraph(workspaceRoot);
       await expect(
         buildUnit(
+          session,
           graph.get("@workspace-panels/restricted-import"),
           "e".repeat(64),
           graph,
@@ -227,6 +223,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
     commit(panelDir, "broken source");
     const graph = discoverPackageGraph(workspaceRoot);
     const failure = await buildUnit(
+      session,
       graph.get("@workspace-panels/broken"),
       "d".repeat(64),
       graph,
@@ -270,6 +267,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
     let caught: unknown;
     try {
       await buildUnit(
+        session,
         graph.get("@workspace-panels/broken-authority"),
         "f".repeat(64),
         graph,
@@ -328,6 +326,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-panels/hello-vanilla"),
       "a".repeat(64),
       graph,
@@ -377,6 +376,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-panels/hello-svelte"),
       "b".repeat(64),
       graph,
@@ -439,6 +439,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-panels/portable-site"),
       "d".repeat(64),
       graph,

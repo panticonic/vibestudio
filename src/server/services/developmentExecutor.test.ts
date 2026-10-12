@@ -4,17 +4,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setUserDataPath } from "@vibestudio/env-paths";
 import type {
   DevelopmentExecutionSnapshot,
   DevelopmentRun,
   DevelopmentSession,
 } from "@vibestudio/service-schemas/development";
 import {
-  setBuildExecutionIdentityContext,
-  get as getBuild,
-  readStoredArtifactBytes,
-  readStoredArtifactContent,
+  createBuildStore,
+  createBuildStoreProcessOwner,
+  type BuildStore,
 } from "../buildV2/buildStore.js";
 import {
   DevelopmentExecutor,
@@ -228,27 +226,61 @@ async function pnpmFixture(root: string, name: string, source: string): Promise<
 
 describe("DevelopmentExecutor exact private execution", () => {
   let root: string;
+  let storeOwner: ReturnType<typeof createBuildStoreProcessOwner>;
+  let store: BuildStore;
+  let buildSystem: Pick<
+    import("../buildV2/index.js").BuildSystemV2,
+    "getBuildByKey" | "putStoredBuild" | "readBuildArtifactBytes"
+  >;
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-development-executor-"));
     roots.push(root);
-    setUserDataPath(path.join(root, "state"));
-    setBuildExecutionIdentityContext({
-      serviceAuthorityForSource: async () =>
-        "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
-      workspaceId: "workspace:test",
-      executionStateForContent: () => ({
-        kind: "application",
-        applicationId: "application:dirty",
-      }),
-    });
+    storeOwner = createBuildStoreProcessOwner();
+    store = createBuildStore(
+      {
+        stateRoot: path.join(root, "state"),
+        sharedArtifactPoolRoot: null,
+        sharedBuildResultCacheRoot: null,
+        releaseBuildRoot: null,
+        executionIdentity: {
+          serviceAuthorityForSource: async () =>
+            "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
+          workspaceId: "workspace:test",
+          executionStateForContent: () => ({
+            kind: "application",
+            applicationId: "application:dirty",
+          }),
+        },
+      },
+      storeOwner
+    );
+    buildSystem = {
+      getBuildByKey: (key) => store.get(key),
+      putStoredBuild: (...args) => store.putStored(...args),
+      readBuildArtifactBytes: (build, artifact) => store.readStoredArtifactBytes(build, artifact),
+    };
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     delete process.env["DEVELOPMENT_EXECUTOR_SECRET"];
+    const failures: unknown[] = [];
+    try {
+      await store.drainPublications();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await storeOwner.drain();
+    } catch (error) {
+      failures.push(error);
+    }
     for (const target of roots.splice(0)) {
       fs.rmSync(target, { recursive: true, force: true });
     }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Development executor fixture cleanup failed");
   });
 
   it("prepares stable exact identities without creating a run root or process", async () => {
@@ -260,6 +292,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
+      buildSystem,
       runRoots: runRoots(root),
       planSource,
       materializeSource: vi.fn(),
@@ -302,6 +335,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
+      buildSystem,
       runRoots: runRoots(root),
       planSource,
       materializeSource: vi.fn(),
@@ -328,6 +362,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
+      buildSystem,
       runRoots: runRoots(root),
       planSource: async ({ repositoryId }) =>
         repositoryId === "repository:vibestudio"
@@ -365,6 +400,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
+      buildSystem,
       runRoots: runRoots(root),
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
@@ -404,7 +440,7 @@ describe("DevelopmentExecutor exact private execution", () => {
 
     await executor.materialize(plan);
     const artifact = await executor.execute(runFor(plan), plan, vi.fn());
-    const stored = await getBuild(plan.snapshot.snapshotDigest);
+    const stored = await store.get(plan.snapshot.snapshotDigest);
 
     expect(artifact.buildKey).toBe(plan.snapshot.snapshotDigest);
     await expect(executor.runRoots.snapshotRoots()).resolves.toEqual([
@@ -419,7 +455,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     expect(stored?.metadata.sourceState).toEqual(plan.snapshot.pair.host.repositoryState);
     const environment = stored?.artifacts.find((entry) => entry.path === "dist/environment.json");
     expect(environment?.encoding).toBe("utf8");
-    expect(JSON.parse(await readStoredArtifactContent(stored!, environment!))).toEqual({
+    expect(JSON.parse(await store.readStoredArtifactContent(stored!, environment!))).toEqual({
       cwd: await fsp.realpath(path.join(root, "runs", plan.runId, "source")),
       declared: "production",
       base: path.join(root, "runs", plan.runId, "base"),
@@ -435,15 +471,16 @@ describe("DevelopmentExecutor exact private execution", () => {
     // The shim is archived at its own path, carrying the linked file's bytes.
     const shim = stored?.artifacts.find((entry) => entry.path === "dist/node/exact/bin/npm");
     expect(shim).toBeDefined();
-    expect(shim ? (await readStoredArtifactBytes(stored!, shim)).toString("utf8") : undefined).toBe(
-      "#!/usr/bin/env node\n"
-    );
+    expect(
+      shim ? (await store.readStoredArtifactBytes(stored!, shim)).toString("utf8") : undefined
+    ).toBe("#!/usr/bin/env node\n");
   });
 
   it("refuses path escapes and foreign owner markers before execution or deletion", async () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
+      buildSystem,
       runRoots: runRoots(root),
       planSource: async () => sourcePlan(),
       materializeSource: async () => {},
@@ -473,6 +510,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
+      buildSystem,
       runRoots: runRoots(root),
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
@@ -508,6 +546,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
+      buildSystem,
       runRoots: runRoots(root),
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {

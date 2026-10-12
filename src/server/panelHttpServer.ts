@@ -1,5 +1,4 @@
 import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
-import { buildDescriptorBytes } from "./buildV2/buildStore.js";
 import { writeHttpBytes } from "./httpStreamWrite.js";
 import { ArtifactBodyCache } from "./artifactBodyCache.js";
 /**
@@ -21,7 +20,6 @@ import type {
   BuildMetadata,
   StoredBuildResult,
 } from "./buildV2/buildStore.js";
-import { artifactFilePath, readStoredArtifactBytes } from "./buildV2/buildStore.js";
 import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import type { CdpBridge } from "./cdpBridge.js";
 import { assertPresent } from "../lintHelpers";
@@ -91,6 +89,15 @@ export interface PanelHttpCallbacks {
   /** Resolve an already-built immutable artifact selected by runtime activation. */
   getBuildByKey(buildKey: string): Promise<StoredBuildResult | null>;
   findSharedStyleBuild(digest: string): Promise<StoredBuildResult | null>;
+  readArtifactBytes(
+    build: Pick<StoredBuildResult, "dir">,
+    artifact: BuildArtifactManifestEntry
+  ): Promise<Buffer>;
+  artifactFilePath(
+    build: Pick<StoredBuildResult, "dir">,
+    artifact: BuildArtifactManifestEntry
+  ): string;
+  buildDescriptorBytes(build: Pick<StoredBuildResult, "dir" | "metadata" | "artifacts">): number;
 }
 
 /** Build output cached by source path (shared across panels) */
@@ -196,16 +203,21 @@ export class PanelHttpServer {
   private readonly artifactBodies = new ArtifactBodyCache(32 * 1024 * 1024);
   constructor(private readonly transportDerivativeCache = new TransportDerivativeCache()) {}
 
+  private buildDescriptorBytes(build: CachedBuild): number {
+    const reader = this.callbacks?.buildDescriptorBytes;
+    if (!reader) throw new Error("Panel build store is not connected");
+    return reader(build);
+  }
+
   /** Serving cache: source/ref -> resolved build (for fast sub-resource serving within a page load) */
-  private servingCache = new ByteBudgetCache<string, CachedBuild>(
-    32 * 1024 * 1024,
-    buildDescriptorBytes
+  private servingCache = new ByteBudgetCache<string, CachedBuild>(32 * 1024 * 1024, (build) =>
+    this.buildDescriptorBytes(build)
   );
 
   /** Immutable activated artifacts. Never invalidated by a later source build. */
   private activatedBuildCache = new ByteBudgetCache<string, CachedBuild>(
     32 * 1024 * 1024,
-    buildDescriptorBytes
+    (build) => this.buildDescriptorBytes(build)
   );
 
   /** Digest-addressed base styles shared by every panel URL. */
@@ -215,7 +227,7 @@ export class PanelHttpServer {
       build: CachedBuild;
       artifact: BuildArtifactManifestEntry;
     }
-  >(32 * 1024 * 1024, ({ build }) => buildDescriptorBytes(build));
+  >(32 * 1024 * 1024, ({ build }) => this.buildDescriptorBytes(build));
 
   /** Builds currently in flight (dedup concurrent requests) */
   private buildInFlight = new Map<string, Promise<void>>();
@@ -1220,7 +1232,7 @@ export class PanelHttpServer {
       }
       this.transportDerivativeCache.scheduleFile(
         artifact.integrity,
-        artifactFilePath({ dir: build.dir }, artifact)
+        this.requireCallbacks().artifactFilePath({ dir: build.dir }, artifact)
       );
     }
   }
@@ -1272,7 +1284,14 @@ export class PanelHttpServer {
     artifact: BuildArtifactManifestEntry
   ): Promise<Buffer> {
     const key = `identity:${build.dir}:${artifact.path}:${artifact.integrity ?? ""}`;
-    return this.artifactBodies.get(key, () => readStoredArtifactBytes(build, artifact));
+    return this.artifactBodies.get(key, () =>
+      this.requireCallbacks().readArtifactBytes(build, artifact)
+    );
+  }
+
+  private requireCallbacks(): PanelHttpCallbacks {
+    if (!this.callbacks) throw new Error("Panel HTTP callbacks are not connected");
+    return this.callbacks;
   }
 
   private async readArtifactText(

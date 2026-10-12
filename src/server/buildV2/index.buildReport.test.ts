@@ -20,6 +20,7 @@ import type { BuildSourceProvider } from "./buildSource.js";
 import type { WorkspaceStateSource } from "./stateTrigger.js";
 import type { BuildSystemV2 } from "./index.js";
 import type { PackageGraph } from "./packageGraph.js";
+import { createBuildProcessOwner } from "./builder.js";
 
 const BASE_VIEW = `state:${"a".repeat(64)}`;
 const CANDIDATE_VIEW = `state:${"b".repeat(64)}`;
@@ -118,7 +119,6 @@ async function loadWithMocks(
   buildSystem: BuildSystemV2;
   workspaceRoot: string;
   cleanup: () => Promise<void>;
-  buildStore: typeof import("./buildStore.js");
   persistEvState: ReturnType<typeof vi.fn>;
   source: WorkspaceStateSource;
 }> {
@@ -164,9 +164,6 @@ async function loadWithMocks(
     );
   }
 
-  const { setUserDataPath } = await import("@vibestudio/env-paths");
-  setUserDataPath(path.join(root, "state"));
-
   const persistEvState = vi.fn();
   vi.doMock("./effectiveVersion.js", async () => {
     const actual =
@@ -192,11 +189,11 @@ async function loadWithMocks(
   const resolvedBuildKey = options.resolvedBuildKey;
   vi.doMock("./builder.js", async () => {
     const actual = await vi.importActual<typeof import("./builder.js")>("./builder.js");
-    const buildStore = await vi.importActual<typeof import("./buildStore.js")>("./buildStore.js");
     return {
       ...actual,
       buildUnitStored: vi.fn(
         async (
+          session: import("./builder.js").BuilderSession,
           node: { name: string; kind: string; relativePath: string },
           ev: string,
           _graph: unknown,
@@ -206,15 +203,20 @@ async function loadWithMocks(
         ) => {
           const key =
             (node.name === "@workspace-panels/app" ? resolvedBuildKey : undefined) ??
-            actual.computeBuildUnitKey(node as never, ev, options as never);
+            actual.computeBuildUnitKey(
+              session.rootFingerprint,
+              node as never,
+              ev,
+              options as never
+            );
           // Cache hit → reuse (exactly like the real builder + coalescing).
-          const cached = await buildStore.get(key);
+          const cached = await session.store.getOrHydrate(key, stateRef);
           if (cached) return cached;
           buildCalls.push({ name: node.name, key, stateRef, priority: options?.priority });
           if (shouldFail(node.name, ev, stateRef)) {
             throw new Error(`mock build failed: ${node.name}`);
           }
-          await buildStore.put(
+          await session.store.putStored(
             key,
             {
               entries: [
@@ -239,7 +241,7 @@ async function loadWithMocks(
               builtAt: new Date().toISOString(),
             }
           );
-          const stored = await buildStore.get(key);
+          const stored = await session.store.getOrHydrate(key, stateRef);
           if (!stored) throw new Error(`Mock build ${key} was not stored`);
           return stored;
         }
@@ -249,28 +251,29 @@ async function loadWithMocks(
 
   const { initBuildSystemV2 } = await import("./index.js");
   const { discoverPackageGraph } = await import("./packageGraph.js");
-  const buildStore = await import("./buildStore.js");
   const graph = discoverPackageGraph(workspaceRoot);
   const source = fakeSource(workspaceRoot, graph);
-  const buildSystem = await initBuildSystemV2(
-    workspaceRoot,
-    source,
-    [path.join(process.cwd(), "node_modules")],
-    {
-      appRoot: process.cwd(),
-      runNativeJob: runIsolatedBuildJob,
-      dependencyWorkspaceRoot: workspaceRoot,
-      ...(options.authorityEnvironmentFailure
-        ? {
-            workspaceAuthorityEnvironmentAt: async () => {
-              throw options.authorityEnvironmentFailure;
-            },
-          }
-        : options.blockingAuthorityConsumer
-          ? { workspaceAuthorityEnvironmentAt: async () => ({ services: [] }) }
-          : {}),
-    }
-  );
+  const processOwner = createBuildProcessOwner({
+    appRoot: process.cwd(),
+    appNodeModules: [path.join(process.cwd(), "node_modules")],
+  });
+  const buildSystem = await initBuildSystemV2(workspaceRoot, source, {
+    processOwner,
+    stateRoot: path.join(root, "state"),
+    storeRoots: { sharedArtifactPoolRoot: null, sharedBuildResultCacheRoot: null },
+    releaseBuildRoot: null,
+    runNativeJob: runIsolatedBuildJob,
+    dependencyWorkspaceRoot: workspaceRoot,
+    ...(options.authorityEnvironmentFailure
+      ? {
+          workspaceAuthorityEnvironmentAt: async () => {
+            throw options.authorityEnvironmentFailure;
+          },
+        }
+      : options.blockingAuthorityConsumer
+        ? { workspaceAuthorityEnvironmentAt: async () => ({ services: [] }) }
+        : {}),
+  });
   // Initialization only discovers/version-tracks units. Actual panel/worker
   // builds are demand-driven by their runtime access paths.
   expect(buildCalls).toEqual([]);
@@ -278,11 +281,11 @@ async function loadWithMocks(
   return {
     buildSystem,
     workspaceRoot,
-    buildStore,
     persistEvState,
     source,
     cleanup: async () => {
       await buildSystem.shutdown();
+      await processOwner.shutdown();
       vi.doUnmock("./builder.js");
       vi.doUnmock("./typecheckFold.js");
       vi.doUnmock("./effectiveVersion.js");

@@ -7,15 +7,14 @@ import * as fs from "node:fs";
 import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import { setUserDataPath } from "@vibestudio/env-paths";
 import { PackageGraph, type GraphNode } from "./packageGraph.js";
 import {
   computeEffectiveVersions,
   recomputeFromNodes,
   diffEvMaps,
   computeBuildKey,
-  setBuildRootConfig,
-  getRootDependencyFingerprintInfo,
+  prepareBuildRootConfig,
+  type RootDependencyFingerprintInfo,
   computeRootDependencyFingerprint,
   loadPersistedEvState,
   persistEvState,
@@ -50,11 +49,11 @@ function graphOf(...nodes: GraphNode[]): PackageGraph {
 }
 
 describe("effectiveVersion", () => {
+  let rootFingerprint: RootDependencyFingerprintInfo;
   describe("persisted EV cache", () => {
     it("rejects legacy truncated EVs and round-trips the versioned full-digest cache", async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-ev-cache-"));
       try {
-        setUserDataPath(dir);
         fs.writeFileSync(
           path.join(dir, "ev-state.json"),
           JSON.stringify({
@@ -63,14 +62,14 @@ describe("effectiveVersion", () => {
             contentHashes: { unit: "manifest:test" },
           })
         );
-        expect(await loadPersistedEvState()).toBeNull();
+        expect(await loadPersistedEvState(dir)).toBeNull();
 
-        await persistEvState({
+        await persistEvState(dir, {
           stateHash: `state:${"a".repeat(64)}`,
           evMap: { unit: "b".repeat(64) },
           contentHashes: { unit: "manifest:test" },
         });
-        expect(await loadPersistedEvState()).toEqual({
+        expect(await loadPersistedEvState(dir)).toEqual({
           version: 2,
           stateHash: `state:${"a".repeat(64)}`,
           evMap: { unit: "b".repeat(64) },
@@ -80,6 +79,38 @@ describe("effectiveVersion", () => {
         fs.rmSync(dir, { recursive: true, force: true });
       }
     });
+  });
+  it("keeps concurrent sessions' dependency identity and EV persistence independent", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-ev-sessions-"));
+    try {
+      const roots = [path.join(root, "a"), path.join(root, "b")];
+      for (const [index, appRoot] of roots.entries()) {
+        fs.mkdirSync(appRoot);
+        fs.writeFileSync(
+          path.join(appRoot, "package.json"),
+          JSON.stringify({ name: `host-${index}` })
+        );
+      }
+      const [first, second] = await Promise.all(
+        roots.map((appRoot) => prepareBuildRootConfig({ appRoot }))
+      );
+      const firstKey = computeBuildKey(first!, "unit", "ev", false);
+      const secondKey = computeBuildKey(second!, "unit", "ev", false);
+      expect(firstKey).not.toBe(secondKey);
+      await prepareBuildRootConfig({ appRoot: roots[1]! });
+      expect(computeBuildKey(first!, "unit", "ev", false)).toBe(firstKey);
+      const states = roots.map((_, index) => ({
+        stateHash: `state:${String(index).repeat(64)}`,
+        evMap: { unit: String(index).repeat(64) },
+        contentHashes: { unit: `manifest:${index}` },
+      }));
+      await Promise.all(roots.map((stateRoot, index) => persistEvState(stateRoot, states[index]!)));
+      expect(await Promise.all(roots.map(loadPersistedEvState))).toEqual(
+        states.map((state) => ({ version: 2, ...state }))
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
   describe("computeEffectiveVersions", () => {
     it("derives EVs bottom-up from injected content hashes", () => {
@@ -202,21 +233,24 @@ describe("effectiveVersion", () => {
   });
 
   describe("computeBuildKey", () => {
-    beforeEach(() => setBuildRootConfig({ appRoot: process.cwd() }));
-    afterEach(() => setBuildRootConfig(null));
+    beforeEach(async () => {
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: process.cwd() });
+    });
 
     it("invalidates every build key when generated wrapper protocol output changes", () => {
       for (const sourcemap of [true, false]) {
-        const before = computeBuildKey("unit-a", "ev1", sourcemap, "protocol-a");
-        expect(computeBuildKey("unit-a", "ev1", sourcemap, "protocol-b")).not.toBe(before);
+        const before = computeBuildKey(rootFingerprint, "unit-a", "ev1", sourcemap, "protocol-a");
+        expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", sourcemap, "protocol-b")).not.toBe(
+          before
+        );
       }
     });
     it("varies by unit name, ev, and sourcemap flag", () => {
-      const base = computeBuildKey("unit-a", "ev1", true);
-      expect(computeBuildKey("unit-a", "ev1", true)).toBe(base);
-      expect(computeBuildKey("unit-b", "ev1", true)).not.toBe(base);
-      expect(computeBuildKey("unit-a", "ev2", true)).not.toBe(base);
-      expect(computeBuildKey("unit-a", "ev1", false)).not.toBe(base);
+      const base = computeBuildKey(rootFingerprint, "unit-a", "ev1", true);
+      expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).toBe(base);
+      expect(computeBuildKey(rootFingerprint, "unit-b", "ev1", true)).not.toBe(base);
+      expect(computeBuildKey(rootFingerprint, "unit-a", "ev2", true)).not.toBe(base);
+      expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", false)).not.toBe(base);
     });
 
     it("does not invalidate workspace builds when host dist bundles change", async () => {
@@ -236,10 +270,10 @@ describe("effectiveVersion", () => {
         fs.writeFileSync(path.join(rootB, "dist", "server.mjs"), "console.log('new server');\n");
         fs.writeFileSync(path.join(rootB, "dist", "main.cjs"), "console.log('new main');\n");
 
-        await setBuildRootConfig({ appRoot: rootA });
-        const first = computeBuildKey("unit-a", "ev1", true);
-        await setBuildRootConfig({ appRoot: rootB });
-        expect(computeBuildKey("unit-a", "ev1", true)).toBe(first);
+        rootFingerprint = await prepareBuildRootConfig({ appRoot: rootA });
+        const first = computeBuildKey(rootFingerprint, "unit-a", "ev1", true);
+        rootFingerprint = await prepareBuildRootConfig({ appRoot: rootB });
+        expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).toBe(first);
       } finally {
         if (previousAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
         else process.env["VIBESTUDIO_APP_ROOT"] = previousAppRoot;
@@ -259,17 +293,17 @@ describe("effectiveVersion", () => {
         fs.writeFileSync(path.join(rpcDir, "package.json"), '{"name":"@vibestudio/rpc"}');
         fs.writeFileSync(path.join(rpcDir, "dist", "client.js"), "export const protocol = 1;\n");
         delete process.env["VIBESTUDIO_APP_ROOT"];
-        await setBuildRootConfig({ appRoot: root });
-        const before = computeBuildKey("unit-a", "ev1", true);
+        rootFingerprint = await prepareBuildRootConfig({ appRoot: root });
+        const before = computeBuildKey(rootFingerprint, "unit-a", "ev1", true);
 
         fs.writeFileSync(path.join(rpcDir, "dist", "client.js"), "export const protocol = 2;\n");
         // A source-server restart/reconfiguration begins a new root snapshot.
-        await setBuildRootConfig({ appRoot: root });
-        expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
+        rootFingerprint = await prepareBuildRootConfig({ appRoot: root });
+        expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).not.toBe(before);
       } finally {
         if (previousAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
         else process.env["VIBESTUDIO_APP_ROOT"] = previousAppRoot;
-        await setBuildRootConfig(null);
+
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
@@ -324,13 +358,12 @@ describe("effectiveVersion", () => {
     beforeEach(async () => {
       root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hermetic-"));
       delete process.env["VIBESTUDIO_APP_ROOT"];
-      await setBuildRootConfig(null);
     });
 
     afterEach(async () => {
       if (previousAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
       else process.env["VIBESTUDIO_APP_ROOT"] = previousAppRoot;
-      await setBuildRootConfig(null);
+
       fs.rmSync(root, { recursive: true, force: true });
     });
 
@@ -342,16 +375,16 @@ describe("effectiveVersion", () => {
         "lockfileVersion: '9.0'\n",
         "packages: []\n"
       );
-      await setBuildRootConfig({ appRoot: dir });
-      const before = computeBuildKey("unit-a", "ev1", true);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: dir });
+      const before = computeBuildKey(rootFingerprint, "unit-a", "ev1", true);
 
       // Change package.json CONTENTS (add a dependency) — build key must change.
       fs.writeFileSync(
         path.join(dir, "package.json"),
         '{"name":"host","version":"1.0.0","dependencies":{"left-pad":"1.0.0"}}'
       );
-      await setBuildRootConfig({ appRoot: dir });
-      expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: dir });
+      expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).not.toBe(before);
     });
 
     it("invalidates builds when the installed dependency realm changes", async () => {
@@ -361,15 +394,13 @@ describe("effectiveVersion", () => {
       fs.mkdirSync(path.dirname(dependencyManifest), { recursive: true });
       fs.writeFileSync(dependencyManifest, '{"name":"zod","version":"3.25.76"}');
 
-      await setBuildRootConfig({ appRoot: dir });
-      const before = computeBuildKey("unit-a", "ev1", true);
-      expect(getRootDependencyFingerprintInfo().files.map((file) => file.file)).toContain(
-        "installed-node-modules:0"
-      );
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: dir });
+      const before = computeBuildKey(rootFingerprint, "unit-a", "ev1", true);
+      expect(rootFingerprint.files.map((file) => file.file)).toContain("installed-node-modules:0");
 
       fs.writeFileSync(dependencyManifest, '{"name":"zod","version":"4.3.6"}');
-      await setBuildRootConfig({ appRoot: dir });
-      expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: dir });
+      expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).not.toBe(before);
     });
 
     it("uses the injected app root when VIBESTUDIO_APP_ROOT is unset", async () => {
@@ -378,31 +409,31 @@ describe("effectiveVersion", () => {
       writeRootFiles(dirA, '{"name":"a"}', "lockfileVersion: '9.0'\n", "packages: []\n");
       writeRootFiles(dirB, '{"name":"b"}', "lockfileVersion: '9.0'\n", "packages: []\n");
 
-      await setBuildRootConfig({ appRoot: dirA });
-      const keyA = computeBuildKey("unit-a", "ev1", true);
-      expect(getRootDependencyFingerprintInfo().rootSource).toBe("injected");
-      expect(getRootDependencyFingerprintInfo().root).toBe(dirA);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: dirA });
+      const keyA = computeBuildKey(rootFingerprint, "unit-a", "ev1", true);
+      expect(rootFingerprint.rootSource).toBe("injected");
+      expect(rootFingerprint.root).toBe(dirA);
 
-      await setBuildRootConfig({ appRoot: dirB });
-      expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(keyA);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: dirB });
+      expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).not.toBe(keyA);
     });
 
     it("shares one captured dependency environment across bootstrap and steady construction", async () => {
       const appRoot = path.join(root, "shared-host");
       writeRootFiles(appRoot, '{"name":"host"}', "lock\n", "ws\n");
       const fingerprint = await computeRootDependencyFingerprint(appRoot);
-      await setBuildRootConfig({ appRoot, fingerprint });
-      const bootstrapKey = computeBuildKey("unit-a", "ev1", true);
-      await setBuildRootConfig({ appRoot, fingerprint });
-      expect(getRootDependencyFingerprintInfo()).toBe(fingerprint);
-      expect(computeBuildKey("unit-a", "ev1", true)).toBe(bootstrapKey);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot, fingerprint });
+      const bootstrapKey = computeBuildKey(rootFingerprint, "unit-a", "ev1", true);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot, fingerprint });
+      expect(rootFingerprint).toBe(fingerprint);
+      expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).toBe(bootstrapKey);
       await expect(
-        setBuildRootConfig({ appRoot, workspaceRoot: path.join(appRoot, "other"), fingerprint })
+        prepareBuildRootConfig({ appRoot, workspaceRoot: path.join(appRoot, "other"), fingerprint })
       ).rejects.toThrow("different dependency environment");
       // A subsequent host generation inspects its own dependency inputs.
       fs.writeFileSync(path.join(appRoot, "package.json"), '{"name":"host","changed":true}');
-      await setBuildRootConfig({ appRoot });
-      expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(bootstrapKey);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot });
+      expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).not.toBe(bootstrapKey);
     });
 
     it("folds nested workspace dependency/config files into the build key", async () => {
@@ -411,17 +442,17 @@ describe("effectiveVersion", () => {
       writeRootFiles(appRoot, '{"name":"host"}', "lock\n", "ws\n");
       writeWorkspaceFiles(workspaceRoot);
 
-      await setBuildRootConfig({ appRoot, workspaceRoot });
-      const before = computeBuildKey("unit-a", "ev1", true);
-      const beforeInfo = getRootDependencyFingerprintInfo();
+      rootFingerprint = await prepareBuildRootConfig({ appRoot, workspaceRoot });
+      const before = computeBuildKey(rootFingerprint, "unit-a", "ev1", true);
+      const beforeInfo = rootFingerprint;
       expect(beforeInfo.files.map((f) => f.file)).toContain("workspace/package.json");
 
       fs.writeFileSync(
         path.join(workspaceRoot, "package.json"),
         '{"name":"workspace","overrides":{"x":"1.0.0"}}'
       );
-      await setBuildRootConfig({ appRoot, workspaceRoot });
-      expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot, workspaceRoot });
+      expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).not.toBe(before);
     });
 
     it("does not let ambient environment override the injected app root", async () => {
@@ -430,9 +461,9 @@ describe("effectiveVersion", () => {
       writeRootFiles(injected, '{"name":"injected"}', "lock\n", "ws\n");
       writeRootFiles(overridden, '{"name":"override"}', "lock\n", "ws\n");
 
-      await setBuildRootConfig({ appRoot: injected });
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: injected });
       process.env["VIBESTUDIO_APP_ROOT"] = overridden;
-      const info = getRootDependencyFingerprintInfo();
+      const info = rootFingerprint;
       expect(info.rootSource).toBe("injected");
       expect(info.root).toBe(injected);
     });
@@ -446,30 +477,30 @@ describe("effectiveVersion", () => {
       // emptyDir: all three exist but lock + workspace are empty.
       writeRootFiles(emptyDir, '{"name":"x"}', "", "");
 
-      await setBuildRootConfig({ appRoot: absentDir });
-      const absentInfo = getRootDependencyFingerprintInfo();
-      const absentKey = computeBuildKey("u", "ev", true);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: absentDir });
+      const absentInfo = rootFingerprint;
+      const absentKey = computeBuildKey(rootFingerprint, "u", "ev", true);
       expect(absentInfo.files.map((f) => f.present)).toEqual([true, false, false]);
       expect(absentInfo.files[1]?.contentHash).toBeNull();
 
-      await setBuildRootConfig({ appRoot: emptyDir });
-      const emptyInfo = getRootDependencyFingerprintInfo();
-      const emptyKey = computeBuildKey("u", "ev", true);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: emptyDir });
+      const emptyInfo = rootFingerprint;
+      const emptyKey = computeBuildKey(rootFingerprint, "u", "ev", true);
       expect(emptyInfo.files.map((f) => f.present)).toEqual([true, true, true]);
 
       // Present-empty must not collide with absent.
       expect(emptyKey).not.toBe(absentKey);
 
       // Deterministic: recomputing over the same absent root is stable.
-      await setBuildRootConfig({ appRoot: absentDir });
-      expect(computeBuildKey("u", "ev", true)).toBe(absentKey);
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: absentDir });
+      expect(computeBuildKey(rootFingerprint, "u", "ev", true)).toBe(absentKey);
     });
 
     it("surfaces input paths + presence for observability", async () => {
       const dir = path.join(root, "obs");
       writeRootFiles(dir, '{"name":"o"}', "lock\n", "ws\n");
-      await setBuildRootConfig({ appRoot: dir });
-      const info = getRootDependencyFingerprintInfo();
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: dir });
+      const info = rootFingerprint;
       expect(info.files.map((f) => f.file)).toEqual([
         "package.json",
         "pnpm-lock.yaml",
@@ -503,8 +534,8 @@ describe("effectiveVersion", () => {
         `package\0z-link\0${hash(JSON.stringify({ name: "parent" }))}\0link\0z-link\0a\0`
       );
       fs.mkdirSync(path.join(dir, "node_modules", "empty"));
-      await setBuildRootConfig({ appRoot: dir });
-      const installed = getRootDependencyFingerprintInfo().files.find(
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: dir });
+      const installed = rootFingerprint.files.find(
         (file) => file.file === "installed-node-modules:0"
       );
       expect(installed?.contentHash).toBe(hash(records.join("")));
@@ -529,7 +560,7 @@ describe("effectiveVersion", () => {
       }
       fs.symlinkSync("a/large.bin", path.join(packageDir, "z-link"));
       records.push("link\0z-link\0a/large.bin\0");
-      const fingerprint = await computeRootDependencyFingerprint(dir);
+      const fingerprint = await prepareBuildRootConfig({ appRoot: dir });
       expect(fingerprint.files.find((file) => file.file === "packages/sdk/**")?.contentHash).toBe(
         hash(records.join(""))
       );
@@ -552,10 +583,10 @@ describe("effectiveVersion", () => {
         timerAdvanced = true;
       }, 0);
 
-      await setBuildRootConfig({ appRoot: dir });
+      rootFingerprint = await prepareBuildRootConfig({ appRoot: dir });
 
       expect(timerAdvanced).toBe(true);
-      expect(computeBuildKey("unit-a", "ev1", true)).toMatch(/^[0-9a-f]{64}$/);
+      expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).toMatch(/^[0-9a-f]{64}$/);
     });
   });
 });

@@ -1,12 +1,15 @@
 # Performance Optimization Plan
 
-Status: proposed · 2026-07-23
+Status: historical investigation · 2026-07-23; scope clarified 2026-10-12
 
-This plan supersedes the earlier model-generated performance review. Every claim below has
-been re-verified against the current source; where the original review was wrong or
-imprecise, this document says so and plans against what the code actually does.
+This document records the July investigation. Its measurements, source line references,
+and proposed workstreams describe that checkout; they must be revalidated before guiding
+current changes. In particular, the builder now uses explicit sessions and release
+preparation supplies source snapshots and runtime artifacts. The graph-pass counts below
+are historical findings, not a description of today's startup path. Current producer,
+consumer, and ownership contracts live in [build-artifact-contracts.md](build-artifact-contracts.md).
 
-## Measurements (carried over, still valid)
+## Historical measurements
 
 | Area                             | Evidence                                                                           |
 | -------------------------------- | ---------------------------------------------------------------------------------- |

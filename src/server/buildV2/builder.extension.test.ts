@@ -5,14 +5,9 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@vibestudio/env-paths";
 
-import { buildUnit, closeBuilder, extensionRuntimeDepsProjected, initBuilder } from "./builder.js";
-import { setBuildRootConfig } from "./effectiveVersion.js";
-import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
-beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
-afterAll(() => setBuildSourceProvider(null));
-import { primaryTextArtifactContent, setBuildExecutionIdentityContext } from "./buildStore.js";
+import { buildUnit, type BuilderSession, extensionRuntimeDepsProjected } from "./builder.js";
+import { createBuilderTestSession } from "./builderTestSession.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 
@@ -28,27 +23,24 @@ function git(cwd: string, args: string[]): void {
 describe("buildUnit extension builds", () => {
   let root: string;
   let workspaceRoot: string;
+  let session: BuilderSession;
+  let closeSession: () => Promise<void>;
 
   beforeEach(async () => {
-    initBuilder(path.join(process.cwd(), "node_modules"), process.cwd(), runIsolatedBuildJob);
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-build-"));
     workspaceRoot = path.join(root, "workspace");
-    await setBuildRootConfig({
+    const context = await createBuilderTestSession({
       appRoot: path.resolve(__dirname, "../../.."),
       workspaceRoot,
+      stateRoot: path.join(root, "state"),
+      runNativeJob: runIsolatedBuildJob,
     });
-    setUserDataPath(path.join(root, "state"));
-    setBuildExecutionIdentityContext({
-      serviceAuthorityForSource: async () =>
-        "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
-      workspaceId: "workspace:test",
-      executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
-    });
+    session = context.session;
+    closeSession = context.close;
   });
 
   afterEach(async () => {
-    await closeBuilder();
-    await setBuildRootConfig(null);
+    await closeSession?.();
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -148,7 +140,14 @@ describe("buildUnit extension builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const node = graph.get("@workspace-extensions/hello");
-    const result = await buildUnit(node, "a".repeat(64), graph, workspaceRoot, SOURCE_STATE_HASH);
+    const result = await buildUnit(
+      session,
+      node,
+      "a".repeat(64),
+      graph,
+      workspaceRoot,
+      SOURCE_STATE_HASH
+    );
 
     expect(result.metadata).toMatchObject({
       kind: "extension",
@@ -170,7 +169,7 @@ describe("buildUnit extension builds", () => {
     expect(fs.readFileSync(path.join(result.dir, "package.json"), "utf8")).toBe(
       '{"type":"module"}'
     );
-    const bundle = await primaryTextArtifactContent(result);
+    const bundle = await session.store.primaryTextArtifactContent(result);
     expect(bundle).toContain("ping() {");
     expect(bundle).toContain("sourceMappingURL=data:application/json");
     expect(result.artifacts).toContainEqual(
@@ -242,7 +241,14 @@ describe("buildUnit extension builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const node = graph.get("@workspace-extensions/cjs-extension");
-    const result = await buildUnit(node, "b".repeat(64), graph, workspaceRoot, SOURCE_STATE_HASH);
+    const result = await buildUnit(
+      session,
+      node,
+      "b".repeat(64),
+      graph,
+      workspaceRoot,
+      SOURCE_STATE_HASH
+    );
     const mod = await import(`file://${path.join(result.dir, "bundle.js")}`);
     const api = await mod.activate();
 

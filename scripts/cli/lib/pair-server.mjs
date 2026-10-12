@@ -659,7 +659,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
         scratch: path.join(preparationRoot, "scratch"),
         env,
       });
-      await preparation.sourcesReady;
+      await preparation.completed;
     } catch (error) {
       await preparation?.stop();
       if (error.code !== "EOWNERSHIP") cleanupReadyState();

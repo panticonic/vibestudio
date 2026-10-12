@@ -9,6 +9,7 @@ import {
   parseOptions,
   readableTail,
   resolvePackagedExecutable,
+  measureAcceptancePhase,
 } from "./packaged-isolation-smoke.mjs";
 import includeRuntimeModuleFile from "./electron-runtime-module-files.mjs";
 
@@ -28,6 +29,47 @@ test("requires explicit installed package and rejects malformed options", () => 
   assert.throws(() => parseOptions(["--app", "app", "--timeout-ms", "0"]), /Unknown/);
   assert.throws(() => parseOptions(["--app"]), /Missing/);
   assert.deepEqual(parseOptions(["--app", "app"]), { app: "app", timeoutMs: 600000 });
+});
+test("records phase boundaries and elapsed time on success and failure", async () => {
+  const result = {};
+  let now = 12;
+  const value = await measureAcceptancePhase(
+    result,
+    "guiLaunchToChooser",
+    "Electron launch to chooser heading",
+    async () => {
+      now = 31;
+      return "visible";
+    },
+    () => now
+  );
+  assert.equal(value, "visible");
+  assert.deepEqual(result.timings.guiLaunchToChooser, {
+    boundary: "Electron launch to chooser heading",
+    status: "completed",
+    elapsedMs: 19,
+  });
+
+  const failure = new Error("packaged workspace did not become ready");
+  now = 40;
+  await assert.rejects(
+    measureAcceptancePhase(
+      result,
+      "packagedWorkspaceRequireElectronReady",
+      "server launch to require-electron-ready hub record; not GUI shell readiness",
+      async () => {
+        now = 67;
+        throw failure;
+      },
+      () => now
+    ),
+    (error) => error === failure
+  );
+  assert.deepEqual(result.timings.packagedWorkspaceRequireElectronReady, {
+    boundary: "server launch to require-electron-ready hub record; not GUI shell readiness",
+    status: "failed",
+    elapsedMs: 27,
+  });
 });
 test("resolves actual macOS bundle executable without assuming product name", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "packaged-resolver-"));

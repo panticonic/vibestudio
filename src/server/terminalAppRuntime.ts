@@ -26,6 +26,10 @@ export interface TerminalAppRuntimeDeps {
   registry: TerminalRegistry;
   buildSystem: {
     getBuildByKey(key: string): Promise<AppBuildResultLike | null>;
+    getBuildArtifactPath(
+      build: Pick<AppBuildResultLike, "dir">,
+      artifact: AppBuildResultLike["artifacts"][number]
+    ): string;
   };
   connectionGrants?: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
   entityCache?: Pick<EntityCache, "resolve">;
@@ -44,6 +48,8 @@ export class TerminalAppRuntime {
       deps.connectionGrants && deps.entityCache
         ? new TerminalAppRunner({
             connectionGrants: deps.connectionGrants,
+            artifactFilePath: (build, artifact) =>
+              deps.buildSystem.getBuildArtifactPath(build, artifact),
             onStatus: (appId, status, error = null) => this.updateStatus(appId, status, error),
             onLog: (appId, level, message, source) => this.recordLog(appId, level, message, source),
           })

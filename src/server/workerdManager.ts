@@ -26,7 +26,7 @@ import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/se
 import type { FsService } from "./services/fsService.js";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import { readStoredArtifactContent, type StoredBuildResult } from "./buildV2/buildStore.js";
+import type { StoredBuildResult } from "./buildV2/buildStore.js";
 import { executionArtifactRefFromBuild } from "./executionRootProviders.js";
 import type { WorkspaceRpcMethodDoc } from "./buildV2/workspaceRpcCatalog.js";
 import type { ProtectedPublicationEvent, RuntimeImageBinding } from "./buildV2/index.js";
@@ -93,20 +93,23 @@ declare const __dirname: string | undefined;
  * the historical `worker.js` loader identity; relative imports from it resolve
  * against chunk artifact paths at the module-map root.
  */
-async function workerJavaScriptModules(build: StoredBuildResult): Promise<Record<string, string>> {
+async function workerJavaScriptModules(
+  build: StoredBuildResult,
+  readArtifactContent: WorkerdWorkspaceProvider["readBuildArtifactContent"]
+): Promise<Record<string, string>> {
   const primary = build.artifacts.find(
     (artifact) => artifact.role === "primary" && artifact.encoding === "utf8"
   );
   if (!primary) throw new Error(`Build ${build.metadata.buildKey} has no primary text artifact`);
   const modules: Record<string, string> = {
-    "worker.js": await readStoredArtifactContent(build, primary),
+    "worker.js": await readArtifactContent(build, primary),
   };
   const chunks = build.artifacts.filter(
     (artifact) =>
       artifact.role === "asset" && artifact.encoding === "utf8" && artifact.path.endsWith(".js")
   );
   const contents = await Promise.all(
-    chunks.map((artifact) => readStoredArtifactContent(build, artifact))
+    chunks.map((artifact) => readArtifactContent(build, artifact))
   );
   for (const [index, artifact] of chunks.entries()) {
     modules[artifact.path] = contents[index]!;
@@ -547,6 +550,10 @@ export interface WorkerdManagerDeps {
 export interface WorkerdWorkspaceProvider {
   bindRuntimeImage(unitPath: string, ref?: string): Promise<RuntimeImageBinding>;
   getBuildByKey(key: string): Promise<StoredBuildResult | null>;
+  readBuildArtifactContent(
+    build: Pick<StoredBuildResult, "dir">,
+    artifact: StoredBuildResult["artifacts"][number]
+  ): Promise<string>;
   /** Resolve the exact retained execution named by a sealed durable entity. */
   getBuildByExecution(key: string, executionDigest: string): Promise<StoredBuildResult | null>;
   getManifestRoutes(source: string): ReadonlyArray<ManifestRouteDecl>;
@@ -2004,7 +2011,11 @@ export class WorkerdManager {
     instance.buildKey = image.artifact.buildKey;
     instance.executionDigest = image.artifact.executionDigest;
     instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
-    const modules = await workerJavaScriptModules(buildResult);
+    const workspaceProvider = this.requireWorkspaceProvider("worker code loading");
+    const modules = await workerJavaScriptModules(
+      buildResult,
+      workspaceProvider.readBuildArtifactContent
+    );
 
     // WorkerCode `env` (unlike the old capnp config) supports non-string values
     // natively — so `json` bindings / STATE_ARGS / aliases keep their PARSED
@@ -2238,7 +2249,11 @@ export class WorkerdManager {
     if (!resolved) return null;
     const { image, build: buildResult } = resolved;
     if (runtimeExecutableVersion(image) !== version) return null;
-    const modules = await workerJavaScriptModules(buildResult);
+    const workspaceProvider = this.requireWorkspaceProvider("DO code loading");
+    const modules = await workerJavaScriptModules(
+      buildResult,
+      workspaceProvider.readBuildArtifactContent
+    );
     // Terminal (Ink) DOs import a pre-compiled `yoga.wasm` module — it must be
     // loaded alongside the JS bundle (the only way to run WASM in workerd).
     const wasmModules: Record<string, string> = {};
@@ -2246,7 +2261,10 @@ export class WorkerdManager {
       buildResult.artifacts
         .filter((artifact) => artifact.role === "wasm")
         .map(async (artifact) => {
-          wasmModules[artifact.path] = await readStoredArtifactContent(buildResult, artifact);
+          wasmModules[artifact.path] = await workspaceProvider.readBuildArtifactContent(
+            buildResult,
+            artifact
+          );
         })
     );
 
@@ -4152,11 +4170,16 @@ export class WorkerdManager {
     const wasmModules: Record<string, string> = {};
     for (const artifact of build.artifacts) {
       if (artifact.role === "wasm")
-        wasmModules[artifact.path] = await readStoredArtifactContent(build, artifact);
+        wasmModules[artifact.path] = await this.requireWorkspaceProvider(
+          "DO schema probe"
+        ).readBuildArtifactContent(build, artifact);
     }
     return this.probeSchemaExecutable(source, className, {
       version: `${build.metadata.ev}:${build.buildKey}`,
-      modules: await workerJavaScriptModules(build),
+      modules: await workerJavaScriptModules(
+        build,
+        this.requireWorkspaceProvider("DO schema probe").readBuildArtifactContent
+      ),
       ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
     });
   }

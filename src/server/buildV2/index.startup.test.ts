@@ -9,6 +9,8 @@ import { discoverPackageGraph } from "./packageGraph.js";
 import type { BuildSourceProvider } from "./buildSource.js";
 import type { WorkspaceStateSource } from "./stateTrigger.js";
 import type { BuildSystemV2 } from "./index.js";
+import type { BuildSystemRootOptions } from "./index.js";
+import { createBuildProcessOwner } from "./builder.js";
 import {
   executionArtifactDigest,
   executionSourceClosureDigest,
@@ -17,10 +19,28 @@ import {
 import { sha256 } from "@vibestudio/shared/execution/identity";
 
 const TEST_STATE = `state:${"a".repeat(64)}`;
+const ownedProcessOwners = new Set<ReturnType<typeof createBuildProcessOwner>>();
 
-function buildRoots(workspaceRoot: string) {
+function buildRoots(
+  workspaceRoot: string,
+  appNodeModules: string | readonly string[] = [],
+  appRoot = process.cwd()
+): BuildSystemRootOptions {
+  const processOwner = createBuildProcessOwner({ appRoot, appNodeModules });
+  ownedProcessOwners.add(processOwner);
+  const sharedDerivedRoot = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] ?? null;
   return {
-    appRoot: process.cwd(),
+    processOwner,
+    stateRoot: path.join(path.dirname(workspaceRoot), "state"),
+    storeRoots: {
+      sharedArtifactPoolRoot: sharedDerivedRoot
+        ? path.join(sharedDerivedRoot, "build-artifacts")
+        : null,
+      sharedBuildResultCacheRoot:
+        process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] ??
+        (sharedDerivedRoot ? path.join(sharedDerivedRoot, "build-results") : null),
+    },
+    releaseBuildRoot: null,
     runNativeJob: runIsolatedBuildJob,
     dependencyWorkspaceRoot: workspaceRoot,
   };
@@ -94,14 +114,8 @@ describe("BuildSystemV2 startup", () => {
     previousSharedDerivedCacheDir = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-startup-"));
     workspaceRoot = path.join(root, "workspace");
-    const { setUserDataPath } = await import("@vibestudio/env-paths");
-    setUserDataPath(path.join(root, "state"));
-    // setUserDataPath only rebinds this thread's module state. The authority
-    // analysis worker is a separate module registry, so durable-cache isolation
-    // has to travel as an environment variable that the worker inherits. Both
-    // roots matter: the instance root holds per-workspace cache files, and the
-    // shared derived root holds content-addressed facts that are otherwise
-    // reused across instances — including across test runs.
+    // Durable-cache isolation is passed through the explicit build roots below;
+    // the worker receives its separate roots through these environment values.
     process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "state");
     process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = path.join(root, "derived-cache");
     buildSystem = null;
@@ -109,6 +123,16 @@ describe("BuildSystemV2 startup", () => {
 
   afterEach(async () => {
     await buildSystem?.shutdown();
+    const ownerOutcomes = await Promise.allSettled(
+      [...ownedProcessOwners].map((owner) => owner.shutdown())
+    );
+    ownedProcessOwners.clear();
+    const ownerFailures = ownerOutcomes.flatMap((outcome) =>
+      outcome.status === "rejected" ? [outcome.reason] : []
+    );
+    if (ownerFailures.length === 1) throw ownerFailures[0];
+    if (ownerFailures.length > 1)
+      throw new AggregateError(ownerFailures, "BuildSystem test owner cleanup failed");
     vi.doUnmock("./builder.js");
     vi.resetModules();
     if (previousSharedBuildCacheDir === undefined) {
@@ -147,7 +171,7 @@ describe("BuildSystemV2 startup", () => {
       preparedBuildForContent: () => ({ buildKey: key, effectiveVersion }),
     };
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], buildRoots(workspaceRoot));
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, buildRoots(workspaceRoot));
     effectiveVersion = buildSystem.getEffectiveVersion(unitPath)!;
     expect(buildSystem.getBuildKey(unitPath)).toBe(key);
     const prepared = await buildSystem.prepareGc({ epoch: 1 });
@@ -183,7 +207,7 @@ describe("BuildSystemV2 startup", () => {
     const materializeForBuild = vi.fn(async () => ({ sourceRoot: workspaceRoot }));
     const source = { ...base, readFile, materializeForBuild };
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], buildRoots(workspaceRoot));
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, buildRoots(workspaceRoot));
     materializeForBuild.mockClear();
 
     const [first, concurrent] = await Promise.all([
@@ -247,7 +271,7 @@ describe("BuildSystemV2 startup", () => {
     const materializeForBuild = vi.spyOn(source, "materializeForBuild");
     const { initBuildSystemV2 } = await import("./index.js");
     const builder = await import("./builder.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], buildRoots(workspaceRoot));
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, buildRoots(workspaceRoot));
     materializeForBuild.mockClear();
 
     const first = await buildSystem.resolveWorkspaceRpcCatalog(
@@ -286,7 +310,7 @@ describe("BuildSystemV2 startup", () => {
     const workspaceAuthorityEnvironmentAt = vi.fn(() => environment);
 
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), {
       ...buildRoots(workspaceRoot),
       workspaceAuthorityEnvironmentAt,
     });
@@ -333,7 +357,7 @@ describe("BuildSystemV2 startup", () => {
     const compilerSnapshot = vi.spyOn(AuthorityAnalysisWorkerClient.prototype, "compilerSnapshot");
 
     const factLookups = vi.spyOn(AuthorityAnalysisWorkerClient.prototype, "factLookups");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], options);
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, options);
     await buildSystem.listAffectedBuildUnits(TEST_STATE, []);
     expect(compilerSnapshot).toHaveBeenCalledTimes(1);
 
@@ -345,7 +369,7 @@ describe("BuildSystemV2 startup", () => {
     await buildSystem.shutdown();
     buildSystem = null;
 
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], options);
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, options);
     await buildSystem.listAffectedBuildUnits(TEST_STATE, []);
     expect(compilerSnapshot).toHaveBeenCalledTimes(1);
 
@@ -400,7 +424,7 @@ describe("BuildSystemV2 startup", () => {
     const { initBuildSystemV2 } = await import("./index.js");
     const { AuthorityAnalysisWorkerClient } = await import("./authorityAnalysisWorkerClient.js");
     const compilerSnapshot = vi.spyOn(AuthorityAnalysisWorkerClient.prototype, "compilerSnapshot");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], {
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, {
       ...buildRoots(workspaceRoot),
       workspaceAuthorityEnvironmentAt: async () => ({ services: [] }),
     });
@@ -428,7 +452,7 @@ describe("BuildSystemV2 startup", () => {
     const onRetentionDiagnostic = vi.fn();
 
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), {
       ...buildRoots(workspaceRoot),
       executionRootProviders: [
         ...(
@@ -519,7 +543,7 @@ describe("BuildSystemV2 startup", () => {
         executionDigest: executionArtifactDigest(unsigned),
       });
     });
-    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), {
       ...buildRoots(workspaceRoot),
       executionRootProviders: REQUIRED_EXECUTION_ROOT_PROVIDER_IDS.map((id) => ({
         id,
@@ -564,30 +588,25 @@ describe("BuildSystemV2 startup", () => {
       "development-run",
       "product-seed",
     ] as const;
-    buildSystem = await initBuildSystemV2(
-      workspaceRoot,
-      source,
-      [path.join(process.cwd(), "node_modules")],
-      {
-        ...buildRoots(workspaceRoot),
-        executionRootProviders: providerIds.map((id) => ({
-          id,
-          mandatory: true,
-          async snapshotRoots() {
-            return id === "product-seed"
-              ? [
-                  {
-                    owner: "product-seed" as const,
-                    ownerId: "product:test",
-                    reason: "active" as const,
-                    artifact: productSeedArtifact(),
-                  },
-                ]
-              : [];
-          },
-        })),
-      }
-    );
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, {
+      ...buildRoots(workspaceRoot, [path.join(process.cwd(), "node_modules")]),
+      executionRootProviders: providerIds.map((id) => ({
+        id,
+        mandatory: true,
+        async snapshotRoots() {
+          return id === "product-seed"
+            ? [
+                {
+                  owner: "product-seed" as const,
+                  ownerId: "product:test",
+                  reason: "active" as const,
+                  artifact: productSeedArtifact(),
+                },
+              ]
+            : [];
+        },
+      })),
+    });
 
     await expect(buildSystem.gc()).resolves.toMatchObject({
       complete: true,
@@ -610,7 +629,7 @@ describe("BuildSystemV2 startup", () => {
     );
 
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), {
       ...buildRoots(workspaceRoot),
       executionRootProviders: [
         ...(
@@ -652,14 +671,18 @@ describe("BuildSystemV2 startup", () => {
     fs.writeFileSync(path.join(appRoot, "pnpm-workspace.yaml"), "packages: []\n");
 
     const { initBuildSystemV2 } = await import("./index.js");
-    const { getRootDependencyFingerprintInfo } = await import("./effectiveVersion.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
-      appRoot,
+    const { prepareBuildRootConfig } = await import("./effectiveVersion.js");
+    const options = {
+      ...buildRoots(workspaceRoot, [], appRoot),
       dependencyWorkspaceRoot,
-      runNativeJob: runIsolatedBuildJob,
-    });
+    };
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      fakeWorkspaceSource(workspaceRoot),
+      options
+    );
 
-    const info = getRootDependencyFingerprintInfo();
+    const info = await prepareBuildRootConfig({ appRoot, workspaceRoot: dependencyWorkspaceRoot });
     const workspacePackage = info.files.find((file) => file.file === "workspace/package.json");
     expect(info.root).toBe(appRoot);
     expect(info.rootSource).toBe("injected");
@@ -694,8 +717,7 @@ describe("BuildSystemV2 startup", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       source,
-      [path.join(process.cwd(), "node_modules")],
-      buildRoots(workspaceRoot)
+      buildRoots(workspaceRoot, [path.join(process.cwd(), "node_modules")])
     );
 
     const first = await buildSystem.bindRuntimeImage("panels/cached");
@@ -728,18 +750,16 @@ describe("BuildSystemV2 startup", () => {
     fs.writeFileSync(path.join(panelDir, "index.ts"), 'document.body.textContent = "ready";\n');
 
     const { initBuildSystemV2 } = await import("./index.js");
-    const { rebindSourceState } = await import("./buildStore.js");
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(workspaceRoot),
-      [path.join(process.cwd(), "node_modules")],
-      buildRoots(workspaceRoot)
+      buildRoots(workspaceRoot, [path.join(process.cwd(), "node_modules")])
     );
 
     const first = await buildSystem.bindRuntimeImage("panels/rebound-cache");
     const build = await buildSystem.getBuildByKey(first.artifact.buildKey);
     expect(build).not.toBeNull();
-    await rebindSourceState(build!, `state:${"b".repeat(64)}`);
+    await buildSystem.rebindBuildSourceState(build!, `state:${"b".repeat(64)}`);
 
     const rebound = await buildSystem.bindRuntimeImage("panels/rebound-cache");
 
@@ -778,18 +798,16 @@ describe("BuildSystemV2 startup", () => {
     const statePath = path.join(root, "state");
     const source = fakeWorkspaceSource(workspaceRoot);
     const { initBuildSystemV2 } = await import("./index.js");
-    const { primaryTextArtifactContent } = await import("./buildStore.js");
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       source,
-      [path.join(process.cwd(), "node_modules")],
-      buildRoots(workspaceRoot)
+      buildRoots(workspaceRoot, [path.join(process.cwd(), "node_modules")])
     );
 
     const warmBinding = await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE);
     const warmBuild = await buildSystem.getBuildByKey(warmBinding.artifact.buildKey);
     expect(warmBuild).not.toBeNull();
-    const warmBundle = await primaryTextArtifactContent(warmBuild!);
+    const warmBundle = await buildSystem.primaryTextArtifactContent(warmBuild!);
     expect(warmBundle).toContain("cold-cache-runtime-loaded");
 
     await buildSystem.shutdown();
@@ -797,22 +815,17 @@ describe("BuildSystemV2 startup", () => {
     fs.rmSync(statePath, { recursive: true, force: true });
 
     vi.resetModules();
-    const { setUserDataPath } = await import("@vibestudio/env-paths");
-    setUserDataPath(statePath);
     const { initBuildSystemV2: initColdBuildSystem } = await import("./index.js");
-    const { primaryTextArtifactContent: coldPrimaryTextArtifactContent } =
-      await import("./buildStore.js");
     buildSystem = await initColdBuildSystem(
       workspaceRoot,
       fakeWorkspaceSource(workspaceRoot),
-      [path.join(process.cwd(), "node_modules")],
       buildRoots(workspaceRoot)
     );
 
     const coldBinding = await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE);
     const coldBuild = await buildSystem.getBuildByKey(coldBinding.artifact.buildKey);
     expect(coldBuild).not.toBeNull();
-    const rebuiltBundle = await coldPrimaryTextArtifactContent(coldBuild!);
+    const rebuiltBundle = await buildSystem.primaryTextArtifactContent(coldBuild!);
     expect(rebuiltBundle).toContain("cold-cache-runtime-loaded");
     expect(rebuiltBundle).toBe(warmBundle);
     expect(coldBinding).toEqual(warmBinding);
@@ -870,8 +883,7 @@ describe("BuildSystemV2 startup", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       source,
-      [path.join(process.cwd(), "node_modules")],
-      buildRoots(workspaceRoot)
+      buildRoots(workspaceRoot, [path.join(process.cwd(), "node_modules")])
     );
     const binding = await buildSystem.bindRuntimeImage("workers/missing-source", TEST_STATE);
     const build = await buildSystem.getBuildByKey(binding.artifact.buildKey);
@@ -909,8 +921,7 @@ describe("BuildSystemV2 startup", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(workspaceRoot),
-      [path.join(process.cwd(), "node_modules")],
-      buildRoots(workspaceRoot)
+      buildRoots(workspaceRoot, [path.join(process.cwd(), "node_modules")])
     );
     const binding = await buildSystem.bindRuntimeImage("workers/shared-only", TEST_STATE);
     const localBuild = await buildSystem.getBuildByKey(binding.artifact.buildKey);
@@ -920,8 +931,6 @@ describe("BuildSystemV2 startup", () => {
     buildSystem = null;
 
     const consumerState = path.join(root, "consumer-state");
-    const { setUserDataPath } = await import("@vibestudio/env-paths");
-    setUserDataPath(consumerState);
     const source = fakeWorkspaceSource(workspaceRoot);
     source.inspectContentRoot = vi.fn(async () => ({ reconstructible: true, missing: [] }));
     const providerIds = [
@@ -935,30 +944,26 @@ describe("BuildSystemV2 startup", () => {
       "development-run",
       "product-seed",
     ] as const;
-    buildSystem = await initBuildSystemV2(
-      workspaceRoot,
-      source,
-      [path.join(process.cwd(), "node_modules")],
-      {
-        ...buildRoots(workspaceRoot),
-        executionRootProviders: providerIds.map((id) => ({
-          id,
-          mandatory: true,
-          async snapshotRoots() {
-            return id === "runtime-entity"
-              ? [
-                  {
-                    owner: "runtime-entity" as const,
-                    ownerId: "entity:shared-only",
-                    reason: "active" as const,
-                    artifact: artifact!,
-                  },
-                ]
-              : [];
-          },
-        })),
-      }
-    );
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, {
+      ...buildRoots(workspaceRoot, [path.join(process.cwd(), "node_modules")]),
+      stateRoot: consumerState,
+      executionRootProviders: providerIds.map((id) => ({
+        id,
+        mandatory: true,
+        async snapshotRoots() {
+          return id === "runtime-entity"
+            ? [
+                {
+                  owner: "runtime-entity" as const,
+                  ownerId: "entity:shared-only",
+                  reason: "active" as const,
+                  artifact: artifact!,
+                },
+              ]
+            : [];
+        },
+      })),
+    });
     const localBuildDir = path.join(consumerState, "builds", binding.artifact.buildKey);
     const gcState = path.join(consumerState, "execution-retention", "build-gc.json");
 
@@ -993,7 +998,7 @@ describe("BuildSystemV2 startup", () => {
     const discoverGraph = vi.spyOn(source, "discoverGraph");
     const unitHashes = vi.spyOn(source, "unitHashes");
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], buildRoots(workspaceRoot));
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, buildRoots(workspaceRoot));
 
     const resolutions = await buildSystem.resolveBuildUnits(
       ["panels/first", "panels/second"],
@@ -1025,7 +1030,7 @@ describe("BuildSystemV2 startup", () => {
     const discoverGraph = vi.spyOn(source, "discoverGraph");
     const unitHashes = vi.spyOn(source, "unitHashes");
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], buildRoots(workspaceRoot));
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, buildRoots(workspaceRoot));
 
     const [first, second] = await Promise.all([
       buildSystem.resolveBuildUnit("panels/context", "ctx:first"),

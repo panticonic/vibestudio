@@ -254,6 +254,15 @@ async function makeHarness(
           }
         : null
     ),
+    readBuildArtifactBytes: vi.fn<AppHostDeps["buildSystem"]["readBuildArtifactBytes"]>(
+      async (build, entry) => fs.promises.readFile(path.join(build.dir, entry.path))
+    ),
+    readBuildArtifactContent: vi.fn<AppHostDeps["buildSystem"]["readBuildArtifactContent"]>(
+      async (build, entry) => fs.promises.readFile(path.join(build.dir, entry.path), "utf8")
+    ),
+    getBuildArtifactPath: vi.fn<AppHostDeps["buildSystem"]["getBuildArtifactPath"]>(
+      (build, entry) => path.join(build.dir, entry.path)
+    ),
     getEffectiveVersion: vi.fn((name: string): string | null =>
       name === "@workspace-apps/shell" ? "ev-app" : null
     ),

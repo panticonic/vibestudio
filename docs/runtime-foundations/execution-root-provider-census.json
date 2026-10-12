@@ -47,6 +47,7 @@
         "src/server/services/developmentClientExecutorService.ts",
         "src/main/currentHostDevelopmentClientExecutor.ts"
       ],
+      "reviewedReaders": ["src/server/services/developmentExecutor.ts"],
       "note": "The durable development run retains the exact BuildStore execution while the selected client executor owns only a verified materialized copy and subordinate process lifecycle."
     },
     {

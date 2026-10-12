@@ -71,8 +71,6 @@ import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { writeAppDistBake, type AppDistBakeManifest } from "./buildV2/distBake.js";
 import {
-  readStoredArtifactBytes,
-  readStoredArtifactContent,
   type BuildArtifactManifestEntry,
   type BuildMetadata,
   type StoredBuildArtifact,
@@ -215,6 +213,18 @@ export type ElectronHostReadiness =
 interface BuildSystemLike {
   getStoredBuild(unitPath: string, ref?: string): Promise<AppBuildResultLike>;
   getBuildByKey(key: string): Promise<AppBuildResultLike | null>;
+  readBuildArtifactBytes(
+    build: Pick<AppBuildResultLike, "dir">,
+    artifact: BuildArtifactManifestEntry
+  ): Promise<Buffer>;
+  readBuildArtifactContent(
+    build: Pick<AppBuildResultLike, "dir">,
+    artifact: BuildArtifactManifestEntry
+  ): Promise<string>;
+  getBuildArtifactPath(
+    build: Pick<AppBuildResultLike, "dir">,
+    artifact: BuildArtifactManifestEntry
+  ): string;
   getEffectiveVersion(unitName: string): string | null;
   listAffectedBuildUnits?(stateHash: string, changedPaths: readonly string[]): Promise<string[]>;
   resolveBuildUnitIdentity(
@@ -1492,7 +1502,13 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!build) {
       throw new Error(`Active app build is missing from the build store: ${entry.activeBundleKey}`);
     }
-    const artifacts = await appArtifactsForDist(build, entry, build.artifacts);
+    const artifacts = await appArtifactsForDist(
+      build,
+      entry,
+      build.artifacts,
+      (storedBuild, artifact) =>
+        this.deps.buildSystem.readBuildArtifactContent(storedBuild, artifact)
+    );
     return writeAppDistBake({
       entry,
       build: {
@@ -1576,7 +1592,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       for (const index of wanted) {
         const artifact = build.artifacts?.[index];
         if (!artifact?.integrity) continue;
-        const raw = await readStoredArtifactBytes(build, artifact);
+        const raw = await this.deps.buildSystem.readBuildArtifactBytes(build, artifact);
         const digest = artifact.integrity.replace(/^sha256-/u, "");
         const encoded =
           artifact.encoding !== "base64" && raw.byteLength >= 1_024
@@ -1611,7 +1627,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       headers["Content-Security-Policy"] =
         "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
     }
-    const identityBody = await readStoredArtifactBytes(build, artifact);
+    const identityBody = await this.deps.buildSystem.readBuildArtifactBytes(build, artifact);
     const requestHeaders = req.headers ?? {};
     const resumableGzip = requestHeaders[RESUMABLE_GZIP_HEADER] === "1";
     const body = resumableGzip ? await gzipAsync(identityBody, { level: 6 }) : identityBody;
@@ -3071,7 +3087,11 @@ function isAppBuildDetailsLike(
 async function appArtifactsForDist(
   build: AppBuildResultLike,
   entry: AppRegistryEntry,
-  artifacts: readonly AppBuildArtifactLike[]
+  artifacts: readonly AppBuildArtifactLike[],
+  readArtifactContent: (
+    build: AppBuildResultLike,
+    artifact: AppBuildArtifactLike
+  ) => Promise<string>
 ): Promise<Array<BuildArtifactManifestEntry & { content: string }>> {
   return Promise.all(
     artifacts.map(async (artifact) => {
@@ -3092,7 +3112,7 @@ async function appArtifactsForDist(
         encoding: artifact.encoding,
         ...(artifact.platform ? { platform: artifact.platform } : {}),
         ...(artifact.integrity ? { integrity: artifact.integrity } : {}),
-        content: await readStoredArtifactContent(build, artifact),
+        content: await readArtifactContent(build, artifact),
       };
     })
   );

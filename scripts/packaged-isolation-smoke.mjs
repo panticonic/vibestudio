@@ -222,6 +222,34 @@ function launch(command, args, environment, cwd, logPath) {
   return spawnCaptured(child, logPath);
 }
 
+export async function measureAcceptancePhase(
+  result,
+  name,
+  boundary,
+  operation,
+  now = () => performance.now()
+) {
+  const startedAt = now();
+  try {
+    const value = await operation();
+    result.timings ??= {};
+    result.timings[name] = {
+      boundary,
+      status: "completed",
+      elapsedMs: Math.max(0, now() - startedAt),
+    };
+    return value;
+  } catch (error) {
+    result.timings ??= {};
+    result.timings[name] = {
+      boundary,
+      status: "failed",
+      elapsedMs: Math.max(0, now() - startedAt),
+    };
+    throw error;
+  }
+}
+
 export async function runPackagedIsolationSmoke(options) {
   const executable = await resolvePackagedExecutable(options.app);
   const fixture = await fs.realpath(
@@ -274,31 +302,45 @@ export async function runPackagedIsolationSmoke(options) {
   let server;
   let safeCleanup = true;
   try {
-    gui = await electron.launch({
-      executablePath: executable,
-      args: ["--choose-connection", `--user-data-dir=${path.join(fixture, "chromium")}`],
-      env: environment,
-      timeout: 60000,
-    });
-    const identity = await gui.evaluate(({ app }) => ({
-      packaged: app.isPackaged,
-      appRoot: app.getAppPath(),
-      resources: process.resourcesPath,
-      version: app.getVersion(),
-    }));
-    if (!identity.packaged || !identity.appRoot.includes("app.asar"))
-      throw new Error("Smoke requires an actual packaged ASAR application");
-    const page = await gui.firstWindow({ timeout: 60000 });
-    const pageErrors = [];
-    page.on("pageerror", (error) => pageErrors.push(error.message));
-    await page
-      .getByRole("heading", { name: "Choose a server or workspace", exact: true })
-      .waitFor({ state: "visible", timeout: 60000 });
+    const { identity, page, pageErrors } = await measureAcceptancePhase(
+      result,
+      "guiLaunchToChooser",
+      "Electron launch to visible 'Choose a server or workspace' heading; GUI chooser only, not a selected hosted shell",
+      async () => {
+        gui = await electron.launch({
+          executablePath: executable,
+          args: ["--choose-connection", `--user-data-dir=${path.join(fixture, "chromium")}`],
+          env: environment,
+          timeout: 60000,
+        });
+        const identity = await gui.evaluate(({ app }) => ({
+          packaged: app.isPackaged,
+          appRoot: app.getAppPath(),
+          resources: process.resourcesPath,
+          version: app.getVersion(),
+        }));
+        if (!identity.packaged || !identity.appRoot.includes("app.asar"))
+          throw new Error("Smoke requires an actual packaged ASAR application");
+        result.application = {
+          appRoot: identity.appRoot,
+          version: identity.version,
+          packaged: identity.packaged,
+        };
+        result.gui = { ...identity };
+        const page = await gui.firstWindow({ timeout: 60000 });
+        const pageErrors = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page
+          .getByRole("heading", { name: "Choose a server or workspace", exact: true })
+          .waitFor({ state: "visible", timeout: 60000 });
+        return { identity, page, pageErrors };
+      }
+    );
+    result.gui.windowLoaded = true;
     pageErrors.push(...(await page.pageErrors()).map((error) => error.message));
     if (pageErrors.length)
       throw new Error(`Packaged chooser renderer errors: ${pageErrors.join("; ")}`);
     await page.screenshot({ path: path.join(outDir, "chooser.png") });
-    result.gui = { ...identity, windowLoaded: true };
     await closeGui(gui);
     gui = undefined;
     const appRoot = identity.appRoot;
@@ -316,52 +358,67 @@ export async function runPackagedIsolationSmoke(options) {
       // was told to keep outside it.
       VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
     };
-    server = launch(
-      executable,
-      [
-        path.join(here, "lib", "packaged-server-bootstrap.cjs"),
-        serverEntry,
-        "--app-root",
-        appRoot,
-        "--bootstrap-workspace",
-        "dev",
-        "--require-electron-ready",
-        "--ready-file",
-        readyFile,
-      ],
-      electronEnv,
-      fixture,
-      path.join(outDir, "server-output.log")
-    );
-    const deadline = Date.now() + options.timeoutMs;
-    let ready;
-    while (Date.now() < deadline) {
-      if (childExited(server.child)) {
-        await server.drained();
-        // The child writes straight into server-output.log beside this report,
-        // so the transcript needs no separate copy.
-        // How it died distinguishes an uncaught error from a signal. Without
-        // this the report is whatever the process managed to print, which for a
-        // process killed mid-print is the source line and nothing after it.
-        const { exitCode, signalCode } = server.child;
-        throw new Error(
-          `Packaged workspace startup failed (exit ${String(exitCode)}` +
-            `${signalCode ? `, signal ${signalCode}` : ""}): ${server.tail()}`
+    const ready = await measureAcceptancePhase(
+      result,
+      "packagedWorkspaceRequireElectronReady",
+      "Packaged server launch to hub ready-file after --require-electron-ready for fresh workspace 'dev'; server artifact readiness, not GUI pairing or visible selected shell",
+      async () => {
+        server = launch(
+          executable,
+          [
+            path.join(here, "lib", "packaged-server-bootstrap.cjs"),
+            serverEntry,
+            "--app-root",
+            appRoot,
+            "--bootstrap-workspace",
+            "dev",
+            "--require-electron-ready",
+            "--ready-file",
+            readyFile,
+          ],
+          electronEnv,
+          fixture,
+          path.join(outDir, "server-output.log")
         );
+        const deadline = Date.now() + options.timeoutMs;
+        let ready;
+        while (Date.now() < deadline) {
+          if (childExited(server.child)) {
+            await server.drained();
+            // The child writes straight into server-output.log beside this report,
+            // so the transcript needs no separate copy.
+            // How it died distinguishes an uncaught error from a signal. Without
+            // this the report is whatever the process managed to print, which for a
+            // process killed mid-print is the source line and nothing after it.
+            const { exitCode, signalCode } = server.child;
+            throw new Error(
+              `Packaged workspace startup failed (exit ${String(exitCode)}` +
+                `${signalCode ? `, signal ${signalCode}` : ""}): ${server.tail()}`
+            );
+          }
+          try {
+            ready = parseHubReadyPayload(JSON.parse(await fs.readFile(readyFile, "utf8")));
+            break;
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+          }
+          await delay(200);
+        }
+        if (!ready) throw new Error(`Packaged workspace readiness timed out: ${server.tail()}`);
+        if (!ready.workspaces.some((workspace) => workspace.name === "dev" && workspace.running))
+          throw new Error("Packaged ready file has no running bootstrap workspace");
+        return ready;
       }
-      try {
-        ready = parseHubReadyPayload(JSON.parse(await fs.readFile(readyFile, "utf8")));
-        break;
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
-      }
-      await delay(200);
-    }
-    if (!ready) throw new Error(`Packaged workspace readiness timed out: ${server.tail()}`);
-    if (!ready.workspaces.some((workspace) => workspace.name === "dev" && workspace.running))
-      throw new Error("Packaged ready file has no running bootstrap workspace");
+    );
+    result.application = {
+      ...result.application,
+      serverVersion: ready.version,
+      buildId: ready.buildId,
+    };
+    const workspaceEntry = ready.workspaces.find((workspace) => workspace.name === "dev");
     result.workspace = {
       ready: true,
+      workspaceId: workspaceEntry.workspaceId,
       running: ready.workspaces.filter((workspace) => workspace.running).length,
     };
     // The packaged server persists its workspace inside this smoke's isolated
@@ -375,6 +432,24 @@ export async function runPackagedIsolationSmoke(options) {
     const workspaceConfig = path.join(workspaces, "dev", "source", "meta", "vibestudio.yml");
     if (!(await fs.stat(workspaceConfig)).isFile())
       throw new Error("Ready packaged workspace has no materialized configuration");
+    try {
+      const creation = JSON.parse(
+        await fs.readFile(
+          path.join(workspaces, "dev", "state", "workspace-creation", "v1.json"),
+          "utf8"
+        )
+      );
+      if (creation.workspaceId === workspaceEntry.workspaceId && creation.rootTemplate) {
+        result.workspace.template = {
+          url: creation.rootTemplate.url,
+          ref: creation.rootTemplate.ref,
+          commit: creation.rootTemplate.commit,
+          ...(creation.purpose ? { purpose: creation.purpose } : {}),
+        };
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
     server.child.send("packaged-smoke-stop");
     if (!(await awaitExit(server.child, 30000)))
       throw new Error(`Packaged ordered shutdown timed out: ${server.tail()}`);

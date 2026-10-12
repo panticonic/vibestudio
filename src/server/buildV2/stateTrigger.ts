@@ -23,11 +23,12 @@ import {
   type ContentHashMap,
   type EffectiveVersionMap,
 } from "./effectiveVersion.js";
-import * as buildStore from "./buildStore.js";
-import { buildUnitStored, resolveBuildUnitKey } from "./builder.js";
+import { buildUnitStored, resolveBuildUnitKey, type BuilderSession } from "./builder.js";
+import type { BuildSourceProvider } from "./buildSource.js";
 import { diagnosticsFromError, type BuildDiagnostic } from "./diagnostics.js";
-import { recordDiagnostics } from "./diagnosticsStore.js";
+import type { BuildDiagnosticsStore } from "./diagnosticsStore.js";
 import { assertPresent } from "../../lintHelpers";
+import { joinedFailure } from "./builderLifetime.js";
 
 // ---------------------------------------------------------------------------
 // Workspace state source (implemented by vcsHost/workspaceVcs.ts)
@@ -172,10 +173,14 @@ export class StateTransitionTrigger extends EventEmitter {
   private contentHashes: ContentHashMap;
   private stateHash: string;
   private readonly workspaceRoot: string;
-  private readonly source: WorkspaceStateSource;
+  private readonly source: WorkspaceStateSource & BuildSourceProvider;
+  private readonly session: BuilderSession;
+  private readonly diagnostics: BuildDiagnosticsStore;
   private unsubscribe: (() => void) | null = null;
   private queuedRevision = 0;
   private settledRevision = 0;
+  private readonly prewarmFlights = new Set<Promise<void>>();
+  private readonly prewarmFailures: unknown[] = [];
 
   constructor(opts: {
     graph: PackageGraph;
@@ -183,7 +188,9 @@ export class StateTransitionTrigger extends EventEmitter {
     contentHashes: ContentHashMap;
     stateHash: string;
     workspaceRoot: string;
-    source: WorkspaceStateSource;
+    source: WorkspaceStateSource & BuildSourceProvider;
+    session: BuilderSession;
+    diagnostics: BuildDiagnosticsStore;
   }) {
     super();
     this.graph = opts.graph;
@@ -192,6 +199,8 @@ export class StateTransitionTrigger extends EventEmitter {
     this.stateHash = opts.stateHash;
     this.workspaceRoot = opts.workspaceRoot;
     this.source = opts.source;
+    this.session = opts.session;
+    this.diagnostics = opts.diagnostics;
   }
 
   start(): void {
@@ -201,6 +210,18 @@ export class StateTransitionTrigger extends EventEmitter {
   stop(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+  }
+
+  /** Join publication and cache-warming work before the owning session retires. */
+  async drain(): Promise<void> {
+    this.stop();
+    await this.whenSettled();
+    while (this.prewarmFlights.size > 0) {
+      await Promise.allSettled([...this.prewarmFlights]);
+    }
+    const failures = this.prewarmFailures.splice(0);
+    const failure = joinedFailure(failures, "State-trigger cache warming failed");
+    if (failure !== undefined || failures.length > 0) throw failure;
   }
 
   getState(): BuildStateSnapshot {
@@ -228,7 +249,7 @@ export class StateTransitionTrigger extends EventEmitter {
     this.evMap = result.evMap;
     this.contentHashes = result.contentHashes;
     this.stateHash = stateHash;
-    await persistEvState({
+    await persistEvState(this.session.store.stateRoot, {
       stateHash,
       evMap: result.evMap,
       contentHashes: result.contentHashes,
@@ -312,7 +333,7 @@ export class StateTransitionTrigger extends EventEmitter {
     this.evMap = result.evMap;
     this.contentHashes = result.contentHashes;
     this.stateHash = event.workspaceStateHash;
-    await persistEvState({
+    await persistEvState(this.session.store.stateRoot, {
       stateHash: event.workspaceStateHash,
       evMap: result.evMap,
       contentHashes: result.contentHashes,
@@ -354,7 +375,7 @@ export class StateTransitionTrigger extends EventEmitter {
     this.evMap = result.evMap;
     this.contentHashes = result.contentHashes;
     this.stateHash = event.workspaceStateHash;
-    await persistEvState({
+    await persistEvState(this.session.store.stateRoot, {
       stateHash: event.workspaceStateHash,
       evMap: result.evMap,
       contentHashes: result.contentHashes,
@@ -393,9 +414,13 @@ export class StateTransitionTrigger extends EventEmitter {
     trigger: ProtectedPublicationEvent,
     sourceUnitName: string | null
   ): void {
-    void this.buildChanged(names, graph, evMap, trigger, sourceUnitName).catch((error) => {
-      console.error("[StateTrigger] Unexpected cache-warming failure:", error);
-    });
+    const flight = this.buildChanged(names, graph, evMap, trigger, sourceUnitName)
+      .catch((error) => {
+        this.prewarmFailures.push(error);
+        console.error("[StateTrigger] Unexpected cache-warming failure:", error);
+      })
+      .finally(() => this.prewarmFlights.delete(flight));
+    this.prewarmFlights.add(flight);
   }
 
   private async buildChanged(
@@ -427,52 +452,58 @@ export class StateTransitionTrigger extends EventEmitter {
       if ((node.kind === "extension" || node.kind === "app") && name !== sourceUnitName) continue;
 
       const ev = assertPresent(evMap[name]);
-      const buildKey = resolveBuildUnitKey(node, ev, this.stateHash);
-      if (await buildStore.has(buildKey)) {
+      const buildKey = resolveBuildUnitKey(
+        this.session.rootFingerprint,
+        this.source,
+        node,
+        ev,
+        this.stateHash
+      );
+      if (await this.session.store.has(buildKey)) {
         this.emit("build-complete", { name, buildKey, trigger });
         continue;
       }
 
       this.emit("build-started", { name, trigger });
       try {
-        await buildUnitStored(node, ev, graph, this.workspaceRoot, trigger.workspaceStateHash, {
-          // Publication warming is optional cache work. It must yield every
-          // build lane needed by a panel, app, worker, or approval the user is
-          // actually waiting for.
-          priority: "speculative",
-        });
+        await buildUnitStored(
+          this.session,
+          node,
+          ev,
+          graph,
+          this.workspaceRoot,
+          trigger.workspaceStateHash,
+          {
+            // Publication warming is optional cache work. It must yield every
+            // build lane needed by a panel, app, worker, or approval the user is
+            // actually waiting for.
+            priority: "speculative",
+          }
+        );
         this.emit("build-complete", { name, buildKey, trigger });
-        void this.source
-          .recordBuild({
-            inputStateHash: trigger.workspaceStateHash,
-            unitName: name,
-            subtree: node.relativePath,
-            ev,
-            buildKey,
-            status: "ok",
-          })
-          .catch((error: unknown) =>
-            console.warn(`[StateTrigger] Failed to record successful build ${name}:`, error)
-          );
+        await this.source.recordBuild({
+          inputStateHash: trigger.workspaceStateHash,
+          unitName: name,
+          subtree: node.relativePath,
+          ev,
+          buildKey,
+          status: "ok",
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const diagnostics = diagnosticsFromError(error, this.workspaceRoot);
-        recordDiagnostics(name, buildKey, diagnostics);
+        this.diagnostics.record(name, buildKey, diagnostics);
         this.emit("build-error", { name, error: message, diagnostics, trigger });
-        void this.source
-          .recordBuild({
-            inputStateHash: trigger.workspaceStateHash,
-            unitName: name,
-            subtree: node.relativePath,
-            ev,
-            buildKey,
-            status: "error",
-            error: message,
-            diagnostics,
-          })
-          .catch((recordError: unknown) =>
-            console.warn(`[StateTrigger] Failed to record failed build ${name}:`, recordError)
-          );
+        await this.source.recordBuild({
+          inputStateHash: trigger.workspaceStateHash,
+          unitName: name,
+          subtree: node.relativePath,
+          ev,
+          buildKey,
+          status: "error",
+          error: message,
+          diagnostics,
+        });
       }
     }
   }

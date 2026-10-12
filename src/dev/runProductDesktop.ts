@@ -96,7 +96,7 @@ async function main(): Promise<void> {
       env,
     });
 
-    await preparation.sourcesReady;
+    await preparation.completed;
     desktop = new DevInstanceSupervisor({
       sourceRoot: repoRoot,
       command: process.execPath,
@@ -116,13 +116,9 @@ async function main(): Promise<void> {
       stdio: "inherit",
       forwardParentSignals: true,
     });
-    const started = desktop.start();
-    await Promise.race([started, preparation.completed.then(() => started)]);
+    await desktop.start();
     const foreground = desktop.wait();
-    process.exitCode = await Promise.race([
-      foreground,
-      preparation.completed.then(() => foreground),
-    ]);
+    process.exitCode = await foreground;
   } catch (error) {
     retirementFailed = (error as NodeJS.ErrnoException)?.code === "EOWNERSHIP";
     launchFailure = error;

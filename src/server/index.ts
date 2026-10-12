@@ -1,6 +1,5 @@
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import { drainDependencyContentMaintenance } from "./buildV2/dependencyContentMaintenance.js";
-import { drainBuildStorePublications } from "./buildV2/buildStore.js";
 import { drainExternalDependencyPruning } from "./buildV2/externalDeps.js";
 import { REPORT_POLICY } from "@vibestudio/service-schemas/problemReportBundle";
 import { workspaceMethodPrincipals } from "./workspaceRpcAuthority.js";
@@ -416,6 +415,9 @@ async function main() {
   }
 
   const { initBuildSystemV2 } = await import("./buildV2/index.js");
+  const { BuildProcessOwner } = await import("./buildV2/builder.js");
+  const { resolveBuildStoreRoots } = await import("./buildV2/buildStore.js");
+  const { getSharedDerivedDataPath } = await import("@vibestudio/env-paths");
 
   // Consume hub-only capabilities before resolving or loading any
   // workspace-controlled code. Descendants must never inherit these values.
@@ -500,7 +502,6 @@ async function main() {
   const { ExecutionPublicationJournal } = await import("./executionPublicationJournal.js");
   const { executionArtifactRefFromBuild, buildKeyRootProvider, DelegatingExecutionRootProvider } =
     await import("./executionRootProviders.js");
-  const buildStoreForPublication = await import("./buildV2/buildStore.js");
   const { getInternalDOBundle, internalDOExecutionArtifacts } =
     await import("./internalDOs/internalDoLoader.js");
   const productSeedArtifacts = internalDOExecutionArtifacts(getInternalDOBundle());
@@ -513,7 +514,7 @@ async function main() {
   const executionPublicationJournal = new ExecutionPublicationJournal(
     statePath,
     (buildKey, executionDigest) => {
-      const build = buildStoreForPublication.peekLocal(buildKey);
+      const build = buildSystemInstance?.peekVerifiedBuildByKey(buildKey) ?? null;
       if (build) return executionArtifactRefFromBuild(workspaceId, build);
       return productSeedArtifactByIdentity.get(`${buildKey}\0${executionDigest}`) ?? null;
     }
@@ -2517,8 +2518,21 @@ async function main() {
   // One build owner follows the exact initial content through semantic
   // publication and every subsequent workspace edit.
   container.registerManaged({
+    name: "buildProcessOwner",
+    async start() {
+      return new BuildProcessOwner({
+        appRoot,
+        appNodeModules:
+          appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
+      });
+    },
+    async stop(owner: InstanceType<typeof BuildProcessOwner>) {
+      await owner.shutdown();
+    },
+  });
+  container.registerManaged({
     name: "buildSystem",
-    dependencies: ["nativeWorkspace"],
+    dependencies: ["nativeWorkspace", "buildProcessOwner"],
     async start(resolve) {
       const nativeWorkspace = assertPresent(
         resolve<
@@ -2527,112 +2541,53 @@ async function main() {
           >
         >("nativeWorkspace")
       );
-      const buildSystem = await initBuildSystemV2(
-        workspacePath,
-        workspaceVcs,
-        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
-        {
-          appRoot,
-          runNativeJob: (input) => nativeWorkspace.runJob(input),
-          admitNativeDependencies: (input) => nativeWorkspace.admitDependencies(input),
-          dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
-          dependencyFingerprint,
-          workspaceAuthorityEnvironmentAt: async (stateHash) => {
-            const { exactWorkspaceServiceBindings } =
-              await import("./buildV2/userlandAuthority.js");
-            return {
-              services: exactWorkspaceServiceBindings(
-                await loadWorkspaceConfigFromState(stateHash)
-              ),
-            };
-          },
-          ensureBuildProvider: async (target) => {
-            await ensureHostTargetExtensions(target);
-            const host = assertPresent(extensionHostForGateway);
-            await host.whenReconciled();
-            for (const declaration of resolveHostTargetRequiredExtensions(
-              workspaceConfig,
-              target
-            )) {
-              const unit = (await host.listWorkspaceUnits()).find(
-                (row) => row.source === declaration.source
-              );
-              if (!unit)
-                throw new Error(`Required build extension is unavailable: ${declaration.source}`);
-              await host.ensureActivated(unit.name);
-            }
-          },
-          executionRootProviders: [
-            buildKeyRootProvider({
-              id: "app-generation",
-              owner: "app-generation",
-              buildKeys() {
-                const appHost = appHostForGateway;
-                if (!appHost) throw new Error("App registry is not available");
-                return appHost.registry
-                  .list()
-                  .filter((entry) => entry.target !== "terminal")
-                  .flatMap((entry) => [
-                    ...(entry.activeBundleKey
-                      ? [
-                          {
-                            ownerId: entry.name,
-                            buildKey: entry.activeBundleKey,
-                            reason: "active" as const,
-                          },
-                        ]
-                      : []),
-                    ...entry.previousVersions.map((version) => ({
-                      ownerId: entry.name,
-                      buildKey: version.activeBundleKey,
-                      reason: "rollback" as const,
-                    })),
-                  ]);
-              },
-              resolve: async ({ buildKey }) => {
-                const build = await buildStoreForPublication.readLocal(buildKey);
-                return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
-              },
-            }),
-            buildKeyRootProvider({
-              id: "terminal-app",
-              owner: "terminal-app",
-              buildKeys() {
-                const appHost = appHostForGateway;
-                if (!appHost) throw new Error("App registry is not available");
-                return appHost.registry
-                  .list()
-                  .filter((entry) => entry.target === "terminal")
-                  .flatMap((entry) => [
-                    ...(entry.activeBundleKey
-                      ? [
-                          {
-                            ownerId: entry.name,
-                            buildKey: entry.activeBundleKey,
-                            reason: "active" as const,
-                          },
-                        ]
-                      : []),
-                    ...entry.previousVersions.map((version) => ({
-                      ownerId: entry.name,
-                      buildKey: version.activeBundleKey,
-                      reason: "rollback" as const,
-                    })),
-                  ]);
-              },
-              resolve: async ({ buildKey }) => {
-                const build = await buildStoreForPublication.readLocal(buildKey);
-                return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
-              },
-            }),
-            buildKeyRootProvider({
-              id: "extension-generation",
-              owner: "extension-generation",
-              buildKeys() {
-                const extensionHost = extensionHostForGateway;
-                if (!extensionHost) throw new Error("Extension registry is not available");
-                return extensionHost.registry.list().flatMap((entry) =>
-                  entry.activeBundleKey
+      const processOwner = assertPresent(
+        resolve<InstanceType<typeof BuildProcessOwner>>("buildProcessOwner")
+      );
+      const buildSystem = await initBuildSystemV2(workspacePath, workspaceVcs, {
+        processOwner,
+        stateRoot: workspace.statePath,
+        storeRoots: resolveBuildStoreRoots({
+          stateRoot: workspace.statePath,
+          centralDataRoot: getCentralDataPath(),
+          sharedDerivedRoot: getSharedDerivedDataPath(),
+        }),
+        releaseBuildRoot: path.join(releaseResourceRoot, "userland-builds"),
+        runNativeJob: (input) => nativeWorkspace.runJob(input),
+        admitNativeDependencies: (input) => nativeWorkspace.admitDependencies(input),
+        dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
+        dependencyFingerprint,
+        workspaceAuthorityEnvironmentAt: async (stateHash) => {
+          const { exactWorkspaceServiceBindings } = await import("./buildV2/userlandAuthority.js");
+          return {
+            services: exactWorkspaceServiceBindings(await loadWorkspaceConfigFromState(stateHash)),
+          };
+        },
+        ensureBuildProvider: async (target) => {
+          await ensureHostTargetExtensions(target);
+          const host = assertPresent(extensionHostForGateway);
+          await host.whenReconciled();
+          for (const declaration of resolveHostTargetRequiredExtensions(workspaceConfig, target)) {
+            const unit = (await host.listWorkspaceUnits()).find(
+              (row) => row.source === declaration.source
+            );
+            if (!unit)
+              throw new Error(`Required build extension is unavailable: ${declaration.source}`);
+            await host.ensureActivated(unit.name);
+          }
+        },
+        executionRootProviders: [
+          buildKeyRootProvider({
+            id: "app-generation",
+            owner: "app-generation",
+            buildKeys() {
+              const appHost = appHostForGateway;
+              if (!appHost) throw new Error("App registry is not available");
+              return appHost.registry
+                .list()
+                .filter((entry) => entry.target !== "terminal")
+                .flatMap((entry) => [
+                  ...(entry.activeBundleKey
                     ? [
                         {
                           ownerId: entry.name,
@@ -2640,138 +2595,195 @@ async function main() {
                           reason: "active" as const,
                         },
                       ]
-                    : []
-                );
-              },
-              resolve: async ({ buildKey }) => {
-                const build = await buildStoreForPublication.readLocal(buildKey);
-                return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
-              },
-            }),
-            {
-              id: "runtime-image",
-              mandatory: true,
-              async snapshotRoots() {
-                const workerdManager = workerdManagerForGateway;
-                if (!workerdManager) throw new Error("Runtime image store is not available");
-                return workerdManager.listRuntimeImages().map((image) => ({
-                  owner: "runtime-image" as const,
-                  ownerId: image.id,
-                  reason: "active" as const,
-                  artifact: image.artifact,
-                }));
-              },
+                    : []),
+                  ...entry.previousVersions.map((version) => ({
+                    ownerId: entry.name,
+                    buildKey: version.activeBundleKey,
+                    reason: "rollback" as const,
+                  })),
+                ]);
             },
-            buildKeyRootProvider({
-              id: "runtime-entity",
-              owner: "runtime-entity",
-              buildKeys: () =>
-                entityCache.listExecutionOwners().flatMap((entity) =>
-                  entity.activeBuildKey
+            resolve: async ({ buildKey }) => {
+              const build = await buildSystemInstance?.peekBuildByKey(buildKey);
+              return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
+            },
+          }),
+          buildKeyRootProvider({
+            id: "terminal-app",
+            owner: "terminal-app",
+            buildKeys() {
+              const appHost = appHostForGateway;
+              if (!appHost) throw new Error("App registry is not available");
+              return appHost.registry
+                .list()
+                .filter((entry) => entry.target === "terminal")
+                .flatMap((entry) => [
+                  ...(entry.activeBundleKey
                     ? [
                         {
-                          ownerId: entity.id,
-                          buildKey: entity.activeBuildKey,
-                          reason:
-                            entity.status === "preparing"
-                              ? ("in-flight" as const)
-                              : ("active" as const),
-                          executionDigest: entity.activeExecutionDigest,
+                          ownerId: entry.name,
+                          buildKey: entry.activeBundleKey,
+                          reason: "active" as const,
                         },
                       ]
-                    : []
-                ),
-              resolve: async ({ buildKey, executionDigest }) => {
-                const build = executionDigest
-                  ? await buildStoreForPublication.getByExecution(buildKey, executionDigest)
-                  : await buildStoreForPublication.readLocal(buildKey);
-                if (build) return executionArtifactRefFromBuild(workspaceId, build);
-                return executionDigest
-                  ? (productSeedArtifactByIdentity.get(`${buildKey}\0${executionDigest}`) ?? null)
-                  : null;
-              },
-            }),
-            {
-              id: "panel-history",
-              mandatory: true,
-              async snapshotRoots() {
-                if (!entityStoreInstance)
-                  throw new Error("Workspace entity store is not available");
-                return Promise.all(
-                  (await entityStoreInstance.listExecutionRoots())
-                    .filter((entity) => entity.kind === "panel" && entity.activeBuildKey)
-                    .map(async (entity) => {
-                      const build = entity.activeExecutionDigest
-                        ? await buildStoreForPublication.getByExecution(
-                            entity.activeBuildKey!,
-                            entity.activeExecutionDigest
-                          )
-                        : await buildStoreForPublication.readLocal(entity.activeBuildKey!);
-                      if (!build) {
-                        throw new Error(
-                          `Panel history ${entity.id} references missing build ${entity.activeBuildKey}`
-                        );
-                      }
-                      return {
-                        owner: "panel-history" as const,
-                        ownerId: entity.id,
-                        reason:
-                          entity.status === "active" ? ("active" as const) : ("rollback" as const),
-                        artifact: executionArtifactRefFromBuild(workspaceId, build),
-                      };
-                    })
-                );
-              },
+                    : []),
+                  ...entry.previousVersions.map((version) => ({
+                    ownerId: entry.name,
+                    buildKey: version.activeBundleKey,
+                    reason: "rollback" as const,
+                  })),
+                ]);
             },
-            evalRunRootProvider,
-            developmentRunRootProvider,
-            {
-              id: "product-seed",
-              mandatory: true,
-              async snapshotRoots() {
-                // Product code comes from the verified application bundle,
-                // outside workspace BuildStore.
-                return productSeedArtifacts.map((artifact) => ({
-                  owner: "product-seed" as const,
-                  ownerId: artifact.executionDigest,
-                  reason: "pinned" as const,
-                  artifact,
-                }));
-              },
+            resolve: async ({ buildKey }) => {
+              const build = await buildSystemInstance?.peekBuildByKey(buildKey);
+              return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
             },
-          ],
-          onRetentionDiagnostic(report) {
-            const level = report.complete ? "warn" : "error";
-            const message =
-              report.providerFailures.length > 0
-                ? `Build retention diagnostic is incomplete (${report.providerFailures.length} provider failure${report.providerFailures.length === 1 ? "" : "s"})`
-                : report.unresolvedAuthoritativeRootBuildKeys.length > 0
-                  ? `Build retention diagnostic has ${report.unresolvedAuthoritativeRootBuildKeys.length} unresolved authoritative root${report.unresolvedAuthoritativeRootBuildKeys.length === 1 ? "" : "s"}`
-                  : `Build cache contains ${report.unreferenced} unreferenced build${report.unreferenced === 1 ? "" : "s"} (${report.unreferencedBytes} bytes)`;
-            const fields = {
-              complete: report.complete,
-              roots: report.roots,
-              rootBuildKeys: report.rootBuildKeys,
-              storedRootBuildKeys: report.storedRootBuildKeys,
-              unresolvedAuthoritativeRootBuildKeys: report.unresolvedAuthoritativeRootBuildKeys,
-              reachableBuilds: report.reachableBuilds,
-              unreferenced: report.unreferenced,
-              unreferencedBytes: report.unreferencedBytes,
-              providerFailures: report.providerFailures,
-              quarantined: report.quarantined,
-              deleted: report.deleted,
-              retainedForGrace: report.retainedForGrace,
-              notReconstructible: report.notReconstructible,
-              notReconstructibleDetails: report.notReconstructibleDetails,
-              cleanupFailures: report.cleanupFailures,
-            };
-            // The server log is both durable JSONL and a live subscribed event
-            // stream, so operators can inspect this finding after the caller
-            // that requested the report is gone.
-            serverLogStore.append(level, [`[BuildRetention] ${message}`, fields]);
+          }),
+          buildKeyRootProvider({
+            id: "extension-generation",
+            owner: "extension-generation",
+            buildKeys() {
+              const extensionHost = extensionHostForGateway;
+              if (!extensionHost) throw new Error("Extension registry is not available");
+              return extensionHost.registry.list().flatMap((entry) =>
+                entry.activeBundleKey
+                  ? [
+                      {
+                        ownerId: entry.name,
+                        buildKey: entry.activeBundleKey,
+                        reason: "active" as const,
+                      },
+                    ]
+                  : []
+              );
+            },
+            resolve: async ({ buildKey }) => {
+              const build = await buildSystemInstance?.peekBuildByKey(buildKey);
+              return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
+            },
+          }),
+          {
+            id: "runtime-image",
+            mandatory: true,
+            async snapshotRoots() {
+              const workerdManager = workerdManagerForGateway;
+              if (!workerdManager) throw new Error("Runtime image store is not available");
+              return workerdManager.listRuntimeImages().map((image) => ({
+                owner: "runtime-image" as const,
+                ownerId: image.id,
+                reason: "active" as const,
+                artifact: image.artifact,
+              }));
+            },
           },
-        }
-      );
+          buildKeyRootProvider({
+            id: "runtime-entity",
+            owner: "runtime-entity",
+            buildKeys: () =>
+              entityCache.listExecutionOwners().flatMap((entity) =>
+                entity.activeBuildKey
+                  ? [
+                      {
+                        ownerId: entity.id,
+                        buildKey: entity.activeBuildKey,
+                        reason:
+                          entity.status === "preparing"
+                            ? ("in-flight" as const)
+                            : ("active" as const),
+                        executionDigest: entity.activeExecutionDigest,
+                      },
+                    ]
+                  : []
+              ),
+            resolve: async ({ buildKey, executionDigest }) => {
+              const build = executionDigest
+                ? await buildSystemInstance?.getBuildByExecution(buildKey, executionDigest)
+                : await buildSystemInstance?.peekBuildByKey(buildKey);
+              if (build) return executionArtifactRefFromBuild(workspaceId, build);
+              return executionDigest
+                ? (productSeedArtifactByIdentity.get(`${buildKey}\0${executionDigest}`) ?? null)
+                : null;
+            },
+          }),
+          {
+            id: "panel-history",
+            mandatory: true,
+            async snapshotRoots() {
+              if (!entityStoreInstance) throw new Error("Workspace entity store is not available");
+              return Promise.all(
+                (await entityStoreInstance.listExecutionRoots())
+                  .filter((entity) => entity.kind === "panel" && entity.activeBuildKey)
+                  .map(async (entity) => {
+                    const build = entity.activeExecutionDigest
+                      ? await buildSystemInstance?.getBuildByExecution(
+                          entity.activeBuildKey!,
+                          entity.activeExecutionDigest
+                        )
+                      : await buildSystemInstance?.peekBuildByKey(entity.activeBuildKey!);
+                    if (!build) {
+                      throw new Error(
+                        `Panel history ${entity.id} references missing build ${entity.activeBuildKey}`
+                      );
+                    }
+                    return {
+                      owner: "panel-history" as const,
+                      ownerId: entity.id,
+                      reason:
+                        entity.status === "active" ? ("active" as const) : ("rollback" as const),
+                      artifact: executionArtifactRefFromBuild(workspaceId, build),
+                    };
+                  })
+              );
+            },
+          },
+          evalRunRootProvider,
+          developmentRunRootProvider,
+          {
+            id: "product-seed",
+            mandatory: true,
+            async snapshotRoots() {
+              // Product code comes from the verified application bundle,
+              // outside workspace BuildStore.
+              return productSeedArtifacts.map((artifact) => ({
+                owner: "product-seed" as const,
+                ownerId: artifact.executionDigest,
+                reason: "pinned" as const,
+                artifact,
+              }));
+            },
+          },
+        ],
+        onRetentionDiagnostic(report) {
+          const level = report.complete ? "warn" : "error";
+          const message =
+            report.providerFailures.length > 0
+              ? `Build retention diagnostic is incomplete (${report.providerFailures.length} provider failure${report.providerFailures.length === 1 ? "" : "s"})`
+              : report.unresolvedAuthoritativeRootBuildKeys.length > 0
+                ? `Build retention diagnostic has ${report.unresolvedAuthoritativeRootBuildKeys.length} unresolved authoritative root${report.unresolvedAuthoritativeRootBuildKeys.length === 1 ? "" : "s"}`
+                : `Build cache contains ${report.unreferenced} unreferenced build${report.unreferenced === 1 ? "" : "s"} (${report.unreferencedBytes} bytes)`;
+          const fields = {
+            complete: report.complete,
+            roots: report.roots,
+            rootBuildKeys: report.rootBuildKeys,
+            storedRootBuildKeys: report.storedRootBuildKeys,
+            unresolvedAuthoritativeRootBuildKeys: report.unresolvedAuthoritativeRootBuildKeys,
+            reachableBuilds: report.reachableBuilds,
+            unreferenced: report.unreferenced,
+            unreferencedBytes: report.unreferencedBytes,
+            providerFailures: report.providerFailures,
+            quarantined: report.quarantined,
+            deleted: report.deleted,
+            retainedForGrace: report.retainedForGrace,
+            notReconstructible: report.notReconstructible,
+            notReconstructibleDetails: report.notReconstructibleDetails,
+            cleanupFailures: report.cleanupFailures,
+          };
+          // The server log is both durable JSONL and a live subscribed event
+          // stream, so operators can inspect this finding after the caller
+          // that requested the report is gone.
+          serverLogStore.append(level, [`[BuildRetention] ${message}`, fields]);
+        },
+      });
       return buildSystem;
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
@@ -5153,6 +5165,7 @@ async function main() {
     appRoot,
     container,
     workspaceId,
+    getBuildSystem: () => assertPresent(buildSystemInstance),
     workspaceVcs,
     layout,
     eventService,
@@ -8159,7 +8172,6 @@ async function main() {
     for (const drain of [
       drainExternalDependencyPruning,
       drainDependencyContentMaintenance,
-      drainBuildStorePublications,
       closeDerivedCacheCoordinators,
     ]) {
       await drain().catch((error) => {

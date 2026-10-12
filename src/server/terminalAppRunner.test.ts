@@ -50,7 +50,14 @@ function tempBuild() {
   return {
     dir,
     metadata: { ev: "ev-cli" },
-    artifacts: [{ path: "index.mjs", role: "primary" }],
+    artifacts: [
+      {
+        path: "index.mjs",
+        role: "primary" as const,
+        contentType: "text/javascript; charset=utf-8",
+        encoding: "utf8" as const,
+      },
+    ],
   };
 }
 
@@ -66,6 +73,7 @@ describe("TerminalAppRunner", () => {
     };
     const runner = new TerminalAppRunner({
       connectionGrants: grants,
+      artifactFilePath: (build, artifact) => path.join(build.dir, artifact.path),
       onStatus: (appId, status, error) => statuses.push({ appId, status, error }),
       onLog: (appId, level, message, source) => logs.push({ appId, level, message, source }),
     });
@@ -122,6 +130,7 @@ describe("TerminalAppRunner", () => {
     };
     const runner = new TerminalAppRunner({
       connectionGrants: grants,
+      artifactFilePath: (build, artifact) => path.join(build.dir, artifact.path),
       onStatus: (appId, status, error) => statuses.push({ appId, status, error }),
       onLog: vi.fn(),
     });
@@ -153,6 +162,7 @@ describe("TerminalAppRunner", () => {
     };
     const runner = new TerminalAppRunner({
       connectionGrants: grants,
+      artifactFilePath: (build, artifact) => path.join(build.dir, artifact.path),
       onStatus: vi.fn(),
       onLog: vi.fn(),
     });

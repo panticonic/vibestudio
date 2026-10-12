@@ -7,7 +7,8 @@
  * - Callback-based flow (listPanels)
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import * as path from "node:path";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "http";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
@@ -16,6 +17,7 @@ import { createBlobBundleReader } from "@vibestudio/shared/panel/blobBundle";
 import { unitIconTarget } from "@vibestudio/shared/panel/assetPathPolicy";
 import { getPanelRuntimeHelperSet } from "./panelRuntimeHelpers.js";
 import type { BuildArtifactManifestEntry, StoredBuildResult } from "./buildV2/buildStore.js";
+import type { PanelHttpCallbacks } from "./panelHttpServer.js";
 
 // ---------------------------------------------------------------------------
 // extractSourcePath is module-private, so we test the regex logic directly.
@@ -84,25 +86,12 @@ describe("extractSourcePath", () => {
 // PanelHttpServer unit tests (zero per-panel state)
 // ---------------------------------------------------------------------------
 
-import { vi } from "vitest";
 import { EventEmitter } from "node:events";
 
 vi.mock("fs", () => ({
   readFileSync: vi.fn().mockReturnValue("// stub"),
   existsSync: vi.fn().mockReturnValue(false),
 }));
-
-vi.mock("./buildV2/buildStore.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./buildV2/buildStore.js")>();
-  return {
-    ...actual,
-    readStoredArtifactBytes: vi.fn(async (build: { dir: string }, entry: { path: string }) => {
-      const bytes = artifactBodies.get(`${build.dir}/${entry.path}`);
-      if (!bytes) throw new Error(`No stored fixture artifact: ${build.dir}/${entry.path}`);
-      return Buffer.from(bytes);
-    }),
-  };
-});
 
 vi.mock("./buildV2/transportDerivativeCache.js", () => ({
   TransportDerivativeCache: class {
@@ -124,11 +113,56 @@ vi.mock("ws", () => ({
 }));
 
 const artifactBodies = new Map<string, Buffer>();
+const readArtifactBytes = vi.fn(
+  async (build: Pick<StoredBuildResult, "dir">, entry: BuildArtifactManifestEntry) => {
+    const bytes = artifactBodies.get(`${build.dir}/${entry.path}`);
+    if (!bytes) throw new Error(`No stored fixture artifact: ${build.dir}/${entry.path}`);
+    return Buffer.from(bytes);
+  }
+);
+
+function withArtifactCallbacks(
+  callbacks: Omit<
+    PanelHttpCallbacks,
+    "readArtifactBytes" | "artifactFilePath" | "buildDescriptorBytes"
+  >
+): PanelHttpCallbacks {
+  return {
+    ...callbacks,
+    readArtifactBytes,
+    artifactFilePath: (build: Pick<StoredBuildResult, "dir">, entry: BuildArtifactManifestEntry) =>
+      path.join(build.dir, entry.path),
+    buildDescriptorBytes: (build: Pick<StoredBuildResult, "dir" | "metadata" | "artifacts">) =>
+      build.dir.length * 2 +
+      JSON.stringify(build.metadata).length * 2 +
+      build.artifacts.reduce(
+        (bytes, entry) =>
+          bytes +
+          256 +
+          2 * (entry.path.length + entry.contentType.length + (entry.integrity?.length ?? 0)),
+        0
+      ),
+  };
+}
 
 // Must import after mocks
 const { PanelHttpServer } = await import("./panelHttpServer.js");
-const { readStoredArtifactBytes } = await import("./buildV2/buildStore.js");
 const PANEL_RUNTIME_HELPER_SET = getPanelRuntimeHelperSet();
+
+function createPanelServer(): InstanceType<typeof PanelHttpServer> {
+  const server = new PanelHttpServer();
+  server.setCallbacks(
+    withArtifactCallbacks({
+      getBuild: async () => {
+        throw new Error("Unexpected fixture build request");
+      },
+      getUnitIcon: async () => null,
+      getBuildByKey: async () => null,
+      findSharedStyleBuild: async () => null,
+    })
+  );
+  return server;
+}
 
 function rememberArtifactBody(dir: string, artifactPath: string, body: string): void {
   artifactBodies.set(`${dir}/${artifactPath}`, Buffer.from(body));
@@ -254,7 +288,7 @@ describe("PanelHttpServer build cache", () => {
   };
 
   it("keeps the legitimate CDP data-plane payload budget explicit", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     server.initHandlers();
     const internal = server as unknown as {
       wss: { options: { maxPayload: number } };
@@ -265,14 +299,14 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("storeBuild caches by source, hasBuild returns true", () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     server.storeBuild("panels/my-app", buildResult);
     expect(server.hasBuild("panels/my-app")).toBe(true);
     expect(server.hasBuild("panels/other")).toBe(false);
   });
 
   it("keys cached builds by ref", () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     server.storeBuild("panels/my-app", buildResult, "main");
     expect(server.hasBuild("panels/my-app")).toBe(false);
     expect(server.hasBuild("panels/my-app", "main")).toBe(true);
@@ -280,7 +314,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("assigns monotonically increasing build revisions by cache entry", () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     server.storeBuild("panels/my-app", buildResult);
     const firstRevision = server.getBuildRevision("panels/my-app");
     server.storeBuild("panels/my-app", buildResult, "feature");
@@ -292,7 +326,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("invalidateBuild removes cached build", () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     server.storeBuild("panels/my-app", buildResult);
     server.storeBuild("panels/my-app", buildResult, "feature");
     server.invalidateBuild("panels/my-app");
@@ -301,7 +335,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("storeBuild rejects build without html", () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     expect(() =>
       server.storeBuild("panels/x", {
         ...buildResult,
@@ -311,7 +345,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("storeBuild rejects build without bundle", () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     expect(() =>
       server.storeBuild("panels/x", {
         ...buildResult,
@@ -321,22 +355,24 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("storeBuild calls onBuildComplete callback with source", () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const onBuildComplete = vi.fn();
-    server.setCallbacks({
-      onBuildComplete,
-      getBuild: vi.fn(),
-      getUnitIcon: vi.fn(async () => null),
-      findSharedStyleBuild: vi.fn(async () => null),
-      getBuildByKey: vi.fn(async () => buildResult),
-    });
+    server.setCallbacks(
+      withArtifactCallbacks({
+        onBuildComplete,
+        getBuild: vi.fn(),
+        getUnitIcon: vi.fn(async () => null),
+        findSharedStyleBuild: vi.fn(async () => null),
+        getBuildByKey: vi.fn(async () => buildResult),
+      })
+    );
 
     server.storeBuild("panels/my-app", buildResult);
     expect(onBuildComplete).toHaveBeenCalledWith("panels/my-app");
   });
 
   it("does not read lazy artifact payloads while activating a panel build", () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const lazyArtifact = fixtureArtifact(
       buildResult.dir,
       "chunk-lazy.js",
@@ -344,7 +380,7 @@ describe("PanelHttpServer build cache", () => {
       "text/javascript; charset=utf-8",
       "lazy payload"
     );
-    vi.mocked(readStoredArtifactBytes).mockClear();
+    vi.mocked(readArtifactBytes).mockClear();
 
     expect(() =>
       server.storeBuild("panels/my-app", {
@@ -367,7 +403,7 @@ describe("PanelHttpServer build cache", () => {
         },
       })
     ).not.toThrow();
-    expect(readStoredArtifactBytes).not.toHaveBeenCalled();
+    expect(readArtifactBytes).not.toHaveBeenCalled();
   });
 
   describe("build prefetch surfaces", () => {
@@ -443,14 +479,16 @@ describe("PanelHttpServer build cache", () => {
     };
 
     const serverWithBuild = () => {
-      const server = new PanelHttpServer();
-      server.setCallbacks({
-        onBuildComplete: vi.fn(),
-        getBuild: vi.fn(async () => prefetchBuild),
-        getUnitIcon: vi.fn(async () => null),
-        findSharedStyleBuild: vi.fn(async () => null),
-        getBuildByKey: vi.fn(async () => prefetchBuild),
-      });
+      const server = createPanelServer();
+      server.setCallbacks(
+        withArtifactCallbacks({
+          onBuildComplete: vi.fn(),
+          getBuild: vi.fn(async () => prefetchBuild),
+          getUnitIcon: vi.fn(async () => null),
+          findSharedStyleBuild: vi.fn(async () => null),
+          getBuildByKey: vi.fn(async () => prefetchBuild),
+        })
+      );
       return server;
     };
 
@@ -545,22 +583,24 @@ describe("PanelHttpServer build cache", () => {
     });
 
     it("does not read artifact payloads to answer the manifest", async () => {
-      const server = new PanelHttpServer();
-      server.setCallbacks({
-        onBuildComplete: vi.fn(),
-        getBuild: vi.fn(async () => prefetchBuild),
-        getUnitIcon: vi.fn(async () => null),
-        findSharedStyleBuild: vi.fn(async () => null),
-        getBuildByKey: vi.fn(async () => prefetchBuild),
-      });
-      vi.mocked(readStoredArtifactBytes).mockClear();
+      const server = createPanelServer();
+      server.setCallbacks(
+        withArtifactCallbacks({
+          onBuildComplete: vi.fn(),
+          getBuild: vi.fn(async () => prefetchBuild),
+          getUnitIcon: vi.fn(async () => null),
+          findSharedStyleBuild: vi.fn(async () => null),
+          getBuildByKey: vi.fn(async () => prefetchBuild),
+        })
+      );
+      vi.mocked(readArtifactBytes).mockClear();
 
       const response = await handlePanelRequest(
         server,
         `/__vibestudio/panel-build/${BUILD_KEY}/__manifest.json`
       );
       expect(response.statusCodeWritten).toBe(200);
-      expect(readStoredArtifactBytes).not.toHaveBeenCalled();
+      expect(readArtifactBytes).not.toHaveBeenCalled();
     });
 
     it("streams exactly the requested indices as digest-framed records", async () => {
@@ -646,14 +686,16 @@ describe("PanelHttpServer build cache", () => {
     });
 
     it("refuses both surfaces for a build that is no longer activated", async () => {
-      const server = new PanelHttpServer();
-      server.setCallbacks({
-        onBuildComplete: vi.fn(),
-        getBuild: vi.fn(async () => prefetchBuild),
-        getUnitIcon: vi.fn(async () => null),
-        findSharedStyleBuild: vi.fn(async () => null),
-        getBuildByKey: vi.fn(async () => null),
-      });
+      const server = createPanelServer();
+      server.setCallbacks(
+        withArtifactCallbacks({
+          onBuildComplete: vi.fn(),
+          getBuild: vi.fn(async () => prefetchBuild),
+          getUnitIcon: vi.fn(async () => null),
+          findSharedStyleBuild: vi.fn(async () => null),
+          getBuildByKey: vi.fn(async () => null),
+        })
+      );
 
       for (const resource of ["__manifest.json", "__bundle?want=1"]) {
         const response = await handlePanelRequest(
@@ -666,7 +708,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("serves shared styles from one digest-addressed URL across panel sources", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const content = "body { color: rebeccapurple; }";
     const digest = createHash("sha256").update(content).digest("hex");
     const sharedBuild = {
@@ -704,14 +746,16 @@ describe("PanelHttpServer build cache", () => {
     expect(response.body).toBe(content);
     expect(response.headersWritten?.["Cache-Control"]).toBe("public, max-age=31536000, immutable");
     // A fresh serving cache must recover retained styles from the owning build store.
-    const cold = new PanelHttpServer();
+    const cold = createPanelServer();
     const findSharedStyleBuild = vi.fn(async () => sharedBuild);
-    cold.setCallbacks({
-      getBuild: vi.fn(async () => sharedBuild),
-      getUnitIcon: vi.fn(async () => null),
-      getBuildByKey: vi.fn(async () => sharedBuild),
-      findSharedStyleBuild,
-    });
+    cold.setCallbacks(
+      withArtifactCallbacks({
+        getBuild: vi.fn(async () => sharedBuild),
+        getUnitIcon: vi.fn(async () => null),
+        getBuildByKey: vi.fn(async () => sharedBuild),
+        findSharedStyleBuild,
+      })
+    );
     const recovered = await handlePanelRequest(cold, `/__vibestudio/shared-style/${digest}.css`);
     expect(recovered.statusCodeWritten).toBe(200);
     expect(recovered.body).toBe(content);
@@ -719,7 +763,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("serves a declared unit icon without requesting a runtime build", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const body = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>');
     const contentHash = createHash("sha256").update(body).digest("hex");
     const getBuild = vi.fn(async () => buildResult);
@@ -732,12 +776,14 @@ describe("PanelHttpServer build cache", () => {
       contentType: "image/svg+xml",
       body,
     }));
-    server.setCallbacks({
-      getBuild,
-      getUnitIcon,
-      findSharedStyleBuild: vi.fn(async () => null),
-      getBuildByKey: vi.fn(async () => null),
-    });
+    server.setCallbacks(
+      withArtifactCallbacks({
+        getBuild,
+        getUnitIcon,
+        findSharedStyleBuild: vi.fn(async () => null),
+        getBuildByKey: vi.fn(async () => null),
+      })
+    );
 
     const response = await handlePanelRequest(
       server,
@@ -809,15 +855,17 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("does not synthesize build refs from panel context ids", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const getBuild = vi.fn(async () => buildResult);
-    server.setCallbacks({
-      onBuildComplete: vi.fn(),
-      getBuild,
-      getUnitIcon: vi.fn(async () => null),
-      findSharedStyleBuild: vi.fn(async () => null),
-      getBuildByKey: vi.fn(async () => buildResult),
-    });
+    server.setCallbacks(
+      withArtifactCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild,
+        getUnitIcon: vi.fn(async () => null),
+        findSharedStyleBuild: vi.fn(async () => null),
+        getBuildByKey: vi.fn(async () => buildResult),
+      })
+    );
 
     await handlePanelRequest(
       server,
@@ -828,7 +876,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("negotiates runtime helper compression without changing content or cache identity", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const helper = PANEL_RUNTIME_HELPER_SET.helpers.find((entry) => entry.path === "__loader.js")!;
     expect(helper.body.byteLength).toBeGreaterThan(1_024);
     for (const [accept, encoding] of [
@@ -867,15 +915,17 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("serves runtime helpers from a panel route for workspace-prefixed clients", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const getBuild = vi.fn(async () => buildResult);
-    server.setCallbacks({
-      onBuildComplete: vi.fn(),
-      getBuild,
-      getUnitIcon: vi.fn(async () => null),
-      findSharedStyleBuild: vi.fn(async () => null),
-      getBuildByKey: vi.fn(async () => buildResult),
-    });
+    server.setCallbacks(
+      withArtifactCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild,
+        getUnitIcon: vi.fn(async () => null),
+        findSharedStyleBuild: vi.fn(async () => null),
+        getBuildByKey: vi.fn(async () => buildResult),
+      })
+    );
 
     const loader = await handlePanelRequest(server, "/panels/my-app/__loader.js");
     expect(loader.statusCodeWritten).toBe(200);
@@ -888,15 +938,17 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("uses explicit panel build refs when present", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const getBuild = vi.fn(async () => buildResult);
-    server.setCallbacks({
-      onBuildComplete: vi.fn(),
-      getBuild,
-      getUnitIcon: vi.fn(async () => null),
-      findSharedStyleBuild: vi.fn(async () => null),
-      getBuildByKey: vi.fn(async () => buildResult),
-    });
+    server.setCallbacks(
+      withArtifactCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild,
+        getUnitIcon: vi.fn(async () => null),
+        findSharedStyleBuild: vi.fn(async () => null),
+        getBuildByKey: vi.fn(async () => buildResult),
+      })
+    );
 
     await handlePanelRequest(server, "/panels/my-app/?contextId=ctx-panel&ref=state:abc123");
 
@@ -904,19 +956,21 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("reuses an entity-primed build flight and waits for the requested artifact", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     let resolveBuild!: (result: typeof buildResult) => void;
     const primedBuild = new Promise<typeof buildResult>((resolve) => {
       resolveBuild = resolve;
     });
     const getBuild = vi.fn(() => primedBuild);
-    server.setCallbacks({
-      onBuildComplete: vi.fn(),
-      getBuild: vi.fn(async () => buildResult),
-      getUnitIcon: vi.fn(async () => null),
-      findSharedStyleBuild: vi.fn(async () => null),
-      getBuildByKey: vi.fn(async () => buildResult),
-    });
+    server.setCallbacks(
+      withArtifactCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild: vi.fn(async () => buildResult),
+        getUnitIcon: vi.fn(async () => null),
+        findSharedStyleBuild: vi.fn(async () => null),
+        getBuildByKey: vi.fn(async () => buildResult),
+      })
+    );
     server.primeBuild("panels/my-app", undefined, getBuild);
 
     const responsePending = handlePanelRequest(server, "/panels/my-app/bundle.js");
@@ -930,16 +984,18 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("serves a theme-adaptive build error page", async () => {
-    const server = new PanelHttpServer();
-    server.setCallbacks({
-      onBuildComplete: vi.fn(),
-      getBuild: vi.fn(async () => {
-        throw new Error("broken build");
-      }),
-      getUnitIcon: vi.fn(async () => null),
-      findSharedStyleBuild: vi.fn(async () => null),
-      getBuildByKey: vi.fn(async () => null),
-    });
+    const server = createPanelServer();
+    server.setCallbacks(
+      withArtifactCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild: vi.fn(async () => {
+          throw new Error("broken build");
+        }),
+        getUnitIcon: vi.fn(async () => null),
+        findSharedStyleBuild: vi.fn(async () => null),
+        getBuildByKey: vi.fn(async () => null),
+      })
+    );
 
     const response = await handlePanelRequest(server, "/panels/my-app/");
     const body = String(response.body);
@@ -951,16 +1007,18 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("serves an activated panel strictly from its immutable build key", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const getBuild = vi.fn(async () => buildResult);
     const getBuildByKey = vi.fn(async () => buildResult);
-    server.setCallbacks({
-      onBuildComplete: vi.fn(),
-      getBuild,
-      getUnitIcon: vi.fn(async () => null),
-      getBuildByKey,
-      findSharedStyleBuild: vi.fn(async () => null),
-    });
+    server.setCallbacks(
+      withArtifactCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild,
+        getUnitIcon: vi.fn(async () => null),
+        getBuildByKey,
+        findSharedStyleBuild: vi.fn(async () => null),
+      })
+    );
 
     const response = await handlePanelRequest(
       server,
@@ -974,16 +1032,18 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("fails closed when an activated build is missing or belongs to another panel", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     let exactBuild: StoredBuildResult | null = null;
     const getBuildByKey = vi.fn(async () => exactBuild);
-    server.setCallbacks({
-      onBuildComplete: vi.fn(),
-      getBuild: vi.fn(async () => buildResult),
-      getUnitIcon: vi.fn(async () => null),
-      getBuildByKey,
-      findSharedStyleBuild: vi.fn(async () => null),
-    });
+    server.setCallbacks(
+      withArtifactCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild: vi.fn(async () => buildResult),
+        getUnitIcon: vi.fn(async () => null),
+        getBuildByKey,
+        findSharedStyleBuild: vi.fn(async () => null),
+      })
+    );
 
     const missing = await handlePanelRequest(
       server,
@@ -1003,15 +1063,17 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("pins subresources to the build key carried by their document referer", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const getBuildByKey = vi.fn(async () => buildResult);
-    server.setCallbacks({
-      onBuildComplete: vi.fn(),
-      getBuild: vi.fn(async () => buildResult),
-      getUnitIcon: vi.fn(async () => null),
-      getBuildByKey,
-      findSharedStyleBuild: vi.fn(async () => null),
-    });
+    server.setCallbacks(
+      withArtifactCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild: vi.fn(async () => buildResult),
+        getUnitIcon: vi.fn(async () => null),
+        getBuildByKey,
+        findSharedStyleBuild: vi.fn(async () => null),
+      })
+    );
 
     const response = await handlePanelRequest(server, "/panels/my-app/bundle.js", {
       referer: `http://localhost/panels/my-app/?contextId=ctx-panel&buildKey=${BUILD_KEY}`,
@@ -1040,7 +1102,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("rewrites activated HTML artifact references onto the immutable build route", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const activated = {
       ...buildResult,
       artifacts: buildResult.artifacts.map((artifact) =>
@@ -1054,13 +1116,15 @@ describe("PanelHttpServer build cache", () => {
           : artifact
       ),
     } satisfies StoredBuildResult;
-    server.setCallbacks({
-      onBuildComplete: vi.fn(),
-      getBuild: vi.fn(async () => activated),
-      getUnitIcon: vi.fn(async () => null),
-      findSharedStyleBuild: vi.fn(async () => null),
-      getBuildByKey: vi.fn(async () => activated),
-    });
+    server.setCallbacks(
+      withArtifactCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild: vi.fn(async () => activated),
+        getUnitIcon: vi.fn(async () => null),
+        findSharedStyleBuild: vi.fn(async () => null),
+        getBuildByKey: vi.fn(async () => activated),
+      })
+    );
 
     const response = await handlePanelRequest(
       server,
@@ -1075,7 +1139,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("compresses cacheable panel startup artifacts for desktop and mobile clients", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const source = "console.log('startup');\n".repeat(512);
     const compressedBuild = {
       ...buildResult,
@@ -1102,7 +1166,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("keeps the mutable panel HTML pointer out of persistent caches", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     server.storeBuild("panels/my-app", buildResult);
 
     const response = await handlePanelRequest(server, "/panels/my-app/");
@@ -1111,7 +1175,7 @@ describe("PanelHttpServer build cache", () => {
   });
 
   it("does not serve a main entry artifact for a referer-less ref-pinned asset path", async () => {
-    const server = new PanelHttpServer();
+    const server = createPanelServer();
     const mainBuild = {
       ...buildResult,
       artifacts: buildResult.artifacts.map((artifact) =>

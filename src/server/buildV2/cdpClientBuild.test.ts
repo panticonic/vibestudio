@@ -2,13 +2,9 @@ import * as esbuild from "esbuild";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { discoverPackageGraph } from "./packageGraph.js";
-import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 import { exactUserlandRoot } from "../../../tests/exactUserlandRoot";
-
-beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
-afterAll(() => setBuildSourceProvider(null));
 
 describe("canonical CDP client build", () => {
   it("keeps the canonical CDP client free of any vendored browser engine", () => {

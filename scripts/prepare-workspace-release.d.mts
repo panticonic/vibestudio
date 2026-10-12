@@ -1,5 +1,4 @@
 export interface WorkspaceReleasePreparation {
-  sourcesReady: Promise<void>;
   completed: Promise<void>;
   stop(): Promise<void>;
 }

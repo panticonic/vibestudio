@@ -39,21 +39,6 @@ export interface BuildSourceProvider {
   ): Promise<{ sourceRoot: string }>;
 }
 
-let activeProvider: BuildSourceProvider | null = null;
-
-export function setBuildSourceProvider(provider: BuildSourceProvider | null): void {
-  activeProvider = provider;
-}
-
-export function getBuildSourceProvider(): BuildSourceProvider {
-  if (!activeProvider) {
-    throw new Error(
-      "No build source provider installed (initBuildSystemV2 not run; tests must call setBuildSourceProvider)"
-    );
-  }
-  return activeProvider;
-}
-
 /**
  * Passthrough provider serving sources straight from a directory on disk.
  * Used by builder unit tests (no semantic control plane involved).

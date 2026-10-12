@@ -5,13 +5,7 @@ import { buildMethods, type BuildUnitCatalogEntry } from "@vibestudio/service-sc
 import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { buildSourcemapForNode } from "../buildV2/builder.js";
-import { computeBuildKey } from "../buildV2/effectiveVersion.js";
-import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";
-import {
-  readExecutableModules,
-  readStoredArtifactBytes,
-  type StoredBuildResult,
-} from "../buildV2/buildStore.js";
+import type { StoredBuildResult } from "../buildV2/buildStore.js";
 
 export interface ResolvedPanelMetadata {
   source: string;
@@ -115,7 +109,7 @@ export function createBuildService(deps: {
         if (!build) throw new Error(`Unknown immutable build: ${key}`);
         const artifact = build.artifacts.find((candidate) => candidate.path === artifactPath);
         if (!artifact) throw new Error(`Build ${key} has no artifact ${artifactPath}`);
-        const bytes = await readStoredArtifactBytes(build, artifact);
+        const bytes = await deps.buildSystem.readBuildArtifactBytes(build, artifact);
         return new Response(new Uint8Array(bytes), {
           headers: {
             "Content-Type": artifact.contentType,
@@ -137,10 +131,12 @@ export function createBuildService(deps: {
         if (!build) return null;
         const metadata =
           options?.includeExecutableModules === true
-            ? { ...build.metadata, executableModules: await readExecutableModules(build.dir) }
+            ? {
+                ...build.metadata,
+                executableModules: (await bs.readBuildExecutableModules(build)) ?? undefined,
+              }
             : (({ executableModules: _executableModules, ...compact }) => compact)(build.metadata);
-        const diagnostics =
-          diagnosticsForBuildKey(key) ?? diagnosticsForUnit(build.metadata.name) ?? undefined;
+        const diagnostics = bs.getUnitDiagnostics(build.metadata.name) ?? undefined;
         return diagnostics && diagnostics.length > 0 ? { ...metadata, diagnostics } : metadata;
       },
       getBuildReport: (_ctx, [unit, ref, options]) =>
@@ -174,7 +170,8 @@ export function createBuildService(deps: {
                   return { path: artifact.path, role: artifact.role, bytes };
                 })
                 .sort((left, right) => right.bytes - left.bytes);
-              const executableModules = (await readExecutableModules(build.dir)) ?? [];
+              const executableModules =
+                (await deps.buildSystem.readBuildExecutableModules(build)) ?? [];
               return [
                 {
                   target: target.target,
@@ -266,10 +263,7 @@ export function createBuildService(deps: {
         }
         const effectiveVersion = bs.getEffectiveVersion(node.name);
         const buildKeys = effectiveVersion
-          ? {
-              sourcemap: computeBuildKey(node.name, effectiveVersion, true),
-              production: computeBuildKey(node.name, effectiveVersion, false),
-            }
+          ? (bs.getBuildKeyVariants(node.name) ?? { sourcemap: null, production: null })
           : { sourcemap: null, production: null };
         if (effectiveVersion) {
           buildKeys[buildSourcemapForNode(node) ? "sourcemap" : "production"] = bs.getBuildKey(

@@ -236,6 +236,10 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
     egressSecret: "mock-egress-secret",
     getWorkerdGatewayToken: () => "mock-workerd-gateway-token",
     ...overrides,
+    readBuildArtifactContent:
+      overrides.readBuildArtifactContent ??
+      (async (stored, artifact) =>
+        fs.promises.readFile(path.join(stored.dir, artifact.path), "utf8")),
   };
 }
 

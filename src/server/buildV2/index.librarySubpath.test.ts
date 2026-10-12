@@ -6,7 +6,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import vm, { Script } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@vibestudio/env-paths";
 import {
   createPrivateGuestGlobal,
   getRealmCompiler,
@@ -17,7 +16,7 @@ import { initBuildSystemV2, type BuildSystemV2 } from "./index.js";
 import type { BuildSourceProvider } from "./buildSource.js";
 import type { WorkspaceStateSource } from "./stateTrigger.js";
 import { discoverPackageGraph } from "./packageGraph.js";
-import * as buildStore from "./buildStore.js";
+import { createBuildProcessOwner } from "./builder.js";
 import { exactUserlandRoot } from "../../../tests/exactUserlandRoot";
 
 const APP_NODE_MODULES = [path.resolve(__dirname, "../../../node_modules")];
@@ -26,9 +25,25 @@ const TEST_STATE = `state:${"a".repeat(64)}`;
 const CONTEXT_STATE = `state:${"b".repeat(64)}`;
 const RESOLVE_CONTEXT_STATE = `state:${"c".repeat(64)}`;
 
+const ownedProcessOwners = new Set<ReturnType<typeof createBuildProcessOwner>>();
+
 function buildRoots(workspaceRoot: string) {
+  const appRoot = path.resolve(__dirname, "../../..");
+  const processOwner = createBuildProcessOwner({ appRoot, appNodeModules: APP_NODE_MODULES });
+  ownedProcessOwners.add(processOwner);
+  const sharedDerivedRoot = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] ?? null;
   return {
-    appRoot: path.resolve(__dirname, "../../.."),
+    processOwner,
+    stateRoot: path.join(path.dirname(workspaceRoot), "state"),
+    storeRoots: {
+      sharedArtifactPoolRoot: sharedDerivedRoot
+        ? path.join(sharedDerivedRoot, "build-artifacts")
+        : null,
+      sharedBuildResultCacheRoot:
+        process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] ??
+        (sharedDerivedRoot ? path.join(sharedDerivedRoot, "build-results") : null),
+    },
+    releaseBuildRoot: null,
     runNativeJob: runIsolatedBuildJob,
     dependencyWorkspaceRoot: workspaceRoot,
   };
@@ -122,12 +137,21 @@ describe("BuildSystemV2 library package subpaths", () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-lib-subpath-"));
     workspaceRoot = path.join(root, "workspace");
-    setUserDataPath(path.join(root, "state"));
     buildSystem = null;
   });
 
   afterEach(async () => {
     await buildSystem?.shutdown();
+    const outcomes = await Promise.allSettled(
+      [...ownedProcessOwners].map((owner) => owner.shutdown())
+    );
+    ownedProcessOwners.clear();
+    const failures = outcomes.flatMap((outcome) =>
+      outcome.status === "rejected" ? [outcome.reason] : []
+    );
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "BuildSystem library test cleanup failed");
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -172,7 +196,6 @@ describe("BuildSystemV2 library package subpaths", () => {
         TEST_STATE,
         { "ctx:dependency-agent": CONTEXT_STATE }
       ),
-      APP_NODE_MODULES,
       {
         ...buildRoots(mainRoot),
         admitNativeDependencies: async ({
@@ -266,7 +289,6 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      APP_NODE_MODULES,
       buildRoots(workspaceRoot)
     );
 
@@ -306,7 +328,6 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      APP_NODE_MODULES,
       buildRoots(workspaceRoot)
     );
     const result = await buildSystem.getBuild("@workspace/cjs-peer", undefined, {
@@ -347,7 +368,6 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      APP_NODE_MODULES,
       buildRoots(workspaceRoot)
     );
 
@@ -384,17 +404,16 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      APP_NODE_MODULES,
       buildRoots(workspaceRoot)
     );
     const report = await buildSystem.getBuildReport("@workspace/styles", TEST_STATE);
     expect(report).toMatchObject({ status: "ok", diagnostics: [] });
     expect(report.builds).toHaveLength(4);
     for (const target of report.builds) {
-      const built = (await buildStore.get(target.buildKey!))!;
+      const built = (await buildSystem.getBuildByKey(target.buildKey!))!;
       const css = built.artifacts.find((entry) => entry.path === "bundle.css")!;
       expect(css).toMatchObject({ contentType: "text/css; charset=utf-8", encoding: "utf8" });
-      const cssContent = await buildStore.readStoredArtifactContent(built, css);
+      const cssContent = await buildSystem.readBuildArtifactContent(built, css);
       const fontUrl = cssContent.match(/url\((data:[^)]+)\)/u)?.[1];
       expect(fontUrl).toMatch(/^data:font\/woff2[,;]/u);
       expect(new Uint8Array(await (await fetch(fontUrl!)).arrayBuffer())).toEqual(
@@ -439,7 +458,6 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      APP_NODE_MODULES,
       buildRoots(workspaceRoot)
     );
     const report = await buildSystem.getBuildReport("@workspace/broken-style", TEST_STATE);
@@ -463,7 +481,6 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      APP_NODE_MODULES,
       buildRoots(workspaceRoot)
     );
     await expect(
@@ -509,7 +526,6 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      APP_NODE_MODULES,
       buildRoots(workspaceRoot)
     );
 
@@ -537,7 +553,6 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       actualWorkspaceRoot,
       fakeWorkspaceSource(() => actualWorkspaceRoot),
-      APP_NODE_MODULES,
       buildRoots(actualWorkspaceRoot)
     );
 
@@ -600,7 +615,6 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       actualWorkspaceRoot,
       fakeWorkspaceSource(() => actualWorkspaceRoot),
-      APP_NODE_MODULES,
       buildRoots(actualWorkspaceRoot)
     );
 
@@ -755,7 +769,6 @@ describe("BuildSystemV2 library package subpaths", () => {
         "state:main",
         { "ctx:agent-1": CONTEXT_STATE }
       ),
-      APP_NODE_MODULES,
       buildRoots(mainRoot)
     );
 
@@ -811,7 +824,6 @@ describe("BuildSystemV2 library package subpaths", () => {
         "state:main-resolve",
         { "ctx:agent-resolve": RESOLVE_CONTEXT_STATE }
       ),
-      APP_NODE_MODULES,
       buildRoots(mainRoot)
     );
 
@@ -880,7 +892,6 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      APP_NODE_MODULES,
       buildRoots(workspaceRoot)
     );
 
@@ -980,7 +991,6 @@ describe("BuildSystemV2 library package subpaths", () => {
       buildSystem = await initBuildSystemV2(
         workspaceRoot,
         fakeWorkspaceSource(() => workspaceRoot),
-        APP_NODE_MODULES,
         buildRoots(workspaceRoot)
       );
 
@@ -1057,7 +1067,6 @@ describe("BuildSystemV2 library package subpaths", () => {
       buildSystem = await initBuildSystemV2(
         workspaceRoot,
         fakeWorkspaceSource(() => workspaceRoot),
-        APP_NODE_MODULES,
         buildRoots(workspaceRoot)
       );
 

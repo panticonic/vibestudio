@@ -2,14 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setUserDataPath } from "@vibestudio/env-paths";
-
 import { discoverPackageGraph } from "./packageGraph.js";
-import { computeEffectiveVersions, setBuildRootConfig } from "./effectiveVersion.js";
-import { setBuildSourceProvider, type BuildSourceProvider } from "./buildSource.js";
-import { closeBuilder, initBuilder } from "./builder.js";
+import { computeEffectiveVersions } from "./effectiveVersion.js";
+import type { BuildSourceProvider } from "./buildSource.js";
 import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import { StateTransitionTrigger, type WorkspaceStateSource } from "./stateTrigger.js";
+import { BuildDiagnosticsStore } from "./diagnosticsStore.js";
+import { createBuilderTestSession } from "./builderTestSession.js";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 
 /**
@@ -21,12 +20,11 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
   let root: string;
   let workspaceRoot: string;
   let trigger: StateTransitionTrigger | null = null;
+  let builderFixture: Awaited<ReturnType<typeof createBuilderTestSession>> | null = null;
 
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-grouppush-"));
     workspaceRoot = path.join(root, "workspace");
-    setUserDataPath(path.join(root, "state"));
-    await setBuildRootConfig({ appRoot: process.cwd(), workspaceRoot });
     for (const name of ["a", "b"]) {
       const dir = path.join(workspaceRoot, "packages", name);
       fs.mkdirSync(dir, { recursive: true });
@@ -39,11 +37,10 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
   });
 
   afterEach(async () => {
-    trigger?.stop();
+    await trigger?.drain();
     trigger = null;
-    await closeBuilder();
-    setBuildSourceProvider(null);
-    await setBuildRootConfig(null);
+    await builderFixture?.close();
+    builderFixture = null;
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -67,15 +64,28 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const { evMap, contentHashes } = computeEffectiveVersions(graph, {});
     let publication!: (event: ProtectedPublicationEvent) => void | Promise<void>;
-    const source = {
+    const source: WorkspaceStateSource & BuildSourceProvider = {
       workspaceId: "workspace:test",
-      discoverGraph: vi.fn(),
-      unitHashes: vi.fn(),
+      ensureFresh: async () => ({ stateHash: "state:0" }),
+      discoverGraph: vi.fn(async () => graph),
+      unitHashes: vi.fn(async () => ({})),
+      resolveContextState: async () => "state:0",
+      readFile: async () => null,
+      executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+      materializeForBuild: async () => ({ sourceRoot: workspaceRoot }),
+      recordBuild: async () => {},
       onProtectedPublication: (cb: typeof publication) => {
         publication = cb;
         return () => {};
       },
-    } as unknown as WorkspaceStateSource;
+    };
+    builderFixture = await createBuilderTestSession({
+      appRoot: process.cwd(),
+      workspaceRoot,
+      stateRoot: path.join(root, "state"),
+      runNativeJob: runIsolatedBuildJob,
+      source,
+    });
     trigger = new StateTransitionTrigger({
       graph,
       evMap,
@@ -83,6 +93,8 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       stateHash: "state:0",
       workspaceRoot,
       source,
+      session: builderFixture.session,
+      diagnostics: new BuildDiagnosticsStore(),
     });
     const changed = vi.fn();
     trigger.on("change-detected", changed);
@@ -128,6 +140,14 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       stateHash: "state:0",
       workspaceRoot,
       source,
+      session: (builderFixture = await createBuilderTestSession({
+        appRoot: process.cwd(),
+        workspaceRoot,
+        stateRoot: path.join(root, "state"),
+        runNativeJob: runIsolatedBuildJob,
+        source,
+      })).session,
+      diagnostics: new BuildDiagnosticsStore(),
     });
 
     const changed: string[] = [];
@@ -150,15 +170,28 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
     const { evMap, contentHashes } = computeEffectiveVersions(graph, {});
     const publicationFailure = new Error("graph rediscovery failed");
     let publicationCb: ((event: ProtectedPublicationEvent) => void | Promise<void>) | null = null;
-    const source = {
+    const source: WorkspaceStateSource & BuildSourceProvider = {
       workspaceId: "workspace:test",
+      ensureFresh: async () => ({ stateHash: "state:0" }),
       discoverGraph: vi.fn().mockRejectedValueOnce(publicationFailure),
       unitHashes: vi.fn(),
+      resolveContextState: async () => "state:0",
+      readFile: async () => null,
+      executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+      materializeForBuild: async () => ({ sourceRoot: workspaceRoot }),
+      recordBuild: async () => {},
       onProtectedPublication: (cb: (event: ProtectedPublicationEvent) => void | Promise<void>) => {
         publicationCb = cb;
         return () => {};
       },
-    } as unknown as WorkspaceStateSource;
+    };
+    builderFixture = await createBuilderTestSession({
+      appRoot: process.cwd(),
+      workspaceRoot,
+      stateRoot: path.join(root, "state"),
+      runNativeJob: runIsolatedBuildJob,
+      source,
+    });
     trigger = new StateTransitionTrigger({
       graph,
       evMap,
@@ -166,6 +199,8 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       stateHash: "state:0",
       workspaceRoot,
       source,
+      session: builderFixture.session,
+      diagnostics: new BuildDiagnosticsStore(),
     });
     trigger.start();
     expect(publicationCb).not.toBeNull();
@@ -193,7 +228,6 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
   });
 
   it("settles graph state without waiting for speculative cache warming", async () => {
-    initBuilder(path.join(process.cwd(), "node_modules"), process.cwd(), runIsolatedBuildJob);
     const panelDir = path.join(workspaceRoot, "workers", "slow-worker");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
@@ -242,7 +276,13 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
         return { sourceRoot: workspaceRoot };
       },
     };
-    setBuildSourceProvider(source);
+    builderFixture = await createBuilderTestSession({
+      appRoot: process.cwd(),
+      workspaceRoot,
+      stateRoot: path.join(root, "state"),
+      runNativeJob: runIsolatedBuildJob,
+      source,
+    });
 
     trigger = new StateTransitionTrigger({
       graph,
@@ -251,6 +291,8 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       stateHash: "state:0",
       workspaceRoot,
       source,
+      session: builderFixture.session,
+      diagnostics: new BuildDiagnosticsStore(),
     });
     trigger.start();
     const warmingFinished = new Promise<void>((resolve) => {

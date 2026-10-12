@@ -16,6 +16,7 @@ import { workerExecutableHeaders } from "./workerExecutableDispatch.js";
  */
 import { createServer, type Server } from "node:http";
 import { mkdtempSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -193,6 +194,8 @@ async function createHarness(
       authority: { requests: [], provides: [] },
     }),
     getBuildByKey: async () => storedBuildFixture(currentBuild.value),
+    readBuildArtifactContent: async (build, artifact) =>
+      readFile(join(build.dir, artifact.path), "utf8"),
     getBuildByExecution: async (_key, executionDigest) =>
       currentBuild.value.metadata.execution?.executionDigest === executionDigest
         ? storedBuildFixture(currentBuild.value)

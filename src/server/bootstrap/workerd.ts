@@ -431,6 +431,8 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       const provider: WorkerdWorkspaceProvider = {
         bindRuntimeImage: (unitPath, ref) => buildSystem.bindRuntimeImage(unitPath, ref),
         getBuildByKey: (key) => buildSystem.getBuildByKey(key),
+        readBuildArtifactContent: (build, artifact) =>
+          buildSystem.readBuildArtifactContent(build, artifact),
         getBuildByExecution: (key, executionDigest) =>
           buildSystem.getBuildByExecution(key, executionDigest),
         getManifestRoutes: (source) =>

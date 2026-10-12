@@ -93,6 +93,31 @@ and runtime smoke checks as the final verification of the produced artifact.
 
 ## CI and release parallelism
 
+### Startup acceptance and preparation
+
+The startup target is a usable application within seconds on both a fresh install
+and an established workspace. Measure from launch through an interactive selected
+panel whose required services are ready. A visible loading shell does not satisfy
+that boundary. Record cold and warm results separately, with the exact app revision,
+template pins, prepared artifact identities, and native startup phase receipts.
+Until that boundary has been measured, do not claim that startup meets the target.
+
+Release producers prepare immutable template source closures and eligible runtime
+builds before packaging. The installed consumer waits for complete preparation;
+it must consume artifacts matching its content state, source, effective version,
+and build identity. Workspace-specific semantic history and protected publication
+remain runtime responsibilities. Moving a proof to a producer requires preserving
+its authority and binding the proof to the exact installed input.
+
+Source launch uses the same completed preparation boundary before starting its
+consumer. Publishing source-only records and loading them before builds finish
+leaves the consumer with an immutable empty build list, causing duplicate demand
+compilation alongside the producer. Preparation owns the full output and exposes
+one completion result; producer failure prevents consumer admission. Keep cold
+source artifact production distinct from a cold installed launch with completed
+prepared artifacts. Neither increasing a smoke deadline nor serving an unproven
+workspace establishes fast startup.
+
 The CI graph in `.github/workflows/ci.yml` expresses per-platform artifact
 dependencies, rather than broad verification barriers. Native producer jobs
 prepare executor payloads and source-attested Darwin observers once. Each Unix
@@ -299,6 +324,22 @@ retain their worker resources until their terminal result. Close auxiliary
 workers only after that join, and preserve operation and retirement failures
 together. A timeout, a larger heap allowance, or a smaller local lane override
 does not repair missing ownership or establish a safe host-wide budget.
+
+The process owns the compiler admission queue, compiler-worker residency, shared
+build flights, and store-maintenance coordination. Each builder session owns its
+immutable source provider, root fingerprint, native executor, state root, store,
+and diagnostics. Concurrent template roles use separate sessions under one process
+owner; they do not switch an ambient source or store between builds.
+
+Shared flights are keyed by the physical cache root and complete deterministic
+build identity. A follower hydrates and verifies the result through its own store
+and retains its own workspace authority. Cancellation withdraws that caller's
+borrow; the producer continues while another borrower needs it. The last borrower
+or process shutdown cancels the owned operation. Session retirement joins retained
+resources, and process retirement joins every admitted flight and worker close.
+Store publication and maintenance failures reach every waiting caller, including
+combined operation and cleanup failures, rather than disappearing in detached
+logging callbacks.
 
 Merkle scaffold publication follows the actual tree dependency graph. Independent
 sibling branches run concurrently under one eight-write admission budget for the

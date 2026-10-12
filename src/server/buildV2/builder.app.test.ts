@@ -4,23 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@vibestudio/env-paths";
-
-import { buildUnit, initBuilder } from "./builder.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildUnit, type BuilderSession } from "./builder.js";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
-import { setBuildRootConfig } from "./effectiveVersion.js";
-import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
-import { setBuildExecutionIdentityContext } from "./buildStore.js";
-beforeAll(() => {
-  initBuilder(
-    path.resolve(__dirname, "../../../node_modules"),
-    path.resolve(__dirname, "../../.."),
-    runIsolatedBuildJob
-  );
-  setBuildSourceProvider(workingTreeSourceProvider());
-});
-afterAll(() => setBuildSourceProvider(null));
+import { createBuilderTestSession } from "./builderTestSession.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 import { clearBuildProvidersForTests, registerBuildProvider } from "./buildProviderRegistry.js";
 import type { BuildProviderInput } from "@vibestudio/shared/buildProvider";
@@ -37,26 +24,25 @@ function git(cwd: string, args: string[]): void {
 describe("buildUnit app builds", () => {
   let root: string;
   let workspaceRoot: string;
+  let session: BuilderSession;
+  let closeSession: () => Promise<void>;
 
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-app-build-"));
     workspaceRoot = path.join(root, "workspace");
-    await setBuildRootConfig({
+    const context = await createBuilderTestSession({
       appRoot: path.resolve(__dirname, "../../.."),
       workspaceRoot,
+      stateRoot: path.join(root, "state"),
+      runNativeJob: runIsolatedBuildJob,
     });
-    setUserDataPath(path.join(root, "state"));
-    setBuildExecutionIdentityContext({
-      serviceAuthorityForSource: async () =>
-        "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
-      workspaceId: "workspace:test",
-      executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
-    });
+    session = context.session;
+    closeSession = context.close;
     clearBuildProvidersForTests();
   });
 
   afterEach(async () => {
-    await setBuildRootConfig(null);
+    await closeSession?.();
     clearBuildProvidersForTests();
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -113,6 +99,7 @@ describe("buildUnit app builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-apps/shell"),
       "a".repeat(64),
       graph,
@@ -220,6 +207,7 @@ describe("buildUnit app builds", () => {
 
       const graph = discoverPackageGraph(workspaceRoot);
       const result = await buildUnit(
+        session,
         graph.get("@workspace-apps/startup-shell"),
         "d".repeat(64),
         graph,
@@ -280,6 +268,7 @@ describe("buildUnit app builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-apps/asset-viewer"),
       "b".repeat(64),
       graph,
@@ -380,6 +369,7 @@ describe("buildUnit app builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-apps/remote-cli"),
       "b".repeat(64),
       graph,
@@ -410,7 +400,6 @@ describe("buildUnit app builds", () => {
       JSON.stringify({ name: "@platform/fake", version: "0.1.0", type: "module" })
     );
     fs.writeFileSync(path.join(platformPackage, "src", "index.ts"), "export const fake = true;\n");
-    initBuilder(testNodeModules, path.resolve(__dirname, "../../.."), runIsolatedBuildJob);
     const appDir = path.join(workspaceRoot, "apps", "mobile");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
@@ -447,11 +436,14 @@ describe("buildUnit app builds", () => {
     ]);
 
     let demandedTarget: string | undefined;
-    initBuilder(
-      testNodeModules,
-      path.resolve(__dirname, "../../.."),
-      runIsolatedBuildJob,
-      async (target) => {
+    await closeSession();
+    const providerContext = await createBuilderTestSession({
+      appRoot: path.resolve(__dirname, "../../.."),
+      workspaceRoot,
+      stateRoot: path.join(root, "state"),
+      appNodeModules: testNodeModules,
+      runNativeJob: runIsolatedBuildJob,
+      ensureBuildProvider: async (target) => {
         demandedTarget = target;
         registerBuildProvider({
           name: "@workspace-extensions/react-native-provider",
@@ -492,50 +484,47 @@ describe("buildUnit app builds", () => {
             return new Response(`bundle:${input.unitName}:${input.effectiveVersion}`);
           },
         });
-      }
-    );
+      },
+    });
+    session = providerContext.session;
+    closeSession = providerContext.close;
 
     const graph = discoverPackageGraph(workspaceRoot);
     let result: Awaited<ReturnType<typeof buildUnit>>;
-    try {
-      result = await buildUnit(
-        graph.get("@workspace-apps/mobile"),
-        "c".repeat(64),
-        graph,
-        workspaceRoot,
-        SOURCE_STATE_HASH
-      );
-      const repeats = await Promise.all(
-        Array.from({ length: 3 }, () =>
-          buildUnit(
-            graph.get("@workspace-apps/mobile"),
-            "c".repeat(64),
-            graph,
-            workspaceRoot,
-            SOURCE_STATE_HASH
-          )
+    result = await buildUnit(
+      session,
+      graph.get("@workspace-apps/mobile"),
+      "c".repeat(64),
+      graph,
+      workspaceRoot,
+      SOURCE_STATE_HASH
+    );
+    const repeats = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        buildUnit(
+          session,
+          graph.get("@workspace-apps/mobile"),
+          "c".repeat(64),
+          graph,
+          workspaceRoot,
+          SOURCE_STATE_HASH
         )
-      );
-      expect(repeats.map((build) => build.buildKey)).toEqual(Array(3).fill(result.buildKey));
-      expect(providerBuilds).toBe(1);
+      )
+    );
+    expect(repeats.map((build) => build.buildKey)).toEqual(Array(3).fill(result.buildKey));
+    expect(providerBuilds).toBe(1);
 
-      providerEv = "ev-provider-2";
-      const changedProvider = await buildUnit(
-        graph.get("@workspace-apps/mobile"),
-        "c".repeat(64),
-        graph,
-        workspaceRoot,
-        SOURCE_STATE_HASH
-      );
-      expect(changedProvider.buildKey).not.toBe(result.buildKey);
-      expect(providerBuilds).toBe(2);
-    } finally {
-      initBuilder(
-        path.resolve(__dirname, "../../../node_modules"),
-        path.resolve(__dirname, "../../.."),
-        runIsolatedBuildJob
-      );
-    }
+    providerEv = "ev-provider-2";
+    const changedProvider = await buildUnit(
+      session,
+      graph.get("@workspace-apps/mobile"),
+      "c".repeat(64),
+      graph,
+      workspaceRoot,
+      SOURCE_STATE_HASH
+    );
+    expect(changedProvider.buildKey).not.toBe(result.buildKey);
+    expect(providerBuilds).toBe(2);
 
     expect(demandedTarget).toBe("react-native");
 
@@ -654,6 +643,7 @@ describe("buildUnit app builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-panels/fs-panel"),
       "d".repeat(64),
       graph,
@@ -729,6 +719,7 @@ describe("buildUnit app builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-panels/lazy-expose"),
       "f".repeat(64),
       graph,
@@ -777,6 +768,7 @@ describe("buildUnit app builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     await expect(
       buildUnit(
+        session,
         graph.get("@workspace-apps/prebuilt"),
         "e".repeat(64),
         graph,

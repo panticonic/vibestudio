@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { canonicalJson } from "@vibestudio/content-addressing";
@@ -179,6 +180,8 @@ async function createWorkerdHarness(
       };
     },
     getBuildByKey: async (key: string) => builds.get(key) ?? null,
+    readBuildArtifactContent: async (build, artifact) =>
+      readFile(join(build.dir, artifact.path), "utf8"),
     getBuildByExecution: async (key: string, executionDigest: string) => {
       const build = builds.get(key) ?? null;
       return build?.metadata.execution?.executionDigest === executionDigest ? build : null;

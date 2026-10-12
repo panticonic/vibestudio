@@ -1,14 +1,11 @@
 import { createProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
-import { artifactFilePath } from "./buildV2/buildStore.js";
+import type { StoredBuildArtifact } from "./buildV2/buildStore.js";
 
 export interface TerminalAppBuild {
   dir: string;
   metadata: { ev: string };
-  artifacts?: Array<{
-    path: string;
-    role: string;
-  }>;
+  artifacts?: StoredBuildArtifact[];
 }
 
 export interface TerminalAppLaunch {
@@ -29,6 +26,10 @@ export interface TerminalAppLaunch {
 
 export interface TerminalAppRunnerDeps {
   connectionGrants: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
+  artifactFilePath(
+    build: Pick<TerminalAppBuild, "dir">,
+    artifact: NonNullable<TerminalAppBuild["artifacts"]>[number]
+  ): string;
   onStatus(appId: string, status: "running" | "stopped" | "error", error?: string | null): void;
   onLog(
     appId: string,
@@ -86,7 +87,7 @@ export class TerminalAppRunner {
       (candidate) => candidate.role === "primary"
     );
     if (!artifact) throw new Error(`Terminal app ${launch.appId} has no primary artifact`);
-    const entryPath = artifactFilePath(launch.build, artifact);
+    const entryPath = this.deps.artifactFilePath(launch.build, artifact);
     const rpcGrant = this.deps.connectionGrants.grant(launch.appId, "server", {
       ttlMs: TERMINAL_APP_CONNECTION_GRANT_TTL_MS,
       subject: { userId: "system", handle: "system" },

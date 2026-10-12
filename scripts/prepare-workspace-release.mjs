@@ -44,9 +44,10 @@ function joinedFailure(failures, message) {
   return new AggregateError(failures, message, { cause: failures[0] });
 }
 
-/** One producer owns source publication and exhaustive compilation. Launchers
- * may proceed at sourcesReady; packagers require completed. Every caller must
- * stop and join the producer before retiring its source or output directories.
+/** One producer owns exhaustive compilation and final output publication. Consumers
+ * start only after completed so they observe one immutable, complete artifact
+ * set. Every caller must stop and join the producer before retiring its source
+ * or output directories.
  * @param {{ appRoot: string, output: string, scratch: string, env: NodeJS.ProcessEnv, executable: string, entry: string }} input
  */
 export function prepareWorkspaceRelease(input) {
@@ -63,13 +64,8 @@ export function prepareWorkspaceRelease(input) {
     ],
     { cwd: path.dirname(input.entry), env: input.env, stdio: ["ignore", "pipe", "pipe", "ipc"] }
   );
-  let resolveReady, rejectReady;
-  const sourcesReady = new Promise((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
-  let ready = false,
-    failure,
+  let failure,
+    completedReceipt = false,
     cancellation,
     stopping,
     tail = "";
@@ -83,10 +79,20 @@ export function prepareWorkspaceRelease(input) {
     });
   }
   child.on("message", (message) => {
-    if (message?.kind === "sources-ready" && !ready && !cancellation) {
-      ready = true;
-      input.env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = input.output;
-      resolveReady();
+    if (message?.kind === "completed") {
+      if (completedReceipt || failure) {
+        const invalidReceipt = new Error(
+          "Workspace release producer sent an invalid completion receipt"
+        );
+        failure = failure
+          ? joinedFailure(
+              [failure, invalidReceipt],
+              "Workspace release producer reported multiple failures"
+            )
+          : invalidReceipt;
+      } else {
+        completedReceipt = true;
+      }
     } else if (message?.kind === "failed") {
       try {
         const received = deserializeRpcFailure(message.failure);
@@ -141,22 +147,17 @@ export function prepareWorkspaceRelease(input) {
       }
       if (failures.length > 0)
         throw joinedFailure(failures, "Workspace release preparation failed");
-      if (!ready) throw new Error("Workspace release producer exited without publishing sources");
-    })
-    .catch((error) => {
-      rejectReady(error);
-      throw error;
+      if (!completedReceipt)
+        throw new Error("Workspace release producer exited without a completed release receipt");
+      input.env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = input.output;
     })
     .finally(() => {
       process.off("SIGINT", interrupt);
       process.off("SIGTERM", interrupt);
     });
-  // Readiness and completion have different consumers. Keep failures observable
-  // without an unhandled rejection while a caller is awaiting the other phase.
-  void sourcesReady.catch(() => {});
+  // Keep producer failures observable even while a caller is joining cleanup.
   void completed.catch(() => {});
   return {
-    sourcesReady,
     completed,
     stop() {
       if (stopping) return stopping;

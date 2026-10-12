@@ -92,10 +92,10 @@ describe("pair-server runner", () => {
     const prepareRelease = vi.fn(({ output, env }: { output: string; env: NodeJS.ProcessEnv }) => {
       preparationRoot = output;
       mkdirSync(output, { recursive: true });
-      env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = output;
       return {
-        sourcesReady: Promise.resolve(),
-        completed: Promise.resolve(),
+        completed: Promise.resolve().then(() => {
+          env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = output;
+        }),
         stop: vi.fn(async () => {}),
       };
     });
@@ -109,10 +109,7 @@ describe("pair-server runner", () => {
         expect(env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"]).toBe(preparationRoot);
         expect(fs.existsSync(preparationRoot)).toBe(true);
         expect(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]).toBe("/isolated/host-generation");
-        expect(readCurrentHostBuildGeneration).toHaveBeenCalledWith(
-          expect.any(String),
-          "source"
-        );
+        expect(readCurrentHostBuildGeneration).toHaveBeenCalledWith(expect.any(String), "source");
         // Resolve the source generation only after rebuilding it. Asking first
         // reads a file that does not exist yet, and the server exits before readiness.
         expect(vi.mocked(prepareSourceServer).mock.invocationCallOrder[0]).toBeLessThan(

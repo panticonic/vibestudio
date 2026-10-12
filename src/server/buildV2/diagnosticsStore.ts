@@ -10,36 +10,29 @@
 
 import type { BuildDiagnostic } from "./diagnostics.js";
 
-const byBuildKey = new Map<string, BuildDiagnostic[]>();
-const byUnitName = new Map<string, BuildDiagnostic[]>();
+/** Role-owned diagnostics; unit names are only unique inside one workspace. */
+export class BuildDiagnosticsStore {
+  private readonly byBuildKey = new Map<string, BuildDiagnostic[]>();
+  private readonly byUnitName = new Map<string, BuildDiagnostic[]>();
 
-export function recordDiagnostics(
-  unitName: string,
-  buildKey: string | null,
-  diagnostics: BuildDiagnostic[]
-): void {
-  byUnitName.set(unitName, diagnostics);
-  if (buildKey) byBuildKey.set(buildKey, diagnostics);
-  // Bound memory.
-  if (byUnitName.size > 500) {
-    const first = byUnitName.keys().next().value;
-    if (first !== undefined) byUnitName.delete(first);
+  record(unitName: string, buildKey: string | null, diagnostics: BuildDiagnostic[]): void {
+    this.byUnitName.set(unitName, diagnostics);
+    if (buildKey) this.byBuildKey.set(buildKey, diagnostics);
+    if (this.byUnitName.size > 500) {
+      const first = this.byUnitName.keys().next().value;
+      if (first !== undefined) this.byUnitName.delete(first);
+    }
+    if (this.byBuildKey.size > 1000) {
+      const first = this.byBuildKey.keys().next().value;
+      if (first !== undefined) this.byBuildKey.delete(first);
+    }
   }
-  if (byBuildKey.size > 1000) {
-    const first = byBuildKey.keys().next().value;
-    if (first !== undefined) byBuildKey.delete(first);
+
+  forBuildKey(buildKey: string): BuildDiagnostic[] | null {
+    return this.byBuildKey.get(buildKey) ?? null;
   }
-}
 
-export function diagnosticsForBuildKey(buildKey: string): BuildDiagnostic[] | null {
-  return byBuildKey.get(buildKey) ?? null;
-}
-
-export function diagnosticsForUnit(unitName: string): BuildDiagnostic[] | null {
-  return byUnitName.get(unitName) ?? null;
-}
-
-export function clearDiagnostics(): void {
-  byBuildKey.clear();
-  byUnitName.clear();
+  forUnit(unitName: string): BuildDiagnostic[] | null {
+    return this.byUnitName.get(unitName) ?? null;
+  }
 }

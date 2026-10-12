@@ -49,10 +49,6 @@ void (async () => {
       output: option("--output"),
       scratch: option("--scratch"),
       signal: cancellation.signal,
-      onSourcesPrepared: async () => {
-        const error = await sendMessage({ kind: "sources-ready" });
-        if (error) throw error;
-      },
     });
   } catch (caught) {
     let failure = caught;
@@ -73,13 +69,11 @@ void (async () => {
     process.off("disconnect", interrupt);
   }
 
-  let disconnected = false;
   let disconnectAttempted = false;
   if (failures.length === 0 && process.connected) {
-    disconnectAttempted = true;
     try {
-      process.disconnect();
-      disconnected = true;
+      const sendError = await sendMessage({ kind: "completed" });
+      if (sendError) failures.push(sendError);
     } catch (error) {
       failures.push(error);
     }

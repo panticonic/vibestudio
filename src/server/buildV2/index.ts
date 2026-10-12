@@ -39,37 +39,35 @@ import {
   persistEvState,
   diffEvMaps,
   computeBuildKey,
-  setBuildRootConfig,
-  getRootDependencyFingerprintInfo,
+  prepareBuildRootConfig,
   type RootDependencyFingerprintInfo,
   type ContentHashMap,
   type ChangeSet,
   type EffectiveVersionMap,
 } from "./effectiveVersion.js";
-import * as buildStore from "./buildStore.js";
 import {
-  primaryTextArtifactContent,
+  createBuildStore,
+  type BuildStore,
+  type BuildStoreRoots,
+  type BuildGcMode,
+  contentTypeForPath,
   type BuildResult,
   type StoredBuildResult,
 } from "./buildStore.js";
 import {
+  BuildProcessOwner,
+  createBuilderSession,
   buildUnitStored,
   resolveBuildUnitKey,
   buildNpmLibrary,
   buildPlatformLibrary,
-  closeBuilder,
   collectWorkspaceRpcMethods,
-  initBuilder,
   withBuilderWorkers,
+  type BuilderSession,
   type BuildUnitOptions,
 } from "./builder.js";
 import { joinedFailure } from "./builderLifetime.js";
-import {
-  setBuildSourceProvider,
-  getBuildSourceProvider,
-  collectTransitiveInternalDeps,
-  type BuildSourceProvider,
-} from "./buildSource.js";
+import { collectTransitiveInternalDeps, type BuildSourceProvider } from "./buildSource.js";
 import { validateBuildRef } from "./refs.js";
 import { TypecheckWorkerClient } from "./typecheckWorkerClient.js";
 import {
@@ -80,7 +78,7 @@ import {
   hasErrors,
   type BuildDiagnostic,
 } from "./diagnostics.js";
-import { recordDiagnostics, diagnosticsForUnit } from "./diagnosticsStore.js";
+import { BuildDiagnosticsStore } from "./diagnosticsStore.js";
 import type {
   LibraryBuildTarget,
   WorkspaceTestArtifactV1,
@@ -223,7 +221,7 @@ export type { WorkspaceStateSource, BuildRecord, StateChangedUnit } from "./stat
 export type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 export type { BuildSourceProvider } from "./buildSource.js";
 export type { BuildDiagnostic } from "./diagnostics.js";
-export { setBuildSourceProvider, directorySourceProvider } from "./buildSource.js";
+export { directorySourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 export {
   clearBuildProvidersForTests,
   listBuildProviders,
@@ -262,6 +260,14 @@ export interface BuildUnitCatalogEntry extends BuildUnitResolution {
 }
 
 export interface BuildSystemRootOptions {
+  /** One process owner shared by every role-specific build session. */
+  processOwner: BuildProcessOwner;
+  /** Exact mutable state root owned by this workspace. */
+  stateRoot: string;
+  /** Process-admitted shared cache roots resolved before any role starts. */
+  storeRoots: BuildStoreRoots;
+  /** Installed immutable runtime artifacts selected by this app generation. */
+  releaseBuildRoot: string | null;
   /** Owning operation cancellation, propagated to dependency acquisition. */
   signal?: AbortSignal;
   runNativeJob: RunNativeWorkspaceJob;
@@ -276,7 +282,6 @@ export interface BuildSystemRootOptions {
    * Host app root containing package.json/pnpm-lock.yaml/pnpm-workspace.yaml.
    * This is an explicit host construction input, never inferred from process state.
    */
-  appRoot: string;
   /**
    * Exact semantic dependency root containing the userland package/lock/workspace
    * files that influence build cache identity. Production requires the active
@@ -303,7 +308,7 @@ export interface BuildSystemRootOptions {
 
 export interface BuildRetentionReport {
   epoch: number;
-  mode: buildStore.BuildGcMode;
+  mode: BuildGcMode;
   complete: boolean;
   roots: number;
   /** Exact union of graph and authoritative host-owned build-key roots. */
@@ -469,6 +474,35 @@ export interface BuildSystemV2 {
 
   /** Get an immutable build-store artifact by build key. */
   getBuildByKey(key: string): Promise<StoredBuildResult | null>;
+  /** Rebind a reusable artifact to this workspace session's exact source state. */
+  rebindBuildSourceState(
+    build: StoredBuildResult,
+    sourceStateHash: string
+  ): Promise<StoredBuildResult>;
+  /** Read the primary UTF-8 artifact through this workspace session's store. */
+  primaryTextArtifactContent(
+    build: Pick<StoredBuildResult, "artifacts" | "metadata" | "dir">,
+    opts?: { platform?: string }
+  ): Promise<string>;
+  putStoredBuild: BuildStore["putStored"];
+  /** Read one artifact through this workspace session's verified store. */
+  readBuildArtifactBytes(
+    build: Pick<StoredBuildResult, "dir">,
+    artifact: StoredBuildResult["artifacts"][number]
+  ): Promise<Buffer>;
+  readBuildArtifactContent(
+    build: Pick<StoredBuildResult, "dir">,
+    artifact: StoredBuildResult["artifacts"][number]
+  ): Promise<string>;
+  /** Load executable module metadata through this workspace session's store. */
+  readBuildExecutableModules(
+    build: StoredBuildResult
+  ): ReturnType<BuildStore["readExecutableModules"]>;
+  getBuildArtifactPath(
+    build: Pick<StoredBuildResult, "dir">,
+    artifact: StoredBuildResult["artifacts"][number]
+  ): string;
+  getBuildDescriptorBytes(build: Pick<StoredBuildResult, "dir" | "metadata" | "artifacts">): number;
   findSharedStyleBuild(digest: string): Promise<StoredBuildResult | null>;
 
   /** Get one exact semantic execution retained for reusable artifact bytes. */
@@ -476,6 +510,8 @@ export interface BuildSystemV2 {
 
   /** Side-effect-free verified lookup of one workspace-owned build record. */
   peekBuildByKey(key: string): Promise<StoredBuildResult | null>;
+  /** Synchronous metadata-only read for atomic publication-journal transactions. */
+  peekVerifiedBuildByKey(key: string): StoredBuildResult | null;
 
   /**
    * Binder API for runtime entities. Resolves a build content selector to an
@@ -491,6 +527,8 @@ export interface BuildSystemV2 {
   getEffectiveVersion(unitNameOrPath: string): string | null;
   /** Current runtime artifact selected by publication, or its compilation recipe. */
   getBuildKey(unitNameOrPath: string): string | null;
+  /** The exact base recipes used by provenance inspection for one unit. */
+  getBuildKeyVariants(unitNameOrPath: string): { sourcemap: string; production: string } | null;
 
   /** Get external npm runtime/build dependencies for a unit. */
   getExternalDeps(unitName: string): Record<string, string>;
@@ -620,11 +658,17 @@ export interface BuildSystemV2 {
 export async function initBuildSystemV2(
   workspaceRoot: string,
   source: WorkspaceStateSource & BuildSourceProvider,
-  appNodeModules: string | string[],
   rootOptions: BuildSystemRootOptions
 ): Promise<BuildSystemV2> {
   logVerbose("BuildV2", "Initializing...");
-  const appNodeModuleRoots = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
+  const processOwner = rootOptions.processOwner;
+  const appRoot = processOwner.appRoot;
+  const appNodeModuleRoots = processOwner.appNodeModules;
+  const rootFingerprint = await prepareBuildRootConfig({
+    appRoot,
+    workspaceRoot: rootOptions.dependencyWorkspaceRoot,
+    fingerprint: rootOptions.dependencyFingerprint,
+  });
   const authorityEnvironmentFlights = new Map<
     string,
     Promise<ExactWorkspaceAuthorityEnvironment>
@@ -640,13 +684,15 @@ export async function initBuildSystemV2(
     rpcSchemaVersion: workspaceRpcSchemaVersion(),
   } as const;
   const authorityFactEpoch = { analyzerVersion: authorityEpoch.analyzerVersion } as const;
+  let store!: BuildStore;
+  let builderSession!: BuilderSession;
   const compiledRpcCatalogAt = async (
     provider: GraphNode,
     effectiveVersion: string,
     stateHash: string
   ) => {
-    const key = resolveBuildUnitKey(provider, effectiveVersion, stateHash);
-    const metadata = await buildStore.compilationMetadata(key);
+    const key = resolveBuildUnitKey(rootFingerprint, source, provider, effectiveVersion, stateHash);
+    const metadata = await store.compilationMetadata(key);
     if (
       metadata &&
       metadata.ev === effectiveVersion &&
@@ -707,8 +753,8 @@ export async function initBuildSystemV2(
             className: binding.target.className,
             graph: graphAtView,
             workspaceRoot,
-            source: getBuildSourceProvider(),
-            collectRpcCatalog: collectWorkspaceRpcMethods,
+            source,
+            collectRpcCatalog: (...args) => collectWorkspaceRpcMethods(processOwner, ...args),
             compiledRpcCatalog: () => compiledRpcCatalogAt(provider, effectiveVersion, stateHash),
           });
         },
@@ -945,7 +991,7 @@ export async function initBuildSystemV2(
             const projectedUnits = [...projectionUnits.values()].sort((a, b) =>
               a.name.localeCompare(b.name)
             );
-            const materialized = await getBuildSourceProvider().materializeForBuild(
+            const materialized = await source.materializeForBuild(
               projectedUnits,
               stateHash,
               workspaceRoot
@@ -1301,56 +1347,11 @@ export async function initBuildSystemV2(
   }
   if (rootOptions.executionRootProviders) executionRootProviders.assertCompleteCensus();
 
-  // Build cache identity depends on dependency manifests, not on where the
-  // active managed workspace copy happens to live. Server startup passes these
-  // roots explicitly.
-  await setBuildRootConfig({
-    appRoot: rootOptions.appRoot,
-    workspaceRoot: rootOptions.dependencyWorkspaceRoot,
-    fingerprint: rootOptions.dependencyFingerprint,
-  });
-
-  // Declare where @vibestudio/* platform packages live (workspace:* deps).
-  initBuilder(
-    appNodeModuleRoots,
-    rootOptions.appRoot,
-    rootOptions.runNativeJob,
-    rootOptions.ensureBuildProvider,
-    rootOptions.signal
-  );
-  buildStore.configureReleaseBuilds(rootOptions.appRoot);
   const typecheckWorker = new TypecheckWorkerClient();
-  const unitValidationStore = new UnitValidationStore();
-  setBuildSourceProvider(source);
-  buildStore.setBuildExecutionIdentityContext({
-    workspaceId: source.workspaceId,
-    executionStateForContent: (stateHash) => source.executionStateForContent?.(stateHash) ?? null,
-    serviceAuthorityForSource: async (metadata) => {
-      if (!metadata.sourcePath || !metadata.sourceStateHash || !metadata.authority)
-        throw new Error("Cannot seal incomplete workspace authority");
-      const view = await viewAt(metadata.sourceStateHash);
-      const node = resolveUnit(view.graph, metadata.sourcePath, workspaceRoot);
-      if (
-        !node ||
-        view.evMap[node.name] !== metadata.ev ||
-        canonicalJson(
-          parseUnitAuthorityManifest(
-            node.manifest.authority ?? { requests: [], provides: [] },
-            "source authority"
-          )
-        ) !== canonicalJson(metadata.authority)
-      ) {
-        throw new Error(`Build authority does not match exact source for ${metadata.sourcePath}`);
-      }
-      const environment = rootOptions.workspaceAuthorityEnvironmentAt
-        ? await authorityEnvironmentAt(metadata.sourceStateHash, view.graph, view.evMap)
-        : null;
-      return serviceAuthorityDigest(
-        await serviceBindingsForNode(node, environment),
-        await serviceReviewsForNode(node, environment)
-      );
-    },
-  });
+  const buildDiagnosticsStore = new BuildDiagnosticsStore();
+  const unitValidationStore = new UnitValidationStore(
+    path.join(rootOptions.stateRoot, "unit-validation")
+  );
 
   // Step 1: Snapshot the workspace + discover package graph from that state
   // (scan-on-demand —
@@ -1369,7 +1370,7 @@ export async function initBuildSystemV2(
   // Step 2: Compute effective versions. Cold-start fast path: if the
   // persisted EV state was computed at this exact workspace state, reuse it
   // wholesale (zero DO hashing calls).
-  const persisted = await loadPersistedEvState();
+  const persisted = await loadPersistedEvState(rootOptions.stateRoot);
   let evMap: EffectiveVersionMap;
   let contentHashes: ContentHashMap;
   if (persisted && persisted.stateHash === stateHash) {
@@ -1394,22 +1395,13 @@ export async function initBuildSystemV2(
       `EV diff: ${changeset.changed.length} changed, ` +
         `${changeset.added.length} added, ${changeset.removed.length} removed (${Date.now() - tEv}ms)`
     );
-    await persistEvState({ stateHash, evMap, contentHashes });
+    await persistEvState(rootOptions.stateRoot, { stateHash, evMap, contentHashes });
   }
 
   // Step 3: Start the state trigger (subscribes to vcs state advances).
   // The owning steady-state host may start the bounded panel/worker prewarm
   // lane after initialization, once workspace runtime reconciliation completes.
-  const trigger = new StateTransitionTrigger({
-    graph,
-    evMap,
-    contentHashes,
-    stateHash,
-    workspaceRoot,
-    source,
-  });
-  trigger.start();
-  logVerbose("BuildV2", "State trigger started");
+  let trigger!: StateTransitionTrigger;
   const authorityPublicationUnsubscribe = source.onProtectedPublication((event) => {
     if (authorityIndexManager.promotePublished(event.workspaceStateHash, authorityEpoch)) {
       logVerbose("BuildV2", `Promoted authority baseline for ${event.workspaceStateHash}`);
@@ -1440,28 +1432,6 @@ export async function initBuildSystemV2(
     }
   };
 
-  trigger.on("build-started", ({ name, trigger: t }) => {
-    recordBuildEvent({ type: "build-started", name, trigger: t });
-  });
-  trigger.on("build-complete", ({ name, buildKey, trigger: t }) => {
-    recordBuildEvent({ type: "build-complete", name, buildKey, trigger: t });
-  });
-  trigger.on("build-error", ({ name, error, diagnostics, trigger: t }) => {
-    recordBuildEvent({ type: "build-error", name, error, diagnostics, trigger: t });
-  });
-  trigger.on("change-detected", ({ units, trigger: t }) => {
-    for (const unit of units) {
-      const event: BuildSystemUnitChangeEvent = { ...unit, trigger: t };
-      for (const listener of unitChangeListeners) {
-        try {
-          listener(event);
-        } catch (err) {
-          console.error("[BuildV2] unit-change listener failed:", err);
-        }
-      }
-    }
-  });
-
   // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
@@ -1484,7 +1454,7 @@ export async function initBuildSystemV2(
       ? executionArtifactRefFromBuild(source.workspaceId, build)
       : undefined;
     return {
-      bundle: await primaryTextArtifactContent(build),
+      bundle: await store.primaryTextArtifactContent(build),
       format,
       requiredModules,
       ...(execution ? { execution } : {}),
@@ -1540,6 +1510,92 @@ export async function initBuildSystemV2(
     return flight;
   };
 
+  store = createBuildStore(
+    {
+      stateRoot: rootOptions.stateRoot,
+      sharedArtifactPoolRoot: rootOptions.storeRoots.sharedArtifactPoolRoot,
+      sharedBuildResultCacheRoot: rootOptions.storeRoots.sharedBuildResultCacheRoot,
+      releaseBuildRoot: rootOptions.releaseBuildRoot,
+      executionIdentity: {
+        workspaceId: source.workspaceId,
+        executionStateForContent: (stateHash) =>
+          source.executionStateForContent?.(stateHash) ?? null,
+        serviceAuthorityForSource: async (metadata) => {
+          if (!metadata.sourcePath || !metadata.sourceStateHash || !metadata.authority)
+            throw new Error("Cannot seal incomplete workspace authority");
+          const view = await viewAt(metadata.sourceStateHash);
+          const node = resolveUnit(view.graph, metadata.sourcePath, workspaceRoot);
+          if (
+            !node ||
+            view.evMap[node.name] !== metadata.ev ||
+            canonicalJson(
+              parseUnitAuthorityManifest(
+                node.manifest.authority ?? { requests: [], provides: [] },
+                "source authority"
+              )
+            ) !== canonicalJson(metadata.authority)
+          ) {
+            throw new Error(
+              `Build authority does not match exact source for ${metadata.sourcePath}`
+            );
+          }
+          const environment = rootOptions.workspaceAuthorityEnvironmentAt
+            ? await authorityEnvironmentAt(metadata.sourceStateHash, view.graph, view.evMap)
+            : null;
+          return serviceAuthorityDigest(
+            await serviceBindingsForNode(node, environment),
+            await serviceReviewsForNode(node, environment)
+          );
+        },
+      },
+    },
+    processOwner.buildStoreProcessOwner
+  );
+  builderSession = createBuilderSession({
+    processOwner,
+    runNativeJob: rootOptions.runNativeJob,
+    ensureBuildProvider: rootOptions.ensureBuildProvider,
+    signal: rootOptions.signal,
+    source,
+    store,
+    sharedBuildResultCacheRoot: rootOptions.storeRoots.sharedBuildResultCacheRoot,
+    rootFingerprint,
+  });
+
+  trigger = new StateTransitionTrigger({
+    graph,
+    evMap,
+    contentHashes,
+    stateHash,
+    workspaceRoot,
+    source,
+    session: builderSession,
+    diagnostics: buildDiagnosticsStore,
+  });
+  trigger.on("build-started", ({ name, trigger: t }) => {
+    recordBuildEvent({ type: "build-started", name, trigger: t });
+  });
+  trigger.on("build-complete", ({ name, buildKey, trigger: t }) => {
+    recordBuildEvent({ type: "build-complete", name, buildKey, trigger: t });
+  });
+  trigger.on("build-error", ({ name, error, diagnostics, trigger: t }) => {
+    recordBuildEvent({ type: "build-error", name, error, diagnostics, trigger: t });
+  });
+  trigger.on("change-detected", ({ units, trigger: t }) => {
+    for (const unit of units) {
+      const event: BuildSystemUnitChangeEvent = { ...unit, trigger: t };
+      for (const listener of unitChangeListeners) {
+        try {
+          listener(event);
+        } catch (err) {
+          console.error("[BuildV2] unit-change listener failed:", err);
+        }
+      }
+    }
+  });
+  trigger.start();
+  logVerbose("BuildV2", "State trigger started");
+
   const rediscoverAt = (atStateHash: string): Promise<void> => trigger.rediscoverAt(atStateHash);
 
   // Runtime bindings are immutable facts. Cache them by the exact protected
@@ -1553,7 +1609,7 @@ export async function initBuildSystemV2(
   const usableCachedBinding = async (key: string): Promise<RuntimeImageBinding | null> => {
     const binding = runtimeBindingCache.get(key);
     if (!binding) return null;
-    const build = await buildStore.get(binding.artifact.buildKey);
+    const build = await store.get(binding.artifact.buildKey);
     // BuildV2 reuses artifact bytes across semantic states, so the build
     // directory's metadata may have been rebound since this binding was
     // cached. A build-key hit alone is not enough: returning the old sealed
@@ -1639,7 +1695,14 @@ export async function initBuildSystemV2(
         "BuildV2",
         `Runtime binding build started for ${node.relativePath} at ${stateHash}`
       );
-      const build = await buildUnitStored(node, ev, graphAtState, workspaceRoot, stateHash);
+      const build = await buildUnitStored(
+        builderSession,
+        node,
+        ev,
+        graphAtState,
+        workspaceRoot,
+        stateHash
+      );
       logVerbose(
         "BuildV2",
         `Runtime binding build completed for ${node.relativePath} in ` +
@@ -1702,7 +1765,7 @@ export async function initBuildSystemV2(
           priority,
         }
       : { priority };
-    const buildKey = resolveBuildUnitKey(node, ev, viewStateHash, options);
+    const buildKey = resolveBuildUnitKey(rootFingerprint, source, node, ev, viewStateHash, options);
 
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
@@ -1711,7 +1774,15 @@ export async function initBuildSystemV2(
     let reusable = true;
     try {
       onProgress?.({ repoPath: node.relativePath, phase: "bundling" });
-      built = await buildUnitStored(node, ev, graphAtView, workspaceRoot, viewStateHash, options);
+      built = await buildUnitStored(
+        builderSession,
+        node,
+        ev,
+        graphAtView,
+        workspaceRoot,
+        viewStateHash,
+        options
+      );
     } catch (error) {
       buildError = error;
       // Build failures can include transient storage or dependency provisioning
@@ -1721,7 +1792,7 @@ export async function initBuildSystemV2(
 
     if (buildError != null) {
       try {
-        const { sourceRoot } = await getBuildSourceProvider().materializeForBuild(
+        const { sourceRoot } = await source.materializeForBuild(
           internalDeps,
           viewStateHash,
           workspaceRoot
@@ -1778,7 +1849,7 @@ export async function initBuildSystemV2(
     // The same source root gives esbuild failure paths workspace coordinates
     // instead of cache/temp checkout paths.
     try {
-      const { sourceRoot } = await getBuildSourceProvider().materializeForBuild(
+      const { sourceRoot } = await source.materializeForBuild(
         internalDeps,
         viewStateHash,
         workspaceRoot
@@ -1793,8 +1864,8 @@ export async function initBuildSystemV2(
         node,
         graphAtView,
         sourceRoot,
-        rootOptions.appRoot,
-        appNodeModuleRoots
+        appRoot,
+        [...appNodeModuleRoots]
       );
       try {
         let authorityEnvironment: ExactWorkspaceAuthorityEnvironment | undefined;
@@ -1848,7 +1919,7 @@ export async function initBuildSystemV2(
                   ...(authorityEnvironment ? { environment: authorityEnvironment } : {}),
                   workspaceId: source.workspaceId,
                   executableModules: built
-                    ? await buildStore.readExecutableModules(built.dir)
+                    ? await store.readExecutableModules(built.dir)
                     : undefined,
                 },
               }),
@@ -2041,7 +2112,7 @@ export async function initBuildSystemV2(
             workspaceId: source.workspaceId,
             stateHash: viewStateHash,
             unitName: node.name,
-            compilerRecipe: computeBuildKey(node.name, ev, sourcemapForNode(node)),
+            compilerRecipe: computeBuildKey(rootFingerprint, node.name, ev, sourcemapForNode(node)),
             artifact:
               outcome.built?.metadata.execution?.executionDigest ?? outcome.built?.buildKey ?? null,
             moduleConditions: conditions,
@@ -2054,11 +2125,15 @@ export async function initBuildSystemV2(
       outcome.target.diagnostics.push(...validation.diagnostics);
       outcome.reusable &&= validation.reusable;
       if (outcome.target.buildKey) {
-        recordDiagnostics(node.name, outcome.target.buildKey, outcome.target.diagnostics);
+        buildDiagnosticsStore.record(
+          node.name,
+          outcome.target.buildKey,
+          outcome.target.diagnostics
+        );
       }
     }
 
-    const diagnostics: BuildDiagnostic[] = [];
+    const reportDiagnostics: BuildDiagnostic[] = [];
     const diagnosticIndex = new Map<string, number>();
     const builds: UnitBuildTarget[] = outcomes.map(({ target }) => {
       const diagnosticIndexes = [
@@ -2067,8 +2142,8 @@ export async function initBuildSystemV2(
             const key = JSON.stringify(diagnostic);
             const existing = diagnosticIndex.get(key);
             if (existing !== undefined) return existing;
-            const index = diagnostics.length;
-            diagnostics.push(diagnostic);
+            const index = reportDiagnostics.length;
+            reportDiagnostics.push(diagnostic);
             diagnosticIndex.set(key, index);
             return index;
           })
@@ -2081,9 +2156,9 @@ export async function initBuildSystemV2(
         diagnosticIndexes,
       };
     });
-    const failed = hasErrors(diagnostics);
+    const failed = hasErrors(reportDiagnostics);
     return {
-      report: { ...base, status: failed ? "failed" : "ok", diagnostics, builds },
+      report: { ...base, status: failed ? "failed" : "ok", diagnostics: reportDiagnostics, builds },
       reusable: outcomes.every((outcome) => outcome.reusable),
     };
   };
@@ -2171,7 +2246,7 @@ export async function initBuildSystemV2(
         stateHash: view.stateHash,
         effectiveVersion: assertPresent(view.evMap[node.name]),
         contentHash: file.contentHash,
-        contentType: buildStore.contentTypeForPath(declaredPath),
+        contentType: contentTypeForPath(declaredPath),
         body,
       });
     })().finally(() => {
@@ -2182,12 +2257,12 @@ export async function initBuildSystemV2(
   };
 
   const getBuild = ((unitPath: string, ref?: string, options?: BuildUnitOptions) =>
-    withBuilderWorkers(() =>
+    withBuilderWorkers(builderSession, () =>
       getBuildInternal(unitPath, ref, options)
     )) as BuildSystemV2["getBuild"];
 
   const getStoredBuild: BuildSystemV2["getStoredBuild"] = (unitPath, ref, options) =>
-    withBuilderWorkers(() =>
+    withBuilderWorkers(builderSession, () =>
       getBuildInternal(unitPath, ref, options, true)
     ) as Promise<StoredBuildResult>;
 
@@ -2224,7 +2299,11 @@ export async function initBuildSystemV2(
         const manifestError = manifestIssueBuildError(graphAtState, unitPath);
         if (manifestError) throw manifestError;
         if (unitPath.startsWith("@vibestudio/") && options?.library) {
-          const build = await buildPlatformLibrary(unitPath, options.externals ?? []);
+          const build = await buildPlatformLibrary(
+            builderSession,
+            unitPath,
+            options.externals ?? []
+          );
           return libraryBuildResult(build);
         }
         throw new BuildRequestError(
@@ -2243,6 +2322,7 @@ export async function initBuildSystemV2(
         ? { ...options, library: true, libraryEntrySubpath: resolved.libraryEntrySubpath ?? "." }
         : options;
       const build = await buildUnitStored(
+        builderSession,
         node,
         ev,
         graphAtState,
@@ -2254,7 +2334,7 @@ export async function initBuildSystemV2(
         ? libraryBuildResult(build)
         : storedOnly
           ? build
-          : await buildStore.materializeStoredBuild(build);
+          : await store.materializeStoredBuild(build);
     }
 
     // unitPath can be a package name or workspace-relative path
@@ -2284,7 +2364,11 @@ export async function initBuildSystemV2(
         // platform packages in node_modules. Build them as library bundles
         // so eval can import them.
         if (unitPath.startsWith("@vibestudio/") && options?.library) {
-          const build = await buildPlatformLibrary(unitPath, options.externals ?? []);
+          const build = await buildPlatformLibrary(
+            builderSession,
+            unitPath,
+            options.externals ?? []
+          );
           return libraryBuildResult(build);
         }
         throw new BuildRequestError("package_not_found", `Unknown build unit: ${unitPath}`, {
@@ -2334,6 +2418,7 @@ export async function initBuildSystemV2(
     let build: StoredBuildResult;
     try {
       build = await buildUnitStored(
+        builderSession,
         node,
         ev,
         headGraph,
@@ -2357,7 +2442,7 @@ export async function initBuildSystemV2(
       ? libraryBuildResult(build)
       : storedOnly
         ? build
-        : await buildStore.materializeStoredBuild(build);
+        : await store.materializeStoredBuild(build);
   };
 
   const resolveDeclaredTestSuite = async (
@@ -2450,14 +2535,22 @@ export async function initBuildSystemV2(
         { target: node.relativePath, suite: suite.name, runtime: suite.runtime }
       );
     }
-    const build = await buildUnitStored(node, ev, view.graph, workspaceRoot, stateHash, {
-      test: {
-        suite: suite.name,
-        runtime: suite.runtime,
-        include: [...suite.include],
-        ...(selection.file ? { file: selection.file } : {}),
-      },
-    }).catch((error: unknown) => {
+    const build = await buildUnitStored(
+      builderSession,
+      node,
+      ev,
+      view.graph,
+      workspaceRoot,
+      stateHash,
+      {
+        test: {
+          suite: suite.name,
+          runtime: suite.runtime,
+          include: [...suite.include],
+          ...(selection.file ? { file: selection.file } : {}),
+        },
+      }
+    ).catch((error: unknown) => {
       if (
         error instanceof BuildDiagnosticsError &&
         error.diagnostics.some((diagnostic) => diagnostic.severity === "error") &&
@@ -2516,13 +2609,8 @@ export async function initBuildSystemV2(
           });
         const { graph } = await viewAt(resolution.stateHash);
         const node = graph.get(resolution.unitName);
-        const compiler = typecheckDependencyGraph(
-          node,
-          graph,
-          rootOptions.appRoot,
-          appNodeModuleRoots
-        );
-        const { sourceRoot } = await getBuildSourceProvider().materializeForBuild(
+        const compiler = typecheckDependencyGraph(node, graph, appRoot, appNodeModuleRoots);
+        const { sourceRoot } = await source.materializeForBuild(
           compiler.graph.allNodes().filter((candidate) => graph.has(candidate.name)),
           resolution.stateHash,
           workspaceRoot
@@ -2543,14 +2631,14 @@ export async function initBuildSystemV2(
             compiler.graph.get(node.name),
             compiler.graph,
             sourceRoot,
-            appNodeModuleRoots,
+            [...appNodeModuleRoots],
             { traverseWorkspaceDependencies: false }
           );
         // Host package roots participate in declaration resolution, but never
         // become grants to native workspace code. Acquire the closed installation
         // with lifecycle scripts disabled before admitting it to the native owner.
         const environment = await acquireExternalDeps(closure.installSet, dependencyOverrides, {
-          appRoot: rootOptions.appRoot,
+          appRoot,
           patches: dependencyPatches,
         });
         const workspacePackageSources = Object.fromEntries(
@@ -2574,13 +2662,13 @@ export async function initBuildSystemV2(
               packageNode,
               compiler.graph,
               sourceRoot,
-              appNodeModuleRoots,
+              [...appNodeModuleRoots],
               { traverseWorkspaceDependencies: false }
             );
             const packageEnvironment = await acquireExternalDeps(
               requirements.closure.installSet,
               requirements.dependencyOverrides,
-              { appRoot: rootOptions.appRoot, patches: requirements.dependencyPatches }
+              { appRoot, patches: requirements.dependencyPatches }
             );
             packageEnvironments.push(packageEnvironment);
             workspacePackageDependencyKeys[name] = packageEnvironment.key;
@@ -2595,7 +2683,7 @@ export async function initBuildSystemV2(
                   stateHash: resolution.stateHash,
                   external: environment.key,
                   workspacePackageDependencies: workspacePackageDependencyKeys,
-                  sdk: getRootDependencyFingerprintInfo().value,
+                  sdk: rootFingerprint.value,
                   packages,
                 })
               : null;
@@ -2765,12 +2853,9 @@ export async function initBuildSystemV2(
         manifest: node.manifest,
         packageVersion: node.packageVersion ?? null,
         dependencyEvs,
-        externalDeps: collectExternalDependencyClosure(
-          node,
-          graph,
-          workspaceRoot,
-          appNodeModuleRoots
-        ).installSet,
+        externalDeps: collectExternalDependencyClosure(node, graph, workspaceRoot, [
+          ...appNodeModuleRoots,
+        ]).installSet,
         serviceBindings: await serviceBindingsForNode(
           node,
           rootOptions.workspaceAuthorityEnvironmentAt
@@ -2832,12 +2917,9 @@ export async function initBuildSystemV2(
               manifest: node.manifest,
               packageVersion: node.packageVersion ?? null,
               dependencyEvs,
-              externalDeps: collectExternalDependencyClosure(
-                node,
-                graph,
-                workspaceRoot,
-                appNodeModuleRoots
-              ).installSet,
+              externalDeps: collectExternalDependencyClosure(node, graph, workspaceRoot, [
+                ...appNodeModuleRoots,
+              ]).installSet,
               serviceBindings: await serviceBindingsForNode(node, environment),
               serviceReviews: await serviceReviewsForNode(node, environment),
             };
@@ -2922,8 +3004,8 @@ export async function initBuildSystemV2(
         className,
         graph,
         workspaceRoot,
-        source: getBuildSourceProvider(),
-        collectRpcCatalog: collectWorkspaceRpcMethods,
+        source,
+        collectRpcCatalog: (...args) => collectWorkspaceRpcMethods(processOwner, ...args),
         compiledRpcCatalog: () => compiledRpcCatalogAt(provider, effectiveVersion, stateHash),
       });
       return {
@@ -2941,24 +3023,72 @@ export async function initBuildSystemV2(
       version: string,
       externals?: string[]
     ): Promise<BuildBundleResult> {
-      const build = await buildNpmLibrary(specifier, version, externals ?? []);
+      const build = await buildNpmLibrary(builderSession, specifier, version, externals ?? []);
       return libraryBuildResult(build);
     },
 
     findSharedStyleBuild(digest: string): Promise<StoredBuildResult | null> {
-      return buildStore.findSharedStyleBuild(digest);
+      return store.findSharedStyleBuild(digest);
     },
 
     getBuildByKey(key: string): Promise<StoredBuildResult | null> {
-      return buildStore.get(key);
+      return store.get(key);
+    },
+
+    rebindBuildSourceState(build: StoredBuildResult, sourceStateHash: string) {
+      return store.rebindSourceState(build, sourceStateHash);
+    },
+
+    primaryTextArtifactContent(
+      build: Pick<StoredBuildResult, "artifacts" | "metadata" | "dir">,
+      opts?: { platform?: string }
+    ) {
+      return store.primaryTextArtifactContent(build, opts);
+    },
+
+    putStoredBuild(...args: Parameters<BuildStore["putStored"]>) {
+      return store.putStored(...args);
+    },
+
+    readBuildArtifactBytes(
+      build: Pick<StoredBuildResult, "dir">,
+      artifact: StoredBuildResult["artifacts"][number]
+    ) {
+      return store.readStoredArtifactBytes(build, artifact);
+    },
+
+    readBuildArtifactContent(
+      build: Pick<StoredBuildResult, "dir">,
+      artifact: StoredBuildResult["artifacts"][number]
+    ) {
+      return store.readStoredArtifactContent(build, artifact);
+    },
+
+    readBuildExecutableModules(build: StoredBuildResult) {
+      return store.readExecutableModules(build.dir);
+    },
+
+    getBuildArtifactPath(
+      build: Pick<StoredBuildResult, "dir">,
+      artifact: StoredBuildResult["artifacts"][number]
+    ) {
+      return store.artifactFilePath(build, artifact);
+    },
+
+    getBuildDescriptorBytes(build: Pick<StoredBuildResult, "dir" | "metadata" | "artifacts">) {
+      return store.buildDescriptorBytes(build);
     },
 
     getBuildByExecution(key: string, executionDigest: string): Promise<StoredBuildResult | null> {
-      return buildStore.getByExecution(key, executionDigest);
+      return store.getByExecution(key, executionDigest);
     },
 
     peekBuildByKey(key: string): Promise<StoredBuildResult | null> {
-      return buildStore.readLocal(key);
+      return store.readLocal(key);
+    },
+
+    peekVerifiedBuildByKey(key: string): StoredBuildResult | null {
+      return store.peekLocal(key);
     },
 
     getEffectiveVersion(unitNameOrPath: string): string | null {
@@ -2971,7 +3101,7 @@ export async function initBuildSystemV2(
       const { graph } = currentState();
       const node = resolveUnit(graph, unitName, workspaceRoot);
       if (!node) return {};
-      return collectExternalDependencyClosure(node, graph, workspaceRoot, appNodeModuleRoots)
+      return collectExternalDependencyClosure(node, graph, workspaceRoot, [...appNodeModuleRoots])
         .installSet;
     },
 
@@ -3184,10 +3314,17 @@ export async function initBuildSystemV2(
       for (const name of buildableChanged) {
         const n = snapshot.graph.get(name);
         const ev = assertPresent(snapshot.evMap[name]);
-        const bk = resolveBuildUnitKey(n, ev, snapshot.stateHash);
-        if (!(await buildStore.has(bk))) {
+        const bk = resolveBuildUnitKey(rootFingerprint, source, n, ev, snapshot.stateHash);
+        if (!(await store.has(bk))) {
           try {
-            await buildUnitStored(n, ev, snapshot.graph, workspaceRoot, snapshot.stateHash);
+            await buildUnitStored(
+              builderSession,
+              n,
+              ev,
+              snapshot.graph,
+              workspaceRoot,
+              snapshot.stateHash
+            );
           } catch (error) {
             console.error(
               `[BuildV2] Failed to rebuild ${name}:`,
@@ -3293,7 +3430,7 @@ export async function initBuildSystemV2(
         }
       };
 
-      const flight = withBuilderWorkers(() =>
+      const flight = withBuilderWorkers(builderSession, () =>
         buildUnitReport(node, view, viewStateHash, emitProgress, options?.priority)
       )
         .then(({ report, reusable }) => (reusable ? cacheBuildReport(cacheKey, report) : report))
@@ -3321,12 +3458,25 @@ export async function initBuildSystemV2(
       const snapshot = currentState();
       const node = resolveUnit(snapshot.graph, unitNameOrPath, workspaceRoot);
       const ev = node ? snapshot.evMap[node.name] : null;
-      return node && ev ? resolveBuildUnitKey(node, ev, snapshot.stateHash) : null;
+      return node && ev
+        ? resolveBuildUnitKey(rootFingerprint, source, node, ev, snapshot.stateHash)
+        : null;
+    },
+
+    getBuildKeyVariants(unitNameOrPath: string) {
+      const snapshot = currentState();
+      const node = resolveUnit(snapshot.graph, unitNameOrPath, workspaceRoot);
+      const ev = node ? snapshot.evMap[node.name] : null;
+      if (!node || !ev) return null;
+      return {
+        sourcemap: computeBuildKey(rootFingerprint, node.name, ev, true),
+        production: computeBuildKey(rootFingerprint, node.name, ev, false),
+      };
     },
 
     getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null {
       const node = resolveUnit(currentState().graph, unitName, workspaceRoot);
-      return diagnosticsForUnit(node?.name ?? unitName);
+      return buildDiagnosticsStore.forUnit(node?.name ?? unitName);
     },
 
     async prepareGc({ epoch }): Promise<PreparedBuildGc> {
@@ -3339,7 +3489,7 @@ export async function initBuildSystemV2(
       for (const node of graph.allNodes()) {
         const ev = evMap[node.name];
         if (!ev) continue;
-        roots.add(resolveBuildUnitKey(node, ev, stateHash));
+        roots.add(resolveBuildUnitKey(rootFingerprint, source, node, ev, stateHash));
       }
 
       for (const root of providerSnapshot.roots) {
@@ -3363,7 +3513,7 @@ export async function initBuildSystemV2(
         commitArtifactDeletion?: (buildKey: string, commit: () => void) => boolean;
       }): Promise<BuildRetentionReport> => {
         const providerFailures = [...providerSnapshot.providerFailures];
-        const scan = await buildStore.scanRetention();
+        const scan = await store.scanRetention();
         providerFailures.push(
           ...scan.failures.map((failure) => ({
             provider: `build-store:${failure.key}`,
@@ -3382,7 +3532,7 @@ export async function initBuildSystemV2(
         const complete =
           providerFailures.length === 0 && unresolvedAuthoritativeRootBuildKeys.length === 0;
         const effectiveMode = complete ? options.mode : "report";
-        const collection = await buildStore.collectRetention({
+        const collection = await store.collectRetention({
           epoch,
           mode: effectiveMode,
           rootedBuildKeys: roots,
@@ -3464,9 +3614,9 @@ export async function initBuildSystemV2(
       );
       let artifact = matchingRoots[0]?.artifact ?? null;
       if (!artifact) {
-        const scan = await buildStore.scanRetention();
+        const scan = await store.scanRetention();
         for (const stored of scan.builds) {
-          const build = await buildStore.readLocal(stored.key);
+          const build = await store.readLocal(stored.key);
           if (build?.metadata.execution?.executionDigest === executionDigest) {
             try {
               artifact = executionArtifactRefFromBuild(source.workspaceId, build);
@@ -3479,8 +3629,7 @@ export async function initBuildSystemV2(
       }
       const missing: string[] = [];
       if (!artifact) missing.push("artifact");
-      if (artifact && !(await buildStore.readLocal(artifact.buildKey)))
-        missing.push("artifact bytes");
+      if (artifact && !(await store.readLocal(artifact.buildKey))) missing.push("artifact bytes");
       if (artifact) {
         if (!source.inspectContentRoot) {
           missing.push("source content-store inspection authority");
@@ -3590,23 +3739,15 @@ export async function initBuildSystemV2(
       retiringDependencies = true;
       shutdownFlight = (async () => {
         const failures: unknown[] = [];
-        try {
-          trigger.stop();
-        } catch (error) {
-          failures.push(error);
-        }
-        const firstStage = await Promise.allSettled([
-          closeBuilder(),
-          Promise.allSettled([...dependencyPreparations]).then((outcomes) => {
-            failures.push(
-              ...outcomes.flatMap((outcome) =>
-                outcome.status === "rejected" ? [outcome.reason] : []
-              )
-            );
-          }),
-        ]);
+        const firstStage = await Promise.allSettled([trigger.drain(), ...dependencyPreparations]);
         failures.push(
           ...firstStage.flatMap((outcome) =>
+            outcome.status === "rejected" ? [outcome.reason] : []
+          )
+        );
+        const sessionRetirement = await Promise.allSettled([builderSession.close()]);
+        failures.push(
+          ...sessionRetirement.flatMap((outcome) =>
             outcome.status === "rejected" ? [outcome.reason] : []
           )
         );
@@ -3621,11 +3762,6 @@ export async function initBuildSystemV2(
         );
         try {
           authorityPublicationUnsubscribe();
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          setBuildSourceProvider(null);
         } catch (error) {
           failures.push(error);
         }

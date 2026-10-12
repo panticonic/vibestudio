@@ -14,13 +14,8 @@ import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retention";
 import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
-import {
-  contentTypeForPath,
-  get as getBuild,
-  put as putBuild,
-  readStoredArtifactBytes,
-  type BuildArtifactInput,
-} from "../buildV2/buildStore.js";
+import { contentTypeForPath, type BuildArtifactInput } from "../buildV2/buildStore.js";
+import type { BuildSystemV2 } from "../buildV2/index.js";
 import { executionArtifactRefFromBuild } from "../executionRootProviders.js";
 import { DevelopmentRunRoots } from "./developmentRunRoots.js";
 import { sealDevelopmentWorkspaceSources } from "./developmentWorkspaceSources.js";
@@ -110,6 +105,10 @@ export class DevelopmentExecutor {
     private readonly deps: {
       workspaceId: string;
       hostExecutionDigest: string;
+      buildSystem: Pick<
+        BuildSystemV2,
+        "getBuildByKey" | "putStoredBuild" | "readBuildArtifactBytes"
+      >;
       runRoots: DevelopmentRunRoots;
       planSource(input: {
         contextId: string;
@@ -402,7 +401,7 @@ export class DevelopmentExecutor {
         code: "ESTATE",
       });
     }
-    const build = await getBuild(run.artifact.buildKey);
+    const build = await this.deps.buildSystem.getBuildByKey(run.artifact.buildKey);
     if (
       !build?.metadata.execution ||
       canonicalJson(build.metadata.execution) !== canonicalJson(run.artifact)
@@ -420,7 +419,7 @@ export class DevelopmentExecutor {
     }
     // Force the immutable store's lazy payload-integrity verification before
     // trusting its manifest as the launch identity.
-    await readStoredArtifactBytes(build, serverArtifact);
+    await this.deps.buildSystem.readBuildArtifactBytes(build, serverArtifact);
     const sourceRoot = await fs.realpath(path.join(runRoot, "source"));
     const serverEntryPath = path.join(sourceRoot, "dist", "server.mjs");
     const entryStat = await fs.lstat(serverEntryPath);
@@ -457,7 +456,7 @@ export class DevelopmentExecutor {
         code: "ESTATE",
       });
     }
-    const build = await getBuild(run.artifact.buildKey);
+    const build = await this.deps.buildSystem.getBuildByKey(run.artifact.buildKey);
     if (
       !build?.metadata.execution ||
       canonicalJson(build.metadata.execution) !== canonicalJson(run.artifact)
@@ -491,6 +490,7 @@ export class DevelopmentExecutor {
         byteLength: entry.artifact.byteLength!,
       }))
       .sort((left, right) => left.path.localeCompare(right.path));
+    const buildSystem = this.deps.buildSystem;
     return {
       mainEntryBuildId,
       manifest,
@@ -508,7 +508,7 @@ export class DevelopmentExecutor {
             code: "ERANGE",
           });
         }
-        const bytes = await readStoredArtifactBytes(build, entry.artifact);
+        const bytes = await buildSystem.readBuildArtifactBytes(build, entry.artifact);
         return bytes.subarray(offset, offset + length);
       },
     };
@@ -529,7 +529,7 @@ export class DevelopmentExecutor {
       "vibestudio/development-source-effective-version/v1",
       canonicalJson(run.snapshot.pair)
     );
-    const build = await putBuild(
+    const build = await this.deps.buildSystem.putStoredBuild(
       run.snapshot.snapshotDigest,
       { entries: artifacts },
       {

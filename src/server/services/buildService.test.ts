@@ -8,12 +8,11 @@ import {
   type BuildMetadataWire,
   type BuildPerformanceProfileWire,
 } from "@vibestudio/service-schemas/build";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createBuildService } from "./buildService.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { StoredBuildResult } from "../buildV2/buildStore.js";
-import { setBuildRootConfig } from "../buildV2/effectiveVersion.js";
 
 const inventory = vi.hoisted(() => ({
   modules: [
@@ -26,11 +25,6 @@ const inventory = vi.hoisted(() => ({
     },
   ],
 }));
-vi.mock("../buildV2/buildStore.js", async (original) => ({
-  ...(await original<typeof import("../buildV2/buildStore.js")>()),
-  readExecutableModules: vi.fn(() => inventory.modules),
-}));
-
 const buildMetadata = {
   kind: "extension",
   name: "@workspace-extensions/example",
@@ -51,9 +45,7 @@ const buildMetadata = {
 
 const ownedBuildDirs = new Set<string>();
 
-beforeEach(() => setBuildRootConfig({ appRoot: process.cwd(), workspaceRoot: process.cwd() }));
 afterEach(() => {
-  setBuildRootConfig(null);
   for (const dir of ownedBuildDirs) fs.rmSync(dir, { recursive: true, force: true });
   ownedBuildDirs.clear();
 });
@@ -126,6 +118,17 @@ function makeBuildSystem(): BuildSystemV2 {
     getBuildByKey: vi.fn<BuildSystemV2["getBuildByKey"]>(async (key) =>
       key === build.buildKey ? build : null
     ),
+    readBuildArtifactBytes: vi.fn<BuildSystemV2["readBuildArtifactBytes"]>(async () => {
+      return Buffer.from("export {};");
+    }),
+    readBuildExecutableModules: vi.fn<BuildSystemV2["readBuildExecutableModules"]>(
+      async () => inventory.modules
+    ),
+    getUnitDiagnostics: vi.fn(() => null),
+    getBuildKeyVariants: vi.fn(() => ({
+      sourcemap: "sourcemap-build-key",
+      production: "production-build-key",
+    })),
     getUnitIcon: vi.fn(async () => null),
     getBuildReport: vi.fn(async () => ({
       repoPath: "extensions/example",

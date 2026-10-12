@@ -11,6 +11,7 @@ import {
   stagePackageDependencies,
   stagePinnedRootDependencies,
   stagePublishedPackage,
+  stagePassthroughScriptClosure,
 } from "../scripts/build-server-npm-package.mjs";
 import { createRequire } from "node:module";
 
@@ -172,6 +173,10 @@ describe("npm CLI packaging", () => {
       mkdirSync(path.dirname(target), { recursive: true });
       writeFileSync(target, "");
     }
+    writeFileSync(
+      path.join(root, "scripts/cli/remote-serve.mjs"),
+      fs.readFileSync(path.resolve("scripts/cli/remote-serve.mjs"))
+    );
     expect(() => assertPassthroughScriptsStaged(root)).not.toThrow();
     fs.rmSync(path.join(root, "scripts/cli/lib/pair-server.mjs"));
     expect(() => assertPassthroughScriptsStaged(root)).toThrow(/pair-server\.mjs/);
@@ -203,6 +208,12 @@ describe("npm CLI packaging", () => {
     const packageRoot = mkdtempSync(path.join(tmpdir(), "vibestudio-node-stage-"));
     try {
       stageNodeRuntimeInstaller(packageRoot);
+      mkdirSync(path.join(packageRoot, "scripts"), { recursive: true });
+      fs.copyFileSync(
+        path.resolve("scripts/vendor-install.mjs"),
+        path.join(packageRoot, "scripts/vendor-install.mjs")
+      );
+      stagePassthroughScriptClosure(packageRoot);
       const distribution = JSON.parse(
         fs.readFileSync(path.join(packageRoot, "native/node/distribution.json"), "utf8")
       );

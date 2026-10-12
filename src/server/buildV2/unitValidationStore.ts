@@ -2,7 +2,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { getUserDataPath } from "@vibestudio/env-paths";
 import { buildDiagnosticSchema } from "@vibestudio/service-schemas/build";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import {
@@ -17,7 +16,7 @@ const recordSchema = z
 
 /** Compiler observations are reusable only for the same complete validation input. */
 export class UnitValidationStore {
-  constructor(private readonly root = path.join(getUserDataPath(), "unit-validation")) {}
+  constructor(private readonly root: string) {}
 
   async validate(
     identity: unknown,

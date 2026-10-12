@@ -16,10 +16,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { readWorkspaceConfig } from "@vibestudio/workspace/configParser";
 import { initBuildSystemV2, type BuildSystemV2 } from "./index.js";
+import { createBuildProcessOwner, type BuildProcessOwner } from "./builder.js";
 import type { BuildSourceProvider } from "./buildSource.js";
 import type { WorkspaceStateSource } from "./stateTrigger.js";
 import { discoverPackageGraph } from "./packageGraph.js";
@@ -215,6 +215,7 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
   let root: string;
   let workspaceRoot: string;
   let buildSystem: BuildSystemV2;
+  let processOwner: BuildProcessOwner | undefined;
   // Bumped whenever the test edits workspace source, so the canonical report
   // re-projects instead of serving a cached state.
   let revision = 0;
@@ -264,7 +265,6 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-scaffold-acceptance-"));
     workspaceRoot = path.join(root, "workspace");
     fs.mkdirSync(workspaceRoot, { recursive: true });
-    setUserDataPath(path.join(root, "state"));
 
     // 1. Generate every covered scaffold through the public prepareProjects path.
     const { prepareProjects, prepareApplication } = (await import(
@@ -443,36 +443,52 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
     // 5. Provide the real Base runtime packages the scaffolds depend on.
     copyWorkspaceClosure(workspaceRoot, ["@workspace/runtime"]);
 
-    buildSystem = await initBuildSystemV2(
-      workspaceRoot,
-      workingTreeStateSource(),
-      APP_NODE_MODULES,
-      {
-        appRoot: path.resolve(__dirname, "../../.."),
-        runNativeJob: runIsolatedBuildJob,
-        dependencyWorkspaceRoot: workspaceRoot,
-        // The same canonical config → exact-binding derivation the server wires:
-        // meta/vibestudio.yml services[] become the authority environment.
-        workspaceAuthorityEnvironmentAt: async () => ({
-          services: exactWorkspaceServiceBindings(
-            await readWorkspaceConfig(
-              {
-                readText: async (filePath: string) => {
-                  const absolute = path.join(workspaceRoot, filePath);
-                  return fs.existsSync(absolute) ? fs.readFileSync(absolute, "utf8") : null;
-                },
+    const appRoot = path.resolve(__dirname, "../../..");
+    processOwner = createBuildProcessOwner({ appRoot, appNodeModules: APP_NODE_MODULES });
+    buildSystem = await initBuildSystemV2(workspaceRoot, workingTreeStateSource(), {
+      processOwner,
+      stateRoot: path.join(root, "state"),
+      storeRoots: { sharedArtifactPoolRoot: null, sharedBuildResultCacheRoot: null },
+      releaseBuildRoot: null,
+      runNativeJob: runIsolatedBuildJob,
+      dependencyWorkspaceRoot: workspaceRoot,
+      // The same canonical config → exact-binding derivation the server wires:
+      // meta/vibestudio.yml services[] become the authority environment.
+      workspaceAuthorityEnvironmentAt: async () => ({
+        services: exactWorkspaceServiceBindings(
+          await readWorkspaceConfig(
+            {
+              readText: async (filePath: string) => {
+                const absolute = path.join(workspaceRoot, filePath);
+                return fs.existsSync(absolute) ? fs.readFileSync(absolute, "utf8") : null;
               },
-              "workspace:scaffold-acceptance"
-            )
-          ),
-        }),
-      }
-    );
+            },
+            "workspace:scaffold-acceptance"
+          )
+        ),
+      }),
+    });
   }, 240_000);
 
   afterAll(async () => {
-    await buildSystem?.shutdown?.();
+    const failures: unknown[] = [];
+    try {
+      await buildSystem?.shutdown?.();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await processOwner?.shutdown();
+    } catch (error) {
+      failures.push(error);
+    }
     fs.rmSync(root, { recursive: true, force: true });
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Scaffold acceptance cleanup failed", {
+        cause: failures[0],
+      });
+    }
   });
 
   async function report(unit: string) {

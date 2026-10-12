@@ -93,6 +93,18 @@ async function upload(report = reportFixture(), receiptSecret = secret) {
   });
 }
 describe("Cloudflare intake with real D1 and R2", () => {
+  it("keeps the deployed submission limiter at twenty requests per minute", () => {
+    const submitLimiter = readFileSync("apps/webhook-relay/wrangler.toml", "utf8")
+      .split("[[ratelimits]]")
+      .slice(1)
+      .find((section) => /^\s*name\s*=\s*"REPORT_SUBMIT_LIMIT"\s*$/mu.test(section));
+    expect(submitLimiter).toBeDefined();
+    expect(submitLimiter).toMatch(/^\s*namespace_id\s*=\s*"1001"\s*$/mu);
+    expect(submitLimiter).toMatch(
+      /^\s*simple\s*=\s*\{\s*limit\s*=\s*20\s*,\s*period\s*=\s*60\s*\}\s*$/mu
+    );
+  });
+
   it("requires a valid self-issued signature, but no login or registered submission key; protects developer access", async () => {
     const report = reportFixture(),
       bytes = encodeReport(report);
@@ -375,7 +387,7 @@ describe("Cloudflare intake with real D1 and R2", () => {
   it("commits one receipt and group membership under concurrent identical retries", async () => {
     const report = reportFixture();
     const results = await Promise.all([upload(report), upload(report)]);
-    expect(results.map((r) => r.status).sort()).toEqual([200, 201]);
+    expect(results.map((r) => r.status).sort((left, right) => left - right)).toEqual([200, 201]);
     expect(await results[0]!.json()).toEqual(await results[1]!.json());
     const db = await mf.getD1Database("REPORT_DB");
     expect(
@@ -481,17 +493,48 @@ describe("Cloudflare intake with real D1 and R2", () => {
     ).toBe(true);
     machine = firstMachine;
   });
-  it("rate limits anonymous signed writes before persistence and returns an actionable retry delay", async () => {
+  it("propagates submission limiter rejection before persistence with an actionable retry delay", async () => {
     const report = reportFixture();
-    let result = await upload(report);
-    for (let i = 0; i < 25 && result.status !== 429; i++) result = await upload(report);
-    expect(result.status).toBe(429);
-    expect(result.headers.get("retry-after")).toBe("60");
-    const db = await mf.getD1Database("REPORT_DB");
+    const keys: string[] = [];
+    // Miniflare uses a wall-clock fixed window, so driving the full threshold
+    // can cross an epoch during a busy suite. Exercise the handler's platform
+    // binding boundary deterministically instead.
+    const submitLimit: ReportingBindings["REPORT_SUBMIT_LIMIT"] = {
+      async limit({ key }) {
+        keys.push(key);
+        return { success: false };
+      },
+    };
+    const allow = {
+      async limit() {
+        return { success: true };
+      },
+    };
+    const bindings: ReportingBindings = {
+      REPORT_DB: await mf.getD1Database("REPORT_DB"),
+      REPORT_BUNDLES: await mf.getR2Bucket("REPORT_BUNDLES"),
+      REPORT_SUBMIT_LIMIT: submitLimit,
+      REPORT_READ_LIMIT: allow,
+      REPORT_MUTATION_LIMIT: allow,
+      REPORT_RECEIPT_LIMIT: allow,
+      REPORT_AUTH_FAILURE_LIMIT: allow,
+    };
+    const db = bindings.REPORT_DB;
     const before = (await db
       .prepare("SELECT count(*) AS n FROM submissions")
       .first<{ n: number }>())!.n;
-    expect((await upload(reportFixture())).status).toBe(429);
+    const bytes = encodeReport(report);
+    const result = await handleProblemReports(
+      new Request(root, {
+        method: "POST",
+        headers: await signedHeaders(report.submissionId, bytes),
+        body: bytes,
+      }),
+      bindings
+    );
+    expect(result.status).toBe(429);
+    expect(result.headers.get("retry-after")).toBe("60");
+    expect(keys).toEqual([await reportDigest(`192.0.2.${source}`)]);
     expect(
       (await db.prepare("SELECT count(*) AS n FROM submissions").first<{ n: number }>())!.n
     ).toBe(before);

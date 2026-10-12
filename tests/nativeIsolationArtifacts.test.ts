@@ -57,6 +57,16 @@ function fixture() {
   return { root, artifactRoot: path.join(root, "native/isolation/artifacts") };
 }
 
+function desktopRuntimeConfig(root: string) {
+  mkdirSync(path.join(root, "scripts/cli"), { recursive: true });
+  writeFileSync(path.join(root, "package.json"), JSON.stringify({ dependencies: {} }));
+  writeFileSync(path.join(root, "scripts/cli/entry.mjs"), "export {};\n");
+  return {
+    files: [{ from: "scripts", to: "scripts", filter: ["cli/**/*"] }],
+    asarUnpack: ["scripts/cli/**/*"],
+  };
+}
+
 describe("native isolation artifact matrix", () => {
   it("selects only exact supported tuples and has no Windows arm64 fallback", () => {
     for (const target of NATIVE_ISOLATION_TARGETS) {
@@ -91,7 +101,7 @@ describe("native isolation artifact matrix", () => {
 
   it("stages a requested ARM64 helper without using the host target", async () => {
     const { root, artifactRoot } = fixture();
-    const config = {};
+    const config = desktopRuntimeConfig(root);
     const target = nativeIsolationTarget("linux", "arm64");
     writeNodeRuntimeFixture(root, "linux", "arm64");
     writeArtifacts(artifactRoot, [target]);
@@ -157,13 +167,9 @@ describe("native isolation artifact matrix", () => {
         { recursive: true }
       );
       writeFileSync(installedManifest, readFileSync(sourceManifest));
-      await expect(
-        assertPackagedNativeIsolation(resources, context)
-      ).resolves.not.toThrow();
+      await expect(assertPackagedNativeIsolation(resources, context)).resolves.not.toThrow();
       writeFileSync(installed, Buffer.from("changed"));
-      await expect(assertPackagedNativeIsolation(resources, context)).rejects.toThrow(
-        /differs/
-      );
+      await expect(assertPackagedNativeIsolation(resources, context)).rejects.toThrow(/differs/);
     } finally {
       rmSync(root, { recursive: true, force: true });
       roots.splice(roots.indexOf(root), 1);
@@ -172,7 +178,7 @@ describe("native isolation artifact matrix", () => {
 
   it("stages Windows Node without requiring or shipping an MXC executor", async () => {
     const { root } = fixture();
-    const config = {};
+    const config = desktopRuntimeConfig(root);
     writeNodeRuntimeFixture(root, "win32", "x64");
     const workerdPackage = path.join(root, "node_modules/@cloudflare/workerd-windows-64");
     mkdirSync(path.join(workerdPackage, "bin"), { recursive: true });
@@ -181,6 +187,16 @@ describe("native isolation artifact matrix", () => {
       JSON.stringify({ name: "@cloudflare/workerd-windows-64", version: "test" })
     );
     writeFileSync(path.join(workerdPackage, "bin/workerd.exe"), "vendor workerd");
+    const workerdPackageRoot = path.join(root, "node_modules/workerd");
+    mkdirSync(workerdPackageRoot, { recursive: true });
+    writeFileSync(
+      path.join(workerdPackageRoot, "package.json"),
+      JSON.stringify({ name: "workerd", main: "index.cjs" })
+    );
+    writeFileSync(
+      path.join(workerdPackageRoot, "index.cjs"),
+      `module.exports = { default: ${JSON.stringify(path.join(workerdPackage, "bin/workerd.exe"))} };\n`
+    );
     const context = {
       electronPlatformName: "win32",
       arch: 1,
@@ -188,17 +204,19 @@ describe("native isolation artifact matrix", () => {
     };
     await stageElectronNativeIsolation(context);
     const resources = path.join(root, "resources");
-    cpSync(path.join(root, "dist/node-payload"), path.join(resources, "app.asar.unpacked/dist/node"), {
-      recursive: true,
-    });
+    cpSync(
+      path.join(root, "dist/node-payload"),
+      path.join(resources, "app.asar.unpacked/dist/node"),
+      {
+        recursive: true,
+      }
+    );
     cpSync(
       workerdPackage,
       path.join(resources, "app.asar.unpacked/node_modules/@cloudflare/workerd-windows-64"),
       { recursive: true }
     );
-    await expect(
-      assertPackagedNativeIsolation(resources, context)
-    ).resolves.toBeUndefined();
+    await expect(assertPackagedNativeIsolation(resources, context)).resolves.toBeUndefined();
     expect(() => statSync(path.join(root, "dist/mxc"))).toThrow();
     expect(() => statSync(path.join(resources, "app.asar.unpacked/dist/mxc"))).toThrow();
     expect(readFileSync(path.join(workerdPackage, "bin/workerd.exe.manifest"))).toEqual(
@@ -230,10 +248,7 @@ describe("native isolation artifact matrix", () => {
     );
     mkdirSync(path.join(runtime, "selected"), { recursive: true });
     writeFileSync(path.join(windowsRelease, "node.exe"), "windows node");
-    writeFileSync(
-      path.join(windowsRelease, "node_modules/corepack/dist/corepack.js"),
-      "corepack"
-    );
+    writeFileSync(path.join(windowsRelease, "node_modules/corepack/dist/corepack.js"), "corepack");
     writeFileSync(
       path.join(
         runtime,
@@ -268,12 +283,7 @@ describe("native isolation artifact matrix", () => {
     const installed = path.join(resources, "app.asar.unpacked/dist/node");
     expect(
       existsSync(
-        path.join(
-          installed,
-          "releases/win32-x64",
-          nodeRuntimeIdentity(windowsTarget),
-          "node.exe"
-        )
+        path.join(installed, "releases/win32-x64", nodeRuntimeIdentity(windowsTarget), "node.exe")
       )
     ).toBe(true);
     expect(

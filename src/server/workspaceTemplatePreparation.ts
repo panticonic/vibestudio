@@ -2,9 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import { readExactGitSnapshot, discoverTrackedGitSnapshot } from "@vibestudio/git";
-import { getUserDataPath, setUserDataPath } from "@vibestudio/env-paths";
+import { getCentralDataPath, getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { readDefaultWorkspaceTemplates } from "@vibestudio/workspace/templateRelease";
+import { workspaceReleaseResourceRoot } from "./preparedWorkspaceTemplate.js";
 import {
   sameWorkspaceTemplatePin,
   type WorkspaceTemplatePin,
@@ -27,12 +28,12 @@ import { acquireRootTemplateSnapshot } from "./acquireRootTemplateSnapshot.js";
 import { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
 import { createProtectedRefStore } from "./services/protectedRefStore.js";
 import { initBuildSystemV2 } from "./buildV2/index.js";
-import { withBuilderWorkers } from "./buildV2/builder.js";
+import { createBuildProcessOwner } from "./buildV2/builder.js";
+import { resolveBuildStoreRoots } from "./buildV2/buildStore.js";
 import { prepareWorkspaceRuntimeBuilds } from "./workspaceTemplateBuilds.js";
 import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
 import { getExistingAppNodeModulesRoots } from "@vibestudio/shared/runtimePaths";
 import { exportReleaseBuild } from "../../scripts/prebuild-release-userland.mjs";
-import { drainBuildStorePublications } from "./buildV2/buildStore.js";
 import { drainDependencyContentMaintenance } from "./buildV2/dependencyContentMaintenance.js";
 import { drainExternalDependencyPruning } from "./buildV2/externalDeps.js";
 import { blobCasPath, linkReconstructableBlobFile } from "./storage/blobCas.js";
@@ -47,7 +48,6 @@ export async function prepareWorkspaceTemplates(input: {
   output: string;
   scratch: string;
   signal?: AbortSignal;
-  onSourcesPrepared?: () => void | Promise<void>;
 }): Promise<void> {
   const pins = readDefaultWorkspaceTemplates(input.appRoot);
   const sources = JSON.parse(process.env["VIBESTUDIO_WORKSPACE_SOURCES"] ?? "[]") as Array<{
@@ -60,8 +60,19 @@ export async function prepareWorkspaceTemplates(input: {
   const snapshotBlobs = new Map<string, string>();
   fs.mkdirSync(input.scratch, { recursive: true });
   const previousInstance = process.env["VIBESTUDIO_INSTANCE_ROOT"];
-  const previousUserData = getUserDataPath();
   process.env["VIBESTUDIO_INSTANCE_ROOT"] = input.scratch;
+  const centralDataRoot = getCentralDataPath();
+  const sharedDerivedRoot = getSharedDerivedDataPath();
+  // All release roles compile from independent state roots but share this
+  // operation-owned reconstruction cache. Build keys include the exact root
+  // dependency fingerprint and effective source identity, so a role can reuse
+  // a completed build only after its own store validates and hydrates it.
+  const sharedBuildArtifactPoolRoot = path.join(input.scratch, "shared-build-artifacts");
+  const sharedBuildResultCacheRoot = path.join(input.scratch, "shared-build-results");
+  const processOwner = createBuildProcessOwner({
+    appRoot: input.appRoot,
+    appNodeModules: getExistingAppNodeModulesRoots(input.appRoot),
+  });
   let retirementFailed = false;
   const releaseBuilds: Array<{
     workspace: string;
@@ -79,6 +90,8 @@ export async function prepareWorkspaceTemplates(input: {
     directory: string;
     record: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate;
   }> = [];
+  let operationFailure: unknown;
+  let operationFailed = false;
   const publishManifest = () => {
     const manifest = path.join(input.output, "userland-builds/release.json");
     fs.mkdirSync(path.dirname(manifest), { recursive: true });
@@ -108,7 +121,6 @@ export async function prepareWorkspaceTemplates(input: {
         path.join(statePath, "workspace-creation/v1.json"),
         JSON.stringify({ version: 1, workspaceId, rootTemplate: pin })
       );
-      setUserDataPath(statePath);
       const sink = { put: (bytes: Uint8Array) => putBootstrapBytes(blobsDir, Buffer.from(bytes)) };
       const acquire = (requested: WorkspaceTemplatePin) => {
         const key = JSON.stringify(requested);
@@ -209,164 +221,210 @@ export async function prepareWorkspaceTemplates(input: {
         record,
       });
     }
-    publishManifest();
     input.signal?.throwIfAborted();
-    await input.onSourcesPrepared?.();
-    for (const {
-      role,
-      statePath,
-      workspaceId,
-      stateHash,
-      sourcePath,
-      blobsDir,
-      directory,
-      record,
-    } of prepared) {
-      input.signal?.throwIfAborted();
-      setUserDataPath(statePath);
-      const preparedBuilds: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate["builds"] =
-        [];
-      const vcs = new WorkspaceVcs({
-        workspaceId,
-        initialContentState: stateHash,
-        workspaceRoot: sourcePath,
-        blobsDir,
-        contextProjectionsRoot: path.join(statePath, "contexts"),
-        buildSourcesRoot: path.join(statePath, "build-sources"),
-        refs: createProtectedRefStore({
-          statePath: path.join(statePath, "refs"),
-          gate: async () => {
-            throw new Error("A release producer cannot publish semantic state");
-          },
-        }),
-      });
-      const native = await startNativeWorkspaceRuntime({
-        workspaceId,
-        statePath,
-        sourceRoot: path.join(statePath, "build-sources"),
-        scratchRoot: path.join(statePath, "scratch"),
-        buildsRoot: path.join(statePath, "builds"),
-        appRoot: input.appRoot,
-      });
-      let builds: Awaited<ReturnType<typeof initBuildSystemV2>> | undefined;
-      let retirement: ReturnType<typeof native.stop> | undefined;
-      const retireNative = () => (retirement ??= native.stop());
-      const cancelled = () => {
-        void retireNative().catch(() => {});
-      };
-      input.signal?.addEventListener("abort", cancelled, { once: true });
-      if (input.signal?.aborted) cancelled();
-      const retireResources = async () => {
-        const outcomes = await Promise.allSettled([
-          builds?.shutdown(),
-          retireNative().then((stopped) => {
-            if (!stopped.launcherExited) {
-              retirementFailed = true;
-              throw Object.assign(new Error("Template preparation still owns a native executor"), {
-                code: "EOWNERSHIP",
+    const roleOutcomes = await Promise.allSettled(
+      prepared.map(
+        async ({
+          role,
+          statePath,
+          workspaceId,
+          stateHash,
+          sourcePath,
+          blobsDir,
+          directory,
+          record,
+        }) => {
+          input.signal?.throwIfAborted();
+          const preparedBuilds: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate["builds"] =
+            [];
+          const vcs = new WorkspaceVcs({
+            workspaceId,
+            initialContentState: stateHash,
+            workspaceRoot: sourcePath,
+            blobsDir,
+            contextProjectionsRoot: path.join(statePath, "contexts"),
+            buildSourcesRoot: path.join(statePath, "build-sources"),
+            refs: createProtectedRefStore({
+              statePath: path.join(statePath, "refs"),
+              gate: async () => {
+                throw new Error("A release producer cannot publish semantic state");
+              },
+            }),
+          });
+          const native = await startNativeWorkspaceRuntime({
+            workspaceId,
+            statePath,
+            sourceRoot: path.join(statePath, "build-sources"),
+            scratchRoot: path.join(statePath, "scratch"),
+            buildsRoot: path.join(statePath, "builds"),
+            appRoot: input.appRoot,
+          });
+          let builds: Awaited<ReturnType<typeof initBuildSystemV2>> | undefined;
+          let retirement: ReturnType<typeof native.stop> | undefined;
+          const retireNative = () => (retirement ??= native.stop());
+          const cancelled = () => {
+            void retireNative().catch(() => {});
+          };
+          input.signal?.addEventListener("abort", cancelled, { once: true });
+          if (input.signal?.aborted) cancelled();
+          const retireResources = async () => {
+            const failures: unknown[] = [];
+            const buildOutcome = await Promise.allSettled([builds?.shutdown()]);
+            failures.push(
+              ...buildOutcome.flatMap((outcome) =>
+                outcome.status === "rejected" ? [outcome.reason] : []
+              )
+            );
+            const nativeOutcome = await Promise.allSettled([
+              retireNative().then((stopped) => {
+                if (!stopped.launcherExited) {
+                  retirementFailed = true;
+                  throw Object.assign(
+                    new Error("Template preparation still owns a native executor"),
+                    {
+                      code: "EOWNERSHIP",
+                    }
+                  );
+                }
+              }),
+            ]);
+            failures.push(
+              ...nativeOutcome.flatMap((outcome) =>
+                outcome.status === "rejected" ? [outcome.reason] : []
+              )
+            );
+            if (failures.length > 0) {
+              retirementFailed = failures.some((failure) => hasOwnershipFailure(failure));
+              if (failures.length === 1) throw failures[0];
+              throw new AggregateError(
+                failures,
+                "Template preparation resource retirement failed",
+                {
+                  cause: failures[0],
+                }
+              );
+            }
+          };
+          let operationFailure: unknown;
+          let operationFailed = false;
+          try {
+            builds = await initBuildSystemV2(sourcePath, vcs, {
+              processOwner,
+              stateRoot: statePath,
+              storeRoots: resolveBuildStoreRoots({
+                stateRoot: statePath,
+                centralDataRoot,
+                sharedDerivedRoot,
+                artifactPoolOverride: sharedBuildArtifactPoolRoot,
+                buildResultCacheOverride: sharedBuildResultCacheRoot,
+              }),
+              releaseBuildRoot: path.join(
+                workspaceReleaseResourceRoot(input.appRoot),
+                "userland-builds"
+              ),
+              signal: input.signal,
+              dependencyWorkspaceRoot: sourcePath,
+              runNativeJob: (job) => native.runJob(job),
+              admitNativeDependencies: (deps) => native.admitDependencies(deps),
+            });
+            const preparedAt = performance.now();
+            console.log(`[workspace-release] Preparing runtimes for ${role}`);
+            const owner = builds;
+            const runtimeBuilds = await processOwner.withWorkers(() =>
+              prepareWorkspaceRuntimeBuilds(
+                owner.getGraph().allNodes(),
+                (source) => owner.getBuild(source, stateHash),
+                (binding) =>
+                  exportReleaseBuild(
+                    path.join(statePath, "builds", binding.buildKey),
+                    path.join(input.output, "userland-builds", binding.buildKey),
+                    binding.buildKey
+                  ),
+                input.signal
+              )
+            );
+            for (const { source, binding } of runtimeBuilds) {
+              releaseBuilds.push({
+                workspace: role,
+                source,
+                buildKey: binding.buildKey,
+                builtAt: binding.metadata.builtAt,
+              });
+              preparedBuilds.push({
+                source,
+                buildKey: binding.buildKey,
+                effectiveVersion: binding.metadata.ev,
               });
             }
-          }),
-        ]);
-        // External-dependency cache maintenance is owned by this producer too.
-        // Join its admitted children before releasing the workspace scratch or
-        // allowing the installed preparation process to report completion.
-        outcomes.push(...(await Promise.allSettled([drainExternalDependencyPruning()])));
-        outcomes.push(
-          ...(await Promise.allSettled([
-            drainDependencyContentMaintenance(),
-            drainBuildStorePublications(),
-          ]))
-        );
-        outcomes.push(...(await Promise.allSettled([closeDerivedCacheCoordinators()])));
-        const failures = outcomes.flatMap((outcome) =>
-          outcome.status === "rejected" ? [outcome.reason] : []
-        );
-        if (failures.length > 0) {
-          retirementFailed = failures.some((failure) => hasOwnershipFailure(failure));
-          if (failures.length === 1) throw failures[0];
-          throw new AggregateError(failures, "Template preparation resource retirement failed", {
-            cause: failures[0],
-          });
-        }
-      };
-      let operationFailure: unknown;
-      let operationFailed = false;
-      try {
-        builds = await initBuildSystemV2(
-          sourcePath,
-          vcs,
-          getExistingAppNodeModulesRoots(input.appRoot),
-          {
-            appRoot: input.appRoot,
-            signal: input.signal,
-            dependencyWorkspaceRoot: sourcePath,
-            runNativeJob: (job) => native.runJob(job),
-            admitNativeDependencies: (deps) => native.admitDependencies(deps),
+            console.log(
+              `[workspace-release] Prepared ${role}: ${runtimeBuilds.length} runtimes in ${Math.round(performance.now() - preparedAt)}ms`
+            );
+          } catch (error) {
+            operationFailure = error;
+            operationFailed = true;
           }
-        );
-        const preparedAt = performance.now();
-        console.log(`[workspace-release] Preparing runtimes for ${role}`);
-        const owner = builds;
-        const runtimeBuilds = await withBuilderWorkers(() =>
-          prepareWorkspaceRuntimeBuilds(
-            owner.getGraph().allNodes(),
-            (source) => owner.getBuild(source, stateHash),
-            (binding) =>
-              exportReleaseBuild(
-                path.join(statePath, "builds", binding.buildKey),
-                path.join(input.output, "userland-builds", binding.buildKey),
-                binding.buildKey
-              ),
-            input.signal
-          )
-        );
-        for (const { source, binding } of runtimeBuilds) {
-          releaseBuilds.push({
-            workspace: role,
-            source,
-            buildKey: binding.buildKey,
-            builtAt: binding.metadata.builtAt,
-          });
-          preparedBuilds.push({
-            source,
-            buildKey: binding.buildKey,
-            effectiveVersion: binding.metadata.ev,
-          });
+          try {
+            await retireResources();
+          } catch (retirementFailure) {
+            if (operationFailed) {
+              throw new AggregateError(
+                [operationFailure, retirementFailure],
+                "Template preparation and resource retirement failed",
+                { cause: operationFailure }
+              );
+            }
+            throw retirementFailure;
+          } finally {
+            input.signal?.removeEventListener("abort", cancelled);
+          }
+          if (operationFailed) throw operationFailure;
+          record.builds = preparedBuilds;
+          const recordPath = path.join(directory, "template.json");
+          fs.writeFileSync(`${recordPath}.publishing`, JSON.stringify(record));
+          fs.renameSync(`${recordPath}.publishing`, recordPath);
         }
-        console.log(
-          `[workspace-release] Prepared ${role}: ${runtimeBuilds.length} runtimes in ${Math.round(performance.now() - preparedAt)}ms`
-        );
-      } catch (error) {
-        operationFailure = error;
-        operationFailed = true;
-      }
-      try {
-        await retireResources();
-      } catch (retirementFailure) {
-        if (operationFailed) {
-          throw new AggregateError(
-            [operationFailure, retirementFailure],
-            "Template preparation and resource retirement failed",
-            { cause: operationFailure }
-          );
-        }
-        throw retirementFailure;
-      } finally {
-        input.signal?.removeEventListener("abort", cancelled);
-      }
-      if (operationFailed) throw operationFailure;
-      record.builds = preparedBuilds;
-      const recordPath = path.join(directory, "template.json");
-      fs.writeFileSync(`${recordPath}.publishing`, JSON.stringify(record));
-      fs.renameSync(`${recordPath}.publishing`, recordPath);
-      publishManifest();
+      )
+    );
+    const roleFailures = roleOutcomes.flatMap((outcome) =>
+      outcome.status === "rejected" ? [outcome.reason] : []
+    );
+    if (roleFailures.length === 1) throw roleFailures[0];
+    if (roleFailures.length > 1) {
+      throw new AggregateError(roleFailures, "Workspace runtime preparation failed", {
+        cause: roleFailures[0],
+      });
     }
+    releaseBuilds.sort(
+      (a, b) => a.workspace.localeCompare(b.workspace) || a.source.localeCompare(b.source)
+    );
+    publishManifest();
     input.signal?.throwIfAborted();
-  } finally {
-    setUserDataPath(previousUserData);
-    if (previousInstance === undefined) delete process.env["VIBESTUDIO_INSTANCE_ROOT"];
-    else process.env["VIBESTUDIO_INSTANCE_ROOT"] = previousInstance;
-    if (!retirementFailed) fs.rmSync(input.scratch, { recursive: true, force: true });
+  } catch (error) {
+    operationFailure = error;
+    operationFailed = true;
+  }
+  const retirementFailures: unknown[] = [];
+  for (const retirement of [
+    () => drainExternalDependencyPruning(),
+    () => drainDependencyContentMaintenance(),
+    () => processOwner.shutdown(),
+    () => closeDerivedCacheCoordinators(),
+  ]) {
+    try {
+      await retirement();
+    } catch (error) {
+      retirementFailures.push(error);
+    }
+  }
+  retirementFailed ||= retirementFailures.some((failure) => hasOwnershipFailure(failure));
+  if (previousInstance === undefined) delete process.env["VIBESTUDIO_INSTANCE_ROOT"];
+  else process.env["VIBESTUDIO_INSTANCE_ROOT"] = previousInstance;
+  if (!retirementFailed) fs.rmSync(input.scratch, { recursive: true, force: true });
+  const failures = [...(operationFailed ? [operationFailure] : []), ...retirementFailures];
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Workspace template preparation and retirement failed", {
+      cause: failures[0],
+    });
   }
 }

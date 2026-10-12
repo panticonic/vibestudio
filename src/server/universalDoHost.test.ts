@@ -12,6 +12,7 @@ import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
  */
 import { createServer, type Server } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -294,6 +295,10 @@ async function createHarness(
     getBuildByKey: async (key: string) => {
       const build = boundBuilds.get(key);
       return build ? storedBuildFixture(build) : null;
+    },
+    readBuildArtifactContent: async (build, artifact) => {
+      const bytes = await readFile(join(build.dir, artifact.path));
+      return artifact.encoding === "base64" ? bytes.toString("base64") : bytes.toString("utf8");
     },
     getBuildByExecution: async (key: string, executionDigest: string) => {
       const build = boundBuilds.get(key) ?? null;

@@ -11,6 +11,7 @@ import type { AttachedHostPublisher } from "../services/attachedHostController.j
 import type { AttachedHostEndpoint } from "../services/attachedHostProtocol.js";
 import type { ServerLogStore } from "../services/serverLogStore.js";
 import type { WorkspaceChildHubPort } from "../workspaceChildHubPort.js";
+import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { createAttachedHostPublicationPorts } from "../services/attachedHostTransport.js";
 import type {
   ExecutionPublicationPort,
@@ -31,6 +32,10 @@ export interface DevelopmentNativeBootstrapDeps {
   appRoot: string;
   container: Pick<ServiceContainer, "registerManaged">;
   workspaceId: string;
+  getBuildSystem(): Pick<
+    BuildSystemV2,
+    "getBuildByKey" | "putStoredBuild" | "readBuildArtifactBytes"
+  >;
   workspaceVcs: WorkspaceVcs;
   layout: Pick<StateLayout, "development" | "blobsDir">;
   eventService: EventService;
@@ -114,7 +119,7 @@ export async function wireDevelopmentNative(
 
   deps.container.registerManaged({
     name: "developmentNative",
-    dependencies: ["developmentClientExecutor", "attachedHosts"],
+    dependencies: ["developmentClientExecutor", "attachedHosts", "buildSystem"],
     async start() {
       const hostExecutionDigest = readHostExecutionDigest(deps.appRoot);
       const semantic = createNativeDevelopmentSemanticAdapter(deps.workspaceVcs);
@@ -127,6 +132,7 @@ export async function wireDevelopmentNative(
       developmentExecutor = new DevelopmentExecutor({
         workspaceId: deps.workspaceId,
         hostExecutionDigest,
+        buildSystem: deps.getBuildSystem(),
         runRoots: developmentRunRoots,
         planSource: (input) => deps.workspaceVcs.planExactContextRepository(input),
         materializeSource: (plan, destination) =>

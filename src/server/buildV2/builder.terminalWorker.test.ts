@@ -4,14 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@vibestudio/env-paths";
 
-import { buildUnit, initBuilder } from "./builder.js";
-import { setBuildRootConfig } from "./effectiveVersion.js";
-import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
-import { setBuildExecutionIdentityContext } from "./buildStore.js";
-beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
-afterAll(() => setBuildSourceProvider(null));
+import { buildUnit, type BuilderSession } from "./builder.js";
+import { createBuilderTestSession } from "./builderTestSession.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 import { exactTemplateRoots } from "../../../tests/exactUserlandRoot";
 
@@ -50,24 +45,25 @@ function copyDir(src: string, dst: string): void {
 describe("buildUnit terminal worker builds", () => {
   let root: string;
   let workspaceRoot: string;
+  let session: BuilderSession;
+  let closeSession: () => Promise<void>;
 
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-terminal-build-"));
     workspaceRoot = path.join(root, "workspace");
-    await setBuildRootConfig({ appRoot: REPO_ROOT, workspaceRoot });
-    setUserDataPath(path.join(root, "state"));
-    setBuildExecutionIdentityContext({
-      serviceAuthorityForSource: async () =>
-        "b7e01c5f5a5351d9b1e459b5fc9e3c36920637eac75afd9ad271b3a0d8736e06",
-      workspaceId: "workspace:test",
-      executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+    const context = await createBuilderTestSession({
+      appRoot: REPO_ROOT,
+      workspaceRoot,
+      stateRoot: path.join(root, "state"),
+      appNodeModules: [path.join(REPO_ROOT, "node_modules")],
+      runNativeJob: runIsolatedBuildJob,
     });
-    // Resolve external npm deps (yoga-layout) from the repo's real node_modules.
-    initBuilder([path.join(REPO_ROOT, "node_modules")], REPO_ROOT, runIsolatedBuildJob);
+    session = context.session;
+    closeSession = context.close;
   });
 
   afterEach(async () => {
-    await setBuildRootConfig(null);
+    await closeSession?.();
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -115,6 +111,7 @@ describe("buildUnit terminal worker builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-workers/terminal-min"),
       "a".repeat(64),
       graph,
@@ -208,6 +205,7 @@ describe("buildUnit terminal worker builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-workers/stale-dist-worker"),
       "b".repeat(64),
       graph,
@@ -230,6 +228,7 @@ describe("buildUnit terminal worker builds", () => {
 
     const laterState = `state:${"d".repeat(64)}`;
     const reused = await buildUnit(
+      session,
       graph.get("@workspace-workers/stale-dist-worker"),
       "b".repeat(64),
       graph,
@@ -270,6 +269,7 @@ describe("buildUnit terminal worker builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
+      session,
       graph.get("@workspace-workers/lazy-expose-worker"),
       "e".repeat(64),
       graph,

@@ -227,7 +227,7 @@ async function runServer(
   await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
   resources.preparation = prepareLaunchTemplates(env, instance.root, instance.generationId);
-  await resources.preparation.sourcesReady;
+  await resources.preparation.completed;
   const configuredReadyFile = optionValue(forwarded, "--ready-file");
   const readyFile =
     configuredReadyFile ?? path.join(instance.root, "server-auth", "hub-ready.json");
@@ -280,8 +280,7 @@ async function runServer(
     },
   });
   resources.supervisor = supervisor;
-  const started = supervisor.start();
-  await Promise.race([started, resources.preparation.completed.then(() => started)]);
+  await supervisor.start();
   return supervisor;
 }
 
@@ -299,7 +298,7 @@ async function runDesktop(
   await run(process.execPath, ["scripts/ensure-host-build.mjs"], { env });
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "desktop");
   resources.preparation = prepareLaunchTemplates(env, instance.root, instance.generationId);
-  await resources.preparation.sourcesReady;
+  await resources.preparation.completed;
   const supervisor = new DevInstanceSupervisor({
     sourceRoot: fs.realpathSync(process.cwd()),
     command: process.execPath,
@@ -309,8 +308,7 @@ async function runDesktop(
     forwardParentSignals: true,
   });
   resources.supervisor = supervisor;
-  const started = supervisor.start();
-  await Promise.race([started, resources.preparation.completed.then(() => started)]);
+  await supervisor.start();
   return supervisor;
 }
 

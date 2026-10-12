@@ -1,21 +1,49 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { closeBuilder, initBuilder, withBuilderWorkers } from "./builder.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withBuilderWorkers } from "./builder.js";
+import { createBuilderTestSession } from "./builderTestSession.js";
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import { LibraryLoweringWorkerClient } from "./libraryLoweringWorkerClient.js";
 import { WorkspaceRpcCatalogWorkerClient } from "./workspaceRpcCatalogWorkerClient.js";
 import { ImmutableTreeWorkerClient } from "./immutableTreeWorkerClient.js";
 
+const contexts: Array<Awaited<ReturnType<typeof createBuilderTestSession>>> = [];
+const roots: string[] = [];
+
+async function openSession() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-builder-lifetime-"));
+  roots.push(root);
+  const context = await createBuilderTestSession({
+    appRoot: process.cwd(),
+    workspaceRoot: root,
+    stateRoot: path.join(root, "state"),
+    runNativeJob: runIsolatedBuildJob,
+  });
+  contexts.push(context);
+  return context;
+}
+
 afterEach(async () => {
-  await closeBuilder();
+  const failures: unknown[] = [];
+  for (const context of contexts.splice(0)) {
+    try {
+      await context.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   vi.restoreAllMocks();
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(failures, "Builder lifetime fixture cleanup failed");
 });
 
 describe("build-owned compiler residency", () => {
-  it("closes admission, joins admitted work, then permits a new explicit lifetime", async () => {
-    const appRoot = process.cwd();
-    initBuilder(path.join(appRoot, "node_modules"), appRoot, async () => {
-      throw new Error("unused");
-    });
+  it("closes admission and joins admitted work before process-owned worker retirement", async () => {
+    const context = await openSession();
     const close = vi
       .spyOn(LibraryLoweringWorkerClient.prototype, "close")
       .mockResolvedValue(undefined);
@@ -27,33 +55,27 @@ describe("build-owned compiler residency", () => {
     const gate = new Promise<void>((resolve) => {
       finish = resolve;
     });
-    const admitted = withBuilderWorkers(async () => {
+    const admitted = withBuilderWorkers(context.session, async () => {
       started();
       await gate;
     });
     await workStarted;
 
     let retired = false;
-    const retirement = closeBuilder().then(() => {
+    const retirement = context.processOwner.shutdown().then(() => {
       retired = true;
     });
-    await expect(withBuilderWorkers(async () => undefined)).rejects.toThrow("shutting down");
+    await expect(withBuilderWorkers(context.session, async () => undefined)).rejects.toThrow(
+      "shutting down"
+    );
     expect(retired).toBe(false);
     finish();
     await Promise.all([admitted, retirement]);
     expect(close).toHaveBeenCalledOnce();
-
-    initBuilder(path.join(appRoot, "node_modules"), appRoot, async () => {
-      throw new Error("unused");
-    });
-    await expect(withBuilderWorkers(async () => "reopened")).resolves.toBe("reopened");
   });
 
-  it("does not reinitialize until auxiliary worker retirement reaches terminal", async () => {
-    const appRoot = process.cwd();
-    initBuilder(path.join(appRoot, "node_modules"), appRoot, async () => {
-      throw new Error("unused");
-    });
+  it("keeps each process owner closed after auxiliary worker retirement", async () => {
+    const context = await openSession();
     let finishClose!: () => void;
     const closeGate = new Promise<void>((resolve) => {
       finishClose = resolve;
@@ -67,27 +89,20 @@ describe("build-owned compiler residency", () => {
       await closeGate;
     });
 
-    const closing = closeBuilder();
+    const closing = context.processOwner.shutdown();
     await started;
-    expect(() =>
-      initBuilder(path.join(appRoot, "node_modules"), appRoot, async () => {
-        throw new Error("unused");
-      })
-    ).toThrow("retiring");
+    await expect(withBuilderWorkers(context.session, async () => undefined)).rejects.toThrow(
+      "shutting down"
+    );
     finishClose();
     await closing;
-
-    expect(() =>
-      initBuilder(path.join(appRoot, "node_modules"), appRoot, async () => {
-        throw new Error("unused");
-      })
-    ).not.toThrow();
+    await expect(context.processOwner.withWorkers(async () => "closed")).rejects.toThrow(
+      "shutting down"
+    );
   });
 
-  it("shares workers across overlapping closures and joins last-owner retirement", async () => {
-    initBuilder(path.join(process.cwd(), "node_modules"), process.cwd(), async () => {
-      throw new Error("unused");
-    });
+  it("shares workers across overlapping operations and joins every worker on shutdown", async () => {
+    const context = await openSession();
     const lowering = vi
       .spyOn(LibraryLoweringWorkerClient.prototype, "close")
       .mockResolvedValue(undefined);
@@ -100,40 +115,27 @@ describe("build-owned compiler residency", () => {
     let firstDone!: () => void;
     let secondDone!: () => void;
     const first = withBuilderWorkers(
-      () =>
-        new Promise<void>((resolve) => {
-          firstDone = resolve;
-        })
+      context.session,
+      () => new Promise<void>((resolve) => (firstDone = resolve))
     );
     const second = withBuilderWorkers(
-      () =>
-        new Promise<void>((resolve) => {
-          secondDone = resolve;
-        })
+      context.session,
+      () => new Promise<void>((resolve) => (secondDone = resolve))
     );
-    // Resolve the initialization retirement before either owned operation starts.
     await new Promise<void>((resolve) => setImmediate(resolve));
     firstDone();
     await first;
     expect(lowering).not.toHaveBeenCalled();
     secondDone();
     await second;
+    await context.processOwner.shutdown();
     expect(lowering).toHaveBeenCalledOnce();
     expect(catalog).toHaveBeenCalledOnce();
     expect(immutable).toHaveBeenCalledOnce();
-    const failure = new Error("original build failure");
-    await expect(
-      withBuilderWorkers(async () => {
-        throw failure;
-      })
-    ).rejects.toBe(failure);
-    expect(lowering).toHaveBeenCalledTimes(2);
   });
 
   it("preserves every worker retirement error and the failed build that owned them", async () => {
-    initBuilder(path.join(process.cwd(), "node_modules"), process.cwd(), async () => {
-      throw new Error("unused");
-    });
+    const context = await openSession();
     const loweringFailure = new Error("lowering worker close failed");
     const catalogFailure = new Error("catalog worker close failed");
     vi.spyOn(LibraryLoweringWorkerClient.prototype, "close").mockRejectedValue(loweringFailure);
@@ -142,25 +144,21 @@ describe("build-owned compiler residency", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     const buildFailure = new Error("build failed");
-    let caught: unknown;
-    try {
-      await withBuilderWorkers(async () => {
+    await expect(
+      context.processOwner.withWorkers(async () => {
         throw buildFailure;
-      });
-    } catch (error) {
-      caught = error;
-    }
+      })
+    ).rejects.toMatchObject({
+      errors: [
+        buildFailure,
+        expect.objectContaining({
+          errors: [loweringFailure, catalogFailure],
+          cause: loweringFailure,
+        }),
+      ],
+      cause: buildFailure,
+    });
 
-    expect(caught).toBeInstanceOf(AggregateError);
-    const combined = caught as AggregateError;
-    expect(combined.errors).toEqual([
-      buildFailure,
-      expect.objectContaining({
-        errors: [loweringFailure, catalogFailure],
-        cause: loweringFailure,
-      }),
-    ]);
-    expect(combined.cause).toBe(buildFailure);
     vi.restoreAllMocks();
   });
 });

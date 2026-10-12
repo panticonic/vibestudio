@@ -34,7 +34,10 @@ describe("TerminalAppRuntime startup failures", () => {
     const runtime = new TerminalAppRuntime({
       workspaceId: "workspace-test",
       registry,
-      buildSystem: { getBuildByKey: vi.fn(async () => null) },
+      buildSystem: {
+        getBuildByKey: vi.fn(async () => null),
+        getBuildArtifactPath: vi.fn(() => "/unused"),
+      },
       diagnostics: {
         record: vi.fn(),
         history: () => ({

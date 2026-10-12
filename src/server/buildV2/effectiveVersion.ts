@@ -22,7 +22,7 @@ import { logVerbose } from "@vibestudio/dev-log";
  * files, the exact local `packages/*` implementation trees workspace builds
  * can bundle, plus nested workspace package/lock/workspace/tsconfig files (see
  * computeRootDependencyFingerprint). These inputs are read off live disk. The
- * app/workspace roots are now injected explicitly (setBuildRootConfig) rather
+ * app/workspace roots are now injected explicitly (prepareBuildRootConfig) rather
  * than guessed from process.cwd(). A future design step should move these inputs
  * into GAD workspace state so the whole build key is derived from
  * content-addressed state; that migration is intentionally out of scope here.
@@ -32,7 +32,6 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import type { PackageGraph } from "./packageGraph.js";
-import { getUserDataPath } from "@vibestudio/env-paths";
 import {
   getPhysicalAppPath,
   getExistingAppNodeModulesRoots,
@@ -191,12 +190,12 @@ interface PersistedEvState {
   contentHashes: ContentHashMap;
 }
 
-function getEvStatePath(): string {
-  return path.join(getUserDataPath(), "ev-state.json");
+function getEvStatePath(stateRoot: string): string {
+  return path.join(stateRoot, "ev-state.json");
 }
 
-export async function loadPersistedEvState(): Promise<PersistedEvState | null> {
-  const p = getEvStatePath();
+export async function loadPersistedEvState(stateRoot: string): Promise<PersistedEvState | null> {
+  const p = getEvStatePath(stateRoot);
   try {
     const parsed = JSON.parse(await fs.promises.readFile(p, "utf-8")) as PersistedEvState;
     if (
@@ -214,8 +213,11 @@ export async function loadPersistedEvState(): Promise<PersistedEvState | null> {
   return null;
 }
 
-export async function persistEvState(state: Omit<PersistedEvState, "version">): Promise<void> {
-  const p = getEvStatePath();
+export async function persistEvState(
+  stateRoot: string,
+  state: Omit<PersistedEvState, "version">
+): Promise<void> {
+  const p = getEvStatePath(stateRoot);
   const dir = path.dirname(p);
   const temporary = `${p}.tmp.${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
   await fs.promises.mkdir(dir, { recursive: true });
@@ -281,44 +283,22 @@ export interface RootDependencyFingerprintFile {
 /** Observable description of the root-dependency fingerprint folded into build keys. */
 export interface RootDependencyFingerprintInfo {
   /** Resolved app root the fingerprint was computed against. */
-  root: string;
-  workspaceRoot: string | null;
+  readonly root: string;
+  readonly workspaceRoot: string | null;
   /** The root is always an explicit construction input. */
-  rootSource: "injected";
+  readonly rootSource: "injected";
   /** Full SHA-256 fingerprint folded into computeBuildKey. */
-  value: string;
+  readonly value: string;
   /** Per-input observability (paths + presence + per-file content hash). */
-  files: RootDependencyFingerprintFile[];
+  readonly files: readonly RootDependencyFingerprintFile[];
 }
 
-/**
- * App root injected at build-system construction (see setBuildRootConfig).
- * Makes the fingerprint's file inputs explicit instead of cwd-guessing. There
- * is deliberately no environment or cwd fallback.
- */
-let injectedAppRoot: string | null = null;
-let rootFingerprintLogged = false;
-let preparedRootFingerprint: RootDependencyFingerprintInfo | null = null;
-let rootConfigGeneration = 0;
-
-/**
- * Inject the host app root and optional workspace root used to locate the
- * dependency fingerprint inputs. Call once from the build system's construction
- * with explicit roots — this removes the fragile process.cwd() dependence from
- * the build-cache identity. Passing `null` clears the injected values (used by
- * tests).
- */
-export async function setBuildRootConfig(
-  config: {
-    appRoot: string;
-    workspaceRoot?: string;
-    fingerprint?: RootDependencyFingerprintInfo;
-  } | null
-): Promise<void> {
-  const generation = ++rootConfigGeneration;
-  injectedAppRoot = config?.appRoot ?? null;
-  preparedRootFingerprint = null;
-  if (!config) return;
+/** Prepare the dependency identity owned by one build session. */
+export async function prepareBuildRootConfig(config: {
+  appRoot: string;
+  workspaceRoot?: string;
+  fingerprint?: RootDependencyFingerprintInfo;
+}): Promise<RootDependencyFingerprintInfo> {
   const info =
     config.fingerprint ??
     (await computeRootDependencyFingerprint(config.appRoot, config.workspaceRoot));
@@ -328,14 +308,8 @@ export async function setBuildRootConfig(
   ) {
     throw new Error("Dependency fingerprint belongs to a different dependency environment");
   }
-  if (generation !== rootConfigGeneration) return;
-  preparedRootFingerprint = info;
   logRootDependencyFingerprint(info);
-}
-
-function resolveAppRoot(): { root: string; source: RootDependencyFingerprintInfo["rootSource"] } {
-  if (injectedAppRoot) return { root: injectedAppRoot, source: "injected" };
-  throw new Error("Build dependency roots were not configured");
+  return info;
 }
 
 async function fullHash(
@@ -650,8 +624,6 @@ export async function computeRootDependencyFingerprint(
 }
 
 function logRootDependencyFingerprint(info: RootDependencyFingerprintInfo): void {
-  if (rootFingerprintLogged) return;
-  rootFingerprintLogged = true;
   const ordinaryFiles = info.files.filter(
     (file) => !file.file.endsWith("/**") && !file.file.startsWith("installed-node-modules:")
   );
@@ -671,35 +643,18 @@ function logRootDependencyFingerprint(info: RootDependencyFingerprintInfo): void
 }
 
 /**
- * Observable description of the root-dependency fingerprint currently folded
- * into build keys. Surface this in build metadata/diagnostics so cache identity
- * (which host-root inputs it depends on, and how the root was resolved) is
- * inspectable rather than invisible.
- */
-export function getRootDependencyFingerprintInfo(): RootDependencyFingerprintInfo {
-  if (!preparedRootFingerprint) {
-    resolveAppRoot();
-    throw new Error("Build dependency fingerprint has not finished preparing");
-  }
-  return preparedRootFingerprint;
-}
-
-function rootDependencyFingerprint(): string {
-  return getRootDependencyFingerprintInfo().value;
-}
-
-/**
  * Compute the build key for a unit:
  *   hash(BUILD_CACHE_VERSION, root-deps fingerprint, unitName, ev, sourcemap).
  * This is the content-addressed store key. The root-deps fingerprint folds in
  * the CONTENTS of the host's package.json / pnpm-lock.yaml / pnpm-workspace.yaml
- * (see getRootDependencyFingerprintInfo for observability). The root lock is
+ * (see RootDependencyFingerprintInfo for observability). The root lock is
  * the host/platform lock, never the unit's dependency authority. Unit name is
  * included to prevent different units with identical EVs from sharing builds
  * (different entry points, HTML titles, dependency sets produce different
  * artifacts).
  */
 export function computeBuildKey(
+  rootFingerprint: RootDependencyFingerprintInfo,
   unitName: string,
   ev: string,
   sourcemap: boolean,
@@ -708,7 +663,7 @@ export function computeBuildKey(
   return hashStrings([
     BUILD_CACHE_VERSION,
     `panel-entry-protocol:${protocolFingerprint}`,
-    `root-deps:${rootDependencyFingerprint()}`,
+    `root-deps:${rootFingerprint.value}`,
     unitName,
     ev,
     `sourcemap:${sourcemap}`,
