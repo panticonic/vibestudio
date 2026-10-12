@@ -89,9 +89,9 @@ jobs:
       CANDIDATE_RUN_ID: ${{ inputs.candidate-run-id }}
       CANDIDATE_ATTEMPT: ${{ needs.validate-release-input.outputs.candidate-attempt }}
     steps:
-      - name: Recheck exact successful CI attempt before creating the tag
+      - name: Recheck the immutable successful CI attempt before creating the tag
         run: |
-          run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID")"
+          run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_ATTEMPT")"
           test "$(jq -r '.run_attempt' <<<"$run_json")" = "$CANDIDATE_ATTEMPT"
           test "$(jq -r '.head_sha' <<<"$run_json")" = "$SOURCE_SHA"
           test "$(jq -r '.status' <<<"$run_json")" = completed

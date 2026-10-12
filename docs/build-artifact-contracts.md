@@ -278,16 +278,20 @@ checks its required unexpired artifacts, and reads the final gate receipt. It
 rejects a changed platform configuration. Prerelease and build-metadata versions
 are not accepted in this
 `--latest` release lane. The tag is never moved or overwritten. Publication
-pins the verified run's exact attempt and each required artifact ID and archive
-SHA-256 digest. Publishers recheck that CI attempt, download by artifact ID,
-verify the archive digest, and then check installer checksums. A concurrent CI
-rerun can invalidate an old artifact ID and fail publication, but cannot replace
-the accepted bytes under the same name. Publication does not rebuild the
+pins the verified run's exact successful attempt and each required artifact ID
+and archive SHA-256 digest. Tag creation and publishers recheck that specific
+attempt through GitHub's attempt API, download by artifact ID, verify the
+archive digest, and then check installer checksums. A later rerun of the CI run
+does not change the accepted attempt or substitute same-name artifacts;
+publication fails if one of the pinned artifacts is deleted or expires.
+Publication does not rebuild the
 application or re-run CI. If the candidate CI run fails, repair it before
 dispatching Release. After a pre-tag dispatch failure, rerun
 the dispatch against the same successful CI run while its artifacts are
-retained; after a post-tag publisher failure, use **Re-run failed jobs** so
-successful candidate producers and their artifacts remain untouched. The final
+retained; after a post-tag publisher failure, use **Re-run failed jobs** on the
+Release workflow. Do not rerun candidate CI to repair publication: once the
+version is tagged, that CI workflow skips candidate packaging, while the
+original successful attempt remains the publication authority. The final
 publication job
 serializes only the shared latest-release promotion and compares stable semantic
 versions, so an older release cannot demote a newer latest release. GitHub keeps

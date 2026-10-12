@@ -117,7 +117,11 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
       windows: process.env.RELEASE_WINDOWS === "true",
     };
     const workflow = ghJson(`repos/${repository}/actions/workflows/ci.yml`);
-    const run = ghJson(`repos/${repository}/actions/runs/${runId}`);
+    const latestRun = ghJson(`repos/${repository}/actions/runs/${runId}`);
+    if (!Number.isSafeInteger(latestRun.run_attempt) || latestRun.run_attempt < 1) {
+      throw new Error("Candidate CI run has no valid attempt number");
+    }
+    const run = ghJson(`repos/${repository}/actions/runs/${runId}/attempts/${latestRun.run_attempt}`);
     const artifacts = ghJson(`repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`);
     const selected = validateReleaseCiRun({
       run,

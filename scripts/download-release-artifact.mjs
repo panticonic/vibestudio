@@ -52,7 +52,9 @@ export async function downloadReleaseArtifact({
     throw new Error("Missing exact candidate run identity or artifact-read token");
   }
   const run = JSON.parse(
-    execFileSync("gh", ["api", `repos/${repository}/actions/runs/${runId}`], { encoding: "utf8" })
+    execFileSync("gh", ["api", `repos/${repository}/actions/runs/${runId}/attempts/${attempt}`], {
+      encoding: "utf8",
+    })
   );
   assertCandidateAttempt(run, { runId, attempt, sourceSha, repository });
   const scratch = fs.mkdtempSync(
