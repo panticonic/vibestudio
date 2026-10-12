@@ -4749,6 +4749,12 @@ async function materializeBuildProviderArtifacts(
           );
         }
         const bytes = new Uint8Array(await response.arrayBuffer());
+        const actualIntegrity = `sha256-${createHash("sha256").update(bytes).digest("hex")}`;
+        if (actualIntegrity !== artifact.stream.integrity) {
+          throw new Error(
+            `Build provider ${provider.name} streamed artifact ${artifact.path} with integrity ${actualIntegrity}, expected ${artifact.stream.integrity}`
+          );
+        }
         content =
           encoding === "base64"
             ? Buffer.from(bytes).toString("base64")

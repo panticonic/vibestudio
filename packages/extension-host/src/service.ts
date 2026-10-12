@@ -3321,12 +3321,14 @@ function extensionWorkspaceStatusFallback(
 
 function isBuildProviderArtifactStream(
   value: unknown
-): value is { method: string; args?: unknown[] } {
+): value is { method: string; args?: unknown[]; integrity: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const stream = value as { method?: unknown; args?: unknown };
+  const stream = value as { method?: unknown; args?: unknown; integrity?: unknown };
   return (
     typeof stream.method === "string" &&
     stream.method.trim().length > 0 &&
+    typeof stream.integrity === "string" &&
+    /^sha256-[0-9a-f]{64}$/.test(stream.integrity) &&
     (stream.args === undefined || Array.isArray(stream.args))
   );
 }

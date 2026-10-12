@@ -7,9 +7,17 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("Android nightly smoke uses its source-server producer entrypoint", () => {
-  const workflow = fs.readFileSync(
+  const nightly = fs.readFileSync(
     path.join(root, ".github/workflows/iroh-e2e-nightly.yml"),
     "utf8"
+  );
+  const workflow = fs.readFileSync(
+    path.join(root, ".github/workflows/android-iroh-smoke.yml"),
+    "utf8"
+  );
+  assert.match(
+    nightly.slice(nightly.indexOf("  android-iroh-smoke:")),
+    /uses: \.\/\.github\/workflows\/android-iroh-smoke\.yml/u
   );
   const androidJob = workflow.slice(workflow.indexOf("  android-iroh-smoke:"));
   const scripts = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).scripts;
@@ -59,6 +67,14 @@ test("desktop nightly smoke installs its native keyring and display runtime", ()
   );
   const androidJob = workflow.slice(workflow.indexOf("  android-iroh-smoke:"));
   const ci = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
+  const qualityDesktop = fs.readFileSync(
+    path.join(root, ".github/workflows/quality-desktop.yml"),
+    "utf8"
+  );
+  const androidSmoke = fs.readFileSync(
+    path.join(root, ".github/workflows/android-iroh-smoke.yml"),
+    "utf8"
+  );
   const qualityJob = ci.slice(ci.indexOf("  quality:"), ci.indexOf("  quality-desktop:"));
   const qualityDesktopJob = ci.slice(
     ci.indexOf("  quality-desktop:"),
@@ -76,14 +92,19 @@ test("desktop nightly smoke installs its native keyring and display runtime", ()
   assert.match(qualityJob, /uses: \.\/\.github\/actions\/setup-linux-source-runtime/u);
   assert.match(
     qualityDesktopJob,
+    /uses: \.\/\.github\/workflows\/quality-desktop\.yml/u
+  );
+  assert.match(
+    qualityDesktop,
     /uses: \.\/\.github\/actions\/setup-linux-source-runtime[\s\S]*?desktop: "true"/u
   );
   assert.match(
     desktopJob,
     /uses: \.\/\.github\/actions\/setup-linux-source-runtime[\s\S]*?desktop: "true"/u
   );
-  assert.match(androidJob, /uses: \.\/\.github\/actions\/setup-linux-source-runtime\n/u);
-  assert.doesNotMatch(androidJob, /desktop: "true"/u);
+  assert.match(androidJob, /uses: \.\/\.github\/workflows\/android-iroh-smoke\.yml/u);
+  assert.match(androidSmoke, /uses: \.\/\.github\/actions\/setup-linux-source-runtime\n/u);
+  assert.doesNotMatch(androidSmoke, /desktop: "true"/u);
 });
 
 test("public Vitest Iroh entrypoints prepare the development desktop host", () => {
