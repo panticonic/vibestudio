@@ -59,21 +59,21 @@ class FakeSession implements IrohClientSession {
 
 class FakePipe implements IrohClientPipe {
   readonly peerEndpointId = reach.endpointId;
-  private readonly session: FakeSession;
+  readonly sessions: FakeSession[] = [];
   private readonly diagnosticsListeners = new Set<
     (diagnostics: IrohConnectionDiagnostics | null) => void
   >();
 
-  constructor(private readonly closeOrder: string[]) {
-    this.session = new FakeSession(closeOrder);
-  }
+  constructor(private readonly closeOrder: string[]) {}
 
   ready(): Promise<void> {
     return Promise.resolve();
   }
 
   openSession(_options: IrohClientSessionOptions): IrohClientSession {
-    return this.session;
+    const session = new FakeSession(this.closeOrder);
+    this.sessions.push(session);
+    return session;
   }
 
   status(): RpcConnectionStatus {
@@ -113,28 +113,23 @@ class FakePipe implements IrohClientPipe {
     return () => this.diagnosticsListeners.delete(handler);
   }
 
-  close(): Promise<void> {
+  async close(): Promise<void> {
     this.closeOrder.push("pipe");
-    return Promise.resolve();
+    await Promise.all(this.sessions.map((session) => session.close()));
   }
 }
 
 describe("Iroh server client lifecycle", () => {
-  it("joins native retirement before wrapper closure can write another session control frame", async () => {
+  it("lets the pipe own logical session retirement exactly once", async () => {
     const pipe = new FakePipe([]);
-    const session = new FakeSession([]);
     let release!: () => void;
     const retiring = new Promise<void>((resolve) => {
       release = resolve;
     });
-    let gone = false;
-    vi.spyOn(pipe, "openSession").mockReturnValue(session);
+    const pipeClose = pipe.close.bind(pipe);
     vi.spyOn(pipe, "close").mockImplementation(async () => {
       await retiring;
-      gone = true;
-    });
-    const closeSession = vi.spyOn(session, "close").mockImplementation(async () => {
-      if (!gone) throw new Error("Session control write raced its physical owner's closure");
+      await pipeClose();
     });
     const client = await createIrohServerClient({
       reach,
@@ -142,6 +137,7 @@ describe("Iroh server client lifecycle", () => {
       getShellToken: () => "token",
       pipe,
     });
+    const closeSession = vi.spyOn(pipe.sessions[0]!, "close");
     const closing = client.close();
     void closing.catch(() => undefined);
     try {
@@ -152,40 +148,24 @@ describe("Iroh server client lifecycle", () => {
       await closing;
     }
     expect(closeSession).toHaveBeenCalledOnce();
+    expect(pipe.sessions[0]!.isClosed()).toBe(true);
   });
-  it("retires the pipe before joining session I/O and retains cleanup failures", async () => {
+  it("propagates the pipe owner's cleanup failure without issuing another session close", async () => {
     const pipe = new FakePipe([]);
-    let release!: () => void;
-    const physicalClosed = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const session = new FakeSession([]);
-    const originalFailure = new Error("Original session retirement failure");
-    vi.spyOn(session, "close").mockImplementation(async () => {
-      await physicalClosed;
-      throw originalFailure;
-    });
-    vi.spyOn(pipe, "openSession").mockReturnValue(session);
-    const closePipe = vi.spyOn(pipe, "close").mockImplementation(async () => {
-      release();
-    });
+    const originalFailure = new Error("Original pipe retirement failure");
+    const closePipe = vi.spyOn(pipe, "close").mockRejectedValue(originalFailure);
     const client = await createIrohServerClient({
       reach,
       callerId: "shell:device",
       getShellToken: () => "token",
       pipe,
     });
+    const closeSession = vi.spyOn(pipe.sessions[0]!, "close");
     const closing = client.close();
-    void closing.catch(() => undefined);
-    try {
-      for (let index = 0; index < 10; index++) await Promise.resolve();
-      expect(closePipe).toHaveBeenCalledOnce();
-      await expect(closing).rejects.toMatchObject({ errors: [originalFailure] });
-      expect(client.close()).toBe(closing);
-    } finally {
-      release();
-      await closing.catch(() => undefined);
-    }
+    await expect(closing).rejects.toBe(originalFailure);
+    expect(closePipe).toHaveBeenCalledOnce();
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(client.close()).toBe(closing);
   });
   it("publishes complete transport diagnostics and retires pipe I/O before joining sessions", async () => {
     const closeOrder: string[] = [];
@@ -217,6 +197,9 @@ describe("Iroh server client lifecycle", () => {
     await client.close();
     expect(closeOrder).toEqual(["pipe", "session"]);
     expect(client.isClosed()).toBe(true);
+    await expect(client.openPanelSession("panel:nav-current", "panel-connection")).rejects.toThrow(
+      "closing"
+    );
   });
 });
 
@@ -225,12 +208,10 @@ describe("Iroh trusted workspace UI transport", () => {
     const closeOrder: string[] = [];
     const pipe = new FakePipe(closeOrder);
     const options: IrohClientSessionOptions[] = [];
-    const sessions: FakeSession[] = [];
+    const openSession = pipe.openSession.bind(pipe);
     vi.spyOn(pipe, "openSession").mockImplementation((entry) => {
       options.push(entry);
-      const session = new FakeSession(closeOrder);
-      sessions.push(session);
-      return session;
+      return openSession(entry);
     });
     const client = await createIrohServerClient({
       reach,
@@ -242,7 +223,7 @@ describe("Iroh trusted workspace UI transport", () => {
     expect(options).toHaveLength(2);
     expect(await options[1]!.getToken()).toBe("user-device-token");
     expect(options[1]!.connectionId).not.toBe(options[0]!.connectionId);
-    const send = vi.spyOn(sessions[1]!, "send");
+    const send = vi.spyOn(pipe.sessions[1]!, "send");
     const envelope: RpcEnvelope = {
       from: "ui",
       target: "runtime-entity",

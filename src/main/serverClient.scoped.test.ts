@@ -325,9 +325,17 @@ describe("ServerClient scoped runtime callers", () => {
       );
     expect(harness.grantRequests).toEqual([]);
     expect(harness.admissionPlatforms).toEqual(["desktop", "desktop"]);
-    await client.close();
+    const closing = client.close();
+    expect(client.close()).toBe(closing);
+    await closing;
     expect(ui.isClosed?.()).toBe(true);
     await expect(client.openHostUiSession()).rejects.toThrow("closing");
+    await expect(client.openPanelSession("panel:nav-current", "panel-connection")).rejects.toThrow(
+      "closing"
+    );
+    await expect(
+      client.callAs({ callerId: "@workspace-apps/shell", callerKind: "app" }, "test", "echo", [])
+    ).rejects.toThrow("closing");
   });
 
   it("binds desktop host metadata into local WebSocket admission", async () => {

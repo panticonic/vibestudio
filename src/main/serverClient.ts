@@ -355,6 +355,7 @@ export async function createServerClient(
   const scopedClients = new Map<string, Promise<ScopedClient>>();
   const hostUiSessions = new Set<HostUiSession>();
   let closing = false;
+  let closePromise: Promise<void> | null = null;
   const scopedListeners = new Map<string, Set<ServerMessageListener>>();
   const scopedKey = (caller: ScopedServerCaller): string =>
     `${caller.callerKind}\x00${caller.callerId}`;
@@ -420,6 +421,7 @@ export async function createServerClient(
   };
 
   const getScopedClient = async (caller: ScopedServerCaller): Promise<ScopedClient> => {
+    if (closing) throw new Error("Desktop server client is closing");
     const key = scopedKey(caller);
     const existing = scopedClients.get(key);
     if (existing) return existing;
@@ -580,6 +582,7 @@ export async function createServerClient(
       };
     },
     async openPanelSession(runtimeEntityId: string, connectionId: string): Promise<PanelSession> {
+      if (closing) throw new Error("Desktop server client is closing");
       // A dedicated panel-principal socket on the panel's lease connectionId, so
       // the server's lease gate (authorizePanelConnection) accepts it. The grant
       // encodes the panel principal (the server derives callerKind:"panel"), and
@@ -597,7 +600,10 @@ export async function createServerClient(
           createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
         },
       });
-      await panelTransport.connectAndWait();
+      await finishSessionOpening(panelTransport, async () => {
+        await panelTransport.connectAndWait();
+        if (closing) throw new Error("Desktop server client is closing");
+      });
       return {
         send: (envelope: RpcEnvelope) => panelTransport.send(envelope),
         onMessage: (listener: ServerMessageListener) => panelTransport.onMessage(listener),
@@ -629,21 +635,25 @@ export async function createServerClient(
     transportDiagnostics(): null {
       return null;
     },
-    async close(): Promise<void> {
+    close(): Promise<void> {
+      if (closePromise) return closePromise;
       closing = true;
-      const uiCleanup = await Promise.allSettled(
-        [...hostUiSessions].map((session) => session.close())
-      );
-      await Promise.allSettled(
-        [...scopedClients.values()].map(async (client) => (await client).close())
-      );
+      const owners = [
+        ...[...hostUiSessions].map((session) => () => session.close()),
+        ...[...scopedClients.values()].map((client) => async () => (await client).close()),
+        () => transport.close(),
+      ];
       scopedClients.clear();
-      await transport.close();
-      const failures = uiCleanup.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : []
+      closePromise = Promise.allSettled(owners.map((close) => Promise.resolve().then(close))).then(
+        (settled) => {
+          const failures = settled.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : []
+          );
+          if (failures.length)
+            throw new AggregateError(failures, "Desktop server client cleanup failed");
+        }
       );
-      if (failures.length)
-        throw new AggregateError(failures, "Workspace UI sessions failed to close");
+      return closePromise;
     },
   };
 }

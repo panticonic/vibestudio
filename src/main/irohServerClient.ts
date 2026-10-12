@@ -240,8 +240,6 @@ export async function createIrohServerClient(
     close(): Promise<void>;
   };
   const scopedClients = new Map<string, Promise<ScopedClient>>();
-  const hostUiSessions = new Set<import("./serverClient.js").HostUiSession>();
-  const materializedScopedClients = new Set<ScopedClient>();
   const scopedListeners = new Map<string, Set<ServerMessageListener>>();
   const scopedKey = (caller: ScopedServerCaller): string =>
     `${caller.callerKind}\x00${caller.callerId}`;
@@ -267,7 +265,7 @@ export async function createIrohServerClient(
     });
     await session.ready?.();
     if (closing) {
-      await session.close().catch(() => undefined);
+      // The closing pipe owns this session even when opening finished late.
       throw new Error("Iroh server client is closing");
     }
     const scopedRpc = createInternalRpcClient({
@@ -283,13 +281,11 @@ export async function createIrohServerClient(
       rpc: scopedRpc,
       closed: false,
       close: async () => {
-        materializedScopedClients.delete(client);
         if (client.closed) return;
         client.closed = true;
         await session.close().catch(() => undefined);
       },
     };
-    materializedScopedClients.add(client);
     return client;
   };
 
@@ -319,6 +315,7 @@ export async function createIrohServerClient(
     runtimeEntityId: string,
     connectionId: string
   ): Promise<PanelSession> => {
+    if (closing) throw new Error("Iroh server client is closing");
     // A panel-principal logical session on the panel's lease connectionId. The
     // grant for the entity id makes the server derive callerKind:"panel" and the
     // connectionId satisfies the lease gate (authorizePanelConnection). Re-grant
@@ -331,6 +328,7 @@ export async function createIrohServerClient(
       getToken: async () => (await authClient.grantConnection(runtimeEntityId)).token,
     });
     await session.ready?.();
+    if (closing) throw new Error("Iroh server client is closing");
     return {
       send: (envelope) => session.send(envelope),
       onMessage: (listener) => session.onMessage(listener),
@@ -378,19 +376,16 @@ export async function createIrohServerClient(
         send: (envelope) => session.send(envelope),
         onMessage: (listener) => session.onMessage(listener),
         status: () => session.status?.() ?? transport.status(),
-        isClosed: () => closePromise !== null,
+        isClosed: () => closePromise !== null || session.isClosed(),
         streamReadable: (envelope, signal, body) => {
           if (!session.streamReadable) throw new Error("Workspace UI stream transport unavailable");
           return session.streamReadable(envelope, signal, body);
         },
         close: () => {
-          closePromise ??= session.close().then(() => {
-            hostUiSessions.delete(ui);
-          });
+          closePromise ??= session.close();
           return closePromise;
         },
       };
-      hostUiSessions.add(ui);
       return finishSessionOpening(
         ui,
         async () => {
@@ -475,29 +470,11 @@ export async function createIrohServerClient(
       if (closePromise) return closePromise;
       closing = true;
       closePromise = Promise.resolve().then(async () => {
-        const scoped = [...materializedScopedClients];
         scopedClients.clear();
-        // The pipe owns the native sessions and releases their pending I/O.
-        // Join its retirement before closing logical wrappers; racing an
-        // independent SESSION_CLOSE write against physical closure invents a
-        // cleanup failure from this owner's own cancellation.
-        const physical = await Promise.allSettled([
-          Promise.resolve().then(() => transport.close()),
-        ]);
-        const owners = [
-          ...[...hostUiSessions].map((session) => () => session.close()),
-          () => mainSession.close(),
-          ...scoped.map((client) => () => client.close()),
-        ];
-        const settled = await Promise.allSettled(
-          owners.map((close) => Promise.resolve().then(close))
-        );
-        materializedScopedClients.clear();
-        const failures = [...physical, ...settled].flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : []
-        );
-        if (failures.length)
-          throw new AggregateError(failures, "Iroh server client cleanup failed");
+        // Both native and reconnecting pipes own every session opened on them.
+        // Their close() retires and joins those sessions. Closing wrappers here
+        // would issue a second SESSION_CLOSE after physical retirement.
+        await transport.close();
       });
       return closePromise;
     },
