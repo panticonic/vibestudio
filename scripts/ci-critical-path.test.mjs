@@ -147,8 +147,22 @@ test("native artifact consumers wait for their exact producers without unrelated
     linuxDownload.with.path,
     "native/isolation/artifacts/native-isolation-linux-\${{ inputs.arch }}"
   );
+  const appDirectoryStep = appSteps.find(
+    (step) => step.name === "Resolve electron-builder's application directory for this architecture"
+  );
+  assert.equal(
+    appDirectoryStep.run,
+    'app_directory=$(node scripts/package-desktop.mjs linux app-path "\${{ inputs.arch }}")\necho "LINUX_APP_DIRECTORY=$app_directory" >> "$GITHUB_ENV"\n'
+  );
+  assert.match(
+    appSteps.find(
+      (step) => step.name === "Allow packaged MXC user namespaces for application preparation"
+    ).run,
+    /\$LINUX_APP_DIRECTORY\/resources/u
+  );
   const buildAppStep = appSteps.find(
-    (step) => step.name === "Build exact Linux application and prepare its installed workspace release"
+    (step) =>
+      step.name === "Build exact Linux application and prepare its installed workspace release"
   );
   assert.equal(
     buildAppStep.run,
@@ -159,7 +173,9 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.equal(appUpload.with.name, "vibestudio-linux-app-\${{ inputs.arch }}-\${{ github.sha }}");
   assert.equal(appUpload.with["compression-level"], 0);
-  const archiveStep = appSteps.find((step) => step.name === "Archive the immutable prepared application");
+  const archiveStep = appSteps.find(
+    (step) => step.name === "Archive the immutable prepared application"
+  );
   assert.match(archiveStep.run, /packages\/\*\/dist/u);
   assert.match(archiveStep.run, /tar -cf linux-app\.tar release\/linux-unpacked/u);
   assert.doesNotMatch(archiveStep.run, /--dereference|--hard-dereference/u);

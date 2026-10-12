@@ -3,7 +3,15 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { excludedNativePackages, packageDesktop } from "./package-desktop.mjs";
+import { spawnSync } from "node:child_process";
+import {
+  appOutDirectoryName,
+  excludedNativePackages,
+  linuxAppDirectoryName,
+  packageDesktop,
+} from "./package-desktop.mjs";
+import { writeAfterPackCompletion } from "./lib/after-pack-completion.mjs";
+import { Platform } from "electron-builder";
 import { getNodeModuleFileMatcher } from "app-builder-lib/out/fileMatcher.js";
 import { PnpmNodeModulesCollector } from "app-builder-lib/out/node-module-collector/pnpmNodeModulesCollector.js";
 
@@ -81,6 +89,11 @@ test("selects the glibc runtime required by desktop Linux", () => {
   assert.ok(!excluded.includes("@native/runtime-glibc"));
 });
 
+test("derives the exact app output identity for Mac and Windows targets", () => {
+  assert.equal(appOutDirectoryName(Platform.MAC, "arm64", { mac: {} }), "mac-arm64");
+  assert.equal(appOutDirectoryName(Platform.WINDOWS, "x64", { win: {} }), "win-unpacked");
+});
+
 test("collects exact nested versions from a hoisted pnpm installation", async () => {
   const root = fixture();
   for (const [relative, version] of [
@@ -117,6 +130,12 @@ test("promotes final installers and retires each joined staging tree", async () 
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
       const arch = [...targets.values()][0].keys().next().value;
       seen.push(config);
+      writeAfterPackCompletion({
+        outDir: config.directories.output,
+        appOutDir: path.join(config.directories.output, "linux-unpacked"),
+        electronPlatformName: "linux",
+        arch,
+      });
       fs.mkdirSync(path.join(config.directories.output, "linux-unpacked"));
       const installer = path.join(config.directories.output, `installer-${arch}.deb`);
       fs.writeFileSync(installer, "verified final artifact");
@@ -145,24 +164,120 @@ test("produces one Linux application through the canonical configured packager",
   let buildOptions;
   const published = await packageDesktop("linux", {
     appRoot: root,
-    arch: "x64",
+    arch: "arm64",
     linuxMode: "app",
     runBuild: async (options) => {
       buildOptions = options;
       const config = JSON.parse(fs.readFileSync(options.config, "utf8"));
       assert.equal(config.afterPack, "./scripts/electron-after-pack.mjs");
       assert.equal(options.prepackaged, undefined);
-      assert.deepEqual([...options.targets.values()][0].keys().next().value, 1);
-      fs.mkdirSync(path.join(config.directories.output, "linux-unpacked"), { recursive: true });
-      fs.writeFileSync(path.join(config.directories.output, "linux-unpacked", "vibestudio"), "app");
+      assert.equal(linuxAppDirectoryName("arm64", config.linux), "linux-arm64-unpacked");
+      assert.deepEqual([...options.targets.values()][0].keys().next().value, 3);
+      const appOutput = path.join(
+        config.directories.output,
+        linuxAppDirectoryName("arm64", config.linux)
+      );
+      writeAfterPackCompletion({
+        outDir: config.directories.output,
+        appOutDir: appOutput,
+        electronPlatformName: "linux",
+        arch: 3,
+      });
+      const resources = path.join(appOutput, "resources");
+      fs.mkdirSync(path.join(resources, "userland-builds"), { recursive: true });
+      fs.writeFileSync(
+        path.join(resources, "userland-builds/release.json"),
+        JSON.stringify(validPreparedWorkspaceRelease("arm64"))
+      );
+      fs.writeFileSync(path.join(appOutput, "vibestudio"), "app");
       return [];
     },
   });
 
   assert.ok(buildOptions);
   assert.deepEqual(published, [path.join(root, "release/linux-unpacked")]);
-  assert.equal(fs.readFileSync(path.join(root, "release/linux-unpacked/vibestudio"), "utf8"), "app");
+  assert.equal(
+    fs.readFileSync(path.join(root, "release/linux-unpacked/vibestudio"), "utf8"),
+    "app"
+  );
   assert.deepEqual(fs.readdirSync(path.join(root, "release")), ["linux-unpacked"]);
+});
+
+test("does not promote a Linux application without the canonical completed release seal", async () => {
+  const root = fixture();
+  await assert.rejects(
+    packageDesktop("linux", {
+      appRoot: root,
+      arch: "x64",
+      linuxMode: "app",
+      runBuild: async ({ config: configPath }) => {
+        const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        const appOutput = path.join(
+          config.directories.output,
+          linuxAppDirectoryName("x64", config.linux)
+        );
+        writeAfterPackCompletion({
+          outDir: config.directories.output,
+          appOutDir: appOutput,
+          electronPlatformName: "linux",
+          arch: 1,
+        });
+        fs.mkdirSync(path.join(appOutput, "resources"), { recursive: true });
+        fs.writeFileSync(path.join(appOutput, "vibestudio"), "incomplete");
+        return [];
+      },
+    }),
+    /complete prepared workspace release/u
+  );
+  assert.deepEqual(fs.readdirSync(path.join(root, "release")), []);
+});
+
+test("does not promote an app when the packager returns without an afterPack receipt", async () => {
+  const root = fixture();
+  await assert.rejects(
+    packageDesktop("linux", {
+      appRoot: root,
+      arch: "x64",
+      linuxMode: "app",
+      runBuild: async () => [],
+    }),
+    /without completing its afterPack hook/u
+  );
+  assert.deepEqual(fs.readdirSync(path.join(root, "release")), []);
+});
+
+test("preserves the original Linux app hook failure and does not promote its output", async () => {
+  const root = fixture();
+  const failure = new Error("afterPack workspace preparation failed");
+  await assert.rejects(
+    packageDesktop("linux", {
+      appRoot: root,
+      arch: "arm64",
+      linuxMode: "app",
+      runBuild: async () => {
+        throw failure;
+      },
+    }),
+    (error) => error === failure
+  );
+  assert.deepEqual(fs.readdirSync(path.join(root, "release")), []);
+});
+
+test("fails and retires owned staging if the builder promise outlives all event-loop work", () => {
+  const root = fixture();
+  const moduleUrl = new URL("./package-desktop.mjs", import.meta.url).href;
+  const source =
+    `import { packageDesktop } from ${JSON.stringify(moduleUrl)};\n` +
+    `void packageDesktop("linux", { appRoot: ${JSON.stringify(root)}, arch: "x64", linuxMode: "app", runBuild: () => new Promise(() => {}) });\n`;
+  const child = spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+    cwd: root,
+    encoding: "utf8",
+  });
+
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1, child.stderr);
+  assert.match(child.stderr, /remained pending after Node had no active work/u);
+  assert.deepEqual(fs.readdirSync(path.join(root, "release")), []);
 });
 
 test("packages one declared Linux format from an isolated prepackaged app copy", async () => {
@@ -180,7 +295,10 @@ test("packages one declared Linux format from an isolated prepackaged app copy",
       buildOptions = options;
       assert.equal(options.prepackaged, prepackaged);
       assert.deepEqual([...options.targets.values()][0].keys().next().value, 1);
-      const artifact = path.join(JSON.parse(fs.readFileSync(options.config, "utf8")).directories.output, "vibestudio.deb");
+      const artifact = path.join(
+        JSON.parse(fs.readFileSync(options.config, "utf8")).directories.output,
+        "vibestudio.deb"
+      );
       fs.writeFileSync(artifact, "deb");
       return [artifact];
     },
@@ -190,7 +308,10 @@ test("packages one declared Linux format from an isolated prepackaged app copy",
   assert.deepEqual(published, [path.join(root, "release/vibestudio.deb")]);
   assert.equal(fs.readFileSync(published[0], "utf8"), "deb");
   assert.ok(fs.existsSync(prepackaged));
-  assert.deepEqual(fs.readdirSync(path.join(root, "release")).sort(), ["linux-unpacked", "vibestudio.deb"]);
+  assert.deepEqual(fs.readdirSync(path.join(root, "release")).sort(), [
+    "linux-unpacked",
+    "vibestudio.deb",
+  ]);
 });
 
 test("retires failed packaging scratch while preserving inherited release products", async () => {
@@ -209,3 +330,43 @@ test("retires failed packaging scratch while preserving inherited release produc
   );
   assert.deepEqual(fs.readdirSync(path.join(root, "release")), ["previous.deb"]);
 });
+
+function validPreparedWorkspaceRelease(arch) {
+  const pin = (commit) => ({
+    url: "git+https://example.test/vibestudio.git",
+    ref: "refs/tags/v1",
+    commit,
+  });
+  return {
+    format: "vibestudio-workspace-runtime-release/2",
+    version: 2,
+    platform: "linux",
+    arch,
+    appDependencyFingerprint: "a".repeat(64),
+    hostBuild: {
+      version: 1,
+      mode: "production",
+      fingerprint: "b".repeat(64),
+      inputCount: 1,
+    },
+    compilerProtocol: {
+      cacheVersion: "test-cache",
+      panelEntryProtocolFingerprint: "c".repeat(64),
+    },
+    templates: {
+      base: pin("1".repeat(40)),
+      personal: pin("2".repeat(40)),
+      system: pin("3".repeat(40)),
+    },
+    preparedTemplates: ["base", "personal", "system"].map((workspace, index) => ({
+      workspace,
+      recordDigest: String(index + 4).repeat(64),
+    })),
+    builds: ["base", "personal", "system"].map((workspace, index) => ({
+      workspace,
+      source: "panels/chat",
+      buildKey: String(index + 7).repeat(64),
+      builtAt: "2026-10-12T00:00:00.000Z",
+    })),
+  };
+}

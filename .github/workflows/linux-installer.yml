@@ -49,6 +49,11 @@ jobs:
       - name: Install Linux application runtime
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
 
+      - name: Resolve electron-builder's application directory for this architecture
+        run: |
+          app_directory=$(node scripts/package-desktop.mjs linux app-path "${{ inputs.arch }}")
+          echo "LINUX_APP_DIRECTORY=$app_directory" >> "$GITHUB_ENV"
+
       - name: Allow packaged MXC user namespaces for application preparation
         run: |
           profile="$RUNNER_TEMP/vibestudio-release-mxc.apparmor"
@@ -56,7 +61,7 @@ jobs:
           abi <abi/4.0>,
           include <tunables/global>
 
-          profile vibestudio_release_mxc "$GITHUB_WORKSPACE/release/.package-linux-${{ inputs.arch }}-*/linux-unpacked/resources/app.asar.unpacked/dist/mxc/linux-${{ inputs.arch }}/lxc-exec" flags=(unconfined) {
+          profile vibestudio_release_mxc "$GITHUB_WORKSPACE/release/.package-linux-${{ inputs.arch }}-*/$LINUX_APP_DIRECTORY/resources/app.asar.unpacked/dist/mxc/linux-${{ inputs.arch }}/lxc-exec" flags=(unconfined) {
             userns,
           }
           EOF

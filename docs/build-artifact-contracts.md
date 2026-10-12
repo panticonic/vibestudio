@@ -230,6 +230,12 @@ This does not rebuild the application layout.
 Linux installer candidates live inside the same reusable graph as their native
 inputs. Separate x64 and arm64 application producers each wait only for their
 matching native payload. Each builds and prepares one installed application.
+The packager promotes that application only after the `afterPack` hook writes a
+completion receipt for the exact platform, architecture, and output directory;
+an unfinished hook cannot leave a publishable app. Electron Builder uses
+`linux-unpacked` for x64 and `linux-arm64-unpacked` for arm64 here, so the
+producer resolves its actual staging path and publishes the common
+`release/linux-unpacked` archive path for the format jobs.
 Debian, RPM, and Arch format jobs then run concurrently from separate copies of
 that exact application: the package tool writes metadata into its input tree,
 so the copies are required to keep format jobs independent. The candidate job

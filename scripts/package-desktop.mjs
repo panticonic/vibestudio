@@ -2,8 +2,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { Arch, Platform, build } from "electron-builder";
+import { Arch, Platform, build, getArchSuffix } from "electron-builder";
 import { includeDesktopRuntimeScriptClosure } from "./lib/npm-runtime-script-closure.mjs";
+import { consumeAfterPackCompletion } from "./lib/after-pack-completion.mjs";
 
 function supports(values, target) {
   if (!values || values.length === 0) return true;
@@ -36,6 +37,58 @@ export function excludedNativePackages(appRoot, platform, arch) {
   return excluded.sort();
 }
 
+/** electron-builder's output directory uses the configured default-architecture suffix. */
+export function linuxAppDirectoryName(arch, linuxConfig) {
+  const architecture = Arch[arch];
+  if (typeof architecture !== "number") throw new Error(`Unsupported Linux architecture: ${arch}`);
+  return `linux${getArchSuffix(architecture, linuxConfig.defaultArch)}-unpacked`;
+}
+
+/** Match electron-builder's canonical appOutDir naming for the requested target. */
+export function appOutDirectoryName(platform, arch, config) {
+  const architecture = Arch[arch];
+  if (typeof architecture !== "number")
+    throw new Error(`Unsupported desktop architecture: ${arch}`);
+  const platformConfig = config[platform.buildConfigurationKey] ?? {};
+  const suffix = getArchSuffix(architecture, platformConfig.defaultArch);
+  const unpacked = platform === Platform.MAC ? "" : "-unpacked";
+  return `${platform.buildConfigurationKey}${suffix}${unpacked}`;
+}
+
+export function linuxAppDirectoryNameFromRoot(appRoot, arch) {
+  const config = parse(fs.readFileSync(path.join(appRoot, "electron-builder.yml"), "utf8"));
+  return linuxAppDirectoryName(arch, config.linux);
+}
+
+/** Reject a dir target unless its canonical prepared-release seal validates. */
+export async function assertCompleteLinuxApplication(appDirectory, arch) {
+  const manifestPath = path.join(appDirectory, "resources/userland-builds/release.json");
+  const unregisterTsx = (await import("tsx/esm/api")).register();
+  let manifest;
+  try {
+    const { preparedWorkspaceReleaseManifestSchema } =
+      await import("../src/server/preparedWorkspaceRelease.ts");
+    manifest = preparedWorkspaceReleaseManifestSchema.parse(
+      JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+    );
+  } catch (cause) {
+    throw new Error(
+      `Linux application has no complete prepared workspace release: ${manifestPath}`,
+      {
+        cause,
+      }
+    );
+  } finally {
+    unregisterTsx();
+  }
+  if (manifest.platform !== "linux" || manifest.arch !== arch)
+    throw new Error(`Prepared workspace release target does not match linux-${arch}`);
+  for (const workspace of ["base", "personal", "system"]) {
+    if (!manifest.builds.some((buildRecord) => buildRecord.workspace === workspace))
+      throw new Error(`Prepared workspace release contains no ${workspace} runtime builds`);
+  }
+}
+
 export async function packageDesktop(
   platformName,
   {
@@ -66,21 +119,39 @@ export async function packageDesktop(
   // Userland builds execute the installed native compiler/runtime closure.
   // Each architecture is packaged on its matching release runner.
   const published = [];
-  const targets = linuxMode === "app"
-    ? ["dir"]
-    : linuxMode === "format"
-      ? targetSpecs
-          .filter((target) => target.arch.includes(arch) && target.target === linuxFormat)
-          .map((target) => target.target)
-      : targetSpecs
-          .filter((target) => target.arch.includes(arch))
-          .map((target) => target.target);
+  const targets =
+    linuxMode === "app"
+      ? ["dir"]
+      : linuxMode === "format"
+        ? targetSpecs
+            .filter((target) => target.arch.includes(arch) && target.target === linuxFormat)
+            .map((target) => target.target)
+        : targetSpecs.filter((target) => target.arch.includes(arch)).map((target) => target.target);
   if (linuxMode === "format" && targets.length !== 1)
     throw new Error(`No Linux ${arch} ${linuxFormat} desktop release target is declared`);
   const prepackagedPath = prepackaged ? path.resolve(appRoot, prepackaged) : undefined;
   if (linuxMode === "format" && (!prepackagedPath || !fs.statSync(prepackagedPath).isDirectory()))
-    throw new Error(`Prepackaged Linux application is not a directory: ${prepackaged ?? "<missing>"}`);
+    throw new Error(
+      `Prepackaged Linux application is not a directory: ${prepackaged ?? "<missing>"}`
+    );
   const staging = fs.mkdtempSync(path.join(output, `.package-${platform.nodeName}-${arch}-`));
+  let operationSettled = false;
+  let eventLoopDrainReported = false;
+  const onBeforeExit = () => {
+    if (operationSettled || eventLoopDrainReported) return;
+    eventLoopDrainReported = true;
+    console.error(
+      new Error(
+        `Desktop packaging for ${platform.nodeName}/${arch} remained pending after Node had no active work`
+      ).stack
+    );
+    process.exitCode = 1;
+    // beforeExit is the process's authoritative no-active-work boundary. The
+    // packager promise has no remaining event-loop owner, so its finally block
+    // cannot run; retire only this call's unique staging tree here.
+    fs.rmSync(staging, { recursive: true, force: true });
+  };
+  process.on("beforeExit", onBeforeExit);
   try {
     const config = structuredClone(base);
     config.directories.output = staging;
@@ -101,10 +172,19 @@ export async function packageDesktop(
       config: configPath,
       ...(prepackagedPath ? { prepackaged: prepackagedPath } : {}),
     });
+    if (!(linuxMode === "format" && prepackagedPath))
+      consumeAfterPackCompletion(
+        staging,
+        platform.nodeName,
+        Arch[arch],
+        appOutDirectoryName(platform, arch, base)
+      );
     if (linuxMode === "app") {
-      const appDirectory = path.join(staging, "linux-unpacked");
-      if (!fs.statSync(appDirectory).isDirectory())
+      const appDirectory = path.join(staging, linuxAppDirectoryName(arch, base.linux));
+      const appStat = fs.lstatSync(appDirectory);
+      if (!appStat.isDirectory() || appStat.isSymbolicLink())
         throw new Error(`Linux application target did not produce ${appDirectory}`);
+      await assertCompleteLinuxApplication(appDirectory, arch);
       const destination = path.join(output, "linux-unpacked");
       if (fs.existsSync(destination))
         throw new Error(`Refusing to replace an existing Linux application: ${destination}`);
@@ -129,6 +209,8 @@ export async function packageDesktop(
     }
   } finally {
     // build() joins every archive/signing job before this operation retires its tree.
+    operationSettled = true;
+    process.off("beforeExit", onBeforeExit);
     fs.rmSync(staging, { recursive: true, force: true });
   }
   return published;
@@ -136,19 +218,28 @@ export async function packageDesktop(
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [platformName, modeOrArch, format, prepackaged, requestedArch] = process.argv.slice(2);
-  const options =
-    platformName === "linux" && modeOrArch === "app"
-      ? { linuxMode: "app", arch: format ?? process.arch }
-      : platformName === "linux" && modeOrArch === "format"
-        ? {
-            linuxMode: "format",
-            linuxFormat: format,
-            prepackaged,
-            arch: requestedArch ?? process.arch,
-          }
-        : { arch: modeOrArch ?? process.arch };
-  packageDesktop(platformName, options).catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+  if (platformName === "linux" && modeOrArch === "app-path") {
+    try {
+      process.stdout.write(`${linuxAppDirectoryNameFromRoot(process.cwd(), format)}\n`);
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
+  } else {
+    const options =
+      platformName === "linux" && modeOrArch === "app"
+        ? { linuxMode: "app", arch: format ?? process.arch }
+        : platformName === "linux" && modeOrArch === "format"
+          ? {
+              linuxMode: "format",
+              linuxFormat: format,
+              prepackaged,
+              arch: requestedArch ?? process.arch,
+            }
+          : { arch: modeOrArch ?? process.arch };
+    packageDesktop(platformName, options).catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
+  }
 }
