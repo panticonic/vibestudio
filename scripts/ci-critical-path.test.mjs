@@ -4,8 +4,38 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test("Linux candidate checksums admit native package architecture names and reject incomplete sets", async () => {
+  const workflow = await readWorkflow("linux-installer.yml");
+  const command = workflow.jobs.package.steps
+    .find((step) => step.name === "Generate installer checksums")
+    .run.replaceAll("${{ inputs.arch }}", "x64");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "linux-candidate-checksums-"));
+  try {
+    const release = path.join(root, "release");
+    await fs.mkdir(release);
+    for (const architectures of [
+      ["amd64", "x86_64", "x64"],
+      ["arm64", "aarch64", "arm64"],
+    ]) {
+      const names = ["deb", "rpm", "pkg.tar.zst"].map(
+        (extension, index) => `vibestudio-0.1.98-${architectures[index]}.${extension}`
+      );
+      for (const name of names) await fs.writeFile(path.join(release, name), name);
+      execFileSync("bash", ["-euo", "pipefail", "-c", command], { cwd: root });
+      execFileSync("sha256sum", ["--check", "SHA256SUMS-linux-x64"], { cwd: release });
+      await fs.rm(path.join(release, names[0]));
+      assert.throws(() => execFileSync("bash", ["-euo", "pipefail", "-c", command], { cwd: root }));
+      for (const name of names.slice(1)) await fs.rm(path.join(release, name));
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 async function readWorkflow(fileName) {
   const source = await fs.readFile(

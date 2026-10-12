@@ -70,14 +70,17 @@ jobs:
       - name: Build Linux installers
         run: pnpm dist:linux
 
+      # Each isolated runner packages only its own architecture. Debian and RPM
+      # use native architecture names (amd64/x86_64, arm64/aarch64); collect the
+      # exact one-per-format outputs rather than assuming Electron arch spelling.
       - name: Generate installer checksums
         run: |
           cd release
-          test "$(find . -maxdepth 1 -type f -name "vibestudio-*-${{ inputs.arch }}.deb" | wc -l)" -eq 1
-          test "$(find . -maxdepth 1 -type f -name "vibestudio-*-${{ inputs.arch }}.rpm" | wc -l)" -eq 1
-          test "$(find . -maxdepth 1 -type f -name "vibestudio-*-${{ inputs.arch }}.pkg.tar.zst" | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -type f -name "vibestudio-*.deb" | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -type f -name "vibestudio-*.rpm" | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -type f -name "vibestudio-*.pkg.tar.zst" | wc -l)" -eq 1
           find . -maxdepth 1 -type f \
-            \( -name "vibestudio-*-${{ inputs.arch }}.deb" -o -name "vibestudio-*-${{ inputs.arch }}.rpm" -o -name "vibestudio-*-${{ inputs.arch }}.pkg.tar.zst" \) \
+            \( -name "vibestudio-*.deb" -o -name "vibestudio-*.rpm" -o -name "vibestudio-*.pkg.tar.zst" \) \
             -print0 \
             | sort -z \
             | xargs -0 sha256sum \
@@ -89,9 +92,9 @@ jobs:
         with:
           name: vibestudio-linux-${{ inputs.arch }}-${{ github.sha }}
           path: |
-            release/vibestudio-*-${{ inputs.arch }}.deb
-            release/vibestudio-*-${{ inputs.arch }}.rpm
-            release/vibestudio-*-${{ inputs.arch }}.pkg.tar.zst
+            release/vibestudio-*.deb
+            release/vibestudio-*.rpm
+            release/vibestudio-*.pkg.tar.zst
             release/SHA256SUMS-linux-${{ inputs.arch }}
           if-no-files-found: error
           retention-days: 7
