@@ -1,0 +1,140 @@
+name: CI diagnostic
+run-name: "CI diagnostic: ${{ inputs.target }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Exact expensive CI job to rerun with its prerequisites
+        type: choice
+        options:
+          - npm-server-preflight
+          - linux-installer-x64
+          - linux-installer-arm64
+          - windows-installer-candidate
+          - quality-desktop
+          - android-iroh-smoke
+        required: true
+      base-ref:
+        description: Base template branch or commit used by the npm preflight
+        type: string
+        default: main
+        required: true
+      windows-runner:
+        description: Configured Windows runner label
+        type: string
+        default: windows-2025
+        required: true
+
+permissions: {}
+
+jobs:
+  quality-inputs:
+    name: Prepare exact Linux quality inputs
+    if: ${{ inputs.target == 'npm-server-preflight' || inputs.target == 'quality-desktop' }}
+    uses: ./.github/workflows/quality-inputs.yml
+    with:
+      base-ref: ${{ inputs.base-ref }}
+    permissions:
+      contents: read
+
+  native-input-linux-x64:
+    name: Prepare native release input (linux-x64)
+    if: ${{ inputs.target == 'npm-server-preflight' || inputs.target == 'linux-installer-x64' }}
+    uses: ./.github/workflows/native-input.yml
+    with:
+      runner: ubuntu-22.04
+      target: linux-x64
+    permissions:
+      contents: read
+
+  native-input-linux-arm64:
+    name: Prepare native release input (linux-arm64)
+    if: ${{ inputs.target == 'npm-server-preflight' || inputs.target == 'linux-installer-arm64' }}
+    uses: ./.github/workflows/native-input.yml
+    with:
+      runner: ubuntu-22.04-arm
+      target: linux-arm64
+    permissions:
+      contents: read
+
+  native-input-darwin-arm64:
+    name: Prepare native release input (darwin-arm64)
+    if: ${{ inputs.target == 'npm-server-preflight' }}
+    uses: ./.github/workflows/native-input.yml
+    with:
+      runner: macos-14
+      target: darwin-arm64
+    permissions:
+      contents: read
+
+  npm-server-preflight:
+    name: Staged headless server npm candidate
+    if: ${{ inputs.target == 'npm-server-preflight' }}
+    needs:
+      - quality-inputs
+      - native-input-linux-x64
+      - native-input-linux-arm64
+      - native-input-darwin-arm64
+    uses: ./.github/workflows/npm-server-preflight.yml
+    permissions:
+      contents: read
+
+  quality-desktop:
+    name: Desktop Iroh source integration
+    if: ${{ inputs.target == 'quality-desktop' }}
+    needs: quality-inputs
+    uses: ./.github/workflows/quality-desktop.yml
+    permissions:
+      contents: read
+
+  android-iroh-smoke:
+    name: Android Iroh UX and recovery
+    if: ${{ inputs.target == 'android-iroh-smoke' }}
+    uses: ./.github/workflows/android-iroh-smoke.yml
+    permissions:
+      contents: read
+
+  linux-installer-x64:
+    name: Build Linux x64 installer candidate
+    if: ${{ inputs.target == 'linux-installer-x64' }}
+    needs: native-input-linux-x64
+    uses: ./.github/workflows/linux-installer.yml
+    with:
+      runner: ubuntu-24.04
+      arch: x64
+    permissions:
+      contents: read
+
+  linux-installer-arm64:
+    name: Build Linux arm64 installer candidate
+    if: ${{ inputs.target == 'linux-installer-arm64' }}
+    needs: native-input-linux-arm64
+    uses: ./.github/workflows/linux-installer.yml
+    with:
+      runner: ubuntu-24.04-arm
+      arch: arm64
+    permissions:
+      contents: read
+
+  application-candidate-windows:
+    name: Package Windows application candidate and verify native execution
+    if: ${{ inputs.target == 'windows-installer-candidate' }}
+    uses: ./.github/workflows/application-candidate.yml
+    with:
+      runner: ${{ inputs.windows-runner }}
+      target: win32-x64
+      package: windows
+      release-candidate: false
+    permissions:
+      contents: read
+
+  windows-installer-candidate:
+    name: Package NSIS installer from the tested Windows application
+    if: ${{ inputs.target == 'windows-installer-candidate' }}
+    needs: application-candidate-windows
+    uses: ./.github/workflows/windows-installer.yml
+    with:
+      runner: ${{ inputs.windows-runner }}
+    permissions:
+      contents: read

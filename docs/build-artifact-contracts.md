@@ -261,6 +261,26 @@ inputs; diagnostics can still select alternatives but cannot publish. The
 release dispatcher verifies the receipt's complete template identities and
 runner before tagging.
 
+Once the diagnostic workflow is present on the default branch, run a focused
+check against the branch with a fix by selecting that branch with `--ref` and
+choosing the failing expensive job:
+
+```sh
+gh workflow run ci-diagnostic.yml --ref my-fix-branch \
+  -f target=linux-installer-x64
+```
+
+Targets are `npm-server-preflight`, `linux-installer-x64`,
+`linux-installer-arm64`, `windows-installer-candidate`, `quality-desktop`, and
+`android-iroh-smoke`. The workflow runs the selected job's declared
+prerequisites and calls the same reusable workflows as CI or the Iroh nightly
+workflow. The Android target runs only the Android Iroh emulator job; dispatching
+`iroh-e2e-nightly.yml` directly still runs its desktop and Android jobs together.
+The diagnostic workflow does not call release metadata or the release
+candidate gate, and has no release-candidate input. Its run and artifacts are
+separate from the protected-main `CI` workflow run that release publication
+requires.
+
 While a version tag does not yet exist, any protected-main push could become
 the requested release SHA, so enabled candidate packages are produced in that
 CI run. Once the version is tagged, subsequent same-version pushes skip only

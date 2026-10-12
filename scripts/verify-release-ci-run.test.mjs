@@ -86,6 +86,10 @@ test("release dispatch accepts only a completed protected-main candidate and its
     () => validateReleaseCiRun({ ...args, run: { ...run, event: "pull_request" } }),
     /protected-main/u
   );
+  assert.throws(
+    () => validateReleaseCiRun({ ...args, run: { ...run, workflow_id: workflow.id + 1 } }),
+    /not the CI workflow/u
+  );
   assert.doesNotThrow(() =>
     validateReleaseCiRun({ ...args, run: { ...run, event: "workflow_dispatch" } })
   );

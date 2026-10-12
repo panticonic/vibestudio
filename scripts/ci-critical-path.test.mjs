@@ -105,18 +105,36 @@ async function readCiJobs() {
 
 test("Linux quality consumers share one verified template and infrastructure producer", async () => {
   const jobs = await readCiJobs();
-  const producer = jobs["quality-inputs"];
+  const qualityInputsWorkflow = await readWorkflow("quality-inputs.yml");
+  const producer = qualityInputsWorkflow.jobs.prepare;
   const quality = jobs.quality;
   const followup = jobs["quality-followup"];
-  const desktop = jobs["quality-desktop"];
-  assert.deepEqual(dependenciesOf(producer), []);
+  const desktop = (await readWorkflow("quality-desktop.yml")).jobs.integration;
+  const desktopCaller = jobs["quality-desktop"];
+  assert.equal(jobs["quality-inputs"].uses, "./.github/workflows/quality-inputs.yml");
+  assert.deepEqual(jobs["quality-inputs"].with, {
+    "base-ref": "\${{ inputs.base-ref || 'main' }}",
+  });
   assert.deepEqual(dependenciesOf(quality), ["quality-inputs"]);
   assert.deepEqual(dependenciesOf(followup), ["quality-inputs"]);
-  assert.deepEqual(dependenciesOf(desktop), ["quality-inputs"]);
+  assert.deepEqual(dependenciesOf(desktopCaller), ["quality-inputs"]);
+  assert.equal(desktopCaller.uses, "./.github/workflows/quality-desktop.yml");
   const step = (job, name) => job.steps.find((entry) => entry.name === name);
   assert.ok(step(producer, "Build shared infrastructure packages"));
   assert.ok(step(producer, "Record exact host and template inputs"));
-  assert.ok(step(producer, "Upload exact quality inputs"));
+  assert.deepEqual(step(producer, "Upload exact quality inputs").with, {
+    name: "vibestudio-quality-inputs-${{ github.sha }}",
+    path: "quality-inputs.tar",
+    "if-no-files-found": "error",
+    "compression-level": 0,
+    "retention-days": 7,
+  });
+  assert.deepEqual(step(producer, "Upload exact quality input manifest").with, {
+    name: "vibestudio-quality-manifest-${{ github.sha }}",
+    path: "release-quality-inputs.json",
+    "if-no-files-found": "error",
+    "retention-days": 14,
+  });
   for (const consumer of [quality, followup, desktop]) {
     assert.ok(step(consumer, "Download exact quality inputs"));
     assert.ok(step(consumer, "Restore and verify quality inputs"));
@@ -159,6 +177,105 @@ function transitiveDependencies(jobs, name, visiting = new Set()) {
   }
   return result;
 }
+
+test("diagnostic workflow runs the exact reusable package jobs and only their prerequisites", async () => {
+  const diagnostic = await readWorkflow("ci-diagnostic.yml");
+  const jobs = diagnostic.jobs;
+  const targets = diagnostic.on.workflow_dispatch.inputs.target.options;
+  assert.deepEqual(targets, [
+    "npm-server-preflight",
+    "linux-installer-x64",
+    "linux-installer-arm64",
+    "windows-installer-candidate",
+    "quality-desktop",
+    "android-iroh-smoke",
+  ]);
+
+  for (const target of targets) {
+    const selected = new Set([target, ...transitiveDependencies(jobs, target)]);
+    for (const [jobName, job] of Object.entries(jobs)) {
+      assert.equal(
+        job.if.includes(`inputs.target == '${target}'`),
+        selected.has(jobName),
+        `${target} must select exactly its needs closure; ${jobName}`
+      );
+    }
+  }
+
+  const ci = await readCiJobs();
+  for (const target of [
+    "npm-server-preflight",
+    "linux-installer-x64",
+    "linux-installer-arm64",
+    "application-candidate-windows",
+    "windows-installer-candidate",
+  ]) {
+    assert.equal(jobs[target].uses, ci[target].uses, `${target} must call CI's implementation`);
+  }
+  assert.equal(jobs["quality-desktop"].uses, ci["quality-desktop"].uses);
+  const desktopWorkflow = await readWorkflow("quality-desktop.yml");
+  const desktopIntegration = desktopWorkflow.jobs.integration;
+  assert.equal(desktopIntegration["runs-on"], "ubuntu-24.04");
+  assert.deepEqual(desktopIntegration.permissions, { contents: "read" });
+  assert.ok(
+    desktopIntegration.steps.some((step) => step.run === "pnpm test:remote-transport")
+  );
+  assert.ok(desktopIntegration.steps.some((step) => step.run === "pnpm test:iroh-desktop-e2e"));
+  const nightly = await readWorkflow("iroh-e2e-nightly.yml");
+  assert.equal(
+    jobs["android-iroh-smoke"].uses,
+    nightly.jobs["android-iroh-smoke"].uses,
+    "the diagnostic Android target must call the nightly job implementation"
+  );
+  assert.deepEqual(dependenciesOf(jobs["npm-server-preflight"]), [
+    "quality-inputs",
+    "native-input-linux-x64",
+    "native-input-linux-arm64",
+    "native-input-darwin-arm64",
+  ]);
+  assert.deepEqual(dependenciesOf(jobs["linux-installer-x64"]), ["native-input-linux-x64"]);
+  assert.deepEqual(dependenciesOf(jobs["linux-installer-arm64"]), ["native-input-linux-arm64"]);
+  assert.deepEqual(dependenciesOf(jobs["application-candidate-windows"]), []);
+  assert.deepEqual(dependenciesOf(jobs["windows-installer-candidate"]), [
+    "application-candidate-windows",
+  ]);
+  assert.deepEqual(dependenciesOf(jobs["quality-desktop"]), ["quality-inputs"]);
+  assert.deepEqual(dependenciesOf(jobs["android-iroh-smoke"]), []);
+  const androidWorkflow = await readWorkflow("android-iroh-smoke.yml");
+  const androidJob = androidWorkflow.jobs["android-iroh-smoke"];
+  assert.equal(androidJob["runs-on"], "ubuntu-24.04");
+  assert.deepEqual(androidJob.permissions, { contents: "read" });
+  const emulator = androidJob.steps.find(
+    (step) => step.name === "Android Iroh pairing, approvals, panel lifecycle, and recovery"
+  );
+  assert.equal(
+    emulator.uses,
+    "reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d"
+  );
+  assert.equal(emulator.with["api-level"], 35);
+  assert.equal(emulator.with.script, "pnpm test:iroh-mobile-e2e");
+  for (const [diagnosticJob, ciJob] of [
+    ["linux-installer-x64", "linux-installer-x64"],
+    ["linux-installer-arm64", "linux-installer-arm64"],
+    ["windows-installer-candidate", "windows-installer-candidate"],
+  ]) {
+    assert.deepEqual(
+      dependenciesOf(jobs[diagnosticJob]),
+      dependenciesOf(ci[ciJob]).filter((dependency) => dependency !== "release-metadata")
+    );
+  }
+  assert.equal(jobs["quality-inputs"].uses, ci["quality-inputs"].uses);
+  assert.equal(jobs["native-input-linux-x64"].uses, ci["native-input-linux-x64"].uses);
+  assert.equal(jobs["native-input-linux-arm64"].uses, ci["native-input-linux-arm64"].uses);
+  assert.equal(jobs["native-input-darwin-arm64"].uses, ci["native-input-darwin-arm64"].uses);
+  assert.equal(jobs["application-candidate-windows"].with["release-candidate"], false);
+  assert.equal(jobs["windows-installer-candidate"].with["release-tag"], undefined);
+  assert.equal(jobs["linux-installer-x64"].with["release-tag"], undefined);
+  assert.equal(jobs["linux-installer-arm64"].with["release-tag"], undefined);
+  assert.equal(jobs["release-candidate-gate"], undefined);
+  assert.equal(jobs["release-metadata"], undefined);
+  assert.equal(diagnostic.on.workflow_dispatch.inputs["release-candidate"], undefined);
+});
 
 test("native artifact consumers wait for their exact producers without unrelated gates", async () => {
   const jobs = await readCiJobs();
@@ -466,11 +583,15 @@ test("native artifact consumers wait for their exact producers without unrelated
     "Windows installer acceptance retains its diagnostics"
   );
 
-  assert.deepEqual(dependenciesOf(jobs["npm-server-preflight"]), [
+  const npmJob = jobs["npm-server-preflight"];
+  const npmWorkflow = await readWorkflow("npm-server-preflight.yml");
+  const npmPreflight = npmWorkflow.jobs.preflight;
+  assert.equal(npmJob.uses, "./.github/workflows/npm-server-preflight.yml");
+  assert.deepEqual(dependenciesOf(npmJob), [
     ...producerJobs,
     "quality-inputs",
   ]);
-  const npmDownloads = jobs["npm-server-preflight"].steps
+  const npmDownloads = npmPreflight.steps
     .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
     .map((step) => step.with.name)
     .filter(
@@ -483,7 +604,7 @@ test("native artifact consumers wait for their exact producers without unrelated
     "native-isolation-darwin-arm64-${{ github.sha }}",
     "darwin-process-observers-ci-${{ github.sha }}",
   ]);
-  const npmPreflightSteps = jobs["npm-server-preflight"].steps;
+  const npmPreflightSteps = npmPreflight.steps;
   const npmIndex = (name) => npmPreflightSteps.findIndex((step) => step.name === name);
   assert.ok(npmIndex("Download exact official template input manifest") >= 0);
   assert.ok(
