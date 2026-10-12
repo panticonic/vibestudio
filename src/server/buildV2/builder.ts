@@ -5154,6 +5154,20 @@ export async function refreshCachedExtensionRuntimeDeps(
     extensionDetails?.dependencyOverrides ?? {},
     extensionDetails?.dependencyPatches ?? []
   );
+  if (!currentKey)
+    throw new Error(`Extension runtime dependency key is missing: ${result.metadata.name}`);
+  const recordRuntimeKey = async (key: string): Promise<void> => {
+    // A retained execution has its own source state and execution digest. Only
+    // the canonical build record owns the mutable host-runtime projection key.
+    const canonical = await session.store.readBuildMetadata(result.dir);
+    if (canonical.buildKey !== result.buildKey || canonical.details.kind !== "extension")
+      throw new Error(
+        `Extension build metadata changed during runtime projection: ${result.buildKey}`
+      );
+    if (canonical.details.runtimeDepsKey === key) return;
+    canonical.details.runtimeDepsKey = key;
+    await session.store.writeBuildMetadata(result.dir, canonical);
+  };
   await session.processOwner.projectExtensionRuntimeDeps(result.dir, async (ownerSignal) => {
     if (
       extensionRuntimeDepsProjected(
@@ -5162,10 +5176,7 @@ export async function refreshCachedExtensionRuntimeDeps(
         currentKey
       )
     ) {
-      if (extensionDetails && extensionDetails.runtimeDepsKey !== currentKey) {
-        extensionDetails.runtimeDepsKey = currentKey;
-        await session.store.writeBuildMetadata(result.dir, result.metadata);
-      }
+      await recordRuntimeKey(currentKey);
       return;
     }
 
@@ -5198,17 +5209,20 @@ export async function refreshCachedExtensionRuntimeDeps(
           runtimeDeps.key
         );
       }
-      if (extensionDetails && extensionDetails.runtimeDepsKey !== runtimeDeps.key) {
-        extensionDetails.runtimeDepsKey = runtimeDeps.key;
-        await session.store.writeBuildMetadata(result.dir, result.metadata);
-      }
+      await recordRuntimeKey(runtimeDeps.key);
     } finally {
       runtimeDeps.release();
     }
   });
   // A role may have joined another role's target flight with its own stale
-  // descriptor. Reconcile from the single published metadata record.
-  Object.assign(result.metadata, await session.store.readBuildMetadata(result.dir));
+  // descriptor. Reconcile only runtime readiness; retained execution identity
+  // must remain the exact variant requested by this caller.
+  const canonical = await session.store.readBuildMetadata(result.dir);
+  if (canonical.buildKey !== result.buildKey || canonical.details.kind !== "extension")
+    throw new Error(
+      `Extension build metadata changed during runtime projection: ${result.buildKey}`
+    );
+  if (extensionDetails) extensionDetails.runtimeDepsKey = canonical.details.runtimeDepsKey;
   if (
     !extensionRuntimeDepsProjected(
       session.store.primaryArtifactFilePath(result),

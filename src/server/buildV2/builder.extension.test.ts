@@ -6,8 +6,14 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { buildUnit, type BuilderSession, extensionRuntimeDepsProjected } from "./builder.js";
+import {
+  buildUnit,
+  type BuilderSession,
+  extensionRuntimeDepsProjected,
+  refreshCachedExtensionRuntimeDeps,
+} from "./builder.js";
 import { createBuilderTestSession } from "./builderTestSession.js";
+import { extensionRuntimeDependencyKey } from "./externalDeps.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 
@@ -94,6 +100,72 @@ describe("buildUnit extension builds", () => {
     expect(extensionRuntimeDepsProjected(bundlePath, ["fixture-dependency"], "fixture-key")).toBe(
       true
     );
+  });
+
+  it("repairs runtime metadata without changing a retained execution or the canonical latest execution", async () => {
+    const key = "a".repeat(64);
+    const originalState = `state:${"1".repeat(64)}`;
+    const latestState = `state:${"2".repeat(64)}`;
+    const deps = { fixture: "1.0.0" };
+    const runtimeKey = extensionRuntimeDependencyKey(session.processOwner.appRoot, deps)!;
+    const original = await session.store.putStored(
+      key,
+      {
+        entries: [
+          {
+            path: "bundle.js",
+            role: "primary",
+            contentType: "text/javascript; charset=utf-8",
+            encoding: "utf8",
+            content: "export default {};",
+          },
+        ],
+      },
+      {
+        kind: "extension",
+        name: "@workspace-extensions/fixture",
+        buildKey: key,
+        sourcePath: "extensions/fixture",
+        ev: "e".repeat(64),
+        sourceStateHash: originalState,
+        sourcemap: false,
+        authority: { requests: [], provides: [] },
+        details: {
+          kind: "extension",
+          runtimeDepsKey: "prior-runtime-key",
+          runtimeAbi: null,
+          providerContracts: {},
+          methodAuthority: {},
+          externalDeps: deps,
+        },
+        builtAt: "2026-01-01T00:00:00.000Z",
+      },
+      async (directory) => {
+        const packageDir = path.join(directory, "node_modules", "fixture");
+        await fs.promises.mkdir(packageDir, { recursive: true });
+        await fs.promises.writeFile(path.join(packageDir, "package.json"), '{"main":"index.js"}');
+        await fs.promises.writeFile(path.join(packageDir, "index.js"), "module.exports = true;");
+        await fs.promises.writeFile(
+          path.join(directory, "node_modules", ".vibestudio-runtime-projection.json"),
+          JSON.stringify({ version: 1, runtimeDepsKey: runtimeKey })
+        );
+      }
+    );
+    const originalDigest = original.metadata.execution!.executionDigest;
+    const latest = await session.store.rebindSourceState(original, latestState);
+    const retained = (await session.store.getByExecution(key, originalDigest))!;
+    expect(retained.metadata.execution?.executionDigest).toBe(originalDigest);
+
+    await refreshCachedExtensionRuntimeDeps(session, retained);
+
+    expect(retained.metadata.execution?.executionDigest).toBe(originalDigest);
+    expect(retained.sourceStateHash).toBe(originalState);
+    expect(retained.metadata.sourceStateHash).toBe(originalState);
+    expect(retained.metadata.details).toMatchObject({ runtimeDepsKey: runtimeKey });
+    const canonical = await session.store.readBuildMetadata(latest.dir);
+    expect(canonical.execution?.executionDigest).toBe(latest.metadata.execution?.executionDigest);
+    expect(canonical.sourceStateHash).toBe(latestState);
+    expect(canonical.details).toMatchObject({ runtimeDepsKey: runtimeKey });
   });
 
   it("builds a workspace extension package as a node ESM bundle with inline sourcemaps", async () => {
