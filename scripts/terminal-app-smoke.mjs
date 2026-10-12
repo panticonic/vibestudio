@@ -31,9 +31,9 @@ import { runOwnedCleanupSteps, runWithOwnedCleanup } from "./lib/owned-cleanup.m
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** Text the browser's chrome renders once it owns the screen. */
-const CHROME_MARKER = process.env.TERMINAL_SMOKE_CHROME_MARKER ?? "Vibestudio Terminal";
-/** Keys that quit the browser (Ctrl-Q in the current browser). */
-const QUIT_KEYS = process.env.TERMINAL_SMOKE_QUIT_KEYS ?? "\x11";
+const CHROME_MARKER = process.env.TERMINAL_SMOKE_CHROME_MARKER ?? "Vibestudio ·";
+/** Keys that quit the browser: the default prefix (Ctrl-Space, sent as NUL), then `q`. */
+const QUIT_KEYS = process.env.TERMINAL_SMOKE_QUIT_KEYS ?? "\x00q";
 
 const ANSI =
   // eslint-disable-next-line no-control-regex
