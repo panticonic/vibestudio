@@ -596,15 +596,10 @@ test("native artifact consumers wait for their exact producers without unrelated
   const windowsRestore = windowsSteps.find(
     (step) => step.name === "Restore the tested Windows application layout"
   );
-  const windowsHookDependencies = windowsSteps.find(
-    (step) => step.name === "Build infrastructure packages required by packaging hooks"
-  );
   const windowsPackage = windowsSteps.find(
     (step) => step.name === "Package NSIS installer from the tested application"
   );
-  assert.equal(windowsHookDependencies.run, "pnpm build:infrastructure");
   assert.ok(windowsSteps.indexOf(windowsDownload) < windowsSteps.indexOf(windowsRestore));
-  assert.ok(windowsSteps.indexOf(windowsHookDependencies) < windowsSteps.indexOf(windowsPackage));
   assert.ok(windowsSteps.indexOf(windowsRestore) < windowsSteps.indexOf(windowsPackage));
   assert.match(windowsPackage.run, /--prepackaged release\/win-unpacked/);
   assert.doesNotMatch(windowsPackage.run, /pnpm build/);

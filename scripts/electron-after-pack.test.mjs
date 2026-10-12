@@ -1,18 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { completeAfterPack, reportAfterPackFailure } from "./electron-after-pack.mjs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach } from "node:test";
 import { afterPackCompletionPath } from "./lib/after-pack-completion.mjs";
+import { fileURLToPath } from "node:url";
 
 const roots = [];
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-test("after-pack diagnostics render nested operation and cleanup failures", () => {
+test("after-pack diagnostics render nested operation and cleanup failures", async () => {
   const operationFailure = new Error("native dependency verification failed", {
     cause: new Error("SQLite errcode=5, errstr=database is locked"),
   });
@@ -24,13 +26,39 @@ test("after-pack diagnostics render nested operation and cleanup failures", () =
   );
   let diagnostic;
 
-  reportAfterPackFailure(failure, (message) => {
+  await reportAfterPackFailure(failure, (message) => {
     diagnostic = message;
   });
 
   assert.match(diagnostic, /native dependency verification failed/);
   assert.match(diagnostic, /SQLite errcode=5, errstr=database is locked/);
   assert.match(diagnostic, /owned package process exited with status 7/);
+});
+
+test("hook module imports without loading the RPC build output", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "after-pack-import-test-"));
+  roots.push(root);
+  const loader = path.join(root, "block-rpc-loader.mjs");
+  fs.writeFileSync(
+    loader,
+    `export async function resolve(specifier, context, nextResolve) {
+      if (specifier === "@vibestudio/rpc") throw new Error("unexpected RPC import");
+      return nextResolve(specifier, context);
+    }\n`
+  );
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--no-warnings",
+      "--experimental-loader",
+      loader,
+      "--input-type=module",
+      "-e",
+      'await import("./scripts/electron-after-pack.mjs")',
+    ],
+    { cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."), encoding: "utf8" }
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("publishes the afterPack receipt only after every boundary, preparation, and signing stage", async () => {
