@@ -138,7 +138,7 @@ async function makeHarness(
     affectedBuildUnits?: string[];
     isSystemWorkspace?: () => boolean;
     getWorkspaceTrustGrants?: AppHostDeps["getWorkspaceTrustGrants"];
-    ensureHostTargetExtensions?: AppHostDeps["ensureHostTargetExtensions"];
+    prepareHostTarget?: AppHostDeps["prepareHostTarget"];
     beforeInitialize?: (
       host: AppHost,
       getBuildByKey: AppHostDeps["buildSystem"]["getBuildByKey"]
@@ -360,9 +360,7 @@ async function makeHarness(
         : target === "react-native"
           ? { appSource: "apps/mobile", requiresExtensions: ["extensions/react-native"] }
           : { appSource: "apps/terminal-browser", requiresExtensions: [] },
-    ...(opts.ensureHostTargetExtensions
-      ? { ensureHostTargetExtensions: opts.ensureHostTargetExtensions }
-      : {}),
+    ...(opts.prepareHostTarget ? { prepareHostTarget: opts.prepareHostTarget } : {}),
   });
   ownedHosts.add(host);
   try {
@@ -3045,10 +3043,10 @@ describe("AppHost", () => {
   });
 
   it("stages React Native app approval before the provider is active and consumes it after provider startup", async () => {
-    const ensureHostTargetExtensions = vi.fn(async () => undefined);
+    const prepareHostTarget = vi.fn(async () => undefined);
     const { host, buildSystem, approvalQueue, approvalCoordinator, graphNode } = await makeHarness({
       useApprovalCoordinator: true,
-      ensureHostTargetExtensions,
+      prepareHostTarget,
     });
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
     host.setDeclared([{ source: graphNode.relativePath, ref: "main" }]);
@@ -3063,7 +3061,7 @@ describe("AppHost", () => {
       appId: graphNode.name,
       reason: "React Native build provider is not active",
     });
-    expect(ensureHostTargetExtensions).toHaveBeenCalledWith("react-native");
+    expect(prepareHostTarget).toHaveBeenCalledWith("react-native");
     expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
     expect(approvalQueue.request).not.toHaveBeenCalled();
 
@@ -4009,6 +4007,27 @@ describe("AppHost", () => {
     expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
     expect(buildSystem.resolveBuildUnitIdentity).not.toHaveBeenCalled();
     expect(approvalQueue.request).not.toHaveBeenCalled();
+    await host.shutdown();
+  });
+
+  it("prepares a demanded host target (admitting its host-build app) before activating it", async () => {
+    // The shell is hostTargets.electron.app in the harness; a client can demand
+    // it before startup reconciliation has admitted the host build's units.
+    const order: string[] = [];
+    const prepareHostTarget = vi.fn(async (target: string) => {
+      order.push(`prepare:${target}`);
+    });
+    const { host, graphNode } = await makeHarness({ prepareHostTarget });
+    installApp(host, graphNode);
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    host.registry.patch(graphNode.name, { status: "building" });
+    const activateRelease = vi.spyOn(host, "activateRelease").mockImplementation(async () => {
+      order.push("activate");
+    });
+    await expect(host.ensureActivated(graphNode.name)).resolves.toBe("ready");
+    expect(prepareHostTarget).toHaveBeenCalledWith("electron");
+    expect(order).toEqual(["prepare:electron", "activate"]);
+    activateRelease.mockRestore();
     await host.shutdown();
   });
 

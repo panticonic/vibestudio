@@ -1923,16 +1923,27 @@ async function main() {
   const runtimeExtensionDeclarations = (config: typeof workspaceConfig) =>
     resolveExtensionsForHostTargets(config, [...demandedHostTargets]);
   const hostTargetStaging = new Map<string, Promise<void>>();
-  const ensureHostTargetExtensions = async (
+  const prepareHostTarget = async (
     target: import("@vibestudio/shared/hostTargets").HostTarget
   ): Promise<void> => {
     const extensionHost = extensionHostForGateway;
     if (!extensionHost) throw new Error("Extension host is not available");
     // A host target can be demanded before the background startup reconciliation
-    // reaches its host-build admission pass. Admit the exact trusted extension
-    // builds at this boundary before staging makes them activatable.
+    // reaches its host-build admission pass. Admit the exact trusted builds the
+    // target needs — its required extensions and its own app — at this boundary
+    // before staging makes them activatable.
     const requiredExtensions = resolveHostTargetRequiredExtensions(workspaceConfig, target);
     admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(requiredExtensions));
+    const targetApp = resolveHostTargetDecl(workspaceConfig, target);
+    if (targetApp && appHostForGateway) {
+      admitSeedTrustedUnits(
+        await appHostForGateway.seedTrustedDeclared(
+          resolveDeclaredApps(workspaceConfig).filter(
+            (declaration) => declaration.source === targetApp.appSource
+          )
+        )
+      );
+    }
     const pending = hostTargetStaging.get(target);
     if (pending) return pending;
     if (demandedHostTargets.has(target)) return extensionHost.whenDeclarationsStaged();
@@ -2570,7 +2581,7 @@ async function main() {
           };
         },
         ensureBuildProvider: async (target) => {
-          await ensureHostTargetExtensions(target);
+          await prepareHostTarget(target);
           const host = assertPresent(extensionHostForGateway);
           await host.whenReconciled();
           for (const declaration of resolveHostTargetRequiredExtensions(workspaceConfig, target)) {
@@ -6313,7 +6324,7 @@ async function main() {
         // hostTargets.*). Read live from workspaceConfig so meta-change
         // reloads are reflected without an AppHost restart.
         getHostTargetDecl: (target) => resolveHostTargetDecl(workspaceConfig, target),
-        ensureHostTargetExtensions,
+        prepareHostTarget,
       });
       await host.initialize();
       appHostForGateway = host;
@@ -7105,7 +7116,7 @@ async function main() {
               (declaration) => declaration.source === node.relativePath
             )
           ) {
-            await ensureHostTargetExtensions(target);
+            await prepareHostTarget(target);
           }
         }
         await extensionHostForGateway?.whenDeclarationsStaged();

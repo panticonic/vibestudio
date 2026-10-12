@@ -378,7 +378,8 @@ export interface AppHostDeps {
   getHostTargetDecl?(
     target: HostTarget
   ): { appSource: string; requiresExtensions: string[] } | null;
-  ensureHostTargetExtensions?(target: HostTarget): Promise<void>;
+  /** Admit and stage what a demanded host target needs: its app and required extensions. */
+  prepareHostTarget?(target: HostTarget): Promise<void>;
 }
 
 export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
@@ -545,8 +546,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       listCandidates: () => this.listHostTargetCandidates("react-native"),
       declaredForCandidate: (candidate) => this.declaredForCandidate(candidate),
       requiredExtensions: () => deps.getHostTargetDecl?.("react-native")?.requiresExtensions ?? [],
-      ensureRequiredExtensions: () =>
-        deps.ensureHostTargetExtensions?.("react-native") ?? Promise.resolve(),
+      ensureRequiredExtensions: () => deps.prepareHostTarget?.("react-native") ?? Promise.resolve(),
       whenDeclarationsStaged: () => this.unitHost.whenDeclarationsStaged(),
       whenReconciled: () => this.unitHost.whenReconciled(),
       reconcileDeclaration: (declaration, options) =>
@@ -1200,6 +1200,16 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const flight = Promise.resolve()
       .then(async () => {
         await this.initialize();
+        // A host target's app can be demanded before startup reconciliation
+        // admits the host build's units; its target preparation admits them.
+        const target = this.appTarget(node);
+        const hostTarget = this.deps.getHostTargetDecl?.(target);
+        if (
+          hostTarget &&
+          normalizeRepoPath(hostTarget.appSource) === normalizeRepoPath(node.relativePath)
+        ) {
+          await this.deps.prepareHostTarget?.(target);
+        }
         await this.unitHost.whenDeclarationsStaged();
         await this.unitHost.whenApplied(node.name);
         const entry = this.findRegistryEntry(node.name);
