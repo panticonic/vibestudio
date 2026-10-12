@@ -3,7 +3,7 @@
   "name": "@panticonic/vibestudio",
   "productName": "Vibestudio",
   "homepage": "https://github.com/panticonic/vibestudio",
-  "version": "0.1.98",
+  "version": "0.1.99",
   "private": true,
   "bin": {
     "vibestudio": "scripts/vibestudio-cli-shim.mjs",
@@ -72,7 +72,7 @@
     "check:vcs-skill-release": "node --import tsx scripts/generate-vcs-skill-release.mjs --check",
     "check:build-artifacts": "node scripts/check-build-artifacts.mjs",
     "check:native-host-dependencies": "node scripts/native-host-dependencies.mjs",
-    "check:workflows": "node scripts/check-workflows.mjs && node --test scripts/ci-critical-path.test.mjs",
+    "check:workflows": "node scripts/check-workflows.mjs && node --test scripts/ci-critical-path.test.mjs scripts/ci-host-build-inputs.test.mjs",
     "prepare:darwin-process-observers": "node scripts/prepare-darwin-process-observers.mjs",
     "check:host-boundary": "node scripts/check-host-workspace-imports.mjs",
     "check:package-dependencies": "node scripts/check-package-dependencies.mjs",

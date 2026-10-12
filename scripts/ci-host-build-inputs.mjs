@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   computeHostBuildFingerprint,
+  readHostBuildFingerprint,
   sameHostBuildFingerprint,
 } from "./host-build-fingerprint.mjs";
 import {
@@ -120,14 +121,21 @@ function infrastructureReceiptDigest() {
   return sha256(file);
 }
 
-function currentGeneration(kind, mode) {
-  const root = readCurrentHostBuildGeneration(repoRoot, kind);
+export function currentGeneration(kind, mode, cwd = repoRoot) {
+  const root = readCurrentHostBuildGeneration(cwd, kind);
   try {
     const record = JSON.parse(
-      fs.readFileSync(path.join(repoRoot, "dist/host-generations", `current-${kind}.json`), "utf8")
+      fs.readFileSync(path.join(cwd, "dist/host-generations", `current-${kind}.json`), "utf8")
     );
-    const expected = computeHostBuildFingerprint({ cwd: repoRoot, mode });
-    if (record.mode !== mode || !sameHostBuildFingerprint(record, expected)) {
+    const expected = computeHostBuildFingerprint({ cwd, mode });
+    const actual = readHostBuildFingerprint(cwd, path.join(root, "host-build-fingerprint.json"));
+    if (
+      !sameHostBuildFingerprint(actual, expected) ||
+      actual.inputCount !== expected.inputCount ||
+      record.mode !== actual.mode ||
+      record.fingerprint !== actual.fingerprint ||
+      record.inputCount !== actual.inputCount
+    ) {
       throw new Error(
         `Current ${kind} host generation does not match ${mode} inputs for this checkout`
       );
@@ -142,42 +150,46 @@ function currentGeneration(kind, mode) {
   }
 }
 
-const { action, sourceSHA, modes, templateRoot } = parseArguments(process.argv.slice(2));
-assertSourceCheckout(sourceSHA);
-const generations = Object.fromEntries(
-  Object.entries(modes).map(([kind, mode]) => [kind, currentGeneration(kind, mode)])
-);
-const infrastructureReceiptSha256 = infrastructureReceiptDigest();
-const templates = templateSources(templateRoot);
-
-if (action === "write") {
-  fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
-  fs.writeFileSync(
-    receiptPath,
-    `${JSON.stringify(
-      {
-        format: "vibestudio-host-release-inputs/2",
-        sourceSHA,
-        generations,
-        infrastructureReceiptSha256,
-        ...(templates ? { templates } : {}),
-      },
-      null,
-      2
-    )}\n`,
-    { mode: 0o600 }
+function main() {
+  const { action, sourceSHA, modes, templateRoot } = parseArguments(process.argv.slice(2));
+  assertSourceCheckout(sourceSHA);
+  const generations = Object.fromEntries(
+    Object.entries(modes).map(([kind, mode]) => [kind, currentGeneration(kind, mode)])
   );
-  process.stdout.write(`Verified host input receipt for ${sourceSHA}\n`);
-} else {
-  const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
-  if (
-    receipt.format !== "vibestudio-host-release-inputs/2" ||
-    receipt.sourceSHA !== sourceSHA ||
-    JSON.stringify(receipt.generations) !== JSON.stringify(generations) ||
-    receipt.infrastructureReceiptSha256 !== infrastructureReceiptSha256 ||
-    JSON.stringify(receipt.templates) !== JSON.stringify(templates)
-  ) {
-    throw new Error("Host release inputs do not match this source SHA and current checkout");
+  const infrastructureReceiptSha256 = infrastructureReceiptDigest();
+  const templates = templateSources(templateRoot);
+
+  if (action === "write") {
+    fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+    fs.writeFileSync(
+      receiptPath,
+      `${JSON.stringify(
+        {
+          format: "vibestudio-host-release-inputs/2",
+          sourceSHA,
+          generations,
+          infrastructureReceiptSha256,
+          ...(templates ? { templates } : {}),
+        },
+        null,
+        2
+      )}\n`,
+      { mode: 0o600 }
+    );
+    process.stdout.write(`Verified host input receipt for ${sourceSHA}\n`);
+  } else {
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+    if (
+      receipt.format !== "vibestudio-host-release-inputs/2" ||
+      receipt.sourceSHA !== sourceSHA ||
+      JSON.stringify(receipt.generations) !== JSON.stringify(generations) ||
+      receipt.infrastructureReceiptSha256 !== infrastructureReceiptSha256 ||
+      JSON.stringify(receipt.templates) !== JSON.stringify(templates)
+    ) {
+      throw new Error("Host release inputs do not match this source SHA and current checkout");
+    }
+    process.stdout.write(`Host input receipt verified for ${sourceSHA}\n`);
   }
-  process.stdout.write(`Host input receipt verified for ${sourceSHA}\n`);
 }
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

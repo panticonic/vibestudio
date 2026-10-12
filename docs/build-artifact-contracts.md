@@ -152,7 +152,12 @@ observer inputs, builds the production desktop generation, runs its native
 acceptance, and uploads immutable generation records and payloads, infrastructure
 package outputs and their cache receipt, and a source-SHA receipt. Transient
 generation locks, leases, staging, and garbage directories are excluded. The
-application candidate and a separate development-input producer are sibling
+version-2 generation pointer identifies an immutable directory; its version is
+independent of the version-1 build fingerprint receipt inside that directory.
+Transport admission compares that receipt against current source inputs, then
+checks that the pointer's mode, fingerprint, and input count identify the same
+build. Pointer format versions must never be compared as build receipt versions.
+The application candidate and a separate development-input producer are sibling
 consumers of this artifact, so source preparation does not wait for app
 packaging. The development producer builds the development source generation
 once, resolves the eight official template checkouts (including the requested
