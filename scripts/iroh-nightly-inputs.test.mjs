@@ -37,7 +37,7 @@ test("Android nightly smoke uses its source-server producer entrypoint", () => {
   assert.match(emulatorConfig, /disable-linux-hw-accel: false/u);
   assert.match(
     emulatorConfig,
-    /pre-emulator-launch-script: \|\n\s+set -euo pipefail\n\s+"\$ANDROID_HOME\/emulator\/emulator" -accel-check/u
+    /pre-emulator-launch-script: \|\n\s+set -eu\n\s+"\$ANDROID_HOME\/emulator\/emulator" -accel-check/u
   );
 });
 

@@ -115,6 +115,6 @@ jobs:
           profile: pixel_6
           disable-linux-hw-accel: false
           pre-emulator-launch-script: |
-            set -euo pipefail
+            set -eu
             "$ANDROID_HOME/emulator/emulator" -accel-check
           script: pnpm test:iroh-mobile-e2e

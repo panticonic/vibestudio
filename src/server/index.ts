@@ -1926,10 +1926,15 @@ async function main() {
   const ensureHostTargetExtensions = async (
     target: import("@vibestudio/shared/hostTargets").HostTarget
   ): Promise<void> => {
-    const pending = hostTargetStaging.get(target);
-    if (pending) return pending;
     const extensionHost = extensionHostForGateway;
     if (!extensionHost) throw new Error("Extension host is not available");
+    // A host target can be demanded before the background startup reconciliation
+    // reaches its host-build admission pass. Admit the exact trusted extension
+    // builds at this boundary before staging makes them activatable.
+    const requiredExtensions = resolveHostTargetRequiredExtensions(workspaceConfig, target);
+    admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(requiredExtensions));
+    const pending = hostTargetStaging.get(target);
+    if (pending) return pending;
     if (demandedHostTargets.has(target)) return extensionHost.whenDeclarationsStaged();
     demandedHostTargets.add(target);
     const staging = extensionHost.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig), {
@@ -1987,8 +1992,9 @@ async function main() {
         } else {
           if (trigger === "startup") {
             // Host-build units first: they are never offered at the gate, so
-            // this is the only thing that records their admission — and the
-            // shell needs it before it can render any review at all.
+            // startup reconciliation records admission for the full declared
+            // set, while target demand can admit its exact required subset
+            // earlier so a client may launch before this background pass.
             admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(reviewed));
             const review = workspaceCreationReview.isPending()
               ? await extensionHost.reviewDeclared(reviewed)

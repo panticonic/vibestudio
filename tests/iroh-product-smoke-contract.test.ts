@@ -120,4 +120,25 @@ describe("Iroh product E2E entry points", () => {
     expect(mobile).toContain("await runOwnedCommand(lifetime, process.execPath, args");
     expect(mobile).toContain("releaseHostBuildGeneration(hostGenerationRoot)");
   });
+
+  it("keeps the Android emulator preflight compatible with the action's POSIX shell", () => {
+    const nightly = source(".github/workflows/iroh-e2e-nightly.yml");
+    const preflight = nightly.match(/pre-emulator-launch-script:\s*\|\n([\s\S]*?)\n\s*script:/)?.[1];
+    expect(preflight).toBeDefined();
+    expect(preflight).toContain("set -eu");
+    expect(preflight).not.toContain("pipefail");
+  });
+
+  it("admits exact host extension builds before a target stages them for activation", () => {
+    const server = source("src/server/index.ts");
+    const demandStart = server.indexOf("const ensureHostTargetExtensions = async (");
+    const demandEnd = server.indexOf("// Optional artifact warming", demandStart);
+    const demand = server.slice(demandStart, demandEnd);
+    const admission = demand.indexOf("extensionHost.seedTrustedDeclared(");
+    const staging = demand.indexOf("extensionHost.reconcileDeclared(");
+    expect(demandStart).toBeGreaterThan(0);
+    expect(admission).toBeGreaterThan(0);
+    expect(staging).toBeGreaterThan(admission);
+    expect(demand).toContain("admitSeedTrustedUnits(");
+  });
 });
