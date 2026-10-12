@@ -214,15 +214,23 @@ variation in shared reusable workflows rather than copying build recipes.
 
 Release preparation is a manual dispatch from `main` with an exact version tag
 and full source SHA. The workflow checks that SHA against the checked-out commit
-and package version, then runs the reusable CI graph before creating an
-annotated tag and draft release. The tag is never moved or overwritten. Every
+and stable package version, then runs the reusable CI graph before creating an
+annotated tag and draft release. Prerelease and build-metadata versions are not
+accepted in this `--latest` release lane. The tag is never moved or overwritten.
+Every
 enabled desktop installer candidate and its required acceptance must succeed
 before that tag exists; publication consumes those same run-scoped artifacts
 and does not rebuild them. Candidate artifacts are SHA-qualified and immutable
 within the workflow run. After a pre-tag failure, start a fresh dispatch; after
 a post-tag publisher failure, use **Re-run failed jobs** so successful candidate
-producers and their artifacts remain untouched. Mobile and nightly workflows
-remain separate checks.
+producers and their artifacts remain untouched. The final publication job
+serializes only the shared latest-release promotion and compares stable semantic
+versions, so an older release cannot demote a newer latest release. GitHub keeps
+one running and one pending job per concurrency group; a third concurrent
+publication can replace the pending middle run. That run's tagged release stays
+a draft. After the newer publication finishes, use **Re-run failed jobs** on
+the canceled middle run; its draft then publishes without becoming latest.
+Mobile and nightly workflows remain separate checks.
 Keep the workflow name `Release`: the Linux repository publisher is triggered
 by its successful `workflow_run` completion.
 

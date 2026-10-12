@@ -5,9 +5,11 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export function assertReleaseVersion(tag, packageVersion) {
-  const match = /^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/u.exec(tag);
+  const match = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/u.exec(tag);
   if (!match) {
-    throw new Error(`Release tag must be an exact v-prefixed semantic version; received "${tag}"`);
+    throw new Error(
+      `Release tag must be a stable v-prefixed semantic version without prerelease or build metadata; received "${tag}"`
+    );
   }
   const tagVersion = match[1];
   if (tagVersion !== packageVersion) {

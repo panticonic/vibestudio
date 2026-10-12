@@ -26,14 +26,45 @@ test("Linux candidate checksums admit native package architecture names and reje
         (extension, index) => `vibestudio-0.1.98-${architectures[index]}.${extension}`
       );
       for (const name of names) await fs.writeFile(path.join(release, name), name);
-      execFileSync("bash", ["-euo", "pipefail", "-c", command], { cwd: root });
+      execFileSync("bash", ["-euo", "pipefail", "-c", command], {
+        cwd: root,
+        env: { ...process.env, ARCH: "x64" },
+      });
       execFileSync("sha256sum", ["--check", "SHA256SUMS-linux-x64"], { cwd: release });
       await fs.rm(path.join(release, names[0]));
-      assert.throws(() => execFileSync("bash", ["-euo", "pipefail", "-c", command], { cwd: root }));
+      assert.throws(() =>
+        execFileSync("bash", ["-euo", "pipefail", "-c", command], {
+          cwd: root,
+          env: { ...process.env, ARCH: "x64" },
+        })
+      );
       for (const name of names.slice(1)) await fs.rm(path.join(release, name));
     }
   } finally {
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("release workflow shell steps never interpolate workflow inputs into script source", async () => {
+  const files = [
+    "release.yml",
+    "ci.yml",
+    "application-candidate.yml",
+    "linux-installer.yml",
+    "windows-installer.yml",
+  ];
+  for (const fileName of files) {
+    const workflow = await readWorkflow(fileName);
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
+      for (const step of job.steps ?? []) {
+        if (typeof step.run !== "string") continue;
+        assert.doesNotMatch(
+          step.run,
+          /\$\{\{\s*inputs\./u,
+          `${fileName}:${jobName}:${step.name ?? "unnamed"} must pass workflow inputs through env, not shell source`
+        );
+      }
+    }
   }
 });
 
@@ -153,8 +184,9 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.equal(
     appDirectoryStep.run,
-    'app_directory=$(node scripts/package-desktop.mjs linux app-path "\${{ inputs.arch }}")\necho "LINUX_APP_DIRECTORY=$app_directory" >> "$GITHUB_ENV"\n'
+    'app_directory=$(node scripts/package-desktop.mjs linux app-path "$ARCH")\necho "LINUX_APP_DIRECTORY=$app_directory" >> "$GITHUB_ENV"\n'
   );
+  assert.equal(appDirectoryStep.env.ARCH, "\${{ inputs.arch }}");
   assert.match(
     appSteps.find(
       (step) => step.name === "Allow packaged MXC user namespaces for application preparation"
@@ -167,7 +199,7 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.equal(
     buildAppStep.run,
-    'pnpm generate:workspace-template-release && pnpm build && node scripts/package-desktop.mjs linux app "${{ inputs.arch }}"'
+    'pnpm generate:workspace-template-release && pnpm build && node scripts/package-desktop.mjs linux app "$ARCH"'
   );
   const appUpload = appSteps.find(
     (step) => step.name === "Upload exact Linux application for independent format packaging"
@@ -194,7 +226,7 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.equal(
     packageStep.run,
-    'node scripts/package-desktop.mjs linux format "\${{ matrix.format }}" release/linux-unpacked "\${{ inputs.arch }}"'
+    'node scripts/package-desktop.mjs linux format "$PACKAGE_FORMAT" release/linux-unpacked "$ARCH"'
   );
   assert.doesNotMatch(packageStep.run, /pnpm (?:build|dist:linux)/u);
   assert.doesNotMatch(JSON.stringify(formatSteps), /pnpm build:infrastructure/u);

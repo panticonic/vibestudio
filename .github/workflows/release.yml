@@ -44,7 +44,10 @@ jobs:
           WORKFLOW_REF: ${{ github.ref }}
         run: test "$WORKFLOW_REF" = refs/heads/main
       - name: Verify version and exact checked-out source SHA
-        run: node scripts/check-release-version.mjs "${{ inputs.release-tag }}" --source-sha "${{ inputs.source-sha }}"
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        run: node scripts/check-release-version.mjs "$RELEASE_TAG" --source-sha "$SOURCE_SHA"
       - name: Verify Linux repository signing is configured
         if: ${{ vars.RELEASE_LINUX == 'true' }}
         env:
@@ -289,11 +292,36 @@ jobs:
         && (vars.RELEASE_MAC != 'true' || needs.publish-macos.result == 'success')
         && (vars.RELEASE_WINDOWS != 'true' || needs.publish-windows.result == 'success') }}
     runs-on: ubuntu-24.04
+    concurrency:
+      group: release-latest-promotion
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
+      - name: Checkout release comparison helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source-sha }}
+          persist-credentials: false
       - name: Make the complete release public and latest
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release-tag }}
-        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        run: |
+          latest_error="$RUNNER_TEMP/release-latest-error"
+          if latest_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>"$latest_error")"; then
+            :
+          elif grep -q 'HTTP 404' "$latest_error"; then
+            latest_tag=""
+          else
+            cat "$latest_error" >&2
+            exit 1
+          fi
+          make_latest=true
+          if [ -n "$latest_tag" ]; then
+            promotion="$(node scripts/compare-release-tags.mjs "$latest_tag" "$RELEASE_TAG")"
+            if [ "$promotion" = older ]; then make_latest=false; fi
+          fi
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false -f "make_latest=$make_latest"

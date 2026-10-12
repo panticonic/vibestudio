@@ -290,14 +290,14 @@ jobs:
       runner: macos-14
       target: darwin-arm64
       package: mac
-      release-candidate: ${{ inputs.release-preparation }}
+      release-candidate: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' }}
       release-tag: ${{ inputs.release-tag }}
     secrets:
-      APPLE_CSC_LINK: ${{ inputs.release-preparation && secrets.APPLE_CSC_LINK || '' }}
-      APPLE_CSC_KEY_PASSWORD: ${{ inputs.release-preparation && secrets.APPLE_CSC_KEY_PASSWORD || '' }}
-      APPLE_ID: ${{ inputs.release-preparation && secrets.APPLE_ID || '' }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ inputs.release-preparation && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-      APPLE_TEAM_ID: ${{ inputs.release-preparation && secrets.APPLE_TEAM_ID || '' }}
+      APPLE_CSC_LINK: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' && secrets.APPLE_CSC_LINK || '' }}
+      APPLE_CSC_KEY_PASSWORD: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' && secrets.APPLE_CSC_KEY_PASSWORD || '' }}
+      APPLE_ID: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' && secrets.APPLE_ID || '' }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ inputs.release-preparation && vars.RELEASE_MAC == 'true' && secrets.APPLE_TEAM_ID || '' }}
     permissions:
       contents: read
 
@@ -572,7 +572,10 @@ jobs:
       - name: Install packaging dependencies
         run: pnpm install --frozen-lockfile
       - name: Verify release version and source commit
-        run: node scripts/check-release-version.mjs "${{ inputs.release-tag }}" --source-sha "${{ github.sha }}"
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: node scripts/check-release-version.mjs "$RELEASE_TAG" --source-sha "$SOURCE_SHA"
       - name: Download the canonical tested macOS application
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -589,11 +592,14 @@ jobs:
           name: vibestudio-macos-provenance-${{ github.sha }}
           path: candidate-provenance
       - name: Verify exact macOS app archive provenance
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          SOURCE_SHA: ${{ github.sha }}
         run: >-
           node scripts/release-app-candidate.mjs verify
           candidate-app/packaged-app.zip
           candidate-provenance/macos-release-provenance.json
-          "${{ inputs.release-tag }}" "${{ github.sha }}"
+          "$RELEASE_TAG" "$SOURCE_SHA"
       - name: Restore and verify the exact tested application
         shell: bash
         run: |
@@ -618,28 +624,10 @@ jobs:
               ;;
           esac
       - name: Build DMG and updater ZIP from the accepted application
-        env:
-          CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         shell: bash
-        run: |
-          missing=0
-          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-            eval "value=\${$name}"
-            if [ -z "$value" ]; then missing=$((missing + 1)); fi
-          done
-          signing_mode="$(cat release/macos-signing.txt)"
-          if [ "$missing" -eq 0 ] && [ "$signing_mode" = "developer-id" ]; then
-            pnpm exec electron-builder --mac --prepackaged release/Vibestudio.app --publish never
-          elif [ "$missing" -eq 5 ] && [ "$signing_mode" = "ad-hoc" ]; then
-            CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac --prepackaged release/Vibestudio.app --publish never
-          else
-            echo "Apple signing credentials and the tested app signing mode do not agree." >&2
-            exit 1
-          fi
+        run: >-
+          CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac
+          --prepackaged release/Vibestudio.app --publish never
       - name: Generate DMG checksums
         run: |
           cd release

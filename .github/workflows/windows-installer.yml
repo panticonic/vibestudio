@@ -39,7 +39,10 @@ jobs:
 
       - name: Verify requested release version and source commit
         if: ${{ inputs.release-tag != '' }}
-        run: node scripts/check-release-version.mjs "${{ inputs.release-tag }}" --source-sha "${{ github.sha }}"
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: node scripts/check-release-version.mjs "$RELEASE_TAG" --source-sha "$SOURCE_SHA"
 
       # electron-builder eagerly imports its configured hooks for --prepackaged
       # runs. The hook module closure imports @vibestudio/rpc, so build the

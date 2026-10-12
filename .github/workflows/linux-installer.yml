@@ -42,7 +42,10 @@ jobs:
 
       - name: Verify requested release version and source commit
         if: ${{ inputs.release-tag != '' }}
-        run: node scripts/check-release-version.mjs "${{ inputs.release-tag }}" --source-sha "${{ github.sha }}"
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: node scripts/check-release-version.mjs "$RELEASE_TAG" --source-sha "$SOURCE_SHA"
 
       - name: Download this architecture's tested MXC payload
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -54,18 +57,22 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
 
       - name: Resolve electron-builder's application directory for this architecture
+        env:
+          ARCH: ${{ inputs.arch }}
         run: |
-          app_directory=$(node scripts/package-desktop.mjs linux app-path "${{ inputs.arch }}")
+          app_directory=$(node scripts/package-desktop.mjs linux app-path "$ARCH")
           echo "LINUX_APP_DIRECTORY=$app_directory" >> "$GITHUB_ENV"
 
       - name: Allow packaged MXC user namespaces for application preparation
+        env:
+          ARCH: ${{ inputs.arch }}
         run: |
           profile="$RUNNER_TEMP/vibestudio-release-mxc.apparmor"
           cat > "$profile" <<EOF
           abi <abi/4.0>,
           include <tunables/global>
 
-          profile vibestudio_release_mxc "$GITHUB_WORKSPACE/release/.package-linux-${{ inputs.arch }}-*/$LINUX_APP_DIRECTORY/resources/app.asar.unpacked/dist/mxc/linux-${{ inputs.arch }}/lxc-exec" flags=(unconfined) {
+          profile vibestudio_release_mxc "$GITHUB_WORKSPACE/release/.package-linux-$ARCH-*/$LINUX_APP_DIRECTORY/resources/app.asar.unpacked/dist/mxc/linux-$ARCH/lxc-exec" flags=(unconfined) {
             userns,
           }
           EOF
@@ -73,7 +80,9 @@ jobs:
           sudo apparmor_parser -r /etc/apparmor.d/vibestudio-release-mxc
 
       - name: Build exact Linux application and prepare its installed workspace release
-        run: pnpm generate:workspace-template-release && pnpm build && node scripts/package-desktop.mjs linux app "${{ inputs.arch }}"
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: pnpm generate:workspace-template-release && pnpm build && node scripts/package-desktop.mjs linux app "$ARCH"
 
       - name: Archive the immutable prepared application
         run: |
@@ -136,16 +145,21 @@ jobs:
           sudo apt-get install --no-install-recommends -y rpm libarchive-tools
 
       - name: Package one installer from the prepared application
-        run: node scripts/package-desktop.mjs linux format "${{ matrix.format }}" release/linux-unpacked "${{ inputs.arch }}"
+        env:
+          ARCH: ${{ inputs.arch }}
+          PACKAGE_FORMAT: ${{ matrix.format }}
+        run: node scripts/package-desktop.mjs linux format "$PACKAGE_FORMAT" release/linux-unpacked "$ARCH"
 
       - name: Verify this format produced exactly one installer
         shell: bash
+        env:
+          PACKAGE_FORMAT: ${{ matrix.format }}
         run: |
-          case "${{ matrix.format }}" in
+          case "$PACKAGE_FORMAT" in
             deb) pattern='vibestudio-*.deb' ;;
             rpm) pattern='vibestudio-*.rpm' ;;
             pacman) pattern='vibestudio-*.pkg.tar.zst' ;;
-            *) echo "Unsupported Linux package format: ${{ matrix.format }}" >&2; exit 1 ;;
+            *) echo "Unsupported Linux package format: $PACKAGE_FORMAT" >&2; exit 1 ;;
           esac
           shopt -s nullglob
           files=(release/$pattern)
@@ -178,6 +192,8 @@ jobs:
           path: release
 
       - name: Generate installer checksums
+        env:
+          ARCH: ${{ inputs.arch }}
         run: |
           cd release
           test "$(find . -maxdepth 1 -type f -name "vibestudio-*.deb" | wc -l)" -eq 1
@@ -188,8 +204,8 @@ jobs:
             -print0 \
             | sort -z \
             | xargs -0 sha256sum \
-            > SHA256SUMS-linux-${{ inputs.arch }}
-          test -s SHA256SUMS-linux-${{ inputs.arch }}
+            > "SHA256SUMS-linux-$ARCH"
+          test -s "SHA256SUMS-linux-$ARCH"
 
       - name: Upload immutable Linux release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
