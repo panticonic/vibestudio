@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import type { BuildResultWire } from "@vibestudio/service-schemas/build";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "http";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
@@ -217,10 +218,10 @@ describe("PanelHttpServer build cache", () => {
       ev: "ev-1",
       sourceStateHash: "state-hash",
       sourcemap: true,
-      details: { kind: "panel", target: "electron" },
+      details: { kind: "generic" },
       builtAt: "2026-07-21T00:00:00.000Z",
     },
-  } as unknown as import("./buildV2/buildStore.js").BuildResult;
+  } satisfies BuildResultWire;
 
   it("keeps the legitimate CDP data-plane payload budget explicit", async () => {
     const server = new PanelHttpServer();

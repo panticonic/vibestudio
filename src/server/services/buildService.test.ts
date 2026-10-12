@@ -1,6 +1,8 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
   panelMetadataSchema,
+  type BuildMetadataWire,
+  type BuildResultWire,
   type BuildPerformanceProfileWire,
 } from "@vibestudio/service-schemas/build";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +26,24 @@ vi.mock("../buildV2/buildStore.js", async (original) => ({
   ...(await original<typeof import("../buildV2/buildStore.js")>()),
   readExecutableModules: vi.fn(() => inventory.modules),
 }));
+
+const buildMetadata = {
+  kind: "extension",
+  name: "@workspace-extensions/example",
+  buildKey: "build-key",
+  sourcePath: "extensions/example",
+  ev: "ev-1",
+  sourceStateHash: null,
+  sourcemap: true,
+  details: {
+    kind: "extension",
+    runtimeDepsKey: null,
+    runtimeAbi: "4",
+    providerContracts: {},
+    methodAuthority: {},
+  },
+  builtAt: "2026-01-01T00:00:00.000Z",
+} satisfies BuildMetadataWire;
 
 beforeEach(() => setBuildRootConfig({ appRoot: process.cwd(), workspaceRoot: process.cwd() }));
 afterEach(() => setBuildRootConfig(null));
@@ -64,19 +84,7 @@ function makeBuildSystem(): BuildSystemV2 {
                 content: "export {};",
               },
             ],
-            metadata: {
-              kind: "extension",
-              name: "@workspace-extensions/example",
-              ev: "ev-1",
-              sourcemap: true,
-              details: {
-                kind: "extension",
-                runtimeDepsKey: null,
-                runtimeAbi: "4",
-                providerContracts: {},
-              },
-              builtAt: "2026-01-01T00:00:00.000Z",
-            },
+            metadata: buildMetadata,
           }
         : null
     ),
@@ -191,9 +199,10 @@ describe("build service extension diagnostics", () => {
   });
   it("builds websites only from exact refs and returns a content-free immutable handle", async () => {
     const buildSystem = makeBuildSystem();
-    vi.mocked(buildSystem.getBuild).mockResolvedValue({
+    const fullBuild = {
       buildKey: "website-key",
       sourceStateHash: "state:exact",
+      dir: "/tmp/website-build",
       artifacts: [
         {
           path: "site.js",
@@ -206,13 +215,22 @@ describe("build service extension diagnostics", () => {
         },
       ],
       metadata: {
+        kind: "panel",
+        name: "@workspace-panels/site",
+        buildKey: "website-key",
+        sourcePath: "panels/site",
+        ev: "ev-site",
+        sourceStateHash: "state:exact",
+        sourcemap: false,
         details: {
           kind: "website-bundle",
           entryArtifact: "site.js",
           declaration: { entry: "site.tsx", expects: "a useful workspace" },
         },
+        builtAt: "2026-01-01T00:00:00.000Z",
       },
-    } as never);
+    } satisfies BuildResultWire;
+    vi.mocked(buildSystem.getBuild).mockResolvedValue(fullBuild);
     const service = createBuildService({
       buildSystem,
       listUnits: () => [],

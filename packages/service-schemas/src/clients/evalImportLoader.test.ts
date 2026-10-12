@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { BuildResultWire } from "../build.js";
 import { createBuildServiceClient, createEvalImportLoader } from "./evalImportLoader.js";
 
 describe("createEvalImportLoader", () => {
@@ -186,7 +187,7 @@ describe("createEvalImportLoader", () => {
   });
 
   it("rejects full builds for library imports", async () => {
-    const call = vi.fn(async () => ({
+    const fullBuild = {
       dir: "/tmp/build",
       buildKey: "a".repeat(64),
       sourceStateHash: null,
@@ -198,11 +199,12 @@ describe("createEvalImportLoader", () => {
         ev: "ev-test",
         sourceStateHash: null,
         sourcemap: false,
-        details: { kind: "package" },
+        details: { kind: "library", format: "cjs", requiredModules: [] },
         builtAt: "2026-07-13T00:00:00.000Z",
       },
       artifacts: [],
-    }));
+    } satisfies BuildResultWire;
+    const call = vi.fn(async () => fullBuild);
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
     await expect(loadImport("@workspace/pkg", undefined, [])).rejects.toThrow(
