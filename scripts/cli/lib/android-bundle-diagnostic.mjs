@@ -48,6 +48,21 @@ export function parseHermesLocation(message) {
   return null;
 }
 
+export function isSourceMapBytes(bytes) {
+  try {
+    const map = JSON.parse(bytes.toString("utf8"));
+    return (
+      map !== null &&
+      typeof map === "object" &&
+      map.version === 3 &&
+      ((Array.isArray(map.sources) && typeof map.mappings === "string") ||
+        Array.isArray(map.sections))
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function bundleLineExcerpt(source, location) {
   if (
     !location ||

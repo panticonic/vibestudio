@@ -27,6 +27,7 @@ import { observeMobileSmokeLog } from "./lib/mobile-smoke-log.mjs";
 import {
   activeBundleCacheRelativePath,
   bundleLineExcerpt,
+  isSourceMapBytes,
   parseHermesLocation,
 } from "./lib/android-bundle-diagnostic.mjs";
 import { buildAndroidApp } from "./lib/mobile-native-android.mjs";
@@ -824,7 +825,7 @@ async function retainAndroidBundleFailure(device, packageName, failure, compiler
       "cat",
       `${relativePath}.map`
     );
-    sourceMap = result.stdout;
+    if (isSourceMapBytes(result.stdout)) sourceMap = result.stdout;
   } catch {
     // Android source maps are optional; retain one only when the exact sibling
     // emitted with this build was delivered to the app cache.

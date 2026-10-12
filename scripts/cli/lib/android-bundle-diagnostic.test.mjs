@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   activeBundleCacheRelativePath,
   bundleLineExcerpt,
+  isSourceMapBytes,
   parseHermesLocation,
 } from "./android-bundle-diagnostic.mjs";
 
@@ -54,4 +55,9 @@ test("caps excerpt content around a location on a minified bundle line", () => {
 test("returns no excerpt when Hermes does not report an in-range location", () => {
   assert.equal(parseHermesLocation("SyntaxError: unsupported token"), null);
   assert.equal(bundleLineExcerpt("one\ntwo", { line: 3, column: 1 }), null);
+});
+
+test("retains only valid source maps when adb reports a missing sibling as stdout", () => {
+  assert.equal(isSourceMapBytes(Buffer.from('{"version":3,"sources":[],"mappings":""}')), true);
+  assert.equal(isSourceMapBytes(Buffer.from('cat: index.bundle.map: No such file or directory')), false);
 });
