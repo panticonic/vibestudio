@@ -80,7 +80,7 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
       userSubjectSource: {
         resolve: () => ({ userId: "usr_root", handle: "root" }),
       },
-      resolveExtensionCodeIdentity: () => null,
+      resolveExtensionCodeIdentity: async () => null,
       ensureUserlandDoReady: async () => undefined,
       resolveExactCausalInvocation: async () => ({ initiatingUser: null }),
       redeemPairingCredential,
@@ -180,7 +180,7 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
       entityCache: new EntityCache(),
       runtimeCoordinator: new PanelRuntimeCoordinator(),
       userSubjectSource: { resolve: () => ({ userId: "usr_root", handle: "root" }) },
-      resolveExtensionCodeIdentity: () => null,
+      resolveExtensionCodeIdentity: async () => null,
       ensureUserlandDoReady: async () => undefined,
       resolveExactCausalInvocation: async () => ({ initiatingUser: null }),
       redeemPairingCredential: async () => ({

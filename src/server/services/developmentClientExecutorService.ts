@@ -37,7 +37,7 @@ export interface DevelopmentClientLaunchInput {
       integrity: string;
       byteLength: number;
     }[];
-    read(path: string, offset: number, length: number): Buffer;
+    read(path: string, offset: number, length: number): Promise<Buffer>;
   };
   pairingDeepLink: string;
   onRequested?: (receipt: { requestId: string; requestedAt: number }) => void;
@@ -66,6 +66,10 @@ export interface DevelopmentClientLaunchInput {
 interface PendingLaunch extends DevelopmentClientLaunchInput {
   requestId: string;
   expiresAt: number;
+  artifactReads: Set<Promise<Buffer>>;
+  artifactReadFailures: unknown[];
+  readsClosed: boolean;
+  retirement?: Promise<void>;
   settle: {
     resolve(value: {
       requestId: string;
@@ -87,6 +91,7 @@ interface StopWait {
   resolve(): void;
   reject(error: Error): void;
   timeout: NodeJS.Timeout;
+  deadlineExpired: boolean;
 }
 
 interface LiveLaunch {
@@ -149,19 +154,35 @@ export class DevelopmentClientExecutorRegistry {
             expiresAt: request.expiresAt,
           };
         },
-        readArtifact: (ctx, [input]) => {
+        readArtifact: async (ctx, [input]) => {
           const request = this.requirePending(input.requestId, ctx.caller);
+          if (request.readsClosed) {
+            throw coded("ECANCELLED", "Development client artifact reads are closed");
+          }
           const artifact = request.artifactSource.manifest.find(
             (candidate) => candidate.path === input.path
           );
           if (!artifact || input.offset > artifact.byteLength) {
             throw coded("ENOENT", "Unknown development client artifact coordinate");
           }
-          const bytes = request.artifactSource.read(
-            artifact.path,
-            input.offset,
-            Math.min(input.length, artifact.byteLength - input.offset)
-          );
+          let read!: Promise<Buffer>;
+          read = Promise.resolve().then(async () => {
+            try {
+              return await request.artifactSource.read(
+                artifact.path,
+                input.offset,
+                Math.min(input.length, artifact.byteLength - input.offset)
+              );
+            } catch (error) {
+              request.artifactReadFailures.push(error);
+              throw error;
+            } finally {
+              request.artifactReads.delete(read);
+              this.trySettle(request);
+            }
+          });
+          request.artifactReads.add(read);
+          const bytes = await read;
           const nextOffset = input.offset + bytes.byteLength;
           return {
             base64: bytes.toString("base64"),
@@ -268,23 +289,13 @@ export class DevelopmentClientExecutorRegistry {
             attestedAt: receipt.attestedAt,
           };
         },
-        fail: (ctx, [input]) => {
+        fail: async (ctx, [input]) => {
           const request = this.requirePending(input.requestId, ctx.caller);
-          this.pending.delete(input.requestId);
-          clearTimeout(request.timeout);
           const failure = deserializeRpcFailure(input.failure);
-          request.settle.reject(failure);
-          if (request.stop) {
-            clearTimeout(request.stop.timeout);
-            if (failure.code === "EOWNERSHIP")
-              request.stop.reject(
-                coded("ECLEANUP", "Development client launch cleanup failed", failure)
-              );
-            else request.stop.resolve();
-          }
+          await this.retirePending(request, failure);
           return { accepted: true as const };
         },
-        exited: (ctx, [input]) => {
+        exited: async (ctx, [input]) => {
           const launch = [...this.live.values()].find(
             (candidate) => candidate.requestId === input.requestId
           );
@@ -296,8 +307,6 @@ export class DevelopmentClientExecutorRegistry {
             if (pending.launchReceipt && pending.launchReceipt.childPid !== input.childPid) {
               throw coded("EOWNERSHIP", "Exited client PID does not match the launch receipt");
             }
-            this.pending.delete(input.requestId);
-            clearTimeout(pending.timeout);
             const intentional = Boolean(pending.stop);
             const error = coded(
               intentional ? "ECANCELLED" : "ECLIENT_EXIT",
@@ -305,19 +314,11 @@ export class DevelopmentClientExecutorRegistry {
                 ? "Development client launch was stopped before readiness"
                 : `Development client exited before readiness (${input.signal ?? input.exitCode ?? "unknown"})`
             );
-            pending.settle.reject(error);
-            if (pending.stop) {
-              clearTimeout(pending.stop.timeout);
-              if (input.cleanupError)
-                pending.stop.reject(
-                  coded(
-                    "ECLEANUP",
-                    "Development client resources did not retire",
-                    deserializeRpcFailure(input.cleanupError)
-                  )
-                );
-              else pending.stop.resolve();
-            }
+            await this.retirePending(
+              pending,
+              error,
+              input.cleanupError ? deserializeRpcFailure(input.cleanupError) : undefined
+            );
             pending.onExited?.({
               ...input,
               unexpected: !intentional,
@@ -411,16 +412,12 @@ export class DevelopmentClientExecutorRegistry {
       const expiresAt = this.now() + REQUEST_MS;
       const timeout = setTimeout(() => {
         const pending = this.pending.get(requestId);
-        this.pending.delete(requestId);
         const error = coded(
           "EEXECUTOR_TIMEOUT",
           "Desktop executor did not complete the client launch"
         );
-        reject(error);
-        if (pending?.stop) {
-          clearTimeout(pending.stop.timeout);
-          pending.stop.reject(error);
-        }
+        if (pending) void this.retirePending(pending, error);
+        else reject(error);
       }, REQUEST_MS);
       timeout.unref();
       this.pending.set(requestId, {
@@ -429,26 +426,49 @@ export class DevelopmentClientExecutorRegistry {
         expiresAt,
         settle: { resolve, reject },
         timeout,
+        artifactReads: new Set(),
+        artifactReadFailures: [],
+        readsClosed: false,
       });
-      input.onRequested?.({ requestId, requestedAt: this.now() });
+      try {
+        input.onRequested?.({ requestId, requestedAt: this.now() });
+      } catch (error) {
+        const pending = this.pending.get(requestId);
+        if (pending) void this.retirePending(pending, error);
+        else reject(error);
+        return;
+      }
       // A registered executor whose transport has gone holds its lease until
       // that lease expires, so the request can be addressed to a caller with
       // no live connection. Say so now: waiting out the launch budget reports
       // an executor that ignored the request, which is a different fault.
-      const delivered = this.deps.eventService.emitToCaller(
-        input.binding.ownerRuntimeId,
-        "development:client-launch-request",
-        { requestId, runId: input.runId, expiresAt }
-      );
-      if (!delivered) {
-        clearTimeout(timeout);
-        this.pending.delete(requestId);
-        reject(
-          coded(
-            "EEXECUTOR_UNAVAILABLE",
-            "Selected desktop executor has no live connection to receive the launch"
-          )
+      let delivered: boolean;
+      try {
+        delivered = this.deps.eventService.emitToCaller(
+          input.binding.ownerRuntimeId,
+          "development:client-launch-request",
+          { requestId, runId: input.runId, expiresAt }
         );
+      } catch (error) {
+        const pending = this.pending.get(requestId);
+        if (pending) void this.retirePending(pending, error);
+        else reject(error);
+        return;
+      }
+      if (!delivered) {
+        const request = this.pending.get(requestId);
+        if (request) {
+          void this.retirePending(
+            request,
+            coded(
+              "EEXECUTOR_UNAVAILABLE",
+              "Selected desktop executor has no live connection to receive the launch"
+            )
+          );
+        } else {
+          clearTimeout(timeout);
+          reject(coded("EEXECUTOR_UNAVAILABLE", "Desktop executor request was not admitted"));
+        }
       }
     });
     return { requestId, ready };
@@ -458,9 +478,14 @@ export class DevelopmentClientExecutorRegistry {
     const pending = [...this.pending.values()].find((candidate) => candidate.runId === runId);
     if (pending) {
       if (pending.stop) return pending.stop.promise;
-      pending.stop = this.createStopWait(() => {
-        pending.stop = undefined;
-      });
+      pending.readsClosed = true;
+      pending.stop = this.createStopWait(
+        () => undefined,
+        async () => {
+          await Promise.allSettled([...pending.artifactReads]);
+          return pending.artifactReadFailures;
+        }
+      );
       if (pending.launchReceipt) this.emitStopRequest(pending);
       return pending.stop.promise;
     }
@@ -513,7 +538,7 @@ export class DevelopmentClientExecutorRegistry {
   }
 
   private trySettle(request: PendingLaunch): void {
-    if (request.stop) return;
+    if (request.readsClosed || request.stop || request.artifactReads.size > 0) return;
     if (!request.launchReceipt || !request.childAttestation) return;
     this.pending.delete(request.requestId);
     clearTimeout(request.timeout);
@@ -534,6 +559,56 @@ export class DevelopmentClientExecutorRegistry {
     });
   }
 
+  private retirePending(
+    request: PendingLaunch,
+    failure: unknown,
+    cleanupFailure?: unknown
+  ): Promise<void> {
+    if (request.retirement) return request.retirement;
+    request.readsClosed = true;
+    clearTimeout(request.timeout);
+    request.retirement = (async () => {
+      await Promise.allSettled([...request.artifactReads]);
+      if (this.pending.get(request.requestId) === request) {
+        this.pending.delete(request.requestId);
+      }
+      const failures = [
+        failure,
+        ...request.artifactReadFailures,
+        ...(cleanupFailure === undefined ? [] : [cleanupFailure]),
+      ];
+      const outcome: Error =
+        failures.length === 1
+          ? failure instanceof Error
+            ? failure
+            : new Error("Development client launch failed", { cause: failure })
+          : new AggregateError(
+              failures,
+              "Development client launch and artifact retirement failed",
+              {
+                cause: failure,
+              }
+            );
+      request.settle.reject(outcome);
+      if (request.stop) {
+        clearTimeout(request.stop.timeout);
+        if (request.stop.deadlineExpired) return;
+        if (
+          cleanupFailure !== undefined ||
+          request.artifactReadFailures.length > 0 ||
+          (failure as { code?: unknown } | null)?.code === "EOWNERSHIP"
+        ) {
+          request.stop.reject(
+            coded("ECLEANUP", "Development client resources did not retire", outcome)
+          );
+        } else {
+          request.stop.resolve();
+        }
+      }
+    })();
+    return request.retirement;
+  }
+
   private emitStopRequest(
     request: Pick<PendingLaunch, "requestId" | "runId" | "binding" | "launchReceipt">
   ): void {
@@ -549,22 +624,47 @@ export class DevelopmentClientExecutorRegistry {
     );
   }
 
-  private createStopWait(onTimeout: () => void): StopWait {
+  private createStopWait(
+    onTimeout: () => void,
+    joinBeforeTimeout?: () => Promise<readonly unknown[]>
+  ): StopWait {
     let settle!: { resolve(): void; reject(error: Error): void };
     const promise = new Promise<void>((resolve, reject) => {
       settle = { resolve, reject };
     });
+    let stopWait!: StopWait;
     const timeout = setTimeout(() => {
-      onTimeout();
-      settle.reject(coded("EEXECUTOR_TIMEOUT", "Desktop executor did not prove client cleanup"));
+      stopWait.deadlineExpired = true;
+      const deadlineFailure = coded(
+        "EEXECUTOR_TIMEOUT",
+        "Desktop executor did not prove client cleanup"
+      );
+      void (async () => {
+        const failures: unknown[] = [deadlineFailure];
+        try {
+          onTimeout();
+          if (joinBeforeTimeout) failures.push(...(await joinBeforeTimeout()));
+        } catch (error) {
+          failures.push(error);
+        }
+        settle.reject(
+          failures.length === 1
+            ? deadlineFailure
+            : new AggregateError(failures, "Client cleanup deadline and owned work failed", {
+                cause: deadlineFailure,
+              })
+        );
+      })();
     }, 30_000);
     timeout.unref();
-    return {
+    stopWait = {
       promise,
       resolve: settle.resolve,
       reject: settle.reject,
       timeout,
+      deadlineExpired: false,
     };
+    return stopWait;
   }
 
   private recordExternalAttestation(requestId: string, caller: VerifiedCaller): void {

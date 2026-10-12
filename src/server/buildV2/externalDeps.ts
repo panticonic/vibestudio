@@ -28,7 +28,7 @@ import {
 import { optionalPeerNames, type PackageGraph, type GraphNode } from "./packageGraph.js";
 import { BuildRequestError } from "./diagnostics.js";
 import {
-  scheduleDependencyContentMaintenance,
+  prepareDependencyContent,
   scheduleDependencyContentPrune,
 } from "./dependencyContentMaintenance.js";
 
@@ -1500,6 +1500,10 @@ async function ensureDepsInstalledOnce(
     );
     profile.receiptMs = Date.now() - receiptStartedAt;
 
+    // Share immutable file content while the install tree is still private.
+    // Published caches are borrowed by builders and must never be rewritten.
+    await prepareDependencyContent(tmpDir, cacheDir);
+
     // Race-safe promotion: try rename, handle concurrent winner
     const publishStartedAt = Date.now();
     try {
@@ -1516,7 +1520,6 @@ async function ensureDepsInstalledOnce(
           } catch (cleanupError) {
             warnCleanupFailure(tmpDir, cleanupError);
           }
-          scheduleDependencyContentMaintenance(cacheDir);
           return nodeModulesDir;
         }
         // Winner incomplete — remove stale dir, retry rename
@@ -1543,16 +1546,26 @@ async function ensureDepsInstalledOnce(
     }
 
     profile.publishMs = Date.now() - publishStartedAt;
-    scheduleDependencyContentMaintenance(cacheDir);
     logProfile("installed");
 
     return nodeModulesDir;
   } catch (error) {
     // Clean up temp dir on failure
+    let cleanupFailure: unknown;
+    let hasCleanupFailure = false;
     try {
       await fs.promises.rm(tmpDir, { recursive: true, force: true });
     } catch (cleanupError) {
       warnCleanupFailure(tmpDir, cleanupError);
+      cleanupFailure = cleanupError;
+      hasCleanupFailure = true;
+    }
+    if (hasCleanupFailure) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        "External dependency install and staging cleanup failed",
+        { cause: error }
+      );
     }
     if (error instanceof NpmResolutionError) {
       const packages = Object.entries(installPlan.dependencies).map(([specifier, version]) => ({
@@ -1571,7 +1584,8 @@ async function ensureDepsInstalledOnce(
       );
     }
     throw new Error(
-      `Failed to install external dependencies: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to install external dependencies: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
     );
   }
 }

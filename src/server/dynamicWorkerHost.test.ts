@@ -20,6 +20,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
+import {
+  cleanupStoredBuildFixtures,
+  storedBuildFixture,
+} from "../../tests/helpers/storedBuildFixture.js";
 
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import {
@@ -188,10 +192,10 @@ async function createHarness(
       artifact: runtimeArtifact(unitPath, ref ?? "main"),
       authority: { requests: [], provides: [] },
     }),
-    getBuildByKey: () => currentBuild.value,
-    getBuildByExecution: (_key, executionDigest) =>
+    getBuildByKey: async () => storedBuildFixture(currentBuild.value),
+    getBuildByExecution: async (_key, executionDigest) =>
       currentBuild.value.metadata.execution?.executionDigest === executionDigest
-        ? currentBuild.value
+        ? storedBuildFixture(currentBuild.value)
         : null,
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
@@ -248,7 +252,9 @@ async function createHarness(
   const workerdCall = async (path: string, init: RequestInit = {}): Promise<Response> => {
     const port = manager.getPort();
     if (!port) throw new Error("workerd not running");
-    const admission = manager.getWorkerAdmission(decodeURIComponent(path.split("/")[1] ?? ""));
+    const admission = await manager.getWorkerAdmission(
+      decodeURIComponent(path.split("/")[1] ?? "")
+    );
     if (!admission) return new Response("Worker not found", { status: 404 });
     return fetch(`http://127.0.0.1:${port}${path}`, {
       ...init,
@@ -272,6 +278,7 @@ afterEach(async () => {
     await new Promise<void>((r) => active!.egress.close(() => r()));
     active = null;
   }
+  cleanupStoredBuildFixtures();
 });
 
 describe("dynamic worker host (real workerd)", () => {
@@ -286,7 +293,7 @@ describe("dynamic worker host (real workerd)", () => {
       stateArgs: { value: 1 },
     });
     await manager.startWorker({ source: "workers/echo", contextId: "ctx-2", key: "keep" });
-    const original = manager.getWorkerAdmission("echo")!;
+    const original = (await manager.getWorkerAdmission("echo"))!;
     expect(await (await workerdCall("/echo/snapshot")).json()).toEqual({
       feature: "first",
       args: { value: 1 },
@@ -299,7 +306,7 @@ describe("dynamic worker host (real workerd)", () => {
     });
     expect(codeFetches).toEqual([original.version]);
     await manager.updateInstance("echo", { env: { FEATURE: "updated" } });
-    const updated = manager.getWorkerAdmission("echo")!;
+    const updated = (await manager.getWorkerAdmission("echo"))!;
     expect(updated.version).not.toBe(original.version);
     expect(await (await workerdCall("/echo/snapshot")).json()).toEqual({
       feature: "updated",
@@ -313,7 +320,7 @@ describe("dynamic worker host (real workerd)", () => {
       key: "echo",
       env: { FEATURE: "recreated" },
     });
-    const recreated = manager.getWorkerAdmission("echo")!;
+    const recreated = (await manager.getWorkerAdmission("echo"))!;
     expect(recreated.version).not.toBe(original.version);
     expect(recreated.version).not.toBe(updated.version);
     expect(await (await workerdCall("/echo/snapshot")).json()).toEqual({
@@ -349,8 +356,18 @@ describe("dynamic worker host (real workerd)", () => {
     });
     const pending = workerdCall("/echo/snapshot");
     await entered;
-    const sibling = workerdCall("/echo/snapshot");
+    let sibling: Promise<Response> | undefined;
     try {
+      const oldAdmission = await manager.getWorkerAdmission("echo");
+      if (!oldAdmission) throw new Error("Worker admission disappeared before the update");
+      const port = manager.getPort();
+      if (!port) throw new Error("workerd did not start");
+      sibling = fetch(`http://127.0.0.1:${port}/echo/snapshot`, {
+        headers: {
+          Authorization: "Bearer test-gateway-token",
+          ...workerExecutableHeaders(oldAdmission),
+        },
+      });
       await manager.updateInstance("echo", { env: { FEATURE: "new" } });
       held = false;
       release();
@@ -370,7 +387,7 @@ describe("dynamic worker host (real workerd)", () => {
       });
     } finally {
       release();
-      await Promise.allSettled([pending, sibling]);
+      await Promise.allSettled(sibling ? [pending, sibling] : [pending]);
     }
   }, 30_000);
 
@@ -431,7 +448,7 @@ describe("dynamic worker host (real workerd)", () => {
 
     await manager.stopWorker("worker:workers/echo:echo");
     expect(manager.getBootGeneration()).toBe(boot);
-    expect(manager.getWorkerAdmission("echo")).toBeNull();
+    await expect(manager.getWorkerAdmission("echo")).resolves.toBeNull();
 
     const res = await workerdCall("/echo/__rpc", {
       method: "POST",

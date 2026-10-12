@@ -125,6 +125,45 @@ describe("DerivedCacheCoordinator", () => {
     coordinator.close();
   });
 
+  it("retains every batch lease when bulk release fails and retries atomically", () => {
+    const root = cacheRoot();
+    const file = derivedCacheDatabasePath(root);
+    const coordinator = new DerivedCacheCoordinator(file);
+    const batch = coordinator.acquireBatch(root, ["first", "second"]);
+    const state = coordinator as unknown as { db: DatabaseSync };
+    state.db.exec("PRAGMA busy_timeout = 0");
+    const blocker = new DatabaseSync(file);
+    blocker.exec("BEGIN IMMEDIATE");
+    try {
+      let releaseFailure: unknown;
+      try {
+        batch.release();
+      } catch (error) {
+        releaseFailure = error;
+      }
+      expect(releaseFailure).toMatchObject({ errcode: 5 });
+      expect(
+        blocker
+          .prepare("SELECT COUNT(*) AS count FROM cache_leases WHERE root = ?")
+          .get(path.resolve(root))
+      ).toEqual({ count: 2 });
+    } finally {
+      blocker.exec("ROLLBACK");
+      blocker.close();
+    }
+
+    try {
+      expect(() => batch.release()).not.toThrow();
+      expect(
+        state.db
+          .prepare("SELECT COUNT(*) AS count FROM cache_leases WHERE root = ?")
+          .get(path.resolve(root))
+      ).toEqual({ count: 0 });
+    } finally {
+      coordinator.close();
+    }
+  });
+
   it("charges a shared inode proportionally instead of once per pathname", async () => {
     const root = cacheRoot();
     const owner = path.join(path.dirname(root), "content-owner");
@@ -186,6 +225,94 @@ describe("DerivedCacheCoordinator", () => {
       lease.release();
       owner.close();
       collector.close();
+    }
+  });
+
+  it("acquires and releases a deduplicated batch through ordinary cross-process lease rows", async () => {
+    const root = cacheRoot();
+    put(root, "first", 64 * 1024);
+    put(root, "second", 64 * 1024);
+    const owner = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+    const collector = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+    const batch = owner.acquireBatch(root, ["first", "second", "first"]);
+    try {
+      expect([...batch.leases.keys()]).toEqual(["first", "second"]);
+      const protectedEntries = await collector.prune(root, {
+        targetBytes: 0,
+        freeFloorBytes: 0,
+      });
+      expect(protectedEntries.removedEntries).toBe(0);
+      expect(protectedEntries.leasedEntries).toBe(2);
+      expect(fs.existsSync(path.join(root, "first"))).toBe(true);
+      expect(fs.existsSync(path.join(root, "second"))).toBe(true);
+
+      batch.leases.get("first")!.release();
+      batch.release();
+      batch.release();
+      const afterRelease = await collector.prune(root, {
+        targetBytes: 0,
+        freeFloorBytes: 0,
+      });
+      expect(afterRelease.removedEntries).toBe(2);
+      expect(afterRelease.leasedEntries).toBe(0);
+    } finally {
+      batch.release();
+      owner.close();
+      collector.close();
+    }
+  });
+
+  it("validates an entire batch before inserting any lease row", () => {
+    const root = cacheRoot();
+    const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+    try {
+      expect(() => coordinator.acquireBatch(root, ["valid", "../invalid"])).toThrow(
+        /Invalid derived-cache key/
+      );
+      expect(coordinator.acquireBatch(root, []).leases.size).toBe(0);
+      const database = new DatabaseSync(derivedCacheDatabasePath(root));
+      try {
+        expect(database.prepare("SELECT COUNT(*) AS count FROM cache_leases").get()).toEqual({
+          count: 0,
+        });
+      } finally {
+        database.close();
+      }
+    } finally {
+      coordinator.close();
+    }
+  });
+
+  it("rolls back all batch rows when a later lease insert is rejected", () => {
+    const root = cacheRoot();
+    const file = derivedCacheDatabasePath(root);
+    const coordinator = new DerivedCacheCoordinator(file);
+    const database = new DatabaseSync(file);
+    try {
+      database.exec(`
+        CREATE TRIGGER reject_second_batch_lease
+        BEFORE INSERT ON cache_leases
+        WHEN NEW.key = 'second'
+        BEGIN
+          SELECT RAISE(ABORT, 'second lease rejected');
+        END;
+      `);
+      expect(() => coordinator.acquireBatch(root, ["first", "second"])).toThrow(
+        "second lease rejected"
+      );
+      expect(
+        database
+          .prepare("SELECT COUNT(*) AS count FROM cache_entries WHERE root = ?")
+          .get(path.resolve(root))
+      ).toEqual({ count: 0 });
+      expect(
+        database
+          .prepare("SELECT COUNT(*) AS count FROM cache_leases WHERE root = ?")
+          .get(path.resolve(root))
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+      coordinator.close();
     }
   });
 

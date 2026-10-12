@@ -36,15 +36,32 @@ describe("prepared template artifacts", () => {
   it("uses the published artifact key independently of the consumer dependency installation", async () => {
     const materialize = provider();
     const result = {
+      dir: "/published/build",
       buildKey: key,
       sourceStateHash: state,
-      metadata: { ev },
+      metadata: {
+        kind: "worker",
+        name: node.relativePath,
+        buildKey: key,
+        sourcePath: null,
+        ev,
+        sourceStateHash: state,
+        sourcemap: false,
+        authority: { requests: [], provides: [] },
+        details: { kind: "generic" },
+        builtAt: "2026-01-01T00:00:00.000Z",
+      },
       artifacts: [],
-    } as unknown as buildStore.BuildResult;
+    } satisfies buildStore.StoredBuildResult;
     const hydrate = vi.spyOn(buildStore, "getOrHydrate").mockResolvedValue(result);
-    expect(
-      await buildUnit(node, ev, new PackageGraph(), "/consumer-with-different-dependencies", state)
-    ).toBe(result);
+    const built = await buildUnit(
+      node,
+      ev,
+      new PackageGraph(),
+      "/consumer-with-different-dependencies",
+      state
+    );
+    expect(built).toMatchObject({ buildKey: key, sourceStateHash: state, artifacts: [] });
     expect(hydrate).toHaveBeenCalledWith(key, state);
     expect(resolveBuildUnitKey(node, ev, state)).toBe(key);
     expect(materialize).not.toHaveBeenCalled();

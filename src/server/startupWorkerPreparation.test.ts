@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BuildSystemV2, BuildUnitCatalogEntry } from "./buildV2/index.js";
+import type { StoredBuildResult } from "./buildV2/buildStore.js";
 import { prepareStartupWorkers, type StartupWorkerBuilds } from "./startupWorkerPreparation.js";
 
 const units = ["workers/one", "workers/two"].map((unitPath) => ({
@@ -13,13 +14,32 @@ const units = ["workers/one", "workers/two"].map((unitPath) => ({
 
 function setup() {
   const listBuildUnits = vi.fn<BuildSystemV2["listBuildUnits"]>().mockResolvedValue(units);
-  const getBuild = vi.fn<StartupWorkerBuilds<string>["getBuild"]>().mockResolvedValue("executable");
-  return { listBuildUnits, getBuild };
+  const storedBuild: StoredBuildResult = {
+    dir: "/cache/builds/build-key",
+    buildKey: "build-key",
+    sourceStateHash: null,
+    metadata: {
+      kind: "worker",
+      name: "workers/one",
+      buildKey: "build-key",
+      sourcePath: null,
+      ev: "ev-worker",
+      sourceStateHash: null,
+      sourcemap: false,
+      details: { kind: "generic" },
+      builtAt: "2026-01-01T00:00:00.000Z",
+    },
+    artifacts: [],
+  };
+  const getStoredBuild = vi
+    .fn<StartupWorkerBuilds["getStoredBuild"]>()
+    .mockResolvedValue(storedBuild);
+  return { listBuildUnits, getStoredBuild, storedBuild };
 }
 
 function setupPreparation() {
   return vi
-    .fn<(build: string, classes: readonly string[]) => Promise<void>>()
+    .fn<(build: StoredBuildResult, classes: readonly string[]) => Promise<void>>()
     .mockResolvedValue(undefined);
 }
 
@@ -29,10 +49,10 @@ describe("startup worker preparation", () => {
     const prepare = setupPreparation();
     await prepareStartupWorkers(builds, prepare, new AbortController().signal);
     expect(prepare.mock.calls).toEqual([
-      ["executable", ["WorkerOwner"]],
-      ["executable", ["WorkerOwner"]],
+      [builds.storedBuild, ["WorkerOwner"]],
+      [builds.storedBuild, ["WorkerOwner"]],
     ]);
-    expect(builds.getBuild.mock.calls).toEqual([
+    expect(builds.getStoredBuild.mock.calls).toEqual([
       ["workers/one", "state:original", { priority: "speculative" }],
       ["workers/two", "state:original", { priority: "speculative" }],
     ]);
@@ -65,17 +85,17 @@ describe("startup worker preparation", () => {
     expect(settled).toBe(false);
     finish();
     expect(await pending).toBe(shutdown);
-    expect(builds.getBuild).toHaveBeenCalledTimes(1);
+    expect(builds.getStoredBuild).toHaveBeenCalledTimes(1);
   });
 
   it("joins admitted work on shutdown and admits no further builds", async () => {
     const builds = setup();
     const lifetime = new AbortController();
     let finish!: () => void;
-    builds.getBuild.mockImplementationOnce(
+    builds.getStoredBuild.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          finish = () => resolve("executable");
+          finish = () => resolve(builds.storedBuild);
         })
     );
     let settled = false;
@@ -89,14 +109,14 @@ describe("startup worker preparation", () => {
         return error;
       }
     );
-    await vi.waitFor(() => expect(builds.getBuild).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(builds.getStoredBuild).toHaveBeenCalledTimes(1));
     const shutdown = new Error("shutdown");
     lifetime.abort(shutdown);
     await Promise.resolve();
     expect(settled).toBe(false);
     finish();
     expect(await result).toBe(shutdown);
-    expect(builds.getBuild).toHaveBeenCalledTimes(1);
+    expect(builds.getStoredBuild).toHaveBeenCalledTimes(1);
   });
 
   it("retains the original schema failure while preparing independent workers", async () => {
@@ -115,7 +135,7 @@ describe("startup worker preparation", () => {
   it("retains the original build failure while preparing independent workers", async () => {
     const builds = setup();
     const failure = new Error("source does not compile");
-    builds.getBuild.mockRejectedValueOnce(failure);
+    builds.getStoredBuild.mockRejectedValueOnce(failure);
     const result = await prepareStartupWorkers(
       builds,
       setupPreparation(),
@@ -123,6 +143,6 @@ describe("startup worker preparation", () => {
     ).catch((error) => error);
     expect(result).toBeInstanceOf(AggregateError);
     expect(result.errors).toEqual([failure]);
-    expect(builds.getBuild).toHaveBeenCalledTimes(2);
+    expect(builds.getStoredBuild).toHaveBeenCalledTimes(2);
   });
 });

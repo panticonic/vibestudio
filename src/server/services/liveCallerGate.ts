@@ -20,7 +20,7 @@ export function createLiveCallerGate(deps: {
   membershipStore: Pick<MembershipStore, "has">;
   deviceAuthStore: Pick<DeviceAuthStore, "userFor" | "getAgentCredential">;
   entityCache: Pick<EntityCache, "resolveActive">;
-  isLiveExtension: (callerId: string) => boolean;
+  isLiveExtension: (callerId: string) => Promise<boolean>;
   /** Browser hosting proves the exact connected document, independently of code admission. */
   isLiveWebsiteExecution?: (
     runtimeId: string,
@@ -31,7 +31,7 @@ export function createLiveCallerGate(deps: {
     callerKind: VerifiedCaller["runtime"]["kind"]
   ) => boolean;
   now?: () => number;
-}): (caller: VerifiedCaller, authorizedBy?: string) => boolean {
+}): (caller: VerifiedCaller, authorizedBy?: string) => boolean | Promise<boolean> {
   const now = deps.now ?? Date.now;
   const issuerOwnsUser = (issuerId: string, userId: string): boolean => {
     if (issuerId === "electron-main" || issuerId === "headless-host") {

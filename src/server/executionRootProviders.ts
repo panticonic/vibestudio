@@ -1,4 +1,4 @@
-import type { BuildResult } from "./buildV2/buildStore.js";
+import type { BuildResult, StoredBuildResult } from "./buildV2/buildStore.js";
 import { canonicalJson } from "@vibestudio/content-addressing";
 import {
   verifyExecutionArtifactRef,
@@ -30,7 +30,7 @@ export interface ExecutionRootSnapshot {
 
 export function executionArtifactRefFromBuild(
   workspaceId: string,
-  build: BuildResult
+  build: BuildResult | StoredBuildResult
 ): ExecutionArtifactRefV1 {
   const identity = build.metadata.execution;
   if (!identity || !build.sourceStateHash || !build.metadata.sourcePath) {
@@ -148,7 +148,7 @@ export function buildKeyRootProvider(input: {
     buildKey: string;
     reason: ExecutionRootReason;
     executionDigest?: string;
-  }): ExecutionArtifactRefV1 | null;
+  }): ExecutionArtifactRefV1 | null | Promise<ExecutionArtifactRefV1 | null>;
 }): ExecutionRootProvider {
   return {
     id: input.id,
@@ -156,7 +156,7 @@ export function buildKeyRootProvider(input: {
     async snapshotRoots() {
       const roots: ExecutionRoot[] = [];
       for (const candidate of input.buildKeys()) {
-        const artifact = input.resolve(candidate);
+        const artifact = await input.resolve(candidate);
         if (!artifact) {
           throw new Error(
             `${candidate.ownerId} references missing execution artifact ${candidate.buildKey}`

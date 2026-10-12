@@ -21,7 +21,7 @@ export type WorkerSourceStatus = {
 
 export interface BuildUnitCatalogDeps {
   buildSystem: BuildSystemV2;
-  hostedSources(): readonly HostedSourceStatus[];
+  hostedSources(): readonly HostedSourceStatus[] | Promise<readonly HostedSourceStatus[]>;
   workerSources(): readonly WorkerSourceStatus[];
   workerError(source: string): { message: string } | null;
   authorityRows(requests: readonly UnitAuthorityRequest[]): AuthorityRow[];
@@ -37,8 +37,10 @@ function hostedBuildStatus(
   return row?.activeBundleKey || effectiveVersion ? "ready" : "available";
 }
 
-export function listBuildUnitCatalog(deps: BuildUnitCatalogDeps): BuildUnitCatalogEntry[] {
-  const hostedBySource = new Map(deps.hostedSources().map((row) => [row.source, row]));
+export async function listBuildUnitCatalog(
+  deps: BuildUnitCatalogDeps
+): Promise<BuildUnitCatalogEntry[]> {
+  const hostedBySource = new Map((await deps.hostedSources()).map((row) => [row.source, row]));
   const workersBySource = new Map(deps.workerSources().map((row) => [row.source, row]));
 
   return deps.buildSystem

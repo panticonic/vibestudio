@@ -47,9 +47,13 @@ import {
   type EffectiveVersionMap,
 } from "./effectiveVersion.js";
 import * as buildStore from "./buildStore.js";
-import { primaryTextArtifactContent, type BuildResult } from "./buildStore.js";
 import {
-  buildUnit,
+  primaryTextArtifactContent,
+  type BuildResult,
+  type StoredBuildResult,
+} from "./buildStore.js";
+import {
+  buildUnitStored,
   resolveBuildUnitKey,
   buildNpmLibrary,
   buildPlatformLibrary,
@@ -382,6 +386,13 @@ export interface BuildSystemV2 {
     options?: BuildUnitOptions & { library?: false | undefined }
   ): Promise<BuildResult>;
 
+  /** Internal host boundary: resolve the same build operation without wire payload strings. */
+  getStoredBuild(
+    unitPath: string,
+    ref?: string,
+    options?: Omit<BuildUnitOptions, "library"> & { library?: false }
+  ): Promise<StoredBuildResult>;
+
   /** Build one manifest-declared suite against an exact state without executing it. */
   getTestArtifact(
     unitPath: string,
@@ -457,14 +468,14 @@ export interface BuildSystemV2 {
   discardAuthorityIndex(stateHash: string): void;
 
   /** Get an immutable build-store artifact by build key. */
-  getBuildByKey(key: string): BuildResult | null;
-  findSharedStyleBuild(digest: string): BuildResult | null;
+  getBuildByKey(key: string): Promise<StoredBuildResult | null>;
+  findSharedStyleBuild(digest: string): Promise<StoredBuildResult | null>;
 
   /** Get one exact semantic execution retained for reusable artifact bytes. */
-  getBuildByExecution(key: string, executionDigest: string): BuildResult | null;
+  getBuildByExecution(key: string, executionDigest: string): Promise<StoredBuildResult | null>;
 
   /** Side-effect-free verified lookup of one workspace-owned build record. */
-  peekBuildByKey(key: string): BuildResult | null;
+  peekBuildByKey(key: string): Promise<StoredBuildResult | null>;
 
   /**
    * Binder API for runtime entities. Resolves a build content selector to an
@@ -635,7 +646,7 @@ export async function initBuildSystemV2(
     stateHash: string
   ) => {
     const key = resolveBuildUnitKey(provider, effectiveVersion, stateHash);
-    const metadata = buildStore.compilationMetadata(key);
+    const metadata = await buildStore.compilationMetadata(key);
     if (
       metadata &&
       metadata.ev === effectiveVersion &&
@@ -1455,7 +1466,9 @@ export async function initBuildSystemV2(
   // Public API
   // ---------------------------------------------------------------------------
 
-  const libraryBuildResult = (build: BuildResult): BuildBundleResult => {
+  const libraryBuildResult = async (
+    build: BuildResult | StoredBuildResult
+  ): Promise<BuildBundleResult> => {
     if (build.metadata.details.kind !== "library") {
       throw new Error(`Build ${build.buildKey} does not contain a library module contract`);
     }
@@ -1471,7 +1484,7 @@ export async function initBuildSystemV2(
       ? executionArtifactRefFromBuild(source.workspaceId, build)
       : undefined;
     return {
-      bundle: primaryTextArtifactContent(build),
+      bundle: await primaryTextArtifactContent(build),
       format,
       requiredModules,
       ...(execution ? { execution } : {}),
@@ -1537,10 +1550,10 @@ export async function initBuildSystemV2(
   const runtimeBindingFlights = new Map<string, Promise<RuntimeImageBinding>>();
   const runtimeBindingKey = (stateHash: string, unitName: string, ev: string) =>
     `${stateHash}\0${unitName}\0${ev}`;
-  const usableCachedBinding = (key: string): RuntimeImageBinding | null => {
+  const usableCachedBinding = async (key: string): Promise<RuntimeImageBinding | null> => {
     const binding = runtimeBindingCache.get(key);
     if (!binding) return null;
-    const build = buildStore.get(binding.artifact.buildKey);
+    const build = await buildStore.get(binding.artifact.buildKey);
     // BuildV2 reuses artifact bytes across semantic states, so the build
     // directory's metadata may have been rebound since this binding was
     // cached. A build-key hit alone is not enough: returning the old sealed
@@ -1566,7 +1579,7 @@ export async function initBuildSystemV2(
       const currentNode = resolveUnit(snapshot.graph, unitPath, workspaceRoot);
       const currentEv = currentNode ? snapshot.evMap[currentNode.name] : undefined;
       if (currentNode && currentEv) {
-        const cached = usableCachedBinding(
+        const cached = await usableCachedBinding(
           runtimeBindingKey(snapshot.stateHash, currentNode.name, currentEv)
         );
         if (cached) return cached;
@@ -1616,7 +1629,7 @@ export async function initBuildSystemV2(
     if (!ev) throw new Error(`No effective version for ${node.name} at ${stateHash}`);
 
     const identityKey = runtimeBindingKey(stateHash, node.name, ev);
-    const cached = usableCachedBinding(identityKey);
+    const cached = await usableCachedBinding(identityKey);
     if (cached) return cached;
     const existingFlight = runtimeBindingFlights.get(identityKey);
     if (existingFlight) return existingFlight;
@@ -1626,7 +1639,7 @@ export async function initBuildSystemV2(
         "BuildV2",
         `Runtime binding build started for ${node.relativePath} at ${stateHash}`
       );
-      const build = await buildUnit(node, ev, graphAtState, workspaceRoot, stateHash);
+      const build = await buildUnitStored(node, ev, graphAtState, workspaceRoot, stateHash);
       logVerbose(
         "BuildV2",
         `Runtime binding build completed for ${node.relativePath} in ` +
@@ -1673,7 +1686,7 @@ export async function initBuildSystemV2(
   ): Promise<{
     target: Omit<UnitBuildTarget, "diagnosticIndexes"> & { diagnostics: BuildDiagnostic[] };
     reusable: boolean;
-    built: BuildResult | null;
+    built: StoredBuildResult | null;
   }> => {
     const libraryTarget: LibraryBuildTarget | null =
       spec.target === "library:panel"
@@ -1694,11 +1707,11 @@ export async function initBuildSystemV2(
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
     let buildError: unknown = null;
-    let built: BuildResult | null = null;
+    let built: StoredBuildResult | null = null;
     let reusable = true;
     try {
       onProgress?.({ repoPath: node.relativePath, phase: "bundling" });
-      built = await buildUnit(node, ev, graphAtView, workspaceRoot, viewStateHash, options);
+      built = await buildUnitStored(node, ev, graphAtView, workspaceRoot, viewStateHash, options);
     } catch (error) {
       buildError = error;
       // Build failures can include transient storage or dependency provisioning
@@ -1753,7 +1766,7 @@ export async function initBuildSystemV2(
     graphAtView: PackageGraph,
     viewStateHash: string,
     moduleConditions: readonly string[],
-    built: BuildResult | null
+    built: StoredBuildResult | null
   ): Promise<{ diagnostics: BuildDiagnostic[]; reusable: boolean }> => {
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
@@ -1835,7 +1848,7 @@ export async function initBuildSystemV2(
                   ...(authorityEnvironment ? { environment: authorityEnvironment } : {}),
                   workspaceId: source.workspaceId,
                   executableModules: built
-                    ? buildStore.readExecutableModules(built.dir)
+                    ? await buildStore.readExecutableModules(built.dir)
                     : undefined,
                 },
               }),
@@ -1948,7 +1961,7 @@ export async function initBuildSystemV2(
     const outcomes: Array<{
       target: Omit<UnitBuildTarget, "diagnosticIndexes"> & { diagnostics: BuildDiagnostic[] };
       reusable: boolean;
-      built: BuildResult | null;
+      built: StoredBuildResult | null;
     }> = [];
     if (node.kind === "package") {
       const targets = libraryTargetsForDependents(node.name, view.graph);
@@ -2173,11 +2186,17 @@ export async function initBuildSystemV2(
       getBuildInternal(unitPath, ref, options)
     )) as BuildSystemV2["getBuild"];
 
+  const getStoredBuild: BuildSystemV2["getStoredBuild"] = (unitPath, ref, options) =>
+    withBuilderWorkers(() =>
+      getBuildInternal(unitPath, ref, options, true)
+    ) as Promise<StoredBuildResult>;
+
   const getBuildInternal = async function getBuildInternal(
     unitPath: string,
     ref?: string,
-    options?: BuildUnitOptions
-  ): Promise<BuildResult | BuildBundleResult> {
+    options?: BuildUnitOptions,
+    storedOnly = false
+  ): Promise<BuildResult | StoredBuildResult | BuildBundleResult> {
     ref = validateBuildRef(ref);
     // ── Exact state / semantic-context build selector ──
     if (ref && ref !== MAIN_HEAD) {
@@ -2223,7 +2242,7 @@ export async function initBuildSystemV2(
       const buildOptions = options?.library
         ? { ...options, library: true, libraryEntrySubpath: resolved.libraryEntrySubpath ?? "." }
         : options;
-      const build = await buildUnit(
+      const build = await buildUnitStored(
         node,
         ev,
         graphAtState,
@@ -2231,7 +2250,11 @@ export async function initBuildSystemV2(
         buildState,
         buildOptions
       );
-      return options?.library ? libraryBuildResult(build) : build;
+      return options?.library
+        ? libraryBuildResult(build)
+        : storedOnly
+          ? build
+          : await buildStore.materializeStoredBuild(build);
     }
 
     // unitPath can be a package name or workspace-relative path
@@ -2308,9 +2331,16 @@ export async function initBuildSystemV2(
 
     // Build on demand (buildUnit handles cache + coalescing internally)
     logVerbose("BuildV2", `head library ${unitPath}: building ${node.name}`);
-    let build: BuildResult;
+    let build: StoredBuildResult;
     try {
-      build = await buildUnit(node, ev, headGraph, workspaceRoot, headStateHash, buildOptions);
+      build = await buildUnitStored(
+        node,
+        ev,
+        headGraph,
+        workspaceRoot,
+        headStateHash,
+        buildOptions
+      );
     } catch (error) {
       // The caller gets this as a rejection, and when the caller is a device
       // over RPC the reason lands there and nowhere else -- leaving a host log
@@ -2323,7 +2353,11 @@ export async function initBuildSystemV2(
       throw error;
     }
     logVerbose("BuildV2", `head library ${unitPath}: build ready ${build.buildKey}`);
-    return options?.library ? libraryBuildResult(build) : build;
+    return options?.library
+      ? libraryBuildResult(build)
+      : storedOnly
+        ? build
+        : await buildStore.materializeStoredBuild(build);
   };
 
   const resolveDeclaredTestSuite = async (
@@ -2416,7 +2450,7 @@ export async function initBuildSystemV2(
         { target: node.relativePath, suite: suite.name, runtime: suite.runtime }
       );
     }
-    const build = await buildUnit(node, ev, view.graph, workspaceRoot, stateHash, {
+    const build = await buildUnitStored(node, ev, view.graph, workspaceRoot, stateHash, {
       test: {
         suite: suite.name,
         runtime: suite.runtime,
@@ -2461,6 +2495,7 @@ export async function initBuildSystemV2(
 
   const buildSystem: BuildSystemV2 = {
     getBuild,
+    getStoredBuild,
     getTestArtifact,
     resolveTestSuite,
     getUnitIcon,
@@ -2910,20 +2945,20 @@ export async function initBuildSystemV2(
       return libraryBuildResult(build);
     },
 
-    findSharedStyleBuild(digest: string): BuildResult | null {
+    findSharedStyleBuild(digest: string): Promise<StoredBuildResult | null> {
       return buildStore.findSharedStyleBuild(digest);
     },
 
-    getBuildByKey(key: string): BuildResult | null {
+    getBuildByKey(key: string): Promise<StoredBuildResult | null> {
       return buildStore.get(key);
     },
 
-    getBuildByExecution(key: string, executionDigest: string): BuildResult | null {
+    getBuildByExecution(key: string, executionDigest: string): Promise<StoredBuildResult | null> {
       return buildStore.getByExecution(key, executionDigest);
     },
 
-    peekBuildByKey(key: string): BuildResult | null {
-      return buildStore.peekLocal(key);
+    peekBuildByKey(key: string): Promise<StoredBuildResult | null> {
+      return buildStore.readLocal(key);
     },
 
     getEffectiveVersion(unitNameOrPath: string): string | null {
@@ -3150,9 +3185,9 @@ export async function initBuildSystemV2(
         const n = snapshot.graph.get(name);
         const ev = assertPresent(snapshot.evMap[name]);
         const bk = resolveBuildUnitKey(n, ev, snapshot.stateHash);
-        if (!buildStore.has(bk)) {
+        if (!(await buildStore.has(bk))) {
           try {
-            await buildUnit(n, ev, snapshot.graph, workspaceRoot, snapshot.stateHash);
+            await buildUnitStored(n, ev, snapshot.graph, workspaceRoot, snapshot.stateHash);
           } catch (error) {
             console.error(
               `[BuildV2] Failed to rebuild ${name}:`,
@@ -3431,7 +3466,7 @@ export async function initBuildSystemV2(
       if (!artifact) {
         const scan = await buildStore.scanRetention();
         for (const stored of scan.builds) {
-          const build = buildStore.peekLocal(stored.key);
+          const build = await buildStore.readLocal(stored.key);
           if (build?.metadata.execution?.executionDigest === executionDigest) {
             try {
               artifact = executionArtifactRefFromBuild(source.workspaceId, build);
@@ -3444,7 +3479,8 @@ export async function initBuildSystemV2(
       }
       const missing: string[] = [];
       if (!artifact) missing.push("artifact");
-      if (artifact && !buildStore.peekLocal(artifact.buildKey)) missing.push("artifact bytes");
+      if (artifact && !(await buildStore.readLocal(artifact.buildKey)))
+        missing.push("artifact bytes");
       if (artifact) {
         if (!source.inspectContentRoot) {
           missing.push("source content-store inspection authority");

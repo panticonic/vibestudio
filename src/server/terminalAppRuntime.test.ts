@@ -13,6 +13,7 @@ describe("TerminalAppRuntime startup failures", () => {
       activeEv: "ev-terminal",
       activeSourceHash: "state:terminal",
       activeBundleKey: "build-terminal",
+      activeExecutionDigest: null,
       activeDependencyEvs: {},
       activeExternalDeps: {},
       activeRuntimeDepsKey: null,
@@ -33,7 +34,7 @@ describe("TerminalAppRuntime startup failures", () => {
     const runtime = new TerminalAppRuntime({
       workspaceId: "workspace-test",
       registry,
-      buildSystem: { getBuildByKey: vi.fn(() => null) },
+      buildSystem: { getBuildByKey: vi.fn(async () => null) },
       diagnostics: {
         record: vi.fn(),
         history: () => ({

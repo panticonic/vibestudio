@@ -222,6 +222,29 @@ describe("EventsClient", () => {
     await client.unsubscribeAll();
   });
 
+  it("applies the starting snapshot before a newer event from its read", async () => {
+    const listener = vi.fn();
+    client.on("panel-tree-invalidated", listener);
+    await client.subscribe("panel-tree-invalidated");
+
+    fixture.emit(0, {
+      kind: "snapshot",
+      event: "panel-tree-invalidated",
+      payload: { revision: 1, reset: true, groups: [], changedSlotIds: [], removedSlotIds: [] },
+      sequence: 0,
+    });
+    fixture.emit(0, {
+      kind: "event",
+      event: "panel-tree-invalidated",
+      payload: { revision: 2, reset: true, groups: [], changedSlotIds: [], removedSlotIds: [] },
+      sequence: 1,
+    });
+
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2));
+    expect(listener.mock.calls.map(([payload]) => payload.revision)).toEqual([1, 2]);
+    await client.unsubscribeAll();
+  });
+
   it("can bind the same watch contract to an explicit event domain", async () => {
     const desktopEvents = new EventsClient(fixture.rpc, undefined, "desktopEvents");
 

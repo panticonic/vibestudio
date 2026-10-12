@@ -9,7 +9,9 @@ import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient
 
 /** Each topic may replay zero or more held payloads, including one per addressed panel. */
 export type EventSnapshotProviders = {
-  [E in EventName]?: (context: ServiceContext) => Iterable<EventPayloads[E]>;
+  [E in EventName]?: (
+    context: ServiceContext
+  ) => Iterable<EventPayloads[E]> | Promise<Iterable<EventPayloads[E]>>;
 };
 
 export interface EventsServiceDefinitionOptions {
@@ -51,7 +53,9 @@ export function createEventsServiceDefinition(
           if (!isValidEventName(eventName)) throw new Error(`Unknown event: ${eventName}`);
           return eventName;
         });
-        const snapshots: Partial<Record<EventName, () => Iterable<unknown>>> = {};
+        const snapshots: Partial<
+          Record<EventName, () => Iterable<unknown> | Promise<Iterable<unknown>>>
+        > = {};
         for (const event of events) {
           const snapshot = opts.snapshots?.[event];
           if (snapshot) snapshots[event] = () => snapshot(ctx);

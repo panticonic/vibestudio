@@ -24,7 +24,7 @@ import {
   type EffectiveVersionMap,
 } from "./effectiveVersion.js";
 import * as buildStore from "./buildStore.js";
-import { buildUnit, resolveBuildUnitKey } from "./builder.js";
+import { buildUnitStored, resolveBuildUnitKey } from "./builder.js";
 import { diagnosticsFromError, type BuildDiagnostic } from "./diagnostics.js";
 import { recordDiagnostics } from "./diagnosticsStore.js";
 import { assertPresent } from "../../lintHelpers";
@@ -428,14 +428,14 @@ export class StateTransitionTrigger extends EventEmitter {
 
       const ev = assertPresent(evMap[name]);
       const buildKey = resolveBuildUnitKey(node, ev, this.stateHash);
-      if (buildStore.has(buildKey)) {
+      if (await buildStore.has(buildKey)) {
         this.emit("build-complete", { name, buildKey, trigger });
         continue;
       }
 
       this.emit("build-started", { name, trigger });
       try {
-        await buildUnit(node, ev, graph, this.workspaceRoot, trigger.workspaceStateHash, {
+        await buildUnitStored(node, ev, graph, this.workspaceRoot, trigger.workspaceStateHash, {
           // Publication warming is optional cache work. It must yield every
           // build lane needed by a panel, app, worker, or approval the user is
           // actually waiting for.

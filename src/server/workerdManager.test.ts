@@ -11,7 +11,7 @@ import {
 import { spawn } from "child_process";
 import { findServicePort } from "./hostCore/portUtils.js";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
-import type { BuildResult } from "./buildV2/buildStore.js";
+import type { StoredBuildResult } from "./buildV2/buildStore.js";
 import { RouteRegistry } from "./routeRegistry.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -121,11 +121,14 @@ function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
 
 function mockWorkerBuild(
   bundle = 'export default { fetch() { return new Response("ok"); } };'
-): BuildResult {
+): StoredBuildResult {
   const execution = runtimeArtifact("workers/runtime-fixture", "build");
   const buildKey = execution.buildKey;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-build-test-"));
+  testStatePaths.add(dir);
+  fs.writeFileSync(path.join(dir, "worker.js"), bundle);
   return {
-    dir: "/tmp/test-build",
+    dir,
     buildKey,
     sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
     metadata: {
@@ -148,13 +151,14 @@ function mockWorkerBuild(
         role: "primary",
         contentType: "text/javascript; charset=utf-8",
         encoding: "utf8",
-        content: bundle,
+        byteLength: Buffer.byteLength(bundle),
+        integrity: `sha256-${sha256(bundle)}`,
       },
     ],
   };
 }
 
-function mockWorkerBuildFor(source: string, execution: ExecutionArtifactRefV1): BuildResult {
+function mockWorkerBuildFor(source: string, execution: ExecutionArtifactRefV1): StoredBuildResult {
   const base = mockWorkerBuild();
   return {
     ...base,
@@ -185,7 +189,7 @@ class WorkerdManager extends ProductWorkerdManager {
 
 function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDeps {
   const build = mockWorkerBuild();
-  const boundBuilds = new Map<string, BuildResult>();
+  const boundBuilds = new Map<string, StoredBuildResult>();
   const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-manager-test-"));
   testStatePaths.add(statePath);
   return {
@@ -207,8 +211,8 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
         authority: { provides: [], requests: [], serviceRequests: [] },
       };
     }),
-    getBuildByKey: vi.fn(() => build),
-    getBuildByExecution: vi.fn((key, executionDigest) => {
+    getBuildByKey: vi.fn(async () => build),
+    getBuildByExecution: vi.fn(async (key, executionDigest) => {
       const candidate = boundBuilds.get(key) ?? build;
       return candidate.metadata.execution?.executionDigest === executionDigest ? candidate : null;
     }),
@@ -500,10 +504,10 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
       const binding = await deps.bindRuntimeImage("workers/board", "state:original");
-      const build = deps.getBuildByExecution(
+      const build = (await deps.getBuildByExecution(
         binding.artifact.buildKey,
         binding.artifact.executionDigest
-      )!;
+      ))!;
       const probe = vi
         .spyOn(mgr, "probeDurableObjectSchema")
         .mockResolvedValue(descriptor(1, "fresh-shape"));
@@ -560,12 +564,15 @@ describe("WorkerdManager", () => {
         return new Response(null, { status: 204 });
       });
       const older = manager.prepareWorkerExecutable(
-        deps.getBuildByExecution(first.artifact.buildKey, first.artifact.executionDigest)!,
+        (await deps.getBuildByExecution(first.artifact.buildKey, first.artifact.executionDigest))!,
         ["BoardDO"]
       );
       await firstAdmitted;
       await manager.prepareWorkerExecutable(
-        deps.getBuildByExecution(second.artifact.buildKey, second.artifact.executionDigest)!,
+        (await deps.getBuildByExecution(
+          second.artifact.buildKey,
+          second.artifact.executionDigest
+        ))!,
         ["BoardDO"]
       );
       expect((await manager.getDoCode(source, "BoardDO", versions[0]!))?.version).toBe(versions[0]);
@@ -706,7 +713,7 @@ describe("WorkerdManager", () => {
           authority: { provides: [], requests: [], serviceRequests: [] },
         })),
         getBuildByExecution: vi.fn(
-          (key, digest) =>
+          async (key, digest) =>
             builds.find(
               (build) =>
                 build.buildKey === key && build.metadata.execution?.executionDigest === digest
@@ -1080,7 +1087,7 @@ describe("WorkerdManager", () => {
         selectedFiles: ["model.test.ts"],
       };
       const deps = createMockDeps({
-        getBuildByExecution: vi.fn((buildKey, executionDigest) =>
+        getBuildByExecution: vi.fn(async (buildKey, executionDigest) =>
           buildKey === build.buildKey &&
           executionDigest === build.metadata.execution?.executionDigest
             ? build
@@ -1123,10 +1130,12 @@ describe("WorkerdManager", () => {
         startArgs({ source: "workers/runtime-fixture", key: "instance:with spaces" })
       );
 
-      expect(mgr.resolveWorkerAdmission(handle.targetId)).toMatchObject({
+      await expect(mgr.resolveWorkerAdmission(handle.targetId)).resolves.toMatchObject({
         name: "instance_with_spaces",
       });
-      expect(mgr.resolveWorkerAdmission("worker:workers/runtime-fixture:missing")).toBeNull();
+      await expect(
+        mgr.resolveWorkerAdmission("worker:workers/runtime-fixture:missing")
+      ).resolves.toBeNull();
     });
 
     it("injects parent handle metadata into the worker runtime env", async () => {
@@ -1145,7 +1154,8 @@ describe("WorkerdManager", () => {
 
       // Workers load dynamically — parent metadata travels in the per-instance env
       // served by `/_workercode`, not the workerd config.
-      const code = await mgr.getWorkerCode("hello", mgr.getWorkerAdmission("hello")!.version);
+      const admission = await mgr.getWorkerAdmission("hello");
+      const code = await mgr.getWorkerCode("hello", admission!.version);
       expect(code?.env["PARENT_ID"]).toBe("panel-parent");
       expect(code?.env["PARENT_ENTITY_ID"]).toBe("panel:parent-entity");
       expect(code?.env["PARENT_KIND"]).toBe("panel");
@@ -1159,7 +1169,8 @@ describe("WorkerdManager", () => {
 
       await mgr.startWorker(startArgs({ env: { NON_SECRET_PROBE: "configured" } }));
 
-      const code = await mgr.getWorkerCode("hello", mgr.getWorkerAdmission("hello")!.version);
+      const admission = await mgr.getWorkerAdmission("hello");
+      const code = await mgr.getWorkerCode("hello", admission!.version);
       expect(code?.env["NON_SECRET_PROBE"]).toBe("configured");
     });
 
@@ -1392,7 +1403,7 @@ describe("WorkerdManager", () => {
         contextId: "ctx-agent",
       });
       const sealedArtifact = runtimeArtifact("workers/new-do", "ctx:ctx-agent");
-      vi.mocked(deps.getBuildByExecution).mockImplementation((buildKey, executionDigest) =>
+      vi.mocked(deps.getBuildByExecution).mockImplementation(async (buildKey, executionDigest) =>
         buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
           ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
           : null
@@ -1486,12 +1497,12 @@ describe("WorkerdManager", () => {
         ...changedUnsigned,
         executionDigest: executionArtifactDigest(changedUnsigned),
       });
-      vi.mocked(deps.getBuildByKey).mockImplementation((buildKey) =>
+      vi.mocked(deps.getBuildByKey).mockImplementation(async (buildKey) =>
         buildKey === sealedArtifact.buildKey
           ? mockWorkerBuildFor("workers/new-do", changedArtifact)
           : null
       );
-      deps.getBuildByExecution = vi.fn((buildKey, executionDigest) =>
+      deps.getBuildByExecution = vi.fn(async (buildKey, executionDigest) =>
         buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
           ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
           : null
@@ -1714,7 +1725,7 @@ describe("WorkerdManager", () => {
         },
       });
       const sealedArtifact = runtimeArtifact("workers/new-do", "ctx:ctx-agent");
-      vi.mocked(deps.getBuildByExecution).mockImplementation((buildKey, executionDigest) =>
+      vi.mocked(deps.getBuildByExecution).mockImplementation(async (buildKey, executionDigest) =>
         buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
           ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
           : null
@@ -2085,7 +2096,7 @@ describe("WorkerdManager", () => {
       const mgr = new WorkerdManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "main" }));
-      const before = mgr.getWorkerAdmission("hello")?.version;
+      const before = (await mgr.getWorkerAdmission("hello"))?.version;
       await mgr.reconcileMutableSourceBuild(
         "workers/runtime-fixture",
         null,
@@ -2110,7 +2121,7 @@ describe("WorkerdManager", () => {
       // No restart — the worker host reloads on its next request because the
       // loader-cache version bumped. The instance stays "running" throughout.
       expect(statusOf(mgr, "hello")?.status).toBe("running");
-      expect(mgr.getWorkerAdmission("hello")?.version).toBe(
+      expect((await mgr.getWorkerAdmission("hello"))?.version).toBe(
         `${before!.split(":")[0]}:${Number(before!.split(":")[1]) + 1}`
       );
     });
@@ -2121,7 +2132,7 @@ describe("WorkerdManager", () => {
 
       await mgr.startWorker(startArgs({ ref: "main" }));
       await mgr.updateInstance("hello", { env: { FEATURE: "enabled" } });
-      const beforeRebuild = mgr.getWorkerAdmission("hello")?.version;
+      const beforeRebuild = (await mgr.getWorkerAdmission("hello"))?.version;
 
       await mgr.reconcileMutableSourceBuild(
         "workers/runtime-fixture",
@@ -2144,7 +2155,7 @@ describe("WorkerdManager", () => {
         "build:workers/runtime-fixture:main"
       );
 
-      expect(mgr.getWorkerAdmission("hello")?.version).toBe(
+      expect((await mgr.getWorkerAdmission("hello"))?.version).toBe(
         `${beforeRebuild!.split(":")[0]}:${Number(beforeRebuild!.split(":")[1]) + 1}`
       );
     });
@@ -2161,7 +2172,7 @@ describe("WorkerdManager", () => {
         .mockRejectedValueOnce(new Error("Unknown vcs ref: ctx:deleted"));
       const deps = createMockDeps({
         bindRuntimeImage,
-        getBuildByKey: vi.fn(() => null),
+        getBuildByKey: vi.fn(async () => null),
         statePath: fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-image-error-")),
       });
       const mgr = new WorkerdManager(deps);

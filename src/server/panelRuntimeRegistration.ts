@@ -680,7 +680,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       panelHttpServer.populateSourceRegistry(entries);
 
       panelHttpServer.setCallbacks({
-        getBuild: (source, ref) => buildSystem.getBuild(source, ref),
+        getBuild: (source, ref) => buildSystem.getStoredBuild(source, ref),
         getUnitIcon: (source, artifactPath, stateRef) =>
           buildSystem.getUnitIcon(source, artifactPath, stateRef),
         getBuildByKey: (buildKey) => buildSystem.getBuildByKey(buildKey),

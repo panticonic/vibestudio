@@ -92,7 +92,7 @@ export interface WorkspaceStateServiceDeps {
    * The stateArgs schema declared by one exact build. Returns undefined when
    * that build declares none and throws when the build record is unavailable.
    */
-  stateArgsSchemaForBuild(buildKey: string): StateArgsSchema | undefined;
+  stateArgsSchemaForBuild(buildKey: string): Promise<StateArgsSchema | undefined>;
   panelAccess: PanelAccessPermissionDeps;
 }
 
@@ -466,7 +466,9 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         const detail = await receiver.panelTreeDetail(slotId);
         if (!detail?.slot.current_entry_key) throw new Error(`Panel not found: ${slotId}`);
         const activeBuildKey = detail.entity.activeBuildKey ?? null;
-        const schema = activeBuildKey ? deps.stateArgsSchemaForBuild(activeBuildKey) : undefined;
+        const schema = activeBuildKey
+          ? await deps.stateArgsSchemaForBuild(activeBuildKey)
+          : undefined;
         const next = await receiver.slotPatchCurrentStateArgs(slotId, patch, {
           entryKey: detail.slot.current_entry_key,
           activeBuildKey,

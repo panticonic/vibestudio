@@ -18,7 +18,10 @@ describe("createLiveCallerGate", () => {
     requested: authority.requests,
   });
 
-  function fixture(runtimeOwnerUserId = "usr_alice") {
+  function fixture(
+    runtimeOwnerUserId = "usr_alice",
+    extensionLiveness?: (callerId: string) => Promise<boolean>
+  ) {
     let userRevoked = false;
     let member = true;
     let deviceLive = true;
@@ -101,7 +104,9 @@ describe("createLiveCallerGate", () => {
         runtimeId === "panel:website" &&
         website.connected &&
         website.binding.documentId === "document-1",
-      isLiveExtension: (callerId) => extensionLive && callerId === "@workspace-extensions/host",
+      isLiveExtension:
+        extensionLiveness ??
+        (async (callerId) => extensionLive && callerId === "@workspace-extensions/host"),
       isLiveSystemRuntime: (callerId, callerKind) =>
         callerId === "do:workers/workspace-source:GadWorkspaceDO:workspace" && callerKind === "do",
       now: () => 10,
@@ -132,27 +137,57 @@ describe("createLiveCallerGate", () => {
     };
   }
 
-  it("re-checks the concrete shell device, account, and membership on every call", () => {
+  it("waits for the extension's actual liveness result and propagates lookup failure", async () => {
+    let resolve!: (value: boolean) => void;
+    const state = fixture(
+      "usr_alice",
+      () =>
+        new Promise<boolean>((settle) => {
+          resolve = settle;
+        })
+    );
+    const caller = createVerifiedCaller("@workspace-extensions/host", "extension", null, null, {
+      userId: "system",
+      handle: "system",
+    });
+    let settled = false;
+    const result = Promise.resolve(state.gate(caller)).then((allowed) => {
+      settled = true;
+      return allowed;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    resolve(false);
+    expect(await result).toBe(false);
+
+    const failure = new Error("The exact extension identity could not be read");
+    const failing = fixture("usr_alice", async () => {
+      throw failure;
+    });
+    await expect(failing.gate(caller)).rejects.toBe(failure);
+  });
+
+  it("re-checks the concrete shell device, account, and membership on every call", async () => {
     const subject = { userId: "usr_alice", handle: "alice" };
 
     const device = fixture();
     const shell = createVerifiedCaller("shell:dev_1", "shell", null, null, subject);
-    expect(device.gate(shell)).toBe(true);
+    expect(await device.gate(shell)).toBe(true);
     device.revokeDevice();
-    expect(device.gate(shell)).toBe(false);
+    expect(await device.gate(shell)).toBe(false);
 
     const account = fixture();
-    expect(account.gate(shell)).toBe(true);
+    expect(await account.gate(shell)).toBe(true);
     account.revokeUser();
-    expect(account.gate(shell)).toBe(false);
+    expect(await account.gate(shell)).toBe(false);
 
     const membership = fixture();
-    expect(membership.gate(shell)).toBe(true);
+    expect(await membership.gate(shell)).toBe(true);
     membership.removeMembership();
-    expect(membership.gate(shell)).toBe(false);
+    expect(await membership.gate(shell)).toBe(false);
   });
 
-  it("rejects a cached agent as soon as its credential is no longer live", () => {
+  it("rejects a cached agent as soon as its credential is no longer live", async () => {
     const state = fixture();
     const agent = createVerifiedCaller(
       "agent:session:one",
@@ -166,12 +201,12 @@ describe("createLiveCallerGate", () => {
       },
       { userId: "usr_alice", handle: "alice" }
     );
-    expect(state.gate(agent)).toBe(true);
+    expect(await state.gate(agent)).toBe(true);
     state.revokeAgent();
-    expect(state.gate(agent)).toBe(false);
+    expect(await state.gate(agent)).toBe(false);
   });
 
-  it("requires live document proof and the current authenticated viewer for website panels", () => {
+  it("requires live document proof and the current authenticated viewer for website panels", async () => {
     const state = fixture();
     const caller = {
       ...createVerifiedCaller("panel:website", "panel", null, undefined, {
@@ -187,25 +222,25 @@ describe("createLiveCallerGate", () => {
         binding: { subject: "website:one" as const, generation: 0, documentId: "document-1" },
       },
     };
-    expect(state.gate(caller)).toBe(false);
-    expect(state.gate(caller, "shell:dev_1")).toBe(true);
+    expect(await state.gate(caller)).toBe(false);
+    expect(await state.gate(caller, "shell:dev_1")).toBe(true);
     expect(
-      state.gate(
+      await state.gate(
         { ...caller, website: { ...caller.website, workspaceId: "ws_other" } },
         "shell:dev_1"
       )
     ).toBe(false);
     expect(
-      state.gate(
+      await state.gate(
         { ...caller, website: { ...caller.website, userId: "user:usr_bob" } },
         "shell:dev_1"
       )
     ).toBe(false);
     state.retireWebsite();
-    expect(state.gate(caller, "shell:dev_1")).toBe(false);
+    expect(await state.gate(caller, "shell:dev_1")).toBe(false);
     // Code evidence cannot substitute for a retired document's proof.
     expect(
-      state.gate(
+      await state.gate(
         { ...caller, code: codeIdentity("panel:website", "panel", "apps/shared") },
         "shell:dev_1"
       )
@@ -214,7 +249,7 @@ describe("createLiveCallerGate", () => {
 
   it.each(["revokeUser", "removeMembership", "revokeDevice"] as const)(
     "withdraws website transport when %s changes",
-    (withdraw) => {
+    async (withdraw) => {
       const state = fixture();
       const caller = {
         ...createVerifiedCaller("panel:website", "panel", null, undefined, {
@@ -230,13 +265,13 @@ describe("createLiveCallerGate", () => {
           binding: { subject: "website:one" as const, generation: 0, documentId: "document-1" },
         },
       };
-      expect(state.gate(caller, "shell:dev_1")).toBe(true);
+      expect(await state.gate(caller, "shell:dev_1")).toBe(true);
       state[withdraw]();
-      expect(state.gate(caller, "shell:dev_1")).toBe(false);
+      expect(await state.gate(caller, "shell:dev_1")).toBe(false);
     }
   );
 
-  it("binds a shared app connection to its live grant issuer without assigning a global owner", () => {
+  it("binds a shared app connection to its live grant issuer without assigning a global owner", async () => {
     const state = fixture();
     const app = createVerifiedCaller(
       "app:shared",
@@ -248,13 +283,13 @@ describe("createLiveCallerGate", () => {
         handle: "alice",
       }
     );
-    expect(state.gate(app)).toBe(false);
-    expect(state.gate(app, "shell:dev_1")).toBe(true);
+    expect(await state.gate(app)).toBe(false);
+    expect(await state.gate(app, "shell:dev_1")).toBe(true);
     state.revokeDevice();
-    expect(state.gate(app, "shell:dev_1")).toBe(false);
+    expect(await state.gate(app, "shell:dev_1")).toBe(false);
   });
 
-  it("uses the authenticated viewer for shared panels and creator lineage for workers", () => {
+  it("uses the authenticated viewer for shared panels and creator lineage for workers", async () => {
     const state = fixture("usr_bob");
     const subject = { userId: "usr_alice", handle: "alice" };
     const panel = createVerifiedCaller(
@@ -264,8 +299,8 @@ describe("createLiveCallerGate", () => {
       null,
       subject
     );
-    expect(state.gate(panel)).toBe(false);
-    expect(state.gate(panel, "shell:dev_1")).toBe(true);
+    expect(await state.gate(panel)).toBe(false);
+    expect(await state.gate(panel, "shell:dev_1")).toBe(true);
     const worker = createVerifiedCaller(
       "worker:shared",
       "worker",
@@ -273,12 +308,12 @@ describe("createLiveCallerGate", () => {
       null,
       subject
     );
-    expect(state.gate(worker, "shell:dev_1")).toBe(false);
+    expect(await state.gate(worker, "shell:dev_1")).toBe(false);
     state.removeMembership();
-    expect(state.gate(panel, "shell:dev_1")).toBe(false);
+    expect(await state.gate(panel, "shell:dev_1")).toBe(false);
   });
 
-  it("rejects an admitted code caller after its active incarnation changes", () => {
+  it("rejects an admitted code caller after its active incarnation changes", async () => {
     const state = fixture();
     const app = createVerifiedCaller(
       "app:shared",
@@ -288,15 +323,15 @@ describe("createLiveCallerGate", () => {
       { userId: "usr_alice", handle: "alice" }
     );
 
-    expect(state.gate(app, "shell:dev_1")).toBe(true);
+    expect(await state.gate(app, "shell:dev_1")).toBe(true);
     state.advanceIncarnation();
-    expect(state.gate(app, "shell:dev_1")).toBe(false);
+    expect(await state.gate(app, "shell:dev_1")).toBe(false);
   });
 
-  it("admits only the canonical system-owned extension identity", () => {
+  it("admits only the canonical system-owned extension identity", async () => {
     const state = fixture();
     expect(
-      state.gate(
+      await state.gate(
         createVerifiedCaller("@workspace-extensions/host", "extension", null, null, {
           userId: "system",
           handle: "system",
@@ -304,7 +339,7 @@ describe("createLiveCallerGate", () => {
       )
     ).toBe(true);
     expect(
-      state.gate(
+      await state.gate(
         createVerifiedCaller("@workspace-extensions/fake", "extension", null, null, {
           userId: "system",
           handle: "system",
@@ -313,7 +348,7 @@ describe("createLiveCallerGate", () => {
     ).toBe(false);
     state.retireExtension();
     expect(
-      state.gate(
+      await state.gate(
         createVerifiedCaller("@workspace-extensions/host", "extension", null, null, {
           userId: "system",
           handle: "system",
@@ -322,7 +357,7 @@ describe("createLiveCallerGate", () => {
     ).toBe(false);
   });
 
-  it("keeps a live server-spawned shared app authorized without inventing a user owner", () => {
+  it("keeps a live server-spawned shared app authorized without inventing a user owner", async () => {
     const state = fixture();
     const app = createVerifiedCaller(
       "@workspace-apps/remote-cli",
@@ -332,16 +367,16 @@ describe("createLiveCallerGate", () => {
       { userId: "system", handle: "system" }
     );
 
-    expect(state.gate(app, "server")).toBe(true);
-    expect(state.gate(app)).toBe(false);
-    expect(state.gate(app, "shell:dev_1")).toBe(false);
+    expect(await state.gate(app, "server")).toBe(true);
+    expect(await state.gate(app)).toBe(false);
+    expect(await state.gate(app, "shell:dev_1")).toBe(false);
   });
 
-  it("admits only the declared system-owned runtime identity", () => {
+  it("admits only the declared system-owned runtime identity", async () => {
     const state = fixture();
     const systemSubject = { userId: "system", handle: "system" };
     expect(
-      state.gate(
+      await state.gate(
         createVerifiedCaller(
           "do:workers/workspace-source:GadWorkspaceDO:workspace",
           "do",
@@ -356,7 +391,7 @@ describe("createLiveCallerGate", () => {
       )
     ).toBe(true);
     expect(
-      state.gate(
+      await state.gate(
         createVerifiedCaller(
           "do:workers/workspace-source:GadWorkspaceDO:other",
           "do",

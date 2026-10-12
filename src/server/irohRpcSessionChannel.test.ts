@@ -214,6 +214,37 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
 });
 
 describe("IrohRpcSessionChannel shutdown lifecycle", () => {
+  it("owns a cancellation observer when connection closure also rejects reset observation", async () => {
+    const log = vi.fn();
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+      writeControl: vi.fn(async () => undefined),
+      onClosed: vi.fn(),
+      log,
+    });
+    const stream = fakeStream();
+    const readFailure = new Error("ConnectionLost(ApplicationClosed)");
+    const resetFailure = new Error("ConnectionLost(LocallyClosed)");
+    stream.recv.read.mockRejectedValueOnce(readFailure);
+    vi.mocked(stream.recv.receivedReset).mockRejectedValueOnce(resetFailure);
+    const onError = vi.fn();
+    const removedHandler = vi.fn();
+    channel.onError(onError);
+    channel.onError(removedHandler)();
+
+    channel.deliverEnvelope(requestEnvelope(), stream);
+    channel.remoteClosed(1006, "physical connection closed");
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    const failure = onError.mock.calls[0]![0] as AggregateError;
+    expect(failure.errors).toEqual([readFailure, resetFailure]);
+    expect(failure.cause).toBe(readFailure);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(resetFailure.message));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(readFailure.message));
+    expect(removedHandler).not.toHaveBeenCalled();
+  });
+
   it("closes locally when the peer is already gone before the close notification", async () => {
     const onClosed = vi.fn();
     const log = vi.fn();

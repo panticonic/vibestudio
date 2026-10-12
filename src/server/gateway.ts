@@ -85,9 +85,9 @@ export interface RpcHandler {
   /** Resolve runtime grants through the RPC server's live viewer/holder checks. */
   authenticateConnectionGrant(
     token: string
-  ): { caller: VerifiedCaller; authorizedBy: string } | null;
+  ): Promise<{ caller: VerifiedCaller; authorizedBy: string } | null>;
   /** Own the RPC WebSocket upgrade so its protocol budgets are enforced once. */
-  handleGatewayWsUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
+  handleGatewayWsUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void>;
   /** Handle an HTTP RPC or WebSocket-admission request. */
   handleGatewayHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> | void;
   /** Receive an authenticated workspace-child relay through the ordinary dispatcher. */
@@ -118,7 +118,7 @@ export interface AppArtifactHandler {
  *  STATE_ARGS), so they are gated by the workerd-only `loaderSecret`. */
 export interface WorkerHostCodeProvider {
   getLoaderSecret(): string;
-  getWorkerAdmission(name: string): WorkerExecutableAdmission | null;
+  getWorkerAdmission(name: string): Promise<WorkerExecutableAdmission | null>;
   getWorkerCode(
     name: string,
     version: string
@@ -220,7 +220,7 @@ export class Gateway {
     const { healthProvider, adminToken, tokenManager, routeRegistry } = this.deps;
     const workerdToken = this.workerdGatewayToken;
 
-    const requestHandler = (req: IncomingMessage, res: ServerResponse) => {
+    const requestHandler = async (req: IncomingMessage, res: ServerResponse) => {
       const url = req.url ?? "/";
       const rpcHandler = this.deps.getRpcHandler?.() ?? this.deps.rpcHandler;
       const panelHttpHandler = this.deps.getPanelHttpHandler?.() ?? this.deps.panelHttpHandler;
@@ -416,7 +416,7 @@ export class Gateway {
       // through guarded `/_r/` routes or RpcServer; exposing raw `/_u/` here
       // would create an invocation path with no durable-identity readiness gate.
       if (url.startsWith("/_w/")) {
-        if (!validateCallerBearer(req, tokenManager, rpcHandler, this.deps.entityCache)) {
+        if (!(await validateCallerBearer(req, tokenManager, rpcHandler, this.deps.entityCache))) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Unauthorized");
           return;
@@ -454,7 +454,12 @@ export class Gateway {
           res.end("Extension route not found");
           return;
         }
-        const entry = validateCallerBearer(req, tokenManager, rpcHandler, this.deps.entityCache);
+        const entry = await validateCallerBearer(
+          req,
+          tokenManager,
+          rpcHandler,
+          this.deps.entityCache
+        );
         if (!entry) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Unauthorized");
@@ -562,7 +567,15 @@ export class Gateway {
 
     // Loopback HTTP only — the public/TLS ingress is decommissioned; remote
     // reach is the Iroh pipe, co-located reach is loopback WS.
-    const server = createServer(requestHandler);
+    const server = createServer((req, res) => {
+      void requestHandler(req, res).catch((error: unknown) => {
+        log.warn(`Gateway request failed:`, error);
+        if (!res.headersSent && !res.writableEnded) {
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end("Gateway request failed");
+        }
+      });
+    });
     // Workerd pools loader/RPC connections and can be busy when an idle
     // socket expires. Reusing that socket then loses the next invocation.
     // Gateway connections belong to their client and this gateway generation;
@@ -582,105 +595,114 @@ export class Gateway {
     });
 
     server.on("upgrade", (req, socket, head) => {
-      const url = req.url ?? "/";
-      const rpcHandler = this.deps.getRpcHandler?.() ?? this.deps.rpcHandler;
-      const panelHttpHandler = this.deps.getPanelHttpHandler?.() ?? this.deps.panelHttpHandler;
-      const workerdPort = this.deps.getWorkerdPort?.() ?? this.deps.workerdPort;
-      const allowedOrigins = buildOriginAllowList();
+      void (async () => {
+        const url = req.url ?? "/";
+        const rpcHandler = this.deps.getRpcHandler?.() ?? this.deps.rpcHandler;
+        const panelHttpHandler = this.deps.getPanelHttpHandler?.() ?? this.deps.panelHttpHandler;
+        const workerdPort = this.deps.getWorkerdPort?.() ?? this.deps.workerdPort;
+        const allowedOrigins = buildOriginAllowList();
 
-      // Origin allow-list (audit #30). Bearer auth still gates the actual
-      // RPC, but rejecting cross-site browser connects defends against the
-      // case where a malicious local web page learns the loopback port and
-      // tries to ride an existing token via XSS.
-      if (!isOriginAllowed(req.headers["origin"], allowedOrigins)) {
-        log.warn(`WS upgrade rejected: disallowed Origin ${String(req.headers["origin"])}`);
-        socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-
-      // /rpc → RPC WebSocket. RpcServer owns the upgrade so its control-plane
-      // payload and unauthenticated-admission budgets cannot drift from the
-      // handler that interprets the frames.
-      if ((url === "/rpc" || url.startsWith("/rpc?")) && rpcHandler) {
-        rpcHandler.handleGatewayWsUpgrade(req, socket, head);
-        return;
-      }
-
-      // Host-bundle internal DO transport only; raw userland `/_u/` upgrades
-      // are intentionally not a gateway surface (see HTTP path above).
-      if (url.startsWith("/_w/")) {
-        if (!validateCallerBearer(req, tokenManager, rpcHandler, this.deps.entityCache)) {
-          socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-          socket.destroy();
-          return;
-        }
-        if (!workerdPort) {
-          socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
-          socket.destroy();
-          return;
-        }
-        const dispatchSecret = this.deps.getWorkerdDispatchSecret?.();
-        if (!dispatchSecret) {
-          socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
-          socket.destroy();
-          return;
-        }
-        const providedSecret = req.headers["x-vibestudio-dispatch-secret"];
-        if (
-          typeof providedSecret !== "string" ||
-          !constantTimeStringEqual(providedSecret, dispatchSecret)
-        ) {
+        // Origin allow-list (audit #30). Bearer auth still gates the actual
+        // RPC, but rejecting cross-site browser connects defends against the
+        // case where a malicious local web page learns the loopback port and
+        // tries to ride an existing token via XSS.
+        if (!isOriginAllowed(req.headers["origin"], allowedOrigins)) {
+          log.warn(`WS upgrade rejected: disallowed Origin ${String(req.headers["origin"])}`);
           socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
           socket.destroy();
           return;
         }
-        return proxyUpgrade(req, socket, head, workerdPort, workerdToken, {
-          "X-Vibestudio-Dispatch-Secret": dispatchSecret,
-        });
-      }
 
-      // Extension fetch routes do not support WebSocket upgrade in v1.
-      if (url.startsWith("/_r/ext/")) {
-        socket.write("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n");
-        socket.destroy();
-        return;
-      }
+        // /rpc → RPC WebSocket. RpcServer owns the upgrade so its control-plane
+        // payload and unauthenticated-admission budgets cannot drift from the
+        // handler that interprets the frames.
+        if ((url === "/rpc" || url.startsWith("/rpc?")) && rpcHandler) {
+          void rpcHandler.handleGatewayWsUpgrade(req, socket, head).catch((error: unknown) => {
+            log.warn("RPC WebSocket upgrade failed:", error);
+            if (!socket.destroyed) socket.destroy();
+          });
+          return;
+        }
 
-      // /_r/ → route registry dispatch (worker + service WS routes)
-      if (url.startsWith("/_r/") && routeRegistry) {
-        void handleRouteUpgrade(
-          req,
-          socket,
-          head,
-          url,
-          routeRegistry,
-          () => this.deps.getWorkerdPort?.() ?? this.deps.workerdPort,
-          adminToken,
-          tokenManager,
-          workerdToken,
-          this.deps.getWorkerdDispatchSecret?.(),
-          this.deps.ensureDORoute,
-          (ref) =>
-            this.deps.getWorkerHost?.()?.getDoAdmission(ref.source, ref.className, ref.objectKey) ??
-            null,
-          (name) => this.deps.getWorkerHost?.()?.getWorkerAdmission(name) ?? null
-        ).catch((err: unknown) => {
-          log.warn(`Route WS dispatch error:`, err);
-          if (!socket.destroyed) {
-            socket.write("HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n");
+        // Host-bundle internal DO transport only; raw userland `/_u/` upgrades
+        // are intentionally not a gateway surface (see HTTP path above).
+        if (url.startsWith("/_w/")) {
+          if (!(await validateCallerBearer(req, tokenManager, rpcHandler, this.deps.entityCache))) {
+            socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
             socket.destroy();
+            return;
           }
-        });
-        return;
-      }
+          if (!workerdPort) {
+            socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+          const dispatchSecret = this.deps.getWorkerdDispatchSecret?.();
+          if (!dispatchSecret) {
+            socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+          const providedSecret = req.headers["x-vibestudio-dispatch-secret"];
+          if (
+            typeof providedSecret !== "string" ||
+            !constantTimeStringEqual(providedSecret, dispatchSecret)
+          ) {
+            socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+          return proxyUpgrade(req, socket, head, workerdPort, workerdToken, {
+            "X-Vibestudio-Dispatch-Secret": dispatchSecret,
+          });
+        }
 
-      // Default: panel HTTP handler (CDP bridge, etc.)
-      if (panelHttpHandler) {
-        return panelHttpHandler.handleGatewayUpgrade(req, socket, head);
-      }
+        // Extension fetch routes do not support WebSocket upgrade in v1.
+        if (url.startsWith("/_r/ext/")) {
+          socket.write("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n");
+          socket.destroy();
+          return;
+        }
 
-      socket.destroy();
+        // /_r/ → route registry dispatch (worker + service WS routes)
+        if (url.startsWith("/_r/") && routeRegistry) {
+          void handleRouteUpgrade(
+            req,
+            socket,
+            head,
+            url,
+            routeRegistry,
+            () => this.deps.getWorkerdPort?.() ?? this.deps.workerdPort,
+            adminToken,
+            tokenManager,
+            workerdToken,
+            this.deps.getWorkerdDispatchSecret?.(),
+            this.deps.ensureDORoute,
+            (ref) =>
+              this.deps
+                .getWorkerHost?.()
+                ?.getDoAdmission(ref.source, ref.className, ref.objectKey) ?? null,
+            (name) => this.deps.getWorkerHost?.()?.getWorkerAdmission(name) ?? null
+          ).catch((err: unknown) => {
+            log.warn(`Route WS dispatch error:`, err);
+            if (!socket.destroyed) {
+              socket.write("HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n");
+              socket.destroy();
+            }
+          });
+          return;
+        }
+
+        // Default: panel HTTP handler (CDP bridge, etc.)
+        if (panelHttpHandler) {
+          return panelHttpHandler.handleGatewayUpgrade(req, socket, head);
+        }
+
+        socket.destroy();
+      })().catch((error: unknown) => {
+        log.warn("Gateway WebSocket upgrade failed:", error);
+        if (!socket.destroyed) socket.destroy();
+      });
     });
 
     return new Promise((resolve, reject) => {
@@ -930,17 +952,17 @@ function extractBearerToken(req: IncomingMessage): string | null {
   return token.length > 0 ? token : null;
 }
 
-function validateCallerBearer(
+async function validateCallerBearer(
   req: IncomingMessage,
   tokenManager: TokenManager,
   rpcHandler?: RpcHandler | null,
   entityCache?: Pick<EntityCache, "resolveActive">
-): VerifiedCaller | null {
+): Promise<VerifiedCaller | null> {
   const token = extractBearerToken(req);
   if (!token) return null;
   const entry = tokenManager.validateToken(token);
   if (!entry) {
-    return rpcHandler?.authenticateConnectionGrant(token)?.caller ?? null;
+    return (await rpcHandler?.authenticateConnectionGrant(token))?.caller ?? null;
   }
   return createVerifiedCaller(
     entry.callerId,
@@ -994,20 +1016,20 @@ function parseAppArtifactRoute(url: string): { buildKey: string; remainderPath: 
   }
 }
 
-function enforceAuth(
+async function enforceAuth(
   lookup: LookupResult,
   req: IncomingMessage,
   _url: string,
   adminToken: string | undefined,
   tokenManager: TokenManager
-): boolean {
+): Promise<boolean> {
   switch (lookup.auth) {
     case "public":
       return true;
     case "admin-token":
       return validateAdminBearer(req, adminToken);
     case "caller-token":
-      return validateCallerBearer(req, tokenManager) !== null;
+      return (await validateCallerBearer(req, tokenManager)) !== null;
   }
 }
 
@@ -1110,7 +1132,9 @@ async function handleRouteRequest(
   workerdDispatchSecret?: string | null,
   ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void,
   resolveExecutableAdmission?: DoExecutableAdmissionResolver,
-  resolveWorkerAdmission?: (name: string) => WorkerExecutableAdmission | null
+  resolveWorkerAdmission?: (
+    name: string
+  ) => WorkerExecutableAdmission | null | Promise<WorkerExecutableAdmission | null>
 ): Promise<boolean> {
   const qIdx = url.indexOf("?");
   const pathOnly = qIdx === -1 ? url : url.slice(0, qIdx);
@@ -1127,7 +1151,7 @@ async function handleRouteRequest(
     return true;
   }
 
-  if (!enforceAuth(result, req, url, adminToken, tokenManager)) {
+  if (!(await enforceAuth(result, req, url, adminToken, tokenManager))) {
     res.writeHead(401, { "Content-Type": "text/plain" });
     res.end("Unauthorized");
     return true;
@@ -1173,7 +1197,7 @@ async function handleRouteRequest(
   } else {
     try {
       extraHeaders = workerExecutableHeaders(
-        requireWorkerAdmission(result.targetInstanceName, resolveWorkerAdmission)
+        await requireWorkerAdmission(result.targetInstanceName, resolveWorkerAdmission)
       );
     } catch (error) {
       res.writeHead(workerAdmissionFailureStatus(error), { "Content-Type": "application/json" });
@@ -1208,7 +1232,9 @@ async function handleRouteUpgrade(
   workerdDispatchSecret?: string | null,
   ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void,
   resolveExecutableAdmission?: DoExecutableAdmissionResolver,
-  resolveWorkerAdmission?: (name: string) => WorkerExecutableAdmission | null
+  resolveWorkerAdmission?: (
+    name: string
+  ) => WorkerExecutableAdmission | null | Promise<WorkerExecutableAdmission | null>
 ): Promise<boolean> {
   const qIdx = url.indexOf("?");
   const pathOnly = qIdx === -1 ? url : url.slice(0, qIdx);
@@ -1219,7 +1245,7 @@ async function handleRouteUpgrade(
     return true;
   }
 
-  if (!enforceAuth(result, req, url, adminToken, tokenManager)) {
+  if (!(await enforceAuth(result, req, url, adminToken, tokenManager))) {
     socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
     socket.destroy();
     return true;
@@ -1261,7 +1287,7 @@ async function handleRouteUpgrade(
   } else {
     try {
       extraHeaders = workerExecutableHeaders(
-        requireWorkerAdmission(result.targetInstanceName, resolveWorkerAdmission)
+        await requireWorkerAdmission(result.targetInstanceName, resolveWorkerAdmission)
       );
     } catch (error) {
       const status = workerAdmissionFailureStatus(error);
@@ -1283,11 +1309,13 @@ async function handleRouteUpgrade(
   return true;
 }
 
-function requireWorkerAdmission(
+async function requireWorkerAdmission(
   name: string,
-  resolve?: (name: string) => WorkerExecutableAdmission | null
-): WorkerExecutableAdmission {
-  const admission = resolve?.(name);
+  resolve?: (
+    name: string
+  ) => WorkerExecutableAdmission | null | Promise<WorkerExecutableAdmission | null>
+): Promise<WorkerExecutableAdmission> {
+  const admission = await resolve?.(name);
   if (!admission)
     throw Object.assign(new Error(`Worker not found: ${name}`), { code: "WORKER_NOT_FOUND" });
   return admission;

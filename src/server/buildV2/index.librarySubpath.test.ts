@@ -391,10 +391,11 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(report).toMatchObject({ status: "ok", diagnostics: [] });
     expect(report.builds).toHaveLength(4);
     for (const target of report.builds) {
-      const built = buildStore.get(target.buildKey!)!;
+      const built = (await buildStore.get(target.buildKey!))!;
       const css = built.artifacts.find((entry) => entry.path === "bundle.css")!;
       expect(css).toMatchObject({ contentType: "text/css; charset=utf-8", encoding: "utf8" });
-      const fontUrl = css.content.match(/url\((data:[^)]+)\)/u)?.[1];
+      const cssContent = await buildStore.readStoredArtifactContent(built, css);
+      const fontUrl = cssContent.match(/url\((data:[^)]+)\)/u)?.[1];
       expect(fontUrl).toMatch(/^data:font\/woff2[,;]/u);
       expect(new Uint8Array(await (await fetch(fontUrl!)).arrayBuffer())).toEqual(
         new Uint8Array([0, 1, 2, 3])

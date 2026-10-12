@@ -115,7 +115,7 @@ function makeService(opts: {
   dispatchReturns?: Record<string, unknown>;
   panelAccess?: Partial<PanelAccessPermissionDeps>;
   presentationDispatch?: (method: string, args: unknown[]) => Promise<unknown>;
-  stateArgsSchemaForBuild?: (buildKey: string) => Record<string, unknown> | undefined;
+  stateArgsSchemaForBuild?: (buildKey: string) => Promise<Record<string, unknown> | undefined>;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const presentationCalls: Array<{ method: string; args: unknown[] }> = [];
@@ -179,7 +179,7 @@ function makeService(opts: {
       ...opts.panelAccess,
       controlsLifecycleContext: opts.panelAccess?.controlsLifecycleContext ?? (async () => false),
     },
-    stateArgsSchemaForBuild: opts.stateArgsSchemaForBuild ?? (() => undefined),
+    stateArgsSchemaForBuild: opts.stateArgsSchemaForBuild ?? (async () => undefined),
     ...(opts.onSlotStateChanged ? { onSlotStateChanged: opts.onSlotStateChanged } : {}),
     ...(opts.onPresentationChanged ? { onPresentationChanged: opts.onPresentationChanged } : {}),
     ...(opts.onEntityTitleChanged ? { onEntityTitleChanged: opts.onEntityTitleChanged } : {}),
@@ -849,7 +849,7 @@ describe("workspaceStateService — slot-state change hook", () => {
     const schemaLookups: string[] = [];
     const { svc, calls } = makeService({
       onSlotStateChanged,
-      stateArgsSchemaForBuild: (key) => {
+      stateArgsSchemaForBuild: async (key) => {
         schemaLookups.push(key);
         return schema;
       },

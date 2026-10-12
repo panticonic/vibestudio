@@ -39,6 +39,10 @@ import {
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
 import { beginDurableObjectRelay } from "./workerdRpcRelay.js";
+import {
+  cleanupStoredBuildFixtures,
+  storedBuildFixture,
+} from "../../tests/helpers/storedBuildFixture.js";
 
 let compiledWorkerdPrograms: WorkerdProgramSources;
 
@@ -287,10 +291,15 @@ async function createHarness(
         authority: { requests: [], provides: [], serviceRequests: [] },
       };
     },
-    getBuildByKey: (key: string) => boundBuilds.get(key) ?? null,
-    getBuildByExecution: (key: string, executionDigest: string) => {
+    getBuildByKey: async (key: string) => {
+      const build = boundBuilds.get(key);
+      return build ? storedBuildFixture(build) : null;
+    },
+    getBuildByExecution: async (key: string, executionDigest: string) => {
       const build = boundBuilds.get(key) ?? null;
-      return build?.metadata.execution?.executionDigest === executionDigest ? build : null;
+      return build?.metadata.execution?.executionDigest === executionDigest
+        ? storedBuildFixture(build)
+        : null;
     },
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
@@ -474,6 +483,7 @@ afterEach(async () => {
     } finally {
       await new Promise<void>((r) => owned.gateway.close(() => r()));
       for (const ownedPath of owned.ownedPaths) rmSync(ownedPath, { recursive: true, force: true });
+      cleanupStoredBuildFixtures();
     }
   }
 });
@@ -588,7 +598,7 @@ describe("UniversalDO facet host (real workerd)", () => {
     };
     active = await createHarness({ [source]: preparedBuild });
     const { manager, dispatch, codeFetches, admissionFetches } = active;
-    await manager.prepareWorkerExecutable(preparedBuild, ["CounterDO"]);
+    await manager.prepareWorkerExecutable(storedBuildFixture(preparedBuild), ["CounterDO"]);
     expect(manager.getDoAdmission(source, "CounterDO", "first")).toBeNull();
     const fetchedBeforeDemand = [...codeFetches.values()].reduce((sum, value) => sum + value, 0);
     const instructions = "Native instructions: λ 日本語 🧭\n".repeat(6000);
@@ -1003,7 +1013,7 @@ describe("UniversalDO facet host (real workerd)", () => {
     const descriptor = await active.manager.probeDurableObjectSchema(
       source,
       "SchemaProbeDO",
-      build
+      storedBuildFixture(build)
     );
 
     expect(descriptor).toMatchObject({

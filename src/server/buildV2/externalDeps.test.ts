@@ -75,7 +75,7 @@ vi.mock("@vibestudio/shared/npmInstaller", async (importOriginal) => ({
 
 vi.mock("./dependencyContentMaintenance.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dependencyContentMaintenance.js")>()),
-  scheduleDependencyContentMaintenance: vi.fn(),
+  prepareDependencyContent: vi.fn(async () => {}),
   scheduleDependencyContentPrune: vi.fn(),
 }));
 
@@ -98,7 +98,7 @@ import {
   pruneUnreferencedDependencyContent,
 } from "./dependencyContentStore.js";
 import {
-  scheduleDependencyContentMaintenance,
+  prepareDependencyContent,
   scheduleDependencyContentPrune,
 } from "./dependencyContentMaintenance.js";
 
@@ -147,16 +147,19 @@ function writePackage(root: string, name: string, version: string): void {
 }
 
 describe("extension runtime dependency publication", () => {
-  it("publishes the validated tree before scheduling physical content sharing", async () => {
-    vi.mocked(scheduleDependencyContentMaintenance).mockClear();
-    vi.mocked(scheduleDependencyContentMaintenance).mockImplementationOnce((cacheDir) => {
-      expect(fs.existsSync(path.join(cacheDir, ".ready"))).toBe(true);
+  it("prepares the private tree before publishing the validated cache", async () => {
+    vi.mocked(prepareDependencyContent).mockClear();
+    vi.mocked(prepareDependencyContent).mockImplementationOnce(async (stagingDir, cacheDir) => {
+      expect(fs.existsSync(path.join(stagingDir, ".ready"))).toBe(true);
+      expect(fs.existsSync(path.join(stagingDir, "node_modules"))).toBe(true);
+      expect(fs.existsSync(cacheDir)).toBe(false);
     });
     const borrowed = await ensureExtensionRuntimeDeps(process.cwd(), {
       "extension-runtime-background-test": "1.0.0",
     });
     try {
-      expect(scheduleDependencyContentMaintenance).toHaveBeenCalledWith(
+      expect(prepareDependencyContent).toHaveBeenCalledWith(
+        expect.stringMatching(/\.tmp\.[a-f0-9]{32}$/u),
         path.dirname(borrowed.nodeModulesDir)
       );
       const manifest = path.join(
@@ -170,13 +173,34 @@ describe("extension runtime dependency publication", () => {
     }
   });
 
-  it("uses the same post-publication maintenance path for compile dependencies", async () => {
-    vi.mocked(scheduleDependencyContentMaintenance).mockClear();
-    vi.mocked(scheduleDependencyContentMaintenance).mockImplementationOnce((cacheDir) => {
-      expect(fs.existsSync(path.join(cacheDir, ".ready"))).toBe(true);
+  it("prepares compile dependencies before publishing their cache", async () => {
+    vi.mocked(prepareDependencyContent).mockClear();
+    vi.mocked(prepareDependencyContent).mockImplementationOnce(async (stagingDir, cacheDir) => {
+      expect(fs.existsSync(path.join(stagingDir, ".ready"))).toBe(true);
+      expect(fs.existsSync(cacheDir)).toBe(false);
     });
     const borrowed = await ensureExternalDeps({ "compile-dependency-maintenance-test": "1.0.0" });
-    expect(scheduleDependencyContentMaintenance).toHaveBeenCalledWith(path.dirname(borrowed));
+    expect(prepareDependencyContent).toHaveBeenCalledWith(
+      expect.stringMatching(/\.tmp\.[a-f0-9]{32}$/u),
+      path.dirname(borrowed)
+    );
+  });
+
+  it("does not publish or retain a staged cache after content preparation fails", async () => {
+    vi.mocked(prepareDependencyContent).mockClear();
+    const failure = new Error("content preparation failed");
+    vi.mocked(prepareDependencyContent).mockRejectedValueOnce(failure);
+
+    await expect(
+      ensureExternalDeps({ "compile-dependency-prepare-failure-test": "1.0.0" })
+    ).rejects.toMatchObject({
+      message: "Failed to install external dependencies: content preparation failed",
+      cause: failure,
+    });
+    expect(prepareDependencyContent).toHaveBeenCalledOnce();
+    const [stagingDir, cacheDir] = vi.mocked(prepareDependencyContent).mock.calls[0]!;
+    expect(fs.existsSync(cacheDir)).toBe(false);
+    expect(fs.existsSync(stagingDir)).toBe(false);
   });
 
   it("routes CAS cleanup after an actual cache prune to the maintenance owner", async () => {

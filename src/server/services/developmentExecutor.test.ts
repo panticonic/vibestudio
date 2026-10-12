@@ -10,7 +10,12 @@ import type {
   DevelopmentRun,
   DevelopmentSession,
 } from "@vibestudio/service-schemas/development";
-import { setBuildExecutionIdentityContext, get as getBuild } from "../buildV2/buildStore.js";
+import {
+  setBuildExecutionIdentityContext,
+  get as getBuild,
+  readStoredArtifactBytes,
+  readStoredArtifactContent,
+} from "../buildV2/buildStore.js";
 import {
   DevelopmentExecutor,
   hashDevelopmentPackageClosure,
@@ -399,7 +404,7 @@ describe("DevelopmentExecutor exact private execution", () => {
 
     await executor.materialize(plan);
     const artifact = await executor.execute(runFor(plan), plan, vi.fn());
-    const stored = getBuild(plan.snapshot.snapshotDigest);
+    const stored = await getBuild(plan.snapshot.snapshotDigest);
 
     expect(artifact.buildKey).toBe(plan.snapshot.snapshotDigest);
     await expect(executor.runRoots.snapshotRoots()).resolves.toEqual([
@@ -414,7 +419,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     expect(stored?.metadata.sourceState).toEqual(plan.snapshot.pair.host.repositoryState);
     const environment = stored?.artifacts.find((entry) => entry.path === "dist/environment.json");
     expect(environment?.encoding).toBe("utf8");
-    expect(JSON.parse(environment?.content ?? "{}")).toEqual({
+    expect(JSON.parse(await readStoredArtifactContent(stored!, environment!))).toEqual({
       cwd: await fsp.realpath(path.join(root, "runs", plan.runId, "source")),
       declared: "production",
       base: path.join(root, "runs", plan.runId, "base"),
@@ -430,11 +435,9 @@ describe("DevelopmentExecutor exact private execution", () => {
     // The shim is archived at its own path, carrying the linked file's bytes.
     const shim = stored?.artifacts.find((entry) => entry.path === "dist/node/exact/bin/npm");
     expect(shim).toBeDefined();
-    expect(
-      shim?.encoding === "base64"
-        ? Buffer.from(shim.content, "base64").toString("utf8")
-        : shim?.content
-    ).toBe("#!/usr/bin/env node\n");
+    expect(shim ? (await readStoredArtifactBytes(stored!, shim)).toString("utf8") : undefined).toBe(
+      "#!/usr/bin/env node\n"
+    );
   });
 
   it("refuses path escapes and foreign owner markers before execution or deletion", async () => {

@@ -272,7 +272,9 @@ export function createEvalService(deps: {
   tokenManager: TokenManager;
   workspaceId: string;
   /** Resolve the actual sealed artifact, including source provenance, for a live code identity. */
-  resolveExecutionArtifact: (code: VerifiedCodeIdentity) => ExecutionArtifactRefV1 | null;
+  resolveExecutionArtifact: (
+    code: VerifiedCodeIdentity
+  ) => ExecutionArtifactRefV1 | null | Promise<ExecutionArtifactRefV1 | null>;
   executionSessions: AgentExecutionSessionRegistry;
   taskAuthorities: TaskAuthorityRegistry;
   isSystemTestHarness?: (caller: ServiceContext["caller"], runId: string) => boolean;
@@ -750,10 +752,11 @@ export function createEvalService(deps: {
     const parent = (await resolveParentPanel(ownerId)) ?? undefined;
     const evalRuntimeId = evalDoEntityId(objectKey);
     const ownerHarness = resolveCodeIdentity(store.cache, ownerId);
+    const ownerArtifact = ownerHarness ? await deps.resolveExecutionArtifact(ownerHarness) : null;
     const harnessArtifact = verifyExecutionArtifactRef(
       ownerHarness
         ? (() => {
-            const artifact = deps.resolveExecutionArtifact(ownerHarness);
+            const artifact = ownerArtifact;
             if (
               !artifact ||
               artifact.executionDigest !== ownerHarness.executionDigest ||

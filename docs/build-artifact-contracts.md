@@ -39,6 +39,33 @@ Invalid cached metadata is a cache miss; filesystem and ownership failures retai
 their original errors. New producer fields must update this canonical contract
 and its complete-record tests, rather than a separate host-only interface.
 
+Internally, `StoredBuildResult` is an immutable build descriptor: its artifact
+entries contain manifest metadata, never payload strings. Consumers select the
+specific artifact they need; the type rejects payload-bearing wire artifacts
+at internal stored-build boundaries. Consumers use the asynchronous reader,
+which verifies the file length and SHA-256 integrity before returning bytes.
+Text consumers decode only that selected artifact. This keeps panel activation,
+metadata inspection, and lazy resources from eagerly reading every artifact.
+Materialize payload strings only at the existing `build.getBuild` RPC boundary,
+whose wire schema requires them; descriptor and artifact RPCs retain their
+manifest-only contract.
+
+The execution-publication journal may synchronously resolve only descriptors
+already verified and hydrated in the build store's in-memory cache. Its lookup
+does no filesystem I/O while the journal transaction is held and returns a
+fail-closed miss when hydration has not happened. Callers must establish the
+descriptor through the canonical asynchronous build-store path before entering
+that transaction; the journal lookup must not grow a second hydration path.
+
+Async state watches register the subscriber before hydrating their initial
+snapshot at a captured sequence watermark. Snapshot records and intervening
+live events share one byte budget; snapshots precede newer buffered events.
+Snapshot failure errors the response with the original failure and retires the
+watch. Request admission is also owned before any asynchronous identity read:
+disconnect and shutdown close admission, and retirement joins accepted work.
+Finished live requests return errors to their caller instead of retaining an
+unbounded server-wide error history.
+
 `pnpm type-check:host` and `pnpm type-check:userland` retain each original compiler program, including its global/module augmentations, source aliases, tests, and compiler options. Compiler realms and template compositions run sequentially. Incremental no-emit state is seeded privately and retained when the compiler completes, including cached diagnostics from a failed check. Compiler errors still propagate; cancellation or launch failure retains the preceding state. Temporary configurations and unpublished state are removed. State lives under the host checkout's `.cache/typecheck-state`, with derived-cache leases and quotas. Template source and installed dependencies are projected into host-owned temporary directories, so no compiler state is written into external template checkouts.
 
 ## CI and release parallelism
@@ -124,13 +151,33 @@ The composition test executes both import forms and checks singleton identity.
 Import resolver filesystem reads are asynchronous and memoized within one
 immutable build. Dependency content sharing and CAS pruning use the existing
 maintenance child, rather than taking profile-wide SQLite writer locks on the
-workspace event loop. One maintenance owner admits one child at a time because
-its jobs mutate the same content store. Independent workspace builds continue
-while that child runs. At retirement, first join cache-prune callbacks that can
-admit maintenance, then join maintenance and artifact publications, then close
-their coordinators and remove scratch. Both servers and release producers retain
-all failures through this dependency order; an ownership failure keeps its state
+workspace event loop. Newly installed dependency trees are deduplicated while
+they are still private staging directories, before atomic publication. Once a
+cache tree is published, builders may borrow it; maintenance must not rewrite
+that tree. Background maintenance therefore prunes unreferenced CAS content,
+while preparation requests carry the exact private staging and destination
+coordinates to the existing child and are joined before the caller publishes.
+One maintenance owner admits one child at a time because its jobs mutate the
+same content store. Independent workspace builds continue while that child
+runs. At retirement, first join cache-prune callbacks that can admit
+maintenance, then join maintenance and artifact publications, then close their
+coordinators and remove scratch. Both servers and release producers retain all
+failures through this dependency order; an ownership failure keeps its state
 anchor until the owner has actually retired.
+
+Dependency maintenance acquires ordinary digest lease rows in bounded batches,
+rather than committing an acquisition and release transaction for every file.
+The existing collector sees the same ownership rows and requires no new schema
+or locking protocol. Hashing and publication stay bounded; every admitted file
+finishes before the batch releases its leases. A failed batch stops further
+admission and retains publication and release failures together. Fewer commits
+are a code-level reduction in storage work, not a measured end-to-end speedup.
+
+Responsiveness samples record their actual elapsed interval. Existing warnings
+also include process user and system CPU deltas: event-loop utilization counts
+synchronous native waits as active, so high utilization alone does not prove a
+JavaScript CPU bottleneck. Process CPU includes worker threads and cannot
+identify the blocking owner without operation or stack evidence.
 
 Each semantic GC snapshot proves semantic, protected-main, execution, and cached
 workspace roots through one operation-scoped batch. Shared tree nodes and content

@@ -71,9 +71,12 @@ import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { writeAppDistBake, type AppDistBakeManifest } from "./buildV2/distBake.js";
 import {
-  readArtifactBytesAsync,
+  readStoredArtifactBytes,
+  readStoredArtifactContent,
   type BuildArtifactManifestEntry,
   type BuildMetadata,
+  type StoredBuildArtifact,
+  type StoredBuildResult,
 } from "./buildV2/buildStore.js";
 
 const gzipAsync = promisify(gzip);
@@ -130,6 +133,7 @@ export interface AppRegistryEntry extends UnitRegistryEntryBase {
   unitKind: "app";
   target: WorkspaceAppTarget;
   capabilities: AppCapability[];
+  activeExecutionDigest: string | null;
   /** Terminal apps that render an interactive TUI (inherit the real TTY). */
   interactive?: boolean;
   previousVersions: AppVersionRecord[];
@@ -144,6 +148,7 @@ export interface AppVersionRecord {
   activeEv: string | null;
   activeSourceHash: string | null;
   activeBundleKey: string;
+  executionDigest: string;
   activeDependencyEvs: Record<string, string>;
   activeExternalDeps: Record<string, string>;
   activeRuntimeDepsKey: string | null;
@@ -208,8 +213,8 @@ export type ElectronHostReadiness =
     };
 
 interface BuildSystemLike {
-  getBuild(unitPath: string, ref?: string): Promise<AppBuildResultLike>;
-  getBuildByKey?(key: string): AppBuildResultLike | null;
+  getStoredBuild(unitPath: string, ref?: string): Promise<AppBuildResultLike>;
+  getBuildByKey(key: string): Promise<AppBuildResultLike | null>;
   getEffectiveVersion(unitName: string): string | null;
   listAffectedBuildUnits?(stateHash: string, changedPaths: readonly string[]): Promise<string[]>;
   resolveBuildUnitIdentity(
@@ -249,24 +254,9 @@ interface BuildSystemLike {
   ): () => void;
 }
 
-interface AppBuildArtifactLike {
-  path: string;
-  role: BuildArtifactManifestEntry["role"];
-  contentType: string;
-  encoding: BuildArtifactManifestEntry["encoding"];
-  platform?: string;
-  integrity?: string;
-  byteLength?: number;
-  content: string;
-}
+export type AppBuildArtifactLike = StoredBuildArtifact;
 
-export interface AppBuildResultLike {
-  dir: string;
-  buildKey?: string;
-  sourceStateHash?: string | null;
-  metadata: AppBuildMetadataLike;
-  artifacts?: AppBuildArtifactLike[];
-}
+export type AppBuildResultLike = StoredBuildResult;
 
 interface AppGraphNode {
   name: string;
@@ -401,6 +391,10 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private lastDeclared: WorkspaceAppDeclaration[] = [];
   private lastDevStatusDiagnosticKey: string | null = null;
   private readonly activationFlights = new Map<string, Promise<"ready">>();
+  private readonly eventFlights = new Set<Promise<void>>();
+  private eventFailures: unknown[] = [];
+  private initialization: Promise<void> | null = null;
+  private initializationComplete = false;
   private retiring = false;
 
   constructor(private readonly deps: AppHostDeps) {
@@ -411,6 +405,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         ...entry,
         activeDependencyEvs: entry.activeDependencyEvs ?? {},
         activeExternalDeps: entry.activeExternalDeps ?? {},
+        activeExecutionDigest: entry.activeExecutionDigest ?? null,
         capabilities: entry.capabilities ?? [],
         previousVersions: entry.previousVersions ?? [],
         lastErrorDetails: entry.lastErrorDetails ?? null,
@@ -420,19 +415,26 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       publicationKeyForEntry: (entry) =>
         JSON.stringify([
           entry.activeBundleKey,
-          ...entry.previousVersions.map((version) => version.activeBundleKey),
+          entry.activeExecutionDigest,
+          ...entry.previousVersions.flatMap((version) => [
+            version.activeBundleKey,
+            version.executionDigest,
+          ]),
         ]),
       publicationForEntry: (entry) => {
-        const buildKeys = [
-          ...(entry.activeBundleKey ? [entry.activeBundleKey] : []),
-          ...entry.previousVersions.map((version) => version.activeBundleKey),
+        const builds = [
+          ...(entry.activeBundleKey
+            ? [{ buildKey: entry.activeBundleKey, executionDigest: entry.activeExecutionDigest }]
+            : []),
+          ...entry.previousVersions.map((version) => ({
+            buildKey: version.activeBundleKey,
+            executionDigest: version.executionDigest,
+          })),
         ];
         return {
           owner: entry.target === "terminal" ? "terminal-app" : "app-generation",
           ownerId: entry.name,
-          artifacts: buildKeys.map((buildKey) => {
-            const executionDigest =
-              deps.buildSystem.getBuildByKey?.(buildKey)?.metadata.execution?.executionDigest;
+          artifacts: builds.map(({ buildKey, executionDigest }) => {
             if (!executionDigest) {
               throw new Error(`App ${entry.name} references unverifiable build ${buildKey}`);
             }
@@ -563,37 +565,117 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       emitStatus: (appId, status, error) => this.emitStatus(appId, status, error),
     });
     deps.buildSystem.onPushBuild((source, trigger) => {
-      this.handleSourceRebuilt(source, trigger).catch((err) => {
-        console.error(
-          `[AppHost] Failed to reload rebuilt app source ${source}:`,
-          err instanceof Error ? err.message : String(err)
-        );
-      });
+      this.admitEventWork(() => this.handleSourceRebuilt(source, trigger));
     });
     deps.buildSystem.onUnitChange?.((event) => {
       if (event.kind !== "app") return;
-      this.handleChangedAppUnit(event).catch((err) => {
-        console.error(
-          `[AppHost] Failed to reconcile changed app unit ${event.relativePath}:`,
-          err instanceof Error ? err.message : String(err)
-        );
-      });
+      this.admitEventWork(() => this.handleChangedAppUnit(event));
     });
     deps.buildSystem.onBuildProviderChange?.((event) => {
       if (event.target !== "react-native") return;
-      this.reconcileAfterProviderChange(event.provider.name).catch((err) => {
-        console.error(
-          `[AppHost] Failed to reconcile apps after provider change ${event.provider.name}:`,
-          err instanceof Error ? err.message : String(err)
-        );
-      });
+      this.admitEventWork(() => this.reconcileAfterProviderChange(event.provider.name));
     });
+  }
+
+  /** Backfill durable app execution identities before any unit reconciliation is admitted. */
+  initialize(): Promise<void> {
+    if (!this.initialization) {
+      this.initialization = this.backfillExecutionIdentities().then(() => {
+        this.initializationComplete = true;
+      });
+    }
+    return this.initialization;
+  }
+
+  private async backfillExecutionIdentities(): Promise<void> {
+    for (const entry of this.registry.list()) {
+      const activeExecutionDigest = entry.activeBundleKey
+        ? (entry.activeExecutionDigest ??
+          (await this.resolveStoredExecutionDigest(entry.name, entry.activeBundleKey)))
+        : null;
+      const previousVersionReads = await Promise.allSettled(
+        entry.previousVersions.map(async (version) =>
+          version.executionDigest
+            ? version
+            : {
+                ...version,
+                executionDigest: await this.resolveStoredExecutionDigest(
+                  entry.name,
+                  version.activeBundleKey
+                ),
+              }
+        )
+      );
+      const previousVersionFailures = previousVersionReads.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (previousVersionFailures.length === 1) throw previousVersionFailures[0];
+      if (previousVersionFailures.length > 1) {
+        throw new AggregateError(previousVersionFailures, "App history identity backfill failed", {
+          cause: previousVersionFailures[0],
+        });
+      }
+      const previousVersions = previousVersionReads.map((result) => {
+        if (result.status !== "fulfilled") {
+          throw new Error("App history identity backfill lost a settled result");
+        }
+        return result.value;
+      });
+      const changed =
+        activeExecutionDigest !== entry.activeExecutionDigest ||
+        previousVersions.some(
+          (version, index) =>
+            version.executionDigest !== entry.previousVersions[index]?.executionDigest
+        );
+      if (changed) {
+        this.registry.patch(entry.name, { activeExecutionDigest, previousVersions });
+      }
+    }
+  }
+
+  private async resolveStoredExecutionDigest(appName: string, buildKey: string): Promise<string> {
+    const build = await this.deps.buildSystem.getBuildByKey(buildKey);
+    const executionDigest = build?.metadata.execution?.executionDigest;
+    if (
+      !build ||
+      build.buildKey !== buildKey ||
+      build.metadata.buildKey !== buildKey ||
+      typeof executionDigest !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(executionDigest)
+    ) {
+      throw new Error(`App ${appName} references unverifiable build ${buildKey}`);
+    }
+    return executionDigest;
+  }
+
+  private admitEventWork(work: () => Promise<void>): void {
+    if (this.retiring) return;
+    const flight = this.initialize().then(work);
+    this.eventFlights.add(flight);
+    void flight.then(
+      () => this.eventFlights.delete(flight),
+      (error) => {
+        this.eventFlights.delete(flight);
+        this.eventFailures.push(error);
+      }
+    );
+  }
+
+  private async joinEventWork(): Promise<void> {
+    await Promise.allSettled([...this.eventFlights]);
+    const failures = this.eventFailures;
+    this.eventFailures = [];
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "AppHost event work failed", { cause: failures[0] });
+    }
   }
 
   async reconcileDeclared(
     declared: WorkspaceAppDeclaration[],
     opts: UnitReconcileOptions = {}
   ): Promise<void> {
+    await this.initialize();
     this.lastDeclared = this.hostedDeclarations(declared);
     await this.unitHost.reconcileDeclared(this.lastDeclared, opts);
     this.emitDevStatusDiagnostic(opts.trigger ?? "startup");
@@ -612,6 +694,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     units: ReviewedUnit[];
     identityKeys: string[];
   }> {
+    await this.initialize();
     const review = await this.unitHost.approvalForDeclarations(this.hostedDeclarations(declared));
     return { units: review.entries, identityKeys: review.identityKeys };
   }
@@ -620,11 +703,19 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   seedTrustedDeclared(
     declared: WorkspaceAppDeclaration[] = this.lastDeclared
   ): Promise<ReviewedUnit[]> {
-    return this.unitHost.seedTrustedDeclarations(this.hostedDeclarations(declared));
+    return this.initialize().then(() =>
+      this.unitHost.seedTrustedDeclarations(this.hostedDeclarations(declared))
+    );
   }
 
   private hostedDeclarations(declared: WorkspaceAppDeclaration[]): WorkspaceAppDeclaration[] {
     return this.deps.isSystemWorkspace() ? declared.map((decl) => ({ ...decl })) : [];
+  }
+
+  private assertInitialized(): void {
+    if (!this.initializationComplete) {
+      throw new Error("AppHost must be initialized before reading app version history");
+    }
   }
 
   private assertAppHosting(): void {
@@ -633,7 +724,9 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async whenSettled(): Promise<void> {
+    await this.initialize();
     await this.unitHost.whenSettled();
+    await this.joinEventWork();
     // Reconcile returns once work is staged, so the line it prints is all
     // `status=building ev=none` — true, and useless. The line a developer reads
     // is this one: what each app actually settled on.
@@ -641,18 +734,36 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async whenReconciled(): Promise<void> {
+    await this.initialize();
     await this.unitHost.whenReconciled();
+    await this.joinEventWork();
   }
 
   /** Declared apps are classified (entries + staged approvals); builds may still run. */
   async whenDeclarationsStaged(): Promise<void> {
+    await this.initialize();
     await this.unitHost.whenDeclarationsStaged();
+    await this.joinEventWork();
   }
 
   async shutdown(): Promise<void> {
     this.retiring = true;
-    await Promise.allSettled(this.activationFlights.values());
-    await this.terminal.shutdown();
+    const lifecyclePromises: Promise<unknown>[] = [
+      ...this.activationFlights.values(),
+      ...this.eventFlights,
+      ...(this.initialization ? [this.initialization] : []),
+      this.terminal.shutdown(),
+    ];
+    const lifecycle = await Promise.allSettled(lifecyclePromises);
+    const failures = [
+      ...this.eventFailures,
+      ...lifecycle.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+    ];
+    this.eventFailures = [];
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "AppHost shutdown failed", { cause: failures[0] });
+    }
   }
 
   async unitChangeApprovalForCommit(
@@ -894,6 +1005,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     previous: AppVersionRecord[];
     retentionLimit: number;
   } {
+    this.assertInitialized();
     const entry = this.findRegistryEntry(sourceOrName);
     if (!entry) return { current: null, previous: [], retentionLimit: APP_ROLLBACK_HISTORY_LIMIT };
     return {
@@ -903,22 +1015,27 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     };
   }
 
-  listHostTargetCandidates(target: HostTarget): HostTargetCandidate[] {
+  async listHostTargetCandidates(target: HostTarget): Promise<HostTargetCandidate[]> {
     if (!this.deps.isSystemWorkspace()) return [];
+    await this.initialize();
     const declaredNames = new Set(
       this.lastDeclared
         .map((decl) => this.tryFindAppNode(decl.source)?.name)
         .filter((name): name is string => typeof name === "string")
     );
-    return this.deps.buildSystem
+    const nodes = this.deps.buildSystem
       .getGraph()
       .allNodes()
       .filter(
         (node) => node.kind === "app" && normalizeRepoPath(node.relativePath).startsWith("apps/")
       )
-      .filter((node) => this.appTarget(node) === target)
-      .map((node) => this.hostTargetCandidate(node, target, declaredNames.has(node.name)))
-      .sort((a, b) => Number(b.declared) - Number(a.declared) || a.source.localeCompare(b.source));
+      .filter((node) => this.appTarget(node) === target);
+    const candidates = await Promise.all(
+      nodes.map((node) => this.hostTargetCandidate(node, target, declaredNames.has(node.name)))
+    );
+    return candidates.sort(
+      (a, b) => Number(b.declared) - Number(a.declared) || a.source.localeCompare(b.source)
+    );
   }
 
   private async prepareReleaseAtRef(
@@ -926,7 +1043,8 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     sourceOrName: string,
     ref: string
   ): Promise<{ buildKey: string; effectiveVersion: string; appId: string; source: string }> {
-    const candidate = this.listHostTargetCandidates(target).find(
+    await this.initialize();
+    const candidate = (await this.listHostTargetCandidates(target)).find(
       (item) => item.name === sourceOrName || item.source === normalizeRepoPath(sourceOrName)
     );
     if (!candidate) throw new Error(`No ${target} app candidate found for ${sourceOrName}`);
@@ -937,7 +1055,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       ref,
     };
     this.assertHostTargetMatchesManifest(node, target);
-    const build = await this.deps.buildSystem.getBuild(candidate.name, ref);
+    const build = await this.deps.buildSystem.getStoredBuild(candidate.name, ref);
     this.validateBuildForTarget(candidate.name, target, build);
     if (
       isAppBuildDetailsLike(build.metadata.details) &&
@@ -985,6 +1103,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       extra: {
         target,
         capabilities: this.appCapabilities(node),
+        activeExecutionDigest: build.metadata.execution?.executionDigest ?? null,
         activationTrust: trust,
       },
     });
@@ -1016,8 +1135,9 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     sourceOrName: string,
     ref: string
   ): Promise<{ buildKey: string; effectiveVersion: string; appId: string; source: string }> {
+    await this.initialize();
     for (const target of ["electron", "react-native", "terminal"] as const) {
-      const candidate = this.listHostTargetCandidates(target).find(
+      const candidate = (await this.listHostTargetCandidates(target)).find(
         (item) => item.name === sourceOrName || item.source === normalizeRepoPath(sourceOrName)
       );
       if (candidate) return this.prepareReleaseAtRef(target, candidate.name, ref);
@@ -1026,6 +1146,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async rollbackAppVersion(sourceOrName: string, buildKey?: string): Promise<AppRegistryEntry> {
+    await this.initialize();
     const entry = this.findRegistryEntry(sourceOrName);
     if (!entry) throw new Error(`Unknown app: ${sourceOrName}`);
     const selected = buildKey
@@ -1038,7 +1159,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           : `No rollback version is available for app ${entry.name}`
       );
     }
-    const build = this.deps.buildSystem.getBuildByKey?.(selected.activeBundleKey);
+    const build = await this.deps.buildSystem.getBuildByKey(selected.activeBundleKey);
     if (!build)
       throw new Error(
         `Rollback app build is missing from the build store: ${selected.activeBundleKey}`
@@ -1046,10 +1167,10 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.validateBuildForTarget(entry.name, selected.target, build);
 
     const updated = this.selectAppVersion(entry, selected, "running", null);
-    this.activateAppEntity(updated, build);
+    await this.activateAppEntity(updated, build);
     await this.terminal.sync(updated, entry);
     const activated = this.registry.get(updated.name) ?? updated;
-    this.emitAvailable(
+    await this.emitAvailable(
       activated,
       {
         lifecycleType: "rolled-back",
@@ -1062,6 +1183,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async restart(sourceOrName: string): Promise<void> {
+    await this.initialize();
     const entry = this.findRegistryEntry(sourceOrName);
     if (!entry) throw new Error(`Unknown app: ${sourceOrName}`);
     if (entry.target === "terminal") {
@@ -1069,10 +1191,10 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       return;
     }
     if (!entry.activeBundleKey) throw new Error(`App ${entry.name} has no active build`);
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
     if (!build) throw new Error(`Active app build is missing: ${entry.activeBundleKey}`);
     this.validateBuildForTarget(entry.name, entry.target, build);
-    this.emitAvailable(entry, { lifecycleType: "available" }, build);
+    await this.emitAvailable(entry, { lifecycleType: "available" }, build);
   }
 
   /** Ensure the declared release has an owned preparation and activation.
@@ -1085,6 +1207,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (pending) return pending;
     const flight = Promise.resolve()
       .then(async () => {
+        await this.initialize();
         await this.unitHost.whenDeclarationsStaged();
         await this.unitHost.whenApplied(node.name);
         const entry = this.findRegistryEntry(node.name);
@@ -1099,7 +1222,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           !entry ||
           !isCapabilityActiveStatus(entry.status) ||
           !entry.activeBundleKey ||
-          !this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
+          !(await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey))
         ) {
           // Permission review owns grants separately from deterministic preparation.
           // Starting a window must not resolve that review or wait on its decision.
@@ -1117,10 +1240,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async activateRelease(sourceOrName: string): Promise<void> {
+    await this.initialize();
     let prepared = this.findRegistryEntry(sourceOrName);
     if (!prepared) throw new Error(`Unknown app: ${sourceOrName}`);
     let build = prepared.activeBundleKey
-      ? this.deps.buildSystem.getBuildByKey?.(prepared.activeBundleKey)
+      ? await this.deps.buildSystem.getBuildByKey(prepared.activeBundleKey)
       : null;
     if (!build) {
       const preparedSourceRepo = prepared.source.repo;
@@ -1135,7 +1259,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         await this.applyDeclared(this.findAppNode(declared.source), declared);
         prepared = this.findRegistryEntry(sourceOrName);
         build = prepared?.activeBundleKey
-          ? this.deps.buildSystem.getBuildByKey?.(prepared.activeBundleKey)
+          ? await this.deps.buildSystem.getBuildByKey(prepared.activeBundleKey)
           : null;
       }
     }
@@ -1160,7 +1284,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const previousPrincipal =
       prepared.target === "terminal" ? this.deps.entityCache?.resolve(prepared.name) : null;
     const entry = this.registry.patch(prepared.name, { status: "running", lastError: null });
-    this.activateAppEntity(entry, build);
+    await this.activateAppEntity(entry, build);
     if (entry.target === "terminal") {
       if (this.terminal.isRunningBuild(entry.name, prepared.activeBundleKey)) {
         return;
@@ -1181,7 +1305,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         }
       }
     }
-    this.emitAvailable(entry, { lifecycleType: "available" }, build);
+    await this.emitAvailable(entry, { lifecycleType: "available" }, build);
   }
 
   async retire(sourceOrName: string): Promise<void> {
@@ -1256,6 +1380,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       activeEv: selected.activeEv,
       activeSourceHash: selected.activeSourceHash,
       activeBundleKey: selected.activeBundleKey,
+      activeExecutionDigest: selected.executionDigest,
       activeDependencyEvs: selected.activeDependencyEvs,
       activeExternalDeps: selected.activeExternalDeps,
       activeRuntimeDepsKey: selected.activeRuntimeDepsKey,
@@ -1350,7 +1475,8 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     });
   }
 
-  bakeDist(sourceOrName: string, outDir: string): AppDistBakeManifest {
+  async bakeDist(sourceOrName: string, outDir: string): Promise<AppDistBakeManifest> {
+    await this.initialize();
     const entry =
       this.registry.get(sourceOrName) ??
       this.registry
@@ -1362,15 +1488,16 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!entry?.activeBundleKey) {
       throw new Error(`No active approved app build found for dist bake: ${sourceOrName}`);
     }
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
     if (!build) {
       throw new Error(`Active app build is missing from the build store: ${entry.activeBundleKey}`);
     }
+    const artifacts = await appArtifactsForDist(build, entry, build.artifacts);
     return writeAppDistBake({
       entry,
       build: {
         metadata: appBuildMetadataForDist(entry, build.metadata),
-        artifacts: appArtifactsForDist(entry, build.artifacts ?? []),
+        artifacts,
       },
       outDir,
       buildKey: entry.activeBundleKey,
@@ -1383,6 +1510,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     buildKey: string,
     remainderPath: string
   ): Promise<void> {
+    await this.initialize();
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.writeHead(405, { "Content-Type": "text/plain" });
       res.end("Method Not Allowed");
@@ -1401,7 +1529,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       res.end("App artifact not active");
       return;
     }
-    const build = this.deps.buildSystem.getBuildByKey?.(buildKey);
+    const build = await this.deps.buildSystem.getBuildByKey(buildKey);
     const artifactPath = normalizeArtifactPath(remainderPath || "index.html");
     if (build && artifactPath === "__manifest.json") {
       const initialArtifacts = new Set(build.metadata.bundleReport?.initialArtifacts ?? []);
@@ -1448,7 +1576,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       for (const index of wanted) {
         const artifact = build.artifacts?.[index];
         if (!artifact?.integrity) continue;
-        const raw = await readArtifactBytesAsync(build, artifact);
+        const raw = await readStoredArtifactBytes(build, artifact);
         const digest = artifact.integrity.replace(/^sha256-/u, "");
         const encoded =
           artifact.encoding !== "base64" && raw.byteLength >= 1_024
@@ -1483,7 +1611,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       headers["Content-Security-Policy"] =
         "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
     }
-    const identityBody = await readArtifactBytesAsync(build, artifact);
+    const identityBody = await readStoredArtifactBytes(build, artifact);
     const requestHeaders = req.headers ?? {};
     const resumableGzip = requestHeaders[RESUMABLE_GZIP_HEADER] === "1";
     const body = resumableGzip ? await gzipAsync(identityBody, { level: 6 }) : identityBody;
@@ -1533,6 +1661,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     source?: string | null,
     opts: { waitForApproval?: boolean } = {}
   ): Promise<ElectronHostReadiness> {
+    await this.initialize();
     // Launch-gate polls (waitForApproval: false) must not block on the full
     // unit reconcile — that made desktop readiness wait for every declared
     // unit to finish building. Wait only until declarations are classified,
@@ -1542,13 +1671,13 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (nonBlocking) await this.unitHost.whenDeclarationsStaged();
     else await this.whenReconciled();
 
-    const first = this.electronReadinessSnapshot(source);
+    const first = await this.electronReadinessSnapshot(source);
     if (first.ready) return first;
 
     const resolvedSource =
       first.source ?? source ?? this.deps.getHostTargetDecl?.("electron")?.appSource;
     if (!resolvedSource) return first;
-    const candidate = this.listHostTargetCandidates("electron").find(
+    const candidate = (await this.listHostTargetCandidates("electron")).find(
       (item) =>
         item.source === normalizeRepoPath(resolvedSource) ||
         item.name === resolvedSource ||
@@ -1584,15 +1713,16 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * path owns the executable-principal transition; permission review owns grants.
    */
   async prepareElectronArtifact(source?: string | null): Promise<ElectronHostReadiness> {
+    await this.initialize();
     await this.unitHost.whenDeclarationsStaged();
 
-    const current = this.electronReadinessSnapshot(source);
+    const current = await this.electronReadinessSnapshot(source);
     if (current.ready) return current;
 
     const resolvedSource =
       current.source ?? source ?? this.deps.getHostTargetDecl?.("electron")?.appSource;
     if (!resolvedSource) return current;
-    const candidate = this.listHostTargetCandidates("electron").find(
+    const candidate = (await this.listHostTargetCandidates("electron")).find(
       (item) =>
         item.source === normalizeRepoPath(resolvedSource) ||
         item.name === resolvedSource ||
@@ -1611,7 +1741,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       };
     }
 
-    const build = await this.deps.buildSystem.getBuild(candidate.name, declared.ref);
+    const build = await this.deps.buildSystem.getStoredBuild(candidate.name, declared.ref);
     this.validateBuildForTarget(candidate.name, "electron", build);
     const htmlArtifact = build.artifacts?.find((artifact) => artifact.role === "html");
     if (!htmlArtifact) {
@@ -1634,9 +1764,9 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     };
   }
 
-  private electronReadinessSnapshot(source?: string | null): ElectronHostReadiness {
+  private async electronReadinessSnapshot(source?: string | null): Promise<ElectronHostReadiness> {
     const resolvedSource = source ?? this.deps.getHostTargetDecl?.("electron")?.appSource;
-    const candidates = this.listHostTargetCandidates("electron");
+    const candidates = await this.listHostTargetCandidates("electron");
     if (!resolvedSource) {
       return {
         ready: false,
@@ -1691,7 +1821,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           item.activeBundleKey
       );
     const build = entry?.activeBundleKey
-      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
+      ? await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey)
       : null;
     const htmlArtifact = build?.artifacts?.find((artifact) => artifact.role === "html");
     if (!entry?.activeBundleKey || !build || !htmlArtifact) {
@@ -1716,6 +1846,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   private async applyDeclared(node: AppGraphNode, decl: WorkspaceAppDeclaration): Promise<void> {
+    await this.initialize();
     if (
       this.appTarget(node, decl) === "react-native" &&
       !this.deps.buildSystem.getBuildProviderDetails?.("react-native")
@@ -1772,7 +1903,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     try {
       if (!previous) this.registry.upsert(this.pendingEntryFor(node, decl, true));
       else this.unitHost.markBuilding(node.name);
-      const build = await this.deps.buildSystem.getBuild(node.name, decl.ref);
+      const build = await this.deps.buildSystem.getStoredBuild(node.name, decl.ref);
       diagnostic.buildKey = path.basename(build.dir);
       diagnostic.phase = "target-validation";
       const target = this.appTarget(node, decl);
@@ -1812,6 +1943,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           target,
           capabilities,
           interactive: this.appInteractive(node),
+          activeExecutionDigest: build.metadata.execution?.executionDigest ?? null,
           activationTrust: null,
         },
       });
@@ -1847,7 +1979,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     }
   }
 
-  private emitAvailable(
+  private async emitAvailable(
     entry: AppRegistryEntry,
     opts: {
       lifecycleType?: "available" | "update-available" | "rolled-back";
@@ -1856,11 +1988,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       notify?: boolean;
     } = {},
     activatedBuild?: AppBuildResultLike
-  ): AppAvailablePayload {
-    this.activateAppEntity(entry, activatedBuild);
+  ): Promise<AppAvailablePayload> {
+    await this.activateAppEntity(entry, activatedBuild);
     const buildKey = entry.activeBundleKey ?? "";
     const build =
-      activatedBuild ?? (buildKey ? this.deps.buildSystem.getBuildByKey?.(buildKey) : null);
+      activatedBuild ?? (buildKey ? await this.deps.buildSystem.getBuildByKey(buildKey) : null);
     const artifactRefs = (build?.artifacts ?? []).map((artifact) => {
       const url = this.getAppArtifactUrl(buildKey, entry.target, artifact.path);
       return {
@@ -1945,9 +2077,9 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     return appArtifactUrl(this.deps.getTerminalAppArtifactBaseUrl(), buildKey, artifactPath);
   }
 
-  private validateActiveBuild(entry: AppRegistryEntry): void {
+  private async validateActiveBuild(entry: AppRegistryEntry): Promise<void> {
     if (!entry.activeBundleKey) throw new Error(`Active app ${entry.name} has no active build key`);
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
     if (!build)
       throw new Error(`Active app build is missing from the build store: ${entry.activeBundleKey}`);
     this.validateBuildForTarget(entry.name, entry.target, build);
@@ -1956,9 +2088,15 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private validateBuildForTarget(
     appName: string,
     target: WorkspaceAppTarget,
-    build: Awaited<ReturnType<BuildSystemLike["getBuild"]>>
+    build: AppBuildResultLike
   ): void {
     this.assertAppHosting();
+    if (
+      typeof build.metadata.execution?.executionDigest !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(build.metadata.execution.executionDigest)
+    ) {
+      throw new Error(`App ${appName} build is missing a sealed execution identity`);
+    }
     if (target === "terminal") {
       const details = build.metadata.details;
       if (!isAppBuildDetailsLike(details) || details.target !== "terminal") {
@@ -2197,11 +2335,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     );
   }
 
-  private hostTargetCandidate(
+  private async hostTargetCandidate(
     node: AppGraphNode,
     target: HostTarget,
     declared: boolean
-  ): HostTargetCandidate {
+  ): Promise<HostTargetCandidate> {
     const entry = this.registry.get(node.name);
     const capabilities = this.appCapabilities(node);
     const reasons: string[] = [];
@@ -2209,7 +2347,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       reasons.push("Electron shell apps must declare the panel-hosting capability");
     }
     const activeBuild = entry?.activeBundleKey
-      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
+      ? await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey)
       : null;
     if (target === "react-native" && activeBuild) {
       const details = activeBuild.metadata.details;
@@ -2258,9 +2396,12 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     };
   }
 
-  private activateAppEntity(entry: AppRegistryEntry, selectedBuild?: AppBuildResultLike): void {
+  private async activateAppEntity(
+    entry: AppRegistryEntry,
+    selectedBuild?: AppBuildResultLike
+  ): Promise<void> {
     if (!this.deps.entityCache || !entry.activeEv) return;
-    const activeBuild = this.resolveActiveAppBuild(entry, selectedBuild);
+    const activeBuild = await this.resolveActiveAppBuild(entry, selectedBuild);
     const existing = this.deps.entityCache.resolve(entry.name);
     const sourceRepo = normalizeRepoPath(entry.source.repo);
     // WP3 §6: the shared workspace app is ONE instance every member reads and
@@ -2294,14 +2435,14 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * cross the sealed-build → executable-principal boundary. Every app runtime,
    * including device-scoped native principals, uses this same decision.
    */
-  private resolveActiveAppBuild(
+  private async resolveActiveAppBuild(
     entry: AppRegistryEntry,
     selectedBuild?: AppBuildResultLike
-  ): {
+  ): Promise<{
     buildKey: string;
     build: AppBuildResultLike;
     identity: ActiveExecutionIdentity;
-  } {
+  }> {
     this.assertAppHosting();
     if (!entry.activeEv) {
       throw new Error(`Cannot activate app ${entry.name} without an effective version`);
@@ -2309,7 +2450,8 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!entry.activeBundleKey) {
       throw new Error(`Cannot activate app ${entry.name} without an immutable build key`);
     }
-    const build = selectedBuild ?? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const build =
+      selectedBuild ?? (await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey));
     if (!build) {
       throw new Error(
         `Cannot activate app ${entry.name}: immutable build ${entry.activeBundleKey} is unavailable`
@@ -2328,6 +2470,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (build.metadata.buildKey && build.metadata.buildKey !== entry.activeBundleKey) {
       throw new Error(
         `Cannot activate app ${entry.name}: build metadata names ${build.metadata.buildKey} instead of ${entry.activeBundleKey}`
+      );
+    }
+    if (build.metadata.execution?.executionDigest !== entry.activeExecutionDigest) {
+      throw new Error(
+        `Cannot activate app ${entry.name}: build ${entry.activeBundleKey} does not match its registry execution identity`
       );
     }
     if (
@@ -2399,6 +2546,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       }),
       target: this.appTarget(node, decl),
       capabilities: this.appCapabilities(node),
+      activeExecutionDigest: null,
       previousVersions: [],
     };
   }
@@ -2417,7 +2565,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       candidate.effectiveVersion !== this.deps.buildSystem.getEffectiveVersion(node.name)
     )
       throw new Error(`Exact review source changed for ${node.relativePath}`);
-    const details = this.appBuildDetails(node.name);
+    const details = await this.appBuildDetails(node.name);
     const active = this.registry.get(node.name);
     return {
       ...createReviewedUnitBase({
@@ -2468,23 +2616,24 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     return unitBuildIdentityFromRegistryEntry(entry, entry.capabilities);
   }
 
-  private appBuildDetails(
+  private async appBuildDetails(
     name: string
-  ): Extract<NonNullable<AppBuildMetadataLike["details"]>, { kind: "app" }> | null {
+  ): Promise<Extract<NonNullable<AppBuildMetadataLike["details"]>, { kind: "app" }> | null> {
     const entry = this.registry.get(name);
     const metadata = entry?.activeBundleKey
-      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)?.metadata
+      ? (await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey))?.metadata
       : null;
     return metadata?.details?.kind === "app"
       ? (metadata.details as Extract<NonNullable<AppBuildMetadataLike["details"]>, { kind: "app" }>)
       : null;
   }
 
-  private needsBuildRefresh(
+  private async needsBuildRefresh(
     entry: AppRegistryEntry,
     node: AppGraphNode,
     decl: WorkspaceAppDeclaration
-  ): boolean {
+  ): Promise<boolean> {
+    await this.initialize();
     if (entry.status === "error") return true;
     // Registry state is only a durable pointer to an immutable build. The
     // artifact store can be recovered independently (for example after an
@@ -2492,7 +2641,10 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     // not make an absent artifact runnable. Rebuild it through the ordinary
     // declaration path instead of leaving every host launch to retry a dead
     // pointer forever.
-    if (!entry.activeBundleKey || !this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)) {
+    if (
+      !entry.activeBundleKey ||
+      !(await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey))
+    ) {
       return true;
     }
     return this.unitHost.needsBuildRefresh(entry, {
@@ -2507,7 +2659,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private async reconcileAfterProviderChange(_providerName: string): Promise<void> {
     const source = this.deps.getHostTargetDecl?.("react-native")?.appSource;
     if (!source) return;
-    const candidate = this.listHostTargetCandidates("react-native").find(
+    const candidate = (await this.listHostTargetCandidates("react-native")).find(
       (item) => item.source === normalizeRepoPath(source) || item.name === source
     );
     // Provider activation invalidates readiness but must not implicitly build
@@ -2916,37 +3068,34 @@ function isAppBuildDetailsLike(
   );
 }
 
-function appArtifactsForDist(
+async function appArtifactsForDist(
+  build: AppBuildResultLike,
   entry: AppRegistryEntry,
-  artifacts: Array<{
-    path: string;
-    role: string;
-    contentType: string;
-    encoding: string;
-    platform?: string;
-    integrity?: string;
-    content: string;
-  }>
-): Array<BuildArtifactManifestEntry & { content: string }> {
-  return artifacts.map((artifact) => {
-    if (!isBuildArtifactRole(artifact.role)) {
-      throw new Error(`Active build for ${entry.name} has invalid artifact role: ${artifact.role}`);
-    }
-    if (!isBuildArtifactEncoding(artifact.encoding)) {
-      throw new Error(
-        `Active build for ${entry.name} has invalid artifact encoding: ${artifact.encoding}`
-      );
-    }
-    return {
-      path: artifact.path,
-      role: artifact.role,
-      contentType: artifact.contentType,
-      encoding: artifact.encoding,
-      ...(artifact.platform ? { platform: artifact.platform } : {}),
-      ...(artifact.integrity ? { integrity: artifact.integrity } : {}),
-      content: artifact.content,
-    };
-  });
+  artifacts: readonly AppBuildArtifactLike[]
+): Promise<Array<BuildArtifactManifestEntry & { content: string }>> {
+  return Promise.all(
+    artifacts.map(async (artifact) => {
+      if (!isBuildArtifactRole(artifact.role)) {
+        throw new Error(
+          `Active build for ${entry.name} has invalid artifact role: ${artifact.role}`
+        );
+      }
+      if (!isBuildArtifactEncoding(artifact.encoding)) {
+        throw new Error(
+          `Active build for ${entry.name} has invalid artifact encoding: ${artifact.encoding}`
+        );
+      }
+      return {
+        path: artifact.path,
+        role: artifact.role,
+        contentType: artifact.contentType,
+        encoding: artifact.encoding,
+        ...(artifact.platform ? { platform: artifact.platform } : {}),
+        ...(artifact.integrity ? { integrity: artifact.integrity } : {}),
+        content: await readStoredArtifactContent(build, artifact),
+      };
+    })
+  );
 }
 
 function isBuildArtifactRole(role: string): role is BuildArtifactManifestEntry["role"] {
@@ -2969,6 +3118,11 @@ function normalizeArtifactPath(remainderPath: string): string {
 
 function appVersionRecordFromEntry(entry: AppRegistryEntry): AppVersionRecord | null {
   if (!entry.activeBundleKey) return null;
+  if (!entry.activeExecutionDigest) {
+    throw new Error(
+      `App ${entry.name} has no verified execution identity for ${entry.activeBundleKey}`
+    );
+  }
   return {
     version: entry.version,
     target: entry.target,
@@ -2976,6 +3130,7 @@ function appVersionRecordFromEntry(entry: AppRegistryEntry): AppVersionRecord | 
     activeEv: entry.activeEv,
     activeSourceHash: entry.activeSourceHash,
     activeBundleKey: entry.activeBundleKey,
+    executionDigest: entry.activeExecutionDigest,
     activeDependencyEvs: { ...(entry.activeDependencyEvs ?? {}) },
     activeExternalDeps: { ...(entry.activeExternalDeps ?? {}) },
     activeRuntimeDepsKey: entry.activeRuntimeDepsKey ?? null,

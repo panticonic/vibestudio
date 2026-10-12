@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { execFileSync } from "node:child_process";
@@ -10,7 +11,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
+import { executionArtifactRefSchema } from "@vibestudio/service-schemas/build";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
+import type { StoredBuildResult } from "../../../src/server/buildV2/buildStore.js";
 
 import { ExtensionHost } from "./service.js";
 import type { ExtensionHostDeps } from "./service.js";
@@ -41,27 +44,40 @@ function tempDir(): string {
 
 const ownedTempDirs = new Set<string>();
 const ownedHosts = new Set<ExtensionHost>();
+const ACTIVE_BUILD_KEY = "a".repeat(64);
+const CANDIDATE_BUILD_KEY = "c".repeat(64);
+const BUILD_SOURCE_STATE_HASH = `state:${"1".repeat(64)}`;
 
 afterEach(async () => {
-  const shutdowns = await Promise.allSettled(
+  const failures: unknown[] = [];
+  const retirements = await Promise.all(
     [...ownedHosts].map(async (host) => {
-      await host.whenSettled();
-      await host.shutdown();
+      try {
+        await host.whenSettled();
+      } catch (error) {
+        failures.push(error);
+      }
+
+      try {
+        await host.shutdown();
+        ownedHosts.delete(host);
+        return true;
+      } catch (error) {
+        failures.push(error);
+        return false;
+      }
     })
   );
-  ownedHosts.clear();
-  for (const dir of ownedTempDirs) {
-    fs.rmSync(dir, { recursive: true, force: true });
+
+  if (retirements.every(Boolean) && ownedHosts.size === 0) {
+    for (const dir of ownedTempDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    ownedTempDirs.clear();
   }
-  ownedTempDirs.clear();
-  const failures = shutdowns.filter(
-    (result): result is PromiseRejectedResult => result.status === "rejected"
-  );
+
   if (failures.length > 0) {
-    throw new AggregateError(
-      failures.map((failure) => failure.reason),
-      "Failed to shut down an ExtensionHost test fixture"
-    );
+    throw new AggregateError(failures, "Failed to shut down an ExtensionHost test fixture");
   }
 });
 
@@ -87,7 +103,7 @@ function doCtx(callerId = "do:workers/agent-worker:AiChatWorker:agent-1") {
   };
 }
 
-function makeHost(
+async function makeHost(
   overrides: {
     initialDeclarationsStaged?: Promise<void>;
     isAdmitted?: ExtensionHostDeps["isAdmitted"];
@@ -196,102 +212,105 @@ function makeHost(
     ) as unknown as ExtensionHostDeps["approvalQueue"]["request"],
   };
   const eventService = { emit: vi.fn(), getOrCreateSubscriber: vi.fn(), subscribe: vi.fn() };
-  const buildArtifacts = (key: string) => [
-    {
-      path: "bundle.js",
-      role: "primary",
-      contentType: "text/javascript; charset=utf-8",
-      encoding: "utf8",
-      content: `export default ${JSON.stringify(key)};`,
-    },
-  ];
-  const buildSystem = {
-    getBuild: vi.fn(async () => ({
-      dir: path.join(statePath, "builds", "candidate-key"),
-      artifacts: buildArtifacts("candidate-key"),
-      metadata: {
-        ev: overrides.candidateEv ?? "ev-candidate",
-        sourceStateHash: "state:test",
-        execution: { executionDigest: "c".repeat(64) },
-        authority: {
-          provides: [],
-          requests: [
-            {
-              capability: "notifications",
-              resource: { kind: "prefix" as const, prefix: "" },
-              tier: "gated" as const,
-              evidence: "intentional-broad" as const,
-            },
-          ],
+  const storedBuilds = new Map<string, StoredBuildResult>();
+  const buildFor = (key: string) => {
+    const existing = storedBuilds.get(key);
+    if (existing) return existing;
+    const candidate = key === CANDIDATE_BUILD_KEY;
+    const buildKey = key;
+    const sourceStateHash = BUILD_SOURCE_STATE_HASH;
+    const executionDigest = (candidate ? "c" : "a").repeat(64);
+    const dir = path.join(statePath, "builds", buildKey);
+    const content = `export default ${JSON.stringify(key)};`;
+    const bytes = Buffer.from(content, "utf8");
+    const artifactPath = "bundle.js";
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, artifactPath), bytes);
+    const artifactDigest = createHash("sha256").update(bytes).digest("hex");
+    const build: StoredBuildResult = {
+      dir,
+      buildKey,
+      sourceStateHash,
+      artifacts: [
+        {
+          path: artifactPath,
+          role: "primary",
+          contentType: "text/javascript; charset=utf-8",
+          encoding: "utf8",
+          byteLength: bytes.byteLength,
+          integrity: `sha256-${artifactDigest}`,
         },
+      ],
+      metadata: {
+        kind: "extension",
+        name: extensionNode.name,
+        buildKey,
+        sourcePath: extensionNode.relativePath,
+        ev: candidate
+          ? (overrides.candidateEv ?? "ev-candidate")
+          : (overrides.activeEv ?? "ev-current"),
+        sourceStateHash,
+        sourceState: { kind: "event", eventId: `build:${key}` },
+        sourcemap: false,
+        ...(overrides.sealedBuildIdentity === false
+          ? {}
+          : {
+              execution: executionArtifactRefSchema.parse({
+                version: 1,
+                sourceState: {
+                  kind: "workspace",
+                  workspaceId: "workspace-test",
+                  effectiveVersion: "2".repeat(64),
+                  state: { kind: "event", eventId: `build:${key}` },
+                  contentRoots: [
+                    { repoPath: extensionNode.relativePath, stateHash: sourceStateHash },
+                  ],
+                  sourceClosureDigest: "3".repeat(64),
+                },
+                recipeDigest: "4".repeat(64),
+                buildKey,
+                artifactDigest,
+                executionDigest,
+              }),
+              authority: {
+                provides: [],
+                requests: [
+                  {
+                    capability: "notifications",
+                    resource: { kind: "prefix", prefix: "" },
+                    tier: "gated",
+                    evidence: "intentional-broad",
+                  },
+                ],
+              },
+            }),
+        serviceAuthorityDigest: "d".repeat(64),
         details: {
           kind: "extension",
-          runtimeDepsKey: "runtime-candidate",
+          runtimeDepsKey: candidate ? "runtime-candidate" : "runtime-key",
           runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
           providerContracts:
-            overrides.candidateProviderContracts ?? overrides.sourceProviderContracts ?? {},
+            (candidate
+              ? (overrides.candidateProviderContracts ?? overrides.sourceProviderContracts)
+              : overrides.activeProviderContracts) ?? {},
           methodAuthority: {
             confirm: {
               website: { kind: "eligible", rationale: "Explicit extension fixture contract." },
-              effect: { kind: "open" as const },
+              effect: { kind: "open" },
             },
           },
-          externalDeps: {},
+          externalDeps: candidate ? {} : (overrides.activeExternalDeps ?? {}),
         },
+        builtAt: "2026-01-01T00:00:00.000Z",
       },
-    })),
-    getBuildByKey: vi.fn((key: string) =>
-      key === "bundle-key" || key === "candidate-key"
-        ? {
-            dir: path.join(statePath, "builds", key),
-            artifacts: buildArtifacts(key),
-            metadata: {
-              ev: key === "candidate-key" ? "ev-candidate" : (overrides.activeEv ?? "ev-current"),
-              sourceStateHash: "state:test",
-              sourcePath: extensionNode.relativePath,
-              serviceAuthorityDigest: "d".repeat(64),
-              ...(overrides.sealedBuildIdentity === false
-                ? {}
-                : {
-                    execution: {
-                      executionDigest: (key === "candidate-key" ? "c" : "a").repeat(64),
-                    },
-                    authority: {
-                      provides: [],
-                      requests: [
-                        {
-                          capability: "notifications",
-                          resource: { kind: "prefix" as const, prefix: "" },
-                          tier: "gated" as const,
-                          evidence: "intentional-broad" as const,
-                        },
-                      ],
-                    },
-                  }),
-              details: {
-                kind: "extension",
-                runtimeDepsKey: key === "candidate-key" ? "runtime-candidate" : "runtime-key",
-                runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
-                providerContracts:
-                  key === "candidate-key"
-                    ? (overrides.candidateProviderContracts ??
-                      overrides.sourceProviderContracts ??
-                      {})
-                    : (overrides.activeProviderContracts ?? {}),
-                methodAuthority: {
-                  confirm: {
-                    website: {
-                      kind: "eligible",
-                      rationale: "Explicit extension fixture contract.",
-                    },
-                    effect: { kind: "open" as const },
-                  },
-                },
-                externalDeps: overrides.activeExternalDeps ?? {},
-              },
-            },
-          }
-        : null
+    };
+    storedBuilds.set(key, build);
+    return build;
+  };
+  const buildSystem = {
+    getStoredBuild: vi.fn(async () => buildFor(CANDIDATE_BUILD_KEY)),
+    getBuildByKey: vi.fn(async (key: string) =>
+      key === ACTIVE_BUILD_KEY || key === CANDIDATE_BUILD_KEY ? buildFor(key) : null
     ),
     getEffectiveVersion: vi.fn((name: string) => {
       if (name === extensionNode.name)
@@ -379,7 +398,12 @@ function makeHost(
       activeEv: overrides.activeEv ?? "ev-current",
       activeSourceHash: "abc123",
       activeBundleKey:
-        overrides.activeBundleKey === undefined ? "bundle-key" : overrides.activeBundleKey,
+        overrides.activeBundleKey === undefined
+          ? overrides.sealedBuildIdentity === false
+            ? null
+            : ACTIVE_BUILD_KEY
+          : overrides.activeBundleKey,
+      activeExecutionDigest: null,
       activeDependencyEvs: {
         "@workspace/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime",
       },
@@ -392,12 +416,13 @@ function makeHost(
       lastError: overrides.status === "error" ? "previous failure" : null,
     });
   }
+  await host.initialize();
   return { host, approvalQueue, buildSystem, extensionNode, eventService, statePath };
 }
 
 describe("ExtensionHost invocation attribution", () => {
   it("reviews the resolved service authority of the exact source used for execution", async () => {
-    const { host, buildSystem, extensionNode } = makeHost({ installed: false });
+    const { host, buildSystem, extensionNode } = await makeHost({ installed: false });
     const candidate = await buildSystem.resolveBuildUnitIdentity();
     const serviceBindings = [
       {
@@ -430,7 +455,7 @@ describe("ExtensionHost invocation attribution", () => {
   });
 
   it("rejects review facts whose source version no longer matches the candidate", async () => {
-    const { host, buildSystem, extensionNode } = makeHost({ installed: false });
+    const { host, buildSystem, extensionNode } = await makeHost({ installed: false });
     const candidate = await buildSystem.resolveBuildUnitIdentity();
     buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({
       ...candidate,
@@ -440,10 +465,10 @@ describe("ExtensionHost invocation attribution", () => {
       host.reviewDeclared([{ source: extensionNode.relativePath, ref: "main" }])
     ).rejects.toThrow("Exact review source changed");
   });
-  it("attributes an extension to its exact active sealed build authority", () => {
-    const { host, extensionNode } = makeHost();
+  it("attributes an extension to its exact active sealed build authority", async () => {
+    const { host, extensionNode } = await makeHost();
 
-    expect(host.resolveCodeIdentity(extensionNode.name)).toEqual({
+    expect(await host.resolveCodeIdentity(extensionNode.name)).toEqual({
       callerId: extensionNode.name,
       callerKind: "extension",
       repoPath: "extensions/git-tools",
@@ -460,11 +485,11 @@ describe("ExtensionHost invocation attribution", () => {
     });
   });
 
-  it("resolves admission evidence from the extension registry only for the exact active execution", () => {
-    const { host, extensionNode } = makeHost();
-    const code = host.resolveCodeIdentity(extensionNode.name)!;
-    expect(host.resolveActiveAuthority(code)?.requests).toEqual(code.requested);
-    expect(host.resolveActiveAdmissionImage(code)).toMatchObject({
+  it("resolves admission evidence from the extension registry only for the exact active execution", async () => {
+    const { host, extensionNode } = await makeHost();
+    const code = (await host.resolveCodeIdentity(extensionNode.name))!;
+    expect((await host.resolveActiveAuthority(code))?.requests).toEqual(code.requested);
+    expect(await host.resolveActiveAdmissionImage(code)).toMatchObject({
       sourcePath: extensionNode.relativePath,
       ev: code.effectiveVersion,
       execution: { executionDigest: code.executionDigest },
@@ -477,24 +502,24 @@ describe("ExtensionHost invocation attribution", () => {
       { executionDigest: "b".repeat(64) },
       { requested: [] },
     ]) {
-      expect(host.resolveActiveAuthority({ ...code, ...changed })).toBeNull();
-      expect(host.resolveActiveAdmissionImage({ ...code, ...changed })).toBeNull();
+      expect(await host.resolveActiveAuthority({ ...code, ...changed })).toBeNull();
+      expect(await host.resolveActiveAdmissionImage({ ...code, ...changed })).toBeNull();
     }
     host.registry.upsert({ ...host.registry.get(extensionNode.name)!, activeBundleKey: null });
-    expect(host.resolveActiveAuthority(code)).toBeNull();
+    expect(await host.resolveActiveAuthority(code)).toBeNull();
   });
 
-  it("does not invent extension code identity without sealed build authority", () => {
-    const { host, extensionNode } = makeHost({ sealedBuildIdentity: false });
+  it("does not invent extension code identity without sealed build authority", async () => {
+    const { host, extensionNode } = await makeHost({ sealedBuildIdentity: false });
 
-    expect(host.resolveCodeIdentity(extensionNode.name)).toBeNull();
+    expect(await host.resolveCodeIdentity(extensionNode.name)).toBeNull();
   });
 
   it("invokes extensions through a configured provider slot", async () => {
     const extensionTransport = {
       call: vi.fn(async () => "ok"),
     };
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
         provider === "gitInterop" ? "@workspace-extensions/git-tools" : null,
@@ -526,7 +551,7 @@ describe("ExtensionHost invocation attribution", () => {
 
   it("routes read-only provider queries but rejects writes and unknown methods", async () => {
     const extensionTransport = { call: vi.fn(async () => "ok") };
-    const { host } = makeHost({
+    const { host } = await makeHost({
       extensionTransport,
       resolveProviderExtensionName: () => "@workspace-extensions/git-tools",
       providerContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
@@ -583,7 +608,7 @@ describe("ExtensionHost invocation attribution", () => {
     const extensionTransport = {
       call: vi.fn(async () => Promise.reject(nested)),
     };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(
@@ -597,7 +622,7 @@ describe("ExtensionHost invocation attribution", () => {
 
   it("fails internal provider dispatch when the approved build does not declare that contract", async () => {
     const extensionTransport = { call: vi.fn(async () => "unexpected") };
-    const { host } = makeHost({
+    const { host } = await makeHost({
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
         provider === "gitInterop" ? "@workspace-extensions/git-tools" : null,
@@ -614,7 +639,7 @@ describe("ExtensionHost invocation attribution", () => {
 
   it("rejects direct invocation from the approved provider contract even when its slot is unconfigured", async () => {
     const extensionTransport = { call: vi.fn(async () => "unexpected") };
-    const { host } = makeHost({
+    const { host } = await makeHost({
       extensionTransport,
       providerContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
       activeProviderContracts: {
@@ -649,7 +674,7 @@ describe("ExtensionHost invocation attribution", () => {
 
   it("allows public invocation of a manifest-selected provider method", async () => {
     const extensionTransport = { call: vi.fn(async () => "published") };
-    const { host } = makeHost({
+    const { host } = await makeHost({
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
         provider === "gitInterop" ? "@workspace-extensions/git-tools" : null,
@@ -679,7 +704,7 @@ describe("ExtensionHost invocation attribution", () => {
 
   it("does not reserve the same method name on a different provider slot", async () => {
     const extensionTransport = { call: vi.fn(async () => "ok") };
-    const { host } = makeHost({
+    const { host } = await makeHost({
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
         provider === "exampleTools" ? "@workspace-extensions/git-tools" : null,
@@ -726,7 +751,7 @@ describe("ExtensionHost invocation attribution", () => {
 
   it("represents command-style extension results as JSON null at the RPC boundary", async () => {
     const extensionTransport = { call: vi.fn(async () => undefined) };
-    const { host } = makeHost({
+    const { host } = await makeHost({
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
         provider === "exampleTools" ? "@workspace-extensions/git-tools" : null,
@@ -751,7 +776,7 @@ describe("ExtensionHost invocation attribution", () => {
 
   it("allows an unrelated extension to expose a public method with a provider-contract name", async () => {
     const extensionTransport = { call: vi.fn(async () => "ok") };
-    const { host } = makeHost({
+    const { host } = await makeHost({
       extensionTransport,
       providerContracts: { gitInterop: ["publishRepo"] },
       activeProviderContracts: {},
@@ -772,7 +797,7 @@ describe("ExtensionHost invocation attribution", () => {
     const extensionTransport = {
       call: vi.fn(async () => "ok"),
     };
-    const { host } = makeHost({
+    const { host } = await makeHost({
       extensionTransport,
       getContextIdForCaller: (callerId) => (callerId === "panel-1" ? "ctx-panel" : null),
     });
@@ -804,7 +829,7 @@ describe("ExtensionHost invocation attribution", () => {
 
   it("threads inbound cancellation through the extension transport", async () => {
     const extensionTransport = { call: vi.fn(async () => "ok") };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
     const controller = new AbortController();
 
@@ -828,7 +853,7 @@ describe("ExtensionHost invocation attribution", () => {
 
 describe("ExtensionHost reload approval", () => {
   it("requests a one-unit management approval for panel reloads", async () => {
-    const { host, approvalQueue, extensionNode } = makeHost();
+    const { host, approvalQueue, extensionNode } = await makeHost();
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
     await expect(host.reload(panelCtx("panel-1"), extensionNode.name)).resolves.toBeUndefined();
@@ -858,7 +883,7 @@ describe("ExtensionHost reload approval", () => {
   });
 
   it("does not prompt trusted shell reloads", async () => {
-    const { host, approvalQueue, extensionNode } = makeHost();
+    const { host, approvalQueue, extensionNode } = await makeHost();
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
     await expect(
@@ -889,7 +914,7 @@ describe("ExtensionHost reconcileDeclared", () => {
     "retains a %s invalid declaration and propagates its failure through provider invocation",
     async (state) => {
       const transport = { call: vi.fn() };
-      const { host, extensionNode, approvalQueue, buildSystem, eventService } = makeHost({
+      const { host, extensionNode, approvalQueue, buildSystem, eventService } = await makeHost({
         installed: state !== "new",
         activeBundleKey: null,
         status: "stopped",
@@ -910,7 +935,7 @@ describe("ExtensionHost reconcileDeclared", () => {
       const failure = host.registry.get(extensionNode.name)!;
       expect(failure).toMatchObject({ status: "error", activeBundleKey: null });
       expect(failure.lastError).toMatch(/website/);
-      expect(host.listWorkspaceUnits()).toContainEqual(
+      expect(await host.listWorkspaceUnits()).toContainEqual(
         expect.objectContaining({
           name: extensionNode.name,
           status: "error",
@@ -935,7 +960,7 @@ describe("ExtensionHost reconcileDeclared", () => {
         message: `[extensions.invokeProvider] ${failure.lastError}`,
       });
       expect(approvalQueue.request).not.toHaveBeenCalled();
-      expect(buildSystem.getBuild).not.toHaveBeenCalled();
+      expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
       expect(transport.call).not.toHaveBeenCalled();
 
       fs.writeFileSync(manifestPath, original);
@@ -944,7 +969,7 @@ describe("ExtensionHost reconcileDeclared", () => {
       await host.whenSettled();
       expect(approvalQueue.request).toHaveBeenCalledTimes(1);
       expect(host.registry.get(extensionNode.name)).toMatchObject({
-        activeBundleKey: "candidate-key",
+        activeBundleKey: CANDIDATE_BUILD_KEY,
         lastError: null,
       });
     }
@@ -952,7 +977,7 @@ describe("ExtensionHost reconcileDeclared", () => {
 
   it("keeps the approved running image usable when an update manifest is invalid", async () => {
     const transport = { call: vi.fn(async () => "approved image result") };
-    const { host, extensionNode, approvalQueue, buildSystem, eventService } = makeHost({
+    const { host, extensionNode, approvalQueue, buildSystem, eventService } = await makeHost({
       extensionTransport: transport,
     });
     const approved = host.registry.get(extensionNode.name)!;
@@ -975,14 +1000,14 @@ describe("ExtensionHost reconcileDeclared", () => {
       "approved image result"
     );
     expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
     expect(transport.call).toHaveBeenCalledTimes(1);
   });
 
   it("joins initial declaration classification requested after an invocation arrives", async () => {
     const initial = declarationCompletion();
     const transport = { call: vi.fn(async () => "original target result") };
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       installed: false,
       activationEvents: ["onInvoke"],
       initialDeclarationsStaged: initial.promise,
@@ -1000,20 +1025,22 @@ describe("ExtensionHost reconcileDeclared", () => {
         settled = true;
       }
     );
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    expect(transport.call).not.toHaveBeenCalled();
-    expect(host.registry.get(extensionNode.name)).toBeNull();
-
-    await host.reconcileDeclared(declare(extensionNode.name), { waitFor: "staged" });
-    initial.resolve();
+    try {
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(transport.call).not.toHaveBeenCalled();
+      expect(host.registry.get(extensionNode.name)).toBeNull();
+      await host.reconcileDeclared(declare(extensionNode.name), { waitFor: "staged" });
+    } finally {
+      initial.resolve();
+    }
     await expect(invoke).resolves.toBe("original target result");
     expect(transport.call).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the original initial declaration classification failure", async () => {
     const initial = declarationCompletion();
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       installed: false,
       initialDeclarationsStaged: initial.promise,
     });
@@ -1028,15 +1055,19 @@ describe("ExtensionHost reconcileDeclared", () => {
   it("joins replacement of a retained approved key whose artifact is missing", async () => {
     const initial = declarationCompletion();
     const transport = { call: vi.fn(async () => "restored") };
-    const { host, extensionNode, buildSystem } = makeHost({
-      activeBundleKey: "retired-artifact",
+    const { host, extensionNode, buildSystem } = await makeHost({
+      activeBundleKey: ACTIVE_BUILD_KEY,
       initialDeclarationsStaged: initial.promise,
       extensionTransport: transport,
     });
+    const getBuildByKey = buildSystem.getBuildByKey.getMockImplementation()!;
+    buildSystem.getBuildByKey.mockImplementation(async (key) =>
+      key === ACTIVE_BUILD_KEY ? null : getBuildByKey(key)
+    );
     const build = declarationCompletion();
-    const candidate = await buildSystem.getBuild();
-    buildSystem.getBuild.mockClear();
-    buildSystem.getBuild.mockImplementation(async () => {
+    const candidate = await buildSystem.getStoredBuild();
+    buildSystem.getStoredBuild.mockClear();
+    buildSystem.getStoredBuild.mockImplementation(async () => {
       await build.promise;
       return candidate;
     });
@@ -1045,34 +1076,43 @@ describe("ExtensionHost reconcileDeclared", () => {
     const invoke = host.invoke(panelCtx(), extensionNode.name, "confirm", []);
     await host.reconcileDeclared(declare(extensionNode.name), { waitFor: "staged" });
     initial.resolve();
-    await vi.waitFor(() => expect(buildSystem.getBuild).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(buildSystem.getStoredBuild).toHaveBeenCalledOnce());
     expect(transport.call).not.toHaveBeenCalled();
     build.resolve();
     await expect(invoke).resolves.toBe("restored");
-    expect(host.registry.get(extensionNode.name)?.activeBundleKey).toBe("candidate-key");
+    expect(host.registry.get(extensionNode.name)?.activeBundleKey).toBe(CANDIDATE_BUILD_KEY);
     expect(transport.call).toHaveBeenCalledOnce();
   });
 
   it("propagates the replacement build failure to the waiting invocation", async () => {
-    const { host, extensionNode, buildSystem } = makeHost({ activeBundleKey: "retired-artifact" });
+    const { host, extensionNode, buildSystem } = await makeHost({
+      activeBundleKey: ACTIVE_BUILD_KEY,
+    });
+    const getBuildByKey = buildSystem.getBuildByKey.getMockImplementation()!;
+    buildSystem.getBuildByKey.mockImplementation(async (key) =>
+      key === ACTIVE_BUILD_KEY ? null : getBuildByKey(key)
+    );
     const build = declarationCompletion();
     const original = new Error("Replacement artifact could not be materialized");
-    buildSystem.getBuild.mockImplementation(async () => {
+    buildSystem.getStoredBuild.mockImplementation(async () => {
       await build.promise;
       throw original;
     });
     await host.reconcileDeclared(declare(extensionNode.name), { waitFor: "staged" });
-    await vi.waitFor(() => expect(buildSystem.getBuild).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(buildSystem.getStoredBuild).toHaveBeenCalledOnce());
     const invoke = host.invoke(panelCtx(), extensionNode.name, "confirm", []);
     const rejected = expect(invoke).rejects.toBe(original);
-    await Promise.resolve();
-    build.resolve();
+    try {
+      await Promise.resolve();
+    } finally {
+      build.resolve();
+    }
     await rejected;
   });
 
   it("releases an initial classification waiter on original caller cancellation", async () => {
     const initial = declarationCompletion();
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       installed: false,
       initialDeclarationsStaged: initial.promise,
     });
@@ -1092,7 +1132,7 @@ describe("ExtensionHost reconcileDeclared", () => {
 
   it("releases initial classification waiters when their extension host is destroyed", async () => {
     const initial = declarationCompletion();
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       installed: false,
       initialDeclarationsStaged: initial.promise,
     });
@@ -1106,22 +1146,28 @@ describe("ExtensionHost reconcileDeclared", () => {
   });
 
   it("makes concurrent shutdown callers join the same process cleanup", async () => {
-    const { host } = makeHost();
+    const { host } = await makeHost();
     const processShutdown = declarationCompletion();
-    const stop = vi.spyOn(host.processes, "shutdown").mockReturnValue(processShutdown.promise);
+    const shutdownStarted = declarationCompletion();
+    const stop = vi.spyOn(host.processes, "shutdown").mockImplementation(() => {
+      shutdownStarted.resolve();
+      return processShutdown.promise;
+    });
 
     const first = host.shutdown();
     const second = host.shutdown();
     expect(second).toBe(first);
-    await Promise.resolve();
-    expect(stop).toHaveBeenCalledOnce();
-
-    processShutdown.resolve();
+    try {
+      await shutdownStarted.promise;
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      processShutdown.resolve();
+    }
     await expect(first).resolves.toBeUndefined();
   });
 
   it("retains a failed shutdown flight instead of retrying process cleanup", async () => {
-    const { host } = makeHost();
+    const { host, statePath } = await makeHost();
     const failure = new Error("native extension cleanup failed");
     const stop = vi.spyOn(host.processes, "shutdown").mockRejectedValue(failure);
 
@@ -1133,6 +1179,8 @@ describe("ExtensionHost reconcileDeclared", () => {
     await expect(second).rejects.toBe(failure);
     expect(stop).toHaveBeenCalledOnce();
     ownedHosts.delete(host);
+    // The mock leaves shutdown unconfirmed; retain this fixture state directory.
+    ownedTempDirs.delete(statePath);
   });
 
   it("fences an active target behind the current declaration classification after startup", async () => {
@@ -1141,7 +1189,7 @@ describe("ExtensionHost reconcileDeclared", () => {
     const removing = declarationCompletion();
     const removalStarted = declarationCompletion();
     const transport = { call: vi.fn(async () => "stale target") };
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       initialDeclarationsStaged: initial.promise,
       extensionTransport: transport,
     });
@@ -1154,9 +1202,12 @@ describe("ExtensionHost reconcileDeclared", () => {
     const reconcile = host.reconcileDeclared([], { trigger: "meta-change" });
     const invoke = host.invoke(panelCtx(), extensionNode.name, "confirm", []);
     const rejection = expect(invoke).rejects.toMatchObject({ code: "ENOEXT" });
-    await removalStarted.promise;
-    expect(transport.call).not.toHaveBeenCalled();
-    removing.resolve();
+    try {
+      await removalStarted.promise;
+      expect(transport.call).not.toHaveBeenCalled();
+    } finally {
+      removing.resolve();
+    }
     await reconcile;
     await rejection;
     expect(transport.call).not.toHaveBeenCalled();
@@ -1167,7 +1218,7 @@ describe("ExtensionHost reconcileDeclared", () => {
     initial.resolve();
     const original = new Error("canonical removal failed");
     const transport = { call: vi.fn(async () => "stale target") };
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       initialDeclarationsStaged: initial.promise,
       extensionTransport: transport,
     });
@@ -1183,7 +1234,7 @@ describe("ExtensionHost reconcileDeclared", () => {
   it("keeps an already active target callable before unrelated startup planning classifies", async () => {
     const initial = declarationCompletion();
     const transport = { call: vi.fn(async () => "approved original target") };
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       initialDeclarationsStaged: initial.promise,
       extensionTransport: transport,
     });
@@ -1204,7 +1255,7 @@ describe("ExtensionHost reconcileDeclared", () => {
         ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nextensions:\n  - source: extensions/git-tools\n`
         : null
     );
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       installed: false,
       readWorkspaceFileAtState,
     });
@@ -1227,7 +1278,7 @@ describe("ExtensionHost reconcileDeclared", () => {
         ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nextensions:\n  - source: extensions/git-tools\n`
         : null
     );
-    const { host } = makeHost({ readWorkspaceFileAtState, affectedBuildUnits: [] });
+    const { host } = await makeHost({ readWorkspaceFileAtState, affectedBuildUnits: [] });
     await host.reconcileDeclared(declare("extensions/git-tools"), { waitFor: "staged" });
 
     const approval = await host.unitChangeApprovalForCommit("state:next", {
@@ -1238,7 +1289,7 @@ describe("ExtensionHost reconcileDeclared", () => {
   });
 
   it("builds and activates declared extensions after startup approval", async () => {
-    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+    const { host, approvalQueue, buildSystem, extensionNode } = await makeHost({
       installed: false,
     });
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
@@ -1261,13 +1312,13 @@ describe("ExtensionHost reconcileDeclared", () => {
         ],
       })
     );
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
       priority: "background",
     });
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ name: extensionNode.name }));
     expect(host.registry.get(extensionNode.name)).toMatchObject({
-      activeBundleKey: "candidate-key",
-      activeSourceHash: "state:test",
+      activeBundleKey: CANDIDATE_BUILD_KEY,
+      activeSourceHash: BUILD_SOURCE_STATE_HASH,
     });
   });
 
@@ -1275,7 +1326,7 @@ describe("ExtensionHost reconcileDeclared", () => {
     "materializes an approved on-invoke extension by its %s identity on first use",
     async (identity) => {
       const extensionTransport = { call: vi.fn(async () => "transport-result") };
-      const { host, buildSystem, extensionNode } = makeHost({
+      const { host, buildSystem, extensionNode } = await makeHost({
         installed: false,
         activationEvents: ["onInvoke"],
         extensionTransport,
@@ -1285,7 +1336,7 @@ describe("ExtensionHost reconcileDeclared", () => {
       await host.reconcileDeclared(declare(extensionNode.name));
       await host.whenSettled();
 
-      expect(buildSystem.getBuild).not.toHaveBeenCalled();
+      expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
       expect(start).not.toHaveBeenCalled();
       expect(host.registry.get(extensionNode.name)).toMatchObject({
         activeBundleKey: null,
@@ -1301,7 +1352,7 @@ describe("ExtensionHost reconcileDeclared", () => {
       await expect(host.invoke(panelCtx("panel-1"), invocationName, "blame", [])).resolves.toBe(
         "transport-result"
       );
-      expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+      expect(buildSystem.getStoredBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
         priority: "interactive",
       });
       expect(start).toHaveBeenCalledTimes(1);
@@ -1310,7 +1361,9 @@ describe("ExtensionHost reconcileDeclared", () => {
 
   it("rejects an ambiguous short name even when only one declaration is built", async () => {
     const extensionTransport = { call: vi.fn(async () => "transport-result") };
-    const { host, extensionNode, buildSystem, approvalQueue } = makeHost({ extensionTransport });
+    const { host, extensionNode, buildSystem, approvalQueue } = await makeHost({
+      extensionTransport,
+    });
     const active = host.registry.get(extensionNode.name)!;
     host.registry.upsert({
       ...active,
@@ -1322,13 +1375,13 @@ describe("ExtensionHost reconcileDeclared", () => {
     await expect(host.invoke(panelCtx("panel-1"), "git-tools", "blame", [])).rejects.toMatchObject({
       code: "ENOEXT",
     });
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(extensionTransport.call).not.toHaveBeenCalled();
   });
 
   it("keeps declared refs unchanged for managed workspace extension repos", async () => {
-    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+    const { host, approvalQueue, buildSystem, extensionNode } = await makeHost({
       installed: false,
       gitDefaultBranch: "master",
     });
@@ -1350,11 +1403,11 @@ describe("ExtensionHost reconcileDeclared", () => {
         ],
       })
     );
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
       priority: "background",
     });
     expect(host.registry.get(extensionNode.name)).toMatchObject({
-      activeBundleKey: "candidate-key",
+      activeBundleKey: CANDIDATE_BUILD_KEY,
       source: { repo: extensionNode.relativePath, ref: "main" },
     });
   });
@@ -1365,7 +1418,7 @@ describe("ExtensionHost reconcileDeclared", () => {
         return `called:${String(args[0])}`;
       }),
     };
-    const { host, approvalQueue, extensionNode } = makeHost({
+    const { host, approvalQueue, extensionNode } = await makeHost({
       depEv: "ev-runtime-new",
       activeDepEv: "ev-runtime-old",
       extensionTransport,
@@ -1401,7 +1454,7 @@ describe("ExtensionHost reconcileDeclared", () => {
         })
       );
       expect(host.registry.get(extensionNode.name)).toMatchObject({
-        activeBundleKey: "bundle-key",
+        activeBundleKey: ACTIVE_BUILD_KEY,
       });
       expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
         "blame",
@@ -1416,33 +1469,38 @@ describe("ExtensionHost reconcileDeclared", () => {
 
   it("does not hold target-local invocation behind unrelated reconciliation work", async () => {
     const extensionTransport = { call: vi.fn(async () => "called") };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
-    vi.spyOn(host, "whenReconciled").mockImplementation(() => new Promise(() => {}));
+    const reconciliation = declarationCompletion();
+    const whenReconciled = vi.spyOn(host, "whenReconciled").mockReturnValue(reconciliation.promise);
+    const unrelatedReconcile = host.whenReconciled();
     const declarationsStaged = vi.spyOn(host, "whenDeclarationsStaged");
-
-    const result = await Promise.race([
-      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", []),
-      new Promise((resolve) => setTimeout(() => resolve("timed-out"), 25)),
-    ]);
-
-    expect(result).toBe("called");
-    expect(declarationsStaged).toHaveBeenCalledTimes(1);
+    try {
+      await expect(host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", [])).resolves.toBe(
+        "called"
+      );
+      expect(whenReconciled).toHaveBeenCalledOnce();
+      expect(declarationsStaged).toHaveBeenCalledTimes(1);
+    } finally {
+      whenReconciled.mockRestore();
+      reconciliation.resolve();
+    }
+    await unrelatedReconcile;
   });
 
   it("starts an already-approved declared extension without prompting", async () => {
-    const { host, approvalQueue, buildSystem, extensionNode } = makeHost();
+    const { host, approvalQueue, buildSystem, extensionNode } = await makeHost();
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
     await host.reconcileDeclared(declare(extensionNode.name));
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ name: extensionNode.name }));
   });
 
   it("removes a registry entry that is no longer declared", async () => {
-    const { host, extensionNode } = makeHost();
+    const { host, extensionNode } = await makeHost();
     const stop = vi.spyOn(host.processes, "stop").mockResolvedValue(undefined);
 
     await host.reconcileDeclared([]);
@@ -1452,7 +1510,7 @@ describe("ExtensionHost reconcileDeclared", () => {
   });
 
   it("retains an undeclared extension until its original cleanup failure is resolved", async () => {
-    const { host, extensionNode } = makeHost();
+    const { host, extensionNode } = await makeHost();
     const original = new Error("Original child cleanup refused");
     const stop = vi.spyOn(host.processes, "stop").mockRejectedValue(original);
     await expect(host.reconcileDeclared([])).rejects.toBe(original);
@@ -1463,7 +1521,7 @@ describe("ExtensionHost reconcileDeclared", () => {
   });
 
   it("rebuilds an extension whose dependency EV changed", async () => {
-    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+    const { host, approvalQueue, buildSystem, extensionNode } = await makeHost({
       activeEv: "ev-current",
       depEv: "ev-runtime-next",
       activeDepEv: "ev-runtime-old",
@@ -1486,13 +1544,13 @@ describe("ExtensionHost reconcileDeclared", () => {
         ],
       })
     );
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
       priority: "background",
     });
   });
 
   it("serializes concurrent rebuilds of the same extension", async () => {
-    const { host, buildSystem, extensionNode } = makeHost();
+    const { host, buildSystem, extensionNode } = await makeHost();
     const releases: Array<() => void> = [];
     let activeStarts = 0;
     let maxActiveStarts = 0;
@@ -1518,7 +1576,7 @@ describe("ExtensionHost reconcileDeclared", () => {
   });
 
   it("retains an approved candidate build when its first activation fails", async () => {
-    const { host, extensionNode } = makeHost({ installed: false });
+    const { host, extensionNode } = await makeHost({ installed: false });
     vi.spyOn(host.processes, "start").mockRejectedValue(new Error("ready timeout"));
 
     await host.reconcileDeclared(declare(extensionNode.name));
@@ -1526,14 +1584,14 @@ describe("ExtensionHost reconcileDeclared", () => {
 
     expect(host.registry.get(extensionNode.name)).toMatchObject({
       activeEv: "ev-candidate",
-      activeBundleKey: "candidate-key",
+      activeBundleKey: CANDIDATE_BUILD_KEY,
       status: "error",
       lastError: "ready timeout",
     });
   });
 
   it("rebuilds a declared ref change and persists the trusted ref", async () => {
-    const { host, approvalQueue, buildSystem, extensionNode } = makeHost();
+    const { host, approvalQueue, buildSystem, extensionNode } = await makeHost();
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
     await host.reconcileDeclared(declare(extensionNode.name, { ref: "feature" }));
@@ -1552,11 +1610,11 @@ describe("ExtensionHost reconcileDeclared", () => {
         ],
       })
     );
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "feature", {
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledWith(extensionNode.name, "feature", {
       priority: "background",
     });
     expect(host.registry.get(extensionNode.name)).toMatchObject({
-      activeBundleKey: "candidate-key",
+      activeBundleKey: CANDIDATE_BUILD_KEY,
       source: { repo: extensionNode.relativePath, ref: "feature" },
     });
   });
@@ -1564,14 +1622,14 @@ describe("ExtensionHost reconcileDeclared", () => {
 
 describe("ExtensionHost update and status", () => {
   it("leaves an up-to-date extension as is and reports its status", async () => {
-    const { host, approvalQueue, buildSystem, extensionNode } = makeHost();
+    const { host, approvalQueue, buildSystem, extensionNode } = await makeHost();
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
     host.setDeclared(declare(extensionNode.name));
 
     const status = await host.update(extensionNode.name);
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
     expect(status).toMatchObject({
       name: extensionNode.name,
       source: extensionNode.relativePath,
@@ -1579,11 +1637,11 @@ describe("ExtensionHost update and status", () => {
       pendingApproval: null,
       lastError: null,
     });
-    expect(host.status(extensionNode.relativePath)).toEqual(status);
+    expect(await host.status(extensionNode.relativePath)).toEqual(status);
   });
 
   it("rebuilds a stale dependency through the install/update review", async () => {
-    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+    const { host, approvalQueue, buildSystem, extensionNode } = await makeHost({
       activeEv: "ev-current",
       candidateEv: "ev-candidate",
       depEv: "ev-runtime-next",
@@ -1591,7 +1649,7 @@ describe("ExtensionHost update and status", () => {
     });
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
     host.setDeclared(declare(extensionNode.name));
-    expect(host.status(extensionNode.name).availableUpdate).toMatchObject({
+    expect((await host.status(extensionNode.name)).availableUpdate).toMatchObject({
       reason: "dependency",
     });
 
@@ -1604,14 +1662,14 @@ describe("ExtensionHost update and status", () => {
         units: [expect.objectContaining({ unitName: extensionNode.name })],
       })
     );
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
       priority: "background",
     });
     expect(status.availableUpdate).toBeNull();
   });
 
   it("rejects when the install/update review is not accepted", async () => {
-    const { host, approvalQueue, extensionNode } = makeHost({
+    const { host, approvalQueue, extensionNode } = await makeHost({
       activeEv: "ev-old",
       candidateEv: "ev-candidate",
       status: "stopped",
@@ -1622,11 +1680,11 @@ describe("ExtensionHost update and status", () => {
 
     await expect(host.update(extensionNode.name)).rejects.toMatchObject({ code: "EACCES" });
     expect(approvalQueue.request).toHaveBeenCalledOnce();
-    expect(host.status(extensionNode.name)).toMatchObject({ activeEv: "ev-old" });
+    expect(await host.status(extensionNode.name)).toMatchObject({ activeEv: "ev-old" });
   });
 
   it("refuses an extension that is not declared", async () => {
-    const { host, extensionNode } = makeHost();
+    const { host, extensionNode } = await makeHost();
     host.setDeclared([]);
 
     await expect(host.update(extensionNode.name)).rejects.toMatchObject({ code: "ENOEXT" });
@@ -1635,7 +1693,7 @@ describe("ExtensionHost update and status", () => {
 
 describe("ExtensionHost activation", () => {
   it("prepares sealed method authority on demand while permission review remains owed", async () => {
-    const { host, buildSystem, extensionNode, approvalQueue } = makeHost({
+    const { host, buildSystem, extensionNode, approvalQueue } = await makeHost({
       installed: false,
       activationEvents: ["onInvoke"],
       isAdmitted: () => false,
@@ -1647,25 +1705,27 @@ describe("ExtensionHost activation", () => {
     await expect(prepare(panelCtx(), [extensionNode.name, "confirm", []])).resolves.toMatchObject({
       payload: { effect: "open" },
     });
-    expect(buildSystem.getBuild).toHaveBeenCalledOnce();
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledOnce();
     expect(start).not.toHaveBeenCalled();
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect((await host.reviewDeclared(declare(extensionNode.name))).units).toHaveLength(1);
   });
 
-  it("derives declaration readiness from live ownership instead of persisted approval status", () => {
-    const { host, extensionNode, buildSystem } = makeHost({
+  it("derives declaration readiness from live ownership instead of persisted approval status", async () => {
+    const { host, extensionNode, buildSystem } = await makeHost({
       status: "pending-approval",
       activeBundleKey: null,
     });
     host.setDeclared(declare(extensionNode.name));
     expect(host.registry.get(extensionNode.name)?.status).toBe("available");
     expect(buildSystem.resolveBuildUnitIdentity).not.toHaveBeenCalled();
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
   });
 
   it("prepares a fresh declared extension without resolving its permission review", async () => {
-    const { host, buildSystem, extensionNode, approvalQueue } = makeHost({ installed: false });
+    const { host, buildSystem, extensionNode, approvalQueue } = await makeHost({
+      installed: false,
+    });
     let running = false;
     vi.spyOn(host.processes, "isRunning").mockImplementation(() => running);
     const start = vi.spyOn(host.processes, "start").mockImplementation(async () => {
@@ -1673,13 +1733,13 @@ describe("ExtensionHost activation", () => {
     });
     host.setDeclared(declare(extensionNode.name));
     await host.ensureActivated(extensionNode.name);
-    expect(buildSystem.getBuild).toHaveBeenCalledOnce();
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledOnce();
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
 
   it("does not launch a foreign exact extension after its origin review is denied", async () => {
-    const { host, buildSystem, extensionNode, approvalQueue } = makeHost({
+    const { host, buildSystem, extensionNode, approvalQueue } = await makeHost({
       installed: false,
       isAdmitted: () => false,
       resolveUnitOrigins: async (repoPaths) =>
@@ -1726,7 +1786,7 @@ describe("ExtensionHost activation", () => {
     });
 
     // Preparing the exact candidate is allowed; launching it needs admission.
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
       priority: "interactive",
     });
     expect(start).not.toHaveBeenCalled();
@@ -1737,7 +1797,7 @@ describe("ExtensionHost activation", () => {
   });
 
   it("keeps the previously admitted image inspectable and runnable when an update is denied", async () => {
-    const { host, extensionNode, approvalQueue } = makeHost({
+    const { host, extensionNode, approvalQueue } = await makeHost({
       activeEv: "ev-old",
       candidateEv: "ev-candidate",
       status: "stopped",
@@ -1764,7 +1824,7 @@ describe("ExtensionHost activation", () => {
     await host.whenSettled();
     expect(approvalQueue.request).toHaveBeenCalledOnce();
     expect(host.registry.get(extensionNode.name)).toMatchObject({
-      activeBundleKey: "bundle-key",
+      activeBundleKey: ACTIVE_BUILD_KEY,
       activeEv: "ev-old",
       status: "stopped",
     });
@@ -1776,12 +1836,12 @@ describe("ExtensionHost activation", () => {
     });
     await expect(host.ensureActivated(extensionNode.name)).resolves.toBeUndefined();
     expect(start).toHaveBeenCalledWith(
-      expect.objectContaining({ bundlePath: expect.stringContaining("bundle-key") })
+      expect.objectContaining({ bundlePath: expect.stringContaining(ACTIVE_BUILD_KEY) })
     );
   });
 
   it("uses the admitted active image while activation is still pending", async () => {
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       activeEv: "ev-old",
       candidateEv: "ev-candidate",
       isAdmitted: (_repoPath, effectiveVersion) => effectiveVersion === "ev-old",
@@ -1793,19 +1853,22 @@ describe("ExtensionHost activation", () => {
       await releaseStart.promise;
     });
     const activation = host.ensureActivated(extensionNode.name);
-    await started.promise;
-
-    const prepare =
-      host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
-    await expect(prepare(panelCtx(), [extensionNode.name, "confirm", []])).resolves.toMatchObject({
-      payload: { executionDigest: "a".repeat(64) },
-    });
-    releaseStart.resolve();
+    try {
+      await started.promise;
+      const prepare =
+        host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
+      await expect(prepare(panelCtx(), [extensionNode.name, "confirm", []])).resolves.toMatchObject(
+        { payload: { executionDigest: "a".repeat(64) } }
+      );
+    } finally {
+      releaseStart.resolve();
+      await Promise.allSettled([activation]);
+    }
     await activation;
   });
 
   it("refuses a stored exact image that was never accepted", async () => {
-    const { host, extensionNode } = makeHost({ isAdmitted: () => false });
+    const { host, extensionNode } = await makeHost({ isAdmitted: () => false });
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
     await expect(host.activate(extensionNode.name)).rejects.toMatchObject({
@@ -1818,7 +1881,7 @@ describe("ExtensionHost activation", () => {
   });
 
   it("preserves the exact open launch review through invocation readiness", async () => {
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       isAdmitted: () => false,
       openUnitReviewFor: () => ({ approvalId: "review-1", title: "Start this workspace?" }),
     });
@@ -1841,7 +1904,7 @@ describe("ExtensionHost activation", () => {
   });
 
   it("joins an interrupted build and starts concurrent consumers only once", async () => {
-    const { host, buildSystem, extensionNode } = makeHost({
+    const { host, buildSystem, extensionNode } = await makeHost({
       status: "building",
       activeBundleKey: null,
     });
@@ -1855,18 +1918,18 @@ describe("ExtensionHost activation", () => {
       host.ensureActivated(extensionNode.name),
       host.ensureActivated(extensionNode.name),
     ]);
-    expect(buildSystem.getBuild).toHaveBeenCalledOnce();
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledOnce();
   });
 
   it("propagates the original interrupted-build failure and clears stale building status", async () => {
-    const { host, buildSystem, extensionNode } = makeHost({
+    const { host, buildSystem, extensionNode } = await makeHost({
       status: "building",
       activeBundleKey: null,
     });
     host.setDeclared(declare(extensionNode.name));
     const failure = new Error("extension source unavailable");
-    buildSystem.getBuild.mockRejectedValueOnce(failure);
+    buildSystem.getStoredBuild.mockRejectedValueOnce(failure);
     await expect(host.ensureActivated(extensionNode.name)).rejects.toBe(failure);
     expect(host.registry.get(extensionNode.name)).toMatchObject({
       status: "error",
@@ -1875,17 +1938,17 @@ describe("ExtensionHost activation", () => {
   });
 
   ledgerTest("execution.extension", async () => {
-    const { host, buildSystem, extensionNode } = makeHost();
+    const { host, buildSystem, extensionNode } = await makeHost();
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
     await host.activate(extensionNode.name);
 
-    expect(buildSystem.getBuildByKey).toHaveBeenCalledWith("bundle-key");
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(buildSystem.getBuildByKey).toHaveBeenCalledWith(ACTIVE_BUILD_KEY);
+    expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
     expect(start).toHaveBeenCalledWith(
       expect.objectContaining({
         name: extensionNode.name,
-        bundlePath: expect.stringContaining("bundle-key"),
+        bundlePath: expect.stringContaining(ACTIVE_BUILD_KEY),
       })
     );
   });
@@ -1908,7 +1971,7 @@ describe("ExtensionHost activation", () => {
       })),
       streamCallTarget: vi.fn(async () => new Response("bundle")),
     };
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       buildTargets: ["react-native"],
       registerBuildProvider,
       extensionTransport,
@@ -1923,7 +1986,7 @@ describe("ExtensionHost activation", () => {
         target: "react-native",
         contractVersion: "vibestudio-build-provider-v2",
         activeEv: "ev-current",
-        activeBuildKey: "bundle-key",
+        activeBuildKey: ACTIVE_BUILD_KEY,
       })
     );
     const provider = registerBuildProvider.mock.calls[0]![0] as {
@@ -1967,7 +2030,7 @@ describe("ExtensionHost activation", () => {
   it("unregisters stale build providers when an activated extension stops contributing a target", async () => {
     const registerBuildProvider = vi.fn();
     const unregisterBuildProvider = vi.fn();
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       buildTargets: ["react-native"],
       registerBuildProvider,
       unregisterBuildProvider,
@@ -1988,8 +2051,8 @@ describe("ExtensionHost activation", () => {
     expect(unregisterBuildProvider).toHaveBeenCalledWith("react-native", extensionNode.name);
   });
 
-  it("surfaces running extension inspector URLs in workspace unit status", () => {
-    const { host, extensionNode } = makeHost();
+  it("surfaces running extension inspector URLs in workspace unit status", async () => {
+    const { host, extensionNode } = await makeHost();
     vi.spyOn(host.processes, "listRunning").mockReturnValue([
       {
         name: extensionNode.name,
@@ -2000,7 +2063,7 @@ describe("ExtensionHost activation", () => {
       },
     ]);
 
-    expect(host.listWorkspaceUnits()[0]).toMatchObject({
+    expect((await host.listWorkspaceUnits())[0]).toMatchObject({
       name: extensionNode.name,
       inspectorUrl: "ws://127.0.0.1:9229/abcdef",
       methods: ["blame"],
@@ -2030,7 +2093,7 @@ describe("ExtensionHost activation", () => {
         }
       ),
     };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     hostRef = host;
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
@@ -2071,7 +2134,7 @@ describe("ExtensionHost activation", () => {
         }
       ),
     };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     hostRef = host;
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
@@ -2085,7 +2148,7 @@ describe("ExtensionHost activation", () => {
 
   it("accepts workspace-relative extension paths on invocation", async () => {
     const extensionTransport = { call: vi.fn(async () => "transport-result") };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(
@@ -2101,7 +2164,7 @@ describe("ExtensionHost activation", () => {
 
   it("accepts the shortName advertised by extensions.list on invocation", async () => {
     const extensionTransport = { call: vi.fn(async () => "transport-result") };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(host.invoke(panelCtx("panel-1"), "git-tools", "blame", [])).resolves.toBe(
@@ -2123,7 +2186,7 @@ describe("ExtensionHost activation", () => {
         throw err;
       }),
     };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", [])).rejects.toThrow(
@@ -2151,7 +2214,7 @@ describe("ExtensionHost activation", () => {
       approvalId: "review-target",
       title: "Workspace tools",
     }));
-    const { host, extensionNode, approvalQueue } = makeHost({
+    const { host, extensionNode, approvalQueue } = await makeHost({
       activeBundleKey: null,
       status: "pending-approval",
       openUnitReviewFor,
@@ -2188,7 +2251,7 @@ describe("ExtensionHost activation", () => {
   });
 
   it("does not classify a pending registry entry as an open review when no exact review exists", async () => {
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       activeBundleKey: null,
       status: "pending-approval",
       openUnitReviewFor: () => null,
@@ -2201,7 +2264,7 @@ describe("ExtensionHost activation", () => {
   it("keeps an active approved extension callable while an update awaits review", async () => {
     const openUnitReviewFor = vi.fn(() => ({ approvalId: "update", title: "Updated tools" }));
     const extensionTransport = { call: vi.fn(async () => "existing-build") };
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       status: "pending-approval",
       openUnitReviewFor,
       extensionTransport,
@@ -2215,7 +2278,7 @@ describe("ExtensionHost activation", () => {
 
   it("fails with ENOEXT and never prompts when invoking an undeclared extension", async () => {
     const extensionTransport = { call: vi.fn(async () => "transport-result") };
-    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+    const { host, approvalQueue, buildSystem, extensionNode } = await makeHost({
       extensionTransport,
       installed: false,
     });
@@ -2238,19 +2301,19 @@ describe("ExtensionHost activation", () => {
     ).rejects.toThrow("commit/push the meta repo");
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
     expect(extensionTransport.call).not.toHaveBeenCalled();
   });
 
   it("awaits the requested extension's approved first activation", async () => {
     const extensionTransport = { call: vi.fn(async () => "transport-result") };
-    const { host, buildSystem, extensionNode } = makeHost({
+    const { host, buildSystem, extensionNode } = await makeHost({
       extensionTransport,
       installed: false,
     });
-    const originalGetBuild = buildSystem.getBuild.getMockImplementation()!;
+    const originalGetBuild = buildSystem.getStoredBuild.getMockImplementation()!;
     let releaseBuild!: () => void;
-    buildSystem.getBuild.mockImplementation(
+    buildSystem.getStoredBuild.mockImplementation(
       () =>
         new Promise((resolve, reject) => {
           releaseBuild = () => {
@@ -2267,10 +2330,12 @@ describe("ExtensionHost activation", () => {
     });
 
     const invocation = host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", []);
-    await Promise.resolve();
-    expect(extensionTransport.call).not.toHaveBeenCalled();
-
-    releaseBuild();
+    try {
+      await Promise.resolve();
+      expect(extensionTransport.call).not.toHaveBeenCalled();
+    } finally {
+      releaseBuild();
+    }
     await expect(invocation).resolves.toBe("transport-result");
     expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
       "blame",
@@ -2281,7 +2346,7 @@ describe("ExtensionHost activation", () => {
 
   it("awaits a requested trusted extension queued before its activation tail exists", async () => {
     const extensionTransport = { call: vi.fn(async () => "transport-result") };
-    const { host, extensionNode } = makeHost({ extensionTransport, installed: false });
+    const { host, extensionNode } = await makeHost({ extensionTransport, installed: false });
     host.registry.upsert({
       unitKind: "extension",
       name: extensionNode.name,
@@ -2291,6 +2356,7 @@ describe("ExtensionHost activation", () => {
       activeEv: null,
       activeSourceHash: null,
       activeBundleKey: null,
+      activeExecutionDigest: null,
       activeDependencyEvs: {},
       activeExternalDeps: {},
       activeRuntimeDepsKey: null,
@@ -2304,9 +2370,10 @@ describe("ExtensionHost activation", () => {
     expect(extensionTransport.call).not.toHaveBeenCalled();
 
     host.registry.patch(extensionNode.name, {
-      activeEv: "ev-ready",
-      activeSourceHash: "state-ready",
-      activeBundleKey: "bundle-key",
+      activeEv: "ev-current",
+      activeSourceHash: BUILD_SOURCE_STATE_HASH,
+      activeBundleKey: ACTIVE_BUILD_KEY,
+      activeExecutionDigest: "a".repeat(64),
       status: "available",
     });
 
@@ -2314,13 +2381,13 @@ describe("ExtensionHost activation", () => {
   });
 
   it("prepares authority only after the requested approved extension finishes its queued build", async () => {
-    const { host, extensionNode, buildSystem } = makeHost({ installed: false });
+    const { host, extensionNode, buildSystem } = await makeHost({ installed: false });
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
-    const originalGetBuild = buildSystem.getBuild.getMockImplementation()!;
+    const originalGetBuild = buildSystem.getStoredBuild.getMockImplementation()!;
     const candidate = await originalGetBuild();
     const build = declarationCompletion();
     const buildRequested = declarationCompletion();
-    buildSystem.getBuild.mockImplementation(async () => {
+    buildSystem.getStoredBuild.mockImplementation(async () => {
       buildRequested.resolve();
       await build.promise;
       return candidate;
@@ -2337,16 +2404,19 @@ describe("ExtensionHost activation", () => {
       () => "resolved",
       () => "rejected"
     );
-    await Promise.resolve();
-    await expect(Promise.race([outcome, Promise.resolve("still-pending")])).resolves.toBe(
-      "still-pending"
-    );
-    build.resolve();
+    try {
+      await Promise.resolve();
+      await expect(Promise.race([outcome, Promise.resolve("still-pending")])).resolves.toBe(
+        "still-pending"
+      );
+    } finally {
+      build.resolve();
+    }
     await expect(preparation).resolves.toMatchObject({ payload: { effect: "open" } });
   });
 
   it("prepares an on-invoke target after declaration application deferred its build", async () => {
-    const { host, extensionNode, buildSystem } = makeHost({
+    const { host, extensionNode, buildSystem } = await makeHost({
       installed: false,
       activationEvents: ["onInvoke"],
     });
@@ -2358,13 +2428,13 @@ describe("ExtensionHost activation", () => {
     await expect(
       prepare(panelCtx("panel-1"), [extensionNode.name, "confirm", []])
     ).resolves.toMatchObject({ payload: { effect: "open" } });
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
       priority: "interactive",
     });
   });
 
   it("fails with ENOTREADY when an extension is not running", async () => {
-    const { host, extensionNode } = makeHost();
+    const { host, extensionNode } = await makeHost();
     vi.spyOn(host.processes, "isRunning").mockReturnValue(false);
 
     await expect(
@@ -2374,7 +2444,7 @@ describe("ExtensionHost activation", () => {
 
   it("waits for a target-local crash restart before invoking", async () => {
     const extensionTransport = { call: vi.fn(async () => "transport-result") };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     const running = vi.spyOn(host.processes, "isRunning").mockReturnValue(false);
     const whenRunning = vi.spyOn(host.processes, "whenRunning").mockImplementation(async () => {
       running.mockReturnValue(true);
@@ -2389,7 +2459,7 @@ describe("ExtensionHost activation", () => {
 
   it("coalesces concurrent first-use activation without restarting the ready child", async () => {
     const extensionTransport = { call: vi.fn(async () => "ok") };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     let running = false;
     vi.spyOn(host.processes, "isRunning").mockImplementation(() => running);
     vi.spyOn(host.processes, "whenRunning").mockImplementation(async () => {
@@ -2441,7 +2511,7 @@ describe("ExtensionHost activation", () => {
         };
       }),
     };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     service = host.createServiceDefinition();
     const req = Readable.from([requestBody]) as any;
     req.method = "POST";
@@ -2511,7 +2581,7 @@ describe("ExtensionHost activation", () => {
         throw new Error(`Unexpected extension method: ${method}`);
       }),
     };
-    const { host, extensionNode } = makeHost({ extensionTransport });
+    const { host, extensionNode } = await makeHost({ extensionTransport });
     const req = Readable.from([]) as any;
     req.method = "GET";
     req.url = "/_r/ext/%40workspace-extensions%2Fgit-tools/download";
@@ -2559,14 +2629,14 @@ describe("ExtensionHost activation", () => {
 
   it("accepts extension activation, health, and log reports from supervision", async () => {
     const recordUnitLog = vi.fn();
-    const { host, extensionNode, eventService } = makeHost({ recordUnitLog });
+    const { host, extensionNode, eventService } = await makeHost({ recordUnitLog });
     const service = host.createServiceDefinition();
     const extensionCtx = { caller: createVerifiedCaller(extensionNode.name, "extension") };
 
     vi.spyOn(host.processes, "isActive").mockReturnValue(true);
     const markReady = vi.spyOn(host.processes, "markReady");
 
-    host.reportActivation(extensionCtx as any, {
+    await host.reportActivation(extensionCtx as any, {
       methods: ["confirm"],
       providerMethods: {},
       hasFetch: true,
@@ -2608,8 +2678,8 @@ describe("ExtensionHost activation", () => {
   });
 
   it("treats the sealed public method contract as a set, independent of declaration order", async () => {
-    const { host, extensionNode, buildSystem } = makeHost();
-    const activeBuild = buildSystem.getBuildByKey("bundle-key");
+    const { host, extensionNode, buildSystem } = await makeHost();
+    const activeBuild = await buildSystem.getBuildByKey(ACTIVE_BUILD_KEY);
     if (!activeBuild || activeBuild.metadata.details?.kind !== "extension") {
       throw new Error("expected active extension build");
     }
@@ -2630,19 +2700,19 @@ describe("ExtensionHost activation", () => {
         effect: { kind: "open" },
       },
     };
-    vi.mocked(buildSystem.getBuildByKey).mockReturnValue(activeBuild);
+    vi.mocked(buildSystem.getBuildByKey).mockResolvedValue(activeBuild);
     vi.spyOn(host.processes, "isActive").mockReturnValue(true);
     const markReady = vi.spyOn(host.processes, "markReady");
     const extensionCtx = { caller: createVerifiedCaller(extensionNode.name, "extension") };
     vi.spyOn(host.processes, "isActive").mockReturnValue(true);
 
-    expect(() =>
+    await expect(
       host.reportActivation(extensionCtx as any, {
         methods: ["second", "first"],
         providerMethods: {},
         hasFetch: false,
       })
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     expect(markReady).toHaveBeenCalledWith(extensionNode.name, {
       methods: ["second", "first"],
       hasFetch: false,
@@ -2650,7 +2720,7 @@ describe("ExtensionHost activation", () => {
   });
 
   it("rejects ready when runtime provider namespaces differ from the approved build", async () => {
-    const { host, extensionNode } = makeHost({
+    const { host, extensionNode } = await makeHost({
       providerContracts: { gitInterop: ["upstreamStatus"] },
       activeProviderContracts: {
         gitInterop: { methods: ["upstreamStatus"] },
@@ -2659,17 +2729,17 @@ describe("ExtensionHost activation", () => {
     const extensionCtx = { caller: createVerifiedCaller(extensionNode.name, "extension") };
     vi.spyOn(host.processes, "isActive").mockReturnValue(true);
 
-    expect(() =>
+    await expect(
       host.reportActivation(extensionCtx as any, {
         methods: ["upstreamStatus"],
         providerMethods: {},
         hasFetch: false,
       })
-    ).toThrow(expect.objectContaining({ code: "EPROTO" }));
+    ).rejects.toMatchObject({ code: "EPROTO" });
   });
 
-  it("allows server callers to invoke extension providers through the dispatcher", () => {
-    const { host } = makeHost();
+  it("allows server callers to invoke extension providers through the dispatcher", async () => {
+    const { host } = await makeHost();
     expect(host.createServiceDefinition().authority.principals).toContain("host");
   });
 });

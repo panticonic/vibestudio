@@ -58,7 +58,9 @@ export interface WorkerdBootstrapDeps {
    * session and context policy. Egress is long-lived, so these facts must be
    * resolved when a request arrives rather than captured at image startup.
    */
-  resolveEgressCaller(caller: VerifiedCaller): VerifiedCaller | null;
+  resolveEgressCaller(
+    caller: VerifiedCaller
+  ): VerifiedCaller | null | Promise<VerifiedCaller | null>;
   /** Restore the exact active entity incarnation before any userland DO call. */
   ensureUserlandDoReady(ref: DORef): Promise<void>;
   ensureUserlandDoPrepared(ref: DORef, witness: LifecycleCloneInput): Promise<void>;
@@ -118,8 +120,8 @@ export function createHostDoAuthorityAttester(input: {
     import("../services/userlandResourceHandleStore.js").UserlandResourceHandleStore,
     "resolve"
   >;
-}): (ref: DORef, method: string, args: readonly unknown[]) => DirectAuthorityAttestation {
-  return (ref, method, args) => {
+}): (ref: DORef, method: string, args: readonly unknown[]) => Promise<DirectAuthorityAttestation> {
+  return async (ref, method, args) => {
     const caller = createHostCaller(
       input.callerId ?? "main",
       "server",
@@ -155,21 +157,25 @@ export function createHostDoAuthorityAttester(input: {
     }
     const service = matches[0];
     if (!service) return attestDirectRpc(facts);
-    const methodAuthority: ReturnType<WorkerdManager["resolveDoRpcMethodAuthority"]> =
+    const methodAuthority: Awaited<ReturnType<WorkerdManager["resolveDoRpcMethodAuthority"]>> =
       isHostIntrinsicDirectMethod(method)
         ? {
             effect: { kind: "open" } as const,
             access: { tier: "open" as const, sensitivity: "read" as const },
             providerExecutionDigest: "-",
           }
-        : input.manager.resolveDoRpcMethodAuthority(
+        : await input.manager.resolveDoRpcMethodAuthority(
             ref.source,
             ref.className,
             ref.objectKey,
             method
           );
     if (!methodAuthority) {
-      const catalog = input.manager.describeDoRpcCatalog(ref.source, ref.className, ref.objectKey);
+      const catalog = await input.manager.describeDoRpcCatalog(
+        ref.source,
+        ref.className,
+        ref.objectKey
+      );
       throw new WorkspaceRpcMethodUndeclaredError({
         source: ref.source,
         className: ref.className,
@@ -284,9 +290,9 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         getProxyPort: async (caller) => {
           await deps.egressProxy.dropCaller(caller.runtime.id);
           egressCallers.set(caller.runtime.id, caller);
-          return deps.egressProxy.startForCaller(caller, () =>
+          return deps.egressProxy.startForCaller(caller, async () =>
             egressCallers.get(caller.runtime.id) === caller
-              ? deps.resolveEgressCaller(caller)
+              ? await deps.resolveEgressCaller(caller)
               : null
           );
         },
@@ -335,9 +341,9 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         },
       });
       deps.onManagerStarted(manager);
-      deps.egressProxy.setCallerResolver((callerId) => {
+      deps.egressProxy.setCallerResolver(async (callerId) => {
         const registered = egressCallers.get(callerId);
-        return registered ? deps.resolveEgressCaller(registered) : null;
+        return registered ? await deps.resolveEgressCaller(registered) : null;
       });
 
       const { INTERNAL_DO_SOURCE } = await import("../internalDOs/internalDoLoader.js");

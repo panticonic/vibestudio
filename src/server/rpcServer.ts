@@ -3,7 +3,7 @@ import {
   type WorkerExecutableAdmission,
 } from "./workerExecutableDispatch.js";
 import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
-import { rpcCallerAbortedError, serializeRpcFailure } from "@vibestudio/rpc";
+import { formatRpcFailure, rpcCallerAbortedError, serializeRpcFailure } from "@vibestudio/rpc";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { attachRpcDiagnosticId, decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
@@ -341,7 +341,7 @@ interface ResolvedRpcCredential {
   agentBinding?: import("@vibestudio/identity/types").AgentBinding;
   subject?: UserSubject;
   authorizedBy?: string;
-  isValidAtUpgrade: () => boolean;
+  isValidAtUpgrade: () => boolean | Promise<boolean>;
 }
 
 interface RedeemedRpcPairingCredential {
@@ -512,7 +512,9 @@ export class RpcServer {
   private workerdDispatchSecret: string | null = null;
   private resolveExecutableAdmission: DoExecutableAdmissionResolver | undefined;
   private resolveWorkerAdmissionFn:
-    | ((targetId: string) => WorkerExecutableAdmission | null)
+    | ((
+        targetId: string
+      ) => WorkerExecutableAdmission | null | Promise<WorkerExecutableAdmission | null>)
     | null = null;
 
   private connections = new ConnectionRegistry({
@@ -564,6 +566,7 @@ export class RpcServer {
     ReturnType<typeof setTimeout> | null
   >();
   private pendingWsAdmissionResolutions = 0;
+  private readonly pendingGatewayUpgrades = new Set<Promise<void>>();
   private readonly wsAdmissionGrants = new Map<string, RpcWebSocketAdmissionGrant>();
   private readonly pairingAdmissionReplayKey = randomBytes(32);
   private readonly pairingAdmissionReplays = new Map<string, RpcPairingAdmissionReplay>();
@@ -851,7 +854,10 @@ export class RpcServer {
        * subsequent inbound frame so a failed administrative socket teardown
        * cannot leave a cached device, agent, or user usable.
        */
-      liveCallerGate?: (caller: VerifiedCaller, authorizedBy?: string) => boolean;
+      liveCallerGate?: (
+        caller: VerifiedCaller,
+        authorizedBy?: string
+      ) => boolean | Promise<boolean>;
       /**
        * Exact existence check for a causal invocation coordinate in the
        * canonical trajectory projection. Causal parents fail closed when this
@@ -886,13 +892,15 @@ export class RpcServer {
         extensionName: string,
         requestId: string
       ) => ResolvedExtensionInvocation | null;
-      resolveExtensionCodeIdentity?: (extensionName: string) => VerifiedCodeIdentity | null;
+      resolveExtensionCodeIdentity?: (
+        extensionName: string
+      ) => Promise<VerifiedCodeIdentity | null>;
       /**
        * Exact-version admission established by the shared unit review. Code
        * identity remains attributable when false, but its manifest grants no
        * authority until the reviewed version has been admitted.
        */
-      isCodeApproved?: (code: VerifiedCodeIdentity) => boolean;
+      isCodeApproved?: (code: VerifiedCodeIdentity) => boolean | Promise<boolean>;
       sessionInboxCapacity?: SessionRegistryOptions["inboxCapacity"];
       sessionTtlMs?: SessionRegistryOptions["ttlMs"];
       runtimeCoordinator?: PanelRuntimeCoordinator;
@@ -947,9 +955,9 @@ export class RpcServer {
       dispatcher: deps.dispatcher,
       egressProxy: deps.egressProxy,
       authenticateHttp: (req) => this.authenticateHttpRequest(req),
-      verifiedCaller: (caller, request, subject) =>
+      verifiedCaller: async (caller, request, subject) =>
         this.callerWithAuthorityParent(
-          this.verifiedCallerFor(
+          await this.verifiedCallerFor(
             caller.callerId,
             caller.callerKind,
             caller.agentBinding,
@@ -1029,7 +1037,7 @@ export class RpcServer {
   }
 
   /** Host-owned initialization uses the same live runtime projection as ingress. */
-  verifiedRuntimeCaller(runtimeId: string): VerifiedCaller {
+  async verifiedRuntimeCaller(runtimeId: string): Promise<VerifiedCaller> {
     const record = this.deps.entityCache?.resolveActive(runtimeId);
     if (!record || !["panel", "app", "worker", "do"].includes(record.kind)) {
       throw createRelayError(`Runtime ${runtimeId} is not active`, "RUNTIME_ENTITY_NOT_ACTIVE");
@@ -1037,7 +1045,7 @@ export class RpcServer {
     return this.verifiedCallerFor(runtimeId, record.kind as "panel" | "app" | "worker" | "do");
   }
 
-  private verifiedCallerFor(
+  private async verifiedCallerFor(
     callerId: string,
     callerKind: CallerKind,
     agentBinding?:
@@ -1046,7 +1054,7 @@ export class RpcServer {
     subject?: UserSubject,
     inheritedTestPolicy?: AgentExecutionTestPolicy | null,
     executionSessionNonce?: string
-  ): VerifiedCaller {
+  ): Promise<VerifiedCaller> {
     // Every registered executable runtime carries its owning context, including
     // panels and apps. Context authority must follow that live host record.
     const retainedEntity = this.deps.entityCache?.resolve(callerId);
@@ -1065,7 +1073,7 @@ export class RpcServer {
     const resolvedAgentBinding = agentBinding ?? activeEntity?.agentBinding;
     const residentCode =
       callerKind === "extension"
-        ? (this.deps.resolveExtensionCodeIdentity?.(callerId) ?? null)
+        ? ((await this.deps.resolveExtensionCodeIdentity?.(callerId)) ?? null)
         : this.deps.entityCache
           ? resolveCodeIdentity(this.deps.entityCache, callerId)
           : null;
@@ -1073,11 +1081,11 @@ export class RpcServer {
     // otherwise resolve it from the caller id (§5.2/§5.4).
     let resolvedSubject =
       subject ??
-      this.resolveSubject(
+      (await this.resolveSubject(
         callerId,
         callerKind,
         agentBinding && "agentId" in agentBinding ? agentBinding : undefined
-      );
+      ));
     if (
       executionSessionNonce !== undefined &&
       (executionSessionNonce.length < 16 || executionSessionNonce.length > 256)
@@ -1150,7 +1158,7 @@ export class RpcServer {
       ...(this.deps.workspaceId ? { workspaceId: this.deps.workspaceId } : {}),
       ...(taskAuthority ? { taskAuthority } : {}),
     };
-    return code && (this.deps.isCodeApproved?.(code) ?? true)
+    return code && ((await this.deps.isCodeApproved?.(code)) ?? true)
       ? { ...withTaskAuthority, codeApproved: true }
       : withTaskAuthority;
   }
@@ -1361,27 +1369,27 @@ export class RpcServer {
    * through the hub-backed `userSubjectSource`. Returning null means admission
    * must fail for every external caller.
    */
-  private resolveSubject(
+  private async resolveSubject(
     callerId: string,
     callerKind: CallerKind,
     agentBinding?: import("@vibestudio/identity/types").AgentBinding
-  ): UserSubject | null {
+  ): Promise<UserSubject | null> {
     if (callerKind === "server") return SYSTEM_SUBJECT;
     if (callerKind === "extension") {
-      return this.deps.resolveExtensionCodeIdentity?.(callerId) ? SYSTEM_SUBJECT : null;
+      return (await this.deps.resolveExtensionCodeIdentity?.(callerId)) ? SYSTEM_SUBJECT : null;
     }
     return this.deps.userSubjectSource?.resolve(callerId, callerKind, agentBinding) ?? null;
   }
 
   /** Re-evaluate workspace membership at every stateless HTTP admission. */
-  private isWorkspaceMember(
+  private async isWorkspaceMember(
     callerId: string,
     callerKind: CallerKind,
     agentBinding?: import("@vibestudio/identity/types").AgentBinding
-  ): boolean {
+  ): Promise<boolean> {
     if (!this.deps.membershipGate) return true;
     return this.deps.membershipGate(
-      this.resolveSubject(callerId, callerKind, agentBinding) ?? undefined
+      (await this.resolveSubject(callerId, callerKind, agentBinding)) ?? undefined
     );
   }
 
@@ -1703,7 +1711,11 @@ export class RpcServer {
     this.resolveExecutableAdmission = fn;
   }
 
-  setWorkerAdmissionResolver(fn: (targetId: string) => WorkerExecutableAdmission | null): void {
+  setWorkerAdmissionResolver(
+    fn: (
+      targetId: string
+    ) => WorkerExecutableAdmission | null | Promise<WorkerExecutableAdmission | null>
+  ): void {
     this.resolveWorkerAdmissionFn = fn;
   }
 
@@ -1767,9 +1779,7 @@ export class RpcServer {
       return;
     }
     ws.onError((error) => {
-      log.warn("RPC session transport error", {
-        cause: error instanceof Error ? error.message : String(error),
-      });
+      log.warn("RPC session transport error", { cause: formatRpcFailure(error) });
     });
     // Expect first message to be ws:auth
     let authTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
@@ -1855,11 +1865,11 @@ export class RpcServer {
   }
 
   /** Authenticate a runtime bearer using the same live identity on RPC and HTTP. */
-  authenticateConnectionGrant(
+  async authenticateConnectionGrant(
     token: string,
     remoteEndpointId?: string
-  ): { caller: VerifiedCaller; authorizedBy: string } | null {
-    const authenticated = this.resolveConnectionGrantIdentity(token, remoteEndpointId);
+  ): Promise<{ caller: VerifiedCaller; authorizedBy: string } | null> {
+    const authenticated = await this.resolveConnectionGrantIdentity(token, remoteEndpointId);
     if (
       authenticated?.caller.runtime.kind === "panel" &&
       this.deps.runtimeCoordinator?.resolvePresentationCallerForRuntime(
@@ -1871,10 +1881,10 @@ export class RpcServer {
   }
 
   /** Credential identity stays valid while a presentation lease is being restored. */
-  private resolveConnectionGrantIdentity(
+  private async resolveConnectionGrantIdentity(
     token: string,
     remoteEndpointId?: string
-  ): { caller: VerifiedCaller; authorizedBy: string } | null {
+  ): Promise<{ caller: VerifiedCaller; authorizedBy: string } | null> {
     const grant = this.deps.connectionGrants?.validate(token, remoteEndpointId);
     if (!grant) return null;
     try {
@@ -1882,27 +1892,38 @@ export class RpcServer {
       // Hosted panels act for their current viewer, including unowned seeded
       // panels. Their persistent creator remains background-runtime lineage.
       if (kind === "panel" && (!grant.subject || grant.subject.userId === "system")) return null;
-      const caller = this.verifiedCallerFor(
+      const caller = await this.verifiedCallerFor(
         grant.principalId,
         kind,
         undefined,
         kind === "panel" || kind === "app" ? grant.subject : undefined
       );
       if (this.deps.membershipGate && !this.deps.membershipGate(caller.subject)) return null;
-      if (this.deps.liveCallerGate && !this.deps.liveCallerGate(caller, grant.issuedBy))
+      if (this.deps.liveCallerGate && !(await this.deps.liveCallerGate(caller, grant.issuedBy)))
         return null;
       return { caller, authorizedBy: grant.issuedBy };
-    } catch {
-      return null;
+    } catch (error) {
+      if (
+        [
+          "EACCES",
+          "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE",
+          "EVALUATED_EXECUTION_SESSION_STALE",
+          "EXECUTION_OWNER_NOT_AVAILABLE",
+          "RUNTIME_ENTITY_NOT_ACTIVE",
+        ].includes(getErrorCode(error) ?? "")
+      ) {
+        return null;
+      }
+      throw error;
     }
   }
 
-  private resolveRpcCredential(
+  private async resolveRpcCredential(
     token: unknown,
     clientLabel?: string,
     clientPlatform?: ClientPlatform,
     transport: import("@vibestudio/identity/identityDb").DeviceTransportBinding = { kind: "local" }
-  ): RpcCredentialResolution | Promise<RpcCredentialResolution> {
+  ): Promise<RpcCredentialResolution> {
     if (typeof token !== "string" || token.length === 0) {
       return {
         ok: false,
@@ -1933,7 +1954,7 @@ export class RpcServer {
       resolvedFromTokenManager = !connectionGrant && entry !== null;
       if (entry?.agentBinding) agentBinding = entry.agentBinding;
       if (connectionGrant) {
-        const authenticated = this.resolveConnectionGrantIdentity(token, remoteEndpointId);
+        const authenticated = await this.resolveConnectionGrantIdentity(token, remoteEndpointId);
         if (!authenticated) return rejectedCredential();
         subject = authenticated.caller.subject;
       }
@@ -1951,9 +1972,9 @@ export class RpcServer {
         return rejectedCredential();
       }
       const resolvedEntry = entry;
-      const isValidAtUpgrade = (): boolean => {
+      const isValidAtUpgrade = async (): Promise<boolean> => {
         if (connectionGrant) {
-          const current = this.resolveConnectionGrantIdentity(token, remoteEndpointId);
+          const current = await this.resolveConnectionGrantIdentity(token, remoteEndpointId);
           return (
             current?.caller.runtime.id === resolvedEntry.callerId &&
             current.caller.runtime.kind === resolvedEntry.callerKind
@@ -1967,13 +1988,13 @@ export class RpcServer {
           );
         }
         try {
-          const caller = this.verifiedCallerFor(
+          const caller = await this.verifiedCallerFor(
             resolvedEntry.callerId,
             resolvedEntry.callerKind,
             agentBinding,
             subject
           );
-          return this.deps.liveCallerGate?.(caller) ?? true;
+          return (await this.deps.liveCallerGate?.(caller)) ?? true;
         } catch {
           return false;
         }
@@ -2116,23 +2137,6 @@ export class RpcServer {
     // workspace membership is restored) may establish a fresh generation.
     if (priorRetirement?.phase === "settled") this.callerRetirements.delete(callerId);
 
-    const pendingTimer = this.disconnectTimers.get(connectionKey);
-    if (pendingTimer) {
-      clearTimeout(pendingTimer);
-      this.disconnectTimers.delete(connectionKey);
-    }
-
-    const callerWaiter = this.reconnectWaiters.get(callerId);
-    if (callerWaiter) {
-      this.reconnectWaiters.delete(callerId);
-      callerWaiter.resolve();
-    }
-    const connectionWaiter = this.connectionReconnectWaiters.get(connectionKey);
-    if (connectionWaiter) {
-      this.connectionReconnectWaiters.delete(connectionKey);
-      connectionWaiter.resolve();
-    }
-
     // Membership entry gate (WP2 §4, authoritative-at-child): once the
     // connecting caller's host-verified subject is known, a hub-spawned
     // workspace child refuses a non-member before establishing any session
@@ -2140,7 +2144,7 @@ export class RpcServer {
     // subject or a live workspace member (root is implicit).
     if (this.deps.membershipGate) {
       const gateSubject =
-        subject ?? this.resolveSubject(callerId, callerKind, agentBinding) ?? undefined;
+        subject ?? (await this.resolveSubject(callerId, callerKind, agentBinding)) ?? undefined;
       if (!this.deps.membershipGate(gateSubject)) {
         // Two very different failures reach this point: a real human who is not
         // a member, and a runtime whose entity is unknown or no longer active
@@ -2174,7 +2178,13 @@ export class RpcServer {
       this.sessions.markDisconnected(existing.caller.runtime.id, existing.caller.runtime.kind);
       existing.ws.close(4002, "Replaced by new connection");
     }
-    const verifiedCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding, subject);
+    const verifiedCaller = await this.verifiedCallerFor(
+      callerId,
+      callerKind,
+      agentBinding,
+      subject
+    );
+    if (ws.readyState !== ws.OPEN) return;
     const caller: VerifiedCaller =
       ws.transportBinding.kind === "iroh"
         ? { ...verifiedCaller, remoteEndpointId: ws.transportBinding.endpointId }
@@ -2210,10 +2220,37 @@ export class RpcServer {
     };
 
     this.connections.addClient(client);
+    // A reconnect is complete only after the authenticated client is visible
+    // to routing. Resolving earlier lets a parked response resume between the
+    // waiter signal and registry admission, where it observes a false
+    // invariant violation and loses the original response.
+    const pendingTimer = this.disconnectTimers.get(connectionKey);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      this.disconnectTimers.delete(connectionKey);
+    }
+    const callerWaiter = this.reconnectWaiters.get(callerId);
+    if (callerWaiter) {
+      this.reconnectWaiters.delete(callerId);
+      callerWaiter.resolve();
+    }
+    const connectionWaiter = this.connectionReconnectWaiters.get(connectionKey);
+    if (connectionWaiter) {
+      this.connectionReconnectWaiters.delete(connectionKey);
+      connectionWaiter.resolve();
+    }
     // Install teardown immediately after registry admission. Any exception in
     // the remaining setup is rolled back by abortFailedAuthentication; a real
     // network close from this point onward must run the normal close path.
-    ws.onMessage((message) => this.handleMessage(client, message));
+    ws.onMessage((message) => {
+      void this.handleMessage(client, message).catch((error) => {
+        log.error("RPC session message handling failed", {
+          callerId: client.caller.runtime.id,
+          cause: formatRpcFailure(error),
+        });
+        client.ws.close(1011, "RPC caller identity validation failed");
+      });
+    });
     ws.onClose((code, reason) => this.handleClose(client, code, reason));
 
     if (callerKind === "panel") {
@@ -2525,7 +2562,7 @@ export class RpcServer {
     return callerKindForPrincipalKind(kind);
   }
 
-  private handleMessage(client: WsClientState, msg: WsClientMessage): void {
+  private async handleMessage(client: WsClientState, msg: WsClientMessage): Promise<void> {
     if (!this.connections.isActiveClient(client)) return;
 
     // Authentication is admission, not a lifetime grant. Account/device/agent
@@ -2555,11 +2592,14 @@ export class RpcServer {
     if (
       msg.type !== "ws:auth" &&
       this.deps.liveCallerGate &&
-      !this.deps.liveCallerGate(client.caller, client.authorizedBy)
+      !(await this.deps.liveCallerGate(client.caller, client.authorizedBy))
     ) {
       client.ws.close(4403, "Caller identity or workspace membership is no longer active");
       return;
     }
+    // Identity resolution may read the immutable stored build descriptor. A
+    // socket that closes while that read is pending must not admit its frame.
+    if (!this.connections.isActiveClient(client)) return;
 
     switch (msg.type) {
       case "ws:rpc": {
@@ -2655,13 +2695,23 @@ export class RpcServer {
           this.forwardForeignWorkspaceRpc(client, routeEnvelope);
           return;
         }
-        void this.handleRoute(
-          client,
-          routeEnvelope.target,
-          routeEnvelope.message,
-          msg.targetConnectionId,
-          routeEnvelope
-        );
+        void Promise.resolve(
+          this.handleRoute(
+            client,
+            routeEnvelope.target,
+            routeEnvelope.message,
+            msg.targetConnectionId,
+            routeEnvelope
+          )
+        ).catch((error) => {
+          this.sendRouteError(
+            client,
+            routeEnvelope.target,
+            routeEnvelope.message,
+            error,
+            routeEnvelope.destination
+          );
+        });
         break;
       }
       case "ws:stream-body-chunk": {
@@ -2711,7 +2761,7 @@ export class RpcServer {
   ): Promise<void> {
     if (message.type === "exposure") {
       try {
-        this.verifiedCallerFor(client.caller.runtime.id, client.caller.runtime.kind);
+        await this.verifiedCallerFor(client.caller.runtime.id, client.caller.runtime.kind);
         if (!Array.isArray(message.entries) || message.entries.length > 512)
           throw new Error("RPC endpoint declarations must contain at most 512 entries");
         const keys = new Set<string>();
@@ -3632,7 +3682,9 @@ export class RpcServer {
   // HTTP POST /rpc endpoint
   // ===========================================================================
 
-  private authenticateHttpRequest(req: import("http").IncomingMessage): HttpRpcAdmission {
+  private async authenticateHttpRequest(
+    req: import("http").IncomingMessage
+  ): Promise<HttpRpcAdmission> {
     const authHeader = req.headers["authorization"];
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
     if (!token) {
@@ -3673,7 +3725,7 @@ export class RpcServer {
       };
     }
     const httpAgentBinding = callerId === entry.callerId ? entry.agentBinding : undefined;
-    if (!this.isWorkspaceMember(callerId, callerKind, httpAgentBinding)) {
+    if (!(await this.isWorkspaceMember(callerId, callerKind, httpAgentBinding))) {
       return {
         ok: false,
         status: 403,
@@ -3730,7 +3782,7 @@ export class RpcServer {
           ) ?? null)
         : null;
     const verifiedCaller = this.callerWithAuthorityParent(
-      this.verifiedCallerFor(
+      await this.verifiedCallerFor(
         callerId,
         callerKind,
         agentBinding,
@@ -3811,7 +3863,7 @@ export class RpcServer {
     const attributedCaller =
       callerKind === "server"
         ? createHostCaller(callerId, "server", SYSTEM_SUBJECT)
-        : this.verifiedCallerFor(
+        : await this.verifiedCallerFor(
             callerId,
             callerKind,
             undefined,
@@ -4015,7 +4067,8 @@ export class RpcServer {
       const routedTargetId = this.resolveRoutableTargetId(targetId);
       const invokeBridge = async (bridge: RpcWireClient, receiverRuntimeId: string) => {
         const authenticatedCaller =
-          relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind);
+          relayCallerScope?.authenticatedCaller ??
+          (await this.verifiedCallerFor(callerId, callerKind));
         const scope = relayCallerScope ?? {
           authenticatedCaller,
           authorizingCaller: authenticatedCaller,
@@ -4813,7 +4866,8 @@ export class RpcServer {
           ? (this.deps.runtimeCoordinator?.getLease(callerId)?.slotId ?? undefined)
           : undefined;
       const transportCaller = this.withLiveRuntimeRelationships(
-        relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind)
+        relayCallerScope?.authenticatedCaller ??
+          (await this.verifiedCallerFor(callerId, callerKind))
       );
       const attributedCaller =
         callerKind === "server"
@@ -5037,7 +5091,7 @@ export class RpcServer {
     args: unknown[],
     meta?: RelayCallMeta
   ): Promise<unknown> {
-    const workerAdmission = this.resolveWorkerAdmissionFn?.(targetId) ?? null;
+    const workerAdmission = (await this.resolveWorkerAdmissionFn?.(targetId)) ?? null;
     if (!workerAdmission) throw new Error(`Worker not found: ${targetId}`);
     if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
@@ -5173,7 +5227,7 @@ export class RpcServer {
         authorizingCaller ??
         (fromKind === "server"
           ? createHostCaller(fromId, "server", SYSTEM_SUBJECT)
-          : this.verifiedCallerFor(fromId, fromKind));
+          : await this.verifiedCallerFor(fromId, fromKind));
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
       const authorization = await this.directDOAuthorization({
         caller: attributedCaller,
@@ -5204,7 +5258,7 @@ export class RpcServer {
 
     // Worker?
     if (targetId.startsWith("worker:")) {
-      const workerAdmission = this.resolveWorkerAdmissionFn?.(targetId) ?? null;
+      const workerAdmission = (await this.resolveWorkerAdmissionFn?.(targetId)) ?? null;
       if (!workerAdmission) throw new Error(`Worker not found: ${targetId}`);
       if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
@@ -5407,12 +5461,12 @@ export class RpcServer {
     return admission;
   }
 
-  private takeWsAdmissionGrant(grant: string): RpcWebSocketAdmissionGrant | null {
+  private async takeWsAdmissionGrant(grant: string): Promise<RpcWebSocketAdmissionGrant | null> {
     const admission = this.wsAdmissionGrants.get(grant);
     if (!admission) return null;
     this.wsAdmissionGrants.delete(grant);
     if (admission.expiresAt <= Date.now()) return null;
-    if (!admission.resolved.isValidAtUpgrade()) return null;
+    if (!(await admission.resolved.isValidAtUpgrade())) return null;
     return admission;
   }
 
@@ -5604,7 +5658,18 @@ export class RpcServer {
   }
 
   /** Upgrade a WebSocket when this RPC server directly owns the gateway route. */
-  handleGatewayWsUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+  handleGatewayWsUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    const flight = this.handleGatewayWsUpgradeOwned(req, socket, head);
+    const joined = flight.finally(() => this.pendingGatewayUpgrades.delete(joined));
+    this.pendingGatewayUpgrades.add(joined);
+    return joined;
+  }
+
+  private async handleGatewayWsUpgradeOwned(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer
+  ): Promise<void> {
     if (this.isShuttingDown()) {
       socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
       socket.destroy();
@@ -5618,7 +5683,8 @@ export class RpcServer {
     }
     const protocolHeader = req.headers["sec-websocket-protocol"];
     const grant = parseWebSocketAuthProtocol(protocolHeader, "rpc");
-    const admission = grant ? this.takeWsAdmissionGrant(grant) : null;
+    const admission = grant ? await this.takeWsAdmissionGrant(grant) : null;
+    if (socket.destroyed || this.isShuttingDown() || this.wss !== wss) return;
     if (!admission) {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
@@ -6052,9 +6118,12 @@ export class RpcServer {
       this.wss.close();
       this.wss = null;
     }
-    const results = await Promise.allSettled(
-      [...this.callerRetirements.values()].map((retirement) => retirement.promise)
-    );
+    const results = await Promise.allSettled([
+      this.streamingRelay.drain(),
+      this.httpRpc.drain(),
+      ...this.pendingGatewayUpgrades,
+      ...[...this.callerRetirements.values()].map((retirement) => retirement.promise),
+    ]);
     const failures = [
       ...new Set(
         results.flatMap((result) =>
@@ -6063,7 +6132,9 @@ export class RpcServer {
       ),
     ];
     if (failures.length === 1) throw failures[0];
-    if (failures.length > 1) throw new AggregateError(failures, "Caller retirement failed");
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "RPC server retirement failed", { cause: failures[0] });
+    }
   }
 }
 

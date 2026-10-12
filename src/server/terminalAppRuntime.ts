@@ -25,7 +25,7 @@ export interface TerminalAppRuntimeDeps {
   workspaceId: string;
   registry: TerminalRegistry;
   buildSystem: {
-    getBuildByKey?(key: string): AppBuildResultLike | null;
+    getBuildByKey(key: string): Promise<AppBuildResultLike | null>;
   };
   connectionGrants?: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
   entityCache?: Pick<EntityCache, "resolve">;
@@ -89,7 +89,7 @@ export class TerminalAppRuntime {
     try {
       if (!this.runner) throw new Error("Terminal app runner is not configured");
       if (!entry.activeBundleKey) throw new Error(`Terminal app ${entry.name} has no active build`);
-      const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+      const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
       if (!build) throw new Error(`Terminal app build is missing: ${entry.activeBundleKey}`);
       this.deps.validateBuild(entry.name, build);
       await this.runner.start(

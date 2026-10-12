@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   UnitHost,
@@ -1033,6 +1033,131 @@ describe("UnitHost", () => {
       activeBundleKey: null,
     });
     expect(built).toEqual([node.name, `missing:${node.name}`]);
+  });
+
+  it("waits for async validation of the retained build before activating it", async () => {
+    const { host, node } = makeHarness({ active: true });
+    let resolveValidation!: () => void;
+    const validation = new Promise<void>((resolve) => {
+      resolveValidation = resolve;
+    });
+    let validationStarted = false;
+    let activated = false;
+
+    const applying = host.applyRuntimeDeclaration({
+      node,
+      decl: { source: node.relativePath, ref: "main" },
+      needsBuildRefresh: async () => false,
+      validateBeforeActivateCurrent: async () => {
+        validationStarted = true;
+        await validation;
+      },
+      buildAndActivate: async () => {
+        throw new Error("matching retained build must not rebuild");
+      },
+      activateCurrent: async () => {
+        activated = true;
+      },
+    });
+
+    await vi.waitFor(() => expect(validationStarted).toBe(true));
+    expect(activated).toBe(false);
+    resolveValidation();
+    await applying;
+    expect(activated).toBe(true);
+  });
+
+  it("waits for async build-refresh selection before taking the unchanged activation path", async () => {
+    const { host, node } = makeHarness({ active: true });
+    let resolveRefresh!: (refresh: boolean) => void;
+    const refreshDecision = new Promise<boolean>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    let selectionStarted = false;
+    let activated = false;
+
+    const applying = host.applyRuntimeDeclaration({
+      node,
+      decl: { source: node.relativePath, ref: "main" },
+      needsBuildRefresh: async () => {
+        selectionStarted = true;
+        return refreshDecision;
+      },
+      buildAndActivate: async () => {
+        throw new Error("unchanged retained build must not rebuild");
+      },
+      activateCurrent: async () => {
+        activated = true;
+      },
+    });
+
+    await vi.waitFor(() => expect(selectionStarted).toBe(true));
+    expect(activated).toBe(false);
+    resolveRefresh(false);
+    await applying;
+    expect(activated).toBe(true);
+  });
+
+  it("propagates async build-refresh failure without activating or replacing the prior build", async () => {
+    const { host, registry, node } = makeHarness({ active: true });
+    const original = new Error("retained build selection failed");
+    const activated: string[] = [];
+
+    await expect(
+      host.applyRuntimeDeclaration({
+        node,
+        decl: { source: node.relativePath, ref: "main" },
+        needsBuildRefresh: async () => {
+          throw original;
+        },
+        buildAndActivate: async () => {
+          throw new Error("failed build selection must not rebuild");
+        },
+        activateCurrent: async () => {
+          activated.push("activated");
+        },
+      })
+    ).rejects.toBe(original);
+
+    expect(activated).toEqual([]);
+    expect(registry.get(node.name)).toMatchObject({
+      activeBundleKey: "bundle",
+      status: "error",
+      lastError: original.message,
+    });
+  });
+
+  it("keeps the prior build when async current-build validation fails", async () => {
+    const { host, registry, node } = makeHarness({ active: true });
+    const original = new Error("retained build integrity check failed");
+    const activated: string[] = [];
+    const errors: string[] = [];
+
+    await expect(
+      host.applyRuntimeDeclaration({
+        node,
+        decl: { source: node.relativePath, ref: "main" },
+        needsBuildRefresh: async () => false,
+        validateBeforeActivateCurrent: async () => {
+          throw original;
+        },
+        buildAndActivate: async () => {
+          throw new Error("failed retained validation must not rebuild");
+        },
+        activateCurrent: async () => {
+          activated.push("activated");
+        },
+        onError: (_node, _decl, message) => errors.push(message),
+      })
+    ).rejects.toBe(original);
+
+    expect(activated).toEqual([]);
+    expect(registry.get(node.name)).toMatchObject({
+      activeBundleKey: "bundle",
+      status: "error",
+      lastError: original.message,
+    });
+    expect(errors).toEqual([original.message]);
   });
 
   it("marks runtime declaration failures as registry errors", async () => {

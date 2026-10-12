@@ -13,6 +13,7 @@ import {
   decodeRpcJson,
   encodeRpcJson,
   responseEnvelopeFor,
+  formatRpcFailure,
   type RpcEnvelope,
   type RpcMessage,
   type RpcRequest,
@@ -84,6 +85,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     (message: WsClientMessage, encodedBytes: number) => void
   >();
   private readonly closeHandlers = new Set<(code: number, reason: string) => void>();
+  private readonly errorHandlers = new Set<(error: unknown) => void>();
   private readonly requests = new Map<string, RequestRoute>();
   private readonly inboundBodies = new Map<string, ReadableStream<Uint8Array>>();
   private pendingBytes = 0;
@@ -116,8 +118,9 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     return () => this.closeHandlers.delete(handler);
   }
 
-  onError(_handler: (error: unknown) => void): () => void {
-    return () => undefined;
+  onError(handler: (error: unknown) => void): () => void {
+    this.errorHandlers.add(handler);
+    return () => this.errorHandlers.delete(handler);
   }
 
   sendMessage(message: WsServerMessage): void {
@@ -189,7 +192,12 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
         headSent: false,
       });
       if (body) this.inboundBodies.set(requestId, body);
-      if (!body) void this.watchCancellation(requestId, envelope.message.type, stream);
+      if (!body) {
+        void this.watchCancellation(requestId, envelope.message.type, stream).catch((error) => {
+          this.logControlFailure(`request ${requestId} cancellation observation`, error);
+          for (const handler of [...this.errorHandlers]) handler(error);
+        });
+      }
     } else {
       // A one-way envelope still owns both halves of a bidirectional QUIC
       // stream. The bounded envelope reader intentionally stops at the frame
@@ -449,7 +457,21 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES);
       return;
     } catch (error) {
-      const resetCode = await stream.recv.receivedReset();
+      let resetCode: number | null;
+      try {
+        resetCode = await stream.recv.receivedReset();
+      } catch (resetError) {
+        // Closing the physical connection can reject both the receive and its
+        // reset observation. The session still owns this observer after the
+        // request route has completed; retain both failures at that boundary.
+        throw new AggregateError(
+          [error, resetError],
+          "Iroh request cancellation observation failed",
+          {
+            cause: error,
+          }
+        );
+      }
       if (resetCode === null) {
         this.logControlFailure(`request ${requestId} receive-half drain`, error);
         return;
@@ -493,9 +515,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
 
   private logControlFailure(operation: string, error: unknown): void {
     this.options.log?.(
-      `Iroh session ${this.options.sid} ${operation} failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
+      `Iroh session ${this.options.sid} ${operation} failed: ${formatRpcFailure(error)}`
     );
   }
 

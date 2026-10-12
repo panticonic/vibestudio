@@ -48,7 +48,7 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { sha256 } from "@vibestudio/shared/execution/identity";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
-import type { BuildResult } from "./buildV2/buildStore.js";
+import type { BuildResult, StoredBuildResult } from "./buildV2/buildStore.js";
 import {
   collectWorkspaceRpcCatalog,
   type WorkspaceRpcMethodDoc,
@@ -59,6 +59,10 @@ import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
+import {
+  cleanupStoredBuildFixtures,
+  storedBuildFixture,
+} from "../../tests/helpers/storedBuildFixture.js";
 
 let compiledWorkerdPrograms: WorkerdProgramSources;
 let compiledInternalDOBundle: InternalDOBundle;
@@ -127,7 +131,7 @@ async function createWorkerdHarness(
 ) {
   const tokenManager = new TokenManager();
   const { getBuild, mainRpc, bindWorkspaceProvider = true, ...managerOverrides } = overrides;
-  const builds = new Map<string, BuildResult>();
+  const builds = new Map<string, StoredBuildResult>();
   // Construct the manager first (getServerUrl reads the port lazily via the
   // holder) so the loader-server closure can reference a `const` manager.
   const portHolder = { value: 0 };
@@ -165,7 +169,8 @@ async function createWorkerdHarness(
         throw new Error(`fixture build ${build.buildKey} has no sealed execution identity`);
       }
       const artifact = build.metadata.execution;
-      builds.set(build.buildKey, build);
+      const storedBuild = storedBuildFixture(build);
+      builds.set(storedBuild.buildKey, storedBuild);
       return {
         source,
         unitName: source,
@@ -173,8 +178,8 @@ async function createWorkerdHarness(
         authority: build.metadata.authority,
       };
     },
-    getBuildByKey: (key: string) => builds.get(key) ?? null,
-    getBuildByExecution: (key: string, executionDigest: string) => {
+    getBuildByKey: async (key: string) => builds.get(key) ?? null,
+    getBuildByExecution: async (key: string, executionDigest: string) => {
       const build = builds.get(key) ?? null;
       return build?.metadata.execution?.executionDigest === executionDigest ? build : null;
     },
@@ -353,7 +358,7 @@ async function createWorkerdHarness(
       callerId: "internal-workerd-test",
       callerKind: "server",
       userId: "internal-workerd-test-user",
-      authorization: attestHostDoCall(ref, method, args),
+      authorization: await attestHostDoCall(ref, method, args),
     });
   };
 
@@ -503,6 +508,7 @@ describe("internal storage DOs under workerd", () => {
       await new Promise<void>((r) => server.close(() => r()));
     }
     while (activeFixtureRoots.length) rmSync(activeFixtureRoots.pop()!, { recursive: true });
+    cleanupStoredBuildFixtures();
   });
 
   it("reopens retained EvalDO storage using the descriptor of its native executable", async () => {

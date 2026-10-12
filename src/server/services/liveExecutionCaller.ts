@@ -83,7 +83,7 @@ export function refineExecutionTestPolicy(
  * direct egress on the same authority lineage as RPC instead of freezing the
  * caller at process-start time.
  */
-export function resolveLiveExecutionCaller(input: {
+export async function resolveLiveExecutionCaller(input: {
   registered: VerifiedCaller;
   /** Resolve through the same live account source as RPC, never image registration. */
   subject: NonNullable<VerifiedCaller["subject"]> | null;
@@ -95,8 +95,8 @@ export function resolveLiveExecutionCaller(input: {
    * Re-evaluate exact-version approval at request time. Egress registrations
    * outlive individual calls, so this fact must not be frozen at registration.
    */
-  isCodeApproved?: (code: VerifiedCodeIdentity) => boolean;
-}): VerifiedCaller | null {
+  isCodeApproved?: (code: VerifiedCodeIdentity) => boolean | Promise<boolean>;
+}): Promise<VerifiedCaller | null> {
   const {
     registered,
     subject,
@@ -151,7 +151,7 @@ export function resolveLiveExecutionCaller(input: {
     ...(testPolicy ? { testPolicy } : {}),
     ...(resolvedTaskAuthority ? { taskAuthority: resolvedTaskAuthority } : {}),
   };
-  return resolved.code && (resolved.codeApproved || isCodeApproved?.(resolved.code))
+  return resolved.code && (resolved.codeApproved || (await isCodeApproved?.(resolved.code)))
     ? { ...resolved, codeApproved: true }
     : resolved;
 }

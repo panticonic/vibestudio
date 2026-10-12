@@ -407,7 +407,9 @@ export class EgressProxy {
    *  instead of a per-caller port. */
   private sharedServer: EgressListener | null = null;
   private sharedSecret: string | null = null;
-  private callerResolver: ((callerId: string) => VerifiedCaller | null) | null = null;
+  private callerResolver:
+    | ((callerId: string) => VerifiedCaller | null | Promise<VerifiedCaller | null>)
+    | null = null;
 
   constructor(private readonly deps: EgressProxyDeps) {
     this.sessionGrantStore = deps.sessionGrantStore ?? new CredentialSessionGrantStore();
@@ -416,7 +418,9 @@ export class EgressProxy {
 
   /** Wire the resolver that maps an egress-caller id (from the trusted header)
    *  to the live worker's VerifiedCaller. Set by the server at startup. */
-  setCallerResolver(fn: (callerId: string) => VerifiedCaller | null): void {
+  setCallerResolver(
+    fn: (callerId: string) => VerifiedCaller | null | Promise<VerifiedCaller | null>
+  ): void {
     this.callerResolver = fn;
   }
 
@@ -435,8 +439,8 @@ export class EgressProxy {
     }
     this.sharedSecret = secret;
     this.sharedServer = new EgressListener({
-      request: (req, res) => {
-        const caller = this.resolveAttributedCaller(req);
+      request: async (req, res) => {
+        const caller = await this.resolveAttributedCaller(req);
         if (!caller) {
           req.resume();
           this.respondWithError(res, 403, "egress: unattributed request");
@@ -445,10 +449,14 @@ export class EgressProxy {
         void this.handleHttpRequest(req, res, caller);
       },
       connect: (req, socket, head) => {
-        void this.handleConnect(req, socket, head, this.resolveAttributedCaller(req));
+        void this.resolveAttributedCaller(req).then((caller) =>
+          this.handleConnect(req, socket, head, caller)
+        );
       },
       upgrade: (req, socket, head) => {
-        void this.handleWebSocketUpgrade(req, socket, head, this.resolveAttributedCaller(req));
+        void this.resolveAttributedCaller(req).then((caller) =>
+          this.handleWebSocketUpgrade(req, socket, head, caller)
+        );
       },
     });
     return this.sharedServer.ready;
@@ -456,12 +464,12 @@ export class EgressProxy {
 
   /** Resolve the trusted caller for a shared-listener request, or null if the
    *  secret is missing/wrong or the caller id is unknown. */
-  private resolveAttributedCaller(req: IncomingMessage): VerifiedCaller | null {
+  private async resolveAttributedCaller(req: IncomingMessage): Promise<VerifiedCaller | null> {
     const secret = this.readHeader(req, EGRESS_SECRET_HEADER);
     if (!this.sharedSecret || !secret || secret !== this.sharedSecret) return null;
     const callerId = this.readHeader(req, EGRESS_CALLER_HEADER);
     if (!callerId) return null;
-    return this.callerResolver?.(callerId) ?? null;
+    return (await this.callerResolver?.(callerId)) ?? null;
   }
 
   async start(): Promise<number> {
@@ -482,31 +490,31 @@ export class EgressProxy {
 
   async startForCaller(
     caller: VerifiedCaller,
-    resolveCaller: () => VerifiedCaller | null
+    resolveCaller: () => VerifiedCaller | null | Promise<VerifiedCaller | null>
   ): Promise<number> {
     if (this.stopped) throw new Error("Egress proxy stopped");
     const key = caller.runtime.id;
     const existing = this.attributedServers.get(key);
     if (existing) return existing.ready;
-    const liveCaller = () => {
-      const current = resolveCaller();
+    const liveCaller = async () => {
+      const current = await resolveCaller();
       return current?.runtime.id === key ? current : null;
     };
     const listener = new EgressListener({
-      request: (req, res) => {
-        void this.handleHttpRequest(req, res, liveCaller());
+      request: async (req, res) => {
+        await this.handleHttpRequest(req, res, await liveCaller());
       },
       connect: (req, socket, head) => {
-        void this.handleConnect(req, socket, head, liveCaller());
+        void liveCaller().then((caller) => this.handleConnect(req, socket, head, caller));
       },
       upgrade: (req, socket, head) => {
-        void this.handleWebSocketUpgrade(req, socket, head, liveCaller());
+        void liveCaller().then((caller) => this.handleWebSocketUpgrade(req, socket, head, caller));
       },
     });
     this.attributedServers.set(key, listener);
     try {
       const port = await listener.ready;
-      if (this.attributedServers.get(key) !== listener || !liveCaller())
+      if (this.attributedServers.get(key) !== listener || !(await liveCaller()))
         throw new Error("Egress caller retired during startup");
       return port;
     } catch (error) {

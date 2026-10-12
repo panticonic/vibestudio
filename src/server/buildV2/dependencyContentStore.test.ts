@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   closeDerivedCacheCoordinators,
+  DerivedCacheCoordinator,
   derivedCacheCoordinator,
   derivedCacheDatabasePath,
 } from "@vibestudio/shared/derivedCache";
@@ -56,6 +58,18 @@ afterEach(async () => {
     throw new AggregateError(cleanupErrors, "Failed to retire dependency publisher children");
   }
 });
+
+function contentLeaseCount(coordinatorRoot: string): number {
+  const database = new DatabaseSync(derivedCacheDatabasePath(coordinatorRoot));
+  try {
+    const row = database
+      .prepare("SELECT COUNT(*) AS count FROM cache_leases WHERE root = ?")
+      .get(path.resolve(coordinatorRoot)) as { count: number };
+    return row.count;
+  } finally {
+    database.close();
+  }
+}
 it("deduplicates dependency payloads without changing their original modes", async () => {
   const first = path.join(root, "first");
   const second = path.join(root, "second");
@@ -73,6 +87,75 @@ it("deduplicates dependency payloads without changing their original modes", asy
   expect(Number(original.mode & 0o7777n)).toBe(originalMode);
   expect(original.nlink).toBeGreaterThanOrEqual(3n);
   expect(open).not.toHaveBeenCalled();
+});
+
+it("holds every distinct batch lease until all files in the batch are published", async () => {
+  const seed = path.join(root, "seed");
+  const tree = path.join(root, "tree");
+  await fs.promises.mkdir(seed);
+  await fs.promises.mkdir(tree);
+  const payloads = ["batch payload one", "batch payload two"];
+  for (const [index, payload] of payloads.entries()) {
+    await fs.promises.writeFile(path.join(seed, `seed-${index}.js`), payload);
+    await fs.promises.writeFile(path.join(tree, `copy-${index}.js`), payload);
+  }
+  await deduplicateDependencyContent(seed);
+
+  const coordinatorRoot = path.join(cache.root, "dependency-files");
+  const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(coordinatorRoot));
+  const targets = new Set<string>();
+  for (const payload of payloads) {
+    const digest = crypto.createHash("sha256").update(payload).digest("hex");
+    const sourceStat = await fs.promises.stat(
+      path.join(seed, `seed-${payloads.indexOf(payload)}.js`)
+    );
+    const mode = (sourceStat.mode & 0o7777).toString(8).padStart(4, "0");
+    targets.add(
+      path.join(
+        coordinatorRoot,
+        mode,
+        "sha256",
+        digest.slice(0, 2),
+        digest.slice(2, 4),
+        digest.slice(4)
+      )
+    );
+  }
+
+  let resolveLeaseHeld!: () => void;
+  const leaseHeld = new Promise<void>((resolve) => {
+    resolveLeaseHeld = resolve;
+  });
+  let releaseVerification!: () => void;
+  const verificationGate = new Promise<void>((resolve) => {
+    releaseVerification = resolve;
+  });
+  let paused = false;
+  const originalLstat = fs.promises.lstat.bind(fs.promises);
+  vi.spyOn(fs.promises, "lstat").mockImplementation(async (targetPath, options) => {
+    if (!paused && targets.has(String(targetPath))) {
+      paused = true;
+      resolveLeaseHeld();
+      await verificationGate;
+    }
+    return originalLstat(targetPath, options);
+  });
+
+  const pending = deduplicateDependencyContent(tree);
+  try {
+    await leaseHeld;
+    const prune = await pruneUnreferencedDependencyContent();
+    expect(prune.files).toBe(0);
+    expect([...targets].every((target) => fs.existsSync(target))).toBe(true);
+    expect(contentLeaseCount(coordinatorRoot)).toBe(2);
+    releaseVerification();
+    await pending;
+    expect(contentLeaseCount(coordinatorRoot)).toBe(0);
+  } finally {
+    releaseVerification();
+    await pending.catch(() => {});
+    coordinator.close();
+  }
 });
 
 it("keeps equal payloads with distinct executable modes in distinct inode pools", async () => {
@@ -377,7 +460,7 @@ it("preserves the original hardlink failure with bounded filesystem evidence", a
   expect(linkError.message).not.toContain(root);
 });
 
-it("retains SQLite transaction diagnostics across parallel deduplication workers", async () => {
+it("retains SQLite transaction diagnostics when batch lease acquisition is rejected", async () => {
   const tree = path.join(root, "locked-tree");
   await fs.promises.mkdir(tree);
   for (const name of ["first.js", "second.js"])
@@ -399,9 +482,8 @@ it("retains SQLite transaction diagnostics across parallel deduplication workers
     blocker.close();
   }
 
-  expect(caught).toBeInstanceOf(AggregateError);
-  const errors = (caught as AggregateError).errors as Array<Error & { cause?: unknown }>;
-  expect(errors).toHaveLength(2);
+  expect(caught).toBeInstanceOf(Error);
+  const errors = [caught as Error & { cause?: unknown }];
   for (const error of errors) {
     expect(error).toMatchObject({
       name: "DependencyContentCoordinatorError",
@@ -412,8 +494,35 @@ it("retains SQLite transaction diagnostics across parallel deduplication workers
         errstr: "database is locked",
       },
     });
-    expect(error.message).toContain("acquiring a digest lease");
+    expect(error.message).toContain("acquiring digest leases");
   }
+});
+
+it("joins the admitted file batch before stopping after a preparation failure", async () => {
+  const tree = path.join(root, "tree");
+  await fs.promises.mkdir(tree);
+  const files = Array.from({ length: 9 }, (_, index) =>
+    path.join(tree, `${String(index).padStart(2, "0")}.js`)
+  );
+  for (const [index, file] of files.entries()) {
+    await fs.promises.writeFile(file, `batch stop payload ${index}`);
+  }
+
+  const primaryFailure = new Error("first batch source disappeared");
+  const originalLstat = fs.promises.lstat.bind(fs.promises);
+  const observed = new Set<string>();
+  vi.spyOn(fs.promises, "lstat").mockImplementation(async (target, options) => {
+    const targetPath = String(target);
+    if (files.includes(targetPath)) {
+      observed.add(targetPath);
+      if (targetPath === files[0]) throw primaryFailure;
+    }
+    return originalLstat(target, options);
+  });
+
+  await expect(deduplicateDependencyContent(tree)).rejects.toBe(primaryFailure);
+  expect(observed).toEqual(new Set(files.slice(0, 8)));
+  expect(fs.existsSync(files[8]!)).toBe(true);
 });
 
 it("keeps a linked replica live when pruning overlaps publication", async () => {
@@ -513,20 +622,41 @@ it("joins all hash workers and aggregates independent failures", async () => {
   const failuresObserved = new Promise<void>((resolve) => {
     rejectFailuresObserved = resolve;
   });
-  let resolveSuccessWorkers!: () => void;
-  const releaseWorkers = new Promise<void>((resolve) => {
-    resolveSuccessWorkers = resolve;
+  let resolveHashing!: () => void;
+  const hashingGate = new Promise<void>((resolve) => {
+    resolveHashing = resolve;
   });
   let resolveWaitStarted!: () => void;
   const waitStarted = new Promise<void>((resolve) => {
     resolveWaitStarted = resolve;
   });
-  let failureCount = 0;
-  let successfulWorkerStarted = false;
-  let resolveSuccessfulWorkerStarted!: () => void;
+  let resolveSuccessStarted!: () => void;
   const successStarted = new Promise<void>((resolve) => {
-    resolveSuccessfulWorkerStarted = resolve;
+    resolveSuccessStarted = resolve;
   });
+  let resolvePublicationPaused!: () => void;
+  const publicationPaused = new Promise<void>((resolve) => {
+    resolvePublicationPaused = resolve;
+  });
+  let releasePublication!: () => void;
+  const publicationGate = new Promise<void>((resolve) => {
+    releasePublication = resolve;
+  });
+  const targetVerifications = new Map<string, number>();
+  const waitingDigest = crypto.createHash("sha256").update("unique payload 2").digest("hex");
+  const waitingMode = ((await fs.promises.stat(files[2]!)).mode & 0o7777)
+    .toString(8)
+    .padStart(4, "0");
+  const waitingTarget = path.join(
+    cache.root,
+    "dependency-files",
+    waitingMode,
+    "sha256",
+    waitingDigest.slice(0, 2),
+    waitingDigest.slice(2, 4),
+    waitingDigest.slice(4)
+  );
+  let failureCount = 0;
   const originalLink = fs.linkSync.bind(fs);
   vi.spyOn(fs, "linkSync").mockImplementation((source, destination) => {
     const sourceName = path.basename(String(source));
@@ -535,15 +665,23 @@ it("joins all hash workers and aggregates independent failures", async () => {
       if (failureCount === failures.length) rejectFailuresObserved();
       throw failures[sourceName === "failure-a.js" ? 0 : 1];
     }
-    successfulWorkerStarted = true;
-    resolveSuccessfulWorkerStarted();
+    resolveSuccessStarted();
     return originalLink(source, destination);
   });
   const originalLstat = fs.promises.lstat.bind(fs.promises);
   vi.spyOn(fs.promises, "lstat").mockImplementation(async (target, options) => {
-    if (path.basename(String(target)) === "wait-a.js") {
+    const targetPath = String(target);
+    if (path.basename(targetPath) === "wait-a.js") {
       resolveWaitStarted();
-      await releaseWorkers;
+      await hashingGate;
+    }
+    if (targetPath === waitingTarget) {
+      const count = (targetVerifications.get(targetPath) ?? 0) + 1;
+      targetVerifications.set(targetPath, count);
+      if (count === 2) {
+        resolvePublicationPaused();
+        await publicationGate;
+      }
     }
     return originalLstat(target, options);
   });
@@ -558,10 +696,16 @@ it("joins all hash workers and aggregates independent failures", async () => {
       settled = true;
     }
   );
-  await Promise.all([failuresObserved, successStarted, waitStarted]);
-  expect(successfulWorkerStarted).toBe(true);
+  await waitStarted;
   expect(settled).toBe(false);
-  resolveSuccessWorkers();
+  resolveHashing();
+  await failuresObserved;
+  await successStarted;
+  await publicationPaused;
+  const coordinatorRoot = path.join(cache.root, "dependency-files");
+  expect(contentLeaseCount(coordinatorRoot)).toBe(files.length);
+  expect(settled).toBe(false);
+  releasePublication();
 
   let caught: unknown;
   try {
@@ -581,4 +725,5 @@ it("joins all hash workers and aggregates independent failures", async () => {
     });
   }
   expect((caught as Error & { cause?: unknown }).cause).toBe(workerErrors[0]);
+  expect(contentLeaseCount(coordinatorRoot)).toBe(0);
 });

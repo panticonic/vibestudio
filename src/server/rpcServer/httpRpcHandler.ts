@@ -30,7 +30,7 @@ export type HttpRpcAdmission =
 export interface HttpRpcHandlerDeps {
   workspaceId?: string;
   maxBodyBytes: number;
-  authenticate(req: IncomingMessage): HttpRpcAdmission;
+  authenticate(req: IncomingMessage): HttpRpcAdmission | Promise<HttpRpcAdmission>;
   handleStreamingRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
   handleRequest(
     caller: AuthenticatedHttpRpcCaller,
@@ -64,6 +64,10 @@ export class HttpRpcHandler {
   private readonly activeRequests = new Map<string, AbortController>();
   private readonly activeBodies = new Set<IncomingMessage>();
   private readonly activeResponses = new Set<ServerResponse>();
+  private readonly operations = new Set<Promise<void>>();
+  private readonly retirementFailures = new Set<unknown>();
+  private readonly admissions = new Set<AbortController>();
+  private stopped = false;
 
   constructor(private readonly deps: HttpRpcHandlerDeps) {}
 
@@ -81,13 +85,65 @@ export class HttpRpcHandler {
 
   /** Abort every HTTP RPC owned by this transport generation. */
   stop(reason = "RPC server shutting down"): void {
+    this.stopped = true;
     const error = new Error(reason);
+    for (const admission of this.admissions) admission.abort(error);
     for (const request of this.activeRequests.values()) request.abort(error);
     for (const req of this.activeBodies) req.destroy(error);
     for (const res of this.activeResponses) res.destroy(error);
   }
 
-  async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  async drain(): Promise<void> {
+    const failures = new Set<unknown>();
+    while (this.operations.size > 0) {
+      const results = await Promise.allSettled([...this.operations]);
+      for (const result of results) {
+        if (result.status === "rejected") failures.add(result.reason);
+      }
+    }
+    for (const failure of this.retirementFailures) failures.add(failure);
+    this.retirementFailures.clear();
+    if (failures.size === 1) throw failures.values().next().value;
+    if (failures.size > 1) throw new AggregateError(failures, "HTTP RPC work failed");
+  }
+
+  handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.stopped) {
+      writeJson(res, 503, { error: "RPC server shutting down" });
+      req.resume();
+      return Promise.resolve();
+    }
+    const abort = new AbortController();
+    this.admissions.add(abort);
+    const disconnected = () => abort.abort(new Error("HTTP RPC caller disconnected"));
+    req.once("aborted", disconnected);
+    res.once("close", disconnected);
+    if (req.aborted || res.destroyed) disconnected();
+    const operation = this.handleOwned(req, res, abort).finally(() => {
+      req.removeListener("aborted", disconnected);
+      res.removeListener("close", disconnected);
+      this.admissions.delete(abort);
+    });
+    this.operations.add(operation);
+    void operation.then(
+      () => this.operations.delete(operation),
+      (error: unknown) => {
+        // Running requests return failures to their caller. Only retirement
+        // needs to retain completed failures until the owning drain joins them.
+        if (this.stopped) this.retirementFailures.add(error);
+        this.operations.delete(operation);
+      }
+    );
+    return operation;
+  }
+
+  private async handleOwned(
+    req: IncomingMessage,
+    res: ServerResponse,
+    abort: AbortController
+  ): Promise<void> {
+    const isLive = () => !abort.signal.aborted && !res.destroyed && !res.writableEnded;
+    if (!isLive()) return;
     this.activeBodies.add(req);
     this.activeResponses.add(res);
     // IncomingMessage closes when its body completes, while its response
@@ -108,7 +164,8 @@ export class HttpRpcHandler {
 
     // Admission is deliberately header-only and must precede request-body
     // consumption. An invalid caller never receives a body-sized allocation.
-    const admission = this.deps.authenticate(req);
+    const admission = await this.deps.authenticate(req);
+    if (!isLive()) return;
     if (!admission.ok) {
       writeJson(res, admission.status, admission.body);
       req.resume();
@@ -132,6 +189,7 @@ export class HttpRpcHandler {
       }
       chunks.push(bytes);
     }
+    if (!isLive()) return;
 
     let envelope: RpcEnvelope;
     try {
@@ -193,16 +251,7 @@ export class HttpRpcHandler {
     }
 
     const requestKey = this.requestKey(admission.caller, message.requestId);
-    const abort = new AbortController();
-    const abortDisconnectedTransport = (): void => {
-      if (!abort.signal.aborted) {
-        abort.abort(new Error("HTTP RPC caller disconnected"));
-      }
-    };
-    req.once("aborted", abortDisconnectedTransport);
-    res.once("close", abortDisconnectedTransport);
     this.activeRequests.set(requestKey, abort);
-    if (req.aborted) abortDisconnectedTransport();
     // The response headers acknowledge that this authenticated request is now
     // registered and cancellable. The JSON body remains the terminal receipt.
     res.writeHead(200, JSON_HEADERS);
@@ -246,8 +295,6 @@ export class HttpRpcHandler {
         )
       );
     } finally {
-      req.removeListener("aborted", abortDisconnectedTransport);
-      res.removeListener("close", abortDisconnectedTransport);
       if (this.activeRequests.get(requestKey) === abort) {
         this.activeRequests.delete(requestKey);
       }

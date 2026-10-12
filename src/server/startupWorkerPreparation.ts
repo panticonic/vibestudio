@@ -1,20 +1,14 @@
 import type { BuildSystemV2 } from "./buildV2/index.js";
+import type { StoredBuildResult } from "./buildV2/buildStore.js";
 
-export interface StartupWorkerBuilds<Executable> {
-  listBuildUnits: BuildSystemV2["listBuildUnits"];
-  getBuild(
-    unitPath: string,
-    ref: string,
-    options: { priority: "speculative" }
-  ): Promise<Executable>;
-}
+export type StartupWorkerBuilds = Pick<BuildSystemV2, "listBuildUnits" | "getStoredBuild">;
 
 /** Prepare executables and schema evidence from one immutable workspace view, without creating entities.
  * Demand joins the same content-addressed builds; speculative work yields to it.
  * Shutdown stops admission and joins the admitted build or schema operation. */
-export async function prepareStartupWorkers<Executable>(
-  builds: StartupWorkerBuilds<Executable>,
-  prepareExecutable: (build: Executable, classNames: readonly string[]) => Promise<void>,
+export async function prepareStartupWorkers(
+  builds: StartupWorkerBuilds,
+  prepareExecutable: (build: StoredBuildResult, classNames: readonly string[]) => Promise<void>,
   signal: AbortSignal
 ): Promise<{ sources: string[]; elapsedMs: number }> {
   const startedAt = performance.now();
@@ -25,7 +19,7 @@ export async function prepareStartupWorkers<Executable>(
   for (const unit of units) {
     signal.throwIfAborted();
     try {
-      const build = await builds.getBuild(unit.unitPath, unit.stateHash, {
+      const build = await builds.getStoredBuild(unit.unitPath, unit.stateHash, {
         priority: "speculative",
       });
       signal.throwIfAborted();

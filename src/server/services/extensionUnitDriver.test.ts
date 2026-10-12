@@ -38,7 +38,7 @@ describe("extension activation", () => {
       capacity: { entries: 1000, errors: 500 },
     }));
     const host = {
-      listWorkspaceUnits: () => [row],
+      listWorkspaceUnits: async () => [row],
       listWorkspaceUnitLogs: vi.fn(() => []),
       ensureActivated: vi.fn(),
     };
@@ -50,7 +50,7 @@ describe("extension activation", () => {
       }
     );
 
-    expect(driver.health(row.name)).toMatchObject({
+    await expect(driver.health(row.name)).resolves.toMatchObject({
       logs: [{ message: "ready", source: "structured" }],
       errors: [{ message: "startup failed", source: "stderr" }],
       dropped: { entries: 4, errors: 1 },
@@ -81,7 +81,7 @@ describe("extension activation", () => {
         finishActivation = resolve;
       });
       const host = {
-        listWorkspaceUnits: () => rows,
+        listWorkspaceUnits: async () => rows,
         ensureActivated: vi.fn(async (releaseId: string) => {
           markOwnerStarted();
           await activationReady;
@@ -138,7 +138,7 @@ describe("extension activation", () => {
     const rows = [row];
     const failure = new Error("extension build failed");
     const host = {
-      listWorkspaceUnits: () => rows,
+      listWorkspaceUnits: async () => rows,
       ensureActivated: vi.fn(async () => {
         throw failure;
       }),

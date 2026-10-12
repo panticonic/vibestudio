@@ -68,6 +68,7 @@ import {
   type BuildArtifacts,
   type BuildMetadata,
   type BuildResult,
+  type StoredBuildResult,
 } from "./buildStore.js";
 import { computeBuildKey } from "./effectiveVersion.js";
 import {
@@ -591,8 +592,8 @@ async function withBuildSlot<T>(
 }
 
 // Build coalescing: dedup concurrent builds of the same key
-const inFlightBuilds = new Map<string, BuildFlight<BuildResult>>();
-const inFlightLibraryBuilds = new Map<string, Promise<BuildResult>>();
+const inFlightBuilds = new Map<string, BuildFlight<StoredBuildResult>>();
+const inFlightLibraryBuilds = new Map<string, Promise<StoredBuildResult>>();
 
 // ---------------------------------------------------------------------------
 // Resolve Plugin
@@ -2107,14 +2108,14 @@ export function resolveBuildUnitKey(
  *   same coordinate from which EVs were derived.
  * @param options - Optional build options (library mode, externals).
  */
-export async function buildUnit(
+export async function buildUnitStored(
   node: GraphNode,
   ev: string,
   graph: PackageGraph,
   workspaceRoot: string,
   stateRef: string,
   options?: BuildUnitOptions
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   const sourcemap = buildSourcemapForNode(node, options);
   let provider: BuildProvider | null = null;
   const prepared = preparedRuntimeBuild(node, ev, stateRef, options);
@@ -2146,7 +2147,8 @@ export async function buildUnit(
   }
 
   // Check store first
-  let cached = await buildStore.getOrHydrate(buildKey, stateRef);
+  const cachedRecord = await buildStore.getOrHydrate(buildKey, stateRef);
+  let cached = cachedRecord;
   if (cached && cached.sourceStateHash !== stateRef && cached.sourceStateHash !== null) {
     cached = await buildStore.rebindSourceState(cached, stateRef);
   }
@@ -2170,7 +2172,7 @@ export async function buildUnit(
     return inFlight.adopt(requestedPriority);
   }
 
-  const flight = new BuildFlight<BuildResult>(requestedPriority, (priority) =>
+  const flight = new BuildFlight<StoredBuildResult>(requestedPriority, (priority) =>
     withBuilderWorkers(() =>
       doBuild(
         node,
@@ -2193,6 +2195,20 @@ export async function buildUnit(
   } finally {
     if (inFlightBuilds.get(buildKey) === flight) inFlightBuilds.delete(buildKey);
   }
+}
+
+/** Materialize artifact strings only for callers crossing the build RPC wire boundary. */
+export async function buildUnit(
+  node: GraphNode,
+  ev: string,
+  graph: PackageGraph,
+  workspaceRoot: string,
+  stateRef: string,
+  options?: BuildUnitOptions
+): Promise<BuildResult> {
+  return buildStore.materializeStoredBuild(
+    await buildUnitStored(node, ev, graph, workspaceRoot, stateRef, options)
+  );
 }
 
 const EMPTY_UNIT_AUTHORITY: UnitAuthorityManifest = Object.freeze({
@@ -2247,7 +2263,7 @@ async function doBuild(
   provider: BuildProvider | null,
   options?: BuildUnitOptions,
   priorityOwner?: BuildPriorityOwner
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   const trace = traceBuildStages(`${node.name}@${buildKey.slice(0, 12)}`);
   trace.enter("semaphore");
   try {
@@ -2476,7 +2492,7 @@ async function buildTestBundle(
   sourceStateHash: string,
   authority: UnitAuthorityManifest,
   test: NonNullable<BuildUnitOptions["test"]>
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   if (test.runtime === "native") {
     throw new BuildRequestError(
       "native_test_artifact_requires_native_executor",
@@ -2647,7 +2663,7 @@ async function storeSimpleBuild(
   authority: UnitAuthorityManifest,
   extraMetadata: Partial<BuildMetadata> = {},
   artifacts: BuildArtifacts = bundleArtifacts(bundle)
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   const metadata: BuildMetadata = {
     kind: node.kind as BuildMetadata["kind"],
     name: node.name,
@@ -2661,7 +2677,7 @@ async function storeSimpleBuild(
     ...extraMetadata,
     builtAt: new Date().toISOString(),
   };
-  return buildStore.put(buildKey, artifacts, metadata);
+  return buildStore.putStored(buildKey, artifacts, metadata);
 }
 
 function bundleArtifacts(bundle: string): BuildArtifacts {
@@ -2942,7 +2958,7 @@ async function buildWebsiteBundle(
   sourceRoot: string,
   sourceStateHash: string,
   authority: UnitAuthorityManifest
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   const env = await prepareBuildEnv(
     node,
     buildKey,
@@ -3091,7 +3107,7 @@ async function buildWebsiteBundle(
       },
       builtAt: new Date().toISOString(),
     };
-    return await buildStore.put(buildKey, { entries: artifacts }, metadata);
+    return await buildStore.putStored(buildKey, { entries: artifacts }, metadata);
   } finally {
     await env.cleanup();
   }
@@ -3108,7 +3124,7 @@ async function buildPanel(
   sourceStateHash: string,
   authority: UnitAuthorityManifest,
   runtimeTest?: RuntimeTestBuild
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   const profileStartedAt = Date.now();
   const profileStartedRss = process.memoryUsage().rss;
   const env = await prepareBuildEnv(
@@ -3493,7 +3509,7 @@ async function buildPanel(
       builtAt: new Date().toISOString(),
     };
 
-    const stored = await buildStore.put(buildKey, { entries: artifactEntries }, metadata);
+    const stored = await buildStore.putStored(buildKey, { entries: artifactEntries }, metadata);
     const storedAt = Date.now();
     const totalMs = storedAt - profileStartedAt;
     if (isVerboseBuildLogEnabled()) {
@@ -3860,7 +3876,7 @@ async function buildWorker(
   sourceStateHash: string,
   authority: UnitAuthorityManifest,
   runtimeTest?: RuntimeTestBuild
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   const profileStartedAt = Date.now();
   const profileStartedRss = process.memoryUsage().rss;
   const env = await prepareBuildEnv(
@@ -4088,7 +4104,7 @@ async function buildWorker(
           : { kind: "generic" },
         builtAt: new Date().toISOString(),
       };
-      const stored = await buildStore.put(buildKey, artifacts, metadata);
+      const stored = await buildStore.putStored(buildKey, artifacts, metadata);
       logProfile(Date.now());
       return stored;
     }
@@ -4140,7 +4156,7 @@ async function buildApp(
   sourceStateHash: string,
   authority: UnitAuthorityManifest,
   provider: BuildProvider | null
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   const appSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(appSourcePath, "package.json");
   const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8")) as {
@@ -4233,7 +4249,7 @@ async function buildApp(
         },
         builtAt: new Date().toISOString(),
       };
-      return buildStore.put(buildKey, { entries }, metadata);
+      return buildStore.putStored(buildKey, { entries }, metadata);
     } finally {
       try {
         await resources?.dispose();
@@ -4338,7 +4354,7 @@ async function buildTerminalApp(
   appManifest: Record<string, unknown>,
   sourceStateHash: string,
   authority: UnitAuthorityManifest
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   const env = await prepareBuildEnv(
     node,
     buildKey,
@@ -4388,7 +4404,7 @@ async function buildTerminalApp(
       tsconfigRaw: { compilerOptions: {} },
     });
     const bundle = fs.readFileSync(path.join(outdir, "index.mjs"), "utf8");
-    return buildStore.put(
+    return buildStore.putStored(
       buildKey,
       {
         entries: [
@@ -4579,7 +4595,7 @@ async function buildExtension(
   sourceRoot: string,
   sourceStateHash: string,
   authority: UnitAuthorityManifest
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   const env = await prepareBuildEnv(
     node,
     buildKey,
@@ -4813,7 +4829,7 @@ async function smokeTestExtensionBuild(
   }
 }
 
-async function refreshCachedExtensionRuntimeDeps(result: BuildResult): Promise<void> {
+async function refreshCachedExtensionRuntimeDeps(result: StoredBuildResult): Promise<void> {
   const extensionDetails =
     result.metadata.details.kind === "extension" ? result.metadata.details : null;
   const deps = extensionDetails?.externalDeps ?? {};
@@ -4934,7 +4950,7 @@ async function buildLibraryBundle(
   conditions: readonly string[],
   authority: UnitAuthorityManifest,
   target: LibraryBuildTarget
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot, "library");
 
   try {
@@ -5160,7 +5176,7 @@ export async function buildNpmLibrary(
   specifier: string,
   version: string,
   externals: string[]
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   validateNpmSpecifier(specifier);
   validateSandboxNpmLibrarySpecifier(specifier);
   validateNpmVersion(version);
@@ -5175,7 +5191,7 @@ export async function buildNpmLibrary(
   const inFlight = inFlightBuilds.get(buildKey);
   if (inFlight) return inFlight.promise;
 
-  const flight = new BuildFlight<BuildResult>("interactive", () =>
+  const flight = new BuildFlight<StoredBuildResult>("interactive", () =>
     withBuilderWorkers(() => doNpmBuild(specifier, version, externals, buildKey))
   );
   inFlightBuilds.set(buildKey, flight);
@@ -5192,7 +5208,7 @@ async function doNpmBuild(
   version: string,
   externals: string[],
   buildKey: string
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   return withBuildSlot(async () => {
     const deps: Record<string, string> = { [specifier]: version };
     const borrowedDeps = await acquireExternalDeps(deps, {}, { appRoot: _appRoot });
@@ -5253,7 +5269,7 @@ async function doNpmBuild(
         details: libraryBuildDetails("cjs", result.metafile),
         builtAt: new Date().toISOString(),
       };
-      return buildStore.put(buildKey, bundleArtifacts(bundleContent), metadata);
+      return buildStore.putStored(buildKey, bundleArtifacts(bundleContent), metadata);
     } finally {
       borrowedDeps.release();
       try {
@@ -5279,7 +5295,7 @@ async function doNpmBuild(
 export async function buildPlatformLibrary(
   specifier: string,
   externals: string[]
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   if (_appNodeModules.length === 0) {
     throw new Error("App node_modules not configured — cannot build @vibestudio/* packages");
   }
@@ -5308,7 +5324,7 @@ async function doPlatformBuild(
   specifier: string,
   externals: string[],
   buildKey: string
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   return withBuildSlot(async () => {
     const outdir = createBuildScratchDir(`platform-${specifier.replace(/[/@]/g, "_")}`);
 
@@ -5354,7 +5370,7 @@ async function doPlatformBuild(
         details: libraryBuildDetails("cjs", result.metafile),
         builtAt: new Date().toISOString(),
       };
-      return buildStore.put(buildKey, bundleArtifacts(bundleContent), metadata);
+      return buildStore.putStored(buildKey, bundleArtifacts(bundleContent), metadata);
     } finally {
       try {
         await fs.promises.rm(outdir, { recursive: true, force: true });

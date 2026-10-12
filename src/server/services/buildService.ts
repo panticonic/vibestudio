@@ -7,7 +7,11 @@ import type { BuildSystemV2 } from "../buildV2/index.js";
 import { buildSourcemapForNode } from "../buildV2/builder.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
 import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";
-import { readArtifactBytesAsync, readExecutableModules } from "../buildV2/buildStore.js";
+import {
+  readExecutableModules,
+  readStoredArtifactBytes,
+  type StoredBuildResult,
+} from "../buildV2/buildStore.js";
 
 export interface ResolvedPanelMetadata {
   source: string;
@@ -56,13 +60,13 @@ const SKILLS_PACKAGE_SCOPE = (() => {
 
 export function createBuildService(deps: {
   buildSystem: BuildSystemV2;
-  listUnits: () => BuildUnitCatalogEntry[];
+  listUnits: () => BuildUnitCatalogEntry[] | Promise<BuildUnitCatalogEntry[]>;
   getCallerContextId: (callerId: string) => string | null;
 }): ServiceDefinition {
-  const artifactHandle = (build: NonNullable<ReturnType<BuildSystemV2["getBuildByKey"]>>) => ({
+  const artifactHandle = (build: StoredBuildResult) => ({
     buildKey: build.buildKey,
     sourceStateHash: build.sourceStateHash,
-    artifacts: build.artifacts.map(({ content: _content, ...artifact }) => artifact),
+    artifacts: build.artifacts,
     ...(build.metadata.details.kind === "website-bundle"
       ? {
           website: {
@@ -91,8 +95,8 @@ export function createBuildService(deps: {
               library: false,
             });
       },
-      getBuildArtifacts: (_ctx, [key]) => {
-        const build = deps.buildSystem.getBuildByKey(key);
+      getBuildArtifacts: async (_ctx, [key]) => {
+        const build = await deps.buildSystem.getBuildByKey(key);
         if (!build) return null;
         return artifactHandle(build);
       },
@@ -100,18 +104,18 @@ export function createBuildService(deps: {
         if (!ref.startsWith("ctx:") && !ref.startsWith("state:")) {
           throw new Error("Website builds require an exact ctx: or state: reference");
         }
-        const build = await deps.buildSystem.getBuild(unit, ref, {
+        const build = await deps.buildSystem.getStoredBuild(unit, ref, {
           library: false,
           website: true,
         });
         return artifactHandle(build);
       },
       readBuildArtifact: async (_ctx, [key, artifactPath]) => {
-        const build = deps.buildSystem.getBuildByKey(key);
+        const build = await deps.buildSystem.getBuildByKey(key);
         if (!build) throw new Error(`Unknown immutable build: ${key}`);
         const artifact = build.artifacts.find((candidate) => candidate.path === artifactPath);
         if (!artifact) throw new Error(`Build ${key} has no artifact ${artifactPath}`);
-        const bytes = await readArtifactBytesAsync(build, artifact);
+        const bytes = await readStoredArtifactBytes(build, artifact);
         return new Response(new Uint8Array(bytes), {
           headers: {
             "Content-Type": artifact.contentType,
@@ -127,13 +131,13 @@ export function createBuildService(deps: {
       getBuildNpm: (_ctx, [specifier, version, externals]) =>
         deps.buildSystem.getBuildNpm(specifier, version, externals),
       prepareTypecheck: (_ctx, [unit, ref]) => deps.buildSystem.prepareTypecheck(unit, ref),
-      getBuildMetadata: (_ctx, [key, options]) => {
+      getBuildMetadata: async (_ctx, [key, options]) => {
         const bs = deps.buildSystem;
-        const build = bs.getBuildByKey(key);
+        const build = await bs.getBuildByKey(key);
         if (!build) return null;
         const metadata =
           options?.includeExecutableModules === true
-            ? { ...build.metadata, executableModules: readExecutableModules(build.dir) }
+            ? { ...build.metadata, executableModules: await readExecutableModules(build.dir) }
             : (({ executableModules: _executableModules, ...compact }) => compact)(build.metadata);
         const diagnostics =
           diagnosticsForBuildKey(key) ?? diagnosticsForUnit(build.metadata.name) ?? undefined;
@@ -158,38 +162,40 @@ export function createBuildService(deps: {
         });
         finishPhase();
         const firstElapsedMs = phaseStartedAt - firstStartedAt;
-        const targets = report.builds.flatMap((target) => {
-          if (!target.buildKey) return [];
-          const build = deps.buildSystem.getBuildByKey(target.buildKey);
-          if (!build) return [];
-          const artifacts = build.artifacts
-            .map((artifact) => {
-              const bytes =
-                artifact.byteLength ??
-                (artifact.encoding === "base64"
-                  ? Buffer.from(artifact.content, "base64").byteLength
-                  : Buffer.byteLength(artifact.content));
-              return { path: artifact.path, role: artifact.role, bytes };
+        const targets = (
+          await Promise.all(
+            report.builds.map(async (target) => {
+              if (!target.buildKey) return [];
+              const build = await deps.buildSystem.getBuildByKey(target.buildKey);
+              if (!build) return [];
+              const artifacts = build.artifacts
+                .map((artifact) => {
+                  const bytes = artifact.byteLength ?? 0;
+                  return { path: artifact.path, role: artifact.role, bytes };
+                })
+                .sort((left, right) => right.bytes - left.bytes);
+              const executableModules = (await readExecutableModules(build.dir)) ?? [];
+              return [
+                {
+                  target: target.target,
+                  buildKey: target.buildKey,
+                  builtAt: build.metadata.builtAt,
+                  artifactCount: artifacts.length,
+                  artifactBytes: artifacts.reduce((sum, artifact) => sum + artifact.bytes, 0),
+                  largestArtifacts: artifacts.slice(0, 20),
+                  executableModuleCount: executableModules.length,
+                  executableSourceBytes: executableModules.reduce(
+                    (sum, module) => sum + Buffer.byteLength(module.source),
+                    0
+                  ),
+                  ...(build.metadata.bundleReport
+                    ? { bundleReport: build.metadata.bundleReport }
+                    : {}),
+                },
+              ];
             })
-            .sort((left, right) => right.bytes - left.bytes);
-          const executableModules = readExecutableModules(build.dir) ?? [];
-          return [
-            {
-              target: target.target,
-              buildKey: target.buildKey,
-              builtAt: build.metadata.builtAt,
-              artifactCount: artifacts.length,
-              artifactBytes: artifacts.reduce((sum, artifact) => sum + artifact.bytes, 0),
-              largestArtifacts: artifacts.slice(0, 20),
-              executableModuleCount: executableModules.length,
-              executableSourceBytes: executableModules.reduce(
-                (sum, module) => sum + Buffer.byteLength(module.source),
-                0
-              ),
-              ...(build.metadata.bundleReport ? { bundleReport: build.metadata.bundleReport } : {}),
-            },
-          ];
-        });
+          )
+        ).flat();
         const builtTimes = targets
           .map((target) => Date.parse(target.builtAt))
           .filter(Number.isFinite);
@@ -224,7 +230,7 @@ export function createBuildService(deps: {
         };
       },
       getEffectiveVersion: (_ctx, [unit]) => deps.buildSystem.getEffectiveVersion(unit),
-      inspectBuildProvenance: (_ctx, [source]) => {
+      inspectBuildProvenance: async (_ctx, [source]) => {
         const bs = deps.buildSystem;
         const graph = bs.getGraph();
         const exactNode =
@@ -271,18 +277,20 @@ export function createBuildService(deps: {
           );
         }
         const cachedBuilds = Object.fromEntries(
-          Object.entries(buildKeys).map(([kind, key]) => {
-            const build = key ? bs.getBuildByKey(key) : null;
-            return [
-              kind,
-              {
-                key,
-                cached: !!build,
-                artifactCount: build?.artifacts.length ?? 0,
-                metadata: build?.metadata ?? null,
-              },
-            ];
-          })
+          await Promise.all(
+            Object.entries(buildKeys).map(async ([kind, key]) => {
+              const build = key ? await bs.getBuildByKey(key) : null;
+              return [
+                kind,
+                {
+                  key,
+                  cached: !!build,
+                  artifactCount: build?.artifacts.length ?? 0,
+                  metadata: build?.metadata ?? null,
+                },
+              ];
+            })
+          )
         );
         return {
           source,

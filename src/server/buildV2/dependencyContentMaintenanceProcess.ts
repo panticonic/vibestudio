@@ -8,66 +8,151 @@ import {
   pruneUnreferencedDependencyContent,
 } from "./dependencyContentStore.js";
 
-async function main(): Promise<void> {
-  const owners = new Map<string, DerivedCacheCoordinator>();
+type Preparation = { stagingDir: string; cacheDir: string };
+type MaintenanceJob = { preparations: Preparation[]; prune: boolean };
+type JobResult = { ok: true } | { ok: false; failure: ReturnType<typeof serializeRpcFailure> };
+
+function parseJob(raw: string | undefined): MaintenanceJob {
+  if (raw === undefined) throw new Error("Dependency maintenance job is missing");
+  const value = JSON.parse(raw) as Partial<MaintenanceJob>;
+  if (
+    !value ||
+    !Array.isArray(value.preparations) ||
+    typeof value.prune !== "boolean" ||
+    (value.preparations.length === 0 && !value.prune)
+  ) {
+    throw new Error("Dependency maintenance job is invalid");
+  }
+  for (const preparation of value.preparations) {
+    if (
+      !preparation ||
+      typeof preparation.stagingDir !== "string" ||
+      typeof preparation.cacheDir !== "string"
+    ) {
+      throw new Error("Dependency preparation descriptor is invalid");
+    }
+  }
+  return value as MaintenanceJob;
+}
+
+async function prepareDependencyTree(
+  preparation: Preparation,
+  owners: Map<string, DerivedCacheCoordinator>
+): Promise<void> {
+  const cache = dependencyCacheLocation(preparation.cacheDir);
+  const cacheDir = path.resolve(preparation.cacheDir);
+  const stagingDir = path.resolve(preparation.stagingDir);
+  const escapedKey = cache.key.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  if (
+    cacheDir !== path.join(cache.root, cache.key) ||
+    path.dirname(stagingDir) !== cache.root ||
+    !new RegExp(`^${escapedKey}\\.tmp\\.[a-f0-9]{32}$`, "u").test(path.basename(stagingDir))
+  ) {
+    throw new Error("Refusing dependency preparation outside its exact private staging directory");
+  }
+  const stagingStat = await fs.promises.lstat(stagingDir);
+  if (!stagingStat.isDirectory() || stagingStat.isSymbolicLink()) {
+    throw new Error("Dependency preparation staging path is not a private directory");
+  }
+  const receiptStat = await fs.promises.lstat(path.join(stagingDir, ".ready"));
+  if (!receiptStat.isFile() || receiptStat.isSymbolicLink()) {
+    throw new Error("Dependency preparation staging directory has no regular receipt");
+  }
+  const nodeModulesStat = await fs.promises.lstat(path.join(stagingDir, "node_modules"));
+  if (!nodeModulesStat.isDirectory() || nodeModulesStat.isSymbolicLink()) {
+    throw new Error("Dependency preparation staging directory has no node_modules tree");
+  }
+
+  let owner = owners.get(cache.root);
+  if (!owner) {
+    owner = new DerivedCacheCoordinator(derivedCacheDatabasePath(cache.root));
+    owners.set(cache.root, owner);
+  }
+  const lease = owner.acquire(cache.root, cache.key);
   let primaryFailure: unknown;
   let hasPrimaryFailure = false;
   try {
-    for (const argument of process.argv.slice(2)) {
-      const { root, key, directory: cacheDir } = dependencyCacheLocation(argument);
-      let owner = owners.get(root);
-      if (!owner) {
-        owner = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
-        owners.set(root, owner);
-      }
-      const lease = owner.acquire(root, key);
-      let operationFailure: unknown;
-      let hasOperationFailure = false;
-      try {
-        await owner.maintain(cacheDir, async () => {
-          if (fs.existsSync(path.join(cacheDir, ".ready")))
-            await deduplicateDependencyContent(cacheDir);
-        });
-      } catch (error) {
-        operationFailure = error;
-        hasOperationFailure = true;
-      } finally {
-        try {
-          lease.release();
-        } catch (error) {
-          operationFailure = hasOperationFailure
-            ? new AggregateError(
-                [operationFailure, error],
-                "Dependency maintenance and lease release failed"
-              )
-            : error;
-          hasOperationFailure = true;
-        }
-      }
-      if (hasOperationFailure) throw operationFailure;
+    const prepared = await owner.maintain(stagingDir, () =>
+      deduplicateDependencyContent(stagingDir)
+    );
+    if (prepared === null) {
+      throw new Error("Dependency staging directory is already owned by another preparation");
     }
-    await pruneUnreferencedDependencyContent();
   } catch (error) {
     primaryFailure = error;
     hasPrimaryFailure = true;
   }
+  try {
+    lease.release();
+  } catch (error) {
+    if (hasPrimaryFailure) {
+      throw new AggregateError(
+        [primaryFailure, error],
+        "Dependency preparation and lease release failed",
+        {
+          cause: primaryFailure,
+        }
+      );
+    }
+    throw error;
+  }
+  if (hasPrimaryFailure) throw primaryFailure;
+}
+
+async function main(): Promise<void> {
+  const job = parseJob(process.argv[2]);
+  const owners = new Map<string, DerivedCacheCoordinator>();
+  const results: JobResult[] = [];
+  const maintenanceFailures: unknown[] = [];
   const closeFailures: unknown[] = [];
-  for (const owner of owners.values()) {
-    try {
-      owner.close();
-    } catch (error) {
-      closeFailures.push(error);
+  try {
+    for (const preparation of job.preparations) {
+      try {
+        await prepareDependencyTree(preparation, owners);
+        results.push({ ok: true });
+      } catch (error) {
+        maintenanceFailures.push(error);
+        console.error(formatRpcFailure(error));
+        results.push({ ok: false, failure: serializeRpcFailure(error) });
+      }
+    }
+    if (job.prune) {
+      try {
+        await pruneUnreferencedDependencyContent();
+        results.push({ ok: true });
+      } catch (error) {
+        maintenanceFailures.push(error);
+        console.error(formatRpcFailure(error));
+        results.push({ ok: false, failure: serializeRpcFailure(error) });
+      }
+    }
+  } finally {
+    for (const owner of owners.values()) {
+      try {
+        owner.close();
+      } catch (error) {
+        closeFailures.push(error);
+      }
     }
   }
-  if (hasPrimaryFailure && closeFailures.length > 0)
-    throw new AggregateError(
-      [primaryFailure, ...closeFailures],
-      "Dependency maintenance and coordinator cleanup failed"
-    );
-  if (hasPrimaryFailure) throw primaryFailure;
-  if (closeFailures.length === 1) throw closeFailures[0];
-  if (closeFailures.length > 1)
-    throw new AggregateError(closeFailures, "Dependency maintenance coordinator cleanup failed");
+
+  if (closeFailures.length > 0) {
+    const failures = [...maintenanceFailures, ...closeFailures];
+    throw new AggregateError(failures, "Dependency maintenance and coordinator cleanup failed", {
+      cause: maintenanceFailures[0] ?? closeFailures[0],
+    });
+  }
+
+  const failed = results.some((result) => !result.ok);
+  if (process.send) {
+    await new Promise<void>((resolve, reject) => {
+      process.send!({ type: "dependency-maintenance-results", results }, (error) =>
+        error ? reject(error) : resolve()
+      );
+    });
+    if (process.connected) process.disconnect();
+  }
+  if (failed) process.exitCode = 1;
 }
 
 void main().catch(async (error) => {

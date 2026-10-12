@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   HttpRpcHandler,
   resolveRpcMaxBodyBytes,
+  type HttpRpcAdmission,
   type HttpRpcHandlerDeps,
 } from "./httpRpcHandler.js";
 
@@ -92,6 +93,79 @@ function deps(overrides: Partial<HttpRpcHandlerDeps> = {}): HttpRpcHandlerDeps {
 }
 
 describe("HttpRpcHandler", () => {
+  it("does not dispatch or consume a body after disconnect during admission", async () => {
+    let started!: () => void;
+    let finish!: (admission: HttpRpcAdmission) => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const pending = new Promise<HttpRpcAdmission>((resolve) => {
+      finish = resolve;
+    });
+    const configured = deps({
+      authenticate: vi.fn(() => {
+        started();
+        return pending;
+      }),
+    });
+    const handler = new HttpRpcHandler(configured);
+    const req = request({ body: JSON.stringify(rpcEnvelope()) });
+    const { res, captured } = response();
+    const operation = handler.handle(req, res);
+    await entered;
+    res.destroy();
+    finish({ ok: true, caller: { callerId: "worker:trusted", callerKind: "worker" } });
+    await operation;
+    await handler.drain();
+    expect(req.readableFlowing).not.toBe(true);
+    expect(configured.handleRequest).not.toHaveBeenCalled();
+    expect(captured.status).toBeNull();
+    req.destroy();
+  });
+
+  it("closes admission and joins original pending admission failures on stop", async () => {
+    let started!: () => void;
+    let fail!: (error: Error) => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const pending = new Promise<HttpRpcAdmission>((_resolve, reject) => {
+      fail = reject;
+    });
+    const configured = deps({
+      authenticate: vi.fn(() => {
+        started();
+        return pending;
+      }),
+    });
+    const handler = new HttpRpcHandler(configured);
+    const req = request({ body: JSON.stringify(rpcEnvelope()) });
+    req.on("error", () => undefined);
+    const { res } = response();
+    const failure = new Error("Admission image could not be verified");
+    const operation = handler.handle(req, res);
+    const operationCheck = expect(operation).rejects.toBe(failure);
+    await entered;
+    handler.stop();
+    let drained = false;
+    const retirement = handler.drain().finally(() => {
+      drained = true;
+    });
+    const retirementCheck = expect(retirement).rejects.toBe(failure);
+    try {
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      const late = response();
+      await handler.handle(request({ body: "unread" }), late.res);
+      expect(late.captured.status).toBe(503);
+      expect(configured.authenticate).toHaveBeenCalledOnce();
+    } finally {
+      fail(failure);
+      await Promise.all([operationCheck, retirementCheck]);
+    }
+    expect(configured.handleRequest).not.toHaveBeenCalled();
+  });
+
   it("routes streaming requests directly to the injected streaming collaborator", async () => {
     const configured = deps();
     const handler = new HttpRpcHandler(configured);
@@ -102,6 +176,22 @@ describe("HttpRpcHandler", () => {
 
     expect(configured.handleStreamingRequest).toHaveBeenCalledWith(req, res);
     expect(configured.authenticate).not.toHaveBeenCalled();
+  });
+
+  it("does not retain completed live request failures as shutdown history", async () => {
+    const failure = new Error("An earlier admission lookup failed");
+    const handler = new HttpRpcHandler(
+      deps({
+        authenticate: async () => {
+          throw failure;
+        },
+      })
+    );
+    const req = request({ body: "unread" });
+    req.on("error", () => undefined);
+    await expect(handler.handle(req, response().res)).rejects.toBe(failure);
+    handler.stop();
+    await handler.drain();
   });
 
   it("authenticates before rejecting an oversized body without dispatch", async () => {

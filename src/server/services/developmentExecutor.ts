@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -16,10 +15,10 @@ import { domainHash } from "@vibestudio/shared/execution/identity";
 import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retention";
 import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
 import {
-  artifactFilePath,
   contentTypeForPath,
   get as getBuild,
   put as putBuild,
+  readStoredArtifactBytes,
   type BuildArtifactInput,
 } from "../buildV2/buildStore.js";
 import { executionArtifactRefFromBuild } from "../executionRootProviders.js";
@@ -83,7 +82,7 @@ export interface OwnedDevelopmentLaunch {
 export interface DevelopmentClientArtifactSource {
   mainEntryBuildId: string;
   manifest: readonly { path: string; integrity: string; byteLength: number }[];
-  read(path: string, offset: number, length: number): Buffer;
+  read(path: string, offset: number, length: number): Promise<Buffer>;
 }
 
 interface OwnedChild {
@@ -403,7 +402,7 @@ export class DevelopmentExecutor {
         code: "ESTATE",
       });
     }
-    const build = getBuild(run.artifact.buildKey);
+    const build = await getBuild(run.artifact.buildKey);
     if (
       !build?.metadata.execution ||
       canonicalJson(build.metadata.execution) !== canonicalJson(run.artifact)
@@ -421,7 +420,7 @@ export class DevelopmentExecutor {
     }
     // Force the immutable store's lazy payload-integrity verification before
     // trusting its manifest as the launch identity.
-    void serverArtifact.content;
+    await readStoredArtifactBytes(build, serverArtifact);
     const sourceRoot = await fs.realpath(path.join(runRoot, "source"));
     const serverEntryPath = path.join(sourceRoot, "dist", "server.mjs");
     const entryStat = await fs.lstat(serverEntryPath);
@@ -458,7 +457,7 @@ export class DevelopmentExecutor {
         code: "ESTATE",
       });
     }
-    const build = getBuild(run.artifact.buildKey);
+    const build = await getBuild(run.artifact.buildKey);
     if (
       !build?.metadata.execution ||
       canonicalJson(build.metadata.execution) !== canonicalJson(run.artifact)
@@ -467,7 +466,7 @@ export class DevelopmentExecutor {
         code: "EARTIFACT_DRIFT",
       });
     }
-    const entries = new Map<string, { filePath: string; integrity: string; byteLength: number }>();
+    const entries = new Map<string, { artifact: (typeof build.artifacts)[number] }>();
     for (const artifact of build.artifacts) {
       if (
         !artifact.path.startsWith("dist/") ||
@@ -476,17 +475,10 @@ export class DevelopmentExecutor {
       ) {
         continue;
       }
-      // Force BuildStore's lazy content hash before exposing a transport
-      // coordinate. The selected device receives chunks, never this path.
-      void artifact.content;
-      entries.set(artifact.path, {
-        filePath: artifactFilePath(build, artifact),
-        integrity: artifact.integrity,
-        byteLength: artifact.byteLength,
-      });
+      entries.set(artifact.path, { artifact });
     }
     const main = entries.get("dist/main.cjs");
-    const mainEntryBuildId = main?.integrity.match(/^sha256-([a-f0-9]{64})$/u)?.[1];
+    const mainEntryBuildId = main?.artifact.integrity?.match(/^sha256-([a-f0-9]{64})$/u)?.[1];
     if (!main || !mainEntryBuildId) {
       throw Object.assign(new Error("Reviewed build has no exact dist/main.cjs artifact"), {
         code: "EARTIFACT_DRIFT",
@@ -495,14 +487,14 @@ export class DevelopmentExecutor {
     const manifest = [...entries.entries()]
       .map(([artifactPath, entry]) => ({
         path: artifactPath,
-        integrity: entry.integrity,
-        byteLength: entry.byteLength,
+        integrity: entry.artifact.integrity!,
+        byteLength: entry.artifact.byteLength!,
       }))
       .sort((left, right) => left.path.localeCompare(right.path));
     return {
       mainEntryBuildId,
       manifest,
-      read(artifactPath, offset, length) {
+      async read(artifactPath, offset, length) {
         const entry = entries.get(artifactPath);
         if (
           !entry ||
@@ -510,25 +502,14 @@ export class DevelopmentExecutor {
           offset < 0 ||
           !Number.isSafeInteger(length) ||
           length < 0 ||
-          offset + length > entry.byteLength
+          offset + length > entry.artifact.byteLength!
         ) {
           throw Object.assign(new Error("Invalid development artifact range"), {
             code: "ERANGE",
           });
         }
-        const fd = fsSync.openSync(entry.filePath, "r");
-        try {
-          const bytes = Buffer.alloc(length);
-          const count = fsSync.readSync(fd, bytes, 0, length, offset);
-          if (count !== length) {
-            throw Object.assign(new Error("Retained development artifact was truncated"), {
-              code: "EARTIFACT_DRIFT",
-            });
-          }
-          return bytes;
-        } finally {
-          fsSync.closeSync(fd);
-        }
+        const bytes = await readStoredArtifactBytes(build, entry.artifact);
+        return bytes.subarray(offset, offset + length);
       },
     };
   }

@@ -51,6 +51,146 @@ async function register(
 }
 
 describe("DevelopmentClientExecutorRegistry", () => {
+  it("joins admitted artifact reads before reporting the existing stop deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      await register(f, "shell:initiating");
+      const binding = f.registry.select({
+        ownerUserId: "user:one",
+        executorId: "shell:initiating",
+        platform: process.platform,
+        arch: process.arch,
+      })!;
+      let rejectRead!: (error: Error) => void;
+      let started!: () => void;
+      const readStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const launch = f.registry.launch({
+        runId: "run:deadline-read",
+        binding,
+        mainEntryBuildId: MAIN,
+        executionDigest: DIGEST,
+        recipeId: "recipe:one",
+        artifactSource: {
+          manifest: [{ path: "dist/main.cjs", integrity: `sha256-${MAIN}`, byteLength: 3 }],
+          read: () =>
+            new Promise<Buffer>((_resolve, reject) => {
+              rejectRead = reject;
+              started();
+            }),
+        },
+        pairingDeepLink: "vibestudio://connect/one",
+      });
+      const device = caller("shell:initiating", "user:one");
+      const read = f
+        .invoke(device, "readArtifact", [
+          { requestId: launch.requestId, path: "dist/main.cjs", offset: 0, length: 3 },
+        ])
+        .catch((error: unknown) => error);
+      await readStarted;
+      let stopSettled = false;
+      const stopping = f.registry.stop("run:deadline-read").catch((error: unknown) => {
+        stopSettled = true;
+        return error;
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.resolve();
+      expect(stopSettled).toBe(false);
+
+      const readFailure = new Error("Artifact read did not retire");
+      rejectRead(readFailure);
+      await read;
+      await f.invoke(device, "fail", [
+        { requestId: launch.requestId, failure: serializeRpcFailure(new Error("cancelled")) },
+      ]);
+      const launchFailure = await launch.ready.catch((error: unknown) => error);
+      expect(launchFailure).toBeInstanceOf(AggregateError);
+      expect((launchFailure as AggregateError).errors[0]).toMatchObject({
+        message: "cancelled",
+      });
+      expect((launchFailure as AggregateError).errors).toContain(readFailure);
+      const stopFailure = await stopping;
+      expect(stopFailure).toBeInstanceOf(AggregateError);
+      expect((stopFailure as AggregateError).errors[0]).toMatchObject({
+        code: "EEXECUTOR_TIMEOUT",
+      });
+      expect((stopFailure as AggregateError).errors).toContain(readFailure);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("joins an admitted artifact read before retiring its launch and retains both failures", async () => {
+    const f = fixture();
+    await register(f, "shell:initiating");
+    const binding = f.registry.select({
+      ownerUserId: "user:one",
+      executorId: "shell:initiating",
+      platform: process.platform,
+      arch: process.arch,
+    })!;
+    let rejectRead!: (error: Error) => void;
+    let started!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const launch = f.registry.launch({
+      runId: "run:reading",
+      binding,
+      mainEntryBuildId: MAIN,
+      executionDigest: DIGEST,
+      recipeId: "recipe:one",
+      artifactSource: {
+        manifest: [{ path: "dist/main.cjs", integrity: `sha256-${MAIN}`, byteLength: 3 }],
+        read: () =>
+          new Promise<Buffer>((_resolve, reject) => {
+            rejectRead = reject;
+            started();
+          }),
+      },
+      pairingDeepLink: "vibestudio://connect/one",
+    });
+    let readySettled = false;
+    const readiness = launch.ready.catch((error: unknown) => {
+      readySettled = true;
+      return error;
+    });
+    const device = caller("shell:initiating", "user:one");
+    const coordinate = { requestId: launch.requestId, path: "dist/main.cjs", offset: 0, length: 3 };
+    const readResult = f
+      .invoke(device, "readArtifact", [coordinate])
+      .catch((error: unknown) => error);
+    await readStarted;
+    await f.invoke(device, "launched", [
+      { requestId: launch.requestId, childPid: 1234, ownershipDigest: "c".repeat(64) },
+    ]);
+    await f.invoke(caller("shell:child", "user:one"), "attest", [{ requestId: launch.requestId }]);
+    expect(readySettled).toBe(false);
+    const terminalFailure = new Error("Provider failed while launch was downloading");
+    let retired = false;
+    const retirement = f
+      .invoke(device, "fail", [
+        { requestId: launch.requestId, failure: serializeRpcFailure(terminalFailure) },
+      ])
+      .then(() => {
+        retired = true;
+      });
+    await Promise.resolve();
+    expect(readySettled).toBe(false);
+    expect(retired).toBe(false);
+    await expect(f.invoke(device, "readArtifact", [coordinate])).rejects.toThrow();
+    const readFailure = new Error("Owned artifact disk read failed");
+    rejectRead(readFailure);
+    expect(await readResult).toBe(readFailure);
+    await retirement;
+    const failure = (await readiness) as AggregateError;
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.errors[0]).toMatchObject({ message: terminalFailure.message });
+    expect(failure.errors).toContain(readFailure);
+  });
+
   it("admits the authenticated user device without lending it the product-host principal", () => {
     const service = fixture().registry.definition();
     expect(service.authority).toEqual({ principals: ["user"] });
@@ -117,7 +257,7 @@ describe("DevelopmentClientExecutorRegistry", () => {
       recipeId: "recipe:one",
       artifactSource: {
         manifest: [{ path: "dist/main.cjs", integrity: `sha256-${MAIN}`, byteLength: 3 }],
-        read: () => Buffer.from("app"),
+        read: async () => Buffer.from("app"),
       },
       pairingDeepLink: "vibestudio://connect/one",
     });
@@ -145,7 +285,7 @@ describe("DevelopmentClientExecutorRegistry", () => {
       recipeId: "recipe:one",
       artifactSource: {
         manifest: [{ path: "dist/main.cjs", integrity: `sha256-${MAIN}`, byteLength: 3 }],
-        read: () => Buffer.from("app"),
+        read: async () => Buffer.from("app"),
       },
       pairingDeepLink: "vibestudio://connect?request=opaque",
     });
@@ -205,7 +345,7 @@ describe("DevelopmentClientExecutorRegistry", () => {
       mainEntryBuildId: MAIN,
       executionDigest: DIGEST,
       recipeId: "recipe:one",
-      artifactSource: { manifest: [], read: () => Buffer.alloc(0) },
+      artifactSource: { manifest: [], read: async () => Buffer.alloc(0) },
       pairingDeepLink: "vibestudio://connect?request=opaque",
     });
     const requestId = (f.emitted[0]!.payload as { requestId: string }).requestId;
@@ -245,7 +385,7 @@ describe("DevelopmentClientExecutorRegistry", () => {
       mainEntryBuildId: MAIN,
       executionDigest: DIGEST,
       recipeId: "recipe:one",
-      artifactSource: { manifest: [], read: () => Buffer.alloc(0) },
+      artifactSource: { manifest: [], read: async () => Buffer.alloc(0) },
       pairingDeepLink: "vibestudio://connect?request=opaque",
       onExited,
     });
@@ -298,7 +438,7 @@ describe("DevelopmentClientExecutorRegistry", () => {
       mainEntryBuildId: MAIN,
       executionDigest: DIGEST,
       recipeId: "recipe:one",
-      artifactSource: { manifest: [], read: () => Buffer.alloc(0) },
+      artifactSource: { manifest: [], read: async () => Buffer.alloc(0) },
       pairingDeepLink: "vibestudio://connect?request=opaque",
     });
     const readiness = launch.ready.catch((error: unknown) => error);
@@ -345,7 +485,7 @@ describe("DevelopmentClientExecutorRegistry", () => {
       mainEntryBuildId: MAIN,
       executionDigest: DIGEST,
       recipeId: "recipe:one",
-      artifactSource: { manifest: [], read: () => Buffer.alloc(0) },
+      artifactSource: { manifest: [], read: async () => Buffer.alloc(0) },
       pairingDeepLink: "vibestudio://connect?request=opaque",
       onExited,
     });

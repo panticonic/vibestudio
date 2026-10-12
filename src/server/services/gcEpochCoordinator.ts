@@ -75,7 +75,7 @@ export class GcEpochCoordinator {
         );
       }
       const executionSourceRoots = this.mergeSourceRoots([
-        ...this.executionSourceRoots(retention.storedRootBuildKeys),
+        ...(await this.executionSourceRoots(retention.storedRootBuildKeys)),
         ...retention.retainedSourceRoots,
       ]);
       const contentPreparation = await this.deps.workspaceVcs.prepareGc({
@@ -125,10 +125,12 @@ export class GcEpochCoordinator {
     }
   }
 
-  private executionSourceRoots(rootBuildKeys: readonly string[]): ExecutionSourceContentRoot[] {
+  private async executionSourceRoots(
+    rootBuildKeys: readonly string[]
+  ): Promise<ExecutionSourceContentRoot[]> {
     const roots = new Map<string, ExecutionSourceContentRoot>();
     for (const key of rootBuildKeys) {
-      const build = this.deps.buildSystem.peekBuildByKey(key);
+      const build = await this.deps.buildSystem.peekBuildByKey(key);
       if (!build) {
         throw new Error(`rooted build ${key} has no verified build metadata`);
       }

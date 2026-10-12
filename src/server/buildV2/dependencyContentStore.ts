@@ -366,16 +366,12 @@ async function ensurePrimaryReplica(
 }
 
 async function replaceWithContentLink(
-  filePath: string
+  prepared: PreparedContentFile
 ): Promise<{ bytes: number; linked: boolean }> {
-  const sourceStat = await fs.promises.lstat(filePath);
-  const digest = await sha256File(filePath);
+  const { filePath, sourceStat, digest } = prepared;
   const storeRoot = contentStoreRoot(sourceStat.mode);
   const coordinatorRoot = contentCoordinatorRoot();
   const coordinator = derivedCacheCoordinator(coordinatorRoot);
-  const lease = withCoordinatorOperation("acquiring a digest lease", () =>
-    coordinator.acquire(coordinatorRoot, contentLeaseKey(sourceStat.mode, digest))
-  );
 
   const replacement = path.join(
     path.dirname(filePath),
@@ -396,7 +392,10 @@ async function replaceWithContentLink(
     );
     for (const candidate of contentReplicaPaths(storeRoot, digest)) {
       const stat = await verifyContentReplica(candidate, digest, sourceStat.size, sourceStat.mode);
-      if (stat && sameInode(sourceStat, stat)) alreadyCanonical = true;
+      if (stat && sameInode(sourceStat, stat)) {
+        alreadyCanonical = true;
+        break;
+      }
     }
     if (
       !alreadyCanonical &&
@@ -454,11 +453,6 @@ async function replaceWithContentLink(
       cleanupFailures.push(cleanupFailure);
     }
   }
-  try {
-    withCoordinatorOperation("releasing a digest lease", () => lease.release());
-  } catch (releaseFailure) {
-    cleanupFailures.push(releaseFailure);
-  }
   if (hasPrimaryFailure && cleanupFailures.length > 0) {
     throw new AggregateError(
       [primaryFailure, ...cleanupFailures],
@@ -474,6 +468,24 @@ async function replaceWithContentLink(
     });
   }
   return { bytes: sourceStat.size, linked: !alreadyCanonical };
+}
+
+interface PreparedContentFile {
+  filePath: string;
+  sourceStat: fs.Stats;
+  digest: string;
+  leaseKey: string;
+}
+
+async function prepareContentFile(filePath: string): Promise<PreparedContentFile> {
+  const sourceStat = await fs.promises.lstat(filePath);
+  const digest = await sha256File(filePath);
+  return {
+    filePath,
+    sourceStat,
+    digest,
+    leaseKey: contentLeaseKey(sourceStat.mode, digest),
+  };
 }
 
 /**
@@ -494,31 +506,68 @@ export async function deduplicateDependencyContent(
   unpublishedCacheDir: string
 ): Promise<DependencyContentDeduplication> {
   const files = await regularFiles(unpublishedCacheDir);
-  let cursor = 0;
   const result: DependencyContentDeduplication = {
     files: 0,
     bytes: 0,
     linkedFiles: 0,
     linkedBytes: 0,
   };
+  if (files.length === 0) return result;
 
-  const workers = Array.from({ length: Math.min(HASH_CONCURRENCY, files.length) }, async () => {
-    for (;;) {
-      const filePath = files[cursor++];
-      if (!filePath) return;
-      const linked = await replaceWithContentLink(filePath);
-      result.files += 1;
-      result.bytes += linked.bytes;
-      if (linked.linked) {
-        result.linkedFiles += 1;
-        result.linkedBytes += linked.bytes;
+  const failures: unknown[] = [];
+  const coordinatorRoot = contentCoordinatorRoot();
+  const coordinator = derivedCacheCoordinator(coordinatorRoot);
+  for (let offset = 0; offset < files.length; offset += HASH_CONCURRENCY) {
+    const groupFailureStart = failures.length;
+    const group = files.slice(offset, offset + HASH_CONCURRENCY);
+    const preparedOutcomes = await Promise.allSettled(group.map(prepareContentFile));
+    const prepared: PreparedContentFile[] = [];
+    for (const outcome of preparedOutcomes) {
+      if (outcome.status === "fulfilled") prepared.push(outcome.value);
+      else failures.push(outcome.reason);
+    }
+    if (prepared.length === 0) break;
+
+    let leaseBatch: ReturnType<typeof coordinator.acquireBatch>;
+    try {
+      leaseBatch = withCoordinatorOperation("acquiring digest leases", () =>
+        coordinator.acquireBatch(
+          coordinatorRoot,
+          prepared.map((file) => file.leaseKey)
+        )
+      );
+    } catch (error) {
+      failures.push(error);
+      break;
+    }
+
+    try {
+      const outcomes = await Promise.allSettled(
+        prepared.map((file) => replaceWithContentLink(file))
+      );
+      for (let index = 0; index < outcomes.length; index += 1) {
+        const outcome = outcomes[index]!;
+        if (outcome.status === "rejected") {
+          failures.push(outcome.reason);
+          continue;
+        }
+        const linked = outcome.value;
+        result.files += 1;
+        result.bytes += linked.bytes;
+        if (linked.linked) {
+          result.linkedFiles += 1;
+          result.linkedBytes += linked.bytes;
+        }
+      }
+    } finally {
+      try {
+        withCoordinatorOperation("releasing digest leases", () => leaseBatch.release());
+      } catch (error) {
+        failures.push(error);
       }
     }
-  });
-  const outcomes = await Promise.allSettled(workers);
-  const failures = outcomes.flatMap((outcome) =>
-    outcome.status === "rejected" ? [outcome.reason] : []
-  );
+    if (failures.length > groupFailureStart) break;
+  }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) {
     throw new AggregateError(failures, "Dependency content deduplication workers failed", {

@@ -1,11 +1,18 @@
 import * as http from "node:http";
+import { EventEmitter } from "node:events";
 import { once } from "node:events";
+import { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocket, WebSocketServer } from "ws";
+import type { RpcEnvelope, RpcStreamRequest } from "@vibestudio/rpc";
 import { createVerifiedCaller, type ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import type { WsClientState } from "./connectionRegistry.js";
+import { WebSocketSessionChannel } from "./sessionChannel.js";
 import { StreamingRelay } from "./streamingRelay.js";
 
 describe("StreamingRelay HTTP response ownership", () => {
   const servers = new Set<http.Server>();
+  const webSocketServers = new Set<WebSocketServer>();
 
   afterEach(async () => {
     await Promise.all(
@@ -18,6 +25,16 @@ describe("StreamingRelay HTTP response ownership", () => {
       )
     );
     servers.clear();
+    await Promise.all(
+      [...webSocketServers].map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.close(() => resolve());
+            for (const client of server.clients) client.terminate();
+          })
+      )
+    );
+    webSocketServers.clear();
   });
 
   it("cancels the owned response and releases backpressure when the client disconnects", async () => {
@@ -199,5 +216,235 @@ describe("StreamingRelay HTTP response ownership", () => {
       expect.any(Function),
       expect.any(AbortSignal)
     );
+  });
+
+  it("joins HTTP identity resolution after the real client disconnects before relay admission", async () => {
+    let verificationStarted!: () => void;
+    let completeVerification!: (value: ReturnType<typeof createVerifiedCaller>) => void;
+    let responseClosed!: () => void;
+    const started = new Promise<void>((resolve) => {
+      verificationStarted = resolve;
+    });
+    const pendingCaller = new Promise<ReturnType<typeof createVerifiedCaller>>((resolve) => {
+      completeVerification = resolve;
+    });
+    const closed = new Promise<void>((resolve) => {
+      responseClosed = resolve;
+    });
+    const caller = createVerifiedCaller("shell:disconnect", "shell");
+    const resolveCausalInvocation = vi.fn(async (verified: typeof caller) => ({
+      caller: verified,
+      parent: undefined,
+    }));
+    const relay = new StreamingRelay({
+      dispatcher: {} as ServiceDispatcher,
+      authenticateHttp: () => ({
+        ok: true,
+        caller: { callerId: caller.runtime.id, callerKind: caller.runtime.kind },
+      }),
+      verifiedCaller: () => {
+        verificationStarted();
+        return pendingCaller;
+      },
+      authorizeRelay: () => ({ ok: true }),
+      createHttpContext: (verified, _request, extras) => ({ caller: verified, ...extras }),
+      createSessionContext: () => {
+        throw new Error("WebSocket context was not expected");
+      },
+      resolveCausalInvocation,
+      relayTargetStream: async () => {
+        throw new Error("A disconnected client must not enter relay work");
+      },
+    });
+    let handled!: Promise<void>;
+    const server = http.createServer((req, res) => {
+      res.once("close", responseClosed);
+      handled = relay.handleHttpRequest(req, res);
+    });
+    servers.add(server);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected an IPv4 test server");
+
+    const controller = new AbortController();
+    const fetchPromise = fetch(`http://127.0.0.1:${address.port}/rpc/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target: "worker:echo",
+        message: {
+          type: "stream-request",
+          requestId: "disconnect-before-relay",
+          fromId: caller.runtime.id,
+          method: "events.watch",
+          args: [["panel-tree-invalidated"]],
+        },
+      }),
+      signal: controller.signal,
+    });
+    const clientClosed = expect(fetchPromise).rejects.toThrow();
+    await started;
+    controller.abort();
+    await clientClosed;
+    await closed;
+    expect(resolveCausalInvocation).not.toHaveBeenCalled();
+    relay.stop();
+    let drained = false;
+    const draining = relay.drain().then(() => {
+      drained = true;
+    });
+    expect(drained).toBe(false);
+
+    completeVerification(caller);
+    await Promise.all([handled, draining]);
+    expect(drained).toBe(true);
+    expect(resolveCausalInvocation).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch a stream when its real WebSocket closes during identity lookup", async () => {
+    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    webSocketServers.add(server);
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected an IPv4 test socket");
+    const accepted = once(server, "connection").then(([socket]) => socket as WebSocket);
+    const peer = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    await once(peer, "open");
+    const socket = await accepted;
+    const channel = new WebSocketSessionChannel(socket);
+    const caller = createVerifiedCaller("shell:ws-close", "shell");
+    const client = {
+      ws: channel,
+      caller,
+      connectionId: "connection:ws-close",
+      authenticated: true,
+      authenticatedAt: Date.now(),
+      userId: "user:ws-close",
+    } as WsClientState;
+    let verificationStarted!: () => void;
+    let completeVerification!: (value: ReturnType<typeof createVerifiedCaller>) => void;
+    const started = new Promise<void>((resolve) => {
+      verificationStarted = resolve;
+    });
+    const pendingCaller = new Promise<ReturnType<typeof createVerifiedCaller>>((resolve) => {
+      completeVerification = resolve;
+    });
+    const resolveCausalInvocation = vi.fn(async (verified: typeof caller) => ({
+      caller: verified,
+      parent: undefined,
+    }));
+    const dispatch = vi.fn();
+    const relay = new StreamingRelay({
+      dispatcher: { dispatch } as unknown as ServiceDispatcher,
+      authenticateHttp: () => ({
+        ok: true,
+        caller: { callerId: caller.runtime.id, callerKind: caller.runtime.kind },
+      }),
+      verifiedCaller: () => {
+        verificationStarted();
+        return pendingCaller;
+      },
+      authorizeRelay: () => ({ ok: true }),
+      createHttpContext: (verified, _request, extras) => ({ caller: verified, ...extras }),
+      createSessionContext: (verifiedClient, _request, verified, extras) => ({
+        caller: verified,
+        connectionId: verifiedClient.connectionId,
+        wsClient: verifiedClient,
+        ...extras,
+      }),
+      resolveCausalInvocation,
+      relayTargetStream: async () => {
+        throw new Error("Unexpected relayed request");
+      },
+    });
+    channel.onClose(() => relay.abortConnection(client));
+    const request = {
+      type: "stream-request",
+      requestId: "ws-close-during-identity",
+      fromId: caller.runtime.id,
+      method: "events.watch",
+      args: [["panel-tree-invalidated"]],
+    } satisfies RpcStreamRequest;
+    const envelope = {
+      target: "main",
+      message: request,
+      delivery: {},
+    } as RpcEnvelope;
+    const handling = relay.handleSessionRequest(client, request, envelope);
+    await started;
+    peer.close();
+    await once(socket, "close");
+    relay.stop();
+    let drained = false;
+    const draining = relay.drain().then(() => {
+      drained = true;
+    });
+    expect(drained).toBe(false);
+    completeVerification(caller);
+
+    await Promise.all([handling, draining]);
+    expect(drained).toBe(true);
+    expect(resolveCausalInvocation).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("retains admitted failures for shutdown drain without replacing the caller failure", async () => {
+    let rejectAdmission!: (error: Error) => void;
+    let admissionStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      admissionStarted = resolve;
+    });
+    const pendingAdmission = new Promise<never>((_resolve, reject) => {
+      rejectAdmission = reject;
+    });
+    const relay = new StreamingRelay({
+      dispatcher: {} as ServiceDispatcher,
+      authenticateHttp: () => {
+        admissionStarted();
+        return pendingAdmission;
+      },
+      verifiedCaller: () => {
+        throw new Error("Caller verification must not run");
+      },
+      authorizeRelay: () => ({ ok: true }),
+      createHttpContext: () => {
+        throw new Error("HTTP context must not be created");
+      },
+      createSessionContext: () => {
+        throw new Error("WebSocket context must not be created");
+      },
+      resolveCausalInvocation: async () => {
+        throw new Error("Causal resolution must not run");
+      },
+      relayTargetStream: async () => {
+        throw new Error("Target relay must not run");
+      },
+    });
+    const socket = new Socket();
+    const req = new http.IncomingMessage(socket);
+    req.complete = true;
+    const res = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writableEnded: false,
+    }) as http.ServerResponse;
+    const handling = relay.handleHttpRequest(req, res);
+    const handlingResult = handling.then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    const original = new Error("admission lookup failed");
+    try {
+      await started;
+      relay.stop();
+      rejectAdmission(original);
+      expect(await handlingResult).toBe(original);
+      await expect(relay.drain()).rejects.toBe(original);
+    } finally {
+      relay.stop();
+      rejectAdmission(original);
+      socket.destroy();
+      await Promise.allSettled([handlingResult, relay.drain()]);
+    }
   });
 });

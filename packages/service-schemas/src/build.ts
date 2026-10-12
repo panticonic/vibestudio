@@ -474,6 +474,11 @@ export const buildResultSchema = z
   });
 export type BuildResultWire = z.infer<typeof buildResultSchema>;
 
+/** Host-owned immutable build coordinates; payloads are read only by their consuming operation. */
+export type StoredBuildResult = Omit<BuildResultWire, "artifacts"> & {
+  artifacts: Array<BuildArtifactManifestEntryWire & { content?: never }>;
+};
+
 export const executionSourceContentRootSchema = z
   .object({
     repoPath: z.string().nullable(),

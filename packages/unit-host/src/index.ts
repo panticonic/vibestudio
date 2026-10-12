@@ -275,8 +275,12 @@ export interface UnitRuntimeApplyOptions<
   node: Node;
   decl: Decl;
   validateBeforeApply?: (node: Node, decl: Decl) => void;
-  validateBeforeActivateCurrent?: (entry: Entry, node: Node, decl: Decl) => void;
-  needsBuildRefresh: (entry: Entry, node: Node, decl: Decl) => boolean;
+  validateBeforeActivateCurrent?: (
+    entry: Entry,
+    node: Node,
+    decl: Decl
+  ) => void | Promise<void>;
+  needsBuildRefresh: (entry: Entry, node: Node, decl: Decl) => boolean | Promise<boolean>;
   /**
    * Leave a trusted declaration unbuilt until its owning runtime operation
    * requests it. The registry records availability, while activation identity
@@ -752,7 +756,7 @@ export class UnitHost<
       if (
         !entry ||
         trust.decision !== "user-approved" ||
-        opts.needsBuildRefresh(entry, node, decl)
+        await opts.needsBuildRefresh(entry, node, decl)
       ) {
         if (!entry) {
           this.opts.registry.upsert(this.opts.makePendingEntry(node, decl, true));
@@ -768,7 +772,7 @@ export class UnitHost<
         return;
       }
 
-      opts.validateBeforeActivateCurrent?.(entry, node, decl);
+      await opts.validateBeforeActivateCurrent?.(entry, node, decl);
       await opts.activateCurrent(entry, node, decl);
     } catch (err) {
       const message = formatRpcFailure(err);

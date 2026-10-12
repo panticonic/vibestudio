@@ -34,6 +34,8 @@ export interface DirectEventSession {
 class EventWatchSession {
   private destroyed = false;
   private destroyHandlers: (() => void)[] = [];
+  private initialSnapshotEvents: Uint8Array[] | null = null;
+  private initialSnapshotEventBytes = 0;
 
   constructor(
     public readonly callerId: string,
@@ -53,6 +55,15 @@ class EventWatchSession {
     if (this.destroyed) return;
     try {
       const record = encodeEventWatchRecord({ kind: "event", event, payload, sequence });
+      if (this.initialSnapshotEvents) {
+        this.initialSnapshotEventBytes += record.byteLength;
+        if (this.initialSnapshotEventBytes > EventService.MAX_WATCH_BUFFER_BYTES) {
+          this.fail(new Error("Event watch buffer capacity exceeded"));
+          return;
+        }
+        this.initialSnapshotEvents.push(record);
+        return;
+      }
       const capacity = this.controller.desiredSize;
       if (capacity !== null && record.byteLength > capacity) {
         this.fail(new Error("Event watch buffer capacity exceeded"));
@@ -64,12 +75,44 @@ class EventWatchSession {
     }
   }
 
+  beginInitialSnapshots(): void {
+    if (!this.destroyed) this.initialSnapshotEvents = [];
+  }
+
+  finishInitialSnapshots(): void {
+    const queued = this.initialSnapshotEvents;
+    this.initialSnapshotEvents = null;
+    this.initialSnapshotEventBytes = 0;
+    if (!queued || this.destroyed) return;
+    for (const record of queued) {
+      if (this.destroyed) return;
+      try {
+        const capacity = this.controller.desiredSize;
+        if (capacity !== null && record.byteLength > capacity) {
+          this.fail(new Error("Event watch buffer capacity exceeded"));
+          return;
+        }
+        this.controller.enqueue(record);
+      } catch (error) {
+        this.fail(error);
+        return;
+      }
+    }
+  }
+
   sendSnapshot(event: EventName, payload: unknown, sequence: number): void {
     if (this.destroyed) return;
     try {
-      this.controller.enqueue(
-        encodeEventWatchRecord({ kind: "snapshot", event, payload, sequence })
-      );
+      const record = encodeEventWatchRecord({ kind: "snapshot", event, payload, sequence });
+      // Events emitted while snapshot providers are pending are held outside
+      // the stream queue. Count them against the same byte budget so snapshot
+      // replay cannot fill the stream while retaining another full buffer.
+      const capacity = this.controller.desiredSize;
+      if (capacity !== null && record.byteLength + this.initialSnapshotEventBytes > capacity) {
+        this.fail(new Error("Event watch buffer capacity exceeded"));
+        return;
+      }
+      this.controller.enqueue(record);
     } catch (error) {
       this.fail(error);
     }
@@ -82,6 +125,8 @@ class EventWatchSession {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.initialSnapshotEvents = null;
+    this.initialSnapshotEventBytes = 0;
     try {
       this.controller.close();
     } catch {
@@ -90,9 +135,11 @@ class EventWatchSession {
     for (const handler of this.destroyHandlers) handler();
   }
 
-  private fail(error: unknown): void {
+  fail(error: unknown): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.initialSnapshotEvents = null;
+    this.initialSnapshotEventBytes = 0;
     try {
       this.controller.error(error);
     } catch {
@@ -198,14 +245,14 @@ export class EventService {
     watchId: string;
     userId?: string;
     events: EventName[];
-    snapshots?: Partial<Record<EventName, () => Iterable<unknown>>>;
+    snapshots?: Partial<Record<EventName, () => Iterable<unknown> | Promise<Iterable<unknown>>>>;
     onClosed?: () => void;
   }): Response {
     const events = new Set(input.events);
     let session!: EventWatchSession;
     const body = new ReadableStream<Uint8Array>(
       {
-        start: (controller) => {
+        start: async (controller) => {
           session = new EventWatchSession(
             input.callerId,
             input.connectionId,
@@ -247,15 +294,25 @@ export class EventService {
           controller.enqueue(
             encodeEventWatchRecord({ kind: "watching", events: [...events], epoch: this.epoch })
           );
+          const snapshotEvents = [...events].filter((event) => input.snapshots?.[event]);
+          if (snapshotEvents.length === 0) return;
+          const snapshotSequence = this.sequence;
+          session.beginInitialSnapshots();
           try {
-            for (const event of events) {
-              for (const snapshot of input.snapshots?.[event]?.() ?? []) {
-                session.sendSnapshot(event, snapshot, this.sequence);
+            for (const event of snapshotEvents) {
+              if (!session.isAlive) return;
+              const provideSnapshot = input.snapshots?.[event];
+              if (!provideSnapshot) continue;
+              const providedSnapshots = await provideSnapshot();
+              if (!session.isAlive) return;
+              for (const snapshot of providedSnapshots) {
+                if (!session.isAlive) return;
+                session.sendSnapshot(event, snapshot, snapshotSequence);
               }
             }
+            session.finishInitialSnapshots();
           } catch (error) {
-            session.destroy();
-            throw error;
+            if (session.isAlive) session.fail(error);
           }
         },
         cancel: () => session.destroy(),

@@ -737,14 +737,14 @@ describe("BuildSystemV2 startup", () => {
     );
 
     const first = await buildSystem.bindRuntimeImage("panels/rebound-cache");
-    const build = buildSystem.getBuildByKey(first.artifact.buildKey);
+    const build = await buildSystem.getBuildByKey(first.artifact.buildKey);
     expect(build).not.toBeNull();
     await rebindSourceState(build!, `state:${"b".repeat(64)}`);
 
     const rebound = await buildSystem.bindRuntimeImage("panels/rebound-cache");
 
     expect(rebound).toEqual(first);
-    expect(buildSystem.getBuildByKey(first.artifact.buildKey)?.metadata.execution).toEqual(
+    expect((await buildSystem.getBuildByKey(first.artifact.buildKey))?.metadata.execution).toEqual(
       first.artifact
     );
   });
@@ -787,9 +787,9 @@ describe("BuildSystemV2 startup", () => {
     );
 
     const warmBinding = await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE);
-    const warmBuild = buildSystem.getBuildByKey(warmBinding.artifact.buildKey);
+    const warmBuild = await buildSystem.getBuildByKey(warmBinding.artifact.buildKey);
     expect(warmBuild).not.toBeNull();
-    const warmBundle = primaryTextArtifactContent(warmBuild!);
+    const warmBundle = await primaryTextArtifactContent(warmBuild!);
     expect(warmBundle).toContain("cold-cache-runtime-loaded");
 
     await buildSystem.shutdown();
@@ -810,9 +810,9 @@ describe("BuildSystemV2 startup", () => {
     );
 
     const coldBinding = await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE);
-    const coldBuild = buildSystem.getBuildByKey(coldBinding.artifact.buildKey);
+    const coldBuild = await buildSystem.getBuildByKey(coldBinding.artifact.buildKey);
     expect(coldBuild).not.toBeNull();
-    const rebuiltBundle = coldPrimaryTextArtifactContent(coldBuild!);
+    const rebuiltBundle = await coldPrimaryTextArtifactContent(coldBuild!);
     expect(rebuiltBundle).toContain("cold-cache-runtime-loaded");
     expect(rebuiltBundle).toBe(warmBundle);
     expect(coldBinding).toEqual(warmBinding);
@@ -874,7 +874,7 @@ describe("BuildSystemV2 startup", () => {
       buildRoots(workspaceRoot)
     );
     const binding = await buildSystem.bindRuntimeImage("workers/missing-source", TEST_STATE);
-    const build = buildSystem.getBuildByKey(binding.artifact.buildKey);
+    const build = await buildSystem.getBuildByKey(binding.artifact.buildKey);
     const executionDigest = build?.metadata.execution?.executionDigest;
     expect(executionDigest).toMatch(/^[0-9a-f]{64}$/u);
 
@@ -913,7 +913,7 @@ describe("BuildSystemV2 startup", () => {
       buildRoots(workspaceRoot)
     );
     const binding = await buildSystem.bindRuntimeImage("workers/shared-only", TEST_STATE);
-    const localBuild = buildSystem.getBuildByKey(binding.artifact.buildKey);
+    const localBuild = await buildSystem.getBuildByKey(binding.artifact.buildKey);
     const artifact = localBuild?.metadata.execution;
     expect(artifact).toBeDefined();
     await buildSystem.shutdown();

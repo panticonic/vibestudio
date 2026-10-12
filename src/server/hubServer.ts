@@ -3346,7 +3346,10 @@ async function startHubGateway(input: {
         socket.destroy();
         return;
       }
-      control.rpcServer.handleGatewayWsUpgrade(req, socket, head);
+      void control.rpcServer.handleGatewayWsUpgrade(req, socket, head).catch((error: unknown) => {
+        console.error("[Hub] RPC WebSocket upgrade failed:", error);
+        if (!socket.destroyed) socket.destroy();
+      });
       return;
     }
     const proxied = parseWorkspaceProxyUrl(req.url ?? "/");

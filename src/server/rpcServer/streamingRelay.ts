@@ -62,14 +62,14 @@ export interface StreamingRelayDeps {
   workspaceId?: string;
   dispatcher: ServiceDispatcher;
   egressProxy?: EgressStreamProxy;
-  authenticateHttp(req: IncomingMessage): HttpRpcAdmission;
+  authenticateHttp(req: IncomingMessage): HttpRpcAdmission | Promise<HttpRpcAdmission>;
   verifiedCaller(
     caller: Omit<AuthenticatedHttpRpcCaller, "agentBinding"> & {
       agentBinding?: AuthenticatedHttpRpcCaller["agentBinding"] | RuntimeAgentBinding;
     },
     request: RpcStreamRequest,
     subject?: UserSubject
-  ): VerifiedCaller;
+  ): VerifiedCaller | Promise<VerifiedCaller>;
   authorizeRelay(
     callerId: string,
     callerKind: CallerKind,
@@ -113,6 +113,7 @@ type ProxyFetchValidation =
   | { ok: false; status: number; error: string };
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
+  if (res.destroyed || res.writableEnded) return;
   res.writeHead(status, JSON_HEADERS);
   res.end(JSON.stringify(body));
 }
@@ -120,7 +121,12 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
 /** Owns streaming RPC admission, framing, proxy dispatch, and cancellation. */
 export class StreamingRelay {
   private readonly sessionStreamAborts = new WeakMap<WsClientState, Map<string, AbortController>>();
+  private readonly sessionRequestAborts = new Set<AbortController>();
   private readonly httpStreamAborts = new Set<AbortController>();
+  private readonly activeHttpRequests = new Set<Promise<void>>();
+  private readonly activeSessionRequests = new Set<Promise<void>>();
+  private readonly retirementFailures: unknown[] = [];
+  private httpAdmissionClosed: Error | null = null;
 
   constructor(private readonly deps: StreamingRelayDeps) {}
 
@@ -157,7 +163,21 @@ export class StreamingRelay {
   /** Abort streaming work that is not tied to an RPC WebSocket. */
   stop(reason = "RPC server shutting down"): void {
     const error = new Error(reason);
+    this.httpAdmissionClosed ??= error;
     for (const controller of this.httpStreamAborts) controller.abort(error);
+    for (const controller of this.sessionRequestAborts) controller.abort(error);
+  }
+
+  /** Join every HTTP stream request admitted before stop closed the owner. */
+  async drain(): Promise<void> {
+    await Promise.all([...this.activeHttpRequests, ...this.activeSessionRequests]);
+    const failures = this.retirementFailures.splice(0);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Streaming HTTP request drain failed", {
+        cause: failures[0],
+      });
+    }
   }
 
   private trackHttp(controller: AbortController): () => void {
@@ -165,8 +185,64 @@ export class StreamingRelay {
     return () => this.httpStreamAborts.delete(controller);
   }
 
-  async handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const admission = this.deps.authenticateHttp(req);
+  private trackOwnedRequest(tasks: Set<Promise<void>>, operation: Promise<void>): void {
+    let owned!: Promise<void>;
+    owned = operation
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          if (this.httpAdmissionClosed) this.retirementFailures.push(error);
+        }
+      )
+      .finally(() => tasks.delete(owned));
+    tasks.add(owned);
+  }
+
+  handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.httpAdmissionClosed) {
+      writeJson(res, 503, { error: this.httpAdmissionClosed.message });
+      return Promise.resolve();
+    }
+    const operation = this.handleOwnedHttpRequest(req, res);
+    this.trackOwnedRequest(this.activeHttpRequests, operation);
+    return operation;
+  }
+
+  private async handleOwnedHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const abortController = new AbortController();
+    const releaseAbort = this.trackHttp(abortController);
+    const abortForRequest = () => abortController.abort(new Error("HTTP request aborted"));
+    const abortForResponse = () => abortController.abort(new Error("HTTP response closed"));
+    const destroyIncompleteRequest = () => {
+      if (!req.complete && !req.destroyed) {
+        req.destroy(
+          abortController.signal.reason instanceof Error ? abortController.signal.reason : undefined
+        );
+      }
+    };
+    req.once("aborted", abortForRequest);
+    res.once("close", abortForResponse);
+    abortController.signal.addEventListener("abort", destroyIncompleteRequest, { once: true });
+    try {
+      await this.handleHttpRequestOwned(req, res, abortController.signal);
+    } catch (error) {
+      if (!abortController.signal.aborted || error !== abortController.signal.reason) throw error;
+    } finally {
+      req.off("aborted", abortForRequest);
+      res.off("close", abortForResponse);
+      abortController.signal.removeEventListener("abort", destroyIncompleteRequest);
+      releaseAbort();
+    }
+  }
+
+  private async handleHttpRequestOwned(
+    req: IncomingMessage,
+    res: ServerResponse,
+    signal: AbortSignal
+  ): Promise<void> {
+    const isLive = () => !signal.aborted && !res.destroyed && !res.writableEnded;
+    const admission = await this.deps.authenticateHttp(req);
+    if (!isLive()) return;
     if (!admission.ok) {
       writeJson(res, admission.status, admission.body);
       return;
@@ -183,6 +259,7 @@ export class StreamingRelay {
       }
       chunks.push(bytes);
     }
+    if (!isLive()) return;
 
     let envelope: RpcEnvelope;
     try {
@@ -217,24 +294,28 @@ export class StreamingRelay {
     const { callerId, callerKind } = admission.caller;
     let verifiedCaller: VerifiedCaller;
     try {
-      verifiedCaller = this.deps.verifiedCaller(admission.caller, request);
+      verifiedCaller = await this.deps.verifiedCaller(admission.caller, request);
     } catch (error) {
+      if (!isLive()) throw error;
       writeJson(res, 403, {
         error: serializeRpcFailure(error),
       });
       return;
     }
+    if (!isLive()) return;
     let causalParent: RpcCausalParent | undefined;
     try {
       const causal = await this.deps.resolveCausalInvocation(verifiedCaller, request);
       verifiedCaller = causal.caller;
       causalParent = causal.parent;
     } catch (error) {
+      if (!isLive()) throw error;
       writeJson(res, 403, {
         error: serializeRpcFailure(error),
       });
       return;
     }
+    if (!isLive()) return;
     const targetId = envelope.target;
     if (targetId && targetId !== "main" && targetId !== "server") {
       const authorization = this.deps.authorizeRelay(callerId, callerKind, targetId, method);
@@ -246,21 +327,25 @@ export class StreamingRelay {
         });
         return;
       }
-      const abortController = new AbortController();
-      const releaseAbort = this.trackHttp(abortController);
-      req.on("aborted", () => abortController.abort());
-      res.on("close", () => abortController.abort());
       try {
         const response = await this.deps.relayTargetStream(
           verifiedCaller,
           envelope,
           request,
           causalParent,
-          abortController.signal
+          signal
         );
+        if (!isLive()) {
+          await this.cancelOwnedResponse(response, signal.reason);
+          return;
+        }
         res.writeHead(200, STREAM_HEADERS);
-        await this.pipeResponseToHttpFrames(response, res, abortController.signal);
+        await this.pipeResponseToHttpFrames(response, res, signal);
       } catch (error) {
+        if (!isLive()) {
+          if (signal.aborted && error === signal.reason) return;
+          throw error;
+        }
         if (!res.headersSent) res.writeHead(200, STREAM_HEADERS);
         const emitFrame = await this.httpFrameWriter(res);
         await emitFrame({
@@ -269,8 +354,7 @@ export class StreamingRelay {
           error: serializeRpcFailure(error, "transport"),
         }).catch(() => {});
       } finally {
-        releaseAbort();
-        res.end();
+        if (!res.destroyed && !res.writableEnded) res.end();
       }
       return;
     }
@@ -280,14 +364,14 @@ export class StreamingRelay {
     const readOnly = envelope.delivery?.readOnly === true;
     if (method !== "credentials.proxyFetch") {
       await this.handleHttpServiceResponse(
-        req,
         res,
         verifiedCaller,
         request,
         args,
         idempotencyKey,
         readOnly,
-        causalParent
+        causalParent,
+        signal
       );
       return;
     }
@@ -297,18 +381,15 @@ export class StreamingRelay {
       writeJson(res, validation.status, { error: validation.error });
       return;
     }
-    const abortController = new AbortController();
-    const releaseAbort = this.trackHttp(abortController);
-    req.on("aborted", () => abortController.abort());
-    res.on("close", () => abortController.abort());
     const emitFrame = await this.httpFrameWriter(res);
+    if (!isLive()) return;
 
     const context = this.deps.createHttpContext(verifiedCaller, request, {
       ...(request.requestId ? { requestId: request.requestId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(readOnly ? { readOnly: true } : {}),
       ...(causalParent ? { causalParent } : {}),
-      signal: abortController.signal,
+      signal,
       // Streaming is an alternate transport for the same semantic service
       // invocation. Unlike the unary RPC core it cannot return EACQUIRE and
       // replay an arbitrary response/request stream safely, so the host keeps
@@ -320,19 +401,20 @@ export class StreamingRelay {
     try {
       await this.deps.dispatcher.assertAuthority(context, "credentials", "proxyFetch", args);
     } catch (error) {
+      if (!isLive()) throw error;
       writeJson(res, 403, {
         error: serializeRpcFailure(error),
       });
-      releaseAbort();
       return;
     }
+    if (!isLive()) return;
     res.writeHead(200, STREAM_HEADERS);
 
     try {
       await validation.egress.forwardProxyFetchStream(
         { caller: context.caller, ...validation.proxyParams },
         emitFrame,
-        abortController.signal
+        signal
       );
     } catch (error) {
       try {
@@ -345,8 +427,7 @@ export class StreamingRelay {
         // The connection may already be closed.
       }
     } finally {
-      releaseAbort();
-      res.end();
+      if (!res.destroyed && !res.writableEnded) res.end();
     }
   }
 
@@ -355,6 +436,26 @@ export class StreamingRelay {
     request: RpcStreamRequest,
     envelope: RpcEnvelope
   ): Promise<void> {
+    if (this.httpAdmissionClosed) return;
+    const abortController = this.register(client, request.requestId);
+    const operation = (async () => {
+      try {
+        await this.handleSessionRequestOwned(client, request, envelope, abortController.signal);
+      } finally {
+        this.unregister(client, request.requestId, abortController);
+      }
+    })();
+    this.trackOwnedRequest(this.activeSessionRequests, operation);
+    return operation;
+  }
+
+  private async handleSessionRequestOwned(
+    client: WsClientState,
+    request: RpcStreamRequest,
+    envelope: RpcEnvelope,
+    signal: AbortSignal
+  ): Promise<void> {
+    const isLive = () => !signal.aborted && client.ws.readyState === client.ws.OPEN;
     const emitFrame = this.sessionFrameWriter(client, request, envelope);
     const inboundBody = client.uploadBodies?.take(request.requestId);
     // The socket authenticates the resident runtime. Evaluated execution is a
@@ -362,7 +463,7 @@ export class StreamingRelay {
     // the invocation caller for every stream just as the unary path does.
     let invocationCaller: VerifiedCaller;
     try {
-      invocationCaller = this.deps.verifiedCaller(
+      invocationCaller = await this.deps.verifiedCaller(
         {
           callerId: client.caller.runtime.id,
           callerKind: client.caller.runtime.kind,
@@ -372,18 +473,22 @@ export class StreamingRelay {
         client.caller.subject
       );
     } catch (error) {
+      if (!isLive()) throw error;
       await emitFrame({ kind: "error", status: 403, error: serializeRpcFailure(error, "access") });
       return;
     }
+    if (!isLive()) return;
     let causalParent: RpcCausalParent | undefined;
     try {
       const causal = await this.deps.resolveCausalInvocation(invocationCaller, request);
       invocationCaller = causal.caller;
       causalParent = causal.parent;
     } catch (error) {
+      if (!isLive()) throw error;
       await emitFrame({ kind: "error", status: 403, error: serializeRpcFailure(error, "access") });
       return;
     }
+    if (!isLive()) return;
     const effectiveInboundBody = inboundBody ?? client.ws.takeInboundBody(request.requestId);
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
@@ -414,17 +519,24 @@ export class StreamingRelay {
         });
         return;
       }
-      const abortController = this.register(client, request.requestId);
       try {
         const response = await this.deps.relayTargetStream(
           invocationCaller,
           envelope,
           request,
           causalParent,
-          abortController.signal
+          signal
         );
-        await this.pipeResponseToWsFrames(response, emitFrame, abortController.signal);
+        if (!isLive()) {
+          await this.cancelOwnedResponse(response, signal.reason);
+          return;
+        }
+        await this.pipeResponseToWsFrames(response, emitFrame, signal);
       } catch (error) {
+        if (!isLive()) {
+          if (signal.aborted && error === signal.reason) return;
+          throw error;
+        }
         try {
           await emitFrame({
             kind: "error",
@@ -434,15 +546,12 @@ export class StreamingRelay {
         } catch {
           // The client may already be gone.
         }
-      } finally {
-        this.unregister(client, request.requestId, abortController);
       }
       return;
     }
     const parsed = parseServiceMethod(request.method);
 
     if (parsed && request.method !== "credentials.proxyFetch") {
-      const abortController = this.register(client, request.requestId);
       try {
         const context = this.deps.createSessionContext(client, request, invocationCaller, {
           ...(request.requestId ? { requestId: request.requestId } : {}),
@@ -450,6 +559,7 @@ export class StreamingRelay {
           ...(readOnly ? { readOnly: true } : {}),
           ...(effectiveInboundBody ? { body: effectiveInboundBody } : {}),
           ...(causalParent ? { causalParent } : {}),
+          signal,
           authorityAcquisition: "wait",
         });
         const result = await this.deps.dispatcher.dispatch(
@@ -458,6 +568,10 @@ export class StreamingRelay {
           parsed.method,
           request.args
         );
+        if (!isLive()) {
+          if (result instanceof Response) await this.cancelOwnedResponse(result, signal.reason);
+          return;
+        }
         if (!(result instanceof Response)) {
           await emitFrame({
             kind: "error",
@@ -469,10 +583,14 @@ export class StreamingRelay {
           });
           return;
         }
-        await this.pipeResponseToWsFrames(result, emitFrame, abortController.signal, (error) =>
+        await this.pipeResponseToWsFrames(result, emitFrame, signal, (error) =>
           this.deps.dispatcher.observeFailure(context, parsed.service, parsed.method, error)
         );
       } catch (error) {
+        if (!isLive()) {
+          if (signal.aborted && error === signal.reason) return;
+          throw error;
+        }
         try {
           await emitFrame({
             kind: "error",
@@ -482,8 +600,6 @@ export class StreamingRelay {
         } catch {
           // The client may already be gone.
         }
-      } finally {
-        this.unregister(client, request.requestId, abortController);
       }
       return;
     }
@@ -522,6 +638,7 @@ export class StreamingRelay {
       ...(readOnly ? { readOnly: true } : {}),
       ...(effectiveInboundBody ? { body: effectiveInboundBody } : {}),
       ...(causalParent ? { causalParent } : {}),
+      signal,
       authorityAcquisition: "wait",
     });
     try {
@@ -532,11 +649,15 @@ export class StreamingRelay {
         request.args
       );
     } catch (error) {
+      if (!isLive()) {
+        if (signal.aborted && error === signal.reason) return;
+        throw error;
+      }
       await emitFrame({ kind: "error", status: 403, error: serializeRpcFailure(error, "access") });
       return;
     }
+    if (!isLive()) return;
 
-    const abortController = this.register(client, request.requestId);
     try {
       await validation.egress.forwardProxyFetchStream(
         {
@@ -545,9 +666,13 @@ export class StreamingRelay {
           ...(effectiveInboundBody ? { body: effectiveInboundBody } : {}),
         },
         emitFrame,
-        abortController.signal
+        signal
       );
     } catch (error) {
+      if (!isLive()) {
+        if (signal.aborted && error === signal.reason) return;
+        throw error;
+      }
       try {
         await emitFrame({
           kind: "error",
@@ -557,8 +682,6 @@ export class StreamingRelay {
       } catch {
         // The client may already be gone.
       }
-    } finally {
-      this.unregister(client, request.requestId, abortController);
     }
   }
 
@@ -601,24 +724,20 @@ export class StreamingRelay {
   }
 
   private async handleHttpServiceResponse(
-    req: IncomingMessage,
     res: ServerResponse,
     caller: VerifiedCaller,
     request: RpcStreamRequest,
     args: unknown[],
     idempotencyKey: string | undefined,
     readOnly: boolean,
-    causalParent: RpcCausalParent | undefined
+    causalParent: RpcCausalParent | undefined,
+    signal: AbortSignal
   ): Promise<void> {
     const parsed = parseServiceMethod(request.method);
     if (!parsed) {
       writeJson(res, 400, { error: `Invalid method format: "${request.method}"` });
       return;
     }
-    const abortController = new AbortController();
-    const releaseAbort = this.trackHttp(abortController);
-    req.once("aborted", () => abortController.abort());
-    res.once("close", () => abortController.abort());
     let response: Response;
     let context: ServiceContext;
     try {
@@ -627,7 +746,7 @@ export class StreamingRelay {
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
         ...(causalParent ? { causalParent } : {}),
-        signal: abortController.signal,
+        signal,
         authorityAcquisition: "wait",
       });
       const result = await this.deps.dispatcher.dispatch(
@@ -636,32 +755,34 @@ export class StreamingRelay {
         parsed.method,
         args
       );
+      if (signal.aborted || res.destroyed || res.writableEnded) {
+        if (result instanceof Response) await this.cancelOwnedResponse(result, signal.reason);
+        return;
+      }
       if (!(result instanceof Response)) {
         writeJson(res, 500, {
           error: `Streaming service ${request.method} did not return a Response`,
         });
-        releaseAbort();
         return;
       }
       response = result;
     } catch (error) {
+      if (signal.aborted || res.destroyed || res.writableEnded) return;
       res.writeHead(200, STREAM_HEADERS);
       await writeHttpBytes(
         res,
         codec.encodeErrorFrame({ status: 502, error: serializeRpcFailure(error, "internal") })
       ).catch(() => {});
       res.end();
-      releaseAbort();
       return;
     }
 
     res.writeHead(200, STREAM_HEADERS);
     try {
-      await this.pipeResponseToHttpFrames(response, res, abortController.signal, (error) =>
+      await this.pipeResponseToHttpFrames(response, res, signal, (error) =>
         this.deps.dispatcher.observeFailure(context, parsed.service, parsed.method, error)
       );
     } finally {
-      releaseAbort();
       if (!res.destroyed && !res.writableEnded) res.end();
     }
   }
@@ -675,14 +796,28 @@ export class StreamingRelay {
     streams.get(requestId)?.abort();
     const controller = new AbortController();
     streams.set(requestId, controller);
+    this.sessionRequestAborts.add(controller);
     return controller;
   }
 
   private unregister(client: WsClientState, requestId: string, controller: AbortController): void {
     const streams = this.sessionStreamAborts.get(client);
+    this.sessionRequestAborts.delete(controller);
     if (streams?.get(requestId) !== controller) return;
     streams.delete(requestId);
     if (streams.size === 0) this.sessionStreamAborts.delete(client);
+  }
+
+  private async cancelOwnedResponse(response: Response, reason: unknown): Promise<void> {
+    try {
+      await response.body?.cancel(reason);
+    } catch (error) {
+      const failures = reason === undefined || reason === error ? [error] : [reason, error];
+      if (failures.length === 1) throw failures[0];
+      throw new AggregateError(failures, "Streaming response cancellation failed", {
+        cause: failures[0],
+      });
+    }
   }
 
   private async httpFrameWriter(

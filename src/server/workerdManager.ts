@@ -26,7 +26,7 @@ import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/se
 import type { FsService } from "./services/fsService.js";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import type { BuildResult } from "./buildV2/buildStore.js";
+import { readStoredArtifactContent, type StoredBuildResult } from "./buildV2/buildStore.js";
 import { executionArtifactRefFromBuild } from "./executionRootProviders.js";
 import type { WorkspaceRpcMethodDoc } from "./buildV2/workspaceRpcCatalog.js";
 import type { ProtectedPublicationEvent, RuntimeImageBinding } from "./buildV2/index.js";
@@ -93,20 +93,23 @@ declare const __dirname: string | undefined;
  * the historical `worker.js` loader identity; relative imports from it resolve
  * against chunk artifact paths at the module-map root.
  */
-function workerJavaScriptModules(build: BuildResult): Record<string, string> {
+async function workerJavaScriptModules(build: StoredBuildResult): Promise<Record<string, string>> {
   const primary = build.artifacts.find(
     (artifact) => artifact.role === "primary" && artifact.encoding === "utf8"
   );
   if (!primary) throw new Error(`Build ${build.metadata.buildKey} has no primary text artifact`);
-  const modules: Record<string, string> = { "worker.js": primary.content };
-  for (const artifact of build.artifacts) {
-    if (
-      artifact.role === "asset" &&
-      artifact.encoding === "utf8" &&
-      artifact.path.endsWith(".js")
-    ) {
-      modules[artifact.path] = artifact.content;
-    }
+  const modules: Record<string, string> = {
+    "worker.js": await readStoredArtifactContent(build, primary),
+  };
+  const chunks = build.artifacts.filter(
+    (artifact) =>
+      artifact.role === "asset" && artifact.encoding === "utf8" && artifact.path.endsWith(".js")
+  );
+  const contents = await Promise.all(
+    chunks.map((artifact) => readStoredArtifactContent(build, artifact))
+  );
+  for (const [index, artifact] of chunks.entries()) {
+    modules[artifact.path] = contents[index]!;
   }
   return modules;
 }
@@ -543,9 +546,9 @@ export interface WorkerdManagerDeps {
  */
 export interface WorkerdWorkspaceProvider {
   bindRuntimeImage(unitPath: string, ref?: string): Promise<RuntimeImageBinding>;
-  getBuildByKey(key: string): BuildResult | null;
+  getBuildByKey(key: string): Promise<StoredBuildResult | null>;
   /** Resolve the exact retained execution named by a sealed durable entity. */
-  getBuildByExecution(key: string, executionDigest: string): BuildResult | null;
+  getBuildByExecution(key: string, executionDigest: string): Promise<StoredBuildResult | null>;
   getManifestRoutes(source: string): ReadonlyArray<ManifestRouteDecl>;
   getManifestDoClasses(source: string): ReadonlyArray<{ className: string }>;
   readonly singletonRegistry: SingletonRegistry;
@@ -653,7 +656,7 @@ export class WorkerdManager {
   private readonly runtimeImageRebinds = new Map<string, Promise<void>>();
   /** Derived lookup index keyed by immutable build objects; entries disappear with the build. */
   private readonly workspaceRpcCatalogIndexes = new WeakMap<
-    BuildResult,
+    StoredBuildResult,
     ReadonlyMap<string, WorkspaceRpcMethodDoc>
   >();
   private workerdBinary: string | null = null;
@@ -673,13 +676,13 @@ export class WorkerdManager {
   /** Latest prepared exact executable per declared class; demand uses the same unit. */
   private readonly preparedDoExecutables = new Map<
     string,
-    { image: RuntimeImageRecord; build: BuildResult; version: string }
+    { image: RuntimeImageRecord; build: StoredBuildResult; version: string }
   >();
   private readonly executablePreparations = new Map<string, Promise<void>>();
   private readonly latestExecutablePreparation = new Map<string, string>();
   private readonly preparingDoExecutables = new Map<
     string,
-    { image: RuntimeImageRecord; build: BuildResult; version: string }
+    { image: RuntimeImageRecord; build: StoredBuildResult; version: string }
   >();
   private readonly doCodeEgressCallers = new Map<
     string,
@@ -901,13 +904,13 @@ export class WorkerdManager {
     return this.persistRuntimeImage(imageId, binding, scopeRef);
   }
 
-  private bindExactWorkerImage(
+  private async bindExactWorkerImage(
     imageId: string,
     source: string,
     artifact: { buildKey: string; executionDigest: string }
-  ): RuntimeImageRecord {
+  ): Promise<RuntimeImageRecord> {
     const provider = this.requireWorkspaceProvider("exact worker image binding");
-    const build = provider.getBuildByExecution(artifact.buildKey, artifact.executionDigest);
+    const build = await provider.getBuildByExecution(artifact.buildKey, artifact.executionDigest);
     if (!build) {
       throw new Error(`Exact worker artifact ${artifact.buildKey} is unavailable`);
     }
@@ -958,15 +961,15 @@ export class WorkerdManager {
   }
 
   /** Resolve a mutable selector. Missing CAS content schedules a rebuild from its tracked scope. */
-  private getMutableRuntimeImageBuild(
+  private async getMutableRuntimeImageBuild(
     imageId: string,
     onRebound?: (record: RuntimeImageRecord) => void
-  ): { image: RuntimeImageRecord; build: BuildResult } {
+  ): Promise<{ image: RuntimeImageRecord; build: StoredBuildResult }> {
     const image = this.runtimeImages.get(imageId);
     if (!image) {
       throw new RuntimeImageWarmingError(`Runtime image is not bound yet: ${imageId}`);
     }
-    const build = this.requireWorkspaceProvider("runtime image loading").getBuildByKey(
+    const build = await this.requireWorkspaceProvider("runtime image loading").getBuildByKey(
       image.artifact.buildKey
     );
     if (build) return { image, build };
@@ -983,16 +986,16 @@ export class WorkerdManager {
   }
 
   /** Resolve an exact durable incarnation. It can never be rebuilt from a mutable selector. */
-  private getSealedRuntimeImageBuild(imageId: string): {
+  private async getSealedRuntimeImageBuild(imageId: string): Promise<{
     image: RuntimeImageRecord;
-    build: BuildResult;
-  } {
+    build: StoredBuildResult;
+  }> {
     const image = this.sealedDoImages.get(imageId);
     if (!image) {
       throw new RuntimeImageUnavailableError(`Sealed runtime image is not attached: ${imageId}`);
     }
     const provider = this.requireWorkspaceProvider("sealed runtime image loading");
-    const build = provider.getBuildByExecution(
+    const build = await provider.getBuildByExecution(
       image.artifact.buildKey,
       image.artifact.executionDigest
     );
@@ -1186,7 +1189,10 @@ export class WorkerdManager {
     }
 
     const provider = this.requireWorkspaceProvider("sealed runtime image restoration");
-    const build = provider.getBuildByExecution(record.activeBuildKey, record.activeExecutionDigest);
+    const build = await provider.getBuildByExecution(
+      record.activeBuildKey,
+      record.activeExecutionDigest
+    );
     if (
       !build ||
       build.metadata.kind !== "worker" ||
@@ -1238,7 +1244,7 @@ export class WorkerdManager {
     // Preparation may have persisted a selector for this id. Once the entity
     // commit succeeds it is derived state and must not remain a second owner.
     this.runtimeImages.delete(record.id);
-    this.restoreSealedUserlandDOClass(record, sealedImage);
+    await this.restoreSealedUserlandDOClass(record, sealedImage);
     await this.ensureWorkerdRunning();
     await this.admitDurableObjectSchema(sealedImage, record.className);
 
@@ -1299,7 +1305,10 @@ export class WorkerdManager {
    * make cleanup impossible). The exact build artifact is therefore a durable
    * part of the active entity identity and must still be available by key.
    */
-  private restoreSealedUserlandDOClass(record: EntityRecord, image: RuntimeImageRecord): void {
+  private async restoreSealedUserlandDOClass(
+    record: EntityRecord,
+    image: RuntimeImageRecord
+  ): Promise<void> {
     const source = record.source.repoPath;
     const className = assertPresent(record.className);
     const sourceSegments = source.split("/").filter(Boolean);
@@ -1307,7 +1316,9 @@ export class WorkerdManager {
       throw new Error(`DO source path must be exactly 2 segments, got: "${source}"`);
     }
     const provider = this.requireWorkspaceProvider("sealed runtime image restoration");
-    if (!provider.getBuildByExecution(image.artifact.buildKey, image.artifact.executionDigest)) {
+    if (
+      !(await provider.getBuildByExecution(image.artifact.buildKey, image.artifact.executionDigest))
+    ) {
       throw new RuntimeImageUnavailableError(
         `Durable Object ${record.id} is missing its sealed build artifact ${image.artifact.buildKey}`
       );
@@ -1517,7 +1528,7 @@ export class WorkerdManager {
   }
 
   /** Resolve a canonical runtime worker id to the loader's opaque instance name. */
-  resolveWorkerAdmission(targetId: string): WorkerExecutableAdmission | null {
+  async resolveWorkerAdmission(targetId: string): Promise<WorkerExecutableAdmission | null> {
     for (const instance of this.instances.values()) {
       if (instance.runtimeImageId === targetId) return this.getWorkerAdmission(instance.name);
     }
@@ -1949,10 +1960,10 @@ export class WorkerdManager {
   }
 
   /** Resolve authoritative mutable code before selecting an immutable lifetime/configuration. */
-  getWorkerAdmission(name: string): WorkerExecutableAdmission | null {
+  async getWorkerAdmission(name: string): Promise<WorkerExecutableAdmission | null> {
     const instance = this.instances.get(name);
     if (!instance) return null;
-    this.selectWorkerImage(instance);
+    await this.selectWorkerImage(instance);
     return { name, version: `${instance.admissionLifetime}:${instance.codeVersion}` };
   }
 
@@ -1985,7 +1996,7 @@ export class WorkerdManager {
     const instance = this.instances.get(name);
     if (!instance) return null;
 
-    const { image, build: buildResult } = this.selectWorkerImage(instance);
+    const { image, build: buildResult } = await this.selectWorkerImage(instance);
     if (`${instance.admissionLifetime}:${instance.codeVersion}` !== version)
       throw Object.assign(new Error("Worker admission changed before code selection"), {
         code: "WORKER_ADMISSION_CHANGED",
@@ -1993,7 +2004,7 @@ export class WorkerdManager {
     instance.buildKey = image.artifact.buildKey;
     instance.executionDigest = image.artifact.executionDigest;
     instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
-    const modules = workerJavaScriptModules(buildResult);
+    const modules = await workerJavaScriptModules(buildResult);
 
     // WorkerCode `env` (unlike the old capnp config) supports non-string values
     // natively — so `json` bindings / STATE_ARGS / aliases keep their PARSED
@@ -2091,7 +2102,9 @@ export class WorkerdManager {
   }
 
   /** Resolve a userland DO method from the exact build bound to this object. */
-  private workspaceRpcCatalogIndex(build: BuildResult): ReadonlyMap<string, WorkspaceRpcMethodDoc> {
+  private workspaceRpcCatalogIndex(
+    build: StoredBuildResult
+  ): ReadonlyMap<string, WorkspaceRpcMethodDoc> {
     const cached = this.workspaceRpcCatalogIndexes.get(build);
     if (cached) return cached;
     const index = new Map<string, WorkspaceRpcMethodDoc>();
@@ -2103,23 +2116,25 @@ export class WorkerdManager {
     return index;
   }
 
-  resolveDoRpcMethodAuthority(
+  async resolveDoRpcMethodAuthority(
     source: string,
     className: string,
     objectKey: string,
     method: string
-  ):
+  ): Promise<
     | (Pick<
         WorkspaceRpcMethodDoc,
         "effect" | "access" | "userlandCapability" | "producesHandle"
       > & { providerExecutionDigest: string })
-    | null {
+    | null
+  > {
     if (isInternalDOSource(source)) return null;
     const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
     const service = this.doServices.get(doServiceKey(source, className));
     const buildKey = objectBuild?.buildKey ?? service?.buildKey;
     if (!buildKey) return null;
-    const build = this.requireWorkspaceProvider("direct DO authority").getBuildByKey(buildKey);
+    const build =
+      await this.requireWorkspaceProvider("direct DO authority").getBuildByKey(buildKey);
     if (!build || build.metadata.kind !== "worker") return null;
     const declaration = this.workspaceRpcCatalogIndex(build).get(`${className}\0${method}`) ?? null;
     return declaration && build.metadata.execution?.executionDigest
@@ -2130,17 +2145,18 @@ export class WorkerdManager {
       : null;
   }
 
-  describeDoRpcCatalog(
+  async describeDoRpcCatalog(
     source: string,
     className: string,
     objectKey: string
-  ): { activeBuildKey: string | null; declaredMethods: string[] } {
+  ): Promise<{ activeBuildKey: string | null; declaredMethods: string[] }> {
     if (isInternalDOSource(source)) return { activeBuildKey: null, declaredMethods: [] };
     const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
     const service = this.doServices.get(doServiceKey(source, className));
     const activeBuildKey = objectBuild?.buildKey ?? service?.buildKey ?? null;
     if (!activeBuildKey) return { activeBuildKey, declaredMethods: [] };
-    const build = this.requireWorkspaceProvider("direct DO catalog").getBuildByKey(activeBuildKey);
+    const build =
+      await this.requireWorkspaceProvider("direct DO catalog").getBuildByKey(activeBuildKey);
     if (!build || build.metadata.kind !== "worker") {
       return { activeBuildKey, declaredMethods: [] };
     }
@@ -2212,24 +2228,27 @@ export class WorkerdManager {
         this.sealedDoImages.has(binding.imageId)
     );
     const objectBuild = objectEntry?.[1];
-    const resolved =
-      prepared?.version === version
-        ? prepared
-        : serviceImage && runtimeExecutableVersion(serviceImage) === version
-          ? this.getMutableRuntimeImageBuild(serviceImage.id)
-          : objectBuild
-            ? this.getSealedRuntimeImageBuild(objectBuild.imageId)
-            : null;
+    const resolved = await (prepared?.version === version
+      ? prepared
+      : serviceImage && runtimeExecutableVersion(serviceImage) === version
+        ? this.getMutableRuntimeImageBuild(serviceImage.id)
+        : objectBuild
+          ? this.getSealedRuntimeImageBuild(objectBuild.imageId)
+          : null);
     if (!resolved) return null;
     const { image, build: buildResult } = resolved;
     if (runtimeExecutableVersion(image) !== version) return null;
-    const modules = workerJavaScriptModules(buildResult);
+    const modules = await workerJavaScriptModules(buildResult);
     // Terminal (Ink) DOs import a pre-compiled `yoga.wasm` module — it must be
     // loaded alongside the JS bundle (the only way to run WASM in workerd).
     const wasmModules: Record<string, string> = {};
-    for (const artifact of buildResult.artifacts) {
-      if (artifact.role === "wasm") wasmModules[artifact.path] = artifact.content;
-    }
+    await Promise.all(
+      buildResult.artifacts
+        .filter((artifact) => artifact.role === "wasm")
+        .map(async (artifact) => {
+          wasmModules[artifact.path] = await readStoredArtifactContent(buildResult, artifact);
+        })
+    );
 
     // Service-level token shared by all instances of this source:className;
     // `do-service:*` is a bearer identity, not an entity id.
@@ -3851,7 +3870,10 @@ export class WorkerdManager {
   /** Prepare one immutable worker executable without creating an entity or
    * registering routes. Class declarations come from the same exact-state
    * catalog view used to build it; schema admission shares the normal gate. */
-  async prepareWorkerExecutable(build: BuildResult, classNames: readonly string[]): Promise<void> {
+  async prepareWorkerExecutable(
+    build: StoredBuildResult,
+    classNames: readonly string[]
+  ): Promise<void> {
     if (build.metadata.kind !== "worker" || !build.metadata.sourcePath)
       throw new Error("Worker executable preparation requires an exact workspace worker build");
     const image: RuntimeImageBinding = {
@@ -3881,7 +3903,7 @@ export class WorkerdManager {
 
   private async prepareDurableExecutable(
     image: RuntimeImageBinding,
-    build: BuildResult,
+    build: StoredBuildResult,
     className: string
   ): Promise<void> {
     await this.admitDurableObjectSchema(image, className);
@@ -3967,7 +3989,7 @@ export class WorkerdManager {
         });
         return;
       }
-      const build = this.requireWorkspaceProvider("schema admission").getBuildByExecution(
+      const build = await this.requireWorkspaceProvider("schema admission").getBuildByExecution(
         image.artifact.buildKey,
         image.artifact.executionDigest
       );
@@ -4122,18 +4144,19 @@ export class WorkerdManager {
   async probeDurableObjectSchema(
     source: string,
     className: string,
-    build: BuildResult
+    build: StoredBuildResult
   ): Promise<DurableObjectPublishedSchemaDescriptor> {
     if (build.metadata.kind !== "worker" || build.metadata.sourcePath !== source) {
       throw new Error(`Schema probe build does not belong to worker source ${source}`);
     }
     const wasmModules: Record<string, string> = {};
     for (const artifact of build.artifacts) {
-      if (artifact.role === "wasm") wasmModules[artifact.path] = artifact.content;
+      if (artifact.role === "wasm")
+        wasmModules[artifact.path] = await readStoredArtifactContent(build, artifact);
     }
     return this.probeSchemaExecutable(source, className, {
       version: `${build.metadata.ev}:${build.buildKey}`,
-      modules: workerJavaScriptModules(build),
+      modules: await workerJavaScriptModules(build),
       ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
     });
   }
@@ -5086,7 +5109,7 @@ export class WorkerdManager {
     // runtime image generations advance, so the next request loads fresh code.
     // No workerd restart — concurrent agents keep running.
 
-    const completed = completedBuildKey ? provider.getBuildByKey(completedBuildKey) : null;
+    const completed = completedBuildKey ? await provider.getBuildByKey(completedBuildKey) : null;
     if (completed?.metadata.kind === "worker") {
       const activeDefinitionDigests = new Set<string>();
       for (const method of completed.metadata.workspaceRpcCatalog ?? []) {

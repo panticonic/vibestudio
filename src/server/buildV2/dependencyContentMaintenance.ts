@@ -7,7 +7,13 @@ import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
 
 export const DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS = 3 * 60_000;
 
-const pendingCacheDirs = new Set<string>();
+type PendingPreparation = {
+  stagingDir: string;
+  cacheDir: string;
+  resolve(): void;
+  reject(error: unknown): void;
+};
+const pendingPreparations: PendingPreparation[] = [];
 let pendingContentPrune = false;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let activeOperation: Promise<void> | null = null;
@@ -22,7 +28,7 @@ function recordFailure(error: unknown): void {
 export async function drainDependencyContentMaintenance(): Promise<void> {
   if (maintenanceTimer) clearTimeout(maintenanceTimer);
   maintenanceTimer = null;
-  while (activeOperation || pendingCacheDirs.size > 0 || pendingContentPrune) {
+  while (activeOperation || pendingPreparations.length > 0 || pendingContentPrune) {
     if (activeOperation) {
       await activeOperation;
       continue;
@@ -45,13 +51,18 @@ export function dependencyContentMaintenanceEntry(): string {
   );
 }
 
-/**
- * Defer physical dependency sharing during startup. The server retains ownership
- * of each admitted child and joins it before releasing shared cache coordinators.
- */
-export function scheduleDependencyContentMaintenance(cacheDir: string): void {
-  pendingCacheDirs.add(path.resolve(cacheDir));
-  scheduleMaintenanceTimer();
+/** Prepare one private install tree before its directory is atomically published. */
+export function prepareDependencyContent(stagingDir: string, cacheDir: string): Promise<void> {
+  const promise = new Promise<void>((resolve, reject) => {
+    pendingPreparations.push({
+      stagingDir: path.resolve(stagingDir),
+      cacheDir: path.resolve(cacheDir),
+      resolve,
+      reject,
+    });
+  });
+  if (!activeOperation) queueMicrotask(startPendingMaintenance);
+  return promise;
 }
 
 /** Request CAS pruning through the same owned child used for dependency maintenance. */
@@ -61,8 +72,7 @@ export function scheduleDependencyContentPrune(): void {
 }
 
 function scheduleMaintenanceTimer(): void {
-  if (maintenanceTimer || activeOperation || (pendingCacheDirs.size === 0 && !pendingContentPrune))
-    return;
+  if (maintenanceTimer || activeOperation || !pendingContentPrune) return;
   maintenanceTimer = setTimeout(() => {
     maintenanceTimer = null;
     startPendingMaintenance();
@@ -73,63 +83,83 @@ function scheduleMaintenanceTimer(): void {
 function startPendingMaintenance(): void {
   if (maintenanceTimer) clearTimeout(maintenanceTimer);
   maintenanceTimer = null;
-  if (activeOperation || (pendingCacheDirs.size === 0 && !pendingContentPrune)) return;
-  const cacheDirs = [...pendingCacheDirs];
-  pendingCacheDirs.clear();
+  if (activeOperation || (pendingPreparations.length === 0 && !pendingContentPrune)) return;
+  const preparations = pendingPreparations.splice(0);
+  const prune = pendingContentPrune;
   pendingContentPrune = false;
 
   let entry: string;
   try {
     entry = dependencyContentMaintenanceEntry();
   } catch (error) {
-    recordFailure(error);
+    if (prune) recordFailure(error);
     scheduleMaintenanceTimer();
+    for (const preparation of preparations) preparation.reject(error);
     return;
   }
   if (!fs.existsSync(entry)) {
-    recordFailure(new Error(`Dependency maintenance entry is missing: ${entry}`));
+    const error = new Error(`Dependency maintenance entry is missing: ${entry}`);
+    if (prune) recordFailure(error);
+    for (const preparation of preparations) preparation.reject(error);
     scheduleMaintenanceTimer();
     return;
   }
 
   let child: ReturnType<typeof fork>;
   try {
-    child = fork(entry, cacheDirs, {
-      execPath: process.execPath,
-      execArgv: [],
-      detached: false,
-      stdio: ["ignore", "inherit", "inherit", "ipc"],
-      env: {
-        ...process.env,
-        ...(process.versions["electron"] ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
-      },
-    });
+    child = fork(
+      entry,
+      [
+        JSON.stringify({
+          preparations: preparations.map(({ stagingDir, cacheDir }) => ({ stagingDir, cacheDir })),
+          prune,
+        }),
+      ],
+      {
+        execPath: process.execPath,
+        execArgv: [],
+        detached: false,
+        stdio: ["ignore", "inherit", "inherit", "ipc"],
+        env: {
+          ...process.env,
+          ...(process.versions["electron"] ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+        },
+      }
+    );
   } catch (error) {
-    recordFailure(error);
+    if (prune) recordFailure(error);
+    for (const preparation of preparations) preparation.reject(error);
     scheduleMaintenanceTimer();
     return;
   }
 
-  const operation = new Promise<void>((resolve, reject) => {
+  const operation = new Promise<void>((resolve) => {
     let childFailure: unknown;
     let hasChildFailure = false;
     let spawnFailure: unknown;
     let hasSpawnFailure = false;
+    let results: unknown[] | null = null;
     child.once("message", (message: unknown) => {
-      if (
-        !message ||
-        typeof message !== "object" ||
-        (message as { type?: unknown }).type !== "dependency-maintenance-failure"
-      ) {
-        childFailure = new Error("Dependency maintenance child sent an invalid failure message");
+      if (!message || typeof message !== "object") {
+        childFailure = new Error("Dependency maintenance child sent an invalid result message");
         hasChildFailure = true;
         return;
       }
-      try {
-        childFailure = deserializeRpcFailure((message as { failure?: RpcFailure }).failure);
-      } catch (error) {
-        childFailure = error;
+      const candidate = message as { type?: unknown; results?: unknown; failure?: RpcFailure };
+      if (candidate.type === "dependency-maintenance-results" && Array.isArray(candidate.results)) {
+        results = candidate.results;
+        return;
       }
+      if (candidate.type === "dependency-maintenance-failure") {
+        try {
+          childFailure = deserializeRpcFailure(candidate.failure);
+        } catch (error) {
+          childFailure = error;
+        }
+        hasChildFailure = true;
+        return;
+      }
+      childFailure = new Error("Dependency maintenance child sent an invalid result message");
       hasChildFailure = true;
     });
     child.once("error", (error) => {
@@ -137,26 +167,112 @@ function startPendingMaintenance(): void {
       hasSpawnFailure = true;
     });
     child.once("close", (code, signal) => {
-      const errors: unknown[] = [];
-      if (hasChildFailure) errors.push(childFailure);
-      if (hasSpawnFailure) errors.push(spawnFailure);
+      const exitErrors: unknown[] = [];
+      if (hasChildFailure) exitErrors.push(childFailure);
+      if (hasSpawnFailure) exitErrors.push(spawnFailure);
       if (signal !== null)
-        errors.push(new Error(`Dependency maintenance terminated by signal ${signal}`));
+        exitErrors.push(new Error(`Dependency maintenance terminated by signal ${signal}`));
       if (code !== 0 && !hasChildFailure && !hasSpawnFailure && signal === null)
-        errors.push(new Error(`Dependency maintenance exited with code ${code}`));
-      if (errors.length > 1)
-        reject(new AggregateError(errors, "Dependency maintenance child failed"));
-      else if (errors.length === 1) reject(errors[0]);
-      else resolve();
+        exitErrors.push(new Error(`Dependency maintenance exited with code ${code}`));
+      const processFailure =
+        exitErrors.length > 1
+          ? new AggregateError(exitErrors, "Dependency maintenance child failed", {
+              cause: exitErrors[0],
+            })
+          : exitErrors[0];
+      const reportedJobFailure = Boolean(
+        results?.some(
+          (result) =>
+            !result || typeof result !== "object" || (result as { ok?: unknown }).ok !== true
+        )
+      );
+      const validResults =
+        results &&
+        results.length === preparations.length + Number(prune) &&
+        !hasChildFailure &&
+        !hasSpawnFailure &&
+        signal === null &&
+        (code === 0 || (code === 1 && reportedJobFailure));
+      if (preparations.length > 0) {
+        if (!validResults) {
+          const error =
+            processFailure ?? new Error("Dependency maintenance child omitted preparation results");
+          for (const [index, preparation] of preparations.entries()) {
+            const result = results?.[index] as { ok?: unknown; failure?: RpcFailure } | null;
+            if (!result?.failure) {
+              preparation.reject(error);
+              continue;
+            }
+            try {
+              const preparationFailure = deserializeRpcFailure(result.failure);
+              preparation.reject(
+                processFailure
+                  ? new AggregateError(
+                      [preparationFailure, processFailure],
+                      "Dependency preparation and child termination failed",
+                      { cause: preparationFailure }
+                    )
+                  : preparationFailure
+              );
+            } catch (failureDecodeError) {
+              preparation.reject(
+                new AggregateError(
+                  [failureDecodeError, error],
+                  "Dependency preparation result and child termination failed",
+                  { cause: failureDecodeError }
+                )
+              );
+            }
+          }
+        } else {
+          preparations.forEach((preparation, index) => {
+            const result = results![index] as { ok?: unknown; failure?: RpcFailure } | null;
+            if (result && result.ok === true) preparation.resolve();
+            else {
+              try {
+                preparation.reject(
+                  result?.failure
+                    ? deserializeRpcFailure(result.failure)
+                    : (processFailure ?? new Error("Dependency preparation failed without a cause"))
+                );
+              } catch (error) {
+                preparation.reject(error);
+              }
+            }
+          });
+        }
+      }
+      const pruneFailures: unknown[] = [];
+      const completedResults = results;
+      if (validResults && prune && completedResults) {
+        for (let index = preparations.length; index < completedResults.length; index += 1) {
+          const result = completedResults[index] as { ok?: unknown; failure?: RpcFailure } | null;
+          if (result?.ok === true) continue;
+          try {
+            pruneFailures.push(
+              result?.failure
+                ? deserializeRpcFailure(result.failure)
+                : new Error("Dependency maintenance failed without a cause")
+            );
+          } catch (error) {
+            pruneFailures.push(error);
+          }
+        }
+      }
+      for (const error of pruneFailures) recordFailure(error);
+      if (processFailure && !validResults) {
+        if (prune || preparations.length === 0) recordFailure(processFailure);
+        if (!results) for (const preparation of preparations) preparation.reject(processFailure);
+      }
+      if (prune && !validResults && !processFailure)
+        recordFailure(new Error("Dependency maintenance child omitted prune results"));
+      resolve();
     });
-  })
-    .catch((error) => {
-      recordFailure(error);
-    })
-    .finally(() => {
-      if (activeOperation === operation) activeOperation = null;
-      scheduleMaintenanceTimer();
-    });
+  }).finally(() => {
+    if (activeOperation === operation) activeOperation = null;
+    if (pendingPreparations.length > 0) queueMicrotask(startPendingMaintenance);
+    else scheduleMaintenanceTimer();
+  });
   activeOperation = operation;
   child.unref();
 }

@@ -21,6 +21,7 @@ import {
   primaryArtifactFilePath,
   primaryTextArtifactContent,
   put,
+  readStoredArtifactContent,
   rebindSourceState,
   readExecutableModules,
   writeBuildMetadata,
@@ -138,7 +139,9 @@ describe("build artifact helpers", () => {
       const hydrated = await getOrHydrate(key, consumerState);
       expect(hydrated?.metadata.sourceStateHash).toBe(consumerState);
       expect(hydrated?.dir).toBe(path.join(root, "consumer", "builds", key));
-      expect(hydrated?.artifacts[0]?.content).toBe("export default {};");
+      expect(await readStoredArtifactContent(hydrated!, hydrated!.artifacts[0]!)).toBe(
+        "export default {};"
+      );
       expect(fs.readFileSync(path.join(installed, "metadata.json"), "utf8")).toBe(metadataBefore);
       await expect(getOrHydrate("f".repeat(64), consumerState)).resolves.toBeNull();
       fs.writeFileSync(path.join(installed, "worker.js"), "truncated");
@@ -169,19 +172,19 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("returns the manifest primary artifact content", () => {
+  it("returns the manifest primary artifact content", async () => {
     const result = build();
 
     expect(primaryArtifact(result)).toMatchObject({ path: "worker.js" });
-    expect(primaryTextArtifactContent(result)).toBe("export default {};");
+    await expect(primaryTextArtifactContent(result)).resolves.toBe("export default {};");
     expect(primaryArtifactFilePath(result)).toBe("/tmp/build/worker.js");
   });
 
-  it("fails closed when a text primary artifact is unavailable", () => {
-    expect(() => primaryTextArtifactContent(build({ artifacts: [] }))).toThrow(
+  it("fails closed when a text primary artifact is unavailable", async () => {
+    await expect(primaryTextArtifactContent(build({ artifacts: [] }))).rejects.toThrow(
       /no primary artifact/
     );
-    expect(() =>
+    await expect(
       primaryTextArtifactContent(
         build({
           artifacts: [
@@ -195,7 +198,7 @@ describe("build artifact helpers", () => {
           ],
         })
       )
-    ).toThrow(/not UTF-8 text/);
+    ).rejects.toThrow(/not UTF-8 text/);
   });
 
   it("rejects unsafe artifact paths when deriving file paths", () => {
@@ -234,7 +237,7 @@ describe("build artifact helpers", () => {
       expect(result.buildKey).toBe("build-key");
       expect(result.metadata.buildKey).toBe(result.buildKey);
       expect(Object.isFrozen(result.metadata.authority)).toBe(true);
-      expect(get("build-key")?.artifacts[0]).toMatchObject({ integrity: expected });
+      expect((await get("build-key"))?.artifacts[0]).toMatchObject({ integrity: expected });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -279,7 +282,7 @@ describe("build artifact helpers", () => {
       setUserDataPath(root);
       const result = await put("build-key", { entries: build().artifacts }, build().metadata);
       fs.writeFileSync(path.join(result.dir, "worker.js"), "tampered");
-      expect(get("build-key")).toBeNull();
+      await expect(get("build-key")).resolves.toBeNull();
 
       for (const artifactPath of ["", ".", "assets\\chunk.js", "assets//chunk.js"]) {
         await expect(
@@ -316,14 +319,26 @@ describe("build artifact helpers", () => {
         }
       );
       const artifactPath = path.join(root, "builds", "lazy-build", "worker.js");
-      const cachedBefore = get("lazy-build");
-      expect(cachedBefore?.artifacts[0]?.content).toBe("export default {};");
+      const cachedBefore = await get("lazy-build");
+      expect(await readStoredArtifactContent(cachedBefore!, cachedBefore!.artifacts[0]!)).toBe(
+        "export default {};"
+      );
       const bytes = fs.readFileSync(artifactPath, "utf8");
       fs.writeFileSync(artifactPath, "x".repeat(Buffer.byteLength(bytes)));
 
-      const cached = get("lazy-build");
+      const cached = await get("lazy-build");
       expect(cached).not.toBeNull();
-      expect(() => cached?.artifacts[0]?.content).toThrow(/integrity mismatch/i);
+      const artifact = cached!.artifacts[0]!;
+      if (artifact.byteLength === undefined) throw new Error("Fixture artifact has no byte length");
+      await expect(
+        readStoredArtifactContent(cached!, {
+          ...artifact,
+          byteLength: artifact.byteLength + 1,
+        })
+      ).rejects.toThrow(/length mismatch/i);
+      await expect(readStoredArtifactContent(cached!, cached!.artifacts[0]!)).rejects.toThrow(
+        /integrity mismatch/i
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -388,7 +403,7 @@ describe("build artifact helpers", () => {
       const expected = expectedArtifactSetIntegrity(result.artifacts);
 
       expect(result.metadata.details).toMatchObject({ integrity: expected });
-      expect(get("app-build-key")?.metadata.details).toMatchObject({ integrity: expected });
+      expect((await get("app-build-key"))?.metadata.details).toMatchObject({ integrity: expected });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -444,7 +459,7 @@ describe("build artifact helpers", () => {
       expect(changedSource.metadata.execution?.executionDigest).not.toBe(
         first.metadata.execution?.executionDigest
       );
-      expect(get(workspaceMetadata.buildKey)?.metadata.execution).toEqual(
+      expect((await get(workspaceMetadata.buildKey))?.metadata.execution).toEqual(
         changedSource.metadata.execution
       );
     } finally {
@@ -482,23 +497,24 @@ describe("build artifact helpers", () => {
         }
       );
 
-      const first = get(buildKey)!;
+      const first = (await get(buildKey))!;
       const firstExecutionDigest = first.metadata.execution!.executionDigest;
       const rebound = await rebindSourceState(first, secondState);
 
       expect(rebound.sourceStateHash).toBe(secondState);
       expect(first.metadata.serviceAuthorityDigest).toBe("a".repeat(64));
       expect(rebound.metadata.serviceAuthorityDigest).toBe("b".repeat(64));
-      expect(getByExecution(buildKey, firstExecutionDigest)?.metadata.serviceAuthorityDigest).toBe(
-        "a".repeat(64)
-      );
+      expect(
+        (await getByExecution(buildKey, firstExecutionDigest))?.metadata.serviceAuthorityDigest
+      ).toBe("a".repeat(64));
       expect(rebound.metadata.sourceState).toEqual({ kind: "event", eventId: "event:second" });
-      expect(get(buildKey)?.metadata.execution?.sourceState.state).toEqual({
+      expect((await get(buildKey))?.metadata.execution?.sourceState.state).toEqual({
         kind: "event",
         eventId: "event:second",
       });
       expect(
-        getByExecution(buildKey, rebound.metadata.execution!.executionDigest)?.metadata.execution
+        (await getByExecution(buildKey, rebound.metadata.execution!.executionDigest))?.metadata
+          .execution
       ).toEqual(rebound.metadata.execution);
       const retained = JSON.parse(
         fs.readFileSync(
@@ -562,7 +578,7 @@ describe("build artifact helpers", () => {
         },
       });
       expect(first).toMatchObject({ quarantined: 1, deleted: 0 });
-      expect(has(buildKey)).toBe(true);
+      expect(await has(buildKey)).toBe(true);
       expect(first.retainedSourceRoots).toEqual([
         { repoPath: "workers/a", stateHash: `state:${"7".repeat(64)}` },
       ]);
@@ -573,7 +589,7 @@ describe("build artifact helpers", () => {
         commitArtifactDeletion: () => false,
       });
       expect(raced).toMatchObject({ deleted: 0, retainedForGrace: 1 });
-      expect(has(buildKey)).toBe(true);
+      expect(await has(buildKey)).toBe(true);
 
       const deleted = await collectRetention({
         ...base,
@@ -584,7 +600,7 @@ describe("build artifact helpers", () => {
         },
       });
       expect(deleted.deleted).toBe(1);
-      expect(has(buildKey)).toBe(false);
+      expect(await has(buildKey)).toBe(false);
       expect(deleted.retainedSourceRoots).toHaveLength(1);
 
       const later = await collectRetention({ ...base, mode: "quarantine", epoch: 4 });
@@ -641,7 +657,7 @@ describe("build artifact helpers", () => {
         },
       });
       expect(rescued).toMatchObject({ deleted: 0, retainedForGrace: 0 });
-      expect(has(buildKey)).toBe(true);
+      expect(await has(buildKey)).toBe(true);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -806,13 +822,13 @@ describe("build artifact helpers", () => {
       ]);
       expect(result.deleted).toBe(0);
       expect(commits).toBe(0);
-      expect(has(healthyKey)).toBe(true);
+      expect(await has(healthyKey)).toBe(true);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("rejects build directories without an artifact manifest", () => {
+  it("rejects build directories without an artifact manifest", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     try {
       setUserDataPath(root);
@@ -838,7 +854,7 @@ describe("build artifact helpers", () => {
       );
       fs.writeFileSync(path.join(dir, "assets", "chunk.js"), "export {};");
 
-      const result = get("legacy-key");
+      const result = await get("legacy-key");
 
       expect(result).toBeNull();
     } finally {
@@ -866,8 +882,8 @@ describe("build artifact helpers", () => {
       metadata["details"] = { kind: "generic", unowned: true };
       fs.writeFileSync(metadataPath, JSON.stringify(metadata));
       setUserDataPath(corruptRoot);
-      expect(get(buildKey)).toBeNull();
-      expect(findSharedStyleBuild("e".repeat(64))).toBeNull();
+      await expect(get(buildKey)).resolves.toBeNull();
+      await expect(findSharedStyleBuild("e".repeat(64))).resolves.toBeNull();
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -901,7 +917,7 @@ describe("build artifact helpers", () => {
         ])
       );
       fs.writeFileSync(path.join(dir, "metadata.json"), JSON.stringify(metadata));
-      expect(get(buildKey)).toBeNull();
+      await expect(get(buildKey)).resolves.toBeNull();
 
       await expect(put(buildKey, { entries: build().artifacts }, metadata)).rejects.toThrow(
         /stop the server and remove it/
@@ -998,9 +1014,9 @@ describe("build artifact helpers", () => {
         setUserDataPath(path.join(root, "first-reader"));
         const first = await getOrHydrate(key);
         expect(first?.metadata).not.toHaveProperty("executableModules");
-        expect(readExecutableModules(first!.dir)).toEqual(modules);
+        expect(await readExecutableModules(first!.dir)).toEqual(modules);
         await writeBuildMetadata(first!.dir, first!.metadata);
-        expect(readExecutableModules(first!.dir)).toEqual(modules);
+        expect(await readExecutableModules(first!.dir)).toEqual(modules);
         const sharedDir = path.join(sharedCache, key);
         const metadataPath = path.join(sharedDir, "metadata.json");
         if (format === "inline") {
@@ -1022,8 +1038,10 @@ describe("build artifact helpers", () => {
         setUserDataPath(path.join(root, "second-reader"));
         const hydrated = await getOrHydrate(key);
         expect(hydrated?.metadata).not.toHaveProperty("executableModules");
-        expect(readExecutableModules(hydrated!.dir)).toEqual(modules);
-        expect(hydrated?.artifacts[0]?.content).toBe("export default {};");
+        expect(await readExecutableModules(hydrated!.dir)).toEqual(modules);
+        expect(await readStoredArtifactContent(hydrated!, hydrated!.artifacts[0]!)).toBe(
+          "export default {};"
+        );
         expect(fs.existsSync(path.join(hydrated!.dir, "metadata.json.tmp.other-writer"))).toBe(
           false
         );
@@ -1033,7 +1051,7 @@ describe("build artifact helpers", () => {
         expect(fs.readFileSync(metadataPath, "utf8")).toBe(metadataBefore);
         if (format === "inline") {
           await writeBuildMetadata(sharedDir, first!.metadata);
-          expect(readExecutableModules(sharedDir)).toEqual(modules);
+          expect(await readExecutableModules(sharedDir)).toEqual(modules);
         }
       } finally {
         linkSpy?.mockRestore();
@@ -1086,9 +1104,9 @@ describe("build artifact helpers", () => {
             ? { kind: "event", eventId: "event:workspace-b" }
             : null,
       });
-      expect(has(buildKey)).toBe(false);
+      expect(await has(buildKey)).toBe(false);
       const reused = await getOrHydrate(buildKey, `state:${"2".repeat(64)}`);
-      expect(has(buildKey)).toBe(true);
+      expect(await has(buildKey)).toBe(true);
 
       expect(reused).toMatchObject({
         dir: path.join(stateB, "builds", buildKey),
@@ -1106,7 +1124,9 @@ describe("build artifact helpers", () => {
         kind: "event",
         eventId: "event:workspace-b",
       });
-      expect(reused?.artifacts[0]?.content).toBe("export default {};");
+      expect(await readStoredArtifactContent(reused!, reused!.artifacts[0]!)).toBe(
+        "export default {};"
+      );
       expect(fs.existsSync(path.join(stateB, "builds", "same-build-key"))).toBe(false);
 
       // A fresh lookup of A must still reproduce its sealed execution after B
@@ -1124,7 +1144,8 @@ describe("build artifact helpers", () => {
         }),
       });
       expect(
-        getByExecution(buildKey, original.metadata.execution!.executionDigest)?.metadata.execution
+        (await getByExecution(buildKey, original.metadata.execution!.executionDigest))?.metadata
+          .execution
       ).toEqual(original.metadata.execution);
       for (const metadataDir of [original.dir, path.join(sharedCache, buildKey)]) {
         expect(
@@ -1193,7 +1214,9 @@ describe("build artifact helpers", () => {
         setUserDataPath(path.join(root, "consumer"));
         if (winnerKind === "valid") {
           const hydrated = await getOrHydrate(key);
-          expect(hydrated?.artifacts[0]?.content).toBe("export default {};");
+          expect(await readStoredArtifactContent(hydrated!, hydrated!.artifacts[0]!)).toBe(
+            "export default {};"
+          );
           expect(fs.existsSync(path.join(sharedDir, "metadata.json"))).toBe(true);
         } else {
           await expect(getOrHydrate(key)).rejects.toSatisfy((error: unknown) => {

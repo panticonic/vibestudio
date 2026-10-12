@@ -99,7 +99,7 @@ const executionSession = {
 } satisfies ExecutionAdmissionFact;
 
 describe("live execution caller resolution", () => {
-  it("refreshes user attribution independently of the registered image", () => {
+  it("refreshes user attribution independently of the registered image", async () => {
     const resolve = (subject: { userId: string; handle: string } | null) =>
       resolveLiveExecutionCaller({
         registered: { ...registered, subject: { userId: "stale-user", handle: "stale" } },
@@ -109,17 +109,17 @@ describe("live execution caller resolution", () => {
         contextTestPolicy: null,
       });
     const subject = { userId: "current-user", handle: "current" };
-    expect(resolve(subject)).toMatchObject({
+    expect(await resolve(subject)).toMatchObject({
       subject,
       code: registered.code,
       runtime: registered.runtime,
     });
-    expect(resolve(null)?.subject).toBeUndefined();
+    expect((await resolve(null))?.subject).toBeUndefined();
   });
 
-  it("joins a registered image to the current agent session and case policy", () => {
+  it("joins a registered image to the current agent session and case policy", async () => {
     expect(
-      resolveLiveExecutionCaller({
+      await resolveLiveExecutionCaller({
         subject: null,
         registered,
         activeEntity,
@@ -159,10 +159,10 @@ describe("live execution caller resolution", () => {
     ).toThrow(/does not match its source identity/);
   });
 
-  it("projects current exact-version approval onto a long-lived egress caller", () => {
+  it("projects current exact-version approval onto a long-lived egress caller", async () => {
     const isCodeApproved = vi.fn(() => true);
     expect(
-      resolveLiveExecutionCaller({
+      await resolveLiveExecutionCaller({
         subject: null,
         registered,
         activeEntity,
@@ -175,9 +175,9 @@ describe("live execution caller resolution", () => {
     expect(isCodeApproved).toHaveBeenCalledWith(registered.code);
   });
 
-  it("does not invent code approval when the exact version is unapproved", () => {
+  it("does not invent code approval when the exact version is unapproved", async () => {
     expect(
-      resolveLiveExecutionCaller({
+      await resolveLiveExecutionCaller({
         subject: null,
         registered,
         activeEntity,
@@ -189,9 +189,9 @@ describe("live execution caller resolution", () => {
     ).not.toHaveProperty("codeApproved");
   });
 
-  it("rejects a stale session whose live context no longer matches", () => {
+  it("rejects a stale session whose live context no longer matches", async () => {
     expect(
-      resolveLiveExecutionCaller({
+      await resolveLiveExecutionCaller({
         subject: null,
         registered,
         activeEntity: { ...activeEntity, contextId: "ctx-replaced" },

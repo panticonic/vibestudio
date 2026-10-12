@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { EventService } from "@vibestudio/shared/eventsService";
-import { readEventWatchRecords } from "@vibestudio/shared/events";
+import { readEventWatchRecords, type EventName } from "@vibestudio/shared/events";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import { createEventsServiceDefinition } from "./eventsServiceDefinition.js";
@@ -63,7 +63,7 @@ function context(
 async function open(
   service: ReturnType<typeof createEventsServiceDefinition>,
   ctx: ServiceContext,
-  events = [EVENT],
+  events: EventName[] = [EVENT],
   watchId = ctx.requestId ?? "watch"
 ) {
   const response = (await service.handler(ctx, "watch", [events, watchId])) as Response;
@@ -157,6 +157,127 @@ describe("events.watch", () => {
     await watch.records.return();
   });
 
+  it("delivers the starting snapshot before events emitted during its read", async () => {
+    const events = new EventService();
+    let snapshotStarted!: () => void;
+    let completeSnapshot!: (value: Iterable<PanelTreeInvalidation>) => void;
+    const started = new Promise<void>((resolve) => {
+      snapshotStarted = resolve;
+    });
+    const pendingSnapshot = new Promise<Iterable<PanelTreeInvalidation>>((resolve) => {
+      completeSnapshot = resolve;
+    });
+    const service = createEventsServiceDefinition(events, {
+      snapshots: {
+        [EVENT]: async () => {
+          snapshotStarted();
+          return pendingSnapshot;
+        },
+      },
+    });
+    const watch = await open(service, context("do:test:async-snapshot", "request:async-snapshot"));
+    expect(events.getSubscriberCount(EVENT)).toBe(1);
+    await expect(watch.records.next()).resolves.toMatchObject({ value: { kind: "watching" } });
+    await started;
+    const duringSnapshot = { ...snapshot, revision: 2 };
+    events.emit(EVENT, duringSnapshot);
+    completeSnapshot([snapshot]);
+    await expect(watch.records.next()).resolves.toEqual({
+      done: false,
+      value: { kind: "snapshot", event: EVENT, payload: snapshot, sequence: 0 },
+    });
+    await expect(watch.records.next()).resolves.toEqual({
+      done: false,
+      value: { kind: "event", event: EVENT, payload: duringSnapshot, sequence: 1 },
+    });
+    await watch.records.return();
+  });
+
+  it("propagates asynchronous snapshot failures and retires the partial watch", async () => {
+    const events = new EventService();
+    const failure = new Error("snapshot metadata read failed");
+    const service = createEventsServiceDefinition(events, {
+      snapshots: { [EVENT]: async () => Promise.reject(failure) },
+    });
+    const watch = await open(
+      service,
+      context("do:test:snapshot-failure", "request:snapshot-failure")
+    );
+
+    await expect(watch.records.next()).rejects.toBe(failure);
+    expect(events.getSubscriberCount(EVENT)).toBe(0);
+  });
+
+  it("bounds snapshot records and events together while the starting snapshot is pending", async () => {
+    const events = new EventService();
+    let snapshotStarted!: () => void;
+    let completeSnapshot!: (value: Iterable<PanelTreeInvalidation>) => void;
+    const started = new Promise<void>((resolve) => {
+      snapshotStarted = resolve;
+    });
+    const pendingSnapshot = new Promise<Iterable<PanelTreeInvalidation>>((resolve) => {
+      completeSnapshot = resolve;
+    });
+    const makeLargePayload = (size: number) =>
+      ({ ...snapshot, retained: "x".repeat(size) }) as PanelTreeInvalidation;
+    const service = createEventsServiceDefinition(events, {
+      snapshots: {
+        [EVENT]: async () => {
+          snapshotStarted();
+          return pendingSnapshot;
+        },
+      },
+    });
+    const watch = await open(
+      service,
+      context("do:test:snapshot-buffer", "request:snapshot-buffer")
+    );
+
+    await expect(watch.records.next()).resolves.toMatchObject({ value: { kind: "watching" } });
+    await started;
+    events.emit(EVENT, makeLargePayload(700_000));
+    completeSnapshot([makeLargePayload(400_000)]);
+
+    await expect(watch.records.next()).rejects.toThrow("Event watch buffer capacity exceeded");
+    expect(events.getSubscriberCount(EVENT)).toBe(0);
+  });
+
+  it("does not admit later snapshot providers after the response is cancelled", async () => {
+    const events = new EventService();
+    let snapshotStarted!: () => void;
+    let completeSnapshot!: (value: Iterable<PanelTreeInvalidation>) => void;
+    const started = new Promise<void>((resolve) => {
+      snapshotStarted = resolve;
+    });
+    const pendingSnapshot = new Promise<Iterable<PanelTreeInvalidation>>((resolve) => {
+      completeSnapshot = resolve;
+    });
+    const laterProvider = vi.fn(() => ["dark" as const]);
+    const service = createEventsServiceDefinition(events, {
+      snapshots: {
+        [EVENT]: async () => {
+          snapshotStarted();
+          return pendingSnapshot;
+        },
+        "system-theme-changed": laterProvider,
+      },
+    });
+    const watch = await open(
+      service,
+      context("do:test:snapshot-cancel", "request:snapshot-cancel"),
+      [EVENT, "system-theme-changed"]
+    );
+
+    await watch.records.next();
+    await started;
+    await watch.records.return();
+    completeSnapshot([snapshot]);
+    await pendingSnapshot;
+
+    expect(laterProvider).not.toHaveBeenCalled();
+    expect(events.getSubscriberCount(EVENT)).toBe(0);
+  });
+
   it("replays every held outcome on one watched topic", async () => {
     const events = new EventService();
     const first = { ...snapshot, revision: 2 };
@@ -219,11 +340,11 @@ describe("events.watch", () => {
     await expect(watch.records.next()).resolves.toMatchObject({ value: { kind: "watching" } });
     await expect(watch.records.next()).resolves.toEqual({
       done: false,
-      value: { kind: "event", event: EVENT, payload: duringSnapshot, sequence: 1 },
+      value: { kind: "snapshot", event: EVENT, payload: snapshot, sequence: 0 },
     });
     await expect(watch.records.next()).resolves.toEqual({
       done: false,
-      value: { kind: "snapshot", event: EVENT, payload: snapshot, sequence: 1 },
+      value: { kind: "event", event: EVENT, payload: duringSnapshot, sequence: 1 },
     });
     await watch.records.return();
   });

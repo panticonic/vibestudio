@@ -43,6 +43,12 @@ export interface DerivedCacheLease {
   release(): void;
 }
 
+export interface DerivedCacheLeaseBatch {
+  readonly root: string;
+  readonly leases: ReadonlyMap<string, DerivedCacheLease>;
+  release(): void;
+}
+
 export function derivedCacheDatabasePath(root: string): string {
   return path.join(canonicalRoot(root), ".storage", "derived-cache.db");
 }
@@ -226,44 +232,69 @@ export class DerivedCacheCoordinator {
   }
 
   acquire(rootInput: string, key: string): DerivedCacheLease {
+    return this.acquireBatch(rootInput, [key]).leases.get(key)!;
+  }
+
+  acquireBatch(rootInput: string, keys: readonly string[]): DerivedCacheLeaseBatch {
     const root = canonicalRoot(rootInput);
-    entryPath(root, key);
-    const leaseId = crypto.randomBytes(20).toString("hex");
+    const uniqueKeys = [...new Set(keys)];
+    for (const key of uniqueKeys) entryPath(root, key);
+    const entries = uniqueKeys.map((key) => ({
+      key,
+      leaseId: crypto.randomBytes(20).toString("hex"),
+      released: false,
+    }));
     const now = Date.now();
-    this.transaction(() => {
-      this.db
-        .prepare(
+    if (entries.length > 0) {
+      this.transaction(() => {
+        const updateEntry = this.db.prepare(
           `INSERT INTO cache_entries(root, key, bytes, last_access)
            VALUES (?, ?, 0, ?)
            ON CONFLICT(root, key) DO UPDATE SET last_access = excluded.last_access`
-        )
-        .run(root, key, now);
-      this.db
-        .prepare("INSERT INTO cache_leases(lease_id, root, key, owner_id) VALUES (?, ?, ?, ?)")
-        .run(leaseId, root, key, this.ownerId);
-    });
-    this.leases.add(leaseId);
-    let released = false;
+        );
+        const insertLease = this.db.prepare(
+          "INSERT INTO cache_leases(lease_id, root, key, owner_id) VALUES (?, ?, ?, ?)"
+        );
+        for (const entry of entries) {
+          updateEntry.run(root, entry.key, now);
+          insertLease.run(entry.leaseId, root, entry.key, this.ownerId);
+        }
+      });
+      for (const entry of entries) this.leases.add(entry.leaseId);
+    }
+
+    const releaseEntries = (selected: typeof entries): void => {
+      const active = selected.filter((entry) => !entry.released && this.leases.has(entry.leaseId));
+      if (active.length === 0) return;
+      const releasedAt = Date.now();
+      this.transaction(() => {
+        const deleteLease = this.db.prepare(
+          "DELETE FROM cache_leases WHERE lease_id = ? AND owner_id = ?"
+        );
+        const updateEntry = this.db.prepare(
+          "UPDATE cache_entries SET last_access = ? WHERE root = ? AND key = ?"
+        );
+        for (const entry of active) deleteLease.run(entry.leaseId, this.ownerId);
+        for (const key of new Set(active.map((entry) => entry.key)))
+          updateEntry.run(releasedAt, root, key);
+      });
+      for (const entry of active) {
+        this.leases.delete(entry.leaseId);
+        entry.released = true;
+      }
+    };
+    const leases = new Map<string, DerivedCacheLease>();
+    for (const entry of entries) {
+      leases.set(entry.key, {
+        root,
+        key: entry.key,
+        release: () => releaseEntries([entry]),
+      });
+    }
     return {
       root,
-      key,
-      release: () => {
-        if (released) return;
-        if (!this.leases.has(leaseId)) {
-          released = true;
-          return;
-        }
-        this.transaction(() => {
-          this.db
-            .prepare("DELETE FROM cache_leases WHERE lease_id = ? AND owner_id = ?")
-            .run(leaseId, this.ownerId);
-          this.db
-            .prepare("UPDATE cache_entries SET last_access = ? WHERE root = ? AND key = ?")
-            .run(Date.now(), root, key);
-        });
-        this.leases.delete(leaseId);
-        released = true;
-      },
+      leases,
+      release: () => releaseEntries(entries),
     };
   }
 

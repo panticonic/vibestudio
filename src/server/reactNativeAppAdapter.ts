@@ -68,16 +68,16 @@ export interface ReactNativeAppAdapterDeps {
   buildSystem: {
     getBuildProviderDetails?(target: "react-native"): AppBuildProviderDetails | null;
   };
-  resolveActiveBuild(entry: AppRegistryEntry): {
+  resolveActiveBuild(entry: AppRegistryEntry): Promise<{
     buildKey: string;
     build: AppBuildResultLike;
     identity: ActiveExecutionIdentity;
-  };
+  }>;
   approvalCoordinator?: UnitApprovalCoordinator<ReviewedUnit>;
   entityCache?: ReactNativeEntityCache;
   getArtifactBaseUrl(): string;
   selectedSource(): string | null;
-  listCandidates(): HostTargetCandidate[];
+  listCandidates(): Promise<HostTargetCandidate[]>;
   declaredForCandidate(candidate: HostTargetCandidate): WorkspaceAppDeclaration | null;
   requiredExtensions(): string[];
   ensureRequiredExtensions(): Promise<void>;
@@ -102,7 +102,7 @@ export class ReactNativeAppAdapter {
 
   constructor(private readonly deps: ReactNativeAppAdapterDeps) {}
 
-  getBootstrap(source?: string | null): ReactNativeAppBootstrap | null {
+  async getBootstrap(source?: string | null): Promise<ReactNativeAppBootstrap | null> {
     const resolvedSource = source ?? this.deps.selectedSource();
     if (!resolvedSource) return null;
     const normalizedSource = normalizeRepoPath(resolvedSource);
@@ -116,7 +116,7 @@ export class ReactNativeAppAdapter {
           candidate.activeBundleKey
       );
     if (!entry?.activeBundleKey) return null;
-    const activeBuild = this.deps.resolveActiveBuild(entry);
+    const activeBuild = await this.deps.resolveActiveBuild(entry);
     const build = activeBuild.build;
     const details =
       build?.metadata.details &&
@@ -186,21 +186,19 @@ export class ReactNativeAppAdapter {
     else await this.deps.whenReconciled();
     await this.deps.ensureRequiredExtensions();
 
-    const first = this.readinessSnapshot(source);
+    const first = await this.readinessSnapshot(source);
     const provider = this.deps.buildSystem.getBuildProviderDetails?.("react-native") ?? null;
     if (first.ready && provider && sameBuildProvider(first.bootstrap.provider, provider))
       return first;
 
     const resolvedSource = first.source ?? source ?? this.deps.selectedSource();
     if (!resolvedSource) return first;
-    const candidate = this.deps
-      .listCandidates()
-      .find(
-        (item) =>
-          item.source === normalizeRepoPath(resolvedSource) ||
-          item.name === resolvedSource ||
-          item.name === first.appId
-      );
+    const candidate = (await this.deps.listCandidates()).find(
+      (item) =>
+        item.source === normalizeRepoPath(resolvedSource) ||
+        item.name === resolvedSource ||
+        item.name === first.appId
+    );
     if (!candidate) return first;
     const declared = this.deps.declaredForCandidate(candidate);
     if (!declared) {
@@ -215,7 +213,7 @@ export class ReactNativeAppAdapter {
 
     if (!provider) {
       await this.stageLaunchPreflightApproval(candidate, declared);
-      const missingProvider = this.readinessSnapshot(candidate.source);
+      const missingProvider = await this.readinessSnapshot(candidate.source);
       const requiredExtensions = this.deps.requiredExtensions();
       const orderingDetail =
         requiredExtensions.length > 0
@@ -246,7 +244,7 @@ export class ReactNativeAppAdapter {
     return this.readinessSnapshot(candidate.source);
   }
 
-  registerPrincipal(deviceId: string, source?: string | null): string | null {
+  async registerPrincipal(deviceId: string, source?: string | null): Promise<string | null> {
     const resolvedSource = source ?? this.deps.selectedSource();
     if (!resolvedSource) return null;
     const normalizedSource = normalizeRepoPath(resolvedSource);
@@ -261,7 +259,7 @@ export class ReactNativeAppAdapter {
           normalizeRepoPath(candidate.source.repo) === normalizedSource
       );
     if (!entry || !this.deps.entityCache) return null;
-    const activeBuild = this.deps.resolveActiveBuild(entry);
+    const activeBuild = await this.deps.resolveActiveBuild(entry);
     return this.activatePrincipal(entry, deviceId, activeBuild);
   }
 
@@ -282,9 +280,9 @@ export class ReactNativeAppAdapter {
     }
   }
 
-  private readinessSnapshot(source?: string | null): ReactNativeHostReadiness {
+  private async readinessSnapshot(source?: string | null): Promise<ReactNativeHostReadiness> {
     const resolvedSource = source ?? this.deps.selectedSource();
-    const candidates = this.deps.listCandidates();
+    const candidates = await this.deps.listCandidates();
     if (!resolvedSource) {
       return {
         ready: false,
@@ -307,7 +305,7 @@ export class ReactNativeAppAdapter {
     const candidate = candidates.find(
       (item) => item.source === normalizedSource || item.name === resolvedSource
     );
-    const bootstrap = this.getBootstrap(normalizedSource);
+    const bootstrap = await this.getBootstrap(normalizedSource);
     if (bootstrap) {
       return {
         ready: true,

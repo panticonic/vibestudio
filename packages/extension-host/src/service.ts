@@ -90,9 +90,12 @@ import type {
   ExtensionHealth,
   ExtensionInvocation,
   ExtensionUserlandCaller,
-  RegistryEntry,
+  RegistryEntry as BaseRegistryEntry,
 } from "./types.js";
 import { invocationFromServiceContext } from "./types.js";
+import type { StoredBuildResult } from "@vibestudio/service-schemas/build";
+
+type RegistryEntry = BaseRegistryEntry & { activeExecutionDigest: string | null };
 
 const EXTENSION_UNIT_DESCRIPTOR: UnitDescriptor<"extension"> = {
   kind: "extension",
@@ -127,22 +130,12 @@ type ActiveExtensionInvocation = {
 };
 
 interface BuildSystemLike {
-  getBuild(
+  getStoredBuild(
     unitPath: string,
     ref?: string,
     options?: { priority?: "interactive" | "background" }
-  ): Promise<{
-    dir: string;
-    sourceStateHash?: string | null;
-    metadata: ExtensionBuildMetadataLike;
-    artifacts: ExtensionBuildArtifactLike[];
-  }>;
-  getBuildByKey?(key: string): {
-    dir: string;
-    sourceStateHash?: string | null;
-    metadata: ExtensionBuildMetadataLike;
-    artifacts: ExtensionBuildArtifactLike[];
-  } | null;
+  ): Promise<StoredBuildResult>;
+  getBuildByKey(key: string): Promise<StoredBuildResult | null>;
   getEffectiveVersion(unitName: string): string | null;
   listAffectedBuildUnits?(stateHash: string, changedPaths: readonly string[]): Promise<string[]>;
   resolveBuildUnitIdentity(
@@ -192,52 +185,38 @@ interface BuildSystemLike {
   ): () => void;
 }
 
-interface ExtensionBuildMetadataLike {
-  ev: string;
-  sourceStateHash?: string | null;
-  sourcePath?: string | null;
-  serviceAuthorityDigest?: string;
-  execution?: { executionDigest: string };
-  authority?: {
-    requests: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
-    provides: readonly import("@vibestudio/shared/authorityManifest").UserlandCapabilityDefinition[];
-  };
-  details?:
-    | {
-        kind: "extension";
-        runtimeDepsKey?: string | null;
-        runtimeAbi?: string | null;
-        externalDeps?: Record<string, string>;
-        providerContracts?: Record<string, { methods: string[] }>;
-        methodAuthority?: Record<
-          string,
-          | { website: import("@vibestudio/rpc").WebsiteMethodPolicy; effect: { kind: "open" } }
-          | {
-              website: import("@vibestudio/rpc").WebsiteMethodPolicy;
-              effect: {
-                kind: "userland-capability";
-                capability: string;
-                resource: { kind: "receiver" };
-              };
-              userlandCapability: {
-                canonicalCapability: string;
-                definitionDigest: string;
-                resourceType: string;
-                grantScopes: readonly import("@vibestudio/shared/authorityManifest").UserlandGrantScope[];
-                title: string;
-                action: string;
-                description?: string;
-              };
-            }
-        >;
-      }
-    | { kind: string };
+type ExtensionBuildMetadataLike = StoredBuildResult["metadata"];
+type ExtensionBuildArtifactLike = StoredBuildResult["artifacts"][number];
+
+function sameExtensionActiveIdentity(left: RegistryEntry, right: RegistryEntry): boolean {
+  return (
+    left.activeBundleKey === right.activeBundleKey &&
+    left.activeExecutionDigest === right.activeExecutionDigest &&
+    left.activeEv === right.activeEv &&
+    left.source.repo === right.source.repo &&
+    left.source.ref === right.source.ref
+  );
 }
 
-interface ExtensionBuildArtifactLike {
-  path: string;
-  role: string;
-  platform?: string;
+function extensionVerifiedCodeIdentity(
+  entry: RegistryEntry,
+  build: StoredBuildResult
+): VerifiedCodeIdentity | null {
+  const executionDigest = build.metadata.execution?.executionDigest;
+  const authority = build.metadata.authority;
+  if (!executionDigest || !authority || !entry.activeEv) return null;
+  return {
+    callerId: entry.name,
+    callerKind: "extension",
+    repoPath: entry.source.repo,
+    effectiveVersion: entry.activeEv,
+    executionDigest,
+    requested: authority.requests,
+  };
+}
+
+function sameCodeIdentity(left: VerifiedCodeIdentity, right: VerifiedCodeIdentity | null): boolean {
+  return right !== null && sha256Canonical(left) === sha256Canonical(right);
 }
 
 type ExtensionProviderContracts = Record<string, { methods: string[] }>;
@@ -387,19 +366,26 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private lastDeclared: UnitDeclaration[] = [];
   private readonly shutdownSignal = new AbortController();
   private shutdownFlight: Promise<void> | null = null;
+  private initializationFlight: Promise<void> | null = null;
+  private readonly callbackFlights = new Set<Promise<void>>();
+  private callbackFailures: unknown[] = [];
 
   constructor(private readonly deps: ExtensionHostDeps) {
     this.registry = new UnitRegistry<RegistryEntry>({
       statePath: deps.statePath,
       unitKind: EXTENSION_UNIT_DESCRIPTOR.kind,
       publicationPort: deps.executionPublicationPort,
-      publicationKeyForEntry: (entry) => entry.activeBundleKey ?? "",
+      normalizeEntry: (entry) => ({
+        ...entry,
+        activeExecutionDigest: entry.activeExecutionDigest ?? null,
+      }),
+      publicationKeyForEntry: (entry) =>
+        `${entry.activeBundleKey ?? ""}\0${entry.activeExecutionDigest ?? ""}`,
       publicationForEntry: (entry) => {
         if (!entry.activeBundleKey) {
           return { owner: "extension-generation", ownerId: entry.name, artifacts: [] };
         }
-        const executionDigest = deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)?.metadata
-          .execution?.executionDigest;
+        const executionDigest = entry.activeExecutionDigest;
         if (!executionDigest) {
           throw new Error(
             `Extension ${entry.name} references unverifiable build ${entry.activeBundleKey}`
@@ -585,22 +571,61 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       },
     });
     deps.buildSystem.onPushBuild((source, trigger) => {
-      this.handleSourceRebuilt(source, trigger).catch((err) => {
-        console.error(
-          `[ExtensionHost] Failed to reload rebuilt extension source ${source}:`,
-          err instanceof Error ? err.message : String(err)
-        );
-      });
+      this.admitCallbackWork(`rebuilt extension source ${source}`, () =>
+        this.handleSourceRebuilt(source, trigger)
+      );
     });
     deps.buildSystem.onUnitChange?.((event) => {
       if (event.kind !== "extension") return;
-      this.handleChangedExtensionUnit(event).catch((err) => {
-        console.error(
-          `[ExtensionHost] Failed to reconcile changed extension unit ${event.relativePath}:`,
-          err instanceof Error ? err.message : String(err)
-        );
-      });
+      this.admitCallbackWork(`changed extension unit ${event.relativePath}`, () =>
+        this.handleChangedExtensionUnit(event)
+      );
     });
+  }
+
+  /** Resolve and persist exact active build identities before this host is exposed. */
+  initialize(): Promise<void> {
+    if (this.initializationFlight) return this.initializationFlight;
+    this.initializationFlight = (async () => {
+      const entries = this.registry.list();
+      const resolved = await Promise.allSettled(
+        entries.map(async (entry) => {
+          if (!entry.activeBundleKey) return null;
+          const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
+          const digest = build?.metadata.execution?.executionDigest;
+          if (
+            !build ||
+            build.buildKey !== entry.activeBundleKey ||
+            build.metadata.buildKey !== entry.activeBundleKey ||
+            build.metadata.ev !== entry.activeEv ||
+            !digest ||
+            (entry.activeExecutionDigest !== null && entry.activeExecutionDigest !== digest)
+          ) {
+            throw new Error(
+              `Extension ${entry.name} references unverifiable build ${entry.activeBundleKey}`
+            );
+          }
+          return entry.activeExecutionDigest === null
+            ? { name: entry.name, activeExecutionDigest: digest }
+            : null;
+        })
+      );
+      const failures = resolved.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Failed to verify active extension build identities");
+      }
+      for (const result of resolved) {
+        if (result.status === "fulfilled" && result.value) {
+          this.registry.patch(result.value.name, {
+            activeExecutionDigest: result.value.activeExecutionDigest,
+          });
+        }
+      }
+    })();
+    return this.initializationFlight;
   }
 
   /** Record authoritative declarations without reviewing or building their authority. */
@@ -626,6 +651,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
 
   /** Opportunistically prepare eager extensions; explicit activation shares this owner. */
   async warmDeclared(): Promise<void> {
+    await this.initialize();
     for (const declaration of this.lastDeclared) {
       const node = this.findExtensionNode(declaration.source);
       if (this.activatesEagerly(node)) await this.ensureActivated(node.name);
@@ -647,6 +673,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       waitFor?: "staged" | "applied";
     } = {}
   ): Promise<void> {
+    await this.initialize();
     this.lastDeclared = declared.map((entry) => ({ ...entry }));
     await this.unitHost.reconcileDeclared(declared, opts);
   }
@@ -659,13 +686,14 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   async reviewDeclared(
     declared: UnitDeclaration[]
   ): Promise<{ units: ReviewedUnit[]; identityKeys: string[] }> {
+    await this.initialize();
     const review = await this.unitHost.approvalForDeclarations(declared);
     return { units: review.entries, identityKeys: review.identityKeys };
   }
 
   /** Declared extensions that ship in the host build, for the server to admit. */
   seedTrustedDeclared(declared: UnitDeclaration[]): Promise<ReviewedUnit[]> {
-    return this.unitHost.seedTrustedDeclarations(declared);
+    return this.initialize().then(() => this.unitHost.seedTrustedDeclarations(declared));
   }
 
   /**
@@ -673,15 +701,32 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * background joint-approval flow it kicked off have settled.
    */
   async whenSettled(): Promise<void> {
-    await this.unitHost.whenSettled();
+    await this.initialize();
+    const failures: unknown[] = [];
+    do {
+      try {
+        await this.joinCallbackWork();
+      } catch (error) {
+        failures.push(...(error instanceof AggregateError ? error.errors : [error]));
+      }
+      try {
+        await this.unitHost.whenSettled();
+      } catch (error) {
+        failures.push(...(error instanceof AggregateError ? error.errors : [error]));
+      }
+    } while (this.callbackFlights.size > 0 || this.callbackFailures.length > 0);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Extension host work failed");
   }
 
   async whenReconciled(): Promise<void> {
+    await this.initialize();
     await this.unitHost.whenReconciled();
   }
 
   /** Declared extensions are classified (entries + staged approvals); builds may still run. */
   async whenDeclarationsStaged(signal?: AbortSignal, target?: string): Promise<void> {
+    await this.initialize();
     const ownedSignal = signal
       ? AbortSignal.any([signal, this.shutdownSignal.signal])
       : this.shutdownSignal.signal;
@@ -689,7 +734,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     // An existing approved target remains callable while unrelated startup
     // planning stages its review. Every target still observes the currently
     // admitted reconciliation's classification before its registry is read.
-    const alreadyActive = target !== undefined && this.lookupForInvoke(target) !== null;
+    const targetEntry = target ? this.resolveInvocationEntry(target) : null;
+    const alreadyActive = Boolean(
+      targetEntry?.activeBundleKey && targetEntry.activeExecutionDigest
+    );
     const wait = (staged: Promise<void>) =>
       new Promise<void>((resolve, reject) => {
         const finish = (error?: unknown) => {
@@ -750,14 +798,17 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     decl: UnitDeclaration,
     building = false
   ): RegistryEntry {
-    return createPendingUnitRegistryEntry({
-      unitKind: "extension",
-      name: node.name,
-      version: this.readNodeVersion(node.path),
-      sourceRepo: node.relativePath,
-      ref: decl.ref,
-      building,
-    });
+    return {
+      ...createPendingUnitRegistryEntry({
+        unitKind: "extension",
+        name: node.name,
+        version: this.readNodeVersion(node.path),
+        sourceRepo: node.relativePath,
+        ref: decl.ref,
+        building,
+      }),
+      activeExecutionDigest: null,
+    };
   }
 
   private validateExtensionManifestAtPath(nodePath: string, unitName: string): void {
@@ -808,10 +859,51 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (this.shutdownFlight) return this.shutdownFlight;
     this.shutdownSignal.abort(new Error("Extension host shut down before declaration readiness"));
     this.shutdownFlight = (async () => {
-      await Promise.allSettled(this.activationTails.values());
-      await this.processes.shutdown();
+      const outcomes = [
+        ...(await Promise.allSettled([
+          this.initializationFlight ?? Promise.resolve(),
+          ...this.callbackFlights,
+        ])),
+        ...(await Promise.allSettled([...this.activationTails.values()])),
+        ...(await Promise.allSettled([this.processes.shutdown()])),
+      ];
+      const failures = [
+        ...this.callbackFailures,
+        ...outcomes.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : [])),
+      ];
+      this.callbackFailures = [];
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, "Extension host shutdown failed");
     })();
     return this.shutdownFlight;
+  }
+
+  private admitCallbackWork(label: string, operation: () => Promise<void>): void {
+    if (this.shutdownSignal.signal.aborted) return;
+    const flight = Promise.resolve()
+      .then(operation)
+      .catch((error: unknown) => {
+        this.callbackFailures.push(error);
+        console.error(
+          `[ExtensionHost] Failed ${label}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      })
+      .finally(() => this.callbackFlights.delete(flight));
+    this.callbackFlights.add(flight);
+    // The callback API is notification-only. Its owning host retains the
+    // failure and joins it at the lifecycle barrier instead of laundering it.
+    void flight.catch(() => {});
+  }
+
+  private async joinCallbackWork(): Promise<void> {
+    const flights = [...this.callbackFlights];
+    if (flights.length) await Promise.allSettled(flights);
+    const failures = this.callbackFailures.splice(0);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Extension host callback work failed");
+    }
   }
 
   async unitChangeApprovalForCommit(
@@ -1118,8 +1210,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     method: string,
     args: unknown[]
   ): Promise<unknown> {
-    return this.invokeExtensionTarget(ctx, name, method, "invoke", (entry, invocation) => {
-      this.assertPublicExtensionInvocationAllowed(entry, method, "invoke");
+    return this.invokeExtensionTarget(ctx, name, method, "invoke", async (entry, invocation) => {
+      await this.assertPublicExtensionInvocationAllowed(entry, method, "invoke");
       return this.deps.extensionTransport.call(
         entry.name,
         "extension.invoke",
@@ -1150,15 +1242,15 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       extension: entry.name,
       method: invocationMethod,
     });
-    this.assertWebsiteMethod(ctx, entry, invocationMethod);
+    await this.assertWebsiteMethod(ctx, entry, invocationMethod);
     await this.ensureTargetRunning(entry, ctx.signal, operation);
     console.info("[ExtensionHost] invocation target ready", {
       extension: entry.name,
       method: invocationMethod,
     });
     ctx.signal?.throwIfAborted();
-    this.assertWebsiteMethod(ctx, entry, invocationMethod);
-    this.assertAdmittedMethod(ctx, entry, invocationMethod);
+    await this.assertWebsiteMethod(ctx, entry, invocationMethod);
+    await this.assertAdmittedMethod(ctx, entry, invocationMethod);
     const invocation = this.createTrackedInvocation(ctx, entry.name, invocationMethod);
     console.info("[ExtensionHost] invocation admitted", {
       extension: entry.name,
@@ -1269,8 +1361,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       name,
       qualifiedMethod,
       "invokeProvider",
-      (entry, invocation) => {
-        this.assertActiveProviderImplementation(entry, provider, method, "invokeProvider");
+      async (entry, invocation) => {
+        await this.assertActiveProviderImplementation(entry, provider, method, "invokeProvider");
         return this.deps.extensionTransport.call(
           entry.name,
           "extension.invokeProvider",
@@ -1291,12 +1383,12 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     );
   }
 
-  private assertPublicExtensionInvocationAllowed(
+  private async assertPublicExtensionInvocationAllowed(
     entry: RegistryEntry,
     method: string,
     operation: "invoke" | "invokeStream"
-  ): void {
-    const owner = this.activeProviderOwner(entry, method, operation);
+  ): Promise<void> {
+    const owner = await this.activeProviderOwner(entry, method, operation);
     if (!owner) return;
     throw new ServiceError(
       "extensions",
@@ -1310,25 +1402,25 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     return this.deps.privateProviderMethods?.[provider]?.includes(method) ?? false;
   }
 
-  private activeProviderOwner(
+  private async activeProviderOwner(
     entry: RegistryEntry,
     method: string,
     operation: "invoke" | "invokeStream"
-  ): string | null {
-    const declarations = this.activeProviderContracts(entry, operation);
+  ): Promise<string | null> {
+    const declarations = await this.activeProviderContracts(entry, operation);
     for (const [provider, declaration] of Object.entries(declarations)) {
       if (declaration.methods.includes(method)) return provider;
     }
     return null;
   }
 
-  private assertActiveProviderImplementation(
+  private async assertActiveProviderImplementation(
     entry: RegistryEntry,
     provider: string,
     method: string,
     operation: "invokeProvider"
-  ): void {
-    const declarations = this.activeProviderContracts(entry, operation);
+  ): Promise<void> {
+    const declarations = await this.activeProviderContracts(entry, operation);
     if (declarations[provider]?.methods.includes(method)) return;
     throw new ServiceError(
       "extensions",
@@ -1338,13 +1430,11 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     );
   }
 
-  private activeProviderContracts(
+  private async activeProviderContracts(
     entry: RegistryEntry,
     operation: "invoke" | "invokeProvider" | "invokeStream" | "ready"
-  ): ExtensionProviderContracts {
-    const build = entry.activeBundleKey
-      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
-      : null;
+  ): Promise<ExtensionProviderContracts> {
+    const build = await this.readCurrentActiveBuild(entry);
     const details = extensionMetadataDetails(build?.metadata);
     if (
       details?.runtimeAbi !== EXTENSION_RUNTIME_ABI_VERSION ||
@@ -1393,8 +1483,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   ): Promise<Response> {
     // See invoke(): stream calls should not wait behind unrelated extension approval/build work.
     const entry = await this.requireInvocationEntry(name, "invokeStream", ctx.signal);
-    this.assertWebsiteMethod(ctx, entry, method);
-    this.assertPublicExtensionInvocationAllowed(entry, method, "invokeStream");
+    await this.assertWebsiteMethod(ctx, entry, method);
+    await this.assertPublicExtensionInvocationAllowed(entry, method, "invokeStream");
     if (!this.deps.extensionTransport.streamCallTarget) {
       throw new ServiceError(
         "extensions",
@@ -1405,8 +1495,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     }
     await this.ensureTargetRunning(entry, ctx.signal, "invokeStream");
     ctx.signal?.throwIfAborted();
-    this.assertWebsiteMethod(ctx, entry, method);
-    this.assertAdmittedMethod(ctx, entry, method);
+    await this.assertWebsiteMethod(ctx, entry, method);
+    await this.assertAdmittedMethod(ctx, entry, method);
     const invocation = this.createTrackedInvocation(ctx, entry.name, method);
     try {
       const response = await this.deps.extensionTransport.streamCallTarget(
@@ -1475,55 +1565,51 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       : null;
   }
 
-  resolveCodeIdentity(extensionName: string): VerifiedCodeIdentity | null {
+  async resolveCodeIdentity(extensionName: string): Promise<VerifiedCodeIdentity | null> {
+    await this.initialize();
     const entry = this.registry.get(extensionName);
     if (!entry?.activeBundleKey || !entry.activeEv) return null;
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
-    const executionDigest = build?.metadata.execution?.executionDigest;
-    const authority = build?.metadata.authority;
-    if (!executionDigest || !authority) return null;
-    return {
-      callerId: entry.name,
-      callerKind: "extension",
-      repoPath: entry.source.repo,
-      effectiveVersion: entry.activeEv,
-      executionDigest,
-      requested: authority.requests,
-    };
+    const build = await this.readCurrentActiveBuild(entry);
+    return build ? extensionVerifiedCodeIdentity(entry, build) : null;
   }
 
   /** Resolve admission evidence only for this registry's current sealed execution. */
-  resolveActiveAuthority(code: VerifiedCodeIdentity): UnitAuthorityManifest | null {
-    const active = this.resolveCodeIdentity(code.callerId);
-    if (!active || sha256Canonical(active) !== sha256Canonical(code)) return null;
+  async resolveActiveAuthority(code: VerifiedCodeIdentity): Promise<UnitAuthorityManifest | null> {
+    await this.initialize();
     const entry = this.registry.get(code.callerId);
-    return entry?.activeBundleKey
-      ? (this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)?.metadata.authority ?? null)
-      : null;
+    if (!entry?.activeBundleKey) return null;
+    const build = await this.readCurrentActiveBuild(entry);
+    if (!build || !sameCodeIdentity(code, extensionVerifiedCodeIdentity(entry, build))) return null;
+    return build.metadata.authority ?? null;
   }
 
   /** Admission facts sealed with this registry's exact currently active image. */
-  resolveActiveAdmissionImage(code: VerifiedCodeIdentity): {
+  async resolveActiveAdmissionImage(code: VerifiedCodeIdentity): Promise<{
     sourcePath: string | null;
     ev: string;
     execution?: { executionDigest: string };
     authority?: UnitAuthorityManifest;
     serviceAuthorityDigest?: string;
-  } | null {
-    if (!this.resolveActiveAuthority(code)) return null;
+  } | null> {
+    await this.initialize();
     const entry = this.registry.get(code.callerId);
-    const image = entry?.activeBundleKey
-      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)?.metadata
-      : null;
-    return image ? { ...image, sourcePath: image.sourcePath ?? null } : null;
+    if (!entry?.activeBundleKey) return null;
+    const build = await this.readCurrentActiveBuild(entry);
+    if (!build || !sameCodeIdentity(code, extensionVerifiedCodeIdentity(entry, build))) return null;
+    const current = this.registry.get(entry.name);
+    if (!current || !sameExtensionActiveIdentity(entry, current)) return null;
+    const image = build.metadata;
+    return { ...image, sourcePath: image.sourcePath ?? null };
   }
 
-  private assertAdmittedMethod(ctx: ServiceContext, entry: RegistryEntry, method: string): void {
+  private async assertAdmittedMethod(
+    ctx: ServiceContext,
+    entry: RegistryEntry,
+    method: string
+  ): Promise<void> {
     const admitted = ctx.preparedAuthority;
     if (!admitted) return; // Internal host invocations do not pass through the public dispatcher.
-    const build = entry.activeBundleKey
-      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
-      : null;
+    const build = await this.readCurrentActiveBuild(entry);
     const declaration = extensionMetadataDetails(build?.metadata)?.methodAuthority?.[method];
     const live = {
       extension: entry.name,
@@ -1545,17 +1631,36 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       );
   }
 
-  private assertWebsiteMethod(ctx: ServiceContext, entry: RegistryEntry, method: string): void {
-    const build = entry.activeBundleKey
-      ? (this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey) ?? null)
-      : null;
+  private async assertWebsiteMethod(
+    ctx: ServiceContext,
+    entry: RegistryEntry,
+    method: string
+  ): Promise<void> {
+    const build = await this.readCurrentActiveBuild(entry);
     this.assertWebsiteMethodPolicy(ctx, method, build);
+  }
+
+  private async readCurrentActiveBuild(entry: RegistryEntry): Promise<StoredBuildResult | null> {
+    if (!entry.activeBundleKey || !entry.activeExecutionDigest) return null;
+    const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
+    if (
+      !build ||
+      build.buildKey !== entry.activeBundleKey ||
+      build.metadata.buildKey !== entry.activeBundleKey ||
+      build.metadata.ev !== entry.activeEv ||
+      build.metadata.execution?.executionDigest !== entry.activeExecutionDigest
+    ) {
+      return null;
+    }
+    const current = this.registry.get(entry.name);
+    if (!current || !sameExtensionActiveIdentity(entry, current)) return null;
+    return build;
   }
 
   private assertWebsiteMethodPolicy(
     ctx: ServiceContext,
     method: string,
-    build: ReturnType<NonNullable<BuildSystemLike["getBuildByKey"]>> | null
+    build: StoredBuildResult | null
   ): void {
     const caller = verifiedInitiator(ctx);
     const website = websiteAuthorityIdentity(caller);
@@ -1636,28 +1741,26 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const target = this.resolveInvocationEntry(
       this.deps.resolveProviderExtensionName(name) ?? name
     );
-    if (target && !this.hasAvailableApprovedBuild(target)) {
+    if (target && !(await this.hasAvailableApprovedBuild(target))) {
       await this.unitHost.whenApplied(target.name, signal);
     }
     // Declaration application can finish by deferring an onInvoke build. Wait
     // for that target transition before deciding whether first use must build.
     await this.waitForTargetActivation(name, signal);
     await this.prepareTargetBuild(name);
-    const entry = this.lookupForInvoke(name);
+    const entry = await this.lookupForInvoke(name);
     if (!entry?.activeBundleKey) throw this.extensionUnavailableError(name, operation);
     return { ...entry, activeBundleKey: entry.activeBundleKey };
   }
 
   /** Pure eligibility lookup: declaration reconciliation owns trust. */
-  private lookupForInvoke(name: string): RegistryEntry | null {
+  private async lookupForInvoke(name: string): Promise<RegistryEntry | null> {
     const entry = this.resolveInvocationEntry(name);
-    return entry && this.hasAvailableApprovedBuild(entry) ? entry : null;
+    return entry && (await this.hasAvailableApprovedBuild(entry)) ? entry : null;
   }
 
-  private hasAvailableApprovedBuild(entry: RegistryEntry): boolean {
-    return !!(
-      entry.activeBundleKey && this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
-    );
+  private async hasAvailableApprovedBuild(entry: RegistryEntry): Promise<boolean> {
+    return !!(await this.readCurrentActiveBuild(entry));
   }
 
   /** Prepare only the declared target demanded by this invocation. Permission
@@ -1665,7 +1768,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private async prepareTargetBuild(nameOrProvider: string): Promise<void> {
     const requestedName = this.deps.resolveProviderExtensionName(nameOrProvider) ?? nameOrProvider;
     const entry = this.resolveInvocationEntry(requestedName);
-    if (!entry || this.hasAvailableApprovedBuild(entry) || entry.status === "error") return;
+    if (!entry || (await this.hasAvailableApprovedBuild(entry)) || entry.status === "error") return;
     if (
       !this.lastDeclared.some(
         (declaration) => this.findExtensionNode(declaration.source).name === entry.name
@@ -1685,7 +1788,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     signal?: AbortSignal
   ): Promise<{
     entry: RegistryEntry;
-    build: NonNullable<ReturnType<NonNullable<BuildSystemLike["getBuildByKey"]>>>;
+    build: StoredBuildResult;
   }> {
     const requestedName = this.deps.resolveProviderExtensionName(nameOrProvider) ?? nameOrProvider;
     signal = signal
@@ -1693,8 +1796,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       : this.shutdownSignal.signal;
     await this.whenDeclarationsStaged(signal, requestedName);
     let entry = this.resolveInvocationEntry(requestedName);
-    if (entry && this.hasAvailableApprovedBuild(entry)) {
-      const active = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey!);
+    if (entry && (await this.hasAvailableApprovedBuild(entry))) {
+      const active = await this.readCurrentActiveBuild(entry);
       if (active) return { entry, build: active };
     }
     entry = this.resolveInvocationEntry(requestedName);
@@ -1706,8 +1809,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         return false;
       }
     });
-    if (entry && this.hasAvailableApprovedBuild(entry)) {
-      const active = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey!);
+    if (entry && (await this.hasAvailableApprovedBuild(entry))) {
+      const active = await this.readCurrentActiveBuild(entry);
       if (active) return { entry, build: active };
     }
     if (!declaration) throw this.extensionUnavailableError(requestedName, "invoke");
@@ -1728,7 +1831,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    */
   private async waitForTargetActivation(name: string, signal?: AbortSignal): Promise<void> {
     const entry = this.resolveInvocationEntry(name);
-    if (!entry || this.hasAvailableApprovedBuild(entry)) return;
+    if (!entry || (await this.hasAvailableApprovedBuild(entry))) return;
     const ownedSignal = signal
       ? AbortSignal.any([signal, this.shutdownSignal.signal])
       : this.shutdownSignal.signal;
@@ -2044,7 +2147,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     return null;
   }
 
-  reportActivation(ctx: ServiceContext, ready: ExtensionReadyState): void {
+  async reportActivation(ctx: ServiceContext, ready: ExtensionReadyState): Promise<void> {
+    await this.initialize();
     if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError(
         "runtime",
@@ -2070,7 +2174,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         "ENOTREADY"
       );
     }
-    const declared = this.activeProviderContracts(entry, "ready");
+    const declared = await this.activeProviderContracts(entry, "ready");
     const reportedProviders = Object.keys(ready.providerMethods);
     if (!sameStringArray(reportedProviders, Object.keys(declared))) {
       throw new ServiceError(
@@ -2101,7 +2205,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         );
       }
     }
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const build = await this.readCurrentActiveBuild(entry);
     const methodAuthority = extensionMetadataDetails(build?.metadata)?.methodAuthority;
     if (!methodAuthority || !sameStringArray(ready.methods, Object.keys(methodAuthority))) {
       throw new ServiceError(
@@ -2161,9 +2265,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   /** One declared extension's build state joined with its supervised process. */
-  status(name: string): ExtensionStatus {
+  async status(name: string): Promise<ExtensionStatus> {
+    await this.initialize();
     const node = this.findExtensionNode(name);
-    const row = this.listWorkspaceUnits().find((candidate) => candidate.name === node.name);
+    const row = (await this.listWorkspaceUnits()).find((candidate) => candidate.name === node.name);
     if (!row) {
       throw new ServiceError(
         "extensions",
@@ -2200,6 +2305,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * scoped to this extension. Settles once that review and application finish.
    */
   async update(name: string, signal?: AbortSignal): Promise<ExtensionStatus> {
+    await this.initialize();
     const node = this.findExtensionNode(name);
     const declaration = this.lastDeclared.find(
       (item) => this.findExtensionNode(item.source).name === node.name
@@ -2221,7 +2327,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     // then the application it ran, which rethrows its build/activation failure.
     await this.unitHost.whenSettled(signal);
     await this.unitHost.whenApplied(node.name, signal);
-    const status = this.status(node.name);
+    const status = await this.status(node.name);
     if (status.availableUpdate) {
       // Still stale after a settled pass: its review was not accepted.
       throw new ServiceError(
@@ -2235,72 +2341,89 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async retire(name: string): Promise<void> {
+    await this.initialize();
     const entry = this.registry.get(name);
     if (!entry) throw new Error(`Unknown extension: ${name}`);
     await this.processes.stop(entry.name);
     this.registry.patch(entry.name, { status: "stopped", lastError: null });
   }
 
-  listWorkspaceUnits(): Array<{
-    name: string;
-    kind: "extension";
-    source: string;
-    displayName: string;
-    status: RegistryEntry["status"];
-    version: string;
-    ev: string | null;
-    activeEv: string | null;
-    activeBundleKey: string | null;
-    activeRuntimeDepsKey: string | null;
-    lastBuiltAt: number | null;
-    pendingApproval: { kind: "extension.install" | "extension.update"; submittedAt: number } | null;
-    availableUpdate: { reason: "dependency"; checkedAt: number } | null;
-    lastError: string | null;
-    health: ExtensionHealth | null;
-    methods: string[];
-    hasFetch: boolean;
-    respawn: { attempts: number; nextAttemptAt: number | null } | null;
-    inspectorUrl: string | null;
-  }> {
+  async listWorkspaceUnits(): Promise<
+    Array<{
+      name: string;
+      kind: "extension";
+      source: string;
+      displayName: string;
+      status: RegistryEntry["status"];
+      version: string;
+      ev: string | null;
+      activeEv: string | null;
+      activeBundleKey: string | null;
+      activeRuntimeDepsKey: string | null;
+      lastBuiltAt: number | null;
+      pendingApproval: {
+        kind: "extension.install" | "extension.update";
+        submittedAt: number;
+      } | null;
+      availableUpdate: { reason: "dependency"; checkedAt: number } | null;
+      lastError: string | null;
+      health: ExtensionHealth | null;
+      methods: string[];
+      hasFetch: boolean;
+      respawn: { attempts: number; nextAttemptAt: number | null } | null;
+      inspectorUrl: string | null;
+    }>
+  > {
+    await this.initialize();
     const runningByName = new Map(this.processes.listRunning().map((entry) => [entry.name, entry]));
     const baseByName = new Map(
       this.unitHost.listWorkspaceUnits().map((entry) => [entry.name, entry])
     );
-    return this.registry.list().map((entry) => {
-      const node = this.findExtensionNode(entry.name);
-      const base = baseByName.get(entry.name) ?? extensionWorkspaceStatusFallback(entry, node);
-      const running = runningByName.get(entry.name);
-      const lastBuiltAt = this.resolveBundleMtime(entry);
-      const pendingApproval =
-        entry.status === "pending-approval"
-          ? {
-              kind: entry.activeBundleKey
-                ? ("extension.update" as const)
-                : ("extension.install" as const),
-              submittedAt: entry.installedAt,
-            }
-          : null;
-      const availableUpdate =
-        entry.activeBundleKey && this.needsBuildRefresh(entry, node)
-          ? { reason: "dependency" as const, checkedAt: Date.now() }
-          : null;
-      return {
-        ...base,
-        lastBuiltAt,
-        pendingApproval,
-        availableUpdate,
-        health: running?.health ?? this.health.get(entry.name) ?? null,
-        methods: running?.methods ?? [],
-        hasFetch: running?.hasFetch ?? false,
-        respawn: this.processes.getRespawn(entry.name),
-        inspectorUrl: running?.inspectorUrl ?? this.inspectorUrls.get(entry.name) ?? null,
-      };
-    });
+    const results = await Promise.allSettled(
+      this.registry.list().map(async (entry) => {
+        const node = this.findExtensionNode(entry.name);
+        const base = baseByName.get(entry.name) ?? extensionWorkspaceStatusFallback(entry, node);
+        const running = runningByName.get(entry.name);
+        const lastBuiltAt = await this.resolveBundleMtime(entry);
+        const pendingApproval =
+          entry.status === "pending-approval"
+            ? {
+                kind: entry.activeBundleKey
+                  ? ("extension.update" as const)
+                  : ("extension.install" as const),
+                submittedAt: entry.installedAt,
+              }
+            : null;
+        const availableUpdate =
+          entry.activeBundleKey && (await this.needsBuildRefresh(entry, node))
+            ? { reason: "dependency" as const, checkedAt: Date.now() }
+            : null;
+        return {
+          ...base,
+          lastBuiltAt,
+          pendingApproval,
+          availableUpdate,
+          health: running?.health ?? this.health.get(entry.name) ?? null,
+          methods: running?.methods ?? [],
+          hasFetch: running?.hasFetch ?? false,
+          respawn: this.processes.getRespawn(entry.name),
+          inspectorUrl: running?.inspectorUrl ?? this.inspectorUrls.get(entry.name) ?? null,
+        };
+      })
+    );
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Failed to resolve extension workspace units");
+    }
+    return results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
   }
 
-  private resolveBundleMtime(entry: RegistryEntry): number | null {
+  private async resolveBundleMtime(entry: RegistryEntry): Promise<number | null> {
     if (!entry.activeBundleKey) return null;
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const build = await this.readCurrentActiveBuild(entry);
     if (!build) return null;
     try {
       return Math.floor(fs.statSync(extensionPrimaryArtifactPath(build)).mtimeMs);
@@ -2499,10 +2622,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   async activate(name: string): Promise<void> {
+    await this.initialize();
+    this.shutdownSignal.signal.throwIfAborted();
     await this.runActivationExclusive(name, () => this.activateOnce(name));
   }
 
   async ensureActivated(name: string): Promise<void> {
+    await this.initialize();
     this.shutdownSignal.signal.throwIfAborted();
     await this.runActivationExclusive(name, async () => {
       // Recheck inside the serialized operation. Multiple consumers can all
@@ -2510,10 +2636,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       // pre-queue check would make each one restart the child in turn.
       if (this.processes.isRunning(name)) return;
       let entry = this.registry.get(name);
-      if (
-        !entry?.activeBundleKey ||
-        !this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
-      ) {
+      if (!entry?.activeBundleKey || !(await this.readCurrentActiveBuild(entry))) {
         const node = this.findExtensionNode(name);
         const declaration = this.lastDeclared.find(
           (item) => this.findExtensionNode(item.source).name === node.name
@@ -2542,7 +2665,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private async activateOnce(name: string): Promise<void> {
     const entry = this.registry.get(name);
     if (!entry?.activeBundleKey) throw new Error(`Extension has no active approved build: ${name}`);
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const build = await this.readCurrentActiveBuild(entry);
     if (!build) {
       throw new Error(
         `Approved extension build is missing from build store: ${entry.activeBundleKey}`
@@ -2610,6 +2733,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const activeSourceHash = requireBuildSourceStateHash(node.name, build);
     const activeDependencyEvs = this.currentDependencyEvs(node);
     const activeExternalDeps = this.currentExternalDeps(node);
+    const executionDigest = build.metadata.execution?.executionDigest;
+    if (!executionDigest) throw new Error(`Build ${build.buildKey} has no execution identity`);
     this.unitHost.activateBuild({
       name: node.name,
       version: this.readNodeVersion(node.path),
@@ -2622,6 +2747,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       externalDeps: activeExternalDeps,
       runtimeDepsKey: extensionMetadataDetails(build.metadata)?.runtimeDepsKey ?? null,
       status: shouldRun ? "building" : "available",
+      extra: { activeExecutionDigest: executionDigest },
     });
     if (!shouldRun) return;
     try {
@@ -2633,6 +2759,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           activeEv: previous.activeEv,
           activeSourceHash: previous.activeSourceHash,
           activeBundleKey: previous.activeBundleKey,
+          activeExecutionDigest: previous.activeExecutionDigest,
           activeDependencyEvs: previous.activeDependencyEvs,
           activeExternalDeps: previous.activeExternalDeps ?? {},
           activeRuntimeDepsKey: previous.activeRuntimeDepsKey,
@@ -2663,9 +2790,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     node: ReturnType<ExtensionHost["findExtensionNode"]>,
     ref: string | undefined,
     priority: "interactive" | "background"
-  ): Promise<Awaited<ReturnType<BuildSystemLike["getBuild"]>>> {
+  ): Promise<StoredBuildResult> {
     this.validateExtensionManifestAtPath(node.path, node.name);
-    return this.deps.buildSystem.getBuild(node.name, ref, { priority });
+    return this.deps.buildSystem.getStoredBuild(node.name, ref, { priority });
   }
 
   private async runActivationExclusive(
@@ -2690,6 +2817,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     relativePath: string;
     trigger?: ProtectedPublicationEvent;
   }): Promise<void> {
+    await this.initialize();
     const installed =
       this.registry.get(event.name) ??
       this.registry
@@ -2715,6 +2843,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     source: string,
     trigger?: ProtectedPublicationEvent
   ): Promise<void> {
+    await this.initialize();
     const installed = this.unitHost.findInstalledByRepo(source);
     if (!installed) return;
     if (!this.sourceChangeAppliesToEntry(trigger, installed.entry)) return;
@@ -2748,10 +2877,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     return this.deps.buildSystem.getExternalDeps(node.name);
   }
 
-  private needsBuildRefresh(
+  private async needsBuildRefresh(
     entry: RegistryEntry,
     node: ReturnType<ExtensionHost["findExtensionNode"]>
-  ): boolean {
+  ): Promise<boolean> {
     const currentExternalDeps = this.currentExternalDeps(node);
     if (
       this.unitHost.needsBuildRefresh(entry, {
@@ -2764,13 +2893,15 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     ) {
       return true;
     }
-    if (!this.hasCurrentExtensionRuntimeAbi(entry)) return true;
-    return Object.keys(currentExternalDeps).length > 0 && !this.hasUsableActiveRuntimeDeps(entry);
+    if (!(await this.hasCurrentExtensionRuntimeAbi(entry))) return true;
+    return (
+      Object.keys(currentExternalDeps).length > 0 && !(await this.hasUsableActiveRuntimeDeps(entry))
+    );
   }
 
-  private hasCurrentExtensionRuntimeAbi(entry: RegistryEntry): boolean {
+  private async hasCurrentExtensionRuntimeAbi(entry: RegistryEntry): Promise<boolean> {
     if (!entry.activeBundleKey) return false;
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const build = await this.readCurrentActiveBuild(entry);
     const details = extensionMetadataDetails(build?.metadata);
     return (
       details?.runtimeAbi === EXTENSION_RUNTIME_ABI_VERSION &&
@@ -2778,9 +2909,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     );
   }
 
-  private hasUsableActiveRuntimeDeps(entry: RegistryEntry): boolean {
+  private async hasUsableActiveRuntimeDeps(entry: RegistryEntry): Promise<boolean> {
     if (!entry.activeBundleKey || !entry.activeRuntimeDepsKey) return false;
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const build = await this.readCurrentActiveBuild(entry);
     if (!build) return false;
     const externalDeps = extensionMetadataDetails(build.metadata)?.externalDeps ?? {};
     if (Object.keys(externalDeps).length === 0) return true;

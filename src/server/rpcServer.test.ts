@@ -165,7 +165,7 @@ type TestRpcServer = {
     subject?: undefined,
     inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy | null,
     executionSessionNonce?: string
-  ): ReturnType<typeof createVerifiedCaller>;
+  ): Promise<ReturnType<typeof createVerifiedCaller>>;
   beginAuthorityParent(
     receiverRuntimeId: string,
     authorization: import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
@@ -370,7 +370,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
           ? { userId: "user-1", handle: "user1" }
           : null,
     },
-    resolveExtensionCodeIdentity: (callerId: string) =>
+    resolveExtensionCodeIdentity: async (callerId: string) =>
       callerId.startsWith("@workspace-extensions/")
         ? {
             callerId,
@@ -977,12 +977,12 @@ describe("RpcServer relay behavior", () => {
     expect(relayAuthorization).not.toHaveBeenCalled();
   });
 
-  it("replaces forged WS route identity with the authenticated panel principal", () => {
+  it("replaces forged WS route identity with the authenticated panel principal", async () => {
     const { server, grantPanel } = createServer();
     const sourceWs = createTestWs();
     const target = createClientWithConnection("panel:nav-b", "target-conn");
     registerClient(server, target);
-    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
 
     sourceWs.emitMessage({
       type: "ws:route",
@@ -1175,10 +1175,10 @@ describe("RpcServer relay behavior", () => {
 
   it.each(["ws:rpc", "ws:route"] as const)(
     "does not dispatch a foreign workspace through %s",
-    (type) => {
+    async (type) => {
       const { server, grantPanel } = createServer();
       const sourceWs = createTestWs();
-      testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+      await testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
       sourceWs.emitMessage({
         type,
         envelope: {
@@ -1227,7 +1227,7 @@ describe("RpcServer relay behavior", () => {
       assertWorkspaceRpcAccess,
     });
     const sourceWs = createTestWs();
-    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
     sourceWs.emitMessage({
       type: "ws:rpc",
       envelope: {
@@ -1276,7 +1276,7 @@ describe("RpcServer relay behavior", () => {
         assertWorkspaceRpcAccess: vi.fn(),
       });
       const sourceWs = createTestWs();
-      testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+      await testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
       const envelope = {
         from: "panel:nav-a",
         target: "do:workers/calendar:Calendar:main",
@@ -1585,7 +1585,11 @@ describe("RpcServer relay behavior", () => {
         assertWorkspaceRpcAccess: vi.fn(),
       });
       const sourceWs = createTestWs();
-      testServer(source.server).handleAuth(sourceWs, source.grantPanel("panel:nav-a"), "conn-1");
+      await testServer(source.server).handleAuth(
+        sourceWs,
+        source.grantPanel("panel:nav-a"),
+        "conn-1"
+      );
       sourceWs.emitMessage({
         type: "ws:rpc",
         envelope: {
@@ -1675,7 +1679,7 @@ describe("RpcServer relay behavior", () => {
         assertWorkspaceRpcAccess,
       });
       const sourceWs = createTestWs();
-      testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+      await testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
       sourceWs.emitMessage({
         type,
         envelope: {
@@ -1732,7 +1736,7 @@ describe("RpcServer relay behavior", () => {
     testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
     testServer(server).dispatcher.getMethodPolicy.mockReturnValue(undefined);
     testServer(server).dispatcher.dispatch.mockResolvedValue({ ok: true });
-    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
 
     sourceWs.emitMessage({
       type: "ws:rpc",
@@ -1771,14 +1775,14 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
-  it("rejects a forged WS relay to an extension host-control method before delivery", () => {
+  it("rejects a forged WS relay to an extension host-control method before delivery", async () => {
     const { server, grantPanel } = createServer();
     const extensionId = "@workspace-extensions/git-bridge";
     const sourceWs = createTestWs();
     const target = createClientWithConnection(extensionId, "extension-conn");
     target.caller = createVerifiedCaller(extensionId, "extension");
     registerClient(server, target);
-    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
 
     sourceWs.emitMessage({
       type: "ws:route",
@@ -1827,7 +1831,7 @@ describe("RpcServer relay behavior", () => {
     const target = createClientWithConnection(extensionId, "extension-conn");
     target.caller = createVerifiedCaller(extensionId, "extension");
     registerClient(server, target);
-    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
 
     sourceWs.emitMessage({
       type: "ws:route",
@@ -2076,7 +2080,7 @@ describe("RpcServer relay behavior", () => {
       };
       const { server, entityCache } = createServer({
         capabilityGrantStore: grantStore,
-        resolveExtensionCodeIdentity: () => extensionCode,
+        resolveExtensionCodeIdentity: async () => extensionCode,
         resolveExtensionInvocation: (_extension, requestId) =>
           requestId === "live-bookmark-operation"
             ? {
@@ -2583,16 +2587,16 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
-  it("keeps the replacement bridge and lease when the old same-connection socket closes late", () => {
+  it("keeps the replacement bridge and lease when the old same-connection socket closes late", async () => {
     const { server, grantPanel, runtimeCoordinator } = createServer();
     const ws1 = createTestWs();
     const ws2 = createTestWs();
 
-    testServer(server).handleAuth(ws1, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(ws1, grantPanel("panel:nav-a"), "conn-1");
     const firstBridge = server.getClientBridge("panel:nav-a");
     expect(firstBridge).toBeTruthy();
 
-    testServer(server).handleAuth(ws2, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(ws2, grantPanel("panel:nav-a"), "conn-1");
     const replacementBridge = server.getClientBridge("panel:nav-a");
     expect(replacementBridge).toBeTruthy();
     expect(replacementBridge).not.toBe(firstBridge);
@@ -2618,8 +2622,8 @@ describe("RpcServer relay behavior", () => {
     testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
     testServer(server).dispatcher.dispatch.mockResolvedValue("ok");
 
-    testServer(server).handleAuth(ws1, grantPanel("panel:nav-a"), "conn-1");
-    testServer(server).handleAuth(ws2, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(ws1, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(ws2, grantPanel("panel:nav-a"), "conn-1");
 
     const lateMessage: RpcMessage = {
       type: "request",
@@ -2642,7 +2646,7 @@ describe("RpcServer relay behavior", () => {
     const extensionToken = tokenManager.ensureToken("@workspace-extensions/shell", "extension");
     const ws = createTestWs();
 
-    testServer(server).handleAuth(ws, extensionToken, "ext-conn-1");
+    await testServer(server).handleAuth(ws, extensionToken, "ext-conn-1");
 
     const responsePromise = testServer(server).streamCallTarget(
       "@workspace-extensions/shell",
@@ -2713,7 +2717,7 @@ describe("RpcServer relay behavior", () => {
     const extensionToken = tokenManager.ensureToken(extensionId, "extension");
     const ws = createTestWs();
 
-    testServer(server).handleAuth(ws, extensionToken, "ext-conn-1");
+    await testServer(server).handleAuth(ws, extensionToken, "ext-conn-1");
     const bridge = server.getClientBridge(extensionId);
     expect(bridge).toBeTruthy();
 
@@ -2837,7 +2841,7 @@ describe("RpcServer relay behavior", () => {
       registerClient(server, origin2);
       registerClient(server, target);
 
-      handleRoute(server, origin2, "panel:nav-b", {
+      await handleRoute(server, origin2, "panel:nav-b", {
         type: "request",
         requestId: "req-reconnect",
         fromId: "panel:nav-a",
@@ -2846,22 +2850,25 @@ describe("RpcServer relay behavior", () => {
       });
       testServer(server).handleClose(origin2, 1006, "network");
 
-      handleRoute(server, target, "panel:nav-a", {
+      await handleRoute(server, target, "panel:nav-a", {
         type: "response",
         requestId: "req-reconnect",
         result: { ok: true },
       });
-      await Promise.resolve();
-
       const reconnectedWs = createTestWs();
       runtimeCoordinator.takeOver("panel:nav-a", {
         slotId: "panel:tree/slot-a",
         clientSessionId: "test-desktop",
         connectionId: "conn-2",
       });
-      testServer(server).handleAuth(reconnectedWs, grantPanel("panel:nav-a"), "conn-2");
-      await Promise.resolve();
-      await Promise.resolve();
+      await testServer(server).handleAuth(reconnectedWs, grantPanel("panel:nav-a"), "conn-2");
+      await vi.waitFor(() =>
+        expect(
+          reconnectedWs.send.mock.calls
+            .map(([raw]) => JSON.parse(raw as string))
+            .some((message) => message.type === "ws:routed")
+        ).toBe(true)
+      );
 
       expect(origin1.ws.sendMessage).not.toHaveBeenCalled();
       const routedCall = reconnectedWs.send.mock.calls
@@ -2970,7 +2977,7 @@ describe("RpcServer relay behavior", () => {
         clientSessionId: "test-desktop",
         connectionId: "target-conn",
       });
-      testServer(server).handleAuth(reconnectedWs, grantPanel("panel:nav-b"), "target-conn");
+      await testServer(server).handleAuth(reconnectedWs, grantPanel("panel:nav-b"), "target-conn");
       await vi.advanceTimersByTimeAsync(3001);
 
       const originMessages = (origin.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map(
@@ -4073,7 +4080,7 @@ describe("RpcServer relay behavior", () => {
         },
       })
     );
-    const caller = testServer(server).verifiedCallerFor(runtimeId, "do");
+    const caller = await testServer(server).verifiedCallerFor(runtimeId, "do");
     expect(caller.executionSession).toBeUndefined();
     expect(caller.testPolicy).toEqual(policy);
 
@@ -4102,19 +4109,21 @@ describe("RpcServer relay behavior", () => {
 
   it.each(["panel", "app"] as const)(
     "inherits the live %s context test policy without granting a session",
-    (kind) => {
+    async (kind) => {
       const policy = { policyId: "test:panel-context", kind: "orchestrator" as const };
       const { server, entityCache } = createServer({
         testPolicyForContext: (contextId) => (contextId === "ctx:test-panel" ? policy : null),
       });
       const runtimeId = `${kind}:test-context`;
       entityCache._onActivate(makeRecord(runtimeId, kind, { contextId: "ctx:test-panel" }));
-      const caller = testServer(server).verifiedCallerFor(runtimeId, kind);
+      const caller = await testServer(server).verifiedCallerFor(runtimeId, kind);
       expect(caller.testPolicy).toEqual(policy);
       expect(caller.executionSession).toBeUndefined();
       const ordinaryId = `${kind}:ordinary-context`;
       entityCache._onActivate(makeRecord(ordinaryId, kind, { contextId: "ctx:ordinary" }));
-      expect(testServer(server).verifiedCallerFor(ordinaryId, kind).testPolicy).toBeUndefined();
+      expect(
+        (await testServer(server).verifiedCallerFor(ordinaryId, kind)).testPolicy
+      ).toBeUndefined();
     }
   );
 
@@ -4200,7 +4209,7 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
-  it("attributes only explicitly marked EvalDO effects to the admitted execution", () => {
+  it("attributes only explicitly marked EvalDO effects to the admitted execution", async () => {
     const runtimeId = "do:vibestudio/internal:EvalDO:session-boundary";
     const nonce = "eval-session-nonce-1234";
     const session = {
@@ -4259,11 +4268,11 @@ describe("RpcServer relay behavior", () => {
       })
     );
 
-    const infrastructureCaller = testServer(server).verifiedCallerFor(runtimeId, "do");
+    const infrastructureCaller = await testServer(server).verifiedCallerFor(runtimeId, "do");
     expect(infrastructureCaller.executionSession).toBeUndefined();
     expect(executionSessionForRuntime).not.toHaveBeenCalled();
 
-    const evaluatedCaller = testServer(server).verifiedCallerFor(
+    const evaluatedCaller = await testServer(server).verifiedCallerFor(
       runtimeId,
       "do",
       undefined,
@@ -4274,7 +4283,7 @@ describe("RpcServer relay behavior", () => {
     expect(evaluatedCaller.executionSession).toBe(session);
     expect(executionSessionForRuntime).toHaveBeenCalledWith(runtimeId, nonce);
 
-    expect(() =>
+    await expect(
       testServer(server).verifiedCallerFor(
         runtimeId,
         "do",
@@ -4283,7 +4292,7 @@ describe("RpcServer relay behavior", () => {
         undefined,
         "wrong-eval-session-nonce"
       )
-    ).toThrow(
+    ).rejects.toThrow(
       expect.objectContaining({
         code: "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE",
         message: expect.stringMatching(/not active/),
@@ -4439,7 +4448,7 @@ describe("RpcServer relay behavior", () => {
       await expect(invoke(runtimeId, "unknown-mission-admission-nonce")).rejects.toMatchObject({
         code: "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE",
       });
-      const ordinary = testServer(server).verifiedCallerFor(runtimeId, "do");
+      const ordinary = await testServer(server).verifiedCallerFor(runtimeId, "do");
       expect(ordinary.executionSession).toBeUndefined();
       expect(ordinary.subject).toEqual(
         transport === "real-account"
@@ -4451,7 +4460,7 @@ describe("RpcServer relay behavior", () => {
     }
   );
 
-  it("delegates a test policy only for the exact active invocation without mutating receiver context", () => {
+  it("delegates a test policy only for the exact active invocation without mutating receiver context", async () => {
     const { server, entityCache } = createServer({
       userSubjectSource: {
         resolve: () => ({ userId: "user-1", handle: "user1" }),
@@ -4480,7 +4489,7 @@ describe("RpcServer relay behavior", () => {
     expect(() =>
       testServer(server).authorityParentFor("do:workers/other:OtherDO:headless-test", nonce)
     ).toThrow(/another runtime/);
-    const caller = testServer(server).verifiedCallerFor(
+    const caller = await testServer(server).verifiedCallerFor(
       receiver,
       "do",
       undefined,
@@ -4815,7 +4824,7 @@ describe("RpcServer relay behavior", () => {
     release();
   });
 
-  it("keeps a receiver's exact case policy when its orchestrator invokes it", () => {
+  it("keeps a receiver's exact case policy when its orchestrator invokes it", async () => {
     const orchestrator = {
       policyId: "test:st_invocation_parent",
       kind: "orchestrator" as const,
@@ -4855,18 +4864,20 @@ describe("RpcServer relay behavior", () => {
 
     expect(testServer(server).authorityParentFor(receiver, nonce)?.testPolicy).toBe(casePolicy);
     expect(
-      testServer(server).verifiedCallerFor(
-        receiver,
-        "do",
-        undefined,
-        undefined,
-        testServer(server).authorityParentFor(receiver, nonce)?.testPolicy
+      (
+        await testServer(server).verifiedCallerFor(
+          receiver,
+          "do",
+          undefined,
+          undefined,
+          testServer(server).authorityParentFor(receiver, nonce)?.testPolicy
+        )
       ).testPolicy
     ).toBe(casePolicy);
     release();
   });
 
-  it("does not poison a shared orchestrator receiver when sequential cases invoke it", () => {
+  it("does not poison a shared orchestrator receiver when sequential cases invoke it", async () => {
     const orchestrator = {
       policyId: "test:st_shared_receiver",
       kind: "orchestrator" as const,
@@ -4909,7 +4920,9 @@ describe("RpcServer relay behavior", () => {
       release();
     }
 
-    expect(testServer(server).verifiedCallerFor(receiver, "do").testPolicy).toBe(orchestrator);
+    expect((await testServer(server).verifiedCallerFor(receiver, "do")).testPolicy).toBe(
+      orchestrator
+    );
   });
 
   it("cancels a routed stream in the same caller-owned streaming relay", async () => {
@@ -4963,7 +4976,7 @@ describe("RpcServer relay behavior", () => {
       connectionId: "target-conn",
     });
     const targetWs = createTestWs();
-    testServer(server).handleAuth(targetWs, grantPanel("panel:nav-b"), "target-conn");
+    await testServer(server).handleAuth(targetWs, grantPanel("panel:nav-b"), "target-conn");
 
     const relay = testServer(server).relayCall(
       "do:channel",
@@ -4975,6 +4988,15 @@ describe("RpcServer relay behavior", () => {
       { idempotencyKey: "idem-1", readOnly: true }
     );
 
+    await vi.waitFor(() =>
+      expect(
+        targetWs.send.mock.calls
+          .map(([raw]) => JSON.parse(raw as string))
+          .some(
+            (message) => message.type === "ws:rpc" && message.envelope?.message?.type === "request"
+          )
+      ).toBe(true)
+    );
     const sent = targetWs.send.mock.calls
       .map(([raw]) => JSON.parse(raw as string))
       .find(
@@ -5005,12 +5027,12 @@ describe("RpcServer relay behavior", () => {
     await expect(relay).resolves.toEqual({ ok: true });
   });
 
-  it("reports exact panel route reachability only while its authenticated bridge is open", () => {
+  it("reports exact panel route reachability only while its authenticated bridge is open", async () => {
     const { server, grantPanel } = createServer();
     expect(server.isRuntimeRouteReachable("panel:nav-a", "conn-1")).toBe(false);
 
     const targetWs = createTestWs();
-    testServer(server).handleAuth(targetWs, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(targetWs, grantPanel("panel:nav-a"), "conn-1");
     expect(server.isRuntimeRouteReachable("panel:nav-a", "conn-1")).toBe(true);
 
     targetWs.emitClose();
@@ -5132,7 +5154,7 @@ describe("RpcServer socket destination admission", () => {
         { frameType, messageType, destination: { kind: "workspace", workspaceId: 42 } },
       ])
     )
-  )("closes $frameType $messageType with an unsupported destination", (input) => {
+  )("closes $frameType $messageType with an unsupported destination", async (input) => {
     const { server } = createServer();
     const client = createClient();
     registerClient(server, client);
@@ -5161,7 +5183,7 @@ describe("RpcServer socket destination admission", () => {
       destination: input.destination,
     } as RpcEnvelope;
 
-    testServer(server).handleMessage(client, {
+    await testServer(server).handleMessage(client, {
       type: input.frameType,
       envelope,
     });
@@ -5175,7 +5197,7 @@ describe("RpcServer socket destination admission", () => {
 describe("RpcServer live caller gate", () => {
   it.each(["user revocation", "device revocation"])(
     "denies the next RPC after failed %s socket teardown",
-    (reason) => {
+    async (reason) => {
       let live = true;
       const { server } = createServer({ liveCallerGate: () => live });
       const dispatcher = testServer(server).dispatcher;
@@ -5194,7 +5216,7 @@ describe("RpcServer live caller gate", () => {
         method: "fs.stat",
         args: ["ctx_1", "/x"],
       };
-      testServer(server).handleMessage(client, {
+      await testServer(server).handleMessage(client, {
         type: "ws:rpc",
         envelope: clientEnvelope(client, "main", request),
       });
@@ -5218,7 +5240,7 @@ describe("RpcServer caller identity", () => {
     expect(waiting.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ success: false, errorCode: "panel_runtime_leased" })
     );
-    expect(server.authenticateConnectionGrant(token)).toBeNull();
+    expect(await server.authenticateConnectionGrant(token)).toBeNull();
     runtimeCoordinator.acquire("panel:nav-a", {
       slotId: "panel:tree/slot-a",
       clientSessionId: "test-desktop",
@@ -5239,11 +5261,11 @@ describe("RpcServer caller identity", () => {
     await testServer(server).handleAuth(intruder, token, "conn-1");
     expect(intruder.close).toHaveBeenCalled();
     expect(testServer(server).connections.getCallerConnections("panel:nav-a")).toHaveLength(0);
-    expect(server.authenticateConnectionGrant(token)).toBeNull();
+    expect(await server.authenticateConnectionGrant(token)).toBeNull();
     await server.stop();
   });
 
-  it("requires a viewer for an unowned seeded panel without changing worker lineage", () => {
+  it("requires a viewer for an unowned seeded panel without changing worker lineage", async () => {
     const { server, entityCache, connectionGrants, grantPanel } = createServer({
       userSubjectSource: { resolve: () => ({ userId: "creator", handle: "creator" }) },
     });
@@ -5251,17 +5273,21 @@ describe("RpcServer caller identity", () => {
     expect(unowned.ownerUserId).toBeUndefined();
     entityCache._onActivate(unowned);
     expect(
-      server.authenticateConnectionGrant(connectionGrants.grant(unowned.id, "shell:test").token)
+      await server.authenticateConnectionGrant(
+        connectionGrants.grant(unowned.id, "shell:test").token
+      )
     ).toBeNull();
-    expect(server.authenticateConnectionGrant(grantPanel(unowned.id))?.caller.subject?.userId).toBe(
-      "user-1"
-    );
+    expect(
+      (await server.authenticateConnectionGrant(grantPanel(unowned.id)))?.caller.subject?.userId
+    ).toBe("user-1");
     const worker = { ...makeRecord("worker:background", "worker"), ownerUserId: "creator" };
     entityCache._onActivate(worker);
     const workerToken = connectionGrants.grant(worker.id, "shell:test", {
       subject: { userId: "user-1", handle: "user1" },
     }).token;
-    expect(server.authenticateConnectionGrant(workerToken)?.caller.subject?.userId).toBe("creator");
+    expect((await server.authenticateConnectionGrant(workerToken))?.caller.subject?.userId).toBe(
+      "creator"
+    );
   });
 
   it("binds shared panel RPC and extension HTTP to the current authenticated viewer", async () => {
@@ -5286,15 +5312,15 @@ describe("RpcServer caller identity", () => {
         getAgentCredential: () => null,
       },
       entityCache,
-      isLiveExtension: () => false,
+      isLiveExtension: async () => false,
     });
     const alice = grantPanel("panel:nav-a");
     const bob = connectionGrants.grant("panel:nav-a", "shell:bob", {
       subject: { userId: "user-2", handle: "bob" },
     }).token;
     const missingSubject = connectionGrants.grant("panel:nav-a", "shell:test").token;
-    expect(server.authenticateConnectionGrant(missingSubject)).toBeNull();
-    expect(server.authenticateConnectionGrant(bob)).toBeNull();
+    expect(await server.authenticateConnectionGrant(missingSubject)).toBeNull();
+    expect(await server.authenticateConnectionGrant(bob)).toBeNull();
     const first = createTestWs();
     await testServer(server).handleAuth(first, alice, "conn-1");
     expect(
@@ -5312,7 +5338,7 @@ describe("RpcServer caller identity", () => {
       clientSessionId: "bob",
       connectionId: "conn-bob",
     });
-    expect(server.authenticateConnectionGrant(alice)).toBeNull();
+    expect(await server.authenticateConnectionGrant(alice)).toBeNull();
     const staleConnection = createTestWs();
     await testServer(server).handleAuth(staleConnection, bob, "conn-1");
     expect(staleConnection.close).toHaveBeenCalledWith(4090, "Panel runtime lease denied");
@@ -5353,11 +5379,11 @@ describe("RpcServer caller identity", () => {
       deviceLive = true;
       member = false;
       expect((await read()).status).toBe(401);
-      expect(server.authenticateConnectionGrant(bob)).toBeNull();
+      expect(await server.authenticateConnectionGrant(bob)).toBeNull();
       member = true;
       runtimeCoordinator.release("panel:nav-a", "conn-bob");
       expect((await read()).status).toBe(401);
-      testServer(server).handleMessage(current, {
+      await testServer(server).handleMessage(current, {
         type: "ws:rpc",
         envelope: clientEnvelope(current, "main", {
           type: "request",
@@ -5374,7 +5400,7 @@ describe("RpcServer caller identity", () => {
     }
   });
 
-  it("retains sealed code attribution without granting an unapproved exact version", () => {
+  it("retains sealed code attribution without granting an unapproved exact version", async () => {
     const isCodeApproved = vi.fn(() => false);
     const { server, entityCache } = createServer({ isCodeApproved });
     entityCache._onActivate(
@@ -5395,7 +5421,7 @@ describe("RpcServer caller identity", () => {
       })
     );
 
-    const caller = testServer(server).verifiedCallerFor("worker:review-me", "worker");
+    const caller = await testServer(server).verifiedCallerFor("worker:review-me", "worker");
 
     expect(caller.code).toMatchObject({
       repoPath: "workers/review-me",
@@ -5521,6 +5547,19 @@ describe("RpcServer caller identity", () => {
     ).rejects.toBe(failure);
   });
 
+  it("preserves stored extension identity lookup failures during connection-grant admission", async () => {
+    const failure = new Error("Stored extension build metadata is unreadable");
+    const { server, connectionGrants } = createServer({
+      resolveExtensionCodeIdentity: async () => {
+        throw failure;
+      },
+    });
+    const extensionId = "@workspace-extensions/example";
+    const token = connectionGrants.grant(extensionId, "shell:test").token;
+
+    await expect(server.authenticateConnectionGrant(token)).rejects.toBe(failure);
+  });
+
   it("rejects nonexistent causal parents before unary and streaming service dispatch", async () => {
     const resolveExactCausalInvocation = vi.fn(async () => null);
     const { server } = createServer({ resolveExactCausalInvocation });
@@ -5629,18 +5668,18 @@ describe("RpcServer caller identity", () => {
     expect(server.getUserConnections("usr_bob")).toEqual([bob]);
   });
 
-  it("rejects WS authentication for the reserved in-process shell caller id", () => {
+  it("rejects WS authentication for the reserved in-process shell caller id", async () => {
     const { server, tokenManager } = createServer();
     const shellToken = tokenManager.createToken("shell", "shell");
     const ws = createTestWs();
 
-    testServer(server).handleAuth(ws, shellToken, "conn-shell");
+    await testServer(server).handleAuth(ws, shellToken, "conn-shell");
 
     expect(ws.close).toHaveBeenCalledWith(4006, expect.stringContaining("shell"));
     expect(testServer(server).connections.getCallerConnections("shell")).toHaveLength(0);
   });
 
-  it("rejects a mismatched RPC contract before authenticating the socket", () => {
+  it("rejects a mismatched RPC contract before authenticating the socket", async () => {
     const { server, tokenManager } = createServer();
     const token = tokenManager.createToken("electron-main", "shell");
     const ws = createTestWs();
@@ -5797,7 +5836,7 @@ describe("RpcServer caller identity", () => {
     expect(testServer(server).sessions.hasSession("electron-main")).toBe(false);
   });
 
-  it("accepts WS authentication for concrete shell host callers", () => {
+  it("accepts WS authentication for concrete shell host callers", async () => {
     const { server, tokenManager } = createServer({
       userSubjectSource: {
         resolve: () => ({ userId: "usr_root", handle: "root" }),
@@ -5806,7 +5845,7 @@ describe("RpcServer caller identity", () => {
     const remoteToken = tokenManager.createToken("electron-main", "shell");
     const ws = createTestWs();
 
-    testServer(server).handleAuth(ws, remoteToken, "conn-shell-host");
+    await testServer(server).handleAuth(ws, remoteToken, "conn-shell-host");
 
     expect(ws.close).not.toHaveBeenCalled();
     const callers = testServer(server).connections.getCallerConnections("electron-main");
@@ -5814,7 +5853,7 @@ describe("RpcServer caller identity", () => {
     expect(callers[0]!.caller.runtime.kind).toBe("shell");
   });
 
-  it("registers one direct event session for the authenticated transport lifetime", () => {
+  it("registers one direct event session for the authenticated transport lifetime", async () => {
     const eventService = new EventService();
     const { server, tokenManager } = createServer({
       eventService,
@@ -5825,7 +5864,7 @@ describe("RpcServer caller identity", () => {
     const remoteToken = tokenManager.createToken("electron-main", "shell");
     const ws = createTestWs();
 
-    testServer(server).handleAuth(ws, remoteToken, "conn-events");
+    await testServer(server).handleAuth(ws, remoteToken, "conn-events");
     expect(eventService.emitToConnection("electron-main", "conn-events", "focus-address-bar")).toBe(
       true
     );
@@ -5850,7 +5889,7 @@ describe("RpcServer caller identity", () => {
     );
   });
 
-  it("accepts WS authentication when a connection grant resolves to a shell host principal", () => {
+  it("accepts WS authentication when a connection grant resolves to a shell host principal", async () => {
     const { server, connectionGrants, entityCache } = createServer({
       userSubjectSource: {
         resolve: () => ({ userId: "usr_root", handle: "root" }),
@@ -5860,14 +5899,14 @@ describe("RpcServer caller identity", () => {
     const grant = connectionGrants.grant("electron-main", "shell:test").token;
     const ws = createTestWs();
 
-    testServer(server).handleAuth(ws, grant, "conn-grant");
+    await testServer(server).handleAuth(ws, grant, "conn-grant");
     expect(ws.close).not.toHaveBeenCalled();
     const callers = testServer(server).connections.getCallerConnections("electron-main");
     expect(callers).toHaveLength(1);
     expect(callers[0]!.caller.runtime.kind).toBe("shell");
   });
 
-  it("accepts reconnects with a redeemed connection grant until the principal is revoked", () => {
+  it("accepts reconnects with a redeemed connection grant until the principal is revoked", async () => {
     const { server, connectionGrants, entityCache } = createServer({
       userSubjectSource: {
         resolve: () => ({ userId: "usr_root", handle: "root" }),
@@ -5878,15 +5917,15 @@ describe("RpcServer caller identity", () => {
     const first = createTestWs();
     const reconnected = createTestWs();
 
-    testServer(server).handleAuth(first, grant, "conn-grant-first");
-    testServer(server).handleAuth(reconnected, grant, "conn-grant-reconnected");
+    await testServer(server).handleAuth(first, grant, "conn-grant-first");
+    await testServer(server).handleAuth(reconnected, grant, "conn-grant-reconnected");
 
     expect(first.close).not.toHaveBeenCalled();
     expect(reconnected.close).not.toHaveBeenCalled();
     expect(testServer(server).connections.getCallerConnections("electron-main")).toHaveLength(2);
   });
 
-  it("attributes a server-spawned app grant to the canonical system subject", () => {
+  it("attributes a server-spawned app grant to the canonical system subject", async () => {
     const membershipGate = vi.fn((subject) => subject?.userId === "system");
     const { server, connectionGrants, entityCache } = createServer({ membershipGate });
     entityCache._onActivate(makeRecord("@workspace-apps/remote-cli", "app"));
@@ -5895,7 +5934,7 @@ describe("RpcServer caller identity", () => {
     }).token;
     const ws = createTestWs();
 
-    testServer(server).handleAuth(ws, grant, "terminal-app");
+    await testServer(server).handleAuth(ws, grant, "terminal-app");
 
     expect(ws.close).not.toHaveBeenCalled();
     expect(membershipGate).toHaveBeenCalledWith({ userId: "system", handle: "system" });
@@ -5905,7 +5944,7 @@ describe("RpcServer caller identity", () => {
     ).toEqual({ userId: "system", handle: "system" });
   });
 
-  it("rejects WS authentication when a connection grant has no runtime entity kind", () => {
+  it("rejects WS authentication when a connection grant has no runtime entity kind", async () => {
     const { server, connectionGrants, entityCache } = createServer();
     const principal = makeRecord("missing-principal", "app");
     entityCache._onActivate(principal);
@@ -5913,7 +5952,7 @@ describe("RpcServer caller identity", () => {
     entityCache._onRetire({ ...principal, status: "retired", retiredAt: Date.now() });
     const ws = createTestWs();
 
-    testServer(server).handleAuth(ws, grant, "conn-missing-principal");
+    await testServer(server).handleAuth(ws, grant, "conn-missing-principal");
 
     expect(ws.close).toHaveBeenCalledWith(4006, "Invalid token");
     expect(testServer(server).connections.getCallerConnections("missing-principal")).toHaveLength(
@@ -6474,7 +6513,7 @@ describe("RpcServer terminal lifecycle", () => {
     });
   });
 
-  it("can own a gateway WebSocket upgrade without a second RPC path", () => {
+  it("can own a gateway WebSocket upgrade without a second RPC path", async () => {
     const { server, tokenManager } = createServer();
     const token = tokenManager.ensureToken("worker:upgrade-test", "worker");
     const grant = "admission-grant";
@@ -6507,7 +6546,7 @@ describe("RpcServer terminal lifecycle", () => {
       },
     });
 
-    server.handleGatewayWsUpgrade(
+    await server.handleGatewayWsUpgrade(
       {
         headers: {
           "sec-websocket-protocol": webSocketAuthProtocol("rpc", grant),
@@ -6522,14 +6561,14 @@ describe("RpcServer terminal lifecycle", () => {
     expect(testServer(server).pendingAuthentications.size).toBe(1);
   });
 
-  it("rejects RPC upgrades without a credential before ws allocates a receiver", () => {
+  it("rejects RPC upgrades without a credential before ws allocates a receiver", async () => {
     const { server } = createServer();
     server.initHandlers();
     const socket = { write: vi.fn(), destroy: vi.fn() };
     const internal = server as unknown as { wss: { handleUpgrade: ReturnType<typeof vi.fn> } };
     const upgrade = vi.spyOn(internal.wss, "handleUpgrade");
 
-    server.handleGatewayWsUpgrade(
+    await server.handleGatewayWsUpgrade(
       { headers: {} } as IncomingMessage,
       socket as unknown as Duplex,
       Buffer.alloc(0)
@@ -6542,7 +6581,7 @@ describe("RpcServer terminal lifecycle", () => {
     expect(socket.destroy).toHaveBeenCalledOnce();
   });
 
-  it("rejects a valid caller bearer sent directly through the legacy upgrade path", () => {
+  it("rejects a valid caller bearer sent directly through the legacy upgrade path", async () => {
     const { server, tokenManager } = createServer();
     const token = tokenManager.ensureToken("worker:no-direct-upgrade", "worker");
     server.initHandlers();
@@ -6550,7 +6589,7 @@ describe("RpcServer terminal lifecycle", () => {
     const internal = server as unknown as { wss: { handleUpgrade: ReturnType<typeof vi.fn> } };
     const upgrade = vi.spyOn(internal.wss, "handleUpgrade");
 
-    server.handleGatewayWsUpgrade(
+    await server.handleGatewayWsUpgrade(
       {
         headers: {
           "sec-websocket-protocol": webSocketAuthProtocol("rpc", token),
@@ -6566,7 +6605,7 @@ describe("RpcServer terminal lifecycle", () => {
     );
   });
 
-  it("prunes an expired admission grant before WebSocket receiver allocation", () => {
+  it("prunes an expired admission grant before WebSocket receiver allocation", async () => {
     const { server, tokenManager } = createServer();
     const token = tokenManager.ensureToken("worker:expired-admission", "worker");
     const grant = "expired-grant";
@@ -6588,7 +6627,7 @@ describe("RpcServer terminal lifecycle", () => {
     const internal = server as unknown as { wss: { handleUpgrade: ReturnType<typeof vi.fn> } };
     const upgrade = vi.spyOn(internal.wss, "handleUpgrade");
 
-    server.handleGatewayWsUpgrade(
+    await server.handleGatewayWsUpgrade(
       {
         headers: {
           "sec-websocket-protocol": webSocketAuthProtocol("rpc", grant),
@@ -6602,7 +6641,7 @@ describe("RpcServer terminal lifecycle", () => {
     expect(admissionGrants.has(grant)).toBe(false);
   });
 
-  it("consumes an admission grant once before allocating a receiver", () => {
+  it("consumes an admission grant once before allocating a receiver", async () => {
     const { server, tokenManager } = createServer();
     server.initHandlers();
     const token = tokenManager.ensureToken("worker:one-use-admission", "worker");
@@ -6623,7 +6662,7 @@ describe("RpcServer terminal lifecycle", () => {
     const internal = server as unknown as { wss: { handleUpgrade: ReturnType<typeof vi.fn> } };
     const upgrade = vi.spyOn(internal.wss, "handleUpgrade").mockImplementation(() => undefined);
 
-    server.handleGatewayWsUpgrade(
+    await server.handleGatewayWsUpgrade(
       {
         headers: {
           "sec-websocket-protocol": webSocketAuthProtocol("rpc", grant),
@@ -6634,7 +6673,7 @@ describe("RpcServer terminal lifecycle", () => {
     );
     expect(upgrade).toHaveBeenCalledOnce();
 
-    server.handleGatewayWsUpgrade(
+    await server.handleGatewayWsUpgrade(
       {
         headers: {
           "sec-websocket-protocol": webSocketAuthProtocol("rpc", grant),
@@ -6768,7 +6807,7 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
     const request = streamRequest("sr-ws-upload", "gateway.fetch", [
       { path: "/x", method: "POST" },
     ]);
-    testServer(server).handleMessage(client, {
+    await testServer(server).handleMessage(client, {
       type: "ws:rpc",
       envelope: clientEnvelope(client, "main", request),
       streamBody: true,
@@ -7145,17 +7184,17 @@ describe("delegated Durable Object authority lifetime", () => {
     expect(testServer(server).dispatcher.dispatch).not.toHaveBeenCalled();
   });
 
-  it("uses live ingress identity for host-owned runtime initialization", () => {
+  it("uses live ingress identity for host-owned runtime initialization", async () => {
     const { server, entityCache } = createServer();
     const runtimeId = "do:workers/agent-worker:AiChatWorker:host-initialization";
-    expect(() => server.verifiedRuntimeCaller(runtimeId)).toThrow(/not active/);
+    await expect(server.verifiedRuntimeCaller(runtimeId)).rejects.toThrow(/not active/);
     const record = makeRecord(runtimeId, "do", { repoPath: "workers/agent-worker" });
     entityCache._onActivate(record);
-    const caller = server.verifiedRuntimeCaller(runtimeId);
+    const caller = await server.verifiedRuntimeCaller(runtimeId);
     expect(caller.runtime).toEqual({ id: runtimeId, kind: "do" });
     expect(caller.code?.repoPath).toBe("workers/agent-worker");
     entityCache._onActivate({ ...record, status: "retired" });
-    expect(() => server.verifiedRuntimeCaller(runtimeId)).toThrow(/not active/);
+    await expect(server.verifiedRuntimeCaller(runtimeId)).rejects.toThrow(/not active/);
   });
 
   it("carries a verified account through live system-owned deputies without changing code identity or leaking to later calls", async () => {

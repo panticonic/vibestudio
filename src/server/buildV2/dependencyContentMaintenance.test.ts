@@ -14,7 +14,7 @@ import {
   DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS,
   dependencyContentMaintenanceEntry,
   drainDependencyContentMaintenance,
-  scheduleDependencyContentMaintenance,
+  prepareDependencyContent,
   scheduleDependencyContentPrune,
 } from "./dependencyContentMaintenance.js";
 import { serializeRpcFailure } from "@vibestudio/rpc";
@@ -23,13 +23,8 @@ function makeChild() {
   return Object.assign(new EventEmitter(), { unref: vi.fn() });
 }
 
-function reportFailure(child: EventEmitter, message: string) {
-  child.emit("message", {
-    type: "dependency-maintenance-failure",
-    failure: serializeRpcFailure(
-      new AggregateError([Object.assign(new Error(message), { code: "EIO" })], "maintenance failed")
-    ),
-  });
+function reportResults(child: EventEmitter, results: unknown[]) {
+  child.emit("message", { type: "dependency-maintenance-results", results });
 }
 
 describe("dependency content maintenance scheduling", () => {
@@ -45,24 +40,32 @@ describe("dependency content maintenance scheduling", () => {
     vi.useRealTimers();
   });
 
-  it("batches cache directories into an owned process after the startup grace period", async () => {
+  it("batches private preparation tickets into one owned process immediately", async () => {
     const child = makeChild();
     fork.mockReturnValue(child);
     const appRoot = process.cwd();
-    const first = "/tmp/profile/derived-cache/external-deps/1111111111111111";
-    const second = "/tmp/profile/derived-cache/external-deps/2222222222222222";
+    const firstCache = "/tmp/profile/derived-cache/external-deps/1111111111111111";
+    const secondCache = "/tmp/profile/derived-cache/external-deps/2222222222222222";
+    const first = `${firstCache}.tmp.${"a".repeat(32)}`;
+    const second = `${secondCache}.tmp.${"b".repeat(32)}`;
 
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = appRoot;
-    scheduleDependencyContentMaintenance(first);
-    scheduleDependencyContentMaintenance(second);
-    await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS - 1);
-    expect(fork).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+    const firstTicket = prepareDependencyContent(first, firstCache);
+    const secondTicket = prepareDependencyContent(second, secondCache);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(fork).toHaveBeenCalledOnce();
     expect(fork).toHaveBeenCalledWith(
       dependencyContentMaintenanceEntry(),
-      [path.resolve(first), path.resolve(second)],
+      [
+        JSON.stringify({
+          preparations: [
+            { stagingDir: path.resolve(first), cacheDir: path.resolve(firstCache) },
+            { stagingDir: path.resolve(second), cacheDir: path.resolve(secondCache) },
+          ],
+          prune: false,
+        }),
+      ],
       expect.objectContaining({
         execPath: process.execPath,
         execArgv: [],
@@ -71,7 +74,9 @@ describe("dependency content maintenance scheduling", () => {
       })
     );
     expect(child.unref).toHaveBeenCalledOnce();
+    reportResults(child, [{ ok: true }, { ok: true }]);
     child.emit("close", 0, null);
+    await Promise.all([firstTicket, secondTicket]);
     await drainDependencyContentMaintenance();
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -85,119 +90,133 @@ describe("dependency content maintenance scheduling", () => {
 
     expect(fork).toHaveBeenCalledWith(
       dependencyContentMaintenanceEntry(),
-      [],
+      [JSON.stringify({ preparations: [], prune: true })],
       expect.objectContaining({ detached: false })
     );
+    reportResults(child, [{ ok: true }]);
     child.emit("close", 0, null);
     await drainDependencyContentMaintenance();
   });
 
-  it("retains the child failure graph and waits for close before draining", async () => {
+  it("settles a failed preparation ticket only after its child closes", async () => {
     const child = makeChild();
     fork.mockReturnValue(child);
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
-    scheduleDependencyContentMaintenance(
+    const ticket = prepareDependencyContent(
+      "/tmp/profile/derived-cache/external-deps/3333333333333333.tmp.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "/tmp/profile/derived-cache/external-deps/3333333333333333"
     );
-    await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(0);
 
-    reportFailure(child, "source link failed");
-    const drain = drainDependencyContentMaintenance();
     let settled = false;
-    void drain.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      }
-    );
+    void ticket.catch(() => {
+      settled = true;
+    });
     await Promise.resolve();
     expect(settled).toBe(false);
+    reportResults(child, [
+      {
+        ok: false,
+        failure: serializeRpcFailure(
+          Object.assign(new Error("source link failed"), { code: "EIO" })
+        ),
+      },
+    ]);
     child.emit("close", 1, null);
 
-    await expect(drain).rejects.toMatchObject({
-      message: "maintenance failed",
-      errors: [expect.objectContaining({ message: "source link failed", code: "EIO" })],
-    });
+    await expect(ticket).rejects.toMatchObject({ message: "source link failed", code: "EIO" });
+    await drainDependencyContentMaintenance();
   });
 
-  it("serializes children and joins queued pruning work and every failure", async () => {
+  it("serializes preparations and joins queued pruning after a preparation failure", async () => {
     const first = makeChild();
     const second = makeChild();
     fork.mockReturnValueOnce(first).mockReturnValueOnce(second);
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
-    const firstDir = "/tmp/profile/derived-cache/external-deps/4444444444444444";
-    const secondDir = "/tmp/profile/derived-cache/external-deps/5555555555555555";
-    scheduleDependencyContentMaintenance(firstDir);
-    await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS);
-    scheduleDependencyContentMaintenance(secondDir);
+    const firstCache = "/tmp/profile/derived-cache/external-deps/4444444444444444";
+    const secondCache = "/tmp/profile/derived-cache/external-deps/5555555555555555";
+    const firstTicket = prepareDependencyContent(`${firstCache}.tmp.${"c".repeat(32)}`, firstCache);
+    await vi.advanceTimersByTimeAsync(0);
+    const secondTicket = prepareDependencyContent(
+      `${secondCache}.tmp.${"d".repeat(32)}`,
+      secondCache
+    );
     scheduleDependencyContentPrune();
     expect(fork).toHaveBeenCalledOnce();
 
-    reportFailure(first, "first source link failed");
+    reportResults(first, [
+      {
+        ok: false,
+        failure: serializeRpcFailure(
+          Object.assign(new Error("first source link failed"), { code: "EIO" })
+        ),
+      },
+    ]);
     first.emit("close", 1, null);
+    await expect(firstTicket).rejects.toMatchObject({ message: "first source link failed" });
     const drain = drainDependencyContentMaintenance();
     await vi.waitFor(() => expect(fork).toHaveBeenCalledTimes(2));
     expect(fork).toHaveBeenLastCalledWith(
       dependencyContentMaintenanceEntry(),
-      [path.resolve(secondDir)],
+      [
+        JSON.stringify({
+          preparations: [
+            {
+              stagingDir: path.resolve(`${secondCache}.tmp.${"d".repeat(32)}`),
+              cacheDir: path.resolve(secondCache),
+            },
+          ],
+          prune: true,
+        }),
+      ],
       expect.any(Object)
     );
-    const spawnError = Object.assign(new Error("spawn denied"), { code: "EACCES" });
-    second.emit("error", spawnError);
-    second.emit("close", -2, null);
+    reportResults(second, [
+      { ok: true },
+      {
+        ok: false,
+        failure: serializeRpcFailure(Object.assign(new Error("prune failure"), { code: "EIO" })),
+      },
+    ]);
+    second.emit("close", 1, null);
+    await expect(secondTicket).resolves.toBeUndefined();
 
-    let drainFailure: unknown;
-    try {
-      await drain;
-    } catch (error) {
-      drainFailure = error;
-    }
-    if (!(drainFailure instanceof AggregateError)) {
-      throw new Error("Expected independent maintenance child failures to be aggregated");
-    }
-    expect(drainFailure.cause).toBe(drainFailure.errors[0]);
-    expect(drainFailure).toMatchObject({
-      errors: expect.arrayContaining([
-        expect.objectContaining({
-          errors: [expect.objectContaining({ message: "first source link failed" })],
-        }),
-        expect.objectContaining({ message: "spawn denied", code: "EACCES" }),
-      ]),
-    });
+    await expect(drain).rejects.toMatchObject({ message: "prune failure", code: "EIO" });
   });
 
   it("retains a distinct signal termination alongside the child failure graph", async () => {
     const child = makeChild();
     fork.mockReturnValue(child);
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
-    scheduleDependencyContentMaintenance(
+    const ticket = prepareDependencyContent(
+      "/tmp/profile/derived-cache/external-deps/6666666666666666.tmp.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "/tmp/profile/derived-cache/external-deps/6666666666666666"
     );
-    await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(0);
 
-    reportFailure(child, "source link failed");
+    reportResults(child, [
+      {
+        ok: false,
+        failure: serializeRpcFailure(
+          Object.assign(new Error("source link failed"), { code: "EIO" })
+        ),
+      },
+    ]);
     child.emit("close", null, "SIGTERM");
 
-    await expect(drainDependencyContentMaintenance()).rejects.toMatchObject({
-      errors: expect.arrayContaining([
-        expect.objectContaining({
-          errors: [expect.objectContaining({ message: "source link failed" })],
-        }),
-        expect.objectContaining({
-          message: "Dependency maintenance terminated by signal SIGTERM",
-        }),
-      ]),
+    await expect(ticket).rejects.toMatchObject({
+      message: "Dependency preparation and child termination failed",
+      errors: [
+        expect.objectContaining({ message: "source link failed", code: "EIO" }),
+        expect.objectContaining({ message: "Dependency maintenance terminated by signal SIGTERM" }),
+      ],
     });
   });
 
   it("retains a missing maintenance entry as a drain failure", async () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
-    scheduleDependencyContentMaintenance(
-      "/tmp/profile/derived-cache/external-deps/7777777777777777"
-    );
+    scheduleDependencyContentPrune();
     await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS);
 
     expect(fork).not.toHaveBeenCalled();

@@ -934,8 +934,8 @@ async function main() {
     membershipStore,
     deviceAuthStore,
     entityCache,
-    isLiveExtension: (callerId) =>
-      (extensionHostForGateway?.resolveCodeIdentity(callerId) ?? null) !== null,
+    isLiveExtension: async (callerId) =>
+      (await extensionHostForGateway?.resolveCodeIdentity(callerId)) != null,
     isLiveSystemRuntime: isSystemRuntime,
     isLiveWebsiteExecution: (runtimeId, website) => websiteDocuments.isLive(runtimeId, website),
   });
@@ -1272,10 +1272,10 @@ async function main() {
   };
   let buildSystemInstance: import("./buildV2/index.js").BuildSystemV2 | null = null;
   const { isSealedCodeAdmitted } = await import("./services/codeAdmission.js");
-  const isCodeApproved = (code: VerifiedCodeIdentity): boolean => {
+  const isCodeApproved = async (code: VerifiedCodeIdentity): Promise<boolean> => {
     if (code.repoPath === "vibestudio/internal") return true;
     if (code.callerKind === "extension") {
-      const image = extensionHostForGateway?.resolveActiveAdmissionImage(code) ?? null;
+      const image = (await extensionHostForGateway?.resolveActiveAdmissionImage(code)) ?? null;
       return isSealedCodeAdmitted({ code, image, admissionStore: unitAdmissionStore });
     }
     const entity = entityCache.resolveActive(code.evalOrigin?.ownerId ?? code.callerId);
@@ -1288,7 +1288,7 @@ async function main() {
     )
       return false;
     const image =
-      buildSystemInstance?.getBuildByExecution(entity.activeBuildKey, code.executionDigest)
+      (await buildSystemInstance?.getBuildByExecution(entity.activeBuildKey, code.executionDigest))
         ?.metadata ?? null;
     return isSealedCodeAdmitted({ code, image, admissionStore: unitAdmissionStore });
   };
@@ -2554,9 +2554,9 @@ async function main() {
               workspaceConfig,
               target
             )) {
-              const unit = host
-                .listWorkspaceUnits()
-                .find((row) => row.source === declaration.source);
+              const unit = (await host.listWorkspaceUnits()).find(
+                (row) => row.source === declaration.source
+              );
               if (!unit)
                 throw new Error(`Required build extension is unavailable: ${declaration.source}`);
               await host.ensureActivated(unit.name);
@@ -2589,8 +2589,8 @@ async function main() {
                     })),
                   ]);
               },
-              resolve: ({ buildKey }) => {
-                const build = buildStoreForPublication.peekLocal(buildKey);
+              resolve: async ({ buildKey }) => {
+                const build = await buildStoreForPublication.readLocal(buildKey);
                 return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
               },
             }),
@@ -2620,8 +2620,8 @@ async function main() {
                     })),
                   ]);
               },
-              resolve: ({ buildKey }) => {
-                const build = buildStoreForPublication.peekLocal(buildKey);
+              resolve: async ({ buildKey }) => {
+                const build = await buildStoreForPublication.readLocal(buildKey);
                 return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
               },
             }),
@@ -2643,8 +2643,8 @@ async function main() {
                     : []
                 );
               },
-              resolve: ({ buildKey }) => {
-                const build = buildStoreForPublication.peekLocal(buildKey);
+              resolve: async ({ buildKey }) => {
+                const build = await buildStoreForPublication.readLocal(buildKey);
                 return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
               },
             }),
@@ -2681,10 +2681,10 @@ async function main() {
                       ]
                     : []
                 ),
-              resolve: ({ buildKey, executionDigest }) => {
+              resolve: async ({ buildKey, executionDigest }) => {
                 const build = executionDigest
-                  ? buildStoreForPublication.getByExecution(buildKey, executionDigest)
-                  : buildStoreForPublication.peekLocal(buildKey);
+                  ? await buildStoreForPublication.getByExecution(buildKey, executionDigest)
+                  : await buildStoreForPublication.readLocal(buildKey);
                 if (build) return executionArtifactRefFromBuild(workspaceId, build);
                 return executionDigest
                   ? (productSeedArtifactByIdentity.get(`${buildKey}\0${executionDigest}`) ?? null)
@@ -2697,28 +2697,30 @@ async function main() {
               async snapshotRoots() {
                 if (!entityStoreInstance)
                   throw new Error("Workspace entity store is not available");
-                return (await entityStoreInstance.listExecutionRoots())
-                  .filter((entity) => entity.kind === "panel" && entity.activeBuildKey)
-                  .map((entity) => {
-                    const build = entity.activeExecutionDigest
-                      ? buildStoreForPublication.getByExecution(
-                          entity.activeBuildKey!,
-                          entity.activeExecutionDigest
-                        )
-                      : buildStoreForPublication.peekLocal(entity.activeBuildKey!);
-                    if (!build) {
-                      throw new Error(
-                        `Panel history ${entity.id} references missing build ${entity.activeBuildKey}`
-                      );
-                    }
-                    return {
-                      owner: "panel-history" as const,
-                      ownerId: entity.id,
-                      reason:
-                        entity.status === "active" ? ("active" as const) : ("rollback" as const),
-                      artifact: executionArtifactRefFromBuild(workspaceId, build),
-                    };
-                  });
+                return Promise.all(
+                  (await entityStoreInstance.listExecutionRoots())
+                    .filter((entity) => entity.kind === "panel" && entity.activeBuildKey)
+                    .map(async (entity) => {
+                      const build = entity.activeExecutionDigest
+                        ? await buildStoreForPublication.getByExecution(
+                            entity.activeBuildKey!,
+                            entity.activeExecutionDigest
+                          )
+                        : await buildStoreForPublication.readLocal(entity.activeBuildKey!);
+                      if (!build) {
+                        throw new Error(
+                          `Panel history ${entity.id} references missing build ${entity.activeBuildKey}`
+                        );
+                      }
+                      return {
+                        owner: "panel-history" as const,
+                        ownerId: entity.id,
+                        reason:
+                          entity.status === "active" ? ("active" as const) : ("rollback" as const),
+                        artifact: executionArtifactRefFromBuild(workspaceId, build),
+                      };
+                    })
+                );
               },
             },
             evalRunRootProvider,
@@ -2802,9 +2804,11 @@ async function main() {
           listUnits: () =>
             listBuildUnitCatalog({
               buildSystem,
-              hostedSources: () =>
-                trustedUnitHosts().flatMap((host) =>
-                  host.listWorkspaceUnits().map((row) => ({
+              hostedSources: async () =>
+                (
+                  await Promise.all(trustedUnitHosts().map((host) => host.listWorkspaceUnits()))
+                ).flatMap((rows) =>
+                  rows.map((row) => ({
                     name: row.name,
                     kind: row.kind,
                     source: row.source,
@@ -3100,33 +3104,36 @@ async function main() {
             });
             const probeResults = (
               await Promise.all(
-                schemaReports.flatMap((report) => {
+                schemaReports.map(async (report) => {
                   const buildKey = report.builds.find(
                     (entry) => entry.target === "runtime"
                   )?.buildKey;
-                  const build = buildKey ? buildSystem.getBuildByKey(buildKey) : null;
+                  const build = buildKey ? await buildSystem.getBuildByKey(buildKey) : null;
                   const classes = classesBySource.get(report.repoPath);
                   if (!build || !classes) return [];
-                  return [...classes].map(async (className) => {
-                    try {
-                      return {
-                        candidate: {
-                          source: report.repoPath,
-                          effectiveVersion: build.metadata.ev,
-                          executionDigest: assertPresent(build.metadata.execution).executionDigest,
-                          descriptor: await manager.probeDurableObjectSchema(
-                            report.repoPath,
-                            className,
-                            build
-                          ),
-                        },
-                      };
-                    } catch (error) {
-                      return {
-                        failure: `${report.repoPath}:${className} schema probe failed: ${error instanceof Error ? error.message : String(error)}`,
-                      };
-                    }
-                  });
+                  return Promise.all(
+                    [...classes].map(async (className) => {
+                      try {
+                        return {
+                          candidate: {
+                            source: report.repoPath,
+                            effectiveVersion: build.metadata.ev,
+                            executionDigest: assertPresent(build.metadata.execution)
+                              .executionDigest,
+                            descriptor: await manager.probeDurableObjectSchema(
+                              report.repoPath,
+                              className,
+                              build
+                            ),
+                          },
+                        };
+                      } catch (error) {
+                        return {
+                          failure: `${report.repoPath}:${className} schema probe failed: ${error instanceof Error ? error.message : String(error)}`,
+                        };
+                      }
+                    })
+                  );
                 })
               )
             ).flat();
@@ -3279,11 +3286,11 @@ async function main() {
             },
           ];
         },
-        "apps:status": () => [
+        "apps:status": async () => [
           {
             snapshot: true,
             apps:
-              appHostForGateway?.listWorkspaceUnits().map((entry) => ({
+              (await appHostForGateway?.listWorkspaceUnits())?.map((entry) => ({
                 name: entry.name,
                 status: entry.status,
                 error: entry.lastError,
@@ -4027,7 +4034,7 @@ async function main() {
           retireEntity: (id) => runtime.internal.retireEntity(id),
           tokenManager,
           workspaceId,
-          resolveExecutionArtifact: (code) => {
+          resolveExecutionArtifact: async (code) => {
             if (code.repoPath === "vibestudio/internal") {
               return (
                 productSeedArtifacts.find(
@@ -4044,7 +4051,7 @@ async function main() {
               entity.source.effectiveVersion !== code.effectiveVersion
             )
               return null;
-            const build = buildSystemInstance?.getBuildByExecution(
+            const build = await buildSystemInstance?.getBuildByExecution(
               entity.activeBuildKey,
               code.executionDigest
             );
@@ -4320,14 +4327,15 @@ async function main() {
             });
           },
           onEntityTitleChanged: (entityId, title) => entityTitleProjection.observe(entityId, title),
-          stateArgsSchemaForBuild: (buildKey) => {
+          stateArgsSchemaForBuild: async (buildKey) => {
             const build = container
               .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
               ?.getBuildByKey(buildKey);
-            if (!build) {
+            const storedBuild = await build;
+            if (!storedBuild) {
               throw new Error(`Build ${buildKey} is unavailable; cannot validate stateArgs`);
             }
-            return build.metadata.stateArgsSchema;
+            return storedBuild.metadata.stateArgsSchema;
           },
         });
       },
@@ -4374,7 +4382,7 @@ async function main() {
         primePanelRuntimeImage = async (source, ref) => {
           await panelHttpServer.primeBuild(source, ref, async () => {
             const binding = await buildSystem.bindRuntimeImage(source, ref);
-            const build = buildSystem.getBuildByKey(binding.artifact.buildKey);
+            const build = await buildSystem.getBuildByKey(binding.artifact.buildKey);
             if (!build) {
               throw new Error(
                 `Prebound panel image ${binding.artifact.buildKey} for ${source} is unavailable`
@@ -4603,12 +4611,12 @@ async function main() {
               } else if (spec.kind === "panel") {
                 const selectedBuildKey = spec.execution.artifact?.buildKey ?? existingBuildKey;
                 if (selectedBuildKey) {
-                  const build = spec.execution.artifact
+                  const build = await (spec.execution.artifact
                     ? buildSystem.getBuildByExecution(
                         selectedBuildKey,
                         spec.execution.artifact.executionDigest
                       )
-                    : buildSystem.getBuildByKey(selectedBuildKey);
+                    : buildSystem.getBuildByKey(selectedBuildKey));
                   if (!build) {
                     throw new Error(
                       `Activated panel build ${selectedBuildKey} for ${source} is unavailable from the immutable build store`
@@ -4685,7 +4693,7 @@ async function main() {
                   container.get<ReturnType<typeof createWorkerService>>("workersRpc")
                 );
                 const service = await workers.resolveService(
-                  { caller: rpcServer.verifiedRuntimeCaller(record.id), signal },
+                  { caller: await rpcServer.verifiedRuntimeCaller(record.id), signal },
                   "vibestudio.channel.v1",
                   channelId
                 );
@@ -5392,7 +5400,7 @@ async function main() {
             const buildSystem =
               container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
             const build = active?.activeBuildKey
-              ? buildSystem?.getBuildByKey(active.activeBuildKey)
+              ? await buildSystem?.getBuildByKey(active.activeBuildKey)
               : null;
             const catalogMethod =
               build && "metadata" in build && build.metadata.kind === "worker"
@@ -5417,7 +5425,7 @@ async function main() {
                     candidateReport?.builds.find((entry) => entry.target === "runtime")?.buildKey ??
                     null;
                   const candidateBuild = candidateBuildKey
-                    ? buildSystem?.getBuildByKey(candidateBuildKey)
+                    ? await buildSystem?.getBuildByKey(candidateBuildKey)
                     : null;
                   candidateDeclaresMethod =
                     candidateBuild?.metadata.kind === "worker" &&
@@ -5617,8 +5625,8 @@ async function main() {
         }),
         resolveExtensionInvocation: (extensionName, requestId) =>
           extensionHostForGateway?.resolveActiveInvocation(extensionName, requestId) ?? null,
-        resolveExtensionCodeIdentity: (extensionName) =>
-          extensionHostForGateway?.resolveCodeIdentity(extensionName) ?? null,
+        resolveExtensionCodeIdentity: async (extensionName) =>
+          (await extensionHostForGateway?.resolveCodeIdentity(extensionName)) ?? null,
         isCodeApproved,
       });
       server.initHandlers();
@@ -6249,6 +6257,7 @@ async function main() {
         registerBuildProvider,
         unregisterBuildProvider,
       });
+      await host.initialize();
       extensionHostForGateway = host;
       return host;
     },
@@ -6323,6 +6332,7 @@ async function main() {
         getHostTargetDecl: (target) => resolveHostTargetDecl(workspaceConfig, target),
         ensureHostTargetExtensions,
       });
+      await host.initialize();
       appHostForGateway = host;
       return host;
     },
@@ -6594,7 +6604,7 @@ async function main() {
     runtimeDiagnostics,
     eventService,
     executionPublicationPort: executionPublicationJournal,
-    resolveEgressCaller: (registered) => {
+    resolveEgressCaller: async (registered) => {
       const entity = entityCache.resolve(registered.runtime.id);
       if (entity && entity.status !== "active") return null;
       const activeEntity = entityCache.resolveActive(registered.runtime.id);
@@ -6647,7 +6657,9 @@ async function main() {
       workerdManagerForGateway = manager;
     },
     publishSourceBuild: async (manager, source, doClasses, trigger, buildKey) => {
-      const build = buildKey ? assertPresent(buildSystemInstance).getBuildByKey(buildKey) : null;
+      const build = buildKey
+        ? await assertPresent(buildSystemInstance).getBuildByKey(buildKey)
+        : null;
       if (!build || build.metadata.kind !== "worker" || build.metadata.sourcePath !== source) {
         await manager.reconcileMutableSourceBuild(source, doClasses, trigger, buildKey);
         return;

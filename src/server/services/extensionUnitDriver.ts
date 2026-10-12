@@ -17,11 +17,11 @@ export function createExtensionUnitDriver(
     if (!value) throw new Error("Extension runtime is not available");
     return value;
   };
-  const rows = () =>
-    host()
-      .listWorkspaceUnits()
-      .filter((row) => row.status === "running");
-  const describeRow = (row: ReturnType<typeof rows>[number]): RuntimeSupervisionDescription => ({
+  const rows = async () =>
+    (await host().listWorkspaceUnits()).filter((row) => row.status === "running");
+  const describeRow = (
+    row: Awaited<ReturnType<typeof rows>>[number]
+  ): RuntimeSupervisionDescription => ({
     identity: { kind: "extension", entityId: row.name },
     release: { kind: "extension", releaseId: row.name },
     source: row.source,
@@ -39,8 +39,8 @@ export function createExtensionUnitDriver(
       inspector: row.inspectorUrl !== null,
     },
   });
-  const requireRow = (entityId: string) => {
-    const row = rows().find((candidate) => candidate.name === entityId);
+  const requireRow = async (entityId: string) => {
+    const row = (await rows()).find((candidate) => candidate.name === entityId);
     if (row) return row;
     throw Object.assign(new Error(`No active extension runtime exists with id ${entityId}`), {
       code: "UNIT_ENTITY_NOT_FOUND",
@@ -48,22 +48,20 @@ export function createExtensionUnitDriver(
   };
   const history = (entityId: string, query?: UnitLogQuery) => diagnostics.history(entityId, query);
   const logs = (entityId: string, query?: UnitLogQuery): RuntimeSupervisionLogRecord[] => {
-    requireRow(entityId);
     return runtimeDiagnosticHistory({ kind: "extension", entityId }, history(entityId, query)).logs;
   };
   return {
     kind: "extension",
-    list: () => rows().map(describeRow),
-    describe: (entityId) => {
-      const row = rows().find((candidate) => candidate.name === entityId);
+    list: async () => (await rows()).map(describeRow),
+    describe: async (entityId) => {
+      const row = (await rows()).find((candidate) => candidate.name === entityId);
       return row ? describeRow(row) : null;
     },
     logs: (entityId, query) => {
-      requireRow(entityId);
-      return logs(entityId, query);
+      return requireRow(entityId).then(() => logs(entityId, query));
     },
-    health: (entityId, query) => {
-      const row = requireRow(entityId);
+    health: async (entityId, query) => {
+      const row = await requireRow(entityId);
       const description = describeRow(row);
       const snapshot = runtimeDiagnosticHistory(
         { kind: "extension", entityId },
@@ -88,8 +86,8 @@ export function createExtensionUnitDriver(
         capacity: snapshot.capacity,
       };
     },
-    restart: (ctx, entityId) => host().reload(ctx, requireRow(entityId).name),
-    retire: (_ctx, entityId) => host().retire(requireRow(entityId).name),
+    restart: async (ctx, entityId) => host().reload(ctx, (await requireRow(entityId)).name),
+    retire: async (_ctx, entityId) => host().retire((await requireRow(entityId)).name),
     // Lifecycle reports originate from the starting child itself. The
     // ExtensionHost owns that generation and validates it against its process
     // table; the supervisor's public list intentionally contains only ready
@@ -103,12 +101,12 @@ export function createExtensionUnitDriver(
         // A declared host prerequisite may be dormant until its first launch.
         // Stage that declaration before consulting the runtime registry.
         await ensureDeclaration(releaseId);
-        const row = host()
-          .listWorkspaceUnits()
-          .find((candidate) => candidate.name === releaseId || candidate.source === releaseId);
+        const row = (await host().listWorkspaceUnits()).find(
+          (candidate) => candidate.name === releaseId || candidate.source === releaseId
+        );
         if (!row) return { status: "unavailable", reason: `Unknown extension: ${releaseId}` };
         await host().ensureActivated(row.name);
-        const entity = describeRow(requireRow(row.name));
+        const entity = describeRow(await requireRow(row.name));
         return { status: "ready", entity };
       },
     },

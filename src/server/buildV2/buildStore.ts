@@ -21,7 +21,8 @@ import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { gunzipSync, gzip, constants as zlibConstants } from "zlib";
+import { gunzip, gzip, constants as zlibConstants } from "zlib";
+import { promisify } from "util";
 import {
   getCentralDataPath,
   getSharedDerivedDataPath,
@@ -62,6 +63,7 @@ import {
   type BuildResultWire,
   type BuildMetadataDetailsWire,
   type ExecutableModuleWire,
+  type StoredBuildResult,
 } from "@vibestudio/service-schemas/build";
 export { contentTypeForPath } from "@vibestudio/shared/contentType";
 
@@ -84,6 +86,10 @@ export type BuildArtifactInput = Omit<BuildArtifactWire, "encoding" | "byteLengt
 export type BuildArtifactManifestEntry = BuildArtifactManifestEntryWire;
 
 export type BuildArtifactWithContent = BuildArtifactWire;
+
+/** Stored artifacts stay as immutable file descriptors until a consumer asks for bytes. */
+export type StoredBuildArtifact = StoredBuildResult["artifacts"][number];
+export type { StoredBuildResult } from "@vibestudio/service-schemas/build";
 
 /**
  * Immutable executable identity sealed at the build-store boundary.
@@ -168,6 +174,7 @@ interface StoredExecutionVariant {
 }
 
 const EXECUTABLE_MODULES_FILE = "executable-modules.json.gz";
+const gunzipAsync = promisify(gunzip);
 
 function gzipJson(value: unknown): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -179,23 +186,30 @@ function gzipJson(value: unknown): Promise<Buffer> {
 }
 
 /** Hot metadata never owns executable source payloads. */
-export function readBuildMetadata(dir: string): BuildMetadata {
-  const content = fs.readFileSync(path.join(dir, "metadata.json"), "utf-8");
+export async function readBuildMetadata(dir: string): Promise<BuildMetadata> {
+  const content = await fs.promises.readFile(path.join(dir, "metadata.json"), "utf-8");
   const metadata = parseStoredBuildMetadata(content);
   const { executableModules: _modules, ...compact } = metadata;
   return compact;
 }
 
 /** Read source evidence only at the compiler/diagnostic consumer that needs it. */
-export function readExecutableModules(dir: string): ExecutableModuleInput[] | undefined {
-  const content = fs.readFileSync(path.join(dir, "metadata.json"), "utf8");
+export async function readExecutableModules(
+  dir: string
+): Promise<ExecutableModuleInput[] | undefined> {
+  const content = await fs.promises.readFile(path.join(dir, "metadata.json"), "utf8");
   const metadata = parseStoredBuildMetadata(content);
   if (metadata.executableModules !== undefined) return metadata.executableModules;
   const modulesPath = path.join(dir, EXECUTABLE_MODULES_FILE);
-  if (!fs.existsSync(modulesPath)) return undefined;
+  try {
+    await fs.promises.access(modulesPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
   let modulesJson: string;
   try {
-    modulesJson = gunzipSync(fs.readFileSync(modulesPath)).toString("utf-8");
+    modulesJson = (await gunzipAsync(await fs.promises.readFile(modulesPath))).toString("utf-8");
   } catch (error) {
     if (["Z_DATA_ERROR", "Z_BUF_ERROR"].includes((error as NodeJS.ErrnoException).code ?? "")) {
       invalidStoredBuildMetadata("Stored executable module inventory is corrupt", error);
@@ -224,11 +238,20 @@ export async function writeBuildMetadata(dir: string, metadata: BuildMetadata): 
   const { executableModules: suppliedModules, ...compactMetadata } = wireMetadata;
   const modulesPath = path.join(dir, EXECUTABLE_MODULES_FILE);
   const metadataPath = path.join(dir, "metadata.json");
-  const executableModules =
-    suppliedModules ??
-    (!fs.existsSync(modulesPath) && fs.existsSync(metadataPath)
-      ? readExecutableModules(dir)
-      : undefined);
+  let executableModules = suppliedModules;
+  if (executableModules === undefined) {
+    try {
+      await fs.promises.access(modulesPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      try {
+        await fs.promises.access(metadataPath);
+        executableModules = await readExecutableModules(dir);
+      } catch (metadataError) {
+        if ((metadataError as NodeJS.ErrnoException).code !== "ENOENT") throw metadataError;
+      }
+    }
+  }
   if (executableModules !== undefined) {
     const modulesTmp = `${modulesPath}.tmp.${crypto.randomBytes(12).toString("hex")}`;
     try {
@@ -359,7 +382,7 @@ function warnCleanupFailure(pathName: string, error: unknown): void {
 
 /** Project only the sealed artifacts, never mutable metadata or writer scratch files. */
 async function materializeBuildTree(
-  source: BuildResult,
+  source: StoredBuildResult,
   targetDir: string,
   metadata: BuildMetadata = source.metadata
 ): Promise<void> {
@@ -369,11 +392,11 @@ async function materializeBuildTree(
     modules = await fs.promises.readFile(path.join(source.dir, EXECUTABLE_MODULES_FILE));
   } catch (error) {
     if (!isFileSystemErrorCode(error, ["ENOENT"])) throw error;
-    const inline = readExecutableModules(source.dir);
+    const inline = await readExecutableModules(source.dir);
     if (inline !== undefined) modules = await gzipJson(inline);
   }
   await fs.promises.mkdir(targetDir, { recursive: true });
-  const manifest = source.artifacts.map(manifestForEntry);
+  const manifest = source.artifacts;
   await runBounded(manifest, 8, async (entry) => {
     const sourcePath = path.join(source.dir, entry.path);
     const targetPath = path.join(targetDir, entry.path);
@@ -389,7 +412,8 @@ async function materializeBuildTree(
       await fs.promises.copyFile(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
     }
   });
-  await writeBuildRecords(targetDir, metadata, manifest);
+  const { executableModules: _modules, ...compactMetadata } = metadata;
+  await writeBuildRecords(targetDir, compactMetadata, manifest);
   if (modules)
     await writePooledArtifact(
       getSharedArtifactPoolDir(),
@@ -415,15 +439,15 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return;
   const cacheRoot = path.dirname(sharedDir);
-  if (sharedBuildDirectoryExists(sharedDir)) {
-    assertCompleteSharedBuild(sharedDir, key);
+  if (await sharedBuildDirectoryExists(sharedDir)) {
+    await assertCompleteSharedBuild(sharedDir, key);
     return;
   }
 
   const tmpDir = `${sharedDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
   try {
     await fs.promises.mkdir(path.dirname(sharedDir), { recursive: true });
-    const source = readBuildDir(sourceDir, key, { verifyExecution: false });
+    const source = await readBuildDir(sourceDir, key, { verifyExecution: false });
     if (!source) throw new Error(`Cannot publish incomplete build ${key}`);
     await materializeBuildTree(source, tmpDir);
     try {
@@ -431,7 +455,7 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
     } catch (renameError) {
       let incumbentExists: boolean;
       try {
-        incumbentExists = sharedBuildDirectoryExists(sharedDir);
+        incumbentExists = await sharedBuildDirectoryExists(sharedDir);
       } catch (inspectionError) {
         throw new AggregateError(
           [renameError, inspectionError],
@@ -441,7 +465,7 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
       }
       if (!incumbentExists) throw renameError;
       try {
-        assertCompleteSharedBuild(sharedDir, key);
+        await assertCompleteSharedBuild(sharedDir, key);
       } catch (verificationError) {
         throw new AggregateError(
           [renameError, verificationError],
@@ -481,9 +505,9 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
   }
 }
 
-function sharedBuildDirectoryExists(sharedDir: string): boolean {
+async function sharedBuildDirectoryExists(sharedDir: string): Promise<boolean> {
   try {
-    const stat = fs.lstatSync(sharedDir);
+    const stat = await fs.promises.lstat(sharedDir);
     if (!stat.isDirectory() || stat.isSymbolicLink())
       throw new Error("Shared build publication destination is not a real directory");
     return true;
@@ -493,13 +517,28 @@ function sharedBuildDirectoryExists(sharedDir: string): boolean {
   }
 }
 
-function assertCompleteSharedBuild(sharedDir: string, key: string): void {
-  const build = readBuildDir(sharedDir, key, { verifyExecution: false });
+async function assertCompleteSharedBuild(sharedDir: string, key: string): Promise<void> {
+  const build = await readBuildDir(sharedDir, key, { verifyExecution: false });
   if (!build) throw new Error(`Shared build ${key} is incomplete or has a different build key`);
-  // readBuildDir checks the exact metadata key, canonical artifact paths, and
-  // payload lengths. Accessing the lazy payloads invokes the canonical hash
-  // verifier before an existing directory can win publication.
-  for (const artifact of build.artifacts) void artifact.content;
+  // Verify every payload before an existing directory wins publication.
+  await mapJoined(build.artifacts, (artifact) => readStoredArtifactBytes(build, artifact));
+}
+
+async function mapJoined<T, R>(items: readonly T[], work: (item: T) => Promise<R>): Promise<R[]> {
+  const results = await Promise.allSettled(items.map(work));
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : []
+  );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Multiple stored build artifact reads failed", {
+      cause: failures[0],
+    });
+  }
+  return results.map((result) => {
+    if (result.status !== "fulfilled") throw new Error("Unsettled stored artifact read");
+    return result.value;
+  });
 }
 
 // Shared builds are a reconstruction cache, not part of the durability commit
@@ -531,19 +570,15 @@ function scheduleSharedBuildPublication(key: string, sourceDir: string): void {
   });
 }
 
-function readArtifactContent(dir: string, entry: BuildArtifactManifestEntry): string {
-  const filePath = path.join(dir, entry.path);
-  return entry.encoding === "base64"
-    ? fs.readFileSync(filePath, "base64")
-    : fs.readFileSync(filePath, "utf-8");
-}
-
-/** Read and verify one artifact without blocking the workspace-server thread. */
-export async function readArtifactBytesAsync(
-  build: Pick<BuildResult, "dir">,
+/** Read and verify one stored artifact without blocking the workspace-server thread. */
+export async function readStoredArtifactBytes(
+  build: Pick<{ dir: string }, "dir">,
   entry: BuildArtifactManifestEntry
 ): Promise<Buffer> {
   const bytes = await fs.promises.readFile(artifactFilePath(build, entry));
+  if (bytes.byteLength !== entry.byteLength) {
+    throw new Error(`Build artifact length mismatch: ${entry.path}`);
+  }
   const digest = Buffer.from(await crypto.webcrypto.subtle.digest("SHA-256", bytes)).toString(
     "hex"
   );
@@ -551,6 +586,23 @@ export async function readArtifactBytesAsync(
     throw new Error(`Build artifact integrity mismatch: ${entry.path}`);
   }
   return bytes;
+}
+
+export async function readStoredArtifactContent(
+  build: Pick<StoredBuildResult, "dir">,
+  entry: BuildArtifactManifestEntry
+): Promise<string> {
+  const bytes = await readStoredArtifactBytes(build, entry);
+  return entry.encoding === "base64" ? bytes.toString("base64") : bytes.toString("utf8");
+}
+
+/** Materialize only at an existing wire boundary whose schema requires strings. */
+export async function materializeStoredBuild(build: StoredBuildResult): Promise<BuildResult> {
+  const artifacts = await mapJoined(build.artifacts, async (entry) => ({
+    ...entry,
+    content: await readStoredArtifactContent(build, entry),
+  }));
+  return { ...build, artifacts };
 }
 
 function artifactByteLength(entry: Pick<BuildArtifactInput, "content" | "encoding">): number {
@@ -593,25 +645,6 @@ function assertCanonicalArtifactManifestPaths(
     }
     seen.add(canonical);
   }
-}
-
-function lazyArtifactContent(
-  dir: string,
-  entry: BuildArtifactManifestEntry
-): BuildArtifactWithContent {
-  const artifact = { ...entry } as BuildArtifactWithContent;
-  Object.defineProperty(artifact, "content", {
-    enumerable: true,
-    configurable: false,
-    get() {
-      const content = readArtifactContent(dir, entry);
-      if (entry.integrity !== artifactIntegrity({ ...entry, content })) {
-        throw new Error(`Build artifact integrity mismatch: ${entry.path}`);
-      }
-      return content;
-    },
-  });
-  return artifact;
 }
 
 function integrityHex(integrity: string): string | null {
@@ -785,24 +818,29 @@ function verifiedExecutionIdentity(
   return expected;
 }
 
-export function has(key: string): boolean {
+export async function has(key: string): Promise<boolean> {
   // Cache presence means a complete, identity-verified manifest whose files
   // exist at their sealed lengths. Payload hashes are verified when consumed.
   // This keeps lazy artifacts off startup while rejecting partial cache trees.
-  return get(key) !== null;
+  return (await get(key)) !== null;
 }
 
-function readBuildDir(
+async function readBuildDir(
   dir: string,
   expectedBuildKey: string,
   options: { verifyExecution?: boolean } = {}
-): BuildResult | null {
+): Promise<StoredBuildResult | null> {
   const metadataPath = path.join(dir, "metadata.json");
 
-  if (!fs.existsSync(metadataPath)) return null;
+  try {
+    await fs.promises.access(metadataPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 
   try {
-    const rawMetadata = readBuildMetadata(dir);
+    const rawMetadata = parseStoredBuildMetadata(await fs.promises.readFile(metadataPath, "utf8"));
     if (
       !("sourceStateHash" in rawMetadata) ||
       (rawMetadata.sourceStateHash !== null && typeof rawMetadata.sourceStateHash !== "string") ||
@@ -830,12 +868,21 @@ function readBuildDir(
         !/^[0-9a-f]{64}$/u.test(rawMetadata.serviceAuthorityDigest))
     )
       return null;
-    const metadata: BuildMetadata = { ...rawMetadata, ...(authority ? { authority } : {}) };
+    const { executableModules: _modules, ...compactRawMetadata } = rawMetadata;
+    const metadata: BuildMetadata = {
+      ...compactRawMetadata,
+      ...(authority ? { authority } : {}),
+    };
     const manifestPath = path.join(dir, "artifacts.json");
-    if (!fs.existsSync(manifestPath)) return null;
+    try {
+      await fs.promises.access(manifestPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
     let manifestJson: unknown;
     try {
-      manifestJson = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+      manifestJson = JSON.parse(await fs.promises.readFile(manifestPath, "utf-8"));
     } catch (error) {
       if (error instanceof SyntaxError) {
         invalidStoredBuildMetadata("Stored build artifact manifest is not valid JSON", error);
@@ -852,27 +899,29 @@ function readBuildDir(
     } catch (error) {
       invalidStoredBuildMetadata("Stored build artifact paths are invalid", error);
     }
-    const artifacts = storedManifest.map((entry) => {
-      const artifactPath = path.join(dir, entry.path);
-      let stat: fs.Stats;
-      try {
-        stat = fs.statSync(artifactPath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          invalidStoredBuildMetadata(`Build artifact is missing: ${entry.path}`, error);
+    const artifacts = await Promise.all(
+      storedManifest.map(async (entry) => {
+        const artifactPath = path.join(dir, entry.path);
+        let stat: fs.Stats;
+        try {
+          stat = await fs.promises.stat(artifactPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            invalidStoredBuildMetadata(`Build artifact is missing: ${entry.path}`, error);
+          }
+          throw error;
         }
-        throw error;
-      }
-      if (
-        !stat.isFile() ||
-        !Number.isSafeInteger(entry.byteLength) ||
-        (entry.byteLength ?? -1) < 0 ||
-        stat.size !== entry.byteLength
-      ) {
-        invalidStoredBuildMetadata(`Build artifact size mismatch: ${entry.path}`);
-      }
-      return lazyArtifactContent(dir, entry);
-    });
+        if (
+          !stat.isFile() ||
+          !Number.isSafeInteger(entry.byteLength) ||
+          (entry.byteLength ?? -1) < 0 ||
+          stat.size !== entry.byteLength
+        ) {
+          invalidStoredBuildMetadata(`Build artifact size mismatch: ${entry.path}`);
+        }
+        return entry;
+      })
+    );
     if (options.verifyExecution !== false) {
       try {
         verifiedExecutionIdentity(metadata, storedManifest);
@@ -902,9 +951,11 @@ const reportedSharedBuildHits = new ByteBudgetCache<string, true>(
   1024 * 1024,
   (_, key) => key.length * 2 + 128
 );
-export function buildDescriptorBytes(
-  build: Pick<BuildResult, "dir" | "metadata" | "artifacts">
-): number {
+export function buildDescriptorBytes(build: {
+  dir: string;
+  metadata: BuildMetadata;
+  artifacts: readonly Pick<BuildArtifactManifestEntry, "path" | "contentType" | "integrity">[];
+}): number {
   return (
     build.dir.length * 2 +
     JSON.stringify(build.metadata).length * 2 +
@@ -919,7 +970,7 @@ export function buildDescriptorBytes(
   );
 }
 
-const verifiedLocalBuilds = new ByteBudgetCache<string, BuildResult>(
+const verifiedLocalBuilds = new ByteBudgetCache<string, StoredBuildResult>(
   32 * 1024 * 1024,
   buildDescriptorBytes
 );
@@ -928,7 +979,7 @@ function localBuildCacheId(dir: string): string {
   return path.resolve(dir);
 }
 
-function rememberVerifiedLocalBuild(build: BuildResult): BuildResult {
+function rememberVerifiedLocalBuild(build: StoredBuildResult): StoredBuildResult {
   verifiedLocalBuilds.set(localBuildCacheId(build.dir), build);
   for (const style of build.metadata.sharedStyles ?? [])
     sharedStyleOwners.set(style.digest, build.buildKey);
@@ -939,13 +990,20 @@ function forgetVerifiedLocalBuild(dir: string): void {
   verifiedLocalBuilds.delete(localBuildCacheId(dir));
 }
 
-function readVerifiedLocalBuild(key: string): BuildResult | null {
+async function readVerifiedLocalBuild(key: string): Promise<StoredBuildResult | null> {
   const dir = getBuildDir(key);
   const cacheId = localBuildCacheId(dir);
   const cached = verifiedLocalBuilds.get(cacheId);
-  if (cached && fs.existsSync(path.join(dir, "metadata.json"))) return cached;
+  if (cached) {
+    try {
+      await fs.promises.access(path.join(dir, "metadata.json"));
+      return cached;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
   if (cached) forgetVerifiedLocalBuild(dir);
-  const build = readBuildDir(dir, key);
+  const build = await readBuildDir(dir, key);
   return build ? rememberVerifiedLocalBuild(build) : null;
 }
 
@@ -954,17 +1012,17 @@ const sharedStyleOwners = new ByteBudgetCache<string, string>(
   (key, digest) => 2 * (key.length + digest.length) + 128
 );
 
-export function findSharedStyleBuild(digest: string): BuildResult | null {
+export async function findSharedStyleBuild(digest: string): Promise<StoredBuildResult | null> {
   if (!/^[0-9a-f]{64}$/u.test(digest)) return null;
   const known = sharedStyleOwners.get(digest);
   if (known) {
-    const build = readVerifiedLocalBuild(known);
+    const build = await readVerifiedLocalBuild(known);
     if (build?.metadata.sharedStyles?.some((style) => style.digest === digest)) return build;
     sharedStyleOwners.delete(digest);
   }
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(getBuildsDir(), { withFileTypes: true });
+    entries = await fs.promises.readdir(getBuildsDir(), { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -973,7 +1031,9 @@ export function findSharedStyleBuild(digest: string): BuildResult | null {
     if (!entry.isDirectory() || !/^[0-9a-f]{64}$/u.test(entry.name)) continue;
     let metadata: BuildMetadata;
     try {
-      metadata = readBuildMetadata(getBuildDir(entry.name));
+      metadata = parseStoredBuildMetadata(
+        await fs.promises.readFile(path.join(getBuildDir(entry.name), "metadata.json"), "utf8")
+      );
     } catch (error) {
       if (
         (error as NodeJS.ErrnoException).code === "ENOENT" ||
@@ -983,7 +1043,7 @@ export function findSharedStyleBuild(digest: string): BuildResult | null {
       throw error;
     }
     if (!metadata.sharedStyles?.some((style) => style.digest === digest)) continue;
-    const build = readVerifiedLocalBuild(entry.name);
+    const build = await readVerifiedLocalBuild(entry.name);
     if (build) {
       sharedStyleOwners.set(digest, entry.name);
       return build;
@@ -993,17 +1053,22 @@ export function findSharedStyleBuild(digest: string): BuildResult | null {
 }
 
 /**
- * Verify one workspace-owned build without publishing it to, or materializing
- * it from, the shared reconstruction cache. Diagnostics and retention root
- * snapshots must not turn a read into new local ownership.
+ * Resolve only a descriptor whose metadata was already verified by this
+ * process. The publication journal uses this metadata-only lookup while its
+ * SQLite write transaction is held; it must never perform filesystem I/O.
  */
-export function peekLocal(key: string): BuildResult | null {
+export function peekLocal(key: string): StoredBuildResult | null {
+  return verifiedLocalBuilds.get(localBuildCacheId(getBuildDir(key))) ?? null;
+}
+
+/** Read and verify a workspace-owned build without claiming shared-cache ownership. */
+export async function readLocal(key: string): Promise<StoredBuildResult | null> {
   return readVerifiedLocalBuild(key);
 }
 
-export function get(key: string): BuildResult | null {
+export async function get(key: string): Promise<StoredBuildResult | null> {
   const localDir = getBuildDir(key);
-  const local = readVerifiedLocalBuild(key);
+  const local = await readVerifiedLocalBuild(key);
   if (local) {
     scheduleSharedBuildPublication(key, localDir);
     return local;
@@ -1021,7 +1086,7 @@ export function configureReleaseBuilds(appRoot: string): void {
 /** Compiler facts belong to immutable artifacts, before workspace execution
  * provenance is sealed. Reading them must not hydrate a build or recursively
  * resolve the service contracts needed to seal that same build. */
-export function compilationMetadata(key: string): BuildMetadata | null {
+export async function compilationMetadata(key: string): Promise<BuildMetadata | null> {
   const directories = [
     getBuildDir(key),
     ...(releaseBuildRoot ? [path.join(releaseBuildRoot, key)] : []),
@@ -1030,7 +1095,7 @@ export function compilationMetadata(key: string): BuildMetadata | null {
       : []),
   ];
   for (const directory of directories) {
-    const build = readBuildDir(directory, key, { verifyExecution: false });
+    const build = await readBuildDir(directory, key, { verifyExecution: false });
     if (build) return build.metadata;
   }
   return null;
@@ -1040,9 +1105,9 @@ export function compilationMetadata(key: string): BuildMetadata | null {
 export async function getOrHydrate(
   key: string,
   sourceStateHash?: string
-): Promise<BuildResult | null> {
+): Promise<StoredBuildResult | null> {
   const localDir = getBuildDir(key);
-  const local = get(key);
+  const local = await get(key);
   if (local) return local;
 
   if (isRetiredBuildKey(key)) return null;
@@ -1063,7 +1128,7 @@ export async function getOrHydrate(
       if (isRetiredBuildKey(key)) return null;
       // The shared record's execution identity belongs to its source workspace;
       // it is deliberately verified only after its provenance is rebound below.
-      const shared = readBuildDir(sharedDir, key, { verifyExecution: false });
+      const shared = await readBuildDir(sharedDir, key, { verifyExecution: false });
       if (!shared) continue;
       // Artifact bytes are globally shareable, but workspace build metadata is
       // not. In particular, sourceState and execution commit to the workspace
@@ -1098,27 +1163,26 @@ export async function getOrHydrate(
         try {
           await fs.promises.rename(tmpDir, localDir);
         } catch (error) {
-          if (!fs.existsSync(localDir)) throw error;
+          try {
+            await fs.promises.access(localDir);
+          } catch (inspectionError) {
+            if ((inspectionError as NodeJS.ErrnoException).code === "ENOENT") throw error;
+            throw new AggregateError(
+              [error, inspectionError],
+              `Could not inspect local build ${key}`,
+              { cause: error }
+            );
+          }
           promoted = false;
           await fs.promises.rm(tmpDir, { recursive: true, force: true });
         }
         if (promoted) {
-          const materialized: BuildResult = {
+          const materialized: StoredBuildResult = {
             dir: localDir,
             buildKey: key,
             sourceStateHash: sharedMetadata.sourceStateHash,
             metadata: sharedMetadata,
-            artifacts: shared.artifacts.map((artifact) =>
-              lazyArtifactContent(localDir, {
-                path: artifact.path,
-                role: artifact.role,
-                contentType: artifact.contentType,
-                encoding: artifact.encoding,
-                byteLength: artifact.byteLength,
-                ...(artifact.platform ? { platform: artifact.platform } : {}),
-                ...(artifact.integrity ? { integrity: artifact.integrity } : {}),
-              })
-            ),
+            artifacts: shared.artifacts,
           };
           rememberVerifiedLocalBuild(materialized);
         }
@@ -1130,7 +1194,7 @@ export async function getOrHydrate(
         }
         throw error;
       }
-      const materialized = readVerifiedLocalBuild(key);
+      const materialized = await readVerifiedLocalBuild(key);
       if (materialized && !reportedSharedBuildHits.has(key)) {
         reportedSharedBuildHits.set(key, true);
         logVerbose(
@@ -1157,13 +1221,16 @@ export async function getOrHydrate(
 
 /** Resolve one retained execution of reusable artifact bytes without rebinding
  * or silently upgrading it to the build key's latest semantic source state. */
-export function getByExecution(key: string, executionDigest: string): BuildResult | null {
-  const current = get(key);
+export async function getByExecution(
+  key: string,
+  executionDigest: string
+): Promise<StoredBuildResult | null> {
+  const current = await get(key);
   if (!current) return null;
   if (current.metadata.execution?.executionDigest === executionDigest) return current;
   try {
     const stored = JSON.parse(
-      fs.readFileSync(executionMetadataPath(current.dir, executionDigest), "utf8")
+      await fs.promises.readFile(executionMetadataPath(current.dir, executionDigest), "utf8")
     ) as StoredExecutionVariant;
     const variant = retainedExecutionVariant(stored, key, executionDigest);
     if (!variant) return null;
@@ -1214,9 +1281,9 @@ function retainedExecutionVariant(
  * the workspace-owned metadata before the result can be retained or executed.
  */
 export async function rebindSourceState(
-  build: BuildResult,
+  build: StoredBuildResult,
   sourceStateHash: string
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   if (build.sourceStateHash === sourceStateHash) return build;
   const sourceState = activeExecutionIdentityContext?.executionStateForContent(sourceStateHash);
   if (!sourceState) {
@@ -1255,9 +1322,9 @@ export async function rebindSourceState(
 }
 
 export function primaryArtifact(
-  build: Pick<BuildResult, "artifacts">,
+  build: Pick<BuildResult | StoredBuildResult, "artifacts">,
   opts: { platform?: string } = {}
-): BuildArtifactWithContent | null {
+): BuildArtifactWithContent | StoredBuildArtifact | null {
   return (
     build.artifacts.find(
       (entry) =>
@@ -1267,10 +1334,10 @@ export function primaryArtifact(
   );
 }
 
-export function primaryTextArtifactContent(
-  build: Pick<BuildResult, "artifacts" | "metadata">,
+export async function primaryTextArtifactContent(
+  build: Pick<BuildResult | StoredBuildResult, "artifacts" | "metadata" | "dir">,
   opts: { platform?: string } = {}
-): string {
+): Promise<string> {
   const artifact = primaryArtifact(build, opts);
   if (!artifact) {
     throw new Error(
@@ -1282,11 +1349,12 @@ export function primaryTextArtifactContent(
       `Build ${build.metadata.name} primary artifact ${artifact.path} is not UTF-8 text`
     );
   }
-  return artifact.content;
+  if (typeof artifact.content === "string") return artifact.content;
+  return readStoredArtifactContent(build, artifact);
 }
 
 export function artifactFilePath(
-  build: Pick<BuildResult, "dir">,
+  build: Pick<{ dir: string }, "dir">,
   artifact: Pick<BuildArtifactManifestEntry, "path">
 ): string {
   if (path.isAbsolute(artifact.path) || artifact.path.split(/[\\/]/).includes("..")) {
@@ -1296,7 +1364,7 @@ export function artifactFilePath(
 }
 
 export function primaryArtifactFilePath(
-  build: Pick<BuildResult, "dir" | "artifacts" | "metadata">,
+  build: Pick<BuildResult | StoredBuildResult, "dir" | "artifacts" | "metadata">,
   opts: { platform?: string } = {}
 ): string {
   const artifact = primaryArtifact(build, opts);
@@ -1308,11 +1376,11 @@ export function primaryArtifactFilePath(
   return artifactFilePath(build, artifact);
 }
 
-export async function put(
+export async function putStored(
   key: string,
   artifacts: BuildArtifacts,
   metadata: BuildMetadata
-): Promise<BuildResult> {
+): Promise<StoredBuildResult> {
   if (metadata.execution !== undefined) {
     throw new Error("Build execution identity is derived by the store and cannot be supplied");
   }
@@ -1386,7 +1454,7 @@ export async function put(
       // Another build may have won the race. Accept it only after the same
       // manifest + execution-identity verification used by normal reads.
       if (fs.existsSync(metadataPath)) {
-        const winner = get(key);
+        const winner = await get(key);
         if (winner) {
           try {
             await fs.promises.rm(tmpDir, { recursive: true, force: true });
@@ -1420,11 +1488,20 @@ export async function put(
     }
   }
 
-  const stored = readBuildDir(dir, key);
+  const stored = await readBuildDir(dir, key);
   if (!stored) throw new Error(`Published build ${key} failed verification`);
   clearRetiredBuildKey(key);
   scheduleSharedBuildPublication(key, dir);
   return stored;
+}
+
+/** Materialize a stored build only for callers whose wire contract includes payload strings. */
+export async function put(
+  key: string,
+  artifacts: BuildArtifacts,
+  metadata: BuildMetadata
+): Promise<BuildResult> {
+  return materializeStoredBuild(await putStored(key, artifacts, metadata));
 }
 
 let activeExecutionIdentityContext: {
@@ -1545,8 +1622,10 @@ function clearRetiredBuildKey(key: string): void {
   }
 }
 
-function sourceRootsForStoredBuild(key: string): ExecutionSourceContentRoot[] | null {
-  const build = readBuildDir(getBuildDir(key), key);
+async function sourceRootsForStoredBuild(
+  key: string
+): Promise<ExecutionSourceContentRoot[] | null> {
+  const build = await readBuildDir(getBuildDir(key), key);
   if (
     !build?.metadata.execution ||
     build.metadata.execution.sourceState.kind !== "workspace" ||
@@ -1631,7 +1710,7 @@ export async function collectRetention(input: {
   }
   for (const key of stored) {
     if (protectedKeys.has(key) || byKey.has(key)) continue;
-    const sourceRoots = sourceRootsForStoredBuild(key);
+    const sourceRoots = await sourceRootsForStoredBuild(key);
     if (sourceRoots) {
       newSourceRoots.set(key, sourceRoots);
     } else {

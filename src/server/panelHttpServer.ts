@@ -18,10 +18,10 @@ import { CDP_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./ingressLimits.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type {
   BuildArtifactManifestEntry,
-  BuildResult,
   BuildMetadata,
+  StoredBuildResult,
 } from "./buildV2/buildStore.js";
-import { artifactFilePath, readArtifactBytesAsync } from "./buildV2/buildStore.js";
+import { artifactFilePath, readStoredArtifactBytes } from "./buildV2/buildStore.js";
 import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import type { CdpBridge } from "./cdpBridge.js";
 import { assertPresent } from "../lintHelpers";
@@ -79,7 +79,7 @@ export interface PanelHttpCallbacks {
   onBuildComplete?(source: string, error?: string): void;
 
   /** Build trigger */
-  getBuild(source: string, ref?: string): Promise<BuildResult>;
+  getBuild(source: string, ref?: string): Promise<StoredBuildResult>;
 
   /** Declared icon bytes from current or explicitly selected workspace content. */
   getUnitIcon(
@@ -89,15 +89,15 @@ export interface PanelHttpCallbacks {
   ): Promise<ResolvedUnitIcon | null>;
 
   /** Resolve an already-built immutable artifact selected by runtime activation. */
-  getBuildByKey(buildKey: string): BuildResult | null;
-  findSharedStyleBuild(digest: string): BuildResult | null;
+  getBuildByKey(buildKey: string): Promise<StoredBuildResult | null>;
+  findSharedStyleBuild(digest: string): Promise<StoredBuildResult | null>;
 }
 
 /** Build output cached by source path (shared across panels) */
 interface CachedBuild {
   dir: string;
-  artifacts: Array<BuildArtifactManifestEntry & { content: string }>;
-  htmlArtifact: BuildArtifactManifestEntry & { content: string };
+  artifacts: BuildArtifactManifestEntry[];
+  htmlArtifact: BuildArtifactManifestEntry;
   metadata: BuildMetadata;
   revision: number;
 }
@@ -213,7 +213,7 @@ export class PanelHttpServer {
     string,
     {
       build: CachedBuild;
-      artifact: BuildArtifactManifestEntry & { content: string };
+      artifact: BuildArtifactManifestEntry;
     }
   >(32 * 1024 * 1024, ({ build }) => buildDescriptorBytes(build));
 
@@ -313,7 +313,7 @@ export class PanelHttpServer {
   /**
    * Store a build result. Keyed by source/ref.
    */
-  storeBuild(source: string, buildResult: BuildResult, ref?: string): void {
+  storeBuild(source: string, buildResult: StoredBuildResult, ref?: string): void {
     const htmlArtifact = buildResult.artifacts.find((artifact) => artifact.role === "html");
     const primaryArtifact = buildResult.artifacts.find((artifact) => artifact.role === "primary");
     if (!htmlArtifact || !primaryArtifact) {
@@ -375,7 +375,7 @@ export class PanelHttpServer {
   primeBuild(
     source: string,
     ref: string | undefined,
-    getBuild: () => Promise<BuildResult>
+    getBuild: () => Promise<StoredBuildResult>
   ): Promise<void> {
     return this.ensureBuild(source, ref, getBuild) ?? Promise.resolve();
   }
@@ -445,7 +445,7 @@ export class PanelHttpServer {
       const digest = assertPresent(sharedStyleMatch[1]);
       let shared = this.sharedStyleAssets.get(digest);
       if (!shared) {
-        const result = this.callbacks?.findSharedStyleBuild(digest);
+        const result = await this.callbacks?.findSharedStyleBuild(digest);
         if (result) {
           const build = this.cachedBuild(result);
           this.registerSharedStyles(build);
@@ -538,7 +538,7 @@ export class PanelHttpServer {
     if (activatedArtifactMatch) {
       const buildKey = assertPresent(activatedArtifactMatch[1]);
       const resource = assertPresent(activatedArtifactMatch[2]);
-      const build = this.resolveActivatedBuild(res, buildKey);
+      const build = await this.resolveActivatedBuild(res, buildKey);
       if (!build) return;
       // Prefetch surfaces live INSIDE the build-pinned namespace on purpose:
       // that path is already reachable from the panel origin and already
@@ -688,7 +688,7 @@ export class PanelHttpServer {
   private ensureBuild(
     source: string,
     ref?: string,
-    getBuild?: () => Promise<BuildResult>
+    getBuild?: () => Promise<StoredBuildResult>
   ): Promise<void> | null {
     const flightKey = this.buildCacheKey(source, ref);
     if (this.servingCache.has(flightKey)) return Promise.resolve();
@@ -786,7 +786,7 @@ export class PanelHttpServer {
       return;
     }
 
-    const build = this.resolveActivatedBuild(res, buildKey);
+    const build = await this.resolveActivatedBuild(res, buildKey);
     if (!build) return;
 
     if (build.metadata.kind !== "panel" || build.metadata.sourcePath !== source) {
@@ -797,7 +797,7 @@ export class PanelHttpServer {
     await this.serveActivatedPanelResource(req, res, build, resource, buildKey);
   }
 
-  private cachedBuild(result: BuildResult): CachedBuild {
+  private cachedBuild(result: StoredBuildResult): CachedBuild {
     const htmlArtifact = result.artifacts.find((artifact) => artifact.role === "html");
     const primaryArtifact = result.artifacts.find((artifact) => artifact.role === "primary");
     if (!htmlArtifact || !primaryArtifact)
@@ -811,13 +811,13 @@ export class PanelHttpServer {
     };
   }
 
-  private resolveActivatedBuild(
+  private async resolveActivatedBuild(
     res: import("http").ServerResponse,
     buildKey: string
-  ): CachedBuild | null {
+  ): Promise<CachedBuild | null> {
     let build = this.activatedBuildCache.get(buildKey);
     if (!build) {
-      const result = this.callbacks?.getBuildByKey(buildKey) ?? null;
+      const result = (await this.callbacks?.getBuildByKey(buildKey)) ?? null;
       if (!result) {
         res.writeHead(410, { "Content-Type": "text/plain" });
         res.end(`Activated panel build is unavailable: ${buildKey}`);
@@ -1179,7 +1179,7 @@ export class PanelHttpServer {
   private resolvePanelArtifact(
     build: CachedBuild,
     resource: string
-  ): (BuildArtifactManifestEntry & { content: string }) | null {
+  ): BuildArtifactManifestEntry | null {
     if (resource === "/" || resource === "/index.html") return build.htmlArtifact;
     const normalized = resource.replace(/^\/+/, "");
     return build.artifacts.find((artifact) => artifact.path === normalized) ?? null;
@@ -1229,7 +1229,7 @@ export class PanelHttpServer {
     req: import("http").IncomingMessage,
     res: import("http").ServerResponse,
     build: CachedBuild,
-    artifact: BuildArtifactManifestEntry & { content: string },
+    artifact: BuildArtifactManifestEntry,
     immutableDocument = false,
     contentOverride?: string | Buffer
   ): Promise<void> {
@@ -1272,7 +1272,7 @@ export class PanelHttpServer {
     artifact: BuildArtifactManifestEntry
   ): Promise<Buffer> {
     const key = `identity:${build.dir}:${artifact.path}:${artifact.integrity ?? ""}`;
-    return this.artifactBodies.get(key, () => readArtifactBytesAsync(build, artifact));
+    return this.artifactBodies.get(key, () => readStoredArtifactBytes(build, artifact));
   }
 
   private async readArtifactText(
