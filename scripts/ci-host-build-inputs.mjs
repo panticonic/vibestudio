@@ -17,6 +17,10 @@ import {
   INFRASTRUCTURE_CACHE_PATH,
   inspectInfrastructurePackageBuilds,
 } from "./infrastructure-package-cache.mjs";
+import {
+  assertNativeIsolationArtifacts,
+  nativeIsolationTarget,
+} from "./native-isolation-artifacts.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const receiptPath = path.join(repoRoot, ".cache/darwin-host-inputs.json");
@@ -153,6 +157,9 @@ export function currentGeneration(kind, mode, cwd = repoRoot) {
 function main() {
   const { action, sourceSHA, modes, templateRoot } = parseArguments(process.argv.slice(2));
   assertSourceCheckout(sourceSHA);
+  // Packaging consumes the original native matrix input as well as the staged
+  // runtime. Admit a transport only when both producer and consumer have it.
+  assertNativeIsolationArtifacts(repoRoot, undefined, [nativeIsolationTarget("darwin", "arm64")]);
   const generations = Object.fromEntries(
     Object.entries(modes).map(([kind, mode]) => [kind, currentGeneration(kind, mode)])
   );

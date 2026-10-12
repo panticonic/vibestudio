@@ -86,7 +86,7 @@ jobs:
           shopt -s nullglob
           package_dists=(packages/*/dist)
           test "${#package_dists[@]}" -gt 0
-          tar -cf darwin-source-inputs.tar --exclude=dist/host-generations/.leases --exclude=dist/host-generations/.lock --exclude='dist/host-generations/.garbage-*' --exclude='dist/host-generations/.staging-*' .cache/darwin-host-inputs.json .cache/vibestudio-infrastructure-build.json .cache/ci-workspace-release .cache/template-checkouts dist "${package_dists[@]}"
+          tar -cf darwin-source-inputs.tar --exclude=dist/host-generations/.leases --exclude=dist/host-generations/.lock --exclude='dist/host-generations/.garbage-*' --exclude='dist/host-generations/.staging-*' .cache/darwin-host-inputs.json .cache/vibestudio-infrastructure-build.json .cache/ci-workspace-release .cache/template-checkouts dist native/isolation/artifacts/native-isolation-darwin-arm64 "${package_dists[@]}"
 
       - name: Upload exact development source inputs
         if: ${{ !cancelled() && steps.development-inputs.outcome == 'success' }}

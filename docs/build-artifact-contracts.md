@@ -150,7 +150,10 @@ Darwin packaging and source integration use two host modes with distinct
 fingerprints. One macOS-14 production-host job installs the exact native and
 observer inputs, builds the production desktop generation, runs its native
 acceptance, and uploads immutable generation records and payloads, infrastructure
-package outputs and their cache receipt, and a source-SHA receipt. Transient
+package outputs and their cache receipt, the original Darwin native isolation
+input required by the packaging hook, and a source-SHA receipt. Transport
+admission verifies that native input through the canonical matrix validator;
+the staged runtime alone does not satisfy the packager's input contract. Transient
 generation locks, leases, staging, and garbage directories are excluded. The
 version-2 generation pointer identifies an immutable directory; its version is
 independent of the version-1 build fingerprint receipt inside that directory.
@@ -170,6 +173,16 @@ runtimes. Ordinary startup still validates and reuses the prepared release
 against the current host and template pins. Installed-app acceptance remains an
 independent consumer of the packaged candidate and does not wait for source
 preparation.
+
+Public Iroh Vitest entrypoints prepare their development desktop generation
+before shared test setup reads it. Android smoke owns a source-server generation,
+not a desktop generation: its ordinary CLI prepares the host and complete
+workspace release before the bounded server-readiness and interaction phases.
+The source server validates and reuses the completed release through the normal
+producer. Device installation and preparation retain owned process lifetimes;
+cleanup joins them before retiring the generation lease or scratch. The nightly
+workflow invokes those public entrypoints instead of substituting a production
+build or bypassing their prerequisites with a raw test command.
 
 The npm preflight retains its canonical `npm pack` archive after staging,
 dry-run, and fresh-install smoke checks succeed. Its artifact name includes the

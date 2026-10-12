@@ -9,7 +9,7 @@ import {
 } from "@vibestudio/rpc";
 import { joinChildProcess } from "./lib/join-child-process.mjs";
 
-function isCancellationOnly(error, active = new Set()) {
+export function isCancellationOnly(error, active = new Set()) {
   if (!error || typeof error !== "object") return false;
   if (active.has(error)) return false;
   active.add(error);

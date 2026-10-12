@@ -82,13 +82,10 @@ jobs:
       - name: Acquire complete template source set
         run: pnpm dev:templates setup "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
 
-      - name: Build server artifacts
-        run: pnpm build
-
       - name: Android Iroh pairing, approvals, panel lifecycle, and recovery
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 35
           arch: x86_64
           profile: pixel_6
-          script: node scripts/cli/mobile-smoke.mjs --platform android
+          script: pnpm test:iroh-mobile-e2e

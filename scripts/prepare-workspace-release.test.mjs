@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { serializeRpcFailure } from "@vibestudio/rpc";
-import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
+import { isCancellationOnly, prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 
 async function withProducer(
   code,
@@ -270,6 +270,18 @@ void test("an ECANCELLED aggregate does not hide an independent cleanup failure"
       });
     }
   );
+});
+
+void test("cancellation classification rejects aggregates with independent failures", () => {
+  const cancellation = Object.assign(new Error("cancelled"), { code: "ECANCELLED" });
+  const independent = new Error("producer failed");
+  const mixed = new AggregateError([cancellation, independent], "joined failure", {
+    cause: cancellation,
+  });
+  assert.equal(isCancellationOnly(cancellation), true);
+  assert.equal(isCancellationOnly(new AggregateError([cancellation], "cancelled")), true);
+  assert.equal(isCancellationOnly(mixed), false);
+  assert.equal(isCancellationOnly(independent), false);
 });
 
 void test("an ownership failure caused by cancellation is not cancellation-only", async () => {

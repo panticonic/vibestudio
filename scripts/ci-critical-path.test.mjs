@@ -549,6 +549,11 @@ test("Darwin production and development host inputs are immutable producer artif
     hostSteps[hostIndex("Upload production host inputs")].with.name,
     "vibestudio-darwin-host-production-${{ github.sha }}"
   );
+  assert.match(
+    hostSteps[hostIndex("Verify and archive production host inputs")].run,
+    /tar -cf .* native\/isolation\/artifacts\/native-isolation-darwin-arm64 /u,
+    "host transport must include the original native input consumed by electron-builder"
+  );
 
   const reusable = await readWorkflow("application-candidate.yml");
   const steps = reusable.jobs.candidate.steps;
@@ -593,6 +598,11 @@ test("Darwin production and development host inputs are immutable producer artif
 
   const sourceProducer = await readWorkflow("darwin-host-inputs.yml");
   const sourceSteps = sourceProducer.jobs.prepare.steps;
+  assert.match(
+    sourceSteps.find((step) => step.name === "Verify and archive portable development inputs").run,
+    /tar -cf .* native\/isolation\/artifacts\/native-isolation-darwin-arm64 /u,
+    "development transport must preserve the complete native input closure"
+  );
   const sourceIndex = (name) => sourceSteps.findIndex((step) => step.name === name);
   assert.deepEqual(sourceProducer.on.workflow_call.inputs, {
     runner: { type: "string", required: true },

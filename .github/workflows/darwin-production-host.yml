@@ -91,7 +91,7 @@ jobs:
           shopt -s nullglob
           package_dists=(packages/*/dist)
           test "${#package_dists[@]}" -gt 0
-          tar -cf darwin-host-inputs.tar --exclude=dist/host-generations/.leases --exclude=dist/host-generations/.lock --exclude='dist/host-generations/.garbage-*' --exclude='dist/host-generations/.staging-*' .cache/darwin-host-inputs.json .cache/vibestudio-infrastructure-build.json dist "${package_dists[@]}"
+          tar -cf darwin-host-inputs.tar --exclude=dist/host-generations/.leases --exclude=dist/host-generations/.lock --exclude='dist/host-generations/.garbage-*' --exclude='dist/host-generations/.staging-*' .cache/darwin-host-inputs.json .cache/vibestudio-infrastructure-build.json dist native/isolation/artifacts/native-isolation-darwin-arm64 "${package_dists[@]}"
 
       - name: Upload production host inputs
         if: ${{ !cancelled() && steps.host-inputs.outcome == 'success' }}

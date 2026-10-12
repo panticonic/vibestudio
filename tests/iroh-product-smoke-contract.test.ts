@@ -67,5 +67,24 @@ describe("Iroh product E2E entry points", () => {
     expect(mobile).toContain("managedPanelDeadlineMs");
     expect(mobile).toContain("must not recreate the still-live WebView");
     expect(source("apps/mobile/index.js")).toContain("embedded-pairing-failed");
+
+    const installIndex = mobile.indexOf("await runMobileInstall(options, lifetime)");
+    const templatesIndex = mobile.indexOf("await resolveDevelopmentTemplates({");
+    const sourceBuildIndex = mobile.indexOf('"--source-server-prereqs"');
+    const workspaceReleaseIndex = mobile.indexOf("workspacePreparation = prepareWorkspaceRelease({");
+    const workspaceReleaseJoinIndex = mobile.indexOf("await workspacePreparation.completed;");
+    const serverBudgetIndex = mobile.indexOf(
+      "const serverReadyDeadlineMs = Date.now() + options.timeoutMs"
+    );
+    expect(installIndex).toBeGreaterThan(0);
+    expect(templatesIndex).toBeGreaterThan(installIndex);
+    expect(sourceBuildIndex).toBeGreaterThan(templatesIndex);
+    expect(workspaceReleaseIndex).toBeGreaterThan(sourceBuildIndex);
+    expect(workspaceReleaseJoinIndex).toBeGreaterThan(workspaceReleaseIndex);
+    expect(serverBudgetIndex).toBeGreaterThan(workspaceReleaseJoinIndex);
+    expect(mobile).not.toContain("Math.max(1_000, deadlineMs - Date.now())");
+    expect(mobile).toContain("const child = spawnManaged(lifetime.acquire, command, args, options);");
+    expect(mobile).toContain("await runOwnedCommand(lifetime, process.execPath, args");
+    expect(mobile).toContain("releaseHostBuildGeneration(hostGenerationRoot)");
   });
 });
