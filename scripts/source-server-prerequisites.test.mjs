@@ -1,0 +1,81 @@
+import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { test } from "node:test";
+import { parse } from "@babel/parser";
+import { SOURCE_SERVER_PREREQUISITE_ARTIFACTS } from "./server-runtime-artifacts.mjs";
+import { copySqlJsRuntimeAsset } from "./lib/sql-js-runtime-asset.mjs";
+
+const buildSource = fs.readFileSync(new URL("../build.mjs", import.meta.url), "utf8");
+const buildAst = parse(buildSource, { sourceType: "module" });
+
+function functionCalls(name) {
+  const declaration = buildAst.program.body.find(
+    (node) => node.type === "FunctionDeclaration" && node.id?.name === name
+  );
+  assert.ok(declaration, `Expected function declaration ${name}`);
+  const calls = [];
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "CallExpression" && node.callee.type === "Identifier") {
+      calls.push(node.callee.name);
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) child.forEach(visit);
+      else visit(child);
+    }
+  };
+  visit(declaration.body);
+  return calls;
+}
+
+test("the SQL.js runtime payload is part of source host prerequisites", () => {
+  assert.ok(SOURCE_SERVER_PREREQUISITE_ARTIFACTS.includes("dist/sql-wasm.wasm"));
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "source-host-assets-"));
+  try {
+    const dist = path.join(root, "dist");
+    fs.mkdirSync(dist);
+    copySqlJsRuntimeAsset(dist);
+
+    const require = createRequire(import.meta.url);
+    assert.deepEqual(
+      fs.readFileSync(path.join(dist, "sql-wasm.wasm")),
+      fs.readFileSync(require.resolve("sql.js/dist/sql-wasm.wasm"))
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("both host producers stage and validate payloads before stamping their completion receipt", () => {
+  const sourceCalls = functionCalls("buildSourceServerPrerequisites");
+  assert.ok(
+    sourceCalls.indexOf("copySqlJsRuntimeAsset") <
+      sourceCalls.indexOf("assertHostBuildPayloadComplete")
+  );
+  assert.ok(
+    sourceCalls.indexOf("assertHostBuildPayloadComplete") <
+      sourceCalls.lastIndexOf("writeHostBuildFingerprint")
+  );
+  assert.ok(
+    sourceCalls.lastIndexOf("writeHostBuildFingerprint") <
+      sourceCalls.lastIndexOf("publishHostBuildGeneration")
+  );
+
+  const desktopCalls = functionCalls("build");
+  assert.ok(
+    desktopCalls.indexOf("copyAssets") < desktopCalls.indexOf("assertHostBuildPayloadComplete")
+  );
+  assert.ok(
+    desktopCalls.indexOf("assertHostBuildPayloadComplete") <
+      desktopCalls.lastIndexOf("writeHostBuildFingerprint")
+  );
+  assert.ok(
+    desktopCalls.lastIndexOf("writeHostBuildFingerprint") <
+      desktopCalls.lastIndexOf("publishHostBuildGeneration")
+  );
+  assert.ok(functionCalls("copyAssets").includes("copySqlJsRuntimeAsset"));
+});

@@ -78,7 +78,7 @@ jobs:
         run: pnpm check:workflows
 
       - name: Check acceptance and native preparation harnesses
-        run: node --test scripts/lib/npm-runtime-script-closure.test.mjs scripts/packaged-isolation-smoke.test.mjs scripts/native-host-dependencies.test.mjs scripts/node-runtime-artifacts.test.mjs scripts/macos-test-keychain.test.mjs scripts/branded-electron.test.mjs apps/mobile/metro.config.test.cjs
+        run: node --test scripts/source-server-prerequisites.test.mjs scripts/host-build-generations.test.mjs scripts/host-build-fingerprint.test.mjs scripts/lib/npm-runtime-script-closure.test.mjs scripts/packaged-isolation-smoke.test.mjs scripts/native-host-dependencies.test.mjs scripts/node-runtime-artifacts.test.mjs scripts/macos-test-keychain.test.mjs scripts/branded-electron.test.mjs apps/mobile/metro.config.test.cjs
 
       - name: Type-check
         run: pnpm type-check

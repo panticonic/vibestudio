@@ -15,10 +15,14 @@ import { NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./scripts/build-artif
 import { generateConnectGrammar } from "./scripts/generate-connect-grammar.mjs";
 import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
 import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
-import { publishHostBuildGeneration } from "./scripts/host-build-generations.mjs";
+import {
+  assertHostBuildPayloadComplete,
+  publishHostBuildGeneration,
+} from "./scripts/host-build-generations.mjs";
 import { buildInfrastructurePackages } from "./scripts/infrastructure-package-cache.mjs";
 import { nativeWorkspaceArtifactConfigs } from "./scripts/native-workspace-artifacts.mjs";
 import { SERVER_WORKER_ENTRIES } from "./scripts/server-runtime-artifacts.mjs";
+import { copySqlJsRuntimeAsset } from "./scripts/lib/sql-js-runtime-asset.mjs";
 import {
   computeHostBuildFingerprint,
   invalidateHostBuildFingerprints,
@@ -630,11 +634,7 @@ function copyAssets() {
   fs.copyFileSync("src/bootstrap/index.html", "dist/index.html");
   fs.copyFileSync("src/main/browserPrivacy.html", "dist/browserPrivacy.html");
   fs.copyFileSync("src/main/displayCapture.html", "dist/displayCapture.html");
-  // sql.js resolves its default WASM payload beside the executing bundle.
-  // Both server artifacts bundle the JavaScript loader into dist/, so retain
-  // that package-relative contract by placing the matching runtime there too.
-  const require = createRequire(import.meta.url);
-  fs.copyFileSync(require.resolve("sql.js/dist/sql-wasm.wasm"), "dist/sql-wasm.wasm");
+  copySqlJsRuntimeAsset("dist");
   copyDirectoryRecursive("build-resources/brand", "dist/assets/brand");
   fs.mkdirSync("dist/baked-app", { recursive: true });
   // Bundled agent skill consumed by `vibestudio agent skill install|print`
@@ -815,6 +815,7 @@ async function build() {
     copyAssets();
 
     await checkBuildArtifacts();
+    assertHostBuildPayloadComplete(process.cwd(), "desktop");
 
     // Esbuild reads the graph over time. If source changes during that window,
     // one output can otherwise contain modules from different revisions and
@@ -963,6 +964,8 @@ async function buildSourceServerPrerequisites() {
       () => buildHeadlessHost(),
     ]);
     await buildServerArtifacts(["standalone"], programs);
+    copySqlJsRuntimeAsset("dist");
+    assertHostBuildPayloadComplete(process.cwd(), "source");
 
     // Authority startup identifies the installed host by the exact source
     // snapshot that produced its runtime artifacts. Source-server builds are a

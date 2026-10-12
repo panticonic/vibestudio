@@ -33,6 +33,7 @@ const INPUT_FILES = [
   "scripts/host-build-generations.mjs",
   "scripts/infrastructure-package-cache.mjs",
   "scripts/build-artifact-groups.mjs",
+  "scripts/lib/sql-js-runtime-asset.mjs",
   "scripts/lib/file-digest.mjs",
   "scripts/lib/join-child-process.mjs",
   "scripts/prepare-workspace-release.mjs",

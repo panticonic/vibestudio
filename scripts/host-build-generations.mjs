@@ -34,6 +34,7 @@ const REQUIRED = {
     "assets",
   ],
 };
+const COMPLETION_RECEIPT = "host-build-fingerprint.json";
 
 const heldGenerations = new Map();
 let exitCleanupInstalled = false;
@@ -200,6 +201,17 @@ export function hostBuildGenerationRoot(cwd, kind, fingerprint) {
   return path.join(path.resolve(cwd, "dist/host-generations"), `${kind}-${fingerprint}`);
 }
 
+export function assertHostBuildPayloadComplete(cwd, kind) {
+  if (!(kind in REQUIRED)) throw new Error(`Unknown host generation kind: ${kind}`);
+  const dist = path.resolve(cwd, "dist");
+  for (const artifact of REQUIRED[kind]) {
+    if (artifact === COMPLETION_RECEIPT) continue;
+    if (!fs.existsSync(path.join(dist, artifact))) {
+      throw new Error(`Cannot publish incomplete ${kind} host generation: missing ${artifact}`);
+    }
+  }
+}
+
 export function publishHostBuildGeneration(cwd, build) {
   const dist = path.resolve(cwd, "dist");
   const generations = path.join(dist, "host-generations");
@@ -211,12 +223,11 @@ export function publishHostBuildGeneration(cwd, build) {
   if (!Number.isSafeInteger(build.inputCount) || build.inputCount < 1) {
     throw new Error("Invalid host build input count");
   }
-  for (const artifact of REQUIRED[build.kind]) {
-    if (!fs.existsSync(path.join(dist, artifact))) {
-      throw new Error(
-        `Cannot publish incomplete ${build.kind} host generation: missing ${artifact}`
-      );
-    }
+  assertHostBuildPayloadComplete(cwd, build.kind);
+  if (!fs.existsSync(path.join(dist, COMPLETION_RECEIPT))) {
+    throw new Error(
+      `Cannot publish incomplete ${build.kind} host generation: missing ${COMPLETION_RECEIPT}`
+    );
   }
   return withGenerationLock(generations, () => {
     const target = hostBuildGenerationRoot(cwd, build.kind, build.fingerprint);

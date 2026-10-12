@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  assertHostBuildPayloadComplete,
   collectHostBuildGenerations,
   publishHostBuildGeneration,
   readCurrentHostBuildGeneration,
@@ -23,6 +24,29 @@ function writeSourcePrerequisites(root, prefix) {
     if (!fs.existsSync(file)) fs.writeFileSync(file, `${prefix}:${path.basename(file)}`);
   }
 }
+
+test("validates host payload before its completion receipt is written", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-payload-"));
+  try {
+    writeSourcePrerequisites(root, "fixture");
+    const wasm = path.join(root, "dist/sql-wasm.wasm");
+    const receipt = path.join(root, "dist/host-build-fingerprint.json");
+    fs.rmSync(wasm);
+    fs.rmSync(receipt);
+
+    assert.throws(
+      () => assertHostBuildPayloadComplete(root, "source"),
+      /Cannot publish incomplete source host generation: missing sql-wasm\.wasm/u
+    );
+    assert.equal(fs.existsSync(receipt), false);
+
+    fs.writeFileSync(wasm, "wasm payload");
+    assert.doesNotThrow(() => assertHostBuildPayloadComplete(root, "source"));
+    assert.equal(fs.existsSync(receipt), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("publishes immutable complete generations and leaves the prior one readable", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-generation-"));
