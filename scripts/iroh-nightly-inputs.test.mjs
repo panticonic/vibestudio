@@ -18,8 +18,21 @@ test("Android nightly smoke uses its source-server producer entrypoint", () => {
   assert.doesNotMatch(androidJob, /pnpm build/u);
   assert.equal(
     scripts["test:iroh-mobile-e2e"],
-    "node scripts/cli/mobile-smoke.mjs --platform android"
+    "pnpm build:infrastructure && node scripts/cli/mobile-smoke.mjs --platform android"
   );
+  assert.doesNotMatch(scripts["test:iroh-mobile-e2e"], /pnpm build(?!:infrastructure)/u);
+});
+
+test("desktop nightly smoke installs its native keyring and display runtime", () => {
+  const workflow = fs.readFileSync(
+    path.join(root, ".github/workflows/iroh-e2e-nightly.yml"),
+    "utf8"
+  );
+  const desktopJob = workflow.slice(
+    workflow.indexOf("  iroh-remote-e2e:"),
+    workflow.indexOf("  android-iroh-smoke:")
+  );
+  assert.match(desktopJob, /apt-get install -y[^\n]*xvfb[^\n]*gnome-keyring[^\n]*dbus-x11/u);
 });
 
 test("public Vitest Iroh entrypoints prepare the development desktop host", () => {

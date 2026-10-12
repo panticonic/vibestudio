@@ -25,7 +25,10 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { tsImport } from "tsx/esm/api";
 import { startEphemeralLinuxSecretService } from "./lib/linux-secret-service.mjs";
+import { developmentTemplateSetEnv } from "./lib/development-template-set.mjs";
 import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
+import { hasOwnershipFailure } from "./lib/owned-cleanup.mjs";
+import { isCancellationOnly, prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 import {
   createDesktopObservationOwner,
   createOwnedTemporaryDirectory,
@@ -500,6 +503,47 @@ function waitForChildExit(child) {
     child.once("exit", exited);
     if (child.exitCode != null || child.signalCode != null) exited();
   });
+}
+
+function runOwnedCommand(lifetime, command, args, options = {}) {
+  const child = lifetime.acquire(() =>
+    spawn(command, args, {
+      cwd: options.cwd ?? repoRoot,
+      env: options.env ?? process.env,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+  );
+  child.stdout?.on("data", (chunk) =>
+    prefixAndWrite(options.label ?? command, chunk.toString(), process.stdout)
+  );
+  child.stderr?.on("data", (chunk) =>
+    prefixAndWrite(options.label ?? command, chunk.toString(), process.stderr)
+  );
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      if (code === 0) resolve();
+      else {
+        reject(
+          new Error(
+            `${options.label ?? command} exited ${signal ? `with signal ${signal}` : `with code ${String(code)}`}`
+          )
+        );
+      }
+    });
+  });
+}
+
+function containsErrorIdentity(error, target, seen = new Set()) {
+  if (error === target) return true;
+  if (!error || typeof error !== "object" || seen.has(error)) return false;
+  seen.add(error);
+  return (
+    containsErrorIdentity(error.cause, target, seen) ||
+    (Array.isArray(error.errors) &&
+      error.errors.some((child) => containsErrorIdentity(child, target, seen)))
+  );
 }
 
 async function waitForServerReady(readyFile, serverChild, timeoutMs) {
@@ -2245,7 +2289,12 @@ async function main(parentOwnerSignal) {
   }
 
   const deadlineController = new AbortController();
-  const ownerSignal = AbortSignal.any([parentOwnerSignal, deadlineController.signal]);
+  const stopController = new AbortController();
+  const ownerSignal = AbortSignal.any([
+    parentOwnerSignal,
+    deadlineController.signal,
+    stopController.signal,
+  ]);
   let deadlineFailure;
   let testDeadline;
   const processLifetime = createOwnedProcessLifetime();
@@ -2269,22 +2318,55 @@ async function main(parentOwnerSignal) {
   let electronApp = null;
   let cleanupPromise;
   let tempRoot = "";
+  let sourceGeneration = null;
+  let workspacePreparation = null;
+  let workspacePreparationJoined = false;
+  let workspacePreparationStopPromise = null;
+  let operationFailure;
+  const requestWorkspacePreparationStop = () => {
+    if (!workspacePreparation || workspacePreparationJoined || workspacePreparationStopPromise)
+      return workspacePreparationStopPromise;
+    try {
+      workspacePreparationStopPromise = Promise.resolve(workspacePreparation.stop());
+    } catch (error) {
+      workspacePreparationStopPromise = Promise.reject(error);
+    }
+    void workspacePreparationStopPromise.catch(() => {});
+    return workspacePreparationStopPromise;
+  };
   const rootOwner = createOwnedTemporaryDirectory(
     () => fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-")),
     (root) => fsp.rm(root, { recursive: true, force: true })
   );
   let desktopEnvironment;
-  const deadlineMs = Date.now() + options.timeoutMs;
+  let deadlineMs;
 
   const cleanup = () => {
     if (cleanupPromise) return cleanupPromise;
     clearTimeout(testDeadline);
     rootOwner.seal();
+    requestWorkspacePreparationStop();
     cleanupPromise = (async () => {
       const cleanupErrors = [];
       let localTreesGone = true;
+      if (hasOwnershipFailure(operationFailure)) localTreesGone = false;
       for (const app of desktopApps) desktopObservationOwners.get(app)?.seal();
-      tempRoot = (await rootOwner.join()) ?? "";
+      try {
+        tempRoot = (await rootOwner.join()) ?? "";
+      } catch (error) {
+        localTreesGone = false;
+        cleanupErrors.push(error);
+      }
+      try {
+        if (workspacePreparationStopPromise) await workspacePreparationStopPromise;
+      } catch (error) {
+        if (!isCancellationOnly(error)) {
+          cleanupErrors.push(error);
+          if (hasOwnershipFailure(error)) localTreesGone = false;
+        }
+      } finally {
+        if (workspacePreparationStopPromise) workspacePreparationJoined = true;
+      }
       // Attempt every registered owner even when one cleanup reports failure.
       for (const app of desktopApps.toReversed()) {
         let hubOwner;
@@ -2311,7 +2393,12 @@ async function main(parentOwnerSignal) {
           localTreesGone = false;
           cleanupErrors.push(error);
         }
-        await desktopObservationOwners.get(app)?.join();
+        try {
+          await desktopObservationOwners.get(app)?.join();
+        } catch (error) {
+          localTreesGone = false;
+          cleanupErrors.push(error);
+        }
         let mainJoined = false;
         try {
           await desktopProcessOwners.get(app).join();
@@ -2346,7 +2433,21 @@ async function main(parentOwnerSignal) {
         try {
           await environment.dispose?.();
         } catch (error) {
+          localTreesGone = false;
           cleanupErrors.push(error);
+        }
+      }
+      if (localTreesGone) {
+        for (const generation of [desktopGeneration, sourceGeneration]) {
+          if (!generation) continue;
+          try {
+            releaseHostBuildGeneration(generation);
+            if (generation === desktopGeneration) desktopGeneration = null;
+            if (generation === sourceGeneration) sourceGeneration = null;
+          } catch (error) {
+            localTreesGone = false;
+            cleanupErrors.push(error);
+          }
         }
       }
       if (tempRoot && localTreesGone) {
@@ -2356,10 +2457,8 @@ async function main(parentOwnerSignal) {
           cleanupErrors.push(error);
         }
       }
-      if (desktopGeneration && localTreesGone) {
-        releaseHostBuildGeneration(desktopGeneration);
-        desktopGeneration = null;
-      }
+      if (tempRoot && !localTreesGone)
+        console.warn(`[desktop-smoke] Retained isolated state: ${tempRoot}`);
       if (cleanupErrors.length)
         throw new AggregateError(cleanupErrors, "Desktop smoke cleanup failed");
     })();
@@ -2369,24 +2468,27 @@ async function main(parentOwnerSignal) {
   const ownerLost = () => {
     // Closing the actual client settles observations before its process tree
     // disappears. The same cleanup promise owns every resource and the root.
+    processLifetime.requestStop();
+    requestWorkspacePreparationStop();
     void cleanup().catch((error) => {
       console.error(error);
       process.exitCode = 1;
     });
   };
-  process.once("SIGINT", ownerLost);
-  process.once("SIGTERM", ownerLost);
+  const processSignal = () => {
+    if (!stopController.signal.aborted) {
+      stopController.abort(
+        Object.assign(new Error("Desktop smoke interrupted"), { code: "ECANCELLED" })
+      );
+    }
+  };
+  process.once("SIGINT", processSignal);
+  process.once("SIGTERM", processSignal);
   ownerSignal.addEventListener("abort", ownerLost, { once: true });
   if (ownerSignal.aborted) ownerLost();
 
   try {
     ownerSignal.throwIfAborted();
-    testDeadline = setTimeout(() => {
-      deadlineFailure = new Error(
-        `Desktop pairing acceptance deadline reached (${options.timeoutMs}ms)`
-      );
-      deadlineController.abort(deadlineFailure);
-    }, options.timeoutMs);
     if (options.readyFile) {
       try {
         await fsp.unlink(options.readyFile);
@@ -2428,16 +2530,7 @@ async function main(parentOwnerSignal) {
       explicitRoot: options.templateCheckouts,
     });
     if (developmentTemplates) {
-      serverEnv.VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES = JSON.stringify(developmentTemplates.pins);
-      serverEnv.VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE = JSON.stringify(
-        developmentTemplates.pins.system
-      );
-      serverEnv.VIBESTUDIO_WORKSPACE_SOURCES = JSON.stringify(
-        developmentTemplates.sources.map(({ id }) => ({
-          pin: developmentTemplates.sourcePins[id],
-          checkout: developmentTemplates.checkouts[id],
-        }))
-      );
+      Object.assign(serverEnv, developmentTemplateSetEnv(developmentTemplates));
       await assertTemplateCheckoutBootable({
         repoRoot,
         checkout: developmentTemplates.checkouts.system,
@@ -2448,6 +2541,44 @@ async function main(parentOwnerSignal) {
     } else {
       console.log("[desktop-smoke] Templates: canonical pinned production release");
     }
+    ownerSignal.throwIfAborted();
+    // The acceptance budget covers the smoke, not the canonical source-host
+    // and workspace-release prerequisites. CI-provided release roots are
+    // admitted by the same producer and reused only after full validation.
+    await runOwnedCommand(
+      processLifetime,
+      process.execPath,
+      [path.join(repoRoot, "build.mjs"), "--source-server-prereqs"],
+      {
+        cwd: repoRoot,
+        env: serverEnv,
+        label: "source-host-build",
+      }
+    );
+    ownerSignal.throwIfAborted();
+    sourceGeneration = readCurrentHostBuildGeneration(repoRoot, "source");
+    serverEnv.VIBESTUDIO_HOST_ARTIFACT_ROOT = sourceGeneration;
+    workspacePreparation = prepareWorkspaceRelease({
+      appRoot: repoRoot,
+      output: path.join(tempRoot, "workspace-release"),
+      scratch: path.join(tempRoot, "workspace-preparation"),
+      env: serverEnv,
+      executable: process.execPath,
+      entry: path.join(sourceGeneration, "prepare-workspace-templates.mjs"),
+    });
+    try {
+      await workspacePreparation.completed;
+    } finally {
+      workspacePreparationJoined = true;
+    }
+    ownerSignal.throwIfAborted();
+    deadlineMs = Date.now() + options.timeoutMs;
+    testDeadline = setTimeout(() => {
+      deadlineFailure = new Error(
+        `Desktop pairing acceptance deadline reached (${options.timeoutMs}ms)`
+      );
+      deadlineController.abort(deadlineFailure);
+    }, options.timeoutMs);
     if (options.local) {
       const localLaunchStartedAt = performance.now();
       const sourceEnvironment = Object.fromEntries(
@@ -3030,31 +3161,35 @@ async function main(parentOwnerSignal) {
     await cleanup();
   } catch (error) {
     const original = deadlineFailure ?? error;
-    if (!parentOwnerSignal.aborted || deadlineFailure)
+    operationFailure = original;
+    const cancellationOnly = ownerSignal.aborted && isCancellationOnly(original);
+    if (!cancellationOnly)
       console.error(
         `[desktop-smoke] ${original instanceof Error ? (original.stack ?? original.message) : String(original)}`
       );
-    for (const app of desktopApps) {
-      try {
-        await captureDesktopFailureDiagnostics(app, original);
-      } catch (diagnosticError) {
-        console.error(
-          `[desktop-smoke] Could not retain desktop failure diagnostics: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`
-        );
+    if (!cancellationOnly) {
+      for (const app of desktopApps) {
+        try {
+          await captureDesktopFailureDiagnostics(app, original);
+        } catch (diagnosticError) {
+          console.error(
+            `[desktop-smoke] Could not retain desktop failure diagnostics: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`
+          );
+        }
       }
     }
     try {
       await cleanup();
     } catch (cleanupError) {
-      if (cleanupError === original) throw original;
+      if (containsErrorIdentity(cleanupError, original)) throw cleanupError;
       throw new AggregateError([original, cleanupError], "Desktop smoke and cleanup failed");
     }
-    if (!parentOwnerSignal.aborted || deadlineFailure) process.exitCode = 1;
+    if (!cancellationOnly) process.exitCode = 1;
   } finally {
     clearTimeout(testDeadline);
     ownerSignal.removeEventListener("abort", ownerLost);
-    process.off("SIGINT", ownerLost);
-    process.off("SIGTERM", ownerLost);
+    process.off("SIGINT", processSignal);
+    process.off("SIGTERM", processSignal);
   }
 }
 

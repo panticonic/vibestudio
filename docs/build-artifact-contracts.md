@@ -176,10 +176,14 @@ preparation.
 
 Public Iroh Vitest entrypoints prepare their development desktop generation
 before shared test setup reads it. Android smoke owns a source-server generation,
-not a desktop generation: its ordinary CLI prepares the host and complete
+not a desktop generation: its public command first builds infrastructure packages
+needed by the CLI import closure, then the CLI prepares the host and complete
 workspace release before the bounded server-readiness and interaction phases.
-The source server validates and reuses the completed release through the normal
-producer. Device installation and preparation retain owned process lifetimes;
+Desktop and website smokes use the same phase boundary: they prepare the source
+host and validate or produce the exact workspace release before starting their
+acceptance deadline. An inherited release root goes through the canonical
+producer's full input validation. The source server validates and reuses the
+completed release through the normal producer. Device installation and preparation retain owned process lifetimes;
 cleanup joins them before retiring the generation lease or scratch. The nightly
 workflow invokes those public entrypoints instead of substituting a production
 build or bypassing their prerequisites with a raw test command.
@@ -243,7 +247,12 @@ tied to a consumed artifact or another concrete prerequisite, and record that
 reason beside the edge. Independent checks should overlap, without rebuilding
 the same candidate or weakening its installed acceptance tests.
 
-`pnpm check:workflows` runs a checksum-pinned actionlint against every workflow,
+`pnpm check:workflows` first validates the desktop runtime script import closure
+using the same implementation as desktop packaging and npm staging. Shared
+script helpers must live in the packaged script boundary; source-only adapters
+may re-export them, but packaged scripts cannot import those adapters. This
+check rejects missing imports and undeclared runtime dependencies before builds.
+It then runs a checksum-pinned actionlint against every workflow,
 including expression-context and dependency validation, both locally through
 the commit/quality gates and in CI. Its semantic checks do not depend on
 optional shellcheck or pyflakes installations. Focused workflow tests protect

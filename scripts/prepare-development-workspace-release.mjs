@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs/promises";
-import { tsImport } from "tsx/esm/api";
+import { developmentTemplateSetEnv } from "./lib/development-template-set.mjs";
 import { resolveDevelopmentTemplates } from "./cli/lib/smoke-remote-server.mjs";
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 import { hasOwnershipFailure } from "./lib/owned-cleanup.mjs";
@@ -16,10 +16,6 @@ import {
 } from "./host-build-fingerprint.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const { developmentTemplateSetEnv } = await tsImport(
-  "../src/dev/developmentTemplateSet.ts",
-  import.meta.url
-);
 const args = process.argv.slice(2);
 function requiredOption(name) {
   const index = args.indexOf(name);

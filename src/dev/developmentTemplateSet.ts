@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { DefaultWorkspaceTemplates } from "@vibestudio/workspace/templateRelease";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+export {
+  developmentTemplateSetEnv,
+  developmentTemplateSetSources,
+} from "../../scripts/lib/development-template-set.mjs";
 import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
 import { selectDevelopmentTemplateCheckouts } from "./developmentTemplateConfig.js";
 
@@ -90,24 +94,5 @@ export async function resolveDevelopmentTemplateSet(input: {
     sourceCheckouts: selected.checkouts,
     sourcePins,
     sources: selected.sources,
-  };
-}
-
-export function developmentTemplateSetSources(selection: DevelopmentTemplateSet): Array<{
-  pin: WorkspaceTemplatePin;
-  checkout: string;
-}> {
-  return selection.sources.map((source) => ({
-    pin: requiredEntry(selection.sourcePins, source.id, "pin"),
-    checkout: requiredEntry(selection.checkouts, source.id, "checkpoint"),
-  }));
-}
-
-export function developmentTemplateSetEnv(selection: DevelopmentTemplateSet): NodeJS.ProcessEnv {
-  const sources = developmentTemplateSetSources(selection);
-  return {
-    VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(selection.pins),
-    VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(selection.pins.system),
-    VIBESTUDIO_WORKSPACE_SOURCES: JSON.stringify(sources),
   };
 }

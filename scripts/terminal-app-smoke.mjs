@@ -10,10 +10,8 @@ import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunch
 import { createServerInvocation } from "./cli/lib/server-entry.mjs";
 import { readCurrentHostBuildGeneration } from "./host-build-generations.mjs";
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
-import {
-  resolveDevelopmentTemplateSet,
-  developmentTemplateSetEnv,
-} from "../src/dev/developmentTemplateSet.ts";
+import { resolveDevelopmentTemplateSet } from "../src/dev/developmentTemplateSet.ts";
+import { developmentTemplateSetEnv } from "./lib/development-template-set.mjs";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 import { joinChildProcess } from "./lib/join-child-process.mjs";
 import {

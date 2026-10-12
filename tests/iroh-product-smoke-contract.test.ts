@@ -41,6 +41,32 @@ describe("Iroh product E2E entry points", () => {
     expect(desktop).toContain("with Iroh pairing deep link");
   });
 
+  it("prepares the source host and exact workspace release before the desktop acceptance budget", () => {
+    const desktop = source("scripts/desktop-pairing-smoke.mjs");
+    const templatesIndex = desktop.indexOf("await resolveDevelopmentTemplates({");
+    const sourceBuildIndex = desktop.indexOf('"--source-server-prereqs"');
+    const releaseStartIndex = desktop.indexOf("workspacePreparation = prepareWorkspaceRelease({");
+    const releaseJoinIndex = desktop.indexOf("await workspacePreparation.completed;");
+    const deadlineIndex = desktop.indexOf("deadlineMs = Date.now() + options.timeoutMs;");
+    const acceptanceTimerIndex = desktop.indexOf("testDeadline = setTimeout(");
+    expect(templatesIndex).toBeGreaterThan(0);
+    expect(sourceBuildIndex).toBeGreaterThan(templatesIndex);
+    expect(releaseStartIndex).toBeGreaterThan(sourceBuildIndex);
+    expect(releaseJoinIndex).toBeGreaterThan(releaseStartIndex);
+    expect(deadlineIndex).toBeGreaterThan(releaseJoinIndex);
+    expect(acceptanceTimerIndex).toBeGreaterThan(deadlineIndex);
+    expect(desktop).toContain("env: serverEnv");
+    expect(desktop).toContain("serverEnv.VIBESTUDIO_HOST_ARTIFACT_ROOT = sourceGeneration;");
+    expect(desktop).toContain("VIBESTUDIO_WORKSPACE_RELEASE_ROOT");
+    expect(desktop).toContain('from "./lib/development-template-set.mjs"');
+    expect(desktop).toContain(
+      "Object.assign(serverEnv, developmentTemplateSetEnv(developmentTemplates));"
+    );
+    expect(desktop).toContain("processLifetime.requestStop();");
+    expect(desktop).toContain("requestWorkspacePreparationStop();");
+    expect(desktop).toContain("ownerSignal.aborted && isCancellationOnly(original)");
+  });
+
   it("drives native Android approvals, panels, app relaunch, and server recovery over Iroh", () => {
     const mobile = source("scripts/cli/mobile-smoke.mjs");
     for (const marker of [
@@ -71,7 +97,9 @@ describe("Iroh product E2E entry points", () => {
     const installIndex = mobile.indexOf("await runMobileInstall(options, lifetime)");
     const templatesIndex = mobile.indexOf("await resolveDevelopmentTemplates({");
     const sourceBuildIndex = mobile.indexOf('"--source-server-prereqs"');
-    const workspaceReleaseIndex = mobile.indexOf("workspacePreparation = prepareWorkspaceRelease({");
+    const workspaceReleaseIndex = mobile.indexOf(
+      "workspacePreparation = prepareWorkspaceRelease({"
+    );
     const workspaceReleaseJoinIndex = mobile.indexOf("await workspacePreparation.completed;");
     const serverBudgetIndex = mobile.indexOf(
       "const serverReadyDeadlineMs = Date.now() + options.timeoutMs"
@@ -83,7 +111,9 @@ describe("Iroh product E2E entry points", () => {
     expect(workspaceReleaseJoinIndex).toBeGreaterThan(workspaceReleaseIndex);
     expect(serverBudgetIndex).toBeGreaterThan(workspaceReleaseJoinIndex);
     expect(mobile).not.toContain("Math.max(1_000, deadlineMs - Date.now())");
-    expect(mobile).toContain("const child = spawnManaged(lifetime.acquire, command, args, options);");
+    expect(mobile).toContain(
+      "const child = spawnManaged(lifetime.acquire, command, args, options);"
+    );
     expect(mobile).toContain("await runOwnedCommand(lifetime, process.execPath, args");
     expect(mobile).toContain("releaseHostBuildGeneration(hostGenerationRoot)");
   });

@@ -1982,10 +1982,7 @@ async function main() {
     "../prepare-workspace-release.mjs"
   );
   const { createOwnedProcessLifetime } = await tsImport("../development-client-lifecycle.ts", import.meta.url);
-  const { developmentTemplateSetEnv } = await tsImport(
-    "../../src/dev/developmentTemplateSet.ts",
-    import.meta.url
-  );
+  const { developmentTemplateSetEnv } = await import("../lib/development-template-set.mjs");
   await runParentOwnedMain(
     signal =>
       runSmoke(

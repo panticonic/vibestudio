@@ -4,7 +4,11 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
-import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
+import {
+  developmentTemplateSetEnv,
+  developmentTemplateSetSources,
+  resolveDevelopmentTemplateSet,
+} from "./developmentTemplateSet.js";
 
 const roots: string[] = [];
 function git(directory: string, ...args: string[]): void {
@@ -178,6 +182,33 @@ describe("resolveDevelopmentTemplateSet", () => {
     if (!examples) throw new Error("Expected an inspected Examples checkout");
     expect(fs.readFileSync(path.join(examples, "meta", "vibestudio.yml"), "utf8")).toBe(
       fs.readFileSync(path.join(templates, "examples", "meta", "vibestudio.yml"), "utf8")
+    );
+  });
+
+  it("serializes the resolved template set through the canonical runtime helper", async () => {
+    const { host, templates, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH);
+    const selection = await resolveDevelopmentTemplateSet({
+      repoRoot: host,
+      checkpointRoot: checkpoint,
+      explicitRoot: templates,
+    });
+    if (!selection) throw new Error("Expected a complete development template selection");
+
+    expect(developmentTemplateSetSources(selection)).toEqual(
+      selection.sources.map((source) => ({
+        pin: selection.sourcePins[source.id],
+        checkout: selection.checkouts[source.id],
+      }))
+    );
+    const env = developmentTemplateSetEnv(selection);
+    expect(JSON.parse(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"] ?? "null")).toEqual(
+      selection.pins
+    );
+    expect(JSON.parse(env["VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE"] ?? "null")).toEqual(
+      selection.pins.system
+    );
+    expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"] ?? "null")).toEqual(
+      developmentTemplateSetSources(selection)
     );
   });
 
