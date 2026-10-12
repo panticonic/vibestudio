@@ -25,7 +25,10 @@ test("Android nightly smoke uses its source-server producer entrypoint", () => {
   const kvmGrant = androidJob.indexOf("- name: Grant the runner its KVM device access");
   const emulatorAction = androidJob.indexOf("uses: reactivecircus/android-emulator-runner@");
   assert.notEqual(kvmGrant, -1, "runner KVM access must be prepared explicitly");
-  assert.ok(kvmGrant < emulatorAction, "KVM access must be granted before the action detects acceleration");
+  assert.ok(
+    kvmGrant < emulatorAction,
+    "KVM access must be granted before the action detects acceleration"
+  );
   const kvmSetup = androidJob.slice(kvmGrant, emulatorAction);
   assert.match(kvmSetup, /set -euo pipefail/u);
   assert.match(kvmSetup, /\[\[ ! -c "\$kvm_device" \]\]/u);
@@ -56,7 +59,11 @@ test("desktop nightly smoke installs its native keyring and display runtime", ()
   );
   const androidJob = workflow.slice(workflow.indexOf("  android-iroh-smoke:"));
   const ci = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
-  const qualityJob = ci.slice(ci.indexOf("  quality:"), ci.indexOf("  mac-portability:"));
+  const qualityJob = ci.slice(ci.indexOf("  quality:"), ci.indexOf("  quality-desktop:"));
+  const qualityDesktopJob = ci.slice(
+    ci.indexOf("  quality-desktop:"),
+    ci.indexOf("  mac-portability:")
+  );
 
   assert.match(action, /packages=\(bubblewrap gnome-keyring dbus-x11\)/u);
   assert.match(action, /packages\+=\(xvfb\)/u);
@@ -67,6 +74,10 @@ test("desktop nightly smoke installs its native keyring and display runtime", ()
   assert.match(action, /userns,/u);
   assert.match(action, /apparmor_parser -r \/etc\/apparmor\.d\/vibestudio-mxc-lxc-exec/u);
   assert.match(qualityJob, /uses: \.\/\.github\/actions\/setup-linux-source-runtime/u);
+  assert.match(
+    qualityDesktopJob,
+    /uses: \.\/\.github\/actions\/setup-linux-source-runtime[\s\S]*?desktop: "true"/u
+  );
   assert.match(
     desktopJob,
     /uses: \.\/\.github\/actions\/setup-linux-source-runtime[\s\S]*?desktop: "true"/u

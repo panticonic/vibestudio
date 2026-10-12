@@ -83,6 +83,32 @@ async function readCiJobs() {
   return workflow.jobs;
 }
 
+test("Linux quality consumers share one verified template and infrastructure producer", async () => {
+  const jobs = await readCiJobs();
+  const producer = jobs["quality-inputs"];
+  const quality = jobs.quality;
+  const desktop = jobs["quality-desktop"];
+  assert.deepEqual(dependenciesOf(producer), []);
+  assert.deepEqual(dependenciesOf(quality), ["quality-inputs"]);
+  assert.deepEqual(dependenciesOf(desktop), ["quality-inputs"]);
+  const step = (job, name) => job.steps.find((entry) => entry.name === name);
+  assert.ok(step(producer, "Build shared infrastructure packages"));
+  assert.ok(step(producer, "Record exact host and template inputs"));
+  assert.ok(step(producer, "Upload exact quality inputs"));
+  for (const consumer of [quality, desktop]) {
+    assert.ok(step(consumer, "Download exact quality inputs"));
+    assert.ok(step(consumer, "Restore and verify quality inputs"));
+    assert.equal(step(consumer, "Checkout current Base template"), undefined);
+    assert.equal(step(consumer, "Acquire complete template source set"), undefined);
+  }
+  assert.ok(step(quality, "Template type-check and complete userland suite"));
+  assert.ok(step(quality, "Unit tests"));
+  assert.equal(step(quality, "Native Iroh remote transport"), undefined);
+  assert.ok(step(desktop, "Native Iroh remote transport"));
+  assert.ok(step(desktop, "Desktop Iroh pairing, approvals, panels, relaunch, and recovery"));
+  assert.equal(step(desktop, "Template type-check and complete userland suite"), undefined);
+});
+
 function dependenciesOf(job) {
   const needs = job?.needs;
   if (needs === undefined) return [];

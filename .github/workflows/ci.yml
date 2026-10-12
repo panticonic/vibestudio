@@ -47,14 +47,13 @@ on:
 permissions: {}
 
 jobs:
-  quality:
-    name: Quality Checks
+  quality-inputs:
+    name: Prepare exact Linux quality inputs
     runs-on: ubuntu-24.04
     env:
       VIBESTUDIO_TEMPLATE_CHECKOUTS: ${{ github.workspace }}/vibestudio-templates
     permissions:
       contents: read
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -79,16 +78,78 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Set up Linux source runtime
-        uses: ./.github/actions/setup-linux-source-runtime
-        with:
-          desktop: "true"
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Acquire complete template source set
         run: pnpm dev:templates setup "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
+
+      - name: Build shared infrastructure packages
+        run: pnpm build:infrastructure
+
+      - name: Record exact host and template inputs
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: node scripts/ci-quality-inputs.mjs write "$SOURCE_SHA" "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
+
+      - name: Archive verified quality inputs
+        run: |
+          shopt -s nullglob
+          package_dists=(packages/*/dist)
+          test "${#package_dists[@]}" -gt 0
+          tar -cf quality-inputs.tar .cache/ci-quality-inputs.json .cache/vibestudio-infrastructure-build.json vibestudio-templates "${package_dists[@]}"
+
+      - name: Upload exact quality inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibestudio-quality-inputs-${{ github.sha }}
+          path: quality-inputs.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  quality:
+    name: Quality Checks
+    needs: quality-inputs
+    runs-on: ubuntu-24.04
+    env:
+      VIBESTUDIO_TEMPLATE_CHECKOUTS: ${{ github.workspace }}/vibestudio-templates
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Linux source runtime
+        uses: ./.github/actions/setup-linux-source-runtime
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download exact quality inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vibestudio-quality-inputs-${{ github.sha }}
+
+      - name: Restore and verify quality inputs
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          tar -xf quality-inputs.tar
+          node scripts/ci-quality-inputs.mjs verify "$SOURCE_SHA" "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
 
       - name: Check declared template runtime dependencies
         run: pnpm check:userland-dependencies
@@ -117,14 +178,58 @@ jobs:
       - name: Production Electron Node-mode native workspace receiver
         run: ELECTRON_RUN_AS_NODE=1 pnpm exec electron node_modules/vitest/vitest.mjs run src/server/nativeWorkspaceRuntime.integration.test.ts
 
-      - name: Native Iroh remote transport
-        run: pnpm test:remote-transport
-
       - name: Lint
         run: pnpm lint
 
       - name: Check formatting
         run: pnpm format:check
+
+      - name: Unit tests
+        run: pnpm test
+
+  quality-desktop:
+    name: Desktop Iroh source integration
+    needs: quality-inputs
+    runs-on: ubuntu-24.04
+    env:
+      VIBESTUDIO_TEMPLATE_CHECKOUTS: ${{ github.workspace }}/vibestudio-templates
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Linux desktop source runtime
+        uses: ./.github/actions/setup-linux-source-runtime
+        with:
+          desktop: "true"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download exact quality inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vibestudio-quality-inputs-${{ github.sha }}
+
+      - name: Restore and verify quality inputs
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          tar -xf quality-inputs.tar
+          node scripts/ci-quality-inputs.mjs verify "$SOURCE_SHA" "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
 
       - name: Install browser and desktop integration runtimes
         run: |
@@ -133,11 +238,11 @@ jobs:
           sudo apt-get install --no-install-recommends --yes gnome-keyring
           command -v gnome-keyring-daemon
 
+      - name: Native Iroh remote transport
+        run: pnpm test:remote-transport
+
       - name: Desktop Iroh pairing, approvals, panels, relaunch, and recovery
         run: pnpm test:iroh-desktop-e2e
-
-      - name: Unit tests
-        run: pnpm test
 
   mac-portability:
     name: macOS portability

@@ -146,6 +146,18 @@ platform job definitions consistent. Consumers verify downloaded inputs before
 use. Run-scoped artifact names and observer attestations bind them to the
 current workflow revision.
 
+Linux quality has its own source-input edge. `quality-inputs` checks out the
+selected Base ref and complete template catalog once, builds the infrastructure
+packages once, and uploads those outputs with a receipt for the host commit,
+infrastructure manifest, and every template commit and tree. The `quality` and
+`quality-desktop` jobs both verify that receipt after restoring the exact
+artifact. Userland, mobile, unit, and static checks run in `quality`; native
+remote transport and desktop pairing run in `quality-desktop` so they share one
+development host build. Both jobs are required by reusable CI before a release
+tag can be created. The producer edge preserves the test input identity while
+letting these independent suites overlap; measure artifact transfer and job
+durations on the first run before claiming a wall-clock saving.
+
 Darwin packaging and source integration use two host modes with distinct
 fingerprints. One macOS-14 production-host job installs the exact native and
 observer inputs, builds the production desktop generation, runs its native
