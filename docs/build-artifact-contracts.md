@@ -212,17 +212,41 @@ separate named jobs when consumers need different subsets of its outputs;
 otherwise a slow unrelated producer serializes those consumers. Keep platform
 variation in shared reusable workflows rather than copying build recipes.
 
-The reusable CI workflow must still succeed in full before the release
-workflow creates its draft. On configured Windows release tags, the installer
-candidate job consumes the exact `packaged-app-win32-x64` layout produced by
-the successful Windows application-candidate job. It uses electron-builder's
-`--prepackaged` NSIS path, so installer creation does not rebuild the tested
-application. The candidate is named with the workflow SHA and remains
-read-only. Its installer-acceptance job depends only on that candidate and
-checksums, installs and launches the exact installer, and retains diagnostics.
-This keeps Windows acceptance alongside its producer instead of waiting for
-unrelated CI jobs. Release publication still waits for the complete quality
-workflow, which includes that acceptance, and the validated draft.
+Release preparation is a manual dispatch from `main` with an exact version tag
+and full source SHA. The workflow checks that SHA against the checked-out commit
+and package version, then runs the reusable CI graph before creating an
+annotated tag and draft release. The tag is never moved or overwritten. Every
+enabled desktop installer candidate and its required acceptance must succeed
+before that tag exists; publication consumes those same run-scoped artifacts
+and does not rebuild them. Candidate artifacts are SHA-qualified and immutable
+within the workflow run. After a pre-tag failure, start a fresh dispatch; after
+a post-tag publisher failure, use **Re-run failed jobs** so successful candidate
+producers and their artifacts remain untouched. Mobile and nightly workflows
+remain separate checks.
+Keep the workflow name `Release`: the Linux repository publisher is triggered
+by its successful `workflow_run` completion.
+
+The release CI graph keeps quality checks and native-input production
+independent. On configured Windows releases, the installer candidate consumes
+the exact `packaged-app-win32-x64` layout produced by the Windows
+application-candidate job. The artifact name includes the exact workflow SHA.
+It uses electron-builder's `--prepackaged` NSIS path,
+so installer creation does not rebuild the tested application. The candidate
+is named with the workflow SHA and remains read-only. Its installer-acceptance
+job depends only on that candidate and checksums, installs and launches the
+exact installer, and retains diagnostics. On configured macOS releases, the
+canonical `--dir` application candidate receives Apple credentials only in its
+packaging step; electron-builder signs and notarizes that app before its
+acceptance. A provenance manifest binds the archive digest, source SHA,
+version, signing mode, and afterPack receipt. DMG/ZIP packaging consumes that
+verified app with `--prepackaged`, and installed-DMG acceptance is a sibling
+downstream of that packaging job. Linux installer jobs similarly consume only
+their matching native inputs. After both architectures pass, a pre-tag signer
+validates their original checksums, signs the RPMs with the repository key,
+verifies those signatures, and uploads one immutable candidate with canonical
+final checksums. The post-tag publisher only verifies those checksums and
+attaches the candidate. The final release job joins every enabled publisher
+and the full quality workflow.
 The prepackaged installer job runs `pnpm build:infrastructure` before invoking
 electron-builder: it eagerly imports configured hooks even when `--prepackaged`
 skips their execution, and the hook import closure needs the built RPC package.
@@ -242,23 +266,12 @@ so the copies are required to keep format jobs independent. The candidate job
 joins all three format results and uploads checksum-protected installers bound
 to the exact source SHA. Neither architecture waits for the other, native
 verification, or the quality suite. These candidates run for configured Linux
-releases on tags.
-Linux signing and attachment explicitly wait for both the complete reusable CI
-workflow, which includes both candidates, and its validated draft. Signing,
-artifact attachment, and making the release public still wait
-for the validated draft and exact candidate; installed acceptance remains a
-required gate where defined.
-
-The Apple-credentialed macOS build stays behind the draft because signing and
-notarization remain part of electron-builder's canonical macOS packaging path.
-It restores and verifies the tested production-host archive before invoking the
-canonical build, whose exact-input admission reuses those compiled outputs.
-It reuses the exact run-scoped, source-attested Darwin observer and Darwin
-native-isolation artifacts produced by reusable CI, rather than recompiling
-observers or downloading unrelated platform payloads. Keep `needs` edges
-tied to a consumed artifact or another concrete prerequisite, and record that
-reason beside the edge. Independent checks should overlap, without rebuilding
-the same candidate or weakening its installed acceptance tests.
+release preparations before the workflow creates its tag.
+All post-tag publishers wait for the complete reusable CI workflow and its
+validated draft. Keep `needs` edges tied to a consumed artifact or another
+concrete prerequisite, and record that reason beside the edge. Independent
+checks should overlap, without rebuilding the same candidate or weakening its
+installed acceptance tests.
 
 `pnpm check:workflows` first validates the desktop runtime script import closure
 using the same implementation as desktop packaging and npm staging. Shared

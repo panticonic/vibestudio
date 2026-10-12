@@ -12,6 +12,23 @@ on:
       package:
         type: string
         required: true
+      release-candidate:
+        type: boolean
+        default: false
+      release-tag:
+        type: string
+        default: ""
+    secrets:
+      APPLE_CSC_LINK:
+        required: false
+      APPLE_CSC_KEY_PASSWORD:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
 
 permissions: {}
 
@@ -56,6 +73,10 @@ jobs:
           tar -xf .cache/host-inputs/darwin-host-inputs.tar
           node scripts/ci-host-build-inputs.mjs verify --source-sha "$SOURCE_SHA" --desktop-mode production
 
+      - name: Verify exact release version and source commit
+        if: ${{ inputs.release-candidate }}
+        run: node scripts/check-release-version.mjs "${{ inputs.release-tag }}" --source-sha "${{ github.sha }}"
+
       - name: Prepare and exercise native dependencies
         if: ${{ inputs.target != 'darwin-arm64' }}
         run: pnpm check:native-host-dependencies --repair
@@ -98,8 +119,34 @@ jobs:
         id: package
         if: ${{ success() && ((inputs.target == 'darwin-arm64' && steps.restore-host-inputs.outcome == 'success') || (inputs.target != 'darwin-arm64' && steps.native-check.outcome == 'success')) }}
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm exec electron-builder --dir --publish never
+          CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          if [ "${{ inputs.target }}" = "darwin-arm64" ] && [ "${{ inputs.release-candidate }}" = "true" ]; then
+            missing=0
+            for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+              eval "value=\${$name}"
+              if [ -z "$value" ]; then missing=$((missing + 1)); fi
+            done
+            if [ "$missing" -eq 0 ]; then
+              pnpm exec electron-builder --dir --publish never
+              mkdir -p release && echo developer-id > release/macos-signing.txt
+            elif [ "$missing" -eq 5 ]; then
+              echo "::warning::No Apple identity configured; preparing an ad-hoc signed, unnotarized macOS candidate."
+              CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --dir --publish never
+              mkdir -p release && echo ad-hoc > release/macos-signing.txt
+            else
+              echo "Apple signing is partially configured: $missing of 5 credentials are missing." >&2
+              echo "Set all five secrets to sign, or none to publish an unsigned build." >&2
+              exit 1
+            fi
+          else
+            CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --dir --publish never
+          fi
 
       - name: Archive installed application layout
         id: archive
@@ -107,16 +154,43 @@ jobs:
         shell: bash
         run: |
           if [ "${{ inputs.package }}" = "mac" ]; then
-            tar -cf packaged-app.tar -C release/mac-arm64 Vibestudio.app
+            ditto -c -k --sequesterRsrc --keepParent release/mac-arm64/Vibestudio.app packaged-app.zip
           else
             tar -cf packaged-app.tar -C release/win-unpacked .
           fi
+
+      - name: Attest the exact macOS release candidate
+        if: ${{ inputs.package == 'mac' && inputs.release-candidate }}
+        env:
+          RELEASE_DIR: release
+        run: >-
+          node scripts/release-app-candidate.mjs create packaged-app.zip
+          macos-release-provenance.json "${{ inputs.release-tag }}" "${{ github.sha }}"
 
       - name: Upload application for independent acceptance
         if: ${{ !cancelled() && steps.archive.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: packaged-app-${{ inputs.target }}
-          path: packaged-app.tar
+          name: packaged-app-${{ inputs.target }}-${{ github.sha }}
+          path: packaged-app.*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload macOS release signing mode
+        if: ${{ inputs.package == 'mac' && inputs.release-candidate }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibestudio-macos-signing-${{ github.sha }}
+          path: release/macos-signing.txt
+          if-no-files-found: error
+          retention-days: 7
+
+
+      - name: Upload macOS release candidate provenance
+        if: ${{ inputs.package == 'mac' && inputs.release-candidate }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibestudio-macos-provenance-${{ github.sha }}
+          path: macos-release-provenance.json
           if-no-files-found: error
           retention-days: 7

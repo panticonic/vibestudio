@@ -1,34 +1,114 @@
 name: Release
 
-# Tag a validated release with `v*` (e.g. v0.2.0) to create the GitHub release and
-# build the native installers. Nothing here publishes to npm; the headless server
+# Dispatch against an exact commit and requested version. Every enabled native
+# candidate and its acceptance must pass before the workflow creates the tag.
+# Nothing here publishes to npm; the headless server
 # has a separate manual `pnpm publish:server-npm` path for hosts no native
 # package covers.
 #   - vars.RELEASE_LINUX = 'true'  → deb/rpm/pacman, plus the signed apt and
 #     dnf repositories on GitHub Pages after this workflow succeeds
 #     (needs build-resources icons and LINUX_SIGNING_KEY)
 #   - vars.RELEASE_WINDOWS = 'true' → x64 NSIS installer, unsigned unless a certificate is added
-#   - vars.RELEASE_MAC   = 'true'  → DMG, signed and notarized when all five Apple secrets
-#     are set and ad-hoc signed otherwise
+#   - vars.RELEASE_MAC   = 'true'  → DMG/ZIP from the accepted app candidate,
+#     signed and notarized when all five Apple secrets are set and ad-hoc signed otherwise
 # The Homebrew cask is not built here: panticonic/homebrew-tap tracks releases itself.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: Version tag to create after all release candidates pass (for example v0.2.0)
+        type: string
+        required: true
+      source-sha:
+        description: Full commit SHA to validate and tag
+        type: string
+        required: true
 
 # Jobs opt into only the token authority they need. Artifact upload/download uses
 # GitHub's run-scoped artifact token, not a repository-write GITHUB_TOKEN.
 permissions: {}
 
 jobs:
-  release-quality:
-    name: Validate release commit
-    uses: ./.github/workflows/ci.yml
+  validate-release-input:
+    name: Validate requested version and exact commit
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
+    steps:
+      - name: Checkout requested workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require the protected release branch
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: test "$WORKFLOW_REF" = refs/heads/main
+      - name: Verify version and exact checked-out source SHA
+        run: node scripts/check-release-version.mjs "${{ inputs.release-tag }}" --source-sha "${{ inputs.source-sha }}"
+      - name: Verify Linux repository signing is configured
+        if: ${{ vars.RELEASE_LINUX == 'true' }}
+        env:
+          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+        run: test -n "$LINUX_SIGNING_KEY"
+
+  release-quality:
+    name: Validate release commit
+    needs: validate-release-input
+    uses: ./.github/workflows/ci.yml
+    with:
+      release-preparation: true
+      release-tag: ${{ inputs.release-tag }}
+    permissions:
+      contents: read
+    secrets:
+      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+      APPLE_CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
+      APPLE_CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+  create-release-tag:
+    name: Create immutable release tag after all candidate gates
+    needs: release-quality
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release-tag }}
+      SOURCE_SHA: ${{ inputs.source-sha }}
+    steps:
+      - name: Create the tag at the exact validated commit
+        run: |
+          verify_existing_tag() {
+            ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")"
+            test "$(jq -r '.object.type' <<<"$ref_json")" = tag
+            tag_object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+            tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object_sha")"
+            test "$(jq -r '.object.sha' <<<"$tag_json")" = "$SOURCE_SHA"
+            test "$(jq -r '.tag' <<<"$tag_json")" = "$RELEASE_TAG"
+          }
+
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            verify_existing_tag
+          else
+            tag_object_sha="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" \
+              -f "tag=$RELEASE_TAG" \
+              -f "message=Release $RELEASE_TAG" \
+              -f "object=$SOURCE_SHA" \
+              -f "type=commit" \
+              --jq '.sha')"
+            if ! gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$tag_object_sha" >/dev/null; then
+              echo "Tag ref creation raced with another writer; verifying the immutable ref."
+            fi
+            verify_existing_tag
+          fi
 
   github-release:
     name: Create draft GitHub release
-    needs: release-quality
+    needs: create-release-tag
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -38,12 +118,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify tag matches the committed package version
-        run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
-
       - name: GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          tag_name: ${{ inputs.release-tag }}
+          target_commitish: ${{ inputs.source-sha }}
           draft: true
           generate_release_notes: true
           body: |
@@ -75,11 +154,11 @@ jobs:
             brew install --cask panticonic/tap/vibestudio
             ```
 
-            The macOS build is ad-hoc signed rather than signed with an Apple Developer ID,
-            so macOS asks you to confirm it on first launch (System Settings → Privacy &
-            Security → Open Anyway). The app checks for updates and offers the new DMG:
-            quit, replace Vibestudio in Applications, then reopen it. Homebrew installs
-            offer to run `brew upgrade --cask vibestudio` instead.
+            The macOS app is signed and notarized when all Apple credentials are configured.
+            Otherwise it is ad-hoc signed and macOS asks you to confirm it on first launch
+            (System Settings → Privacy & Security → Open Anyway). The app checks for
+            updates and offers the new DMG: quit, replace Vibestudio in Applications,
+            then reopen it. Homebrew installs offer to run `brew upgrade --cask vibestudio` instead.
 
             **Windows** — download the `.exe` installer below. It is not yet code signed,
             so SmartScreen will warn on first run.
@@ -104,8 +183,8 @@ jobs:
 
   publish-linux:
     name: Verify and publish Linux installers
-    # release-quality includes the tag-gated per-architecture Linux candidate
-    # jobs and every other required check; publication stays behind that full gate.
+    # release-quality includes both architectures, pre-tag signature verification,
+    # and every other required check; publication only attaches the signed candidate.
     needs: [github-release, release-quality]
     if: ${{ vars.RELEASE_LINUX == 'true' }}
     runs-on: ubuntu-24.04
@@ -115,34 +194,17 @@ jobs:
       - name: Download immutable Linux release candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: vibestudio-linux-*-${{ github.sha }}
-          merge-multiple: true
+          name: vibestudio-linux-release-${{ inputs.source-sha }}
           path: release
 
       - name: Verify Linux installer checksums
         working-directory: release
-        run: sha256sum --check SHA256SUMS-linux-*
-
-      - name: Checkout package publisher
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          path: publisher
-
-      - name: Sign the canonical RPM installers
-        env:
-          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
-          SIGNING_KEY: ${{ vars.LINUX_SIGNING_KEY_ID || 'packages@vibestudio.app' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y rpm
-          test -n "$LINUX_SIGNING_KEY"
-          printf '%s' "$LINUX_SIGNING_KEY" | gpg --batch --import
-          bash publisher/scripts/publish/sign-linux-installers.sh release
+        run: sha256sum --check SHA256SUMS-linux
 
       - name: Attach Linux installers to the release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          tag_name: ${{ inputs.release-tag }}
           draft: true
           files: |
             release/*.deb
@@ -150,148 +212,9 @@ jobs:
             release/*.pkg.tar.zst
             release/SHA256SUMS-linux
 
-  mac-dmg:
-    name: Build, sign, and notarize macOS DMG
-    needs: github-release
-    if: ${{ vars.RELEASE_MAC == 'true' }}
-    runs-on: macos-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Verify tag matches the committed package version
-        run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
-
-      - name: Download tested Darwin production host inputs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: vibestudio-darwin-host-production-${{ github.sha }}
-          path: .cache/host-inputs
-
-      - name: Restore and verify tested Darwin production host inputs
-        env:
-          SOURCE_SHA: ${{ github.sha }}
-        run: |
-          tar -xf .cache/host-inputs/darwin-host-inputs.tar
-          node scripts/ci-host-build-inputs.mjs verify --source-sha "$SOURCE_SHA" --desktop-mode production
-
-      # Verify the canonical build before any signing secret enters the environment.
-      # Exact-input admission reuses the tested host outputs. electron-builder
-      # currently couples macOS packaging, signing, and notarization in one command,
-      # so only that irreducible step receives the Apple credentials.
-      - name: Build application
-        run: pnpm build
-
-      - name: Download source-attested Darwin process observers
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: darwin-process-observers-ci-${{ github.sha }}
-          path: dist/native-process-observer
-
-      - name: Download tested Darwin native isolation input
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: native-isolation-darwin-arm64
-          path: native/isolation/artifacts/native-isolation-darwin-arm64
-
-      # Signing is all-or-nothing: a half-configured Apple identity produces a
-      # build that looks signed and fails notarization later, so either every
-      # credential is present or the build is deliberately unsigned. An unsigned
-      # build is still ad-hoc signed by the afterPack hook, because Apple Silicon
-      # refuses to run a bundle carrying no signature at all.
-      - name: Package, sign, and notarize macOS installers
-        env:
-          CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          missing=0
-          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-            eval "value=\${$name}"
-            if [ -z "$value" ]; then missing=$((missing + 1)); fi
-          done
-          if [ "$missing" -eq 0 ]; then
-            echo "Signing and notarizing with the configured Apple identity."
-            pnpm exec electron-builder --mac --publish never
-            # The Homebrew tap renders `auto_updates` from this: a cask must not
-            # defer to an in-app updater that Squirrel will refuse.
-            mkdir -p release && echo developer-id > release/macos-signing.txt
-          elif [ "$missing" -eq 5 ]; then
-            echo "::warning::No Apple identity configured; publishing an ad-hoc signed, unnotarized macOS build. Gatekeeper will warn on first launch and it cannot auto-update."
-            # Keep electron-builder from adopting a stray keychain identity on the
-            # runner, so an unsigned build is unsigned deliberately rather than by
-            # accident.
-            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
-            CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac --publish never
-            mkdir -p release && echo ad-hoc > release/macos-signing.txt
-          else
-            echo "Apple signing is partially configured: $missing of 5 credentials are missing." >&2
-            echo "Set all five secrets to sign, or none to publish an unsigned build." >&2
-            exit 1
-          fi
-
-      - name: Generate DMG checksums
-        run: |
-          cd release
-          # electron-updater downloads the zip, not the dmg, and resolves it
-          # through latest-mac.yml. Publishing the installer alone leaves the
-          # in-app updater with nothing to fetch.
-          test -f latest-mac.yml
-          ls ./*.zip >/dev/null
-          shasum -a 256 ./*.dmg ./*.zip > SHA256SUMS-macos
-          test -s SHA256SUMS-macos
-
-      - name: Archive source-attested Darwin process observers
-        run: |
-          tar -czf release/darwin-process-observers.tar.gz -C dist native-process-observer
-          (cd release && shasum -a 256 darwin-process-observers.tar.gz > SHA256SUMS-darwin-process-observers)
-
-      - name: Upload immutable macOS release candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: vibestudio-macos-${{ github.sha }}
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/latest-mac.yml
-            release/macos-signing.txt
-            release/SHA256SUMS-macos
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload immutable Darwin process observer candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: darwin-process-observers-release-${{ github.sha }}
-          path: |
-            release/darwin-process-observers.tar.gz
-            release/SHA256SUMS-darwin-process-observers
-          if-no-files-found: error
-          retention-days: 30
-
   publish-macos:
     name: Verify and publish macOS DMG
-    needs: [github-release, mac-dmg, accept-macos-installer]
+    needs: [github-release, release-quality]
     if: ${{ vars.RELEASE_MAC == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
@@ -300,7 +223,7 @@ jobs:
       - name: Download immutable macOS release candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: vibestudio-macos-${{ github.sha }}
+          name: vibestudio-macos-${{ inputs.source-sha }}
           path: release
 
       - name: Verify DMG checksums
@@ -310,7 +233,7 @@ jobs:
       - name: Download Darwin process observer candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: darwin-process-observers-release-${{ github.sha }}
+          name: darwin-process-observers-release-${{ inputs.source-sha }}
           path: release
 
       - name: Verify Darwin process observer candidate
@@ -320,6 +243,7 @@ jobs:
       - name: Attach DMG to the release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          tag_name: ${{ inputs.release-tag }}
           draft: true
           files: |
             release/*.dmg
@@ -341,7 +265,7 @@ jobs:
       - name: Download immutable Windows release candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: vibestudio-windows-${{ github.sha }}
+          name: vibestudio-windows-${{ inputs.source-sha }}
           path: release
       - name: Verify installer checksums
         working-directory: release
@@ -349,6 +273,7 @@ jobs:
       - name: Attach installer to the release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          tag_name: ${{ inputs.release-tag }}
           draft: true
           files: |
             release/*.exe
@@ -370,68 +295,5 @@ jobs:
       - name: Make the complete release public and latest
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
         run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
-
-  accept-macos-installer:
-    name: Install and launch macOS release candidate
-    needs: mac-dmg
-    if: ${{ vars.RELEASE_MAC == 'true' }}
-    runs-on: macos-14
-    permissions:
-      contents: read
-    timeout-minutes: 30
-    steps:
-      - name: Checkout acceptance harness
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - name: Install test dependencies (no application build)
-        run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Download immutable release candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: vibestudio-macos-${{ github.sha }}
-          path: candidate
-      - name: Verify, install, and launch the DMG
-        shell: bash
-        run: |
-          (cd candidate && shasum -a 256 --check SHA256SUMS-macos)
-          images=(candidate/*.dmg)
-          test "${#images[@]}" -eq 1
-          mount="$RUNNER_TEMP/vibestudio-dmg"
-          mkdir -p "$mount" installed
-          hdiutil attach "${images[0]}" -readonly -nobrowse -mountpoint "$mount"
-          trap 'hdiutil detach "$mount"' EXIT
-          ditto "$mount/Vibestudio.app" installed/Vibestudio.app
-          codesign --verify --deep --strict --verbose=2 installed/Vibestudio.app
-          signing_mode="$(cat candidate/macos-signing.txt)"
-          case "$signing_mode" in
-            developer-id)
-              xcrun stapler validate installed/Vibestudio.app
-              spctl --assess --type execute --verbose=2 installed/Vibestudio.app
-              ;;
-            ad-hoc)
-              echo "Acceptance matches the deliberately ad-hoc signed release candidate."
-              ;;
-            *)
-              echo "Unknown macOS signing mode: $signing_mode" >&2
-              exit 1
-              ;;
-          esac
-          node scripts/packaged-isolation-smoke.mjs --app installed/Vibestudio.app --out-dir test-results/packaged-isolation
-      - name: Upload acceptance diagnostics
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-acceptance-macos
-          path: test-results/packaged-isolation
-          if-no-files-found: warn
-          retention-days: 7

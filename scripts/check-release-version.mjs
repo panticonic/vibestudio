@@ -29,10 +29,15 @@ export function checkCommittedReleaseVersion(
   return assertReleaseVersion(tag, pkg.version);
 }
 
-export function assertSourceCommit(expectedSha, actualSha) {
+export function assertFullSourceCommit(expectedSha) {
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(expectedSha)) {
     throw new Error(`Expected source SHA must be a full Git object ID; received "${expectedSha}"`);
   }
+  return expectedSha;
+}
+
+export function assertSourceCommit(expectedSha, actualSha) {
+  assertFullSourceCommit(expectedSha);
   if (actualSha !== expectedSha) {
     throw new Error(
       `Checked out source commit ${actualSha} does not match requested commit ${expectedSha}`
