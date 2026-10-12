@@ -414,11 +414,11 @@ describe("DevelopmentExecutor exact private execution", () => {
             "console.log('token=should-not-survive');",
             "fs.mkdirSync('dist', {recursive:true});",
             "fs.writeFileSync('dist/server.mjs', 'export const exact = true;\\n');",
-            // The real build stages each host generation with a symlinked
-            // dependency realm pointing outside the output tree.
+            // The real build stages each host generation with a relative
+            // dependency link pointing outside the output tree.
             "fs.mkdirSync('dist/host-generations/desktop-exact', {recursive:true});",
             "fs.writeFileSync('dist/host-generations/desktop-exact/main.cjs', 'exact');",
-            "fs.symlinkSync(process.cwd() + '/node_modules', 'dist/host-generations/desktop-exact/node_modules');",
+            "fs.symlinkSync('../../../node_modules', 'dist/host-generations/desktop-exact/node_modules');",
             // A staged runtime's bin shims are relative links to files in it.
             "fs.mkdirSync('dist/node/exact/bin', {recursive:true});",
             "fs.mkdirSync('dist/node/exact/lib', {recursive:true});",

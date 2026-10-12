@@ -1,11 +1,19 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { spawnResultFailure } from "./spawn-result-failure.mjs";
 
-export async function packNpmPackageCandidate({ packageRoot, outputDirectory, sourceSha }) {
+const MAX_FAILURE_DETAIL_BYTES = 16 * 1024;
+
+export async function packNpmPackageCandidate({
+  packageRoot,
+  outputDirectory,
+  sourceSha,
+  spawnProcess = spawn,
+}) {
   if (!/^[0-9a-f]{40}$/u.test(sourceSha ?? "")) {
     throw new Error("npm candidate source SHA must be a full Git commit SHA");
   }
@@ -15,49 +23,126 @@ export async function packNpmPackageCandidate({ packageRoot, outputDirectory, so
   }
 
   const packageManifest = readJson(path.join(packageRoot, "package.json"));
-  const packedResult = spawnSync("npm", ["pack", "--json", "--pack-destination", outputDirectory], {
-    cwd: packageRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const packFailure = spawnResultFailure(packedResult, "npm pack");
-  if (packFailure) {
-    const detail = packedResult.stderr?.trim() || packedResult.stdout?.trim();
-    throw new Error(`npm pack failed${detail ? `: ${detail}` : ""}`, { cause: packFailure });
-  }
-  let packed;
+  const captureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-pack-"));
+  const stdoutPath = path.join(captureDirectory, "stdout.json");
+  const stderrPath = path.join(captureDirectory, "stderr.log");
+  let primaryFailure;
   try {
-    const results = JSON.parse(packedResult.stdout);
+    const packedResult = await spawnToFiles(
+      spawnProcess,
+      "npm",
+      ["pack", "--json", "--pack-destination", outputDirectory],
+      {
+        cwd: packageRoot,
+        stdoutPath,
+        stderrPath,
+      }
+    );
+    const packFailure = spawnResultFailure(packedResult, "npm pack");
+    if (packFailure) {
+      const stdoutDetail = readFileTail(stdoutPath);
+      const stderrDetail = readFileTail(stderrPath);
+      const details = [stderrDetail, stdoutDetail].filter(Boolean);
+      throw new Error(`npm pack failed${details.length ? `:\n${details.join("\n")}` : ""}`, {
+        cause: packFailure,
+      });
+    }
+
+    let packed;
+    let results;
+    try {
+      results = JSON.parse(fs.readFileSync(stdoutPath, "utf8"));
+    } catch (error) {
+      throw new Error("npm pack returned an invalid candidate record", { cause: error });
+    }
     if (!Array.isArray(results) || results.length !== 1) {
       throw new Error("npm pack must produce exactly one archive");
     }
     [packed] = results;
-  } catch (error) {
-    throw new Error("npm pack returned an invalid candidate record", { cause: error });
-  }
-  if (
-    packed.name !== packageManifest.name ||
-    packed.version !== packageManifest.version ||
-    typeof packed.filename !== "string" ||
-    path.basename(packed.filename) !== packed.filename ||
-    !packed.filename.endsWith(".tgz")
-  ) {
-    throw new Error("npm pack output does not match the staged package identity");
-  }
+    if (
+      packed.name !== packageManifest.name ||
+      packed.version !== packageManifest.version ||
+      typeof packed.filename !== "string" ||
+      path.basename(packed.filename) !== packed.filename ||
+      !packed.filename.endsWith(".tgz")
+    ) {
+      throw new Error("npm pack output does not match the staged package identity");
+    }
 
-  const tarballPath = path.join(outputDirectory, packed.filename);
-  const receipt = await createNpmPackageCandidateReceipt({
-    tarballPath,
-    sourceSha,
-    packageName: packageManifest.name,
-    packageVersion: packageManifest.version,
+    const tarballPath = path.join(outputDirectory, packed.filename);
+    const receipt = await createNpmPackageCandidateReceipt({
+      tarballPath,
+      sourceSha,
+      packageName: packageManifest.name,
+      packageVersion: packageManifest.version,
+    });
+    const receiptPath = path.join(outputDirectory, "candidate-receipt.json");
+    fs.writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    return { receipt, receiptPath, tarballPath };
+  } catch (error) {
+    primaryFailure = error;
+    throw error;
+  } finally {
+    try {
+      fs.rmSync(captureDirectory, { recursive: true, force: true });
+    } catch (cleanupError) {
+      if (primaryFailure) {
+        throw new AggregateError(
+          [primaryFailure, cleanupError],
+          "npm pack and its output cleanup failed",
+          { cause: primaryFailure }
+        );
+      }
+      throw cleanupError;
+    }
+  }
+}
+
+function spawnToFiles(spawnProcess, command, args, { cwd, stdoutPath, stderrPath }) {
+  const stdoutFd = fs.openSync(stdoutPath, "wx", 0o600);
+  let stderrFd;
+  let child;
+  try {
+    stderrFd = fs.openSync(stderrPath, "wx", 0o600);
+    child = spawnProcess(command, args, {
+      cwd,
+      stdio: ["ignore", stdoutFd, stderrFd],
+    });
+  } catch (error) {
+    fs.closeSync(stdoutFd);
+    if (stderrFd !== undefined) fs.closeSync(stderrFd);
+    return Promise.resolve({ status: null, signal: null, error });
+  }
+  fs.closeSync(stdoutFd);
+  fs.closeSync(stderrFd);
+
+  return new Promise((resolve) => {
+    let spawnError;
+    child.once("error", (error) => {
+      spawnError = error;
+    });
+    child.once("close", (status, signal) => {
+      resolve({ status, signal, error: spawnError });
+    });
   });
-  const receiptPath = path.join(outputDirectory, "candidate-receipt.json");
-  fs.writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, {
-    flag: "wx",
-    mode: 0o600,
-  });
-  return { receipt, receiptPath, tarballPath };
+}
+
+function readFileTail(filePath) {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const { size } = fs.fstatSync(fd);
+    if (size === 0) return "";
+    const length = Math.min(size, MAX_FAILURE_DETAIL_BYTES);
+    const tail = Buffer.allocUnsafe(length);
+    fs.readSync(fd, tail, 0, length, size - length);
+    const text = tail.toString("utf8").trim();
+    return size > length ? `[last ${length} bytes]\n${text}` : text;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 export async function readVerifiedNpmPackageCandidate(receiptPath, expected) {

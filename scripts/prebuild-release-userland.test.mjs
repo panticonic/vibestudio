@@ -582,7 +582,7 @@ test("exports only immutable records and verifies every payload before publicati
   const root = await fixture();
   const source = path.join(root, "source"),
     destination = path.join(root, "release");
-  const { key, bytes } = await releaseBuildFixture(root);
+  const { key } = await releaseBuildFixture(root);
   await fs.writeFile(path.join(source, "grants.db"), "private mutable authority");
   await fs.writeFile(path.join(source, "metadata.json.tmp.writer"), "incomplete");
   await Promise.all([
@@ -764,6 +764,28 @@ test("template preparation joins cancellation before retiring private scratch", 
     );
   } finally {
     watcher.close();
+  }
+});
+
+test("installed producer ignores an inherited borrowed release root", async () => {
+  const root = await fixture();
+  const entry = path.join(root, "producer.mjs");
+  const inheritedRoot = path.join(root, "missing-borrowed-release");
+  await fs.writeFile(entry, `process.send({ kind: "completed" }, () => process.exit(0));`);
+  const previous = process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT;
+  process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = inheritedRoot;
+  try {
+    await prepareInstalledTemplateRelease({
+      appRoot: root,
+      resources: root,
+      executable: process.execPath,
+      entry,
+      scratchParent: root,
+    });
+    assert.equal(process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT, inheritedRoot);
+  } finally {
+    if (previous === undefined) delete process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT;
+    else process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = previous;
   }
 });
 

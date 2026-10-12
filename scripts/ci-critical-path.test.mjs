@@ -125,21 +125,54 @@ test("native artifact consumers wait for their exact producers without unrelated
     ["native-isolation-linux-arm64", "native-input-linux-arm64", "linux-arm64", "ubuntu-22.04-arm"],
     ["native-isolation-darwin-arm64", "native-input-darwin-arm64", "darwin-arm64", "macos-26"],
   ]) {
-    assert.deepEqual(dependenciesOf(jobs[verifier]), [producer]);
+    assert.deepEqual(
+      dependenciesOf(jobs[verifier]),
+      verifier === "native-isolation-darwin-arm64"
+        ? [producer, "darwin-development-inputs"]
+        : [producer]
+    );
     assert.equal(jobs[verifier].uses, "./.github/workflows/native-verification.yml");
     assert.equal(jobs[verifier].with.target, target);
     assert.equal(jobs[verifier].with.runner, runner);
   }
 
-  assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), [
-    "native-input-darwin-arm64",
-  ]);
+  assert.deepEqual(dependenciesOf(jobs["darwin-production-host"]), ["native-input-darwin-arm64"]);
+  assert.equal(
+    jobs["darwin-production-host"].uses,
+    "./.github/workflows/darwin-production-host.yml"
+  );
+  assert.deepEqual(jobs["darwin-production-host"].with, { runner: "macos-14" });
+  assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), ["darwin-production-host"]);
   assert.equal(
     jobs["application-candidate-mac"].uses,
     "./.github/workflows/application-candidate.yml"
   );
   assert.equal(jobs["application-candidate-mac"].with.target, "darwin-arm64");
   assert.equal(jobs["application-candidate-mac"].with.package, "mac");
+  assert.deepEqual(dependenciesOf(jobs["darwin-development-inputs"]), ["darwin-production-host"]);
+  assert.ok(
+    !transitiveDependencies(jobs, "darwin-development-inputs").has("application-candidate-mac"),
+    "source preparation must start from the production host artifact without waiting for app packaging"
+  );
+  assert.equal(
+    jobs["darwin-development-inputs"].uses,
+    "./.github/workflows/darwin-host-inputs.yml"
+  );
+  assert.deepEqual(jobs["darwin-development-inputs"].with, {
+    runner: "macos-14",
+    "base-ref": "${{ inputs.base-ref || 'main' }}",
+  });
+  assert.deepEqual(dependenciesOf(jobs["desktop-source-integration-macos-14"]), [
+    "darwin-development-inputs",
+  ]);
+  assert.equal(
+    jobs["desktop-source-integration-macos-14"].uses,
+    "./.github/workflows/desktop-source-integration.yml"
+  );
+  assert.ok(
+    !transitiveDependencies(jobs, "packaged-acceptance-macos-14").has("darwin-development-inputs"),
+    "installed-app acceptance must not wait for unrelated development source integration"
+  );
   assert.deepEqual(dependenciesOf(jobs["application-candidate-windows"]), []);
   assert.equal(
     jobs["application-candidate-windows"].uses,
@@ -147,6 +180,86 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.equal(jobs["application-candidate-windows"].with.target, "win32-x64");
   assert.equal(jobs["application-candidate-windows"].with.package, "windows");
+  const windowsInstallerCandidate = jobs["windows-installer-candidate"];
+  assert.deepEqual(dependenciesOf(windowsInstallerCandidate), ["application-candidate-windows"]);
+  assert.equal(
+    windowsInstallerCandidate.if,
+    "\${{ vars.RELEASE_WINDOWS == 'true' && github.ref_type == 'tag' }}"
+  );
+  assert.equal(windowsInstallerCandidate.uses, "./.github/workflows/windows-installer.yml");
+  assert.deepEqual(windowsInstallerCandidate.with, {
+    runner: "\${{ inputs.windows-runner || 'windows-2025' }}",
+  });
+  assert.ok(
+    !transitiveDependencies(jobs, "windows-installer-candidate").has(
+      "native-isolation-darwin-arm64"
+    ),
+    "the Windows installer must consume only its tested app candidate"
+  );
+
+  const windowsInstaller = await readWorkflow("windows-installer.yml");
+  assert.deepEqual(windowsInstaller.on.workflow_call.inputs, {
+    runner: { type: "string", required: true },
+  });
+  const windowsPackageJob = windowsInstaller.jobs.package;
+  const windowsAcceptanceJob = windowsInstaller.jobs.acceptance;
+  assert.equal(windowsPackageJob["runs-on"], "\${{ inputs.runner }}");
+  assert.deepEqual(windowsPackageJob.permissions, { contents: "read" });
+  const windowsSteps = windowsPackageJob.steps;
+  const windowsDownload = windowsSteps.find(
+    (step) => step.name === "Download tested Windows application candidate"
+  );
+  assert.equal(windowsDownload.with.name, "packaged-app-win32-x64");
+  const windowsRestore = windowsSteps.find(
+    (step) => step.name === "Restore the tested Windows application layout"
+  );
+  const windowsHookDependencies = windowsSteps.find(
+    (step) => step.name === "Build infrastructure packages required by packaging hooks"
+  );
+  const windowsPackage = windowsSteps.find(
+    (step) => step.name === "Package NSIS installer from the tested application"
+  );
+  assert.equal(windowsHookDependencies.run, "pnpm build:infrastructure");
+  assert.ok(windowsSteps.indexOf(windowsDownload) < windowsSteps.indexOf(windowsRestore));
+  assert.ok(windowsSteps.indexOf(windowsHookDependencies) < windowsSteps.indexOf(windowsPackage));
+  assert.ok(windowsSteps.indexOf(windowsRestore) < windowsSteps.indexOf(windowsPackage));
+  assert.match(windowsPackage.run, /--prepackaged release\/win-unpacked/);
+  assert.doesNotMatch(windowsPackage.run, /pnpm build/);
+  const windowsChecksum = windowsSteps.find((step) => step.name === "Generate installer checksums");
+  const windowsUpload = windowsSteps.find(
+    (step) => step.name === "Upload immutable Windows release candidate"
+  );
+  assert.ok(windowsSteps.indexOf(windowsPackage) < windowsSteps.indexOf(windowsChecksum));
+  assert.ok(windowsSteps.indexOf(windowsChecksum) < windowsSteps.indexOf(windowsUpload));
+  assert.match(windowsChecksum.run, /latest\.yml/);
+  assert.match(windowsChecksum.run, /SHA256SUMS-windows/);
+  assert.equal(windowsUpload.with.name, "vibestudio-windows-\${{ github.sha }}");
+  assert.equal(windowsUpload.with["if-no-files-found"], "error");
+  assert.doesNotMatch(JSON.stringify(windowsInstaller), /\$\{\{\s*secrets\./);
+  assert.doesNotMatch(JSON.stringify(windowsInstaller), /softprops\/action-gh-release/);
+
+  assert.deepEqual(dependenciesOf(windowsAcceptanceJob), ["package"]);
+  assert.equal(windowsAcceptanceJob["runs-on"], "\${{ inputs.runner }}");
+  assert.equal(windowsAcceptanceJob.if, undefined);
+  assert.equal(windowsAcceptanceJob["timeout-minutes"], 30);
+  const windowsAcceptanceSteps = windowsAcceptanceJob.steps;
+  const acceptedInstallerDownload = windowsAcceptanceSteps.find(
+    (step) => step.name === "Download immutable release candidate"
+  );
+  assert.equal(acceptedInstallerDownload.with.name, "vibestudio-windows-\${{ github.sha }}");
+  const acceptedInstallerChecksum = windowsAcceptanceSteps.find(
+    (step) => step.name === "Verify installer checksums"
+  );
+  const acceptedInstallerLaunch = windowsAcceptanceSteps.find(
+    (step) => step.name === "Install and launch the NSIS release candidate"
+  );
+  assert.equal(acceptedInstallerChecksum.run, "sha256sum --check SHA256SUMS-windows");
+  assert.ok(acceptedInstallerLaunch.run.includes("packaged-isolation-smoke.mjs"));
+  assert.ok(
+    windowsAcceptanceSteps.some((step) => step.name === "Upload acceptance diagnostics"),
+    "Windows installer acceptance retains its diagnostics"
+  );
+
   assert.deepEqual(dependenciesOf(jobs["npm-server-preflight"]), producerJobs);
   const npmDownloads = jobs["npm-server-preflight"].steps
     .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
@@ -258,6 +371,7 @@ test("native artifact consumers wait for their exact producers without unrelated
     "native-isolation-linux-arm64",
     "application-candidate-mac",
     "application-candidate-windows",
+    "windows-installer-candidate",
     "npm-server-preflight",
     ...acceptanceJobs.map(([name]) => name),
   ]) {
@@ -292,37 +406,43 @@ test("native artifact consumers wait for their exact producers without unrelated
     /vibestudio-linux-\*-/,
     "Linux publication consumes the per-architecture candidates from release-quality"
   );
-  assert.deepEqual(
-    dependenciesOf(releaseJobs["windows-installer"]),
-    [],
-    "Windows packaging consumes no CI-produced native payload artifact"
-  );
-  assert.doesNotMatch(JSON.stringify(releaseJobs["windows-installer"]), /download-artifact/);
+  assert.equal(releaseJobs["windows-installer"], undefined);
+  assert.equal(releaseJobs["accept-windows-installer"], undefined);
+  assert.deepEqual(dependenciesOf(releaseJobs["publish-windows"]), [
+    "github-release",
+    "release-quality",
+  ]);
 
-  for (const [producer, publisher] of [["windows-installer", "publish-windows"]]) {
-    const job = releaseJobs[producer];
-    const ancestors = transitiveDependencies(releaseJobs, producer);
-    assert.ok(
-      !ancestors.has("github-release"),
-      `${producer} must prepare its private candidate before publication without depending on the draft job`
-    );
-    assert.deepEqual(job.permissions, { contents: "read" });
-    const source = JSON.stringify(job);
-    assert.doesNotMatch(
-      source,
-      /\$\{\{\s*secrets\./,
-      `${producer} must not receive publication credentials`
-    );
-    assert.doesNotMatch(
-      source,
-      /softprops\/action-gh-release/,
-      `${producer} must not publish to GitHub Releases`
-    );
-    assert.ok(
-      dependenciesOf(releaseJobs[publisher]).includes(producer),
-      `${publisher} must wait for its exact candidate producer`
-    );
-  }
+  const macJob = releaseJobs["mac-dmg"];
+  const macSteps = macJob.steps;
+  const macHostRestore = macSteps.findIndex(
+    (step) => step.name === "Restore and verify tested Darwin production host inputs"
+  );
+  const macCanonicalBuild = macSteps.findIndex((step) => step.name === "Build application");
+  assert.ok(
+    macHostRestore >= 0 && macHostRestore < macCanonicalBuild,
+    "signed packaging must verify shared production inputs before canonical build admission"
+  );
+  assert.equal(macSteps[macCanonicalBuild].run, "pnpm build");
+  const macObserver = macSteps.find(
+    (step) => step.name === "Download source-attested Darwin process observers"
+  );
+  assert.equal(macObserver.with.name, "darwin-process-observers-ci-\${{ github.sha }}");
+  assert.equal(macObserver.with.path, "dist/native-process-observer");
+  const macNative = macSteps.find(
+    (step) => step.name === "Download tested Darwin native isolation input"
+  );
+  assert.equal(macNative.with.name, "native-isolation-darwin-arm64");
+  assert.equal(macNative.with.path, "native/isolation/artifacts/native-isolation-darwin-arm64");
+  assert.ok(macSteps.some((step) => step.name === "Build application"));
+  assert.ok(
+    !macSteps.some((step) => step.name === "Prepare both Darwin process-group observers"),
+    "the signed packaging job must reuse CI's source-attested observer"
+  );
+  assert.ok(
+    !macSteps.some((step) => step.with?.pattern === "native-isolation-*"),
+    "the signed packaging job downloads only the Darwin native input it consumes"
+  );
 
   const macAncestors = transitiveDependencies(releaseJobs, "mac-dmg");
   assert.ok(
@@ -332,7 +452,7 @@ test("native artifact consumers wait for their exact producers without unrelated
 
   for (const [publisher, producer, acceptance] of [
     ["publish-linux", "release-quality", undefined],
-    ["publish-windows", "windows-installer", "accept-windows-installer"],
+    ["publish-windows", "release-quality", undefined],
     ["publish-macos", "mac-dmg", "accept-macos-installer"],
   ]) {
     const job = releaseJobs[publisher];
@@ -365,7 +485,41 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
 });
 
-test("application packaging captures production outputs before desktop template bootstrap", async () => {
+test("Darwin production and development host inputs are immutable producer artifacts", async () => {
+  const hostWorkflow = await readWorkflow("darwin-production-host.yml");
+  const hostJob = hostWorkflow.jobs["production-host"];
+  const hostSteps = hostJob.steps;
+  const hostIndex = (name) => {
+    const index = hostSteps.findIndex((step) => step.name === name);
+    assert.notEqual(index, -1, `Darwin host producer must include step: ${name}`);
+    return index;
+  };
+  assert.equal(hostJob["timeout-minutes"], undefined);
+  assert.ok(
+    hostIndex("Build production application and headless host") <
+      hostIndex("Check native execution and platform permissions")
+  );
+  assert.ok(
+    hostIndex("Check native execution and platform permissions") <
+      hostIndex("Verify and archive production host inputs")
+  );
+  assert.ok(
+    hostIndex("Verify and archive production host inputs") <
+      hostIndex("Upload production host inputs")
+  );
+  assert.equal(
+    hostSteps[hostIndex("Build production application and headless host")].run,
+    "pnpm build"
+  );
+  assert.equal(
+    hostSteps[hostIndex("Check native execution and platform permissions")].run,
+    "pnpm vitest run --config packages/process-adapter/vitest.native.config.ts --reporter=default --reporter=json --outputFile=.cache/native-acceptance.json"
+  );
+  assert.equal(
+    hostSteps[hostIndex("Upload production host inputs")].with.name,
+    "vibestudio-darwin-host-production-${{ github.sha }}"
+  );
+
   const reusable = await readWorkflow("application-candidate.yml");
   const steps = reusable.jobs.candidate.steps;
   const indexOf = (name) => {
@@ -373,28 +527,130 @@ test("application packaging captures production outputs before desktop template 
     assert.notEqual(index, -1, `application-candidates must include step: ${name}`);
     return index;
   };
-
+  assert.equal(reusable.jobs.candidate["timeout-minutes"], undefined);
   assert.ok(
-    indexOf("Package the application") < indexOf("Checkout Base template for desktop integration"),
-    "the packaged app must capture production dist before template acquisition can rebuild it"
+    indexOf("Download exact Darwin production host inputs") <
+      indexOf("Restore and verify exact Darwin production host inputs")
   );
   assert.ok(
-    indexOf("Archive installed application layout") <
-      indexOf("Acquire complete template source set for desktop integration"),
-    "the candidate archive must be complete before desktop template bootstrap changes shared outputs"
-  );
-  assert.ok(
-    indexOf("Upload application for independent acceptance") <
-      indexOf("Desktop pairing, approvals, panels, relaunch, and recovery"),
-    "independent installed-app acceptance must receive the production candidate before desktop smoke"
+    indexOf("Restore and verify exact Darwin production host inputs") <
+      indexOf("Package the application")
   );
   assert.match(
     steps[indexOf("Package the application")].if,
-    /steps\.native-check\.outcome == 'success'/
+    /inputs\.target == 'darwin-arm64'.*steps\.native-check\.outcome == 'success'/
   );
-  assert.doesNotMatch(
+  assert.equal(
+    steps[indexOf("Restore and verify exact Darwin production host inputs")].id,
+    "restore-host-inputs"
+  );
+  assert.match(steps[indexOf("Package the application")].if, /success\(\)/);
+  assert.match(
     steps[indexOf("Package the application")].if,
-    /desktop-templates/,
-    "packaging eligibility must not depend on source-template bootstrap"
+    /steps\.restore-host-inputs\.outcome == 'success'/
   );
+  assert.equal(
+    steps.some((step) => step.name.includes("Desktop pairing")),
+    false
+  );
+  assert.equal(
+    steps.some(
+      (step) => step.run === "pnpm build" && step.if === "${{ inputs.target == 'darwin-arm64' }}"
+    ),
+    false,
+    "Darwin packaging must reuse the tested production host generation"
+  );
+
+  const sourceProducer = await readWorkflow("darwin-host-inputs.yml");
+  const sourceSteps = sourceProducer.jobs.prepare.steps;
+  const sourceIndex = (name) => sourceSteps.findIndex((step) => step.name === name);
+  assert.deepEqual(sourceProducer.on.workflow_call.inputs, {
+    runner: { type: "string", required: true },
+    "base-ref": { type: "string", default: "main" },
+  });
+  assert.ok(sourceIndex("Download exact production host inputs") >= 0);
+  const pairedBase = sourceSteps[sourceIndex("Checkout paired Base template")];
+  assert.equal(pairedBase.with.ref, "${{ inputs.base-ref }}");
+  assert.equal(pairedBase.with.path, ".cache/template-checkouts/base");
+  assert.ok(
+    sourceIndex("Checkout paired Base template") < sourceIndex("Acquire exact template source set"),
+    "the complete official template setup must preserve the caller's exact Base source input"
+  );
+  assert.ok(
+    sourceIndex("Restore and verify production host inputs") <
+      sourceIndex("Prepare development source host and canonical workspace release")
+  );
+  assert.equal(
+    sourceSteps[sourceIndex("Build development source host generation")].env.NODE_ENV,
+    "development"
+  );
+  assert.equal(
+    sourceSteps[sourceIndex("Build development source host generation")].run,
+    "node build.mjs --source-server-prereqs"
+  );
+  assert.ok(
+    sourceIndex("Build development source host generation") <
+      sourceIndex("Prepare development source host and canonical workspace release")
+  );
+  assert.ok(
+    sourceSteps[sourceIndex("Verify and archive portable development inputs")].run.includes(
+      "--source-mode development"
+    )
+  );
+  assert.ok(
+    sourceSteps[sourceIndex("Verify and archive portable development inputs")].run.includes(
+      "--template-root"
+    )
+  );
+  assert.ok(
+    sourceSteps[sourceIndex("Verify and archive portable development inputs")].run.includes(
+      ".cache/template-checkouts"
+    )
+  );
+  assert.ok(
+    sourceSteps[sourceIndex("Upload exact development source inputs")].with.name.includes(
+      "${{ github.sha }}"
+    )
+  );
+  assert.match(
+    sourceSteps[sourceIndex("Verify and archive portable development inputs")].run,
+    /host-generations\/.leases/
+  );
+  assert.match(
+    sourceSteps[sourceIndex("Verify and archive portable development inputs")].run,
+    /host-generations\/.lock/
+  );
+  assert.equal(sourceProducer.jobs.prepare["timeout-minutes"], undefined);
+
+  const sourceConsumers = [
+    ["native-verification.yml", "Restore and verify exact Darwin development inputs"],
+    ["desktop-source-integration.yml", "Restore and verify exact source integration inputs"],
+  ];
+  for (const [workflowFile, restoreName] of sourceConsumers) {
+    const workflow = await readWorkflow(workflowFile);
+    const consumerJob =
+      workflow.jobs[workflowFile === "native-verification.yml" ? "verify" : "smoke"];
+    const consumerSteps = consumerJob.steps;
+    assert.equal(consumerJob["timeout-minutes"], undefined);
+    const restore = consumerSteps.find((step) => step.name === restoreName);
+    assert.ok(restore, `${workflowFile} must verify the producer artifact`);
+    assert.match(restore.run, /ci-host-build-inputs\.mjs verify/);
+    assert.match(restore.run, /--source-mode development/);
+    assert.match(restore.run, /--template-root/);
+    if (workflowFile === "native-verification.yml") {
+      const productionBuild = consumerSteps.find(
+        (step) => step.name === "Build production application and headless host"
+      );
+      assert.equal(productionBuild.run, "pnpm build");
+      assert.equal(productionBuild.if, "${{ inputs.target != 'darwin-arm64' }}");
+    } else {
+      assert.ok(
+        !consumerSteps.some(
+          (step) =>
+            step.run === "pnpm build" || step.run === "node build.mjs --source-server-prereqs"
+        ),
+        `${workflowFile} must consume the prepared host artifact rather than recompiling it`
+      );
+    }
+  }
 });

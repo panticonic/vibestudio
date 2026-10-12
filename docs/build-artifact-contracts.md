@@ -129,9 +129,11 @@ joining all work. Ordinary launch never deletes the inherited shared cache.
 
 The CI graph in `.github/workflows/ci.yml` expresses per-platform artifact
 dependencies, rather than broad verification barriers. Native producer jobs
-prepare executor payloads and source-attested Darwin observers once. Each Unix
-verification job waits only for its platform's producer. The macOS application
-candidate waits for Darwin inputs; the Windows candidate starts independently.
+prepare executor payloads and source-attested Darwin observers once. Linux
+verification waits for its platform's native producer; Darwin verification also
+consumes the prepared development-host artifact. The macOS application
+candidate waits for the Darwin production-host producer; the Windows candidate
+starts independently.
 The universal `npm-server-preflight` needs all three Unix producers.
 Each installed-acceptance job waits only for the application candidate for its
 platform, without waiting for the other platform, native tests, or npm checks.
@@ -143,6 +145,26 @@ Shared reusable workflows keep the
 platform job definitions consistent. Consumers verify downloaded inputs before
 use. Run-scoped artifact names and observer attestations bind them to the
 current workflow revision.
+
+Darwin packaging and source integration use two host modes with distinct
+fingerprints. One macOS-14 production-host job installs the exact native and
+observer inputs, builds the production desktop generation, runs its native
+acceptance, and uploads immutable generation records and payloads, infrastructure
+package outputs and their cache receipt, and a source-SHA receipt. Transient
+generation locks, leases, staging, and garbage directories are excluded. The
+application candidate and a separate development-input producer are sibling
+consumers of this artifact, so source preparation does not wait for app
+packaging. The development producer builds the development source generation
+once, resolves the eight official template checkouts (including the requested
+Base ref), and prepares their complete workspace runtime release once. It
+uploads one source-SHA-bound archive containing those exact template Git
+snapshots, both host generation modes, infrastructure outputs, and the prepared
+release. MacOS-14 source integration and macOS-26 native verification consume
+and verify that archive; they do not compile the host or re-prepare the template
+runtimes. Ordinary startup still validates and reuses the prepared release
+against the current host and template pins. Installed-app acceptance remains an
+independent consumer of the packaged candidate and does not wait for source
+preparation.
 
 The npm preflight retains its canonical `npm pack` archive after staging,
 dry-run, and fresh-install smoke checks succeed. Its artifact name includes the
@@ -166,8 +188,20 @@ otherwise a slow unrelated producer serializes those consumers. Keep platform
 variation in shared reusable workflows rather than copying build recipes.
 
 The reusable CI workflow must still succeed in full before the release
-workflow creates its draft. Windows installer jobs prepare private, run-scoped
-candidates alongside that validation, using read-only repository permissions.
+workflow creates its draft. On configured Windows release tags, the installer
+candidate job consumes the exact `packaged-app-win32-x64` layout produced by
+the successful Windows application-candidate job. It uses electron-builder's
+`--prepackaged` NSIS path, so installer creation does not rebuild the tested
+application. The candidate is named with the workflow SHA and remains
+read-only. Its installer-acceptance job depends only on that candidate and
+checksums, installs and launches the exact installer, and retains diagnostics.
+This keeps Windows acceptance alongside its producer instead of waiting for
+unrelated CI jobs. Release publication still waits for the complete quality
+workflow, which includes that acceptance, and the validated draft.
+The prepackaged installer job runs `pnpm build:infrastructure` before invoking
+electron-builder: it eagerly imports configured hooks even when `--prepackaged`
+skips their execution, and the hook import closure needs the built RPC package.
+This does not rebuild the application layout.
 Linux installer candidates live inside the same reusable graph as their native
 inputs. Separate x64 and arm64 jobs each wait only for their matching native
 producer and use one shared packaging recipe; neither waits for the other
@@ -179,7 +213,14 @@ workflow, which includes both candidates, and its validated draft. Signing,
 artifact attachment, and making the release public still wait
 for the validated draft and exact candidate; installed acceptance remains a
 required gate where defined.
-The Apple-credentialed macOS build stays behind the draft. Keep `needs` edges
+
+The Apple-credentialed macOS build stays behind the draft because signing and
+notarization remain part of electron-builder's canonical macOS packaging path.
+It restores and verifies the tested production-host archive before invoking the
+canonical build, whose exact-input admission reuses those compiled outputs.
+It reuses the exact run-scoped, source-attested Darwin observer and Darwin
+native-isolation artifacts produced by reusable CI, rather than recompiling
+observers or downloading unrelated platform payloads. Keep `needs` edges
 tied to a consumed artifact or another concrete prerequisite, and record that
 reason beside the edge. Independent checks should overlap, without rebuilding
 the same candidate or weakening its installed acceptance tests.

@@ -131,7 +131,7 @@ async function releaseBuildDestinationExists(destination) {
   }
 }
 
-async function verifyReleaseBuildDirectory(directory, expectedKey, exactContents) {
+export async function verifyReleaseBuildDirectory(directory, expectedKey, exactContents) {
   const metadata = JSON.parse(await fsp.readFile(path.join(directory, "metadata.json"), "utf8"));
   if (!metadata || typeof metadata !== "object" || metadata.buildKey !== expectedKey)
     throw new Error("Release build record key mismatch");
@@ -545,7 +545,6 @@ export async function prepareInstalledTemplateRelease({
     VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
     VIBESTUDIO_INSTANCE_ROOT: path.join(scratch, "instance"),
     VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: path.join(scratch, "derived"),
-    VIBESTUDIO_WORKSPACE_RELEASE_ROOT: resources,
     TMPDIR: path.join(scratch, "tmp"),
     TMP: path.join(scratch, "tmp"),
     TEMP: path.join(scratch, "tmp"),
@@ -558,6 +557,9 @@ export async function prepareInstalledTemplateRelease({
     "VIBESTUDIO_WORKSPACE_SOURCES",
   ])
     delete env[key];
+  // The packager owns this output; only the outer release wrapper may pass it
+  // to a child after deciding whether it is fresh or borrowed input.
+  delete env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT;
   let preparation;
   const failures = [];
   const retainFailure = (error) => {

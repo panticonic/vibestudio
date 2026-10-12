@@ -39,6 +39,13 @@ import { drainExternalDependencyPruning } from "./buildV2/externalDeps.js";
 import { blobCasPath, linkReconstructableBlobFile } from "./storage/blobCas.js";
 import { createHostBootstrapGitReadClient } from "./services/hostGitHttpClient.js";
 import { hasOwnershipFailure } from "../../scripts/lib/owned-cleanup.mjs";
+import {
+  publishPreparedWorkspaceRelease,
+  validateExistingPreparedWorkspaceRelease,
+  workspaceReleaseIdentity,
+  type PreparedWorkspaceReleaseBuild,
+  type PreparedWorkspaceReleaseInput,
+} from "./preparedWorkspaceRelease.js";
 
 /** Prepare the same immutable release for a source supervisor or a packager.
  * Source publication and compilation are phases of the same owned producer.
@@ -50,6 +57,17 @@ export async function prepareWorkspaceTemplates(input: {
   signal?: AbortSignal;
 }): Promise<void> {
   const pins = readDefaultWorkspaceTemplates(input.appRoot);
+  const releaseInput: PreparedWorkspaceReleaseInput = {
+    appRoot: input.appRoot,
+    output: input.output,
+    templates: pins,
+  };
+  input.signal?.throwIfAborted();
+  if (await validateExistingPreparedWorkspaceRelease(releaseInput)) {
+    input.signal?.throwIfAborted();
+    return;
+  }
+  const releaseIdentity = await workspaceReleaseIdentity(input.appRoot);
   const sources = JSON.parse(process.env["VIBESTUDIO_WORKSPACE_SOURCES"] ?? "[]") as Array<{
     pin: WorkspaceTemplatePin;
     checkout: string;
@@ -71,14 +89,9 @@ export async function prepareWorkspaceTemplates(input: {
     appNodeModules: getExistingAppNodeModulesRoots(input.appRoot),
   });
   let retirementFailed = false;
-  const releaseBuilds: Array<{
-    workspace: string;
-    source: string;
-    buildKey: string;
-    builtAt: string;
-  }> = [];
+  const releaseBuilds: PreparedWorkspaceReleaseBuild[] = [];
   const prepared: Array<{
-    role: string;
+    role: "base" | "personal" | "system";
     workspaceId: string;
     statePath: string;
     stateHash: string;
@@ -89,23 +102,9 @@ export async function prepareWorkspaceTemplates(input: {
   }> = [];
   let operationFailure: unknown;
   let operationFailed = false;
-  const publishManifest = () => {
-    const manifest = path.join(input.output, "userland-builds/release.json");
-    fs.mkdirSync(path.dirname(manifest), { recursive: true });
-    fs.writeFileSync(
-      `${manifest}.publishing`,
-      JSON.stringify({
-        version: 1,
-        platform: process.platform,
-        arch: process.arch,
-        templates: pins,
-        builds: releaseBuilds,
-      })
-    );
-    fs.renameSync(`${manifest}.publishing`, manifest);
-  };
   try {
-    for (const [role, pin] of Object.entries(pins)) {
+    for (const role of ["base", "personal", "system"] as const) {
+      const pin = pins[role];
       input.signal?.throwIfAborted();
       const workspaceId = `prepare-${role}`;
       const workspacePath = path.join(input.scratch, "workspaces", workspaceId);
@@ -392,7 +391,6 @@ export async function prepareWorkspaceTemplates(input: {
     releaseBuilds.sort(
       (a, b) => a.workspace.localeCompare(b.workspace) || a.source.localeCompare(b.source)
     );
-    publishManifest();
     input.signal?.throwIfAborted();
   } catch (error) {
     operationFailure = error;
@@ -422,4 +420,6 @@ export async function prepareWorkspaceTemplates(input: {
       cause: failures[0],
     });
   }
+  input.signal?.throwIfAborted();
+  await publishPreparedWorkspaceRelease(releaseInput, releaseBuilds, releaseIdentity);
 }

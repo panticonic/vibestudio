@@ -240,7 +240,6 @@ jobs:
     with:
       runner: ubuntu-22.04
       target: linux-x64
-      base-ref: ${{ inputs.base-ref || 'main' }}
     permissions:
       contents: read
 
@@ -251,30 +250,57 @@ jobs:
     with:
       runner: ubuntu-22.04-arm
       target: linux-arm64
-      base-ref: ${{ inputs.base-ref || 'main' }}
     permissions:
       contents: read
 
   native-isolation-darwin-arm64:
     name: Verify native workspace execution (darwin-arm64)
-    needs: native-input-darwin-arm64
+    needs:
+      - native-input-darwin-arm64
+      - darwin-development-inputs
     uses: ./.github/workflows/native-verification.yml
     with:
       runner: macos-26
       target: darwin-arm64
-      base-ref: ${{ inputs.base-ref || 'main' }}
+    permissions:
+      contents: read
+
+  darwin-production-host:
+    name: Build and verify exact Darwin production host inputs
+    needs: native-input-darwin-arm64
+    uses: ./.github/workflows/darwin-production-host.yml
+    with:
+      runner: macos-14
     permissions:
       contents: read
 
   application-candidate-mac:
-    name: Package macOS application candidate and verify native execution
-    needs: native-input-darwin-arm64
+    name: Package macOS application candidate from tested host inputs
+    needs: darwin-production-host
     uses: ./.github/workflows/application-candidate.yml
     with:
       runner: macos-14
       target: darwin-arm64
       package: mac
+    permissions:
+      contents: read
+
+  darwin-development-inputs:
+    name: Prepare exact Darwin development host and workspace release
+    needs: darwin-production-host
+    uses: ./.github/workflows/darwin-host-inputs.yml
+    with:
+      runner: macos-14
       base-ref: ${{ inputs.base-ref || 'main' }}
+    permissions:
+      contents: read
+
+  desktop-source-integration-macos-14:
+    name: Development desktop source integration (macos-14)
+    needs: darwin-development-inputs
+    uses: ./.github/workflows/desktop-source-integration.yml
+    with:
+      runner: macos-14
     permissions:
       contents: read
 
@@ -285,7 +311,16 @@ jobs:
       runner: ${{ inputs.windows-runner || 'windows-2025' }}
       target: win32-x64
       package: windows
-      base-ref: ${{ inputs.base-ref || 'main' }}
+    permissions:
+      contents: read
+
+  windows-installer-candidate:
+    name: Package NSIS installer from the tested Windows application
+    needs: application-candidate-windows
+    if: ${{ vars.RELEASE_WINDOWS == 'true' && github.ref_type == 'tag' }}
+    uses: ./.github/workflows/windows-installer.yml
+    with:
+      runner: ${{ inputs.windows-runner || 'windows-2025' }}
     permissions:
       contents: read
 

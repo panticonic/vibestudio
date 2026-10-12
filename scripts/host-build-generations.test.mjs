@@ -9,8 +9,20 @@ import {
   readCurrentHostBuildGeneration,
   releaseHostBuildGeneration,
 } from "./host-build-generations.mjs";
-import { NATIVE_WORKSPACE_ENTRIES, SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
+import {
+  NATIVE_WORKSPACE_ENTRIES,
+  SERVER_WORKER_ENTRIES,
+  SOURCE_SERVER_PREREQUISITE_ARTIFACTS,
+} from "./server-runtime-artifacts.mjs";
 import { cleanHostBuildOutput } from "./clean-host-build-output.mjs";
+
+function writeSourcePrerequisites(root, prefix) {
+  for (const artifact of SOURCE_SERVER_PREREQUISITE_ARTIFACTS) {
+    const file = path.join(root, artifact);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (!fs.existsSync(file)) fs.writeFileSync(file, `${prefix}:${path.basename(file)}`);
+  }
+}
 
 test("publishes immutable complete generations and leaves the prior one readable", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-generation-"));
@@ -45,6 +57,7 @@ test("publishes immutable complete generations and leaves the prior one readable
     fs.writeFileSync(path.join(root, "dist/main.cjs"), "main-a");
     fs.writeFileSync(path.join(root, "dist/panelPreload.cjs"), "preload-a");
     fs.writeFileSync(path.join(root, "dist/workerd-programs/router.mjs"), "router-a");
+    writeSourcePrerequisites(root, "a");
     const first = publishHostBuildGeneration(root, {
       kind: "desktop",
       mode: "development",
@@ -116,6 +129,139 @@ test("publishes immutable complete generations and leaves the prior one readable
   }
 });
 
+test("relocated source and desktop generations resolve relative to the new checkout", () => {
+  const originalRoot = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-generation-original-"));
+  const restoredRoot = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-generation-restored-"));
+  const borrowed = [];
+  const populateOutput = (root, suffix) => {
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "product", productName: "Product", version: "1.0.0" })
+    );
+    fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
+    fs.mkdirSync(path.join(root, "dist/workerd-programs"), { recursive: true });
+    for (const entry of [
+      "server.mjs",
+      "prepare-workspace-templates.mjs",
+      ...Object.values(SERVER_WORKER_ENTRIES.standalone),
+      "main.cjs",
+      "adblock-engine-worker.cjs",
+      "server-electron.cjs",
+      "panelPreload.cjs",
+      "browserPrivacyPreload.cjs",
+      "browserTransport.js",
+      "fs-disk-worker.cjs",
+      ...Object.values(NATIVE_WORKSPACE_ENTRIES),
+      "dependency-content-maintenance.cjs",
+      "internal-do.bundle.mjs",
+      "host-build-fingerprint.json",
+    ]) {
+      fs.writeFileSync(path.join(root, "dist", entry), `${suffix}:${entry}`);
+    }
+    for (const entry of ["headless-host", "assets"])
+      fs.mkdirSync(path.join(root, "dist", entry), { recursive: true });
+    fs.writeFileSync(path.join(root, "dist/workerd-programs/router.mjs"), `${suffix}:router`);
+    writeSourcePrerequisites(root, suffix);
+  };
+
+  try {
+    populateOutput(originalRoot, "original");
+    populateOutput(restoredRoot, "restored");
+    const desktopFingerprint = "c".repeat(64);
+    const sourceFingerprint = "d".repeat(64);
+    const originalDesktop = publishHostBuildGeneration(originalRoot, {
+      kind: "desktop",
+      mode: "production",
+      fingerprint: desktopFingerprint,
+      inputCount: 3,
+    });
+    publishHostBuildGeneration(originalRoot, {
+      kind: "source",
+      mode: "production",
+      fingerprint: sourceFingerprint,
+      inputCount: 3,
+    });
+
+    const originalGenerations = path.join(originalRoot, "dist/host-generations");
+    const restoredGenerations = path.join(restoredRoot, "dist/host-generations");
+    fs.mkdirSync(path.dirname(restoredGenerations), { recursive: true });
+    fs.cpSync(originalGenerations, restoredGenerations, {
+      recursive: true,
+      dereference: false,
+      verbatimSymlinks: true,
+    });
+
+    for (const kind of ["desktop", "source"]) {
+      const pointerPath = path.join(restoredGenerations, `current-${kind}.json`);
+      const pointerBytes = fs.readFileSync(pointerPath, "utf8");
+      const pointer = JSON.parse(pointerBytes);
+      assert.equal(pointer.version, 2);
+      assert.equal(pointer.root, `${kind}-${pointer.fingerprint}`);
+      assert.equal(path.isAbsolute(pointer.root), false);
+      fs.writeFileSync(
+        pointerPath,
+        JSON.stringify({ ...pointer, root: path.join(originalGenerations, pointer.root) })
+      );
+      assert.throws(() => readCurrentHostBuildGeneration(restoredRoot, kind), /invalid/u);
+      fs.writeFileSync(pointerPath, pointerBytes);
+
+      const generationRoot = path.join(restoredGenerations, pointer.root);
+      const dependencyLink = path.join(generationRoot, "node_modules");
+      if (kind === "desktop") {
+        fs.unlinkSync(dependencyLink);
+        fs.symlinkSync(path.join(originalRoot, "node_modules"), dependencyLink, "dir");
+        assert.throws(
+          () => readCurrentHostBuildGeneration(restoredRoot, kind),
+          /dependency link is invalid/u
+        );
+        fs.unlinkSync(dependencyLink);
+        fs.symlinkSync(
+          path.relative(generationRoot, path.join(restoredRoot, "node_modules")),
+          dependencyLink,
+          "dir"
+        );
+      }
+      const root = readCurrentHostBuildGeneration(restoredRoot, kind);
+      borrowed.push(root);
+      assert.equal(root, path.join(restoredGenerations, pointer.root));
+      assert.equal(path.isAbsolute(fs.readlinkSync(dependencyLink)), false);
+      assert.equal(
+        fs.realpathSync(dependencyLink),
+        fs.realpathSync(path.join(restoredRoot, "node_modules"))
+      );
+    }
+
+    const nextDesktop = publishHostBuildGeneration(restoredRoot, {
+      kind: "desktop",
+      mode: "production",
+      fingerprint: "e".repeat(64),
+      inputCount: 3,
+    });
+    assert.equal(
+      fs.existsSync(path.join(restoredGenerations, path.basename(originalDesktop))),
+      true
+    );
+    releaseHostBuildGeneration(path.join(restoredGenerations, `desktop-${desktopFingerprint}`));
+    borrowed.splice(
+      borrowed.indexOf(path.join(restoredGenerations, `desktop-${desktopFingerprint}`)),
+      1
+    );
+    assert.equal(
+      fs.existsSync(path.join(restoredGenerations, `desktop-${desktopFingerprint}`)),
+      false
+    );
+    assert.equal(fs.existsSync(nextDesktop), true);
+    assert.equal(
+      fs.existsSync(path.join(restoredGenerations, `source-${sourceFingerprint}`)),
+      true
+    );
+  } finally {
+    for (const root of borrowed) releaseHostBuildGeneration(root);
+    fs.rmSync(originalRoot, { recursive: true, force: true });
+    fs.rmSync(restoredRoot, { recursive: true, force: true });
+  }
+});
+
 test("collects generations after a crashed launcher without removing current builds", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-generation-gc-"));
   try {
@@ -127,7 +273,14 @@ test("collects generations after a crashed launcher without removing current bui
     fs.mkdirSync(current);
     fs.writeFileSync(
       path.join(generations, "current-source.json"),
-      JSON.stringify({ version: 1, kind: "source", root: current })
+      JSON.stringify({
+        version: 2,
+        kind: "source",
+        mode: "development",
+        fingerprint: "b".repeat(64),
+        inputCount: 1,
+        root: path.basename(current),
+      })
     );
     const leaseDir = path.join(generations, ".leases", path.basename(old));
     fs.mkdirSync(leaseDir, { recursive: true });
@@ -167,6 +320,7 @@ test("refuses an incomplete generation without replacing current", () => {
     ])
       fs.writeFileSync(path.join(root, "dist", entry), entry);
     fs.mkdirSync(path.join(root, "dist/headless-host"));
+    writeSourcePrerequisites(root, "failure");
     const first = publishHostBuildGeneration(root, {
       kind: "source",
       mode: "development",
@@ -188,11 +342,16 @@ test("refuses an incomplete generation without replacing current", () => {
     fs.writeFileSync(path.join(root, "dist/browserTransport.js"), "browserTransport.js");
     fs.rmSync(path.join(root, "dist", NATIVE_WORKSPACE_ENTRIES.extensionChild));
     assert.throws(
-      () => publishHostBuildGeneration(root, { kind: "source", mode: "development", fingerprint: "b".repeat(64), inputCount: 1 }),
+      () =>
+        publishHostBuildGeneration(root, {
+          kind: "source",
+          mode: "development",
+          fingerprint: "b".repeat(64),
+          inputCount: 1,
+        }),
       /missing extension-child\.mjs/
     );
     assert.equal(readCurrentHostBuildGeneration(root, "source"), first);
-
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

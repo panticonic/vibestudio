@@ -251,6 +251,17 @@ export async function persistEvState(
 // "36": worker entries expose constructor-free preparation of exact executable units.
 const BUILD_CACHE_VERSION = "36";
 
+/** Build identity shared by runtime artifact manifests and build-key derivation. */
+export function buildCompilerProtocolIdentity(): {
+  readonly cacheVersion: string;
+  readonly panelEntryProtocolFingerprint: string;
+} {
+  return Object.freeze({
+    cacheVersion: BUILD_CACHE_VERSION,
+    panelEntryProtocolFingerprint: panelEntryProtocolFingerprint(),
+  });
+}
+
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the
  * platform/tooling dependency set (root package.json / pnpm lockfile / host

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { statSync } from "node:fs";
 import {
   deserializeRpcFailure,
   formatRpcFailure,
@@ -51,18 +52,23 @@ function joinedFailure(failures, message) {
  * @param {{ appRoot: string, output: string, scratch: string, env: NodeJS.ProcessEnv, executable: string, entry: string }} input
  */
 export function prepareWorkspaceRelease(input) {
+  const declaredOutput = input.env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"];
+  const output = path.resolve(declaredOutput ?? input.output);
+  // A supplied release is a required input. Missing or partial artifacts must
+  // never be mistaken for a new producer-owned output directory.
+  if (declaredOutput) {
+    if (!statSync(path.join(output, "userland-builds", "release.json")).isFile()) {
+      throw new Error(`Workspace release manifest is not a file: ${output}`);
+    }
+  }
   const child = spawn(
     input.executable,
-    [
-      input.entry,
-      "--app-root",
-      input.appRoot,
-      "--output",
-      input.output,
-      "--scratch",
-      input.scratch,
-    ],
-    { cwd: path.dirname(input.entry), env: input.env, stdio: ["ignore", "pipe", "pipe", "ipc"] }
+    [input.entry, "--app-root", input.appRoot, "--output", output, "--scratch", input.scratch],
+    {
+      cwd: path.dirname(input.entry),
+      env: { ...input.env, VIBESTUDIO_WORKSPACE_RELEASE_ROOT: output },
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    }
   );
   let failure,
     completedReceipt = false,
@@ -149,7 +155,7 @@ export function prepareWorkspaceRelease(input) {
         throw joinedFailure(failures, "Workspace release preparation failed");
       if (!completedReceipt)
         throw new Error("Workspace release producer exited without a completed release receipt");
-      input.env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = input.output;
+      input.env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = output;
     })
     .finally(() => {
       process.off("SIGINT", interrupt);

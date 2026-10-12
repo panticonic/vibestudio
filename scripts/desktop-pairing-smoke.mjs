@@ -2458,6 +2458,7 @@ async function main(parentOwnerSignal) {
             "VIBESTUDIO_WORKSPACE_SOURCES",
             "VIBESTUDIO_SHARED_DERIVED_CACHE_DIR",
             "VIBESTUDIO_SERVER_ENTRY",
+            "VIBESTUDIO_WORKSPACE_RELEASE_ROOT",
           ].includes(key)
         )
       );

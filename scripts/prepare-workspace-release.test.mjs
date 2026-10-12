@@ -7,7 +7,12 @@ import os from "node:os";
 import { serializeRpcFailure } from "@vibestudio/rpc";
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 
-async function withProducer(code, check, configureAppRoot = async (root) => root) {
+async function withProducer(
+  code,
+  check,
+  configureAppRoot = async (root) => root,
+  configureEnv = async () => {}
+) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-release-lifecycle-"));
   let owner;
   try {
@@ -15,6 +20,8 @@ async function withProducer(code, check, configureAppRoot = async (root) => root
     const entry = path.join(root, "producer.cjs");
     await fs.writeFile(entry, code);
     const env = { ...process.env };
+    delete env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT;
+    await configureEnv(env, root);
     owner = prepareWorkspaceRelease({
       appRoot,
       output: root,
@@ -29,6 +36,55 @@ async function withProducer(code, check, configureAppRoot = async (root) => root
     await fs.rm(root, { recursive: true, force: true });
   }
 }
+
+void test("validates a declared release through the producer and preserves borrowed output", async () => {
+  await withProducer(
+    `const fs=require("fs"); const output=process.argv[process.argv.indexOf("--output")+1]; fs.writeFileSync("selected-output",output); process.send({kind:"completed"},()=>process.disconnect());`,
+    async (owner, root, env) => {
+      await owner.completed;
+      const output = path.join(root, "borrowed");
+      assert.equal(await fs.readFile(path.join(root, "selected-output"), "utf8"), output);
+      await owner.stop();
+      assert.equal(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT, output);
+      assert.equal(
+        await fs.readFile(path.join(output, "userland-builds", "release.json"), "utf8"),
+        "{}"
+      );
+    },
+    undefined,
+    async (env, root) => {
+      env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = path.join(root, "borrowed");
+      await fs.mkdir(path.join(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT, "userland-builds"), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT, "userland-builds", "release.json"),
+        "{}"
+      );
+    }
+  );
+});
+
+void test("rejects missing declared releases before starting a producer", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-release-missing-"));
+  try {
+    assert.throws(
+      () =>
+        prepareWorkspaceRelease({
+          appRoot: root,
+          output: path.join(root, "new"),
+          scratch: path.join(root, "scratch"),
+          env: { ...process.env, VIBESTUDIO_WORKSPACE_RELEASE_ROOT: path.join(root, "missing") },
+          executable: process.execPath,
+          entry: path.join(root, "must-not-start.cjs"),
+        }),
+      { code: "ENOENT" }
+    );
+    assert.deepEqual(await fs.readdir(root), []);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 async function waitForFile(file) {
   try {

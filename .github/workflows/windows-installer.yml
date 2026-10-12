@@ -1,0 +1,140 @@
+name: Build Windows installer from tested application
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  package:
+    name: Package Windows x64 NSIS installer
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install packaging dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches the committed package version
+        run: node scripts/check-release-version.mjs "$env:GITHUB_REF_NAME"
+
+      # electron-builder eagerly imports its configured hooks for --prepackaged
+      # runs. The hook module closure imports @vibestudio/rpc, so build the
+      # infrastructure package outputs without rebuilding the application.
+      - name: Build infrastructure packages required by packaging hooks
+        run: pnpm build:infrastructure
+
+      - name: Download tested Windows application candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: packaged-app-win32-x64
+          path: candidate
+
+      - name: Restore the tested Windows application layout
+        shell: bash
+        run: |
+          mkdir -p release/win-unpacked
+          tar -xf candidate/packaged-app.tar -C release/win-unpacked
+          test -f release/win-unpacked/Vibestudio.exe
+          test -f release/win-unpacked/resources/app.asar
+
+      # electron-builder's prepackaged input skips application preparation and
+      # packages the already tested layout into the release NSIS target.
+      - name: Package NSIS installer from the tested application
+        run: pnpm exec electron-builder --win --x64 --prepackaged release/win-unpacked --publish never
+
+      - name: Generate installer checksums
+        shell: bash
+        working-directory: release
+        # The in-app updater resolves the installer through latest.yml.
+        run: |
+          test -f latest.yml
+          test "$(find . -maxdepth 1 -type f -name '*.exe' | wc -l)" -eq 1
+          sha256sum ./*.exe > SHA256SUMS-windows
+
+      - name: Upload immutable Windows release candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibestudio-windows-${{ github.sha }}
+          path: |
+            release/*.exe
+            release/latest.yml
+            release/SHA256SUMS-windows
+          if-no-files-found: error
+          retention-days: 7
+
+  acceptance:
+    name: Install and launch Windows release candidate
+    needs: package
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: Checkout acceptance harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install test dependencies (no application build)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Download immutable release candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vibestudio-windows-${{ github.sha }}
+          path: candidate
+      - name: Verify installer checksums
+        shell: bash
+        working-directory: candidate
+        run: sha256sum --check SHA256SUMS-windows
+      - name: Install and launch the NSIS release candidate
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem candidate/*.exe)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one Windows installer' }
+          $destination = Join-Path $env:RUNNER_TEMP 'Vibestudio installed acceptance'
+          $installer = Start-Process -FilePath $installers[0].FullName -ArgumentList @('/S', "/D=$destination") -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { throw "Installer exited $($installer.ExitCode)" }
+          try {
+            node scripts/packaged-isolation-smoke.mjs --app "$destination/Vibestudio.exe" --out-dir test-results/packaged-isolation
+            if ($LASTEXITCODE -ne 0) { throw 'Installed application acceptance failed' }
+          } finally {
+            $uninstaller = Join-Path $destination 'Uninstall Vibestudio.exe'
+            if (Test-Path $uninstaller) {
+              $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+              if ($process.ExitCode -ne 0) { throw "Uninstaller exited $($process.ExitCode)" }
+            }
+          }
+      - name: Upload acceptance diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-acceptance-windows
+          path: test-results/packaged-isolation
+          if-no-files-found: warn
+          retention-days: 7

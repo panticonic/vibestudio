@@ -88,14 +88,40 @@ function withGenerationLock(generations, action) {
   }
 }
 
+function parseCurrentGenerationRecord(generations, kind, { ignoreLegacy = false } = {}) {
+  const record = JSON.parse(
+    fs.readFileSync(path.join(generations, `current-${kind}.json`), "utf8")
+  );
+  // Version 1 stored an absolute checkout path. It is never a usable current
+  // generation after this format change; collectors may ignore that pointer
+  // while leases continue protecting generations already in use.
+  if (ignoreLegacy && record?.version === 1) return null;
+  const keys = Object.keys(record ?? {}).sort();
+  if (
+    record?.version !== 2 ||
+    record.kind !== kind ||
+    !["development", "production"].includes(record.mode) ||
+    !/^[a-f0-9]{64}$/u.test(record.fingerprint) ||
+    !Number.isSafeInteger(record.inputCount) ||
+    record.inputCount < 1 ||
+    record.root !== `${kind}-${record.fingerprint}` ||
+    keys.join(",") !== "fingerprint,inputCount,kind,mode,root,version"
+  ) {
+    throw new Error("Current host build generation is invalid");
+  }
+  const root = path.resolve(generations, record.root);
+  if (path.dirname(root) !== generations || path.basename(root) !== record.root) {
+    throw new Error("Current host build generation root is invalid");
+  }
+  return { ...record, resolvedRoot: root };
+}
+
 function currentRoots(generations) {
   const roots = new Set();
   for (const kind of ["source", "desktop"]) {
     try {
-      const record = JSON.parse(
-        fs.readFileSync(path.join(generations, `current-${kind}.json`), "utf8")
-      );
-      if (typeof record.root === "string") roots.add(path.resolve(record.root));
+      const record = parseCurrentGenerationRecord(generations, kind, { ignoreLegacy: true });
+      if (record) roots.add(record.resolvedRoot);
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
     }
@@ -178,7 +204,13 @@ export function publishHostBuildGeneration(cwd, build) {
   const dist = path.resolve(cwd, "dist");
   const generations = path.join(dist, "host-generations");
   if (!(build.kind in REQUIRED)) throw new Error(`Unknown host generation kind: ${build.kind}`);
+  if (!["development", "production"].includes(build.mode)) {
+    throw new Error("Invalid host build mode");
+  }
   if (!/^[a-f0-9]{64}$/u.test(build.fingerprint)) throw new Error("Invalid host build fingerprint");
+  if (!Number.isSafeInteger(build.inputCount) || build.inputCount < 1) {
+    throw new Error("Invalid host build input count");
+  }
   for (const artifact of REQUIRED[build.kind]) {
     if (!fs.existsSync(path.join(dist, artifact))) {
       throw new Error(
@@ -209,8 +241,9 @@ export function publishHostBuildGeneration(cwd, build) {
             ...(build.kind === "desktop" ? { main: "main.cjs" } : {}),
           })}\n`
         );
+        const nodeModules = path.resolve(cwd, "node_modules");
         fs.symlinkSync(
-          path.resolve(cwd, "node_modules"),
+          path.relative(staging, nodeModules),
           path.join(staging, "node_modules"),
           "dir"
         );
@@ -219,29 +252,57 @@ export function publishHostBuildGeneration(cwd, build) {
         fs.rmSync(staging, { recursive: true, force: true });
       }
     }
+    validateGenerationLayout(cwd, target);
     const current = path.join(generations, `current-${build.kind}.json`);
     const temporary = `${current}.${randomUUID()}.tmp`;
-    fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, ...build, root: target })}\n`);
+    fs.writeFileSync(
+      temporary,
+      `${JSON.stringify({
+        version: 2,
+        kind: build.kind,
+        mode: build.mode,
+        fingerprint: build.fingerprint,
+        inputCount: build.inputCount,
+        root: path.basename(target),
+      })}\n`
+    );
     fs.renameSync(temporary, current);
     collectHostBuildGenerationsLocked(generations);
     return target;
   });
 }
 
+function validateGenerationLayout(cwd, root) {
+  if (
+    path.dirname(root) !== path.resolve(cwd, "dist/host-generations") ||
+    fs.realpathSync(root) !== root
+  ) {
+    throw new Error("Host build generation root is invalid");
+  }
+  const nodeModules = path.join(root, "node_modules");
+  const expected = path.resolve(cwd, "node_modules");
+  const link = fs.readlinkSync(nodeModules);
+  if (
+    path.isAbsolute(link) ||
+    path.resolve(root, link) !== expected ||
+    !fs.statSync(nodeModules).isDirectory()
+  ) {
+    throw new Error(
+      `Host build generation dependency link is invalid: ${link} resolves to ${path.resolve(root, link)}, expected ${expected}`
+    );
+  }
+}
+
 export function readCurrentHostBuildGeneration(cwd = process.cwd(), kind) {
   if (kind !== "source" && kind !== "desktop") throw new Error("Host generation kind is required");
   const generations = path.resolve(cwd, "dist/host-generations");
   return withGenerationLock(generations, () => {
-    const record = JSON.parse(
-      fs.readFileSync(path.join(generations, `current-${kind}.json`), "utf8")
-    );
-    if (record?.version !== 1 || record.kind !== kind || typeof record.root !== "string") {
-      throw new Error("Current host build generation is invalid");
-    }
-    const root = fs.realpathSync(record.root);
-    if (path.dirname(root) !== generations || !path.basename(root).startsWith(`${kind}-`)) {
+    const record = parseCurrentGenerationRecord(generations, kind);
+    const root = record.resolvedRoot;
+    if (fs.realpathSync(root) !== root) {
       throw new Error("Current host build generation root is invalid");
     }
+    validateGenerationLayout(cwd, root);
     retainGeneration(generations, root);
     return root;
   });
