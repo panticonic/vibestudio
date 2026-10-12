@@ -149,14 +149,18 @@ current workflow revision.
 Linux quality has its own source-input edge. `quality-inputs` checks out the
 selected Base ref and complete template catalog once, builds the infrastructure
 packages once, and uploads those outputs with a receipt for the host commit,
-infrastructure manifest, and every template commit and tree. The `quality` and
-`quality-desktop` jobs both verify that receipt after restoring the exact
-artifact. Userland, mobile, unit, and static checks run in `quality`; native
-remote transport and desktop pairing run in `quality-desktop` so they share one
-development host build. Both jobs are required by reusable CI before a release
-tag can be created. The producer edge preserves the test input identity while
-letting these independent suites overlap; measure artifact transfer and job
-durations on the first run before claiming a wall-clock saving.
+infrastructure manifest, and every template commit and tree. The `quality`,
+`quality-followup`, and `quality-desktop` jobs verify that receipt after
+restoring the exact artifact. Template type-checking and the complete userland
+suite stay together in `quality`; the mobile, host-boundary, packaged host,
+lint, formatting, and unit checks run in `quality-followup`. Native remote
+transport and desktop pairing run in `quality-desktop` so they share one
+development host build. Each quality consumer owns its generated files on its
+own runner, while the infrastructure packages and template inputs come from the
+single `quality-inputs` producer. All three jobs are required by reusable CI
+before a release tag can be created. This lets the follow-up checks overlap the
+long userland suite; artifact transfer and job durations determine the actual
+wall-clock saving.
 
 Darwin packaging and source integration use two host modes with distinct
 fingerprints. One macOS-14 production-host job installs the exact native and

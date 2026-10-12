@@ -107,22 +107,32 @@ test("Linux quality consumers share one verified template and infrastructure pro
   const jobs = await readCiJobs();
   const producer = jobs["quality-inputs"];
   const quality = jobs.quality;
+  const followup = jobs["quality-followup"];
   const desktop = jobs["quality-desktop"];
   assert.deepEqual(dependenciesOf(producer), []);
   assert.deepEqual(dependenciesOf(quality), ["quality-inputs"]);
+  assert.deepEqual(dependenciesOf(followup), ["quality-inputs"]);
   assert.deepEqual(dependenciesOf(desktop), ["quality-inputs"]);
   const step = (job, name) => job.steps.find((entry) => entry.name === name);
   assert.ok(step(producer, "Build shared infrastructure packages"));
   assert.ok(step(producer, "Record exact host and template inputs"));
   assert.ok(step(producer, "Upload exact quality inputs"));
-  for (const consumer of [quality, desktop]) {
+  for (const consumer of [quality, followup, desktop]) {
     assert.ok(step(consumer, "Download exact quality inputs"));
     assert.ok(step(consumer, "Restore and verify quality inputs"));
     assert.equal(step(consumer, "Checkout current Base template"), undefined);
     assert.equal(step(consumer, "Acquire complete template source set"), undefined);
   }
   assert.ok(step(quality, "Template type-check and complete userland suite"));
-  assert.ok(step(quality, "Unit tests"));
+  assert.equal(step(quality, "Unit tests"), undefined);
+  assert.ok(step(followup, "Unit tests"));
+  assert.ok(step(followup, "Mobile host and Iroh integration suites"));
+  assert.ok(step(followup, "Host/workspace boundary"));
+  assert.ok(step(followup, "Production host builds without userland source"));
+  assert.ok(step(followup, "Production Electron Node-mode native workspace receiver"));
+  assert.ok(step(followup, "Lint"));
+  assert.ok(step(followup, "Check formatting"));
+  assert.ok(step(followup, "Download exact quality inputs"));
   assert.equal(step(quality, "Native Iroh remote transport"), undefined);
   assert.ok(step(desktop, "Native Iroh remote transport"));
   assert.ok(step(desktop, "Desktop Iroh pairing, approvals, panels, relaunch, and recovery"));
