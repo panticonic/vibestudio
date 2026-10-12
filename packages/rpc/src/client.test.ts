@@ -13,6 +13,7 @@ import type { EnvelopeRpcTransport, RpcConnectionStatus, RpcEnvelope } from "./t
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 import { RpcBoundaryError, rpcCallerAbortedError } from "./errors.js";
 import { responseEnvelopeFor } from "./envelope.js";
+import { FRAME_END, FRAME_HEAD } from "./protocol/streamCodec.js";
 
 /**
  * A fake transport whose status + recovery signals can be driven by the test,
@@ -1623,6 +1624,93 @@ describe("createRpcClient", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/plain");
     await expect(response.text()).resolves.toBe("hello");
+  });
+
+  it("rejects a streaming END whose byte count differs from decoded DATA", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "caller",
+      transport: inProcessTransport("caller", network),
+    });
+    const serverTransport = inProcessTransport("server", network);
+    const server = createRpcClient({
+      selfId: "server",
+      transport: {
+        ...serverTransport,
+        send(envelope) {
+          if (
+            envelope.message.type === "stream-frame" &&
+            envelope.message.frameType === FRAME_END
+          ) {
+            const payload = JSON.stringify({ bytesIn: 4 });
+            return serverTransport.send({
+              ...envelope,
+              message: { ...envelope.message, payload },
+            });
+          }
+          return serverTransport.send(envelope);
+        },
+      },
+    });
+    server.exposeStreaming(
+      "download",
+      async (_request, sink) => {
+        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        await sink({ kind: "chunk", bytes: new TextEncoder().encode("hello") });
+        await sink({ kind: "end", bytesIn: 5 });
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
+
+    const response = await caller.stream("server", "download", []);
+    await expect(response.text()).rejects.toMatchObject({
+      errorKind: "protocol",
+      code: "EPROTOCOL",
+    });
+  });
+
+  it("rejects a streaming END received before HEAD through the stream promise", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "caller",
+      transport: inProcessTransport("caller", network),
+    });
+    const serverTransport = inProcessTransport("server", network);
+    const server = createRpcClient({
+      selfId: "server",
+      transport: {
+        ...serverTransport,
+        send(envelope) {
+          if (
+            envelope.message.type === "stream-frame" &&
+            envelope.message.frameType === FRAME_HEAD
+          ) {
+            return serverTransport.send({
+              ...envelope,
+              message: {
+                ...envelope.message,
+                frameType: FRAME_END,
+                payload: JSON.stringify({ bytesIn: 0 }),
+              },
+            });
+          }
+          return serverTransport.send(envelope);
+        },
+      },
+    });
+    server.exposeStreaming(
+      "download",
+      async (_request, sink) => {
+        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        await sink({ kind: "end", bytesIn: 0 });
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
+
+    await expect(caller.stream("server", "download", [])).rejects.toMatchObject({
+      errorKind: "protocol",
+      code: "EPROTOCOL",
+    });
   });
 
   it("unwraps the ordinary Response path when raw transport streaming is unavailable", async () => {
