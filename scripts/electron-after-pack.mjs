@@ -30,11 +30,17 @@ export async function afterPack(context) {
 export async function completeAfterPack(context, overrides = {}) {
   // electron-builder imports this module even for --prepackaged, where it
   // skips afterPack. Keep application-build dependencies out of that import.
-  const [boundary, release, signing] = await Promise.all([
+  const imports = await Promise.allSettled([
     overrides.checkBoundary ? undefined : import("./check-electron-package-boundary.mjs"),
     overrides.prepareUserland ? undefined : import("./prebuild-release-userland.mjs"),
     overrides.sign ? undefined : import("./electron-adhoc-sign-mac.mjs"),
   ]);
+  const failures = imports
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason);
+  if (failures.length)
+    throw new AggregateError(failures, "Could not load electron afterPack stages");
+  const [boundary, release, signing] = imports.map((result) => result.value);
   const checkBoundary = overrides.checkBoundary ?? boundary.afterPack;
   const prepareUserland = overrides.prepareUserland ?? release.prebuildReleaseUserland;
   const sign = overrides.sign ?? signing.default;
