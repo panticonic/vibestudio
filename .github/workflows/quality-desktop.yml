@@ -61,4 +61,3 @@ jobs:
 
       - name: Desktop Iroh pairing, approvals, panels, relaunch, and recovery
         run: pnpm test:iroh-desktop-e2e
-

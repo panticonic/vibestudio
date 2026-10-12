@@ -135,4 +135,3 @@ jobs:
       - name: Retire npm candidate smoke scratch
         if: ${{ always() }}
         run: rm -rf -- "$RUNNER_TEMP/vibestudio-npm-server-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-
