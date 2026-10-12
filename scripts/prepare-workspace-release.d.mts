@@ -10,4 +10,6 @@ export function prepareWorkspaceRelease(input: {
   env: NodeJS.ProcessEnv;
   executable: string;
   entry: string;
+  /** Receives the producer's stdout and stderr instead of this process's streams. */
+  log?: NodeJS.WritableStream;
 }): WorkspaceReleasePreparation;

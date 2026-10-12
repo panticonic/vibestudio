@@ -179,6 +179,11 @@ export async function listRemoteWorkspaces(
   return await withControl(creds, (client) => client.listWorkspaces());
 }
 
+/** List workspaces over an already-open hub control connection. */
+export async function listWorkspacesVia(control: RpcClient): Promise<RemoteWorkspaceEntry[]> {
+  return await controlClient(control).listWorkspaces();
+}
+
 /** Prepare the authenticated account's private pair through the same host operation as apps. */
 export async function ensureRemoteUserWorkspaces(
   creds: DeviceCredential
@@ -200,15 +205,31 @@ export async function createRemoteWorkspace(
   );
 }
 
+/**
+ * Which workspace to route a device credential to: a visible workspace by
+ * name, an exact workspace id, or one of the account's private pair.
+ */
+export type RemoteWorkspaceSelector =
+  | string
+  | { workspaceId: string }
+  | { privateRole: "personal" | "system" };
+
 export async function selectRemoteWorkspace(
   creds: DeviceCredential,
-  name: string
+  selector: RemoteWorkspaceSelector
 ): Promise<DeviceCredential> {
   const route: HubWorkspaceRoute = await withControl(creds, async (client) => {
-    const entries = await client.listWorkspaces();
-    const entry = entries.find((workspace) => workspace.name === name);
-    if (!entry) throw new AuthError(`workspace "${name}" is not visible to this account`);
-    return await client.routeWorkspace({ workspaceId: entry.workspaceId });
+    if (typeof selector === "string") {
+      const entries = await client.listWorkspaces();
+      const entry = entries.find((workspace) => workspace.name === selector);
+      if (!entry) throw new AuthError(`workspace "${selector}" is not visible to this account`);
+      return await client.routeWorkspace({ workspaceId: entry.workspaceId });
+    }
+    if ("workspaceId" in selector) {
+      return await client.routeWorkspace({ workspaceId: selector.workspaceId });
+    }
+    const pair = await client.ensureUserWorkspaces();
+    return await client.routeWorkspace({ workspaceId: pair[selector.privateRole].workspaceId });
   });
   if (route.serverId !== creds.serverId) {
     throw new AuthError("workspace route changed the paired server identity");

@@ -1,3 +1,4 @@
+import * as os from "node:os";
 import {
   HubPairingInviteSchema,
   HubReadyPayloadSchema,
@@ -5,33 +6,33 @@ import {
   type HubPairingInvite,
 } from "@vibestudio/service-schemas/hubControl";
 import { selectedWorkspacePath } from "@vibestudio/shared/connect";
-import {
-  loadCliCredentials,
-  saveCliCredentials,
-  type CliCredentials,
-} from "../cli/credentialStore.js";
-import { RpcClient } from "../cli/rpcClient.js";
-import { ConnectionError } from "../cli/output.js";
+import { loadCliCredentials, saveCliCredentials, type CliCredentials } from "./credentialStore.js";
+import { RpcClient } from "./rpcClient.js";
+import { ConnectionError } from "./output.js";
 
 /**
+ * Local pairing: the one implementation through which a CLI profile pairs with
+ * a server it shares a machine with — the development instance supervisor,
+ * the in-product isolated development host, and `vibestudio terminal` when it
+ * starts its own local server all use it.
+ *
  * Pairing authenticates the device to an account. The account's own workspaces
- * are created after redemption, and this development client selects one
- * explicitly below.
+ * are created after redemption, and the caller selects one explicitly below.
  */
 type PairingResponse = {
   deviceId: string;
   refreshToken: string;
 };
 
-export type DevCliBootstrapResult =
+export type LocalCliPairingResult =
   | { status: "existing"; workspaceName: string; workspaceId: string }
   | { status: "paired"; workspaceName: string; workspaceId: string }
   | { status: "invite-required" };
 
 /** Which of the account's private workspaces this device opens. */
-export type DevCliWorkspaceSelection = "personal" | "system";
+export type LocalCliWorkspaceSelection = "personal" | "system";
 
-export interface DevCliPairingSponsor {
+export interface LocalCliPairingSponsor {
   gatewayUrl: string;
   serverId: string;
   workspaceId: string;
@@ -40,7 +41,9 @@ export interface DevCliPairingSponsor {
   refreshToken: string;
 }
 
-interface BootstrapDeps {
+interface LocalPairingDeps {
+  /** Device label shown in the server's device list. */
+  label?: string;
   fetch?: typeof fetch;
   rpcClient?: (credential: { url: string; deviceId: string; refreshToken: string }) => {
     call(method: string, args?: unknown[]): Promise<unknown>;
@@ -56,7 +59,7 @@ function pairingResponse(value: unknown): PairingResponse {
     typeof (value as Partial<PairingResponse>).deviceId !== "string" ||
     typeof (value as Partial<PairingResponse>).refreshToken !== "string"
   ) {
-    throw new Error("Local development pairing returned a malformed device credential");
+    throw new Error("Local pairing returned a malformed device credential");
   }
   return value as PairingResponse;
 }
@@ -64,17 +67,13 @@ function pairingResponse(value: unknown): PairingResponse {
 async function postPairing(
   gatewayUrl: string,
   invite: HubPairingInvite,
+  label: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<PairingResponse> {
   const response = await fetchImpl(new URL("/_r/s/auth/complete-pairing", gatewayUrl), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code: invite.code,
-      label: "Vibestudio development CLI",
-      platform: process.platform,
-    }),
-    signal: AbortSignal.timeout(15_000),
+    body: JSON.stringify({ code: invite.code, label, platform: process.platform }),
   });
   const body = (await response.json().catch(() => ({}))) as unknown;
   if (!response.ok) {
@@ -84,8 +83,8 @@ async function postPairing(
         : undefined;
     throw new Error(
       typeof message === "string"
-        ? `Local development pairing failed: ${message}`
-        : `Local development pairing failed with HTTP ${response.status}`
+        ? `Local pairing failed: ${message}`
+        : `Local pairing failed with HTTP ${response.status}`
     );
   }
   return pairingResponse(body);
@@ -99,8 +98,9 @@ function existingCredential(
   if (!existing) return null;
   if (existing.serverId !== serverId) {
     throw new Error(
-      `Instance CLI credential targets server ${existing.serverId}, ` +
-        `but the live hub is ${serverId}`
+      `The saved CLI credential (${credentialFile ?? "default profile"}) belongs to server ` +
+        `${existing.serverId}, but the local server is ${serverId}. Run ` +
+        "`vibestudio remote logout` to forget the old pairing, then try again."
     );
   }
   return existing;
@@ -113,7 +113,7 @@ async function routeWorkspace(
     refreshToken: string;
     workspaceId: string;
   },
-  deps: BootstrapDeps
+  deps: LocalPairingDeps
 ): Promise<ReturnType<typeof HubWorkspaceRouteSchema.parse>> {
   const createRpc = deps.rpcClient ?? ((credential) => new RpcClient(credential));
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -132,7 +132,7 @@ async function routeWorkspace(
       await rpc.close();
     }
   }
-  throw new Error("Development CLI could not route its workspace");
+  throw new Error("The CLI could not route its workspace on the local server");
 }
 
 /**
@@ -145,7 +145,7 @@ async function routeWorkspace(
  */
 async function ensureUserWorkspaces(
   input: { gatewayUrl: string; deviceId: string; refreshToken: string },
-  deps: BootstrapDeps
+  deps: LocalPairingDeps
 ): Promise<{ personal: { workspaceId: string }; system: { workspaceId: string } }> {
   const createRpc = deps.rpcClient ?? ((credential) => new RpcClient(credential));
   // A cold hub can refuse the first call while it is still starting, which is
@@ -167,17 +167,17 @@ async function ensureUserWorkspaces(
       await rpc.close();
     }
   }
-  throw new Error("Development CLI could not prepare its account workspaces");
+  throw new Error("The CLI could not prepare its account workspaces on the local server");
 }
 
 async function reconcileExistingCredential(
   input: { gatewayUrl: string; serverId: string; workspaceId: string },
   existing: CliCredentials,
   credentialFile: string | undefined,
-  deps: BootstrapDeps
-): Promise<DevCliBootstrapResult> {
+  deps: LocalPairingDeps
+): Promise<LocalCliPairingResult> {
   if (existing.kind !== "device") {
-    throw new Error("The instance CLI profile is not a paired device credential");
+    throw new Error("The CLI profile is not a paired device credential");
   }
   const route = await routeWorkspace(
     {
@@ -189,7 +189,7 @@ async function reconcileExistingCredential(
     deps
   );
   if (route.serverId !== input.serverId || route.workspaceId !== input.workspaceId) {
-    throw new Error("Development hub routed a different workspace than the instance selected");
+    throw new Error("The local server routed a different workspace than the CLI selected");
   }
   saveCliCredentials(
     {
@@ -209,15 +209,20 @@ async function pairWithInvite(
     gatewayUrl: string;
     serverId: string;
     invite: HubPairingInvite;
-    workspace?: DevCliWorkspaceSelection;
+    workspace?: LocalCliWorkspaceSelection;
   },
   credentialFile: string | undefined,
-  deps: BootstrapDeps = {}
-): Promise<DevCliBootstrapResult> {
+  deps: LocalPairingDeps = {}
+): Promise<LocalCliPairingResult> {
   if (input.invite.serverId !== input.serverId) {
-    throw new Error("Development CLI invite targets a different hub");
+    throw new Error("The local pairing invite targets a different server");
   }
-  const device = await postPairing(input.gatewayUrl, input.invite, deps.fetch);
+  const device = await postPairing(
+    input.gatewayUrl,
+    input.invite,
+    deps.label ?? `Vibestudio CLI on ${os.hostname()}`,
+    deps.fetch
+  );
   const pair = await ensureUserWorkspaces(
     {
       gatewayUrl: input.gatewayUrl,
@@ -227,8 +232,8 @@ async function pairWithInvite(
     deps
   );
   // System is where the account's tooling lives and what a desktop client
-  // routes its own connection to, so a headless development CLI and an
-  // attached client see the same workspace by default. Personal is a real
+  // routes its own connection to, so a headless CLI and an attached client
+  // see the same workspace by default. Personal is a real
   // choice, not a fallback: it installs different units, so it is the only
   // place cases that need those units can run.
   const workspaceId = pair[input.workspace ?? "system"].workspaceId;
@@ -242,7 +247,7 @@ async function pairWithInvite(
     deps
   );
   if (route.serverId !== input.serverId || route.workspaceId !== workspaceId) {
-    throw new Error("Development hub routed a different workspace than the pairing selected");
+    throw new Error("The local server routed a different workspace than the pairing selected");
   }
 
   const credentials: CliCredentials = {
@@ -262,20 +267,21 @@ async function pairWithInvite(
 }
 
 /**
- * Give a source-server instance its own CLI device over the loopback topology.
+ * Pair the CLI profile with a local server from its hub ready payload: redeem
+ * the server's one-time root invite (first run), or re-route the profile's
+ * existing device credential to the server's current gateway (later runs).
  *
  * This is the same one-time root pairing and route contract used by remote
- * clients, transported over the hub's loopback HTTP ingress. The resulting
- * credential remains instance-scoped and all later CLI calls use ordinary
- * authenticated routing.
+ * clients, transported over the hub's loopback HTTP ingress. All later CLI
+ * calls use ordinary authenticated routing.
  */
-export async function bootstrapInstanceCli(
+export async function pairLocalCli(
   rawReady: unknown,
   options: {
     credentialFile?: string;
-    workspace?: DevCliWorkspaceSelection;
-  } & BootstrapDeps = {}
-): Promise<DevCliBootstrapResult> {
+    workspace?: LocalCliWorkspaceSelection;
+  } & LocalPairingDeps = {}
+): Promise<LocalCliPairingResult> {
   const ready = HubReadyPayloadSchema.parse(rawReady);
   const existing = existingCredential(ready.serverId, options.credentialFile);
   if (existing) {
@@ -307,14 +313,14 @@ export async function bootstrapInstanceCli(
 }
 
 /**
- * Add the instance CLI as another device of an already-paired development
- * desktop. The sponsor authenticates through the ordinary device flow and
- * mints the same account-bound invite exposed by `hubControl.pairDevice`.
+ * Add the CLI as another device of an already-paired local desktop. The
+ * sponsor authenticates through the ordinary device flow and mints the same
+ * account-bound invite exposed by `hubControl.pairDevice`.
  */
-export async function bootstrapInstanceCliFromDevice(
-  sponsor: DevCliPairingSponsor,
-  options: { credentialFile?: string } & BootstrapDeps = {}
-): Promise<DevCliBootstrapResult> {
+export async function pairLocalCliFromDevice(
+  sponsor: LocalCliPairingSponsor,
+  options: { credentialFile?: string } & LocalPairingDeps = {}
+): Promise<LocalCliPairingResult> {
   const existing = existingCredential(sponsor.serverId, options.credentialFile);
   if (existing) {
     return reconcileExistingCredential(sponsor, existing, options.credentialFile, options);

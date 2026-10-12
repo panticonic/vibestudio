@@ -3,9 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadCliCredentials, saveCliCredentials } from "../cli/credentialStore.js";
-import { ConnectionError } from "../cli/output.js";
-import { bootstrapInstanceCli, bootstrapInstanceCliFromDevice } from "./bootstrapInstanceCli.js";
+import { loadCliCredentials, saveCliCredentials } from "./credentialStore.js";
+import { ConnectionError } from "./output.js";
+import { pairLocalCli, pairLocalCliFromDevice } from "./localPairing.js";
 
 const roots: string[] = [];
 const reach = (byte: string) => ({
@@ -18,7 +18,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("bootstrapInstanceCliFromDevice", () => {
+describe("pairLocalCliFromDevice", () => {
   it("routes a saved private identity without publishing it in hub readiness", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-private-"));
     roots.push(root);
@@ -57,7 +57,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     });
     const close = vi.fn(async () => undefined);
     await expect(
-      bootstrapInstanceCli(
+      pairLocalCli(
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,
@@ -123,7 +123,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const fetchMock = vi.fn();
 
     await expect(
-      bootstrapInstanceCliFromDevice(
+      pairLocalCliFromDevice(
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,
@@ -198,7 +198,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
       expect(JSON.parse(String(init?.body))).toMatchObject({
         code: pairing.code,
-        label: "Vibestudio development CLI",
+        label: `Vibestudio CLI on ${os.hostname()}`,
       });
       return Response.json({
         deviceId: `dev_${"C".repeat(24)}`,
@@ -208,7 +208,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     });
 
     await expect(
-      bootstrapInstanceCliFromDevice(
+      pairLocalCliFromDevice(
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,
@@ -297,7 +297,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     );
 
     await expect(
-      bootstrapInstanceCli(
+      pairLocalCli(
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,
@@ -380,7 +380,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     );
 
     await expect(
-      bootstrapInstanceCliFromDevice(
+      pairLocalCliFromDevice(
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,

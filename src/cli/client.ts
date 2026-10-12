@@ -5,7 +5,6 @@ import { createRequire } from "node:module";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as readline from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isConnectPairingInput, isSelectedWorkspaceUrl } from "@vibestudio/shared/connect";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
@@ -31,11 +30,9 @@ import {
   removeRemoteWorkspaceMember,
   revokeRemoteDevice,
   selectRemoteWorkspace,
-  type PairOptions,
-  type RemoteWorkspaceEntry,
 } from "./remoteClient.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
-import { runTerminalLaunchGate } from "./terminalLaunchGate.js";
+import { createTerminalCommand } from "./terminal/terminalCommand.js";
 import { agentCommands, createSelectedWorkspaceClient } from "./agent/index.js";
 import { fsCommands } from "./agent/fsCommands.js";
 import { vcsCommands } from "./agent/vcsCommands.js";
@@ -51,6 +48,7 @@ import { storageCommands } from "./storageCommands.js";
 import { templatesCommands } from "./templatesCommands.js";
 import { remoteHost } from "./remoteHeadlessHost.js";
 import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
+import { cliConfigRoot } from "./configPaths.js";
 import {
   findCommand,
   groupCommands,
@@ -450,177 +448,6 @@ async function remoteWorkspaceSelect(inv: ParsedInvocation): Promise<number> {
   }
 }
 
-function terminalPairOptions(inv: ParsedInvocation): PairOptions | null {
-  let link = typeof inv.flags["pair"] === "string" ? inv.flags["pair"] : undefined;
-  const label = typeof inv.flags["label"] === "string" ? inv.flags["label"] : undefined;
-
-  const positional = inv.positionals[0];
-  if (positional && isConnectPairingInput(positional)) {
-    if (link)
-      throw new UsageError("pass the pairing link once, either positionally or with --pair");
-    link = positional;
-  } else if (positional) {
-    throw new UsageError(
-      `Unexpected argument for terminal start: ${positional}. Pass compact pairing material or a Vibestudio pairing link (also accepted via --pair).`
-    );
-  }
-
-  if (link) {
-    return {
-      link,
-      label: label || `Terminal on ${os.hostname()}`,
-      platform: "terminal",
-    };
-  }
-  if (label) {
-    throw new UsageError("--label is only valid when pairing with --pair");
-  }
-  return null;
-}
-
-async function terminalCredentials(
-  inv: ParsedInvocation,
-  json: boolean
-): Promise<DeviceCredential> {
-  const requestedWorkspace =
-    typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"].trim() : undefined;
-  const pairOptions = terminalPairOptions(inv);
-  let creds: DeviceCredential;
-  if (pairOptions) {
-    assertCliProfileIsUnpaired();
-    creds = await pairRemoteServer(pairOptions);
-    saveCliCredentials(creds);
-    if (!json) console.log(`paired ${creds.url}`);
-  } else {
-    const loaded = loadCliCredentials();
-    if (!loaded) {
-      throw new AuthError(
-        'not paired - run `vibestudio terminal start --pair "https://vibestudio.app/p#..."`'
-      );
-    }
-    creds = requireDeviceCliCredentials(loaded, "terminal start");
-  }
-
-  if (requestedWorkspace) {
-    creds = await chooseTerminalWorkspace(creds, { requestedWorkspace, json });
-    saveCliCredentials(creds);
-  }
-  if (!isSelectedWorkspaceUrl(creds.url)) {
-    throw new AuthError(
-      "stored remote credential is not scoped to a workspace; select a workspace"
-    );
-  }
-  return creds;
-}
-
-async function chooseTerminalWorkspace(
-  creds: DeviceCredential,
-  opts: { requestedWorkspace?: string; json: boolean }
-): Promise<DeviceCredential> {
-  if (opts.requestedWorkspace) {
-    return await selectRemoteWorkspace(creds, opts.requestedWorkspace);
-  }
-  const workspaces = await listRemoteWorkspaces(creds);
-  if (workspaces.length === 0) {
-    throw new AuthError("server has no workspaces to open");
-  }
-  if (opts.json || !process.stdin.isTTY) {
-    throw new UsageError(
-      `choose a workspace with --workspace <name> (${workspaces
-        .map((workspace) => workspace.name)
-        .join(", ")})`
-    );
-  }
-  const selected = await promptWorkspaceSelection(workspaces);
-  return await selectRemoteWorkspace(creds, selected);
-}
-
-async function promptWorkspaceSelection(workspaces: RemoteWorkspaceEntry[]): Promise<string> {
-  console.log("Choose a workspace:");
-  workspaces.forEach((workspace, index) => {
-    const status = workspace.running ? " running" : "";
-    console.log(`  ${index + 1}. ${workspace.name}${status}`);
-  });
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    while (true) {
-      const answer = (await rl.question("Workspace: ")).trim();
-      const numeric = Number(answer);
-      if (Number.isInteger(numeric) && numeric >= 1 && numeric <= workspaces.length) {
-        const selected = workspaces[numeric - 1];
-        if (selected) return selected.name;
-      }
-      const byName = workspaces.find((workspace) => workspace.name === answer);
-      if (byName) return byName.name;
-      console.log("Enter a workspace number or name.");
-    }
-  } finally {
-    rl.close();
-  }
-}
-
-async function terminalStart(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const creds = await terminalCredentials(inv, json);
-    const result = await runTerminalLaunchGate(creds, {
-      target: "terminal",
-      yes: inv.flags["yes"] === true,
-      json,
-      timeoutMs: parseTimeout(inv.flags["timeout"]),
-    });
-    printResult(result, {
-      json,
-      human: () => {
-        if (result.status === "ready") {
-          const launch = result.launch?.status === "ready" ? result.launch : null;
-          console.log(
-            `terminal app started${launch?.entity.identity.entityId ? `: ${launch.entity.identity.entityId}` : ""}`
-          );
-          if (launch?.entity.artifact.buildKey) {
-            console.log(`build: ${launch.entity.artifact.buildKey}`);
-          }
-          if (result.approvalsResolved > 0) {
-            console.log(`approvals resolved: ${result.approvalsResolved}`);
-          }
-          return;
-        }
-        if (result.status === "denied") {
-          console.log("terminal app startup denied");
-          return;
-        }
-        if (result.launch?.status === "unavailable") {
-          console.log(result.launch.reason);
-          return;
-        }
-        if (result.launch?.status === "preparing") {
-          console.log(result.launch.reason);
-          return;
-        }
-        console.log(`terminal app did not start: ${result.status}`);
-      },
-    });
-    return result.status === "ready" ? 0 : 1;
-  } catch (error) {
-    return printError(error, { json });
-  }
-}
-
-function parseTimeout(value: ParsedInvocation["flags"][string] | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string") throw new UsageError("--timeout requires a duration");
-  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)?$/i.exec(value.trim());
-  if (!match) throw new UsageError("--timeout must be a duration such as 30s, 10m, or 1h");
-  const amount = Number(match[1]);
-  const unit = (match[2] ?? "s").toLowerCase();
-  const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
-  const timeoutMs = amount * multiplier;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new UsageError("--timeout must be greater than zero");
-  }
-  return timeoutMs;
-}
-
 function scriptCommand(
   group: string,
   name: string,
@@ -847,34 +674,6 @@ const remoteCommands: CliCommand[] = [
   },
   {
     group: "remote",
-    name: "terminal",
-    summary: "Review approvals and start the selected terminal app",
-    usage:
-      "vibestudio remote terminal [--pair <link>] [--workspace <name>] [--yes] [--timeout <duration>]",
-    flags: [
-      {
-        name: "pair",
-        takesValue: true,
-        description: "Pair from a Vibestudio pairing link before starting",
-      },
-      { name: "label", takesValue: true, description: "Device label used while pairing" },
-      { name: "workspace", takesValue: true, description: "Remote workspace to open" },
-      {
-        name: "yes",
-        takesValue: false,
-        description: "Approve each terminal startup approval once without prompting",
-      },
-      {
-        name: "timeout",
-        takesValue: true,
-        description: "Stop waiting after this duration (default: wait until ready)",
-      },
-      JSON_FLAG,
-    ],
-    run: terminalStart,
-  },
-  {
-    group: "remote",
     name: "logout",
     summary: "Remove the stored CLI device credential",
     usage: "vibestudio remote logout",
@@ -921,37 +720,6 @@ const remoteCommands: CliCommand[] = [
       JSON_FLAG,
     ],
     run: remoteHost,
-  },
-];
-
-const terminalCommands: CliCommand[] = [
-  {
-    group: "terminal",
-    name: "start",
-    summary: "Review approvals and start the selected terminal app",
-    usage:
-      "vibestudio terminal start [--pair <link>] [--workspace <name>] [--yes] [--timeout <duration>]",
-    flags: [
-      {
-        name: "pair",
-        takesValue: true,
-        description: "Pair from a Vibestudio pairing link before starting",
-      },
-      { name: "label", takesValue: true, description: "Device label used while pairing" },
-      { name: "workspace", takesValue: true, description: "Remote workspace to open" },
-      {
-        name: "yes",
-        takesValue: false,
-        description: "Approve each terminal startup approval once without prompting",
-      },
-      {
-        name: "timeout",
-        takesValue: true,
-        description: "Stop waiting after this duration (default: wait until ready)",
-      },
-      JSON_FLAG,
-    ],
-    run: terminalStart,
   },
 ];
 
@@ -1015,7 +783,7 @@ const mobileCommands: CliCommand[] = [
  */
 const commandRegistry: CliCommand[] = [
   ...remoteCommands,
-  ...terminalCommands,
+  createTerminalCommand({ appRoot: repoRoot }),
   ...mobileCommands,
   ...createModelCommands({
     connect: (providerId, options) =>
@@ -1037,7 +805,7 @@ const commandRegistry: CliCommand[] = [
 /** Every command group, in help order, with its one-line description. */
 const GROUP_DESCRIPTIONS: Record<string, string> = {
   remote: "pairing, servers, workspaces, and remote hosts",
-  terminal: "launch the terminal workspace app",
+  terminal: "open the terminal browser, starting a local server when needed",
   mobile: "develop, install, inspect, and pair mobile clients",
   model: "connect and renew model-provider credentials",
   agent: "sessions, diagnostics, services, and workspace skills",
@@ -1084,6 +852,14 @@ export async function main(argv: string[]): Promise<number> {
     printHelp();
     return 2;
   }
+  const groupCommand = findCommand(commandRegistry, group, "");
+  if (groupCommand) {
+    if (rest[0] === "help" || wantsHelp(rest)) {
+      console.log(renderCommandHelp(groupCommand));
+      return 0;
+    }
+    return await runParsed(groupCommand, rest);
+  }
   const [sub, ...subArgs] = rest;
   if (!sub || sub === "--help" || sub === "help") {
     printGroupHelp(group);
@@ -1105,9 +881,13 @@ export async function main(argv: string[]): Promise<number> {
   if (command.passthrough) {
     return await command.run({ positionals: subArgs, flags: {}, flagsMulti: () => [] }, subArgs);
   }
+  return await runParsed(command, subArgs);
+}
+
+async function runParsed(command: CliCommand, args: string[]): Promise<number> {
   let inv: ParsedInvocation;
   try {
-    inv = parseInvocation(command, subArgs);
+    inv = parseInvocation(command, args);
   } catch (error) {
     if (error instanceof UsageError) {
       console.error(error.message);
@@ -1116,7 +896,7 @@ export async function main(argv: string[]): Promise<number> {
     }
     throw error;
   }
-  return await command.run(inv, subArgs);
+  return await command.run(inv, args);
 }
 
 /** Whether argv requests command help (--help/-h before any `--` separator). */
@@ -1185,9 +965,13 @@ Usage:
 ${sections}
 
 Getting started:
-  1. Get a pairing invite from the desktop app or the server host.
-  2. vibestudio remote pair "https://vibestudio.app/p#..."
-  3. vibestudio remote status
+  On this machine:   vibestudio terminal
+                     (starts a local server on first use and keeps your work
+                     in ${cliConfigRoot()})
+  With a server elsewhere:
+    1. Get a pairing invite from the desktop app or the server host.
+    2. vibestudio terminal "https://vibestudio.app/p#..."
+       (or \`vibestudio remote pair "<link>"\` for the CLI alone)
 
 Run \`vibestudio <group> --help\` for a group's commands and
 \`vibestudio <group> <command> --help\` for flags and full usage.
@@ -1197,6 +981,11 @@ Credentials are stored as a 0600 JSON file at ${credentialPath()}.
 }
 
 function printGroupHelp(group: string): void {
+  const groupCommand = findCommand(commandRegistry, group, "");
+  if (groupCommand) {
+    console.log(renderCommandHelp(groupCommand));
+    return;
+  }
   console.log(`vibestudio ${group}
 
 Usage:

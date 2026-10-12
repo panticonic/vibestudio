@@ -16,6 +16,7 @@ import {
   createIrohClientPipe,
   type IrohClientPipe,
   type IrohClientSession,
+  type IrohClientSessionOptions,
 } from "@vibestudio/rpc/transports/irohClient";
 import { createReconnectingIrohClientPipe } from "@vibestudio/rpc/transports/reconnectingIrohClient";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
@@ -58,15 +59,41 @@ export class IrohRpcClient {
   private connected: Promise<Connected> | null = null;
   private closed = false;
   private readonly recoveryListeners = new Set<(kind: RecoveryKind) => void | Promise<void>>();
+  /** A peer client borrows its parent's endpoint; only the owner closes it. */
+  private readonly ownsEndpoint: boolean;
 
-  constructor(private readonly options: IrohRpcClientOptions) {
+  constructor(
+    private readonly options: IrohRpcClientOptions,
+    sharedEndpoint?: EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint>
+  ) {
     assertIrohReach(options.reach);
+    if (sharedEndpoint) {
+      this.endpointOwner = sharedEndpoint;
+      this.ownsEndpoint = false;
+      return;
+    }
     if (options.endpointSecret.byteLength !== 32) {
       throw new Error("Iroh endpoint secret must contain exactly 32 bytes");
     }
     const secretKey = loadIrohNodeBinding().SecretKey.fromBytes([...options.endpointSecret]);
     this.endpointOwner = new EndpointGenerationOwner(
       createNodeEndpointBinding({ secretKey, relayUrls: options.reach.relays })
+    );
+    this.ownsEndpoint = true;
+  }
+
+  /**
+   * A client for another peer (for example the hub control endpoint next to a
+   * workspace endpoint) dialed from this client's endpoint identity. A device
+   * holds one endpoint per credential; peers share it instead of binding the
+   * same Endpoint ID twice. The peer closes its own connection; the endpoint
+   * stays owned by this client.
+   */
+  peer(options: Omit<IrohRpcClientOptions, "endpointSecret">): IrohRpcClient {
+    if (this.closed) throw new Error("Iroh RPC client is closed");
+    return new IrohRpcClient(
+      { ...options, endpointSecret: this.options.endpointSecret },
+      this.endpointOwner
     );
   }
 
@@ -113,13 +140,39 @@ export class IrohRpcClient {
     return () => this.recoveryListeners.delete(handler);
   }
 
+  /**
+   * Open another authenticated logical session on this client's connection,
+   * for a second principal of the same device (for example the app principal
+   * a terminal client runs). The session shares the physical QUIC connection
+   * and the endpoint identity, so grants bound to this endpoint redeem on it.
+   * The caller owns the returned session and closes it.
+   */
+  async openSession(
+    options: Omit<IrohClientSessionOptions, "onPaired" | "connectionId"> & {
+      connectionId?: string;
+    }
+  ): Promise<IrohClientSession> {
+    const { pipe } = await this.ensureConnected();
+    const session = pipe.openSession({
+      ...options,
+      connectionId: options.connectionId ?? randomUUID(),
+    });
+    try {
+      await session.ready?.();
+    } catch (error) {
+      await session.close().catch(() => undefined);
+      throw error;
+    }
+    return session;
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     const connected = this.connected;
     this.connected = null;
     if (connected) await (await connected).pipe.close().catch(() => undefined);
-    await this.endpointOwner.close();
+    if (this.ownsEndpoint) await this.endpointOwner.close();
   }
 
   private ensureConnected(): Promise<Connected> {
@@ -141,7 +194,7 @@ export class IrohRpcClient {
         });
         return createIrohClientPipe(dialed.connection, dialed);
       },
-      closeEndpoint: () => this.endpointOwner.close(),
+      closeEndpoint: () => (this.ownsEndpoint ? this.endpointOwner.close() : Promise.resolve()),
     });
     const connectionId = this.options.connectionId ?? randomUUID();
     const session = pipe.openSession({

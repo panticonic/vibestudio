@@ -75,9 +75,11 @@ export function prepareWorkspaceRelease(input) {
     cancellation,
     stopping,
     tail = "";
+  // `input.log`, when given, receives both streams (a launcher that keeps the
+  // terminal for its own UI); otherwise they pass through to this process.
   for (const [stream, target] of [
-    [child.stdout, process.stdout],
-    [child.stderr, process.stderr],
+    [child.stdout, input.log ?? process.stdout],
+    [child.stderr, input.log ?? process.stderr],
   ]) {
     stream.on("data", (chunk) => {
       tail = (tail + chunk).slice(-8192);

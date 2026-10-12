@@ -1,5 +1,5 @@
 import { AuthError, ConnectionError, networkErrorMessage } from "./output.js";
-import { serverAuthRouteUrl, serverRpcHttpUrl } from "@vibestudio/shared/connect";
+import { serverAuthRouteUrl, serverRpcHttpUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
 import {
   isIrohCredential,
   type CliCredentials,
@@ -8,7 +8,14 @@ import {
 } from "./credentialStore.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { deserializeRpcFailure, decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc";
-import type { RpcErrorData, RpcErrorKind, RpcStreamOptions } from "@vibestudio/rpc";
+import type {
+  EnvelopeRpcTransport,
+  RpcConnectionStatus,
+  RpcErrorData,
+  RpcErrorKind,
+  RpcStreamOptions,
+} from "@vibestudio/rpc";
+import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import { Agent, type Dispatcher } from "undici";
 import {
   RefreshAgentResponseSchema,
@@ -67,6 +74,30 @@ export interface DeviceEndpointCredential {
 }
 
 export type RpcClientCredential = CliCredentials | DeviceEndpointCredential | RawTokenCredential;
+
+/**
+ * An authenticated session for another principal of this device, opened over
+ * the same transport the CLI already uses (loopback WebSocket or the Iroh
+ * connection). Wrap it with `createRpcClient` to act as that principal.
+ */
+export interface PrincipalTransport extends EnvelopeRpcTransport {
+  status(): RpcConnectionStatus;
+  onStatusChange(handler: (status: RpcConnectionStatus) => void): () => void;
+  /** True once the session ended for good (closed locally or terminally by the server). */
+  isClosed(): boolean;
+  close(): Promise<void>;
+}
+
+export interface PrincipalTransportOptions {
+  /** Envelope identity; the server derives the authenticated caller from the token. */
+  selfId: string;
+  /** Redeemable credential for the principal; called for every (re)authentication. */
+  getToken(): Promise<string>;
+  clientLabel: string;
+  onRecovery?(kind: RecoveryKind): void | Promise<void>;
+  /** The server ended the session for good (credential revoked, principal retired). */
+  onTerminalClose?(error: Error): void;
+}
 
 /** Shared surface of the persistent local-WebSocket and remote-Iroh clients. */
 interface PersistentRpcClient {
@@ -237,6 +268,8 @@ export class RpcClient {
   private readonly deviceId: string | null;
   private readonly refreshToken: string | null;
   private readonly pairing: CliStoredPairing | undefined;
+  /** Hub control reach of a complete Iroh device credential. */
+  private readonly controlPairing: CliStoredPairing | undefined = undefined;
   private readonly endpointSecret: string | undefined;
   /** Envelope self-id + kind. The server re-derives the authenticated caller
    *  from the redeemed token, so these are informational for routing/logging. */
@@ -274,6 +307,7 @@ export class RpcClient {
     } else {
       if (isCompleteDeviceCredentials(creds)) {
         this.pairing = creds.transport === "iroh" ? creds.workspacePairing : undefined;
+        this.controlPairing = creds.transport === "iroh" ? creds.controlPairing : undefined;
         this.endpointSecret = creds.transport === "iroh" ? creds.endpointSecret : undefined;
       } else {
         this.pairing = creds.pairing;
@@ -421,6 +455,115 @@ export class RpcClient {
     const client = await this.persistentClient();
     this.assertOpen();
     return await client.onRecovery(handler);
+  }
+
+  /**
+   * Open an authenticated session for another principal of this device over
+   * this client's transport: a second logical session on the same Iroh
+   * connection (so endpoint-bound grants redeem on it), or a WebSocket to the
+   * same loopback workspace URL.
+   */
+  async openPrincipalTransport(options: PrincipalTransportOptions): Promise<PrincipalTransport> {
+    this.assertOpen();
+    if (this.isIroh) {
+      this.keepPushOpen = true;
+      const client = await this.ensureIrohClient();
+      this.assertOpen();
+      const session = await client.openSession({
+        clientLabel: options.clientLabel,
+        clientPlatform: "headless",
+        getToken: options.getToken,
+        ...(options.onRecovery ? { onRecovery: (kind) => options.onRecovery!(kind) } : {}),
+        ...(options.onTerminalClose ? { onTerminalClose: options.onTerminalClose } : {}),
+      });
+      return session;
+    }
+    const [{ WebSocket }, { wsClientTransport }, { NodeWsLike }] = await Promise.all([
+      import("ws"),
+      import("@vibestudio/rpc/transports/wsClient"),
+      import("@vibestudio/rpc/transports/nodeWsLike"),
+    ]);
+    const url = this.url;
+    let closing = false;
+    const transport = wsClientTransport({
+      selfId: options.selfId,
+      getWsUrl: () => serverRpcWsUrl(url),
+      reconnect: true,
+      logPrefix: "[cli-principal-ws]",
+      getAuthMessageFields: () => ({
+        clientLabel: options.clientLabel,
+        clientPlatform: "headless",
+        oauthCallbackMode: "client-loopback",
+      }),
+      ...(options.onRecovery ? { onRecovery: options.onRecovery } : {}),
+      adapter: {
+        now: () => Date.now(),
+        getAuthToken: () => options.getToken(),
+        createSocket: (socketUrl, protocols) => new NodeWsLike(new WebSocket(socketUrl, protocols)),
+      },
+    });
+    const unsubscribe = transport.onStatusChange!((status) => {
+      if (status === "disconnected" && transport.isClosed() && !closing) {
+        unsubscribe();
+        options.onTerminalClose?.(
+          new ConnectionError("the server ended the session (credential revoked or app retired)")
+        );
+      }
+    });
+    try {
+      await transport.connectAndWait();
+    } catch (error) {
+      closing = true;
+      unsubscribe();
+      await transport.close();
+      throw error;
+    }
+    const closeTransport = transport.close.bind(transport);
+    return Object.assign(transport as typeof transport & PrincipalTransport, {
+      close: async () => {
+        closing = true;
+        unsubscribe();
+        await closeTransport();
+      },
+    });
+  }
+
+  /**
+   * A client for the hub control service (workspace listing and routing) that
+   * shares this device client's transport: the loopback hub for a local
+   * credential, or a second peer dialed from the same Iroh endpoint. The
+   * caller closes it; this client keeps owning the endpoint.
+   */
+  async openControlConnection(): Promise<RpcClient> {
+    this.assertOpen();
+    const device = this.deviceCredential();
+    if (!this.isIroh) return new RpcClient({ url: new URL(this.url).origin, ...device });
+    const controlPairing = this.controlPairing;
+    if (!controlPairing) {
+      throw new Error("Stored credential does not contain hub control reach");
+    }
+    const parent = await this.ensureIrohClient();
+    this.assertOpen();
+    const control = new RpcClient({
+      url: this.url,
+      ...device,
+      pairing: controlPairing,
+      endpointSecret: this.endpointSecret,
+    });
+    control.irohClient = Promise.resolve(
+      parent.peer({
+        reach: controlPairing,
+        callerId: this.callerId,
+        callerKind: this.callerKind,
+        getToken: () => this.authToken(),
+        clientLabel: "Vibestudio CLI",
+        onPaired: () => undefined,
+      })
+    );
+    // The peer connection lives until its owner closes it; ordinary calls must
+    // not retire it (re-dialing would bind the endpoint a second time).
+    control.keepPushOpen = true;
+    return control;
   }
 
   /**
