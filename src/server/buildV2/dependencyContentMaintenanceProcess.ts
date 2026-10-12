@@ -3,13 +3,14 @@ import * as path from "node:path";
 import { formatRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 import { dependencyCacheLocation } from "./dependencyCachePaths.js";
+import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
 import {
   deduplicateDependencyContent,
   pruneUnreferencedDependencyContent,
 } from "./dependencyContentStore.js";
 
 type Preparation = { stagingDir: string; cacheDir: string };
-type MaintenanceJob = { preparations: Preparation[]; prune: boolean };
+type MaintenanceJob = { hostArtifactRoot: string; preparations: Preparation[]; prune: boolean };
 type JobResult = { ok: true } | { ok: false; failure: ReturnType<typeof serializeRpcFailure> };
 
 function parseJob(raw: string | undefined): MaintenanceJob {
@@ -17,6 +18,8 @@ function parseJob(raw: string | undefined): MaintenanceJob {
   const value = JSON.parse(raw) as Partial<MaintenanceJob>;
   if (
     !value ||
+    typeof value.hostArtifactRoot !== "string" ||
+    path.resolve(value.hostArtifactRoot) !== resolveRequiredHostArtifactRoot() ||
     !Array.isArray(value.preparations) ||
     typeof value.prune !== "boolean" ||
     (value.preparations.length === 0 && !value.prune)

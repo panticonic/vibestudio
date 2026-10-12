@@ -77,12 +77,12 @@ describe("StreamingRelay HTTP response ownership", () => {
       },
     });
 
-    let handled!: () => void;
-    const handledPromise = new Promise<void>((resolve) => {
+    let handled!: (error?: unknown) => void;
+    const handledPromise = new Promise<unknown>((resolve) => {
       handled = resolve;
     });
     const server = http.createServer((req, res) => {
-      void relay.handleHttpRequest(req, res).finally(handled);
+      void relay.handleHttpRequest(req, res).then(() => handled(), handled);
     });
     servers.add(server);
     server.listen(0, "127.0.0.1");
@@ -117,14 +117,12 @@ describe("StreamingRelay HTTP response ownership", () => {
         ),
       ])
     ).resolves.toBeUndefined();
-    await expect(
-      Promise.race([
-        handledPromise,
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("HTTP relay remained blocked after close")), 1_000)
-        ),
-      ])
-    ).resolves.toBeUndefined();
+    const handlingFailure = await handledPromise;
+    if (handlingFailure !== undefined) {
+      const failures =
+        handlingFailure instanceof AggregateError ? handlingFailure.errors : [handlingFailure];
+      expect(failures).toContainEqual(expect.objectContaining({ code: "ECONNRESET" }));
+    }
     expect(dispatcher.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
       "events",
@@ -178,8 +176,12 @@ describe("StreamingRelay HTTP response ownership", () => {
       },
     });
 
+    let handled!: (error?: unknown) => void;
+    const handledPromise = new Promise<unknown>((resolve) => {
+      handled = resolve;
+    });
     const server = http.createServer((req, res) => {
-      void relay.handleHttpRequest(req, res);
+      void relay.handleHttpRequest(req, res).then(() => handled(), handled);
     });
     servers.add(server);
     server.listen(0, "127.0.0.1");
@@ -204,6 +206,7 @@ describe("StreamingRelay HTTP response ownership", () => {
     });
     expect(response.status).toBe(200);
     await response.arrayBuffer();
+    expect(await handledPromise).toBeUndefined();
 
     expect(assertAuthority).toHaveBeenCalledWith(
       expect.objectContaining({ caller: causallyAttributed }),

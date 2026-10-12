@@ -372,6 +372,67 @@ jobs:
       - name: Build, stage, dry-run, and install-smoke the npm candidate
         run: pnpm publish:server-npm -- --dry-run-only
 
+      - name: Pack the verified npm candidate and attest its source
+        run: |
+          candidate_dir="$TMPDIR/npm-candidate"
+          mkdir -m 0700 -p "$candidate_dir"
+          npm pack ./dist-packages/server --pack-destination "$candidate_dir" --json > "$candidate_dir/npm-pack.json"
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { createReadStream } from "node:fs";
+          import { readFile, stat, writeFile, rm } from "node:fs/promises";
+          import path from "node:path";
+
+          const candidateDir = path.join(process.env.TMPDIR, "npm-candidate");
+          const packageRoot = "dist-packages/server";
+          const packageJson = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
+          const [packed] = JSON.parse(await readFile(path.join(candidateDir, "npm-pack.json"), "utf8"));
+          if (
+            !packed ||
+            packed.name !== packageJson.name ||
+            packed.version !== packageJson.version ||
+            typeof packed.filename !== "string" ||
+            path.basename(packed.filename) !== packed.filename
+          ) {
+            throw new Error("npm pack output does not match the staged server package identity");
+          }
+
+          const tarballPath = path.join(candidateDir, packed.filename);
+          const packageStat = await stat(tarballPath);
+          if (packageStat.size === 0) throw new Error("npm candidate archive is empty");
+          const hash = createHash("sha256");
+          for await (const chunk of createReadStream(tarballPath)) hash.update(chunk);
+          const receipt = {
+            schemaVersion: 1,
+            sourceSha: process.env.GITHUB_SHA,
+            packageName: packageJson.name,
+            packageVersion: packageJson.version,
+            tarball: packed.filename,
+            byteLength: packageStat.size,
+            sha256: hash.digest("hex"),
+          };
+          if (!/^[0-9a-f]{40}$/.test(receipt.sourceSha ?? "")) {
+            throw new Error("GitHub source SHA is missing or invalid");
+          }
+          await writeFile(
+            path.join(candidateDir, "candidate-receipt.json"),
+            `${JSON.stringify(receipt, null, 2)}\n`,
+            { flag: "wx", mode: 0o600 }
+          );
+          await rm(path.join(candidateDir, "npm-pack.json"));
+          NODE
+
+      - name: Upload verified npm candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibestudio-server-npm-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.TMPDIR }}/npm-candidate/*.tgz
+            ${{ env.TMPDIR }}/npm-candidate/candidate-receipt.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
       - name: Retire npm candidate smoke scratch
         if: ${{ always() }}
         run: rm -rf -- "$RUNNER_TEMP/vibestudio-npm-server-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

@@ -1,14 +1,18 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createHash } from "node:crypto";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   panelMetadataSchema,
   type BuildMetadataWire,
-  type BuildResultWire,
   type BuildPerformanceProfileWire,
 } from "@vibestudio/service-schemas/build";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBuildService } from "./buildService.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
+import type { StoredBuildResult } from "../buildV2/buildStore.js";
 import { setBuildRootConfig } from "../buildV2/effectiveVersion.js";
 
 const inventory = vi.hoisted(() => ({
@@ -45,8 +49,47 @@ const buildMetadata = {
   builtAt: "2026-01-01T00:00:00.000Z",
 } satisfies BuildMetadataWire;
 
+const ownedBuildDirs = new Set<string>();
+
 beforeEach(() => setBuildRootConfig({ appRoot: process.cwd(), workspaceRoot: process.cwd() }));
-afterEach(() => setBuildRootConfig(null));
+afterEach(() => {
+  setBuildRootConfig(null);
+  for (const dir of ownedBuildDirs) fs.rmSync(dir, { recursive: true, force: true });
+  ownedBuildDirs.clear();
+});
+
+function storedBuildFixture(args: {
+  buildKey: string;
+  sourceStateHash: string | null;
+  metadata: BuildMetadataWire;
+  artifactPath: string;
+  content: string;
+  contentType: string;
+}): StoredBuildResult {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-service-test-"));
+  ownedBuildDirs.add(dir);
+  const artifactBytes = Buffer.from(args.content, "utf8");
+  const digest = createHash("sha256").update(artifactBytes).digest("hex");
+  const absoluteArtifactPath = path.join(dir, args.artifactPath);
+  fs.mkdirSync(path.dirname(absoluteArtifactPath), { recursive: true });
+  fs.writeFileSync(absoluteArtifactPath, artifactBytes);
+  return {
+    dir,
+    buildKey: args.buildKey,
+    sourceStateHash: args.sourceStateHash,
+    metadata: args.metadata,
+    artifacts: [
+      {
+        path: args.artifactPath,
+        role: "primary",
+        contentType: args.contentType,
+        encoding: "utf8",
+        byteLength: artifactBytes.byteLength,
+        integrity: `sha256-${digest}`,
+      },
+    ],
+  };
+}
 
 function buildTrigger(path: string) {
   const repoPath = path.split("/").slice(0, 2).join("/");
@@ -68,25 +111,20 @@ function buildTrigger(path: string) {
 }
 
 function makeBuildSystem(): BuildSystemV2 {
+  const build = storedBuildFixture({
+    buildKey: "build-key",
+    sourceStateHash: null,
+    metadata: buildMetadata,
+    artifactPath: "bundle.js",
+    content: "export {};",
+    contentType: "text/javascript; charset=utf-8",
+  });
   return {
     getBuild: vi.fn(),
     getBuildNpm: vi.fn(),
-    getBuildByKey: vi.fn((key: string) =>
-      key === "build-key"
-        ? {
-            dir: "/tmp/build-key",
-            artifacts: [
-              {
-                path: "bundle.js",
-                role: "primary",
-                contentType: "text/javascript; charset=utf-8",
-                encoding: "utf8",
-                content: "export {};",
-              },
-            ],
-            metadata: buildMetadata,
-          }
-        : null
+    getStoredBuild: vi.fn<BuildSystemV2["getStoredBuild"]>(async () => build),
+    getBuildByKey: vi.fn<BuildSystemV2["getBuildByKey"]>(async (key) =>
+      key === build.buildKey ? build : null
     ),
     getUnitIcon: vi.fn(async () => null),
     getBuildReport: vi.fn(async () => ({
@@ -199,21 +237,9 @@ describe("build service extension diagnostics", () => {
   });
   it("builds websites only from exact refs and returns a content-free immutable handle", async () => {
     const buildSystem = makeBuildSystem();
-    const fullBuild = {
+    const websiteBuild = storedBuildFixture({
       buildKey: "website-key",
       sourceStateHash: "state:exact",
-      dir: "/tmp/website-build",
-      artifacts: [
-        {
-          path: "site.js",
-          role: "primary",
-          contentType: "text/javascript",
-          encoding: "utf8",
-          content: "private source",
-          byteLength: 14,
-          integrity: `sha256:${"a".repeat(64)}`,
-        },
-      ],
       metadata: {
         kind: "panel",
         name: "@workspace-panels/site",
@@ -228,9 +254,12 @@ describe("build service extension diagnostics", () => {
           declaration: { entry: "site.tsx", expects: "a useful workspace" },
         },
         builtAt: "2026-01-01T00:00:00.000Z",
-      },
-    } satisfies BuildResultWire;
-    vi.mocked(buildSystem.getBuild).mockResolvedValue(fullBuild);
+      } satisfies BuildMetadataWire,
+      artifactPath: "site.js",
+      content: "private source",
+      contentType: "text/javascript",
+    });
+    vi.mocked(buildSystem.getStoredBuild).mockResolvedValue(websiteBuild);
     const service = createBuildService({
       buildSystem,
       listUnits: () => [],
@@ -251,13 +280,14 @@ describe("build service extension diagnostics", () => {
     expect(handle).toMatchObject({
       buildKey: "website-key",
       website: { entryArtifact: "site.js", declaration: { expects: "a useful workspace" } },
-      artifacts: [{ path: "site.js", integrity: `sha256:${"a".repeat(64)}` }],
+      artifacts: [{ path: "site.js", integrity: websiteBuild.artifacts[0]?.integrity }],
     });
     expect(handle).not.toHaveProperty("artifacts.0.content");
-    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-panels/site", "state:exact", {
-      library: false,
-      website: true,
-    });
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledWith(
+      "@workspace-panels/site",
+      "state:exact",
+      { library: false, website: true }
+    );
   });
 
   it("returns the portable { bundle } contract for library builds", async () => {

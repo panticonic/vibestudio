@@ -17,10 +17,12 @@ import {
   getSharedBuildArtifactPoolDir,
   getSharedBuildResultCacheDir,
   has,
+  peekLocal,
   primaryArtifact,
   primaryArtifactFilePath,
   primaryTextArtifactContent,
   put,
+  putStored,
   readStoredArtifactContent,
   rebindSourceState,
   readExecutableModules,
@@ -29,6 +31,9 @@ import {
   setBuildExecutionIdentityContext,
   type BuildResult,
 } from "./buildStore.js";
+import { ExecutionPublicationJournal } from "../executionPublicationJournal.js";
+import { executionArtifactRefFromBuild } from "../executionRootProviders.js";
+import { RuntimeImageStore } from "../runtimeImageStore.js";
 
 beforeEach(() => {
   configureReleaseBuilds(process.cwd());
@@ -99,6 +104,49 @@ function expectedArtifactSetIntegrity(
 }
 
 describe("build artifact helpers", () => {
+  it("admits a newly verified build before synchronous runtime-image publication", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-publication-"));
+    const buildKey = "d".repeat(64);
+    let journal: ExecutionPublicationJournal | undefined;
+    try {
+      setUserDataPath(root);
+      const sourceStateHash = `state:${"8".repeat(64)}`;
+      const stored = await putStored(
+        buildKey,
+        { entries: build().artifacts },
+        {
+          ...build().metadata,
+          buildKey,
+          sourcePath: "workers/a",
+          ev: "e".repeat(64),
+          sourceStateHash,
+        }
+      );
+      const artifact = executionArtifactRefFromBuild("workspace:test", stored);
+      journal = new ExecutionPublicationJournal(root, (requestedBuildKey, executionDigest) => {
+        const verified = peekLocal(requestedBuildKey);
+        if (!verified) return null;
+        const resolved = executionArtifactRefFromBuild("workspace:test", verified);
+        return resolved.executionDigest === executionDigest ? resolved : null;
+      });
+
+      expect(peekLocal(buildKey)).toBe(stored);
+      expect(() =>
+        new RuntimeImageStore(root, journal).upsert({
+          id: "do-service:workers/a:ExampleDO",
+          source: "workers/a",
+          unitName: "workers/a",
+          artifact,
+          authority: stored.metadata.authority!,
+        })
+      ).not.toThrow();
+    } finally {
+      await drainBuildStorePublications();
+      journal?.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("places cross-instance build caches in the shared derived-data root", () => {
     const previous = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
     const root = path.join(os.tmpdir(), "vibestudio-shared-derived-test");
@@ -281,7 +329,12 @@ describe("build artifact helpers", () => {
     try {
       setUserDataPath(root);
       const result = await put("build-key", { entries: build().artifacts }, build().metadata);
-      fs.writeFileSync(path.join(result.dir, "worker.js"), "tampered");
+      const coldReaderRoot = path.join(root, "cold-reader");
+      const coldBuildDir = path.join(coldReaderRoot, "builds", "build-key");
+      fs.mkdirSync(path.dirname(coldBuildDir), { recursive: true });
+      fs.cpSync(result.dir, coldBuildDir, { recursive: true });
+      fs.writeFileSync(path.join(coldBuildDir, "worker.js"), "tampered");
+      setUserDataPath(coldReaderRoot);
       await expect(get("build-key")).resolves.toBeNull();
 
       for (const artifactPath of ["", ".", "assets\\chunk.js", "assets//chunk.js"]) {
@@ -1130,9 +1183,13 @@ describe("build artifact helpers", () => {
       expect(fs.existsSync(path.join(stateB, "builds", "same-build-key"))).toBe(false);
 
       // A fresh lookup of A must still reproduce its sealed execution after B
-      // hydrates the shared bytes. put() did not populate A's verified read
-      // cache, so this exercises the disk verification used after a restart.
-      setUserDataPath(stateA);
+      // hydrates the shared bytes. Read a copied workspace record under a new
+      // state root to exercise the disk verification used after a restart.
+      const stateAReader = path.join(instanceA, "workspaces", "a-reader", "state");
+      const stateAReaderBuild = path.join(stateAReader, "builds", buildKey);
+      fs.mkdirSync(path.dirname(stateAReaderBuild), { recursive: true });
+      fs.cpSync(original.dir, stateAReaderBuild, { recursive: true });
+      setUserDataPath(stateAReader);
       process.env["VIBESTUDIO_INSTANCE_ROOT"] = instanceA;
       setBuildExecutionIdentityContext({
         serviceAuthorityForSource: async () =>

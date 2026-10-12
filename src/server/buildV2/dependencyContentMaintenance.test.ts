@@ -50,15 +50,16 @@ describe("dependency content maintenance scheduling", () => {
     const second = `${secondCache}.tmp.${"b".repeat(32)}`;
 
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = appRoot;
-    const firstTicket = prepareDependencyContent(first, firstCache);
-    const secondTicket = prepareDependencyContent(second, secondCache);
+    const firstTicket = prepareDependencyContent(first, firstCache, appRoot);
+    const secondTicket = prepareDependencyContent(second, secondCache, appRoot);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fork).toHaveBeenCalledOnce();
     expect(fork).toHaveBeenCalledWith(
-      dependencyContentMaintenanceEntry(),
+      dependencyContentMaintenanceEntry(appRoot),
       [
         JSON.stringify({
+          hostArtifactRoot: appRoot,
           preparations: [
             { stagingDir: path.resolve(first), cacheDir: path.resolve(firstCache) },
             { stagingDir: path.resolve(second), cacheDir: path.resolve(secondCache) },
@@ -71,6 +72,7 @@ describe("dependency content maintenance scheduling", () => {
         execArgv: [],
         detached: false,
         stdio: ["ignore", "inherit", "inherit", "ipc"],
+        env: expect.objectContaining({ VIBESTUDIO_HOST_ARTIFACT_ROOT: appRoot }),
       })
     );
     expect(child.unref).toHaveBeenCalledOnce();
@@ -85,12 +87,13 @@ describe("dependency content maintenance scheduling", () => {
     const child = makeChild();
     fork.mockReturnValue(child);
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
-    scheduleDependencyContentPrune();
+    const appRoot = process.cwd();
+    scheduleDependencyContentPrune(appRoot);
     await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS);
 
     expect(fork).toHaveBeenCalledWith(
-      dependencyContentMaintenanceEntry(),
-      [JSON.stringify({ preparations: [], prune: true })],
+      dependencyContentMaintenanceEntry(appRoot),
+      [JSON.stringify({ hostArtifactRoot: appRoot, preparations: [], prune: true })],
       expect.objectContaining({ detached: false })
     );
     reportResults(child, [{ ok: true }]);
@@ -104,7 +107,8 @@ describe("dependency content maintenance scheduling", () => {
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
     const ticket = prepareDependencyContent(
       "/tmp/profile/derived-cache/external-deps/3333333333333333.tmp.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "/tmp/profile/derived-cache/external-deps/3333333333333333"
+      "/tmp/profile/derived-cache/external-deps/3333333333333333",
+      process.cwd()
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -135,13 +139,19 @@ describe("dependency content maintenance scheduling", () => {
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
     const firstCache = "/tmp/profile/derived-cache/external-deps/4444444444444444";
     const secondCache = "/tmp/profile/derived-cache/external-deps/5555555555555555";
-    const firstTicket = prepareDependencyContent(`${firstCache}.tmp.${"c".repeat(32)}`, firstCache);
+    const appRoot = process.cwd();
+    const firstTicket = prepareDependencyContent(
+      `${firstCache}.tmp.${"c".repeat(32)}`,
+      firstCache,
+      appRoot
+    );
     await vi.advanceTimersByTimeAsync(0);
     const secondTicket = prepareDependencyContent(
       `${secondCache}.tmp.${"d".repeat(32)}`,
-      secondCache
+      secondCache,
+      appRoot
     );
-    scheduleDependencyContentPrune();
+    scheduleDependencyContentPrune(appRoot);
     expect(fork).toHaveBeenCalledOnce();
 
     reportResults(first, [
@@ -157,9 +167,10 @@ describe("dependency content maintenance scheduling", () => {
     const drain = drainDependencyContentMaintenance();
     await vi.waitFor(() => expect(fork).toHaveBeenCalledTimes(2));
     expect(fork).toHaveBeenLastCalledWith(
-      dependencyContentMaintenanceEntry(),
+      dependencyContentMaintenanceEntry(appRoot),
       [
         JSON.stringify({
+          hostArtifactRoot: appRoot,
           preparations: [
             {
               stagingDir: path.resolve(`${secondCache}.tmp.${"d".repeat(32)}`),
@@ -190,7 +201,8 @@ describe("dependency content maintenance scheduling", () => {
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
     const ticket = prepareDependencyContent(
       "/tmp/profile/derived-cache/external-deps/6666666666666666.tmp.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "/tmp/profile/derived-cache/external-deps/6666666666666666"
+      "/tmp/profile/derived-cache/external-deps/6666666666666666",
+      process.cwd()
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -213,10 +225,77 @@ describe("dependency content maintenance scheduling", () => {
     });
   });
 
+  it("keeps maintenance jobs partitioned by their admitted host generation", async () => {
+    const first = makeChild();
+    const second = makeChild();
+    fork.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const rootA = path.resolve(process.cwd(), "generation-a");
+    const rootB = path.resolve(process.cwd(), "generation-b");
+    const firstCache = "/tmp/profile/derived-cache/external-deps/7777777777777777";
+    const secondCache = "/tmp/profile/derived-cache/external-deps/8888888888888888";
+    const firstTicket = prepareDependencyContent(
+      `${firstCache}.tmp.${"e".repeat(32)}`,
+      firstCache,
+      rootA
+    );
+    const secondTicket = prepareDependencyContent(
+      `${secondCache}.tmp.${"f".repeat(32)}`,
+      secondCache,
+      rootB
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fork).toHaveBeenCalledOnce();
+    expect(fork).toHaveBeenLastCalledWith(
+      dependencyContentMaintenanceEntry(rootA),
+      [
+        JSON.stringify({
+          hostArtifactRoot: rootA,
+          preparations: [
+            {
+              stagingDir: path.resolve(`${firstCache}.tmp.${"e".repeat(32)}`),
+              cacheDir: path.resolve(firstCache),
+            },
+          ],
+          prune: false,
+        }),
+      ],
+      expect.objectContaining({
+        env: expect.objectContaining({ VIBESTUDIO_HOST_ARTIFACT_ROOT: rootA }),
+      })
+    );
+    reportResults(first, [{ ok: true }]);
+    first.emit("close", 0, null);
+    await expect(firstTicket).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(fork).toHaveBeenCalledTimes(2));
+    expect(fork).toHaveBeenLastCalledWith(
+      dependencyContentMaintenanceEntry(rootB),
+      [
+        JSON.stringify({
+          hostArtifactRoot: rootB,
+          preparations: [
+            {
+              stagingDir: path.resolve(`${secondCache}.tmp.${"f".repeat(32)}`),
+              cacheDir: path.resolve(secondCache),
+            },
+          ],
+          prune: false,
+        }),
+      ],
+      expect.objectContaining({
+        env: expect.objectContaining({ VIBESTUDIO_HOST_ARTIFACT_ROOT: rootB }),
+      })
+    );
+    reportResults(second, [{ ok: true }]);
+    second.emit("close", 0, null);
+    await expect(secondTicket).resolves.toBeUndefined();
+    await drainDependencyContentMaintenance();
+  });
+
   it("retains a missing maintenance entry as a drain failure", async () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
-    scheduleDependencyContentPrune();
+    scheduleDependencyContentPrune(process.cwd());
     await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS);
 
     expect(fork).not.toHaveBeenCalled();

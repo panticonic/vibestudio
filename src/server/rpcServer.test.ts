@@ -726,8 +726,61 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
 
     expect(cancelled).toBe(true); // ReadableStream cancel propagated to the producer
     const frames = sentStreamFrames(client);
-    expect(frames[frames.length - 1]!.frameType).toBe(FRAME_ERROR); // no END masquerade
+    // The client already settled its cancelled request; no completion is sent.
     expect(frames.some((f) => f.frameType === FRAME_END)).toBe(false);
+  });
+
+  it("joins producer cancellation and preserves its failure with the original abort reason", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    const cleanupFailure = new Error("Producer cleanup failed");
+    let finishCancellation!: () => void;
+    let cancellationReason: unknown;
+    const cancellationFinished = new Promise<void>((resolve) => {
+      finishCancellation = resolve;
+    });
+    dispatcher.dispatch.mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("first"));
+          },
+          async cancel(reason) {
+            cancellationReason = reason;
+            await cancellationFinished;
+            throw cleanupFailure;
+          },
+        })
+      )
+    );
+    const client = createClient();
+    registerClient(server, client);
+    const done = handleRpc(server, client, streamRequest("cancel-failure"));
+    const outcome = done.then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    let settled = false;
+    void outcome.then(() => {
+      settled = true;
+    });
+    try {
+      await flushAsync();
+      await handleRpc(server, client, {
+        type: "stream-cancel",
+        requestId: "cancel-failure",
+        fromId: "panel:nav-a",
+      });
+      await flushAsync();
+      expect(cancellationReason).toBeInstanceOf(DOMException);
+      expect(settled).toBe(false);
+    } finally {
+      finishCancellation();
+      await outcome;
+    }
+    const failure = await outcome;
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([cancellationReason, cleanupFailure]);
+    expect(sentStreamFrames(client).some((frame) => frame.frameType === FRAME_END)).toBe(false);
   });
 
   it("an abrupt close cancels only that connection generation's active streams", async () => {
@@ -5547,17 +5600,21 @@ describe("RpcServer caller identity", () => {
     ).rejects.toBe(failure);
   });
 
-  it("preserves stored extension identity lookup failures during connection-grant admission", async () => {
+  it("preserves stored extension identity lookup failures during extension bearer admission", async () => {
     const failure = new Error("Stored extension build metadata is unreadable");
-    const { server, connectionGrants } = createServer({
+    const { server, tokenManager } = createServer({
       resolveExtensionCodeIdentity: async () => {
         throw failure;
       },
     });
     const extensionId = "@workspace-extensions/example";
-    const token = connectionGrants.grant(extensionId, "shell:test").token;
+    const token = tokenManager.ensureToken(extensionId, "extension");
+    const ws = createTestWs();
 
-    await expect(server.authenticateConnectionGrant(token)).rejects.toBe(failure);
+    await expect(
+      testServer(server).handleAuth(ws, token, "extension-identity-failure")
+    ).rejects.toBe(failure);
+    expect(testServer(server).connections.getCallerConnections(extensionId)).toEqual([]);
   });
 
   it("rejects nonexistent causal parents before unary and streaming service dispatch", async () => {

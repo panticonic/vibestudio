@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   collectTransitiveDependencyOverrides,
   collectTransitiveDependencyPatches,
@@ -14,6 +15,7 @@ import {
   type PackageGraph,
 } from "../../src/server/buildV2/packageGraph.js";
 import { installUserlandPackageRelease } from "./userland-package-release.js";
+import { readCurrentHostBuildGeneration } from "../host-build-generations.mjs";
 
 export interface UserlandDependencyProjection {
   graph: PackageGraph;
@@ -62,6 +64,20 @@ export async function prepareUserlandDependencyProjection(
 ): Promise<UserlandDependencyProjection> {
   const appRoot = path.resolve(options.appRoot);
   const workspaceRoot = path.resolve(options.workspaceRoot);
+  // Dependency projection retirement is owned by the host's compiled
+  // maintenance child. Prepare and capture one exact published generation
+  // before the projection can admit that maintenance work.
+  execFileSync(process.execPath, [path.join(appRoot, "scripts/ensure-host-build.mjs")], {
+    cwd: appRoot,
+    env: process.env,
+    stdio: "inherit",
+  });
+  const hostArtifactRoot = readCurrentHostBuildGeneration(appRoot, "desktop");
+  if (!fs.existsSync(path.join(hostArtifactRoot, "dependency-content-maintenance.cjs"))) {
+    throw new Error(
+      `Current host generation is missing dependency maintenance entry: ${hostArtifactRoot}`
+    );
+  }
   const appNodeModules = [path.join(appRoot, "node_modules")];
   const excluded = options.excludedUnitPaths ?? new Set<string>();
   const graph = discoverPackageGraph(workspaceRoot);
@@ -121,6 +137,7 @@ export async function prepareUserlandDependencyProjection(
     : await acquireExternalDeps(dependencies, dependencyOverrides, {
         appRoot,
         patches,
+        hostArtifactRoot,
       });
   return {
     graph,

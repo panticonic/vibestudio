@@ -867,6 +867,69 @@ export class StreamingRelay {
     };
   }
 
+  private async consumeResponseBody(
+    response: Response,
+    emitFrame: (frame: StreamFrame) => Promise<void> | void,
+    signal?: AbortSignal,
+    onFailure?: (error: unknown) => unknown
+  ): Promise<number> {
+    const reader = response.body?.getReader();
+    let cancellation: Promise<void> | undefined;
+    const failures: unknown[] = [];
+    const retainFailure = (error: unknown): void => {
+      if (!failures.includes(error)) failures.push(error);
+    };
+    const cancel = (): void => {
+      if (signal?.aborted) retainFailure(signal.reason);
+      cancellation ??= (reader?.cancel(signal?.reason) ?? Promise.resolve()).catch(retainFailure);
+    };
+    let bytesIn = 0;
+    let finished = !reader;
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      signal?.throwIfAborted();
+      await emitFrame({
+        kind: "head",
+        status: response.status,
+        statusText: response.statusText,
+        headerPairs: Array.from(response.headers.entries()),
+        finalUrl: response.url,
+      });
+      while (reader) {
+        signal?.throwIfAborted();
+        const next = await reader.read();
+        signal?.throwIfAborted();
+        if (next.done) {
+          finished = true;
+          break;
+        }
+        bytesIn += next.value.byteLength;
+        await emitBoundedBodyFrames(next.value, emitFrame);
+      }
+    } catch (error) {
+      retainFailure(error);
+      if (!signal?.aborted) {
+        try {
+          onFailure?.(error);
+        } catch (observerError) {
+          retainFailure(observerError);
+        }
+      }
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      if (!finished) cancel();
+      await cancellation;
+      reader?.releaseLock();
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Streaming response read and cancellation failed", {
+        cause: failures[0],
+      });
+    }
+    return bytesIn;
+  }
+
   private async pipeResponseToHttpFrames(
     response: Response,
     res: ServerResponse,
@@ -874,43 +937,26 @@ export class StreamingRelay {
     onFailure?: (error: unknown) => unknown
   ): Promise<void> {
     const emitFrame = await this.httpFrameWriter(res);
-    await emitFrame({
-      kind: "head",
-      status: response.status,
-      statusText: response.statusText,
-      headerPairs: Array.from(response.headers.entries()),
-      finalUrl: response.url,
-    });
-    let bytesIn = 0;
-    if (response.body) {
-      const reader = response.body.getReader();
-      const cancel = (): void => {
-        void reader.cancel(signal?.reason).catch(() => {});
-      };
-      signal?.addEventListener("abort", cancel, { once: true });
-      if (signal?.aborted) cancel();
+    let bytesIn: number;
+    try {
+      bytesIn = await this.consumeResponseBody(response, emitFrame, signal, onFailure);
+    } catch (error) {
+      if (signal?.aborted) throw error;
       try {
-        while (true) {
-          const next = await reader.read();
-          if (next.done) break;
-          bytesIn += next.value.byteLength;
-          await emitBoundedBodyFrames(next.value, emitFrame);
-        }
-      } catch (error) {
-        if (signal?.aborted) return;
-        onFailure?.(error);
         await emitFrame({
           kind: "error",
           status: 502,
           error: serializeRpcFailure(error, "transport"),
         });
-        return;
-      } finally {
-        signal?.removeEventListener("abort", cancel);
-        reader.releaseLock();
+      } catch (deliveryError) {
+        if (deliveryError === error) throw error;
+        throw new AggregateError([error, deliveryError], "Streaming failure delivery failed", {
+          cause: error,
+        });
       }
+      return;
     }
-    if (signal?.aborted) return;
+    signal?.throwIfAborted();
     await emitFrame({ kind: "end", bytesIn });
   }
 
@@ -920,39 +966,8 @@ export class StreamingRelay {
     signal: AbortSignal,
     onFailure?: (error: unknown) => unknown
   ): Promise<void> {
-    const assertOpen = (): void => {
-      if (signal.aborted) throw new Error("Streaming RPC cancelled by client");
-    };
-    assertOpen();
-    await emitFrame({
-      kind: "head",
-      status: response.status,
-      statusText: response.statusText,
-      headerPairs: Array.from(response.headers.entries()),
-      finalUrl: response.url,
-    });
-    let bytesIn = 0;
-    if (response.body) {
-      const reader = response.body.getReader();
-      const onAbort = (): void => void reader.cancel().catch(() => {});
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        while (true) {
-          assertOpen();
-          const next = await reader.read();
-          if (next.done) break;
-          bytesIn += next.value.byteLength;
-          await emitBoundedBodyFrames(next.value, emitFrame);
-        }
-        assertOpen();
-      } catch (error) {
-        if (!signal.aborted) onFailure?.(error);
-        throw error;
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-        reader.releaseLock();
-      }
-    }
+    const bytesIn = await this.consumeResponseBody(response, emitFrame, signal, onFailure);
+    signal.throwIfAborted();
     await emitFrame({ kind: "end", bytesIn });
   }
 }

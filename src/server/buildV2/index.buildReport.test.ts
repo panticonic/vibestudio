@@ -195,7 +195,7 @@ async function loadWithMocks(
     const buildStore = await vi.importActual<typeof import("./buildStore.js")>("./buildStore.js");
     return {
       ...actual,
-      buildUnit: vi.fn(
+      buildUnitStored: vi.fn(
         async (
           node: { name: string; kind: string; relativePath: string },
           ev: string,
@@ -208,13 +208,13 @@ async function loadWithMocks(
             (node.name === "@workspace-panels/app" ? resolvedBuildKey : undefined) ??
             actual.computeBuildUnitKey(node as never, ev, options as never);
           // Cache hit → reuse (exactly like the real builder + coalescing).
-          const cached = buildStore.get(key);
+          const cached = await buildStore.get(key);
           if (cached) return cached;
           buildCalls.push({ name: node.name, key, stateRef, priority: options?.priority });
           if (shouldFail(node.name, ev, stateRef)) {
             throw new Error(`mock build failed: ${node.name}`);
           }
-          return buildStore.put(
+          await buildStore.put(
             key,
             {
               entries: [
@@ -239,6 +239,9 @@ async function loadWithMocks(
               builtAt: new Date().toISOString(),
             }
           );
+          const stored = await buildStore.get(key);
+          if (!stored) throw new Error(`Mock build ${key} was not stored`);
+          return stored;
         }
       ),
     };
@@ -249,20 +252,25 @@ async function loadWithMocks(
   const buildStore = await import("./buildStore.js");
   const graph = discoverPackageGraph(workspaceRoot);
   const source = fakeSource(workspaceRoot, graph);
-  const buildSystem = await initBuildSystemV2(workspaceRoot, source, [], {
-    appRoot: process.cwd(),
-    runNativeJob: runIsolatedBuildJob,
-    dependencyWorkspaceRoot: workspaceRoot,
-    ...(options.authorityEnvironmentFailure
-      ? {
-          workspaceAuthorityEnvironmentAt: async () => {
-            throw options.authorityEnvironmentFailure;
-          },
-        }
-      : options.blockingAuthorityConsumer
-        ? { workspaceAuthorityEnvironmentAt: async () => ({ services: [] }) }
-        : {}),
-  });
+  const buildSystem = await initBuildSystemV2(
+    workspaceRoot,
+    source,
+    [path.join(process.cwd(), "node_modules")],
+    {
+      appRoot: process.cwd(),
+      runNativeJob: runIsolatedBuildJob,
+      dependencyWorkspaceRoot: workspaceRoot,
+      ...(options.authorityEnvironmentFailure
+        ? {
+            workspaceAuthorityEnvironmentAt: async () => {
+              throw options.authorityEnvironmentFailure;
+            },
+          }
+        : options.blockingAuthorityConsumer
+          ? { workspaceAuthorityEnvironmentAt: async () => ({ services: [] }) }
+          : {}),
+    }
+  );
   // Initialization only discovers/version-tracks units. Actual panel/worker
   // builds are demand-driven by their runtime access paths.
   expect(buildCalls).toEqual([]);
@@ -338,7 +346,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(report.builds).toEqual([
       { target: "runtime", buildKey: resolvedBuildKey, diagnosticIndexes: [] },
     ]);
-    expect(env.buildSystem.getBuildByKey(report.builds[0]!.buildKey!)).toMatchObject({
+    expect(await env.buildSystem.getBuildByKey(report.builds[0]!.buildKey!)).toMatchObject({
       buildKey: resolvedBuildKey,
       artifacts: [expect.objectContaining({ path: "bundle.js" })],
     });

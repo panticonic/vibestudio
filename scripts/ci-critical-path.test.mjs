@@ -103,6 +103,46 @@ test("native artifact consumers wait for their exact producers without unrelated
     "native-isolation-darwin-arm64",
     "darwin-process-observers-ci-${{ github.sha }}",
   ]);
+  const npmPreflightSteps = jobs["npm-server-preflight"].steps;
+  const dryRunStepIndex = npmPreflightSteps.findIndex(
+    (step) => step.name === "Build, stage, dry-run, and install-smoke the npm candidate"
+  );
+  const packStepIndex = npmPreflightSteps.findIndex(
+    (step) => step.name === "Pack the verified npm candidate and attest its source"
+  );
+  const uploadStepIndex = npmPreflightSteps.findIndex(
+    (step) => step.name === "Upload verified npm candidate"
+  );
+  assert.ok(dryRunStepIndex >= 0, "npm preflight must perform its canonical dry-run");
+  assert.ok(packStepIndex > dryRunStepIndex, "candidate packing follows every preflight check");
+  assert.ok(uploadStepIndex > packStepIndex, "only the verified candidate is uploaded");
+  const packStep = npmPreflightSteps[packStepIndex];
+  assert.equal(packStep.if, undefined, "candidate packing must fail the preflight on errors");
+  assert.match(packStep.run, /npm pack \.\/dist-packages\/server/);
+  assert.match(packStep.run, /--pack-destination/);
+  assert.match(packStep.run, /sourceSha:\s*process\.env\.GITHUB_SHA/);
+  assert.match(packStep.run, /packageName:\s*packageJson\.name/);
+  assert.match(packStep.run, /packageVersion:\s*packageJson\.version/);
+  assert.match(packStep.run, /createHash\("sha256"\)/);
+  assert.match(packStep.run, /if \(packageStat\.size === 0\)/);
+  assert.match(packStep.run, /flag: "wx"/);
+
+  const uploadStep = npmPreflightSteps[uploadStepIndex];
+  assert.equal(uploadStep.if, undefined, "candidate upload must be a required preflight result");
+  assert.equal(
+    uploadStep.uses,
+    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+  );
+  assert.equal(
+    uploadStep.with.name,
+    "vibestudio-server-npm-${{ github.sha }}-${{ github.run_attempt }}"
+  );
+  assert.match(uploadStep.with.path, /npm-candidate\/\*\.tgz/);
+  assert.match(uploadStep.with.path, /candidate-receipt\.json/);
+  assert.equal(uploadStep.with["if-no-files-found"], "error");
+  assert.equal(uploadStep.with["compression-level"], 0);
+  assert.equal(uploadStep.with["retention-days"], 14);
+
   const acceptanceJobs = [
     [
       "packaged-acceptance-macos-14",

@@ -170,7 +170,7 @@ describe("buildUnit extension builds", () => {
     expect(fs.readFileSync(path.join(result.dir, "package.json"), "utf8")).toBe(
       '{"type":"module"}'
     );
-    const bundle = primaryTextArtifactContent(result);
+    const bundle = await primaryTextArtifactContent(result);
     expect(bundle).toContain("ping() {");
     expect(bundle).toContain("sourceMappingURL=data:application/json");
     expect(result.artifacts).toContainEqual(

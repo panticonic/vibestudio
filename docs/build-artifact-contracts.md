@@ -56,6 +56,8 @@ does no filesystem I/O while the journal transaction is held and returns a
 fail-closed miss when hydration has not happened. Callers must establish the
 descriptor through the canonical asynchronous build-store path before entering
 that transaction; the journal lookup must not grow a second hydration path.
+Fresh publication must admit the promoted descriptor to this same cache after
+verification and before returning it, just as a verified cache read does.
 
 Async state watches register the subscriber before hydrating their initial
 snapshot at a captured sequence watermark. Snapshot records and intervening
@@ -64,7 +66,10 @@ Snapshot failure errors the response with the original failure and retires the
 watch. Request admission is also owned before any asynchronous identity read:
 disconnect and shutdown close admission, and retirement joins accepted work.
 Finished live requests return errors to their caller instead of retaining an
-unbounded server-wide error history.
+unbounded server-wide error history. Response readers retain the exact abort
+reason, join producer cancellation before releasing their lock, and preserve
+read, observer, and cleanup failures together. HTTP and session transports share
+this reader lifecycle; cancellation never emits a successful end frame.
 
 `pnpm type-check:host` and `pnpm type-check:userland` retain each original compiler program, including its global/module augmentations, source aliases, tests, and compiler options. Compiler realms and template compositions run sequentially. Incremental no-emit state is seeded privately and retained when the compiler completes, including cached diagnostics from a failed check. Compiler errors still propagate; cancellation or launch failure retains the preceding state. Temporary configurations and unpublished state are removed. State lives under the host checkout's `.cache/typecheck-state`, with derived-cache leases and quotas. Template source and installed dependencies are projected into host-owned temporary directories, so no compiler state is written into external template checkouts.
 
@@ -86,6 +91,19 @@ Shared reusable workflows keep the
 platform job definitions consistent. Consumers verify downloaded inputs before
 use. Run-scoped artifact names and observer attestations bind them to the
 current workflow revision.
+
+The npm preflight retains its canonical `npm pack` archive after staging,
+dry-run, and fresh-install smoke checks succeed. Its artifact name includes the
+exact source SHA and run attempt; its receipt records package identity, archive
+length, and SHA-256. Publication may reuse that archive from the matching
+successful CI run after all release gates succeed. Verify the receipt against
+the checked-out commit and version, verify the archive checksum, and extract it
+into `dist-packages/server` before the existing
+`pnpm publish:server-npm:staged` command. That command retains package validation,
+dry-run, and installed/registry smoke checks; it avoids a duplicate build and
+stage. This candidate is an output of the ordinary producer, not a separate
+packaging implementation. Record producer, transfer, and final publication
+wall-clock times before claiming a measured deployment speedup.
 
 A GitHub Actions `needs` edge to a matrix job waits for every matrix leg. Use
 separate named jobs when consumers need different subsets of its outputs;

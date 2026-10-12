@@ -3,18 +3,18 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { deserializeRpcFailure, formatRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 import { getPhysicalAppPath } from "@vibestudio/shared/runtimePaths";
-import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
 
 export const DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS = 3 * 60_000;
 
 type PendingPreparation = {
+  hostArtifactRoot: string;
   stagingDir: string;
   cacheDir: string;
   resolve(): void;
   reject(error: unknown): void;
 };
 const pendingPreparations: PendingPreparation[] = [];
-let pendingContentPrune = false;
+const pendingContentPrunes = new Set<string>();
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let activeOperation: Promise<void> | null = null;
 const failures: unknown[] = [];
@@ -28,7 +28,7 @@ function recordFailure(error: unknown): void {
 export async function drainDependencyContentMaintenance(): Promise<void> {
   if (maintenanceTimer) clearTimeout(maintenanceTimer);
   maintenanceTimer = null;
-  while (activeOperation || pendingPreparations.length > 0 || pendingContentPrune) {
+  while (activeOperation || pendingPreparations.length > 0 || pendingContentPrunes.size > 0) {
     if (activeOperation) {
       await activeOperation;
       continue;
@@ -44,17 +44,19 @@ export async function drainDependencyContentMaintenance(): Promise<void> {
   }
 }
 
-export function dependencyContentMaintenanceEntry(): string {
-  return getPhysicalAppPath(
-    resolveRequiredHostArtifactRoot(),
-    "dependency-content-maintenance.cjs"
-  );
+export function dependencyContentMaintenanceEntry(hostArtifactRoot: string): string {
+  return getPhysicalAppPath(path.resolve(hostArtifactRoot), "dependency-content-maintenance.cjs");
 }
 
 /** Prepare one private install tree before its directory is atomically published. */
-export function prepareDependencyContent(stagingDir: string, cacheDir: string): Promise<void> {
+export function prepareDependencyContent(
+  stagingDir: string,
+  cacheDir: string,
+  hostArtifactRoot: string
+): Promise<void> {
   const promise = new Promise<void>((resolve, reject) => {
     pendingPreparations.push({
+      hostArtifactRoot: path.resolve(hostArtifactRoot),
       stagingDir: path.resolve(stagingDir),
       cacheDir: path.resolve(cacheDir),
       resolve,
@@ -66,13 +68,13 @@ export function prepareDependencyContent(stagingDir: string, cacheDir: string): 
 }
 
 /** Request CAS pruning through the same owned child used for dependency maintenance. */
-export function scheduleDependencyContentPrune(): void {
-  pendingContentPrune = true;
+export function scheduleDependencyContentPrune(hostArtifactRoot: string): void {
+  pendingContentPrunes.add(path.resolve(hostArtifactRoot));
   scheduleMaintenanceTimer();
 }
 
 function scheduleMaintenanceTimer(): void {
-  if (maintenanceTimer || activeOperation || !pendingContentPrune) return;
+  if (maintenanceTimer || activeOperation || pendingContentPrunes.size === 0) return;
   maintenanceTimer = setTimeout(() => {
     maintenanceTimer = null;
     startPendingMaintenance();
@@ -83,14 +85,23 @@ function scheduleMaintenanceTimer(): void {
 function startPendingMaintenance(): void {
   if (maintenanceTimer) clearTimeout(maintenanceTimer);
   maintenanceTimer = null;
-  if (activeOperation || (pendingPreparations.length === 0 && !pendingContentPrune)) return;
-  const preparations = pendingPreparations.splice(0);
-  const prune = pendingContentPrune;
-  pendingContentPrune = false;
+  if (activeOperation || (pendingPreparations.length === 0 && pendingContentPrunes.size === 0))
+    return;
+  const hostArtifactRoot =
+    pendingPreparations[0]?.hostArtifactRoot ?? pendingContentPrunes.values().next().value;
+  if (!hostArtifactRoot) return;
+  const preparations = pendingPreparations.filter(
+    (preparation) => preparation.hostArtifactRoot === hostArtifactRoot
+  );
+  for (const preparation of preparations) {
+    const index = pendingPreparations.indexOf(preparation);
+    pendingPreparations.splice(index, 1);
+  }
+  const prune = pendingContentPrunes.delete(hostArtifactRoot);
 
   let entry: string;
   try {
-    entry = dependencyContentMaintenanceEntry();
+    entry = dependencyContentMaintenanceEntry(hostArtifactRoot);
   } catch (error) {
     if (prune) recordFailure(error);
     scheduleMaintenanceTimer();
@@ -111,6 +122,7 @@ function startPendingMaintenance(): void {
       entry,
       [
         JSON.stringify({
+          hostArtifactRoot,
           preparations: preparations.map(({ stagingDir, cacheDir }) => ({ stagingDir, cacheDir })),
           prune,
         }),
@@ -122,6 +134,7 @@ function startPendingMaintenance(): void {
         stdio: ["ignore", "inherit", "inherit", "ipc"],
         env: {
           ...process.env,
+          VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
           ...(process.versions["electron"] ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
         },
       }

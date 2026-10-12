@@ -1492,7 +1492,10 @@ export async function putStored(
   if (!stored) throw new Error(`Published build ${key} failed verification`);
   clearRetiredBuildKey(key);
   scheduleSharedBuildPublication(key, dir);
-  return stored;
+  // Build publication can immediately feed a synchronous execution-owner
+  // transaction. Admit the descriptor only after the promoted tree has passed
+  // the same verification used by ordinary local reads.
+  return rememberVerifiedLocalBuild(stored);
 }
 
 /** Materialize a stored build only for callers whose wire contract includes payload strings. */

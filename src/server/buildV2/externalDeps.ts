@@ -27,6 +27,7 @@ import {
 } from "@vibestudio/shared/derivedCache";
 import { optionalPeerNames, type PackageGraph, type GraphNode } from "./packageGraph.js";
 import { BuildRequestError } from "./diagnostics.js";
+import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
 import {
   prepareDependencyContent,
   scheduleDependencyContentPrune,
@@ -1129,7 +1130,13 @@ async function acquireDependencyCache(
       await derivedCacheCoordinator(options.baseDir).prune(options.baseDir);
     }
     const nodeModulesDir = await ensureDepsInstalled(deps, options);
-    return borrowedDependencyEnvironment(options.baseDir, options.key, nodeModulesDir, lease);
+    return borrowedDependencyEnvironment(
+      options.baseDir,
+      options.key,
+      nodeModulesDir,
+      lease,
+      options.hostArtifactRoot
+    );
   } catch (error) {
     lease.release();
     throw error;
@@ -1140,7 +1147,8 @@ function borrowedDependencyEnvironment(
   baseDir: string,
   key: string,
   nodeModulesDir: string,
-  lease: DerivedCacheLease
+  lease: DerivedCacheLease,
+  hostArtifactRoot: string
 ): ExternalDependencyBorrow {
   let released = false;
   return {
@@ -1152,7 +1160,9 @@ function borrowedDependencyEnvironment(
       lease.release();
       const operation = scheduleDerivedCachePrune(baseDir)
         .then((pruned) =>
-          pruned && pruned.removedEntries > 0 ? scheduleDependencyContentPrune() : undefined
+          pruned && pruned.removedEntries > 0
+            ? scheduleDependencyContentPrune(hostArtifactRoot)
+            : undefined
         )
         .catch((error) => {
           externalDependencyPruneFailures.push(error);
@@ -1169,8 +1179,16 @@ function borrowedDependencyEnvironment(
 export async function acquireExternalDeps(
   deps: Record<string, string>,
   dependencyOverrides: Record<string, string> = {},
-  options: { appRoot: string; patches?: readonly ExternalDependencyPatch[]; signal?: AbortSignal }
+  options: {
+    appRoot: string;
+    patches?: readonly ExternalDependencyPatch[];
+    signal?: AbortSignal;
+    hostArtifactRoot?: string;
+  }
 ): Promise<ExternalDependencyBorrow> {
+  const hostArtifactRoot = path.resolve(
+    options.hostArtifactRoot ?? resolveRequiredHostArtifactRoot()
+  );
   const overrides = { ...dependencyOverrides };
   const patches = validateDependencyPatches(options.patches ?? []);
   assertDependencyPatchRootsPresent(patches, deps);
@@ -1182,6 +1200,7 @@ export async function acquireExternalDeps(
     overrides,
     patches,
     signal: options.signal,
+    hostArtifactRoot,
   });
 }
 
@@ -1351,6 +1370,7 @@ export async function ensureExtensionRuntimeDeps(
   patches: readonly ExternalDependencyPatch[] = [],
   signal?: AbortSignal
 ): Promise<ExternalDependencyBorrow> {
+  const hostArtifactRoot = resolveRequiredHostArtifactRoot();
   const validatedPatches = validateDependencyPatches(patches);
   assertDependencyPatchRootsPresent(validatedPatches, deps);
   if (Object.keys(deps).length === 0) {
@@ -1371,6 +1391,7 @@ export async function ensureExtensionRuntimeDeps(
     overrides,
     patches: validatedPatches,
     signal,
+    hostArtifactRoot,
   });
 }
 
@@ -1380,6 +1401,7 @@ type EnsureDepsOptions = {
   ignoreScripts: boolean;
   signal?: AbortSignal;
   appRoot: string;
+  hostArtifactRoot: string;
   overrides?: Record<string, string>;
   patches?: readonly ExternalDependencyPatch[];
 };
@@ -1502,7 +1524,7 @@ async function ensureDepsInstalledOnce(
 
     // Share immutable file content while the install tree is still private.
     // Published caches are borrowed by builders and must never be rewritten.
-    await prepareDependencyContent(tmpDir, cacheDir);
+    await prepareDependencyContent(tmpDir, cacheDir, options.hostArtifactRoot);
 
     // Race-safe promotion: try rename, handle concurrent winner
     const publishStartedAt = Date.now();

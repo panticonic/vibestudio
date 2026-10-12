@@ -149,6 +149,7 @@ function writePackage(root: string, name: string, version: string): void {
 describe("extension runtime dependency publication", () => {
   it("prepares the private tree before publishing the validated cache", async () => {
     vi.mocked(prepareDependencyContent).mockClear();
+    const hostArtifactRoot = path.resolve(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!);
     vi.mocked(prepareDependencyContent).mockImplementationOnce(async (stagingDir, cacheDir) => {
       expect(fs.existsSync(path.join(stagingDir, ".ready"))).toBe(true);
       expect(fs.existsSync(path.join(stagingDir, "node_modules"))).toBe(true);
@@ -160,7 +161,8 @@ describe("extension runtime dependency publication", () => {
     try {
       expect(prepareDependencyContent).toHaveBeenCalledWith(
         expect.stringMatching(/\.tmp\.[a-f0-9]{32}$/u),
-        path.dirname(borrowed.nodeModulesDir)
+        path.dirname(borrowed.nodeModulesDir),
+        hostArtifactRoot
       );
       const manifest = path.join(
         borrowed.nodeModulesDir,
@@ -175,6 +177,7 @@ describe("extension runtime dependency publication", () => {
 
   it("prepares compile dependencies before publishing their cache", async () => {
     vi.mocked(prepareDependencyContent).mockClear();
+    const hostArtifactRoot = path.resolve(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!);
     vi.mocked(prepareDependencyContent).mockImplementationOnce(async (stagingDir, cacheDir) => {
       expect(fs.existsSync(path.join(stagingDir, ".ready"))).toBe(true);
       expect(fs.existsSync(cacheDir)).toBe(false);
@@ -182,7 +185,8 @@ describe("extension runtime dependency publication", () => {
     const borrowed = await ensureExternalDeps({ "compile-dependency-maintenance-test": "1.0.0" });
     expect(prepareDependencyContent).toHaveBeenCalledWith(
       expect.stringMatching(/\.tmp\.[a-f0-9]{32}$/u),
-      path.dirname(borrowed)
+      path.dirname(borrowed),
+      hostArtifactRoot
     );
   });
 

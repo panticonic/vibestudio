@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 
 const execute = promisify(execFile);
+const hostArtifactRoot = path.resolve(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!);
 
 it("maintains build and native extension dependency trees through the real child owner", async () => {
   const scratch = path.join(process.cwd(), ".cache/dependency-maintenance-tests");
@@ -34,9 +35,15 @@ it("maintains build and native extension dependency trees through the real child
         "--import",
         "tsx",
         "src/server/buildV2/dependencyContentMaintenanceProcess.ts",
-        JSON.stringify({ preparations, prune: false }),
+        JSON.stringify({ hostArtifactRoot, preparations, prune: false }),
       ],
-      { env: { ...process.env, VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: fixture } }
+      {
+        env: {
+          ...process.env,
+          VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
+          VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: fixture,
+        },
+      }
     );
     const stats = await Promise.all(
       preparations.map(({ stagingDir }) =>
@@ -55,11 +62,18 @@ it("maintains build and native extension dependency trees through the real child
           "tsx",
           "src/server/buildV2/dependencyContentMaintenanceProcess.ts",
           JSON.stringify({
+            hostArtifactRoot,
             preparations: [{ stagingDir: `${outside}.tmp.${"c".repeat(32)}`, cacheDir: outside }],
             prune: false,
           }),
         ],
-        { env: { ...process.env, VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: fixture } }
+        {
+          env: {
+            ...process.env,
+            VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
+            VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: fixture,
+          },
+        }
       )
     ).rejects.toMatchObject({
       stderr: expect.stringContaining("Refusing invalid dependency cache directory"),
@@ -95,9 +109,19 @@ it("prepares private staging content without rewriting a borrowed published cach
         "--import",
         "tsx",
         "src/server/buildV2/dependencyContentMaintenanceProcess.ts",
-        JSON.stringify({ preparations: [{ stagingDir, cacheDir }], prune: false }),
+        JSON.stringify({
+          hostArtifactRoot,
+          preparations: [{ stagingDir, cacheDir }],
+          prune: false,
+        }),
       ],
-      { env: { ...process.env, VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: fixture } }
+      {
+        env: {
+          ...process.env,
+          VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
+          VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: fixture,
+        },
+      }
     );
 
     const after = await fs.stat(publishedFile);
@@ -121,6 +145,7 @@ it("transfers the original maintenance failure graph to its process owner", asyn
       "src/server/buildV2/dependencyContentMaintenanceProcess.ts",
       [
         JSON.stringify({
+          hostArtifactRoot,
           preparations: [{ stagingDir: `${outside}.tmp.${"c".repeat(32)}`, cacheDir: outside }],
           prune: false,
         }),
@@ -128,7 +153,11 @@ it("transfers the original maintenance failure graph to its process owner", asyn
       {
         execArgv: ["--import", "tsx"],
         stdio: ["ignore", "ignore", "pipe", "ipc"],
-        env: { ...process.env, VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: fixture },
+        env: {
+          ...process.env,
+          VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
+          VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: fixture,
+        },
       }
     );
     let results: unknown;
