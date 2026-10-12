@@ -979,6 +979,11 @@ test("Darwin production and development host inputs are immutable producer artif
   );
   assert.match(steps[indexOf("Package the application")].if, /success\(\)/);
   assert.match(
+    steps[indexOf("Package the application")].run,
+    /if \[ -z "\$\{CSC_LINK:-\}" \]; then unset CSC_LINK; fi[\s\S]*electron-builder/,
+    "electron-builder must receive CSC_LINK as absent when no signing certificate is configured"
+  );
+  assert.match(
     steps[indexOf("Package the application")].if,
     /steps\.restore-host-inputs\.outcome == 'success'/
   );
