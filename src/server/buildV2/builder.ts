@@ -174,6 +174,7 @@ export class BuildProcessOwner {
 
   private workerBatches = 0;
   private readonly sharedBuildFlights = new Map<string, SharedBuildFlightEntry>();
+  private readonly extensionRuntimeProjections = new Map<string, Promise<void>>();
   private runningBuilds = 0;
   private runningNonInteractiveBuilds = 0;
   private runningSpeculativeBuilds = 0;
@@ -250,6 +251,22 @@ export class BuildProcessOwner {
       if (failure !== undefined || failures.length > 0) throw failure;
       return value;
     });
+  }
+
+  /** A stored build can be read before its dependency tree is ready. Share the
+   * entire completeness check and projection for that build destination so a
+   * cached reader cannot remove files while the producer is publishing them. */
+  async projectExtensionRuntimeDeps(target: string, operation: () => Promise<void>): Promise<void> {
+    const existing = this.extensionRuntimeProjections.get(target);
+    if (existing) return existing;
+    const projection = this.withWorkers(operation);
+    this.extensionRuntimeProjections.set(target, projection);
+    try {
+      await projection;
+    } finally {
+      if (this.extensionRuntimeProjections.get(target) === projection)
+        this.extensionRuntimeProjections.delete(target);
+    }
   }
 
   async shutdown(): Promise<void> {
@@ -5032,11 +5049,13 @@ async function buildExtension(
         extensionArtifacts
       );
       if (runtimeDeps.nodeModulesDir) {
-        await materializeExtensionRuntimeDeps(
-          session,
-          result.dir,
-          runtimeDeps.nodeModulesDir,
-          node.name
+        await session.processOwner.projectExtensionRuntimeDeps(result.dir, () =>
+          materializeExtensionRuntimeDeps(
+            session,
+            result.dir,
+            runtimeDeps.nodeModulesDir,
+            node.name
+          )
         );
       }
 
@@ -5103,34 +5122,39 @@ async function refreshCachedExtensionRuntimeDeps(
     result.metadata.details.kind === "extension" ? result.metadata.details : null;
   const deps = extensionDetails?.externalDeps ?? {};
   if (Object.keys(deps).length === 0) return;
-  if (
-    extensionRuntimeDepsProjected(session.store.primaryArtifactFilePath(result), Object.keys(deps))
-  )
-    return;
+  await session.processOwner.projectExtensionRuntimeDeps(result.dir, async () => {
+    if (
+      extensionRuntimeDepsProjected(
+        session.store.primaryArtifactFilePath(result),
+        Object.keys(deps)
+      )
+    )
+      return;
 
-  const runtimeDeps = await ensureExtensionRuntimeDeps(
-    session.processOwner.appRoot,
-    deps,
-    extensionDetails?.dependencyOverrides ?? {},
-    extensionDetails?.dependencyPatches ?? [],
-    session.signal
-  );
-  try {
-    if (runtimeDeps.nodeModulesDir) {
-      await materializeExtensionRuntimeDeps(
-        session,
-        result.dir,
-        runtimeDeps.nodeModulesDir,
-        result.metadata.name
-      );
+    const runtimeDeps = await ensureExtensionRuntimeDeps(
+      session.processOwner.appRoot,
+      deps,
+      extensionDetails?.dependencyOverrides ?? {},
+      extensionDetails?.dependencyPatches ?? [],
+      session.signal
+    );
+    try {
+      if (runtimeDeps.nodeModulesDir) {
+        await materializeExtensionRuntimeDeps(
+          session,
+          result.dir,
+          runtimeDeps.nodeModulesDir,
+          result.metadata.name
+        );
+      }
+      if (extensionDetails && extensionDetails.runtimeDepsKey !== runtimeDeps.key) {
+        extensionDetails.runtimeDepsKey = runtimeDeps.key;
+        await session.store.writeBuildMetadata(result.dir, result.metadata);
+      }
+    } finally {
+      runtimeDeps.release();
     }
-    if (extensionDetails && extensionDetails.runtimeDepsKey !== runtimeDeps.key) {
-      extensionDetails.runtimeDepsKey = runtimeDeps.key;
-      await session.store.writeBuildMetadata(result.dir, result.metadata);
-    }
-  } finally {
-    runtimeDeps.release();
-  }
+  });
 }
 
 export function extensionRuntimeDepsProjected(bundlePath: string, deps: string[]): boolean {
@@ -5178,7 +5202,8 @@ async function materializeExtensionRuntimeDeps(
     throw new Error(
       `Failed to materialize extension runtime dependencies for ${extensionName}: ${
         err instanceof Error ? err.message : String(err)
-      }`
+      }`,
+      { cause: err }
     );
   }
 }

@@ -8,6 +8,7 @@ import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import { LibraryLoweringWorkerClient } from "./libraryLoweringWorkerClient.js";
 import { WorkspaceRpcCatalogWorkerClient } from "./workspaceRpcCatalogWorkerClient.js";
 import { ImmutableTreeWorkerClient } from "./immutableTreeWorkerClient.js";
+import { materializeImmutableTree } from "./immutableTreeMaterializer.js";
 
 const contexts: Array<Awaited<ReturnType<typeof createBuilderTestSession>>> = [];
 const roots: string[] = [];
@@ -42,6 +43,40 @@ afterEach(async () => {
 });
 
 describe("build-owned compiler residency", () => {
+  it("joins cached readers to the producer's dependency projection before they can replace it", async () => {
+    const context = await openSession();
+    const root = roots.at(-1)!;
+    const source = path.join(root, "dependencies");
+    const target = path.join(root, "build", "node_modules");
+    await fs.promises.mkdir(source);
+    await fs.promises.writeFile(path.join(source, "package.js"), "installed");
+    let complete!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    let started!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const producer = context.processOwner.projectExtensionRuntimeDeps(target, async () => {
+      started();
+      await gate;
+      await materializeImmutableTree(source, target);
+    });
+    await admitted;
+    const cachedProjection = vi.fn(async () => {
+      await fs.promises.rm(target, { recursive: true, force: true });
+      throw new Error("cached reader must not replace an active projection");
+    });
+    const reader = context.processOwner.projectExtensionRuntimeDeps(target, cachedProjection);
+    complete();
+    await Promise.all([producer, reader]);
+    expect(cachedProjection).not.toHaveBeenCalled();
+    await expect(fs.promises.readFile(path.join(target, "package.js"), "utf8")).resolves.toBe(
+      "installed"
+    );
+  });
+
   it("closes admission and joins admitted work before process-owned worker retirement", async () => {
     const context = await openSession();
     const close = vi

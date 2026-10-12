@@ -111,7 +111,8 @@ function readTemplateFramework(sourceRoot: string, templateDir: string): string 
     throw new Error(
       `Template config ${path.relative(sourceRoot, configPath)} is not valid JSON: ${
         error instanceof Error ? error.message : String(error)
-      }`
+      }`,
+      { cause: error }
     );
   }
   return config.framework ?? null;
