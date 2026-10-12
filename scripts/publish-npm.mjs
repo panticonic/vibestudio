@@ -11,6 +11,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatRpcFailure } from "@vibestudio/rpc";
 import { tsImport } from "tsx/esm/api";
 import { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
+import { spawnResultFailure } from "./lib/spawn-result-failure.mjs";
+import {
+  packNpmPackageCandidate,
+  readVerifiedNpmPackageCandidate,
+  validateNpmPackageManifest,
+} from "./lib/npm-package-candidate.mjs";
+
+export { validateNpmPackageManifest };
 
 export { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
 
@@ -25,6 +33,7 @@ let announcedTokenEnv = false;
 let tokenUserConfigPath = null;
 let tokenUserConfigDirectory = null;
 let resolvedAuthToken = undefined;
+let candidateScratchDirectory = null;
 const serverPackage = {
   name: "@panticonic/vibestudio-server",
   dir: path.join(repoRoot, "dist-packages", "server"),
@@ -35,10 +44,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   try {
     await runWithOwnedCleanup(
       () => main(),
-      () => {
-        if (tokenUserConfigDirectory)
-          fs.rmSync(tokenUserConfigDirectory, { recursive: true, force: true });
-      },
+      cleanupPublisherScratch,
       "npm publish operation and auth-config cleanup failed"
     );
   } catch (error) {
@@ -47,22 +53,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   }
 }
 
-export function spawnResultFailure(result, command) {
-  const details = [];
-  if (result.signal) details.push(new Error(`${command} was terminated by ${result.signal}`));
-  if (result.status !== 0 && result.status !== null && result.status !== undefined)
-    details.push(new Error(`${command} exited with status ${result.status}`));
-  if (result.error && details.length)
-    return new AggregateError([result.error, ...details], `${command} failed`, {
-      cause: result.error,
-    });
-  if (result.error) return result.error;
-  if (!details.length && result.status === 0) return undefined;
-  if (details.length === 1) return details[0];
-  if (details.length > 1)
-    return new AggregateError(details, `${command} failed`, { cause: details[0] });
-  return new Error(`${command} failed (status ${result.status ?? "unknown"})`);
-}
+export { spawnResultFailure };
 
 function redactAuthToken(value) {
   const token = resolvedAuthToken?.value;
@@ -100,10 +91,41 @@ async function main() {
     }
   }
 
-  if (!options.skipBuild) run("pnpm", ["build"], { cwd: repoRoot });
-  if (!options.skipStage) run("node", ["scripts/build-server-npm-package.mjs"], { cwd: repoRoot });
+  if (options.candidateReceipt) {
+    if (options.skipBuild || options.skipStage || options.candidateOutput) {
+      throw new Error(
+        "--candidate-receipt cannot be combined with build, stage, or candidate-output options"
+      );
+    }
+  } else {
+    if (!options.skipBuild) run("pnpm", ["build"], { cwd: repoRoot });
+    if (!options.skipStage)
+      run("node", ["scripts/build-server-npm-package.mjs"], { cwd: repoRoot });
+  }
 
-  const manifests = [validateStagedPackage(serverPackage)];
+  const manifests = options.candidateReceipt
+    ? [validateCandidateIdentity(serverPackage)]
+    : [validateStagedPackage(serverPackage)];
+  const entry = manifests[0];
+  const sourceSha = currentSourceSha();
+  let candidate;
+  if (options.candidateReceipt) {
+    candidate = await readVerifiedNpmPackageCandidate(options.candidateReceipt, {
+      sourceSha,
+      packageName: entry.pkg.name,
+      packageVersion: entry.version,
+    });
+  } else {
+    candidateScratchDirectory = options.candidateOutput
+      ? null
+      : fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-candidate-"));
+    candidate = await packNpmPackageCandidate({
+      packageRoot: entry.pkg.dir,
+      outputDirectory: options.candidateOutput ?? candidateScratchDirectory,
+      sourceSha,
+    });
+  }
+
   const registryVersions = new Map();
   for (const entry of manifests) {
     const existing = npmView(entry.pkg.name, entry.version);
@@ -122,17 +144,17 @@ async function main() {
     (entry) => registryVersions.get(entry.pkg.name) !== entry.version
   );
 
-  if (!options.skipDryRun) {
-    for (const entry of manifests) {
-      console.log(`\n[publish-npm] Dry-run ${entry.pkg.name}@${entry.version}`);
-      run("npm", publishArgs({ dryRun: true, tag: options.tag }), { cwd: entry.pkg.dir });
-    }
+  for (const entry of manifests) {
+    console.log(`\n[publish-npm] Dry-run ${entry.pkg.name}@${entry.version}`);
+    run(
+      "npm",
+      publishArgs({ packagePath: candidate.tarballPath, dryRun: true, tag: options.tag }),
+      { cwd: repoRoot }
+    );
   }
 
-  if (options.installSmoke) {
-    for (const entry of manifests) {
-      await runStagedInstallSmoke(entry);
-    }
+  for (const entry of manifests) {
+    await runInstallSmoke(entry, candidate.tarballPath, "Candidate install smoke");
   }
 
   if (options.dryRunOnly) {
@@ -147,11 +169,15 @@ async function main() {
   for (const entry of publishQueue) {
     console.log(`\n[publish-npm] Publishing ${entry.pkg.name}@${entry.version}`);
     console.log("[publish-npm] Using the configured npm publish token.");
-    const result = spawnSync("npm", publishArgs({ dryRun: false, tag: options.tag }), {
-      cwd: entry.pkg.dir,
-      stdio: "inherit",
-      env: npmEnv(),
-    });
+    const result = spawnSync(
+      "npm",
+      publishArgs({ packagePath: candidate.tarballPath, dryRun: false, tag: options.tag }),
+      {
+        cwd: repoRoot,
+        stdio: "inherit",
+        env: npmEnv(),
+      }
+    );
     const failure = spawnResultFailure(result, "npm publish");
     if (failure) {
       throw new Error(
@@ -167,20 +193,18 @@ async function main() {
     console.log(`  ${entry.pkg.name}@${published}`);
   }
 
-  if (options.installSmoke) {
-    for (const entry of manifests) {
-      await runInstallSmoke(entry, `${entry.pkg.name}@${entry.version}`, "Registry install smoke");
-    }
+  for (const entry of manifests) {
+    await runInstallSmoke(entry, `${entry.pkg.name}@${entry.version}`, "Registry install smoke");
   }
 }
 
 function parseArgs(argv) {
   const options = {
     dryRunOnly: false,
+    candidateOutput: null,
+    candidateReceipt: null,
     help: false,
-    installSmoke: true,
     skipBuild: false,
-    skipDryRun: false,
     skipStage: false,
     tag: "latest",
   };
@@ -193,14 +217,12 @@ function parseArgs(argv) {
       options.help = true;
     } else if (arg === "--dry-run-only") {
       options.dryRunOnly = true;
-    } else if (arg === "--install-smoke") {
-      options.installSmoke = true;
-    } else if (arg === "--skip-install-smoke") {
-      options.installSmoke = false;
+    } else if (arg === "--candidate-output") {
+      options.candidateOutput = path.resolve(requireValue(argv, ++i, arg));
+    } else if (arg === "--candidate-receipt") {
+      options.candidateReceipt = path.resolve(requireValue(argv, ++i, arg));
     } else if (arg === "--skip-build") {
       options.skipBuild = true;
-    } else if (arg === "--skip-dry-run") {
-      options.skipDryRun = true;
     } else if (arg === "--skip-stage") {
       options.skipStage = true;
     } else if (arg === "--tag") {
@@ -222,6 +244,38 @@ function requireValue(argv, index, flag) {
   return value;
 }
 
+function currentSourceSha() {
+  const result = capture("git", ["rev-parse", "HEAD"], { cwd: repoRoot });
+  const failure = spawnResultFailure(result, "git rev-parse HEAD");
+  if (failure) throw failure;
+  const sourceSha = result.stdout.trim();
+  if (!/^[0-9a-f]{40}$/u.test(sourceSha)) {
+    throw new Error("Current Git HEAD is not a full commit SHA");
+  }
+  return sourceSha;
+}
+
+function cleanupPublisherScratch() {
+  const failures = [];
+  for (const ownedPath of [candidateScratchDirectory, tokenUserConfigDirectory]) {
+    if (!ownedPath) continue;
+    try {
+      fs.rmSync(ownedPath, { recursive: true, force: true });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  candidateScratchDirectory = null;
+  tokenUserConfigDirectory = null;
+  tokenUserConfigPath = null;
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Could not retire npm publisher scratch paths", {
+      cause: failures[0],
+    });
+  }
+}
+
 function printUsage() {
   console.log(`Usage: pnpm publish:server-npm [-- options]
 
@@ -230,9 +284,9 @@ Build, stage, dry-run, publish, verify, and install-smoke the headless server np
 Options:
   --skip-build              Reuse the current dist/ build
   --skip-stage              Reuse dist-packages/
-  --skip-dry-run            Publish without npm publish --dry-run
   --dry-run-only            Build/stage/check only; do not publish
-  --skip-install-smoke      Skip the default staged and registry install smoke checks
+  --candidate-output <dir>  Retain the verified archive and receipt in this directory
+  --candidate-receipt <file> Reuse an archive whose receipt matches this Git commit
   --tag <tag>               npm dist-tag. Default: latest
 
 Common reruns:
@@ -249,8 +303,8 @@ Auth:
 `);
 }
 
-function publishArgs({ dryRun, tag }) {
-  const args = ["publish", "--access", "public", "--tag", tag];
+function publishArgs({ packagePath, dryRun, tag }) {
+  const args = ["publish", packagePath, "--access", "public", "--tag", tag];
   if (dryRun) args.push("--dry-run", "--silent");
   return args;
 }
@@ -262,20 +316,20 @@ export function validateStagedPackage(pkg) {
   }
 
   const manifest = readJson(manifestPath);
-  if (manifest.name !== pkg.name) {
-    throw new Error(`${manifestPath} name is ${manifest.name}; expected ${pkg.name}`);
-  }
-  if (manifest.version !== rootPkg.version) {
-    throw new Error(
-      `${manifestPath} version is ${manifest.version}; expected root version ${rootPkg.version}`
-    );
-  }
-  if (manifest.private) throw new Error(`${manifestPath} must not be private`);
-  if (manifest.publishConfig?.access !== "public") {
-    throw new Error(`${manifestPath} must declare publishConfig.access = public`);
-  }
+  validateNpmPackageManifest(manifest, { name: pkg.name, version: rootPkg.version }, manifestPath);
 
   return { pkg, manifest, version: manifest.version };
+}
+
+function validateCandidateIdentity(pkg) {
+  if (pkg.name !== "@panticonic/vibestudio-server") {
+    throw new Error(`Unexpected npm candidate package: ${pkg.name}`);
+  }
+  return {
+    pkg,
+    manifest: { name: pkg.name, version: rootPkg.version, publishConfig: { access: "public" } },
+    version: rootPkg.version,
+  };
 }
 
 function npmView(name, version) {
@@ -333,29 +387,6 @@ function ensureTokenAuth() {
   return whoami.stdout.trim();
 }
 
-async function runStagedInstallSmoke(entry) {
-  const packDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-pack-"));
-  return runWithOwnedCleanup(
-    async () => {
-      run("npm", ["pack", "--silent", "--pack-destination", packDirectory], {
-        cwd: entry.pkg.dir,
-      });
-      const tarballs = fs
-        .readdirSync(packDirectory)
-        .filter((name) => name.endsWith(".tgz"))
-        .map((name) => path.join(packDirectory, name));
-      if (tarballs.length !== 1) {
-        throw new Error(
-          `Expected one staged tarball for ${entry.pkg.name}; found ${tarballs.length}`
-        );
-      }
-      await runInstallSmoke(entry, tarballs[0], "Staged install smoke");
-    },
-    () => fs.rmSync(packDirectory, { recursive: true, force: true }),
-    "Staged npm smoke and pack cleanup failed"
-  );
-}
-
 async function runInstallSmoke(entry, packageSpec, label) {
   const root = fs.mkdtempSync(`${entry.pkg.smokePrefix}-`);
   let lifetime;
@@ -369,6 +400,17 @@ async function runInstallSmoke(entry, packageSpec, label) {
       run("npm", ["install", "-g", "--prefix", prefix, packageSpec], {
         cwd: launchDirectory,
       });
+      const packageDirectory = path.join(
+        prefix,
+        ...(process.platform === "win32" ? [] : ["lib"]),
+        "node_modules",
+        ...entry.pkg.name.split("/")
+      );
+      validateNpmPackageManifest(
+        readJson(path.join(packageDirectory, "package.json")),
+        { name: entry.pkg.name, version: entry.version },
+        "Installed candidate package"
+      );
       run(path.join(prefix, "bin", "vibestudio"), ["--version"], { cwd: launchDirectory });
       run(path.join(prefix, "bin", "vibestudio"), ["--help"], { cwd: launchDirectory });
       run(path.join(prefix, "bin", "vibestudio"), ["remote", "serve", "--help"], {

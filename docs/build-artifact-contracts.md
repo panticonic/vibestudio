@@ -114,14 +114,17 @@ The npm preflight retains its canonical `npm pack` archive after staging,
 dry-run, and fresh-install smoke checks succeed. Its artifact name includes the
 exact source SHA and run attempt; its receipt records package identity, archive
 length, and SHA-256. Publication may reuse that archive from the matching
-successful CI run after all release gates succeed. Verify the receipt against
-the checked-out commit and version, verify the archive checksum, and extract it
-into `dist-packages/server` before the existing
-`pnpm publish:server-npm:staged` command. That command retains package validation,
-dry-run, and installed/registry smoke checks; it avoids a duplicate build and
-stage. This candidate is an output of the ordinary producer, not a separate
-packaging implementation. Record producer, transfer, and final publication
-wall-clock times before claiming a measured deployment speedup.
+successful CI run after all release gates succeed. Run
+`pnpm publish:server-npm -- --candidate-receipt PATH` against that exact checkout.
+The publisher verifies the receipt against Git HEAD and package version, checks
+the archive length and SHA-256, and validates the installed package manifest.
+The ordinary producer packs once; dry-run, fresh-install smoke and publication
+consume the same archive bytes, followed by registry verification and smoke.
+CI uses `--candidate-output DIR` to retain that verified archive and receipt.
+Receipt reuse avoids another build, stage and pack without bypassing acceptance.
+This candidate is an output of the ordinary producer, not a separate packaging
+implementation. Record producer, transfer, and final publication wall-clock
+times before claiming a measured deployment speedup.
 
 A GitHub Actions `needs` edge to a matrix job waits for every matrix leg. Use
 separate named jobs when consumers need different subsets of its outputs;

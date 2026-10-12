@@ -104,35 +104,24 @@ test("native artifact consumers wait for their exact producers without unrelated
     "darwin-process-observers-ci-${{ github.sha }}",
   ]);
   const npmPreflightSteps = jobs["npm-server-preflight"].steps;
-  const dryRunStepIndex = npmPreflightSteps.findIndex(
-    (step) => step.name === "Build, stage, dry-run, and install-smoke the npm candidate"
-  );
-  const packStepIndex = npmPreflightSteps.findIndex(
-    (step) => step.name === "Pack the verified npm candidate and attest its source"
+  const candidateStepIndex = npmPreflightSteps.findIndex(
+    (step) => step.name === "Build, stage, verify, and retain the npm candidate"
   );
   const uploadStepIndex = npmPreflightSteps.findIndex(
     (step) => step.name === "Upload verified npm candidate"
   );
-  assert.ok(dryRunStepIndex >= 0, "npm preflight must perform its canonical dry-run");
-  assert.ok(packStepIndex > dryRunStepIndex, "candidate packing follows every preflight check");
-  assert.ok(uploadStepIndex > packStepIndex, "only the verified candidate is uploaded");
-  const packStep = npmPreflightSteps[packStepIndex];
-  assert.equal(packStep.if, undefined, "candidate packing must fail the preflight on errors");
-  assert.match(packStep.run, /npm pack \.\/dist-packages\/server/);
-  assert.match(packStep.run, /--pack-destination/);
-  assert.match(packStep.run, /sourceSha:\s*process\.env\.GITHUB_SHA/);
-  assert.match(packStep.run, /packageName:\s*packageJson\.name/);
-  assert.match(packStep.run, /packageVersion:\s*packageJson\.version/);
-  assert.match(packStep.run, /createHash\("sha256"\)/);
-  assert.match(packStep.run, /if \(packageStat\.size === 0\)/);
-  assert.match(packStep.run, /flag: "wx"/);
+  assert.ok(candidateStepIndex >= 0, "npm preflight must produce and verify its candidate");
+  assert.ok(uploadStepIndex > candidateStepIndex, "only the verified candidate is uploaded");
+  const candidateStep = npmPreflightSteps[candidateStepIndex];
+  assert.equal(candidateStep.if, undefined, "candidate production must fail the preflight");
+  assert.match(candidateStep.run, /pnpm publish:server-npm/);
+  assert.match(candidateStep.run, /--dry-run-only/);
+  assert.match(candidateStep.run, /--candidate-output.*npm-candidate/);
+  assert.doesNotMatch(candidateStep.run, /npm pack/u, "the workflow must not repack the candidate");
 
   const uploadStep = npmPreflightSteps[uploadStepIndex];
   assert.equal(uploadStep.if, undefined, "candidate upload must be a required preflight result");
-  assert.equal(
-    uploadStep.uses,
-    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-  );
+  assert.equal(uploadStep.uses, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
   assert.equal(
     uploadStep.with.name,
     "vibestudio-server-npm-${{ github.sha }}-${{ github.run_attempt }}"

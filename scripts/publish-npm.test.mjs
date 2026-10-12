@@ -3,7 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import { runWithOwnedCleanup, spawnResultFailure, validateStagedPackage } from "./publish-npm.mjs";
+import {
+  runWithOwnedCleanup,
+  spawnResultFailure,
+  validateNpmPackageManifest,
+  validateStagedPackage,
+} from "./publish-npm.mjs";
 
 void test("rejects a stale staged candidate before publication", () => {
   const rootPackage = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url)));
@@ -29,11 +34,46 @@ void test("rejects a stale staged candidate before publication", () => {
     );
     assert.throws(
       () => validateStagedPackage(candidate.pkg),
-      /version is 0\.0\.0-stale; expected root version/u
+      /version is 0\.0\.0-stale; expected 0\.\d+\.\d+/u
     );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+void test("validates the manifest extracted by a candidate install", () => {
+  const manifest = {
+    name: "@panticonic/vibestudio-server",
+    version: "1.2.3",
+    publishConfig: { access: "public" },
+  };
+  validateNpmPackageManifest(
+    manifest,
+    { name: manifest.name, version: manifest.version },
+    "installed package"
+  );
+  assert.throws(
+    () => validateNpmPackageManifest({ ...manifest, private: true }, manifest, "installed package"),
+    /must not be private/u
+  );
+  assert.throws(
+    () =>
+      validateNpmPackageManifest(
+        { ...manifest, name: "@panticonic/other" },
+        manifest,
+        "installed package"
+      ),
+    /name is @panticonic\/other; expected @panticonic\/vibestudio-server/u
+  );
+  assert.throws(
+    () =>
+      validateNpmPackageManifest(
+        { ...manifest, publishConfig: { access: "restricted" } },
+        manifest,
+        "installed package"
+      ),
+    /publishConfig\.access = public/u
+  );
 });
 
 void test("owned cleanup preserves the operation error as primary", async () => {

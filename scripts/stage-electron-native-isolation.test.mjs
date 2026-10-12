@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { doMergeConfigs } from "app-builder-lib/out/util/config/config.js";
+import { getFileMatchers } from "app-builder-lib/out/fileMatcher.js";
 import {
   includeElectronRuntimeScriptClosure,
   publishNativeArtifact,
@@ -38,16 +40,38 @@ test("the direct electron-builder hook unpacks transitive CLI runtime helpers", 
       `import "../lib/owned-helper.mjs";\n`
     );
     fs.writeFileSync(path.join(root, "scripts/lib/owned-helper.mjs"), `export {};\n`);
-    const config = {
-      files: ["scripts/cli/**/*"],
-      asarUnpack: ["scripts/cli/**/*"],
-    };
+    const config = doMergeConfigs([
+      {
+        files: [{ from: "scripts", to: "scripts", filter: ["cli/**/*"] }],
+        asarUnpack: ["scripts/cli/**/*"],
+      },
+    ]);
 
     const closure = includeElectronRuntimeScriptClosure({
       packager: { projectDir: root, config },
     });
     assert.deepEqual(closure.added, ["scripts/lib/owned-helper.mjs"]);
-    assert.ok(config.files.includes("scripts/lib/owned-helper.mjs"));
+    assert.deepEqual(config.files[0], {
+      from: "scripts",
+      to: "scripts",
+      filter: ["cli/**/*"],
+    });
+    assert.ok(
+      config.files.some((fileSet) => fileSet.filter?.includes("scripts/lib/owned-helper.mjs"))
+    );
+    const matchers = getFileMatchers(config, "files", path.join(root, "out"), {
+      defaultSrc: root,
+      macroExpander: (value) => value,
+      customBuildOptions: {},
+      globalOutDir: path.join(root, "out"),
+    });
+    const helper = path.join(root, "scripts/lib/owned-helper.mjs");
+    const emitted = matchers.flatMap((matcher) =>
+      matcher.createFilter()(helper, fs.statSync(helper))
+        ? [path.relative(matcher.from, helper)]
+        : []
+    );
+    assert.deepEqual(emitted, ["scripts/lib/owned-helper.mjs"]);
     assert.ok(config.asarUnpack.includes("scripts/lib/owned-helper.mjs"));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

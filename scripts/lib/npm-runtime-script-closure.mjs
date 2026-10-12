@@ -128,13 +128,26 @@ export function includeDesktopRuntimeScriptClosure(appRoot, config) {
   if (!Array.isArray(config.files) || !Array.isArray(config.asarUnpack)) {
     throw new Error("Desktop runtime script closure requires files and asarUnpack patterns");
   }
-  const includePatterns = config.files.filter(
-    (pattern) => typeof pattern === "string" && !pattern.startsWith("!") && isScriptPattern(pattern)
+  const fileSets = config.files.map(asFileSet);
+  const patterns = fileSets.flatMap(({ set, patterns }) =>
+    patterns.map((pattern) => ({ set, pattern: fileSetPathPattern(set, pattern) }))
   );
-  const excludePatterns = config.files
-    .filter((pattern) => typeof pattern === "string" && pattern.startsWith("!"))
-    .map((pattern) => pattern.slice(1))
-    .filter(isScriptPattern);
+  const scriptPatterns = patterns.filter(({ pattern }) =>
+    isScriptPattern(pattern.replace(/^!/u, ""))
+  );
+  for (const { set } of scriptPatterns) {
+    if (!sameFileSetMapping(set)) {
+      throw new Error(
+        "Desktop runtime script roots require an identity electron-builder FileSet mapping"
+      );
+    }
+  }
+  const includePatterns = scriptPatterns
+    .filter(({ pattern }) => !pattern.startsWith("!"))
+    .map(({ pattern }) => pattern);
+  const excludePatterns = scriptPatterns
+    .filter(({ pattern }) => pattern.startsWith("!"))
+    .map(({ pattern }) => pattern.slice(1));
   if (includePatterns.length === 0) {
     throw new Error("Desktop package config has no declared scripts runtime roots");
   }
@@ -161,23 +174,61 @@ export function includeDesktopRuntimeScriptClosure(appRoot, config) {
     sourceRoot: appRoot,
     packageRoot: appRoot,
     entryRoots: [...included],
-    packagedPaths: config.files.filter(
-      (pattern) => typeof pattern === "string" && !pattern.includes("node_modules")
-    ),
+    packagedPaths: patterns
+      .filter(({ set, pattern }) => sameFileSetMapping(set) && !pattern.includes("node_modules"))
+      .map(({ pattern }) => pattern),
     copyRoots: ["scripts"],
   });
   assertRuntimeScriptDependencies({ packageRoot: appRoot, importedPackages: closure.bareImports });
 
   const added = closure.files.filter((file) => !included.has(file));
-  const files = new Set(config.files);
+  const files = config.files.map((fileSet) => {
+    const { set, patterns } = asFileSet(fileSet);
+    return { ...set, filter: [...patterns] };
+  });
   const unpacked = new Set(config.asarUnpack);
   for (const file of added) {
-    files.add(file);
+    files.push({ filter: [file] });
     unpacked.add(file);
   }
-  config.files = [...files];
+  config.files = files;
   config.asarUnpack = [...unpacked];
   return { ...closure, added };
+}
+
+function asFileSet(value) {
+  if (typeof value === "string") return { set: {}, patterns: [value] };
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const filter = value.filter;
+    if (typeof filter === "string") return { set: value, patterns: [filter] };
+    if (Array.isArray(filter) && filter.every((pattern) => typeof pattern === "string")) {
+      return { set: value, patterns: filter };
+    }
+  }
+  throw new Error("Desktop package config contains an invalid electron-builder FileSet");
+}
+
+function sameFileSetMapping(fileSet) {
+  const from = normalizeMappingPath(fileSet.from);
+  const to = normalizeMappingPath(fileSet.to);
+  return (
+    from === to &&
+    !path.posix.isAbsolute(from) &&
+    from !== ".." &&
+    !from.startsWith("../")
+  );
+}
+
+function normalizeMappingPath(value) {
+  return value == null ? "." : path.normalize(value).replaceAll("\\", "/");
+}
+
+function fileSetPathPattern(fileSet, pattern) {
+  const base = normalizeMappingPath(fileSet.from);
+  if (base === ".") return pattern;
+  const negated = pattern.startsWith("!");
+  const body = negated ? pattern.slice(1) : pattern;
+  return `${negated ? "!" : ""}${path.posix.join(base, body)}`;
 }
 
 function isScriptPattern(pattern) {

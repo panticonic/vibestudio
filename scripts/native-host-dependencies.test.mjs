@@ -152,6 +152,16 @@ test("installs Windows workerd long-path metadata beside the unchanged dependenc
     const directory = path.join(cwd, "node_modules", "@cloudflare", "workerd-windows-64", "bin");
     mkdirSync(directory, { recursive: true });
     const executable = path.join(directory, "workerd.exe");
+    const workerdRoot = path.join(cwd, "node_modules", "workerd");
+    mkdirSync(workerdRoot, { recursive: true });
+    writeFileSync(
+      path.join(workerdRoot, "package.json"),
+      JSON.stringify({ name: "workerd", main: "index.cjs" })
+    );
+    writeFileSync(
+      path.join(workerdRoot, "index.cjs"),
+      `exports.default = ${JSON.stringify(executable)};\n`
+    );
     const payload = Buffer.from([0x4d, 0x5a, 0x00, 0xff]);
     writeFileSync(executable, payload);
     const manifest = readFileSync(new URL("./workerd.exe.manifest", import.meta.url), "utf8");

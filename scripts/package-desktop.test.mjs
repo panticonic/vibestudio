@@ -125,9 +125,17 @@ test("promotes final installers and retires each joined staging tree", async () 
   });
   assert.equal(outputs.length, 1);
   assert.ok(
-    seen[0].files.some((file) => file.startsWith("!node_modules/@cloudflare/workerd-linux-arm64"))
+    seen[0].files.some(
+      (file) =>
+        typeof file === "string" && file.startsWith("!node_modules/@cloudflare/workerd-linux-arm64")
+    )
   );
-  assert.ok(seen[0].files.includes("scripts/lib/runtime-helper.mjs"));
+  assert.ok(
+    seen[0].files.some(
+      (fileSet) =>
+        typeof fileSet === "object" && fileSet.filter?.includes("scripts/lib/runtime-helper.mjs")
+    )
+  );
   assert.ok(seen[0].asarUnpack.includes("scripts/lib/runtime-helper.mjs"));
   assert.deepEqual(fs.readdirSync(path.join(root, "release")).sort(), ["installer-1.deb"]);
 });

@@ -14,6 +14,12 @@ export function prepareWindowsWorkerdMetadata({
   if (platform !== "win32") return;
   if (arch !== "x64") throw new Error(`Unsupported Windows workerd architecture: ${arch}`);
   const require = createRequire(path.join(cwd, "package.json"));
-  const executable = require.resolve("@cloudflare/workerd-windows-64/bin/workerd.exe");
+  // Workerd owns its platform-package selection and fallback payload location.
+  // Resolve its public binary export from the declared dependency, rather than
+  // reaching across that package's optional-dependency boundary.
+  const executable = require("workerd").default;
+  if (typeof executable !== "string" || !path.isAbsolute(executable)) {
+    throw new Error("Workerd must export an absolute executable path");
+  }
   copyFileSync(new URL("./workerd.exe.manifest", import.meta.url), `${executable}.manifest`);
 }

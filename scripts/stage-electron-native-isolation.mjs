@@ -121,7 +121,7 @@ export async function assertPackagedNativeIsolation(resources, context) {
     throw new Error("Packaged application contains an unselected Node runtime selector");
   if (context.electronPlatformName === "win32") {
     const require = createRequire(path.join(context.packager.projectDir, "package.json"));
-    const source = `${require.resolve("@cloudflare/workerd-windows-64/bin/workerd.exe")}.manifest`;
+    const source = `${require("workerd").default}.manifest`;
     const installed = path.join(
       resources,
       "app.asar.unpacked/node_modules/@cloudflare/workerd-windows-64/bin/workerd.exe.manifest"
