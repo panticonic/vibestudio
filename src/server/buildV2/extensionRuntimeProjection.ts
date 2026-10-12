@@ -22,25 +22,49 @@ export function runtimeDependencyProjectionComplete(
   deps: readonly string[],
   expectedKey: string | null
 ): boolean {
-  if (!expectedKey || runtimeDependencyProjectionKey(nodeModulesDir) !== expectedKey) return false;
-  // The receipt is written only after every admitted file copy joins. Resolve
-  // each declared package from inside this tree to reject host-ancestor fallbacks.
-  const runtimeRequire = createRequire(
-    path.join(nodeModulesDir, ".vibestudio-resolver", "resolve.cjs")
-  );
   try {
-    for (const dep of deps) {
-      const packageEntry = path.join(nodeModulesDir, ...dep.split("/"));
-      const packageRoot = fs.realpathSync(packageEntry);
-      const resolvedPath = fs.realpathSync(runtimeRequire.resolve(dep));
-      const relative = path.relative(packageRoot, resolvedPath);
-      if (!fs.statSync(packageRoot).isDirectory()) return false;
-      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
-        return false;
-    }
+    assertRuntimeDependencyProjectionComplete(nodeModulesDir, deps, expectedKey);
     return true;
   } catch {
     return false;
+  }
+}
+
+export function assertRuntimeDependencyProjectionComplete(
+  nodeModulesDir: string,
+  deps: readonly string[],
+  expectedKey: string | null
+): void {
+  if (path.basename(nodeModulesDir) !== "node_modules")
+    throw new Error(
+      `Runtime dependency projection must be a node_modules directory: ${nodeModulesDir}`
+    );
+  const actualKey = runtimeDependencyProjectionKey(nodeModulesDir);
+  if (!expectedKey || actualKey !== expectedKey)
+    throw new Error(
+      `Runtime dependency projection receipt mismatch: expected ${expectedKey ?? "none"}, found ${actualKey ?? "none"}`
+    );
+  // Resolve from the parent, where Node actually searches this node_modules
+  // directory. Never accept a package found only in an ancestor tree.
+  const runtimeRequire = createRequire(
+    path.join(path.dirname(nodeModulesDir), ".vibestudio-resolver", "resolve.cjs")
+  );
+  for (const dep of deps) {
+    try {
+      const packageEntry = path.join(nodeModulesDir, ...dep.split("/"));
+      const packageRoot = fs.realpathSync(packageEntry);
+      if (!fs.statSync(packageRoot).isDirectory())
+        throw new Error(`Package entry is not a directory: ${packageEntry}`);
+      const resolvedPath = fs.realpathSync(runtimeRequire.resolve(dep));
+      const relative = path.relative(packageRoot, resolvedPath);
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+        throw new Error(`Package entry resolves outside its projected root: ${resolvedPath}`);
+    } catch (error) {
+      throw new Error(
+        `Runtime dependency ${dep} is not resolvable from ${nodeModulesDir}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+    }
   }
 }
 

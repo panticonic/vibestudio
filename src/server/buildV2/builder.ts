@@ -125,6 +125,7 @@ import { LibraryLoweringWorkerClient } from "./libraryLoweringWorkerClient.js";
 import { ImmutableTreeWorkerClient } from "./immutableTreeWorkerClient.js";
 import {
   EXTENSION_RUNTIME_PROJECTION_RECEIPT,
+  assertRuntimeDependencyProjectionComplete,
   extensionRuntimeDepsProjected,
   runtimeDependencyProjectionComplete,
 } from "./extensionRuntimeProjection.js";
@@ -5254,11 +5255,7 @@ export async function populateExtensionRuntimeDeps(
       path.join(destination, EXTENSION_RUNTIME_PROJECTION_RECEIPT),
       JSON.stringify({ version: 1, runtimeDepsKey })
     );
-    if (!runtimeDependencyProjectionComplete(destination, Object.keys(deps), runtimeDepsKey)) {
-      throw new Error(
-        `Completed extension dependency tree cannot resolve its declared packages: ${extensionName}`
-      );
-    }
+    assertRuntimeDependencyProjectionComplete(destination, Object.keys(deps), runtimeDepsKey);
   } catch (error) {
     throw new Error(
       `Failed to materialize extension runtime dependencies for ${extensionName}: ${
@@ -5269,7 +5266,7 @@ export async function populateExtensionRuntimeDeps(
   }
 }
 
-async function materializeExtensionRuntimeDeps(
+export async function materializeExtensionRuntimeDeps(
   session: BuilderSession,
   buildDir: string,
   nodeModulesDir: string,
@@ -5278,12 +5275,13 @@ async function materializeExtensionRuntimeDeps(
   runtimeDepsKey: string | null
 ): Promise<void> {
   const link = path.join(buildDir, "node_modules");
-  let staging: string | undefined;
+  let stagingParent: string | undefined;
   let previous: string | undefined;
   let failure: unknown;
   let failed = false;
   try {
-    staging = await fs.promises.mkdtemp(path.join(buildDir, ".node_modules-staging-"));
+    stagingParent = await fs.promises.mkdtemp(path.join(buildDir, ".node_modules-staging-"));
+    const staging = path.join(stagingParent, "node_modules");
     await populateExtensionRuntimeDeps(
       session,
       staging,
@@ -5301,7 +5299,6 @@ async function materializeExtensionRuntimeDeps(
     }
     try {
       await fs.promises.rename(staging, link);
-      staging = undefined;
     } catch (promotionError) {
       if (previous) {
         try {
@@ -5321,9 +5318,9 @@ async function materializeExtensionRuntimeDeps(
     failed = true;
     failure = err;
   }
-  if (staging) {
+  if (stagingParent) {
     try {
-      await fs.promises.rm(staging, { recursive: true, force: true });
+      await fs.promises.rm(stagingParent, { recursive: true, force: true });
     } catch (cleanupError) {
       failure = failed
         ? new AggregateError([failure, cleanupError], "Projection and staging cleanup failed", {
