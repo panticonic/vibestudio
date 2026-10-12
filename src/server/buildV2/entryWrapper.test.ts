@@ -457,7 +457,7 @@ describe("injectHtmlTransforms", () => {
 });
 
 describe("resolveEntryPoint", () => {
-  it("honors package exports before stale root index.js files", () => {
+  it("honors package exports before stale root index.js files", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-entry-"));
     try {
       fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -472,7 +472,7 @@ describe("resolveEntryPoint", () => {
       fs.writeFileSync(path.join(root, "index.js"), "module.exports = require('./lib/missing');");
       fs.writeFileSync(path.join(root, "src", "index.ts"), "export const ok = true;");
 
-      const entry = resolveEntryPoint(
+      const entry = await resolveEntryPoint(
         { name: "@workspace/test-lib", manifest: {}, path: root } as never,
         root
       );
@@ -483,7 +483,7 @@ describe("resolveEntryPoint", () => {
     }
   });
 
-  it("resolves an exact package subpath without requiring a default export", () => {
+  it("resolves an exact package subpath without requiring a default export", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-entry-"));
     try {
       fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -497,19 +497,19 @@ describe("resolveEntryPoint", () => {
       );
       fs.writeFileSync(path.join(root, "src", "catalog.ts"), "export const ok = true;");
 
-      const entry = resolveEntryPoint(
+      const entry = await resolveEntryPoint(
         { name: "@workspace/subpath-only", manifest: {}, path: root } as never,
         root,
         { subpath: "./catalog" }
       );
 
       expect(entry).toBe(path.join(root, "src", "catalog.ts"));
-      expect(() =>
+      await expect(
         resolveEntryPoint(
           { name: "@workspace/subpath-only", manifest: {}, path: root } as never,
           root
         )
-      ).toThrow("No export . found");
+      ).rejects.toThrow("No export . found");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -611,31 +611,52 @@ const inFlightLibraryBuilds = new Map<string, Promise<BuildResult>>();
 export function createGraphImportResolver(
   graph: PackageGraph
 ): (importPath: string) => { packageName: string; subpath: string } | null {
-  const names = graph
-    .allNodes()
-    .map((node) => node.name)
-    .sort((a, b) => b.length - a.length);
+  const names = new Set(graph.allNodes().map((node) => node.name));
 
   return (importPath) => {
-    for (const name of names) {
-      if (importPath === name) {
-        return { packageName: name, subpath: "." };
+    if (names.has(importPath)) return { packageName: importPath, subpath: "." };
+    for (let separator = importPath.lastIndexOf("/"); separator > 0; ) {
+      const name = importPath.slice(0, separator);
+      if (names.has(name)) {
+        return { packageName: name, subpath: `./${importPath.slice(separator + 1)}` };
       }
-      if (importPath.startsWith(`${name}/`)) {
-        return { packageName: name, subpath: `./${importPath.slice(name.length + 1)}` };
-      }
+      separator = importPath.lastIndexOf("/", separator - 1);
     }
     return null;
   };
 }
 
-function createWorkspaceResolvePlugin(
+/** Memoize exact-source path probes for one immutable build plugin lifetime. */
+function createPathExistenceCache(): (file: string) => Promise<boolean> {
+  const pathsExist = new Map<string, Promise<boolean>>();
+  return (file) => {
+    let result = pathsExist.get(file);
+    if (!result) {
+      result = fs.promises
+        .access(file)
+        .then(() => true)
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
+          throw error;
+        });
+      pathsExist.set(file, result);
+    }
+    return result;
+  };
+}
+
+export function createWorkspaceResolvePlugin(
   graph: PackageGraph,
   sourceRoot: string,
   conditions: readonly string[] = PANEL_CONDITIONS,
   externalSpecifiers: readonly string[] = []
 ): esbuild.Plugin {
   const resolveGraphImport = createGraphImportResolver(graph);
+  const packageMetadata = new Map<
+    string,
+    Promise<{ sourcePath: string; packageJson: { main?: string; exports?: unknown } | null }>
+  >();
+  const pathExists = createPathExistenceCache();
   // esbuild applies the top-level `external` option in its DEFAULT resolver,
   // which runs AFTER plugins — so a workspace specifier this plugin resolves to
   // source would be bundled even when listed in `external`. Honor the externals
@@ -649,7 +670,7 @@ function createWorkspaceResolvePlugin(
     setup(build) {
       // Match any package discovered in the workspace graph, including
       // @workspace/* aliases and template-provided @vibestudio/* source packages.
-      build.onResolve({ filter: /^[^./]|^@/ }, (args) => {
+      build.onResolve({ filter: /^[^./]|^@/ }, async (args) => {
         if (externalSet.has(args.path)) return { path: args.path, external: true };
         const parsed = resolveGraphImport(args.path);
         if (!parsed) return null;
@@ -657,9 +678,24 @@ function createWorkspaceResolvePlugin(
         const node = graph.tryGet(parsed.packageName);
         if (!node) return null;
 
-        const sourcePath = sourcePathForNode(node, sourceRoot);
-        const pkgJsonPath = path.join(sourcePath, "package.json");
-        if (!fs.existsSync(pkgJsonPath)) {
+        let metadata = packageMetadata.get(node.name);
+        if (!metadata) {
+          const sourcePath = sourcePathForNode(node, sourceRoot);
+          metadata = (async () => {
+            const pkgJsonPath = path.join(sourcePath, "package.json");
+            if (!(await pathExists(pkgJsonPath))) return { sourcePath, packageJson: null };
+            return {
+              sourcePath,
+              packageJson: JSON.parse(await fs.promises.readFile(pkgJsonPath, "utf-8")) as {
+                main?: string;
+                exports?: unknown;
+              },
+            };
+          })();
+          packageMetadata.set(node.name, metadata);
+        }
+        const { sourcePath, packageJson: pkgJson } = await metadata;
+        if (!pkgJson) {
           return {
             errors: [
               {
@@ -670,11 +706,6 @@ function createWorkspaceResolvePlugin(
             ],
           };
         }
-
-        const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
-          main?: string;
-          exports?: unknown;
-        };
 
         // Try exports-based resolution, then main field
         let target: string | null = null;
@@ -698,10 +729,10 @@ function createWorkspaceResolvePlugin(
 
           // Build-output exports are generated artifacts. Prefer source even
           // when a stale dist/lib/build/out file exists in the extracted tree.
-          const srcFallback = resolveSourceFallback(sourcePath, target);
+          const srcFallback = await resolveSourceFallback(sourcePath, target, pathExists);
           if (isBuildOutputTarget(target) && srcFallback) return { path: srcFallback };
 
-          if (fs.existsSync(resolved)) return { path: resolved };
+          if (await pathExists(resolved)) return { path: resolved };
 
           // dist/ is generated output; map to TypeScript source.
           if (srcFallback) return { path: srcFallback };
@@ -715,7 +746,7 @@ function createWorkspaceResolvePlugin(
         if (parsed.subpath === ".") {
           for (const entry of SOURCE_ENTRY_CANDIDATES) {
             const full = path.join(sourcePath, entry);
-            if (fs.existsSync(full)) return { path: full };
+            if (await pathExists(full)) return { path: full };
           }
         }
 
@@ -744,7 +775,11 @@ function isBuildOutputTarget(target: string): boolean {
  * Tries each known output dir replacement with src/, then tries the target
  * as-is with .js→.ts rewrite (for flat layouts without an output dir).
  */
-function resolveSourceFallback(sourcePath: string, target: string): string | null {
+async function resolveSourceFallback(
+  sourcePath: string,
+  target: string,
+  pathExists: (file: string) => Promise<boolean>
+): Promise<string | null> {
   const candidates: string[] = [];
 
   // Try replacing each known output dir with src/
@@ -763,7 +798,7 @@ function resolveSourceFallback(sourcePath: string, target: string): string | nul
     const base = candidate.replace(/\.js$/, "");
     for (const ext of [".ts", ".tsx", "/index.ts", "/index.tsx"]) {
       const full = path.resolve(sourcePath, base + ext);
-      if (fs.existsSync(full)) return full;
+      if (await pathExists(full)) return full;
     }
   }
 
@@ -778,22 +813,23 @@ function resolveSourceFallback(sourcePath: string, target: string): string | nul
  * materialized source state, only .ts files exist. This plugin intercepts .js imports
  * within the source root and rewrites them to their .ts/.tsx equivalents.
  */
-function createTsExtensionPlugin(sourceRoot: string): esbuild.Plugin {
+export function createTsExtensionPlugin(sourceRoot: string): esbuild.Plugin {
+  const pathExists = createPathExistenceCache();
   return {
     name: "ts-extension-rewrite",
     setup(build) {
-      build.onResolve({ filter: /\.js$/ }, (args) => {
+      build.onResolve({ filter: /\.js$/ }, async (args) => {
         // Only relative imports within materialized source
         if (!args.path.startsWith(".") || !args.resolveDir) return null;
         if (!args.resolveDir.startsWith(sourceRoot)) return null;
 
         const resolved = path.resolve(args.resolveDir, args.path);
-        if (fs.existsSync(resolved)) return null; // .js exists, use it
+        if (await pathExists(resolved)) return null; // .js exists, use it
 
         // Try .ts and .tsx equivalents
         const base = resolved.slice(0, -3); // strip .js
         for (const ext of [".ts", ".tsx"]) {
-          if (fs.existsSync(base + ext)) return { path: base + ext };
+          if (await pathExists(base + ext)) return { path: base + ext };
         }
 
         return null;
@@ -3087,7 +3123,7 @@ async function buildPanel(
   const { outdir, nodePaths } = env;
   const entryFile = runtimeTest
     ? path.join(outdir, "_test-entry.ts")
-    : resolveEntryPoint(node, env.sourcePath, { conditions: PANEL_CONDITIONS });
+    : await resolveEntryPoint(node, env.sourcePath, { conditions: PANEL_CONDITIONS });
   if (runtimeTest) {
     fs.writeFileSync(entryFile, panelTestEntry(outdir, env.sourcePath, runtimeTest));
   }
@@ -3839,7 +3875,7 @@ async function buildWorker(
   const { outdir, nodePaths, resolveDir } = env;
   const entryFile = runtimeTest
     ? path.join(outdir, "_test-entry.ts")
-    : resolveEntryPoint(node, env.sourcePath, { conditions: WORKER_CONDITIONS });
+    : await resolveEntryPoint(node, env.sourcePath, { conditions: WORKER_CONDITIONS });
   if (runtimeTest) {
     fs.writeFileSync(entryFile, workerTestEntry(outdir, env.sourcePath, runtimeTest));
   }
@@ -4553,7 +4589,7 @@ async function buildExtension(
     "runtime-root"
   );
   const { outdir, nodePaths, resolveDir } = env;
-  const entryFile = resolveEntryPoint(node, env.sourcePath, {
+  const entryFile = await resolveEntryPoint(node, env.sourcePath, {
     conditions: EXTENSION_CONDITIONS,
   });
 
@@ -4913,7 +4949,7 @@ async function buildLibraryBundle(
     // module, instead of silently resolving to a private duplicate.
     const libraryExternals = [...new Set([...externals, ...Object.keys(env.providedPeers)])];
     const moduleUrl = `vibestudio-module://build/${buildKey}/${encodeURIComponent(node.name)}`;
-    const entryFile = resolveEntryPoint(node, env.sourcePath, {
+    const entryFile = await resolveEntryPoint(node, env.sourcePath, {
       conditions,
       subpath: entrySubpath,
     });
@@ -5337,18 +5373,19 @@ async function doPlatformBuild(
  * Resolve the entry point for a node.
  * Uses sourcePath from the materialized source state instead of node.path.
  */
-export function resolveEntryPoint(
+export async function resolveEntryPoint(
   node: GraphNode,
   sourcePath: string,
   options: {
     conditions?: readonly string[];
     subpath?: string;
   } = {}
-): string {
+): Promise<string> {
   const conditions = options.conditions ?? PANEL_CONDITIONS;
   const subpath = options.subpath ?? ".";
+  const pathExists = createPathExistenceCache();
   if (subpath !== ".") {
-    return resolvePackageExportEntryPoint(node, sourcePath, subpath, conditions);
+    return resolvePackageExportEntryPoint(node, sourcePath, subpath, pathExists, conditions);
   }
 
   const explicit = node.manifest.entry;
@@ -5380,7 +5417,7 @@ export function resolveEntryPoint(
     if (target) {
       const resolved = path.resolve(sourcePath, target);
       if (fs.existsSync(resolved)) return resolved;
-      const srcFallback = resolveSourceFallback(sourcePath, target);
+      const srcFallback = await resolveSourceFallback(sourcePath, target, pathExists);
       if (srcFallback) return srcFallback;
       if (Object.hasOwn(pkgJson, "exports"))
         throw new BuildRequestError(
@@ -5409,12 +5446,13 @@ export function resolveEntryPoint(
   throw new Error(`No entry point found for ${node.name} at ${sourcePath}`);
 }
 
-function resolvePackageExportEntryPoint(
+async function resolvePackageExportEntryPoint(
   node: GraphNode,
   sourcePath: string,
   subpath: string,
+  pathExists: (file: string) => Promise<boolean>,
   conditions: readonly string[] = PANEL_CONDITIONS
-): string {
+): Promise<string> {
   const normalized = subpath === "." ? "." : subpath.startsWith("./") ? subpath : `./${subpath}`;
   const pkgJsonPath = path.join(sourcePath, "package.json");
   if (!fs.existsSync(pkgJsonPath)) {
@@ -5441,7 +5479,7 @@ function resolvePackageExportEntryPoint(
 
   const resolved = path.resolve(sourcePath, target);
   if (fs.existsSync(resolved)) return resolved;
-  const srcFallback = resolveSourceFallback(sourcePath, target);
+  const srcFallback = await resolveSourceFallback(sourcePath, target, pathExists);
   if (srcFallback) return srcFallback;
 
   throw new BuildRequestError(

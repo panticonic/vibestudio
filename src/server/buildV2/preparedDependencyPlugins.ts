@@ -464,11 +464,17 @@ export function composePreparedDependencyPlugins(
                     resultNamespace === "file" || isOwnedNamespace(resultNamespace)
                       ? path.dirname(physicalPath)
                       : (adapted.resolveDir ?? path.dirname(physicalPath));
-                  const locationKey = namespaceKey(nextNamespace, resultPath);
+                  // A file resolved by a plugin must have the same identity as
+                  // that file resolved by esbuild's default resolver. Physical
+                  // paths and virtual paths in one namespace are distinct
+                  // modules, which would duplicate contexts and other singletons.
+                  const ownedPath =
+                    resultNamespace === "file" ? virtualInputPath(physicalPath) : resultPath;
+                  const locationKey = namespaceKey(nextNamespace, ownedPath);
                   if (!locations.has(locationKey)) {
-                    rememberLocation(nextNamespace, resultPath, { physicalPath, resolveDir });
+                    rememberLocation(nextNamespace, ownedPath, { physicalPath, resolveDir });
                   }
-                  return { ...result, namespace: nextNamespace };
+                  return { ...result, path: ownedPath, namespace: nextNamespace };
                 });
               }
             };

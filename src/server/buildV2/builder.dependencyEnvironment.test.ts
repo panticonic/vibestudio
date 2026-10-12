@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as esbuild from "esbuild";
 import { describe, expect, it } from "vitest";
 import { composePreparedDependencyPlugins } from "./preparedDependencyPlugins.js";
+import { createTsExtensionPlugin } from "./builder.js";
 
 function writePackage(nodeModules: string, name: string, marker: string): void {
   const root = path.join(nodeModules, ...name.split("/"));
@@ -19,6 +20,34 @@ function writePackage(nodeModules: string, name: string, marker: string): void {
 }
 
 describe("dependency-environment resolver", () => {
+  it("shares module identity between rewritten and default-resolved source imports", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-source-identity-"));
+    try {
+      const entry = path.join(root, "entry.ts");
+      fs.writeFileSync(path.join(root, "context.tsx"), "export const context = {};\n");
+      fs.writeFileSync(
+        entry,
+        'import { context as provider } from "./context.js";\n' +
+          'import { context as consumer } from "./context";\n' +
+          "export const sameContext = provider === consumer;\n"
+      );
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "cjs",
+        platform: "node",
+        write: false,
+        logLevel: "silent",
+        plugins: composePreparedDependencyPlugins([createTsExtensionPlugin(root)], [], [root]),
+      });
+      const module = { exports: {} as { sameContext?: boolean } };
+      new Function("module", "exports", result.outputFiles[0]!.text)(module, module.exports);
+      expect(module.exports.sameContext).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses stable virtual identities for prepared files and retains physical diagnostics", async () => {
     const build = async (prefix: string) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

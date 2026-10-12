@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import { readExactGitSnapshot, discoverTrackedGitSnapshot } from "@vibestudio/git";
 import { getUserDataPath, setUserDataPath } from "@vibestudio/env-paths";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
@@ -33,8 +34,11 @@ import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
 import { getExistingAppNodeModulesRoots } from "@vibestudio/shared/runtimePaths";
 import { exportReleaseBuild } from "../../scripts/prebuild-release-userland.mjs";
 import { drainBuildStorePublications } from "./buildV2/buildStore.js";
+import { drainDependencyContentMaintenance } from "./buildV2/dependencyContentMaintenance.js";
+import { drainExternalDependencyPruning } from "./buildV2/externalDeps.js";
 import { blobCasPath, linkReconstructableBlobFile } from "./storage/blobCas.js";
 import { createHostBootstrapGitReadClient } from "./services/hostGitHttpClient.js";
+import { hasOwnershipFailure } from "../../scripts/lib/owned-cleanup.mjs";
 
 /** Prepare the same immutable release for a source supervisor or a packager.
  * Source publication and compilation are phases of the same owned producer.
@@ -260,23 +264,38 @@ export async function prepareWorkspaceTemplates(input: {
         const outcomes = await Promise.allSettled([
           builds?.shutdown(),
           retireNative().then((stopped) => {
-            if (!stopped.launcherExited)
+            if (!stopped.launcherExited) {
+              retirementFailed = true;
               throw Object.assign(new Error("Template preparation still owns a native executor"), {
                 code: "EOWNERSHIP",
               });
+            }
           }),
         ]);
-        outcomes.push(...(await Promise.allSettled([drainBuildStorePublications()])));
-        for (const outcome of outcomes) {
-          if (outcome.status === "rejected") {
-            retirementFailed = true;
-            throw Object.assign(
-              outcome.reason instanceof Error ? outcome.reason : new Error(String(outcome.reason)),
-              { code: "EOWNERSHIP" }
-            );
-          }
+        // External-dependency cache maintenance is owned by this producer too.
+        // Join its admitted children before releasing the workspace scratch or
+        // allowing the installed preparation process to report completion.
+        outcomes.push(...(await Promise.allSettled([drainExternalDependencyPruning()])));
+        outcomes.push(
+          ...(await Promise.allSettled([
+            drainDependencyContentMaintenance(),
+            drainBuildStorePublications(),
+          ]))
+        );
+        outcomes.push(...(await Promise.allSettled([closeDerivedCacheCoordinators()])));
+        const failures = outcomes.flatMap((outcome) =>
+          outcome.status === "rejected" ? [outcome.reason] : []
+        );
+        if (failures.length > 0) {
+          retirementFailed = failures.some((failure) => hasOwnershipFailure(failure));
+          if (failures.length === 1) throw failures[0];
+          throw new AggregateError(failures, "Template preparation resource retirement failed", {
+            cause: failures[0],
+          });
         }
       };
+      let operationFailure: unknown;
+      let operationFailed = false;
       try {
         builds = await initBuildSystemV2(
           sourcePath,
@@ -322,13 +341,25 @@ export async function prepareWorkspaceTemplates(input: {
         console.log(
           `[workspace-release] Prepared ${role}: ${runtimeBuilds.length} runtimes in ${Math.round(performance.now() - preparedAt)}ms`
         );
-      } finally {
-        try {
-          await retireResources();
-        } finally {
-          input.signal?.removeEventListener("abort", cancelled);
-        }
+      } catch (error) {
+        operationFailure = error;
+        operationFailed = true;
       }
+      try {
+        await retireResources();
+      } catch (retirementFailure) {
+        if (operationFailed) {
+          throw new AggregateError(
+            [operationFailure, retirementFailure],
+            "Template preparation and resource retirement failed",
+            { cause: operationFailure }
+          );
+        }
+        throw retirementFailure;
+      } finally {
+        input.signal?.removeEventListener("abort", cancelled);
+      }
+      if (operationFailed) throw operationFailure;
       record.builds = preparedBuilds;
       const recordPath = path.join(directory, "template.json");
       fs.writeFileSync(`${recordPath}.publishing`, JSON.stringify(record));

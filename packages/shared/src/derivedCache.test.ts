@@ -5,8 +5,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DerivedCacheCoordinator,
+  closeDerivedCacheCoordinators,
   derivedCacheDatabasePath,
   derivedCacheUnderPressure,
+  derivedCacheCoordinator,
+  scheduleDerivedCachePrune,
   type DerivedCacheLease,
 } from "./derivedCache.js";
 
@@ -627,5 +630,46 @@ describe("DerivedCacheCoordinator", () => {
       firstProcess.close();
       secondProcess.close();
     }
+  });
+
+  it("joins every prune and close failure while retaining coordinators that did not close", async () => {
+    const firstRoot = cacheRoot();
+    const secondRoot = cacheRoot();
+    const first = derivedCacheCoordinator(firstRoot);
+    const second = derivedCacheCoordinator(secondRoot);
+    const firstPruneFailure = new Error("first prune failed");
+    const secondPruneFailure = new Error("second prune failed");
+    const firstCloseFailure = new Error("first coordinator close failed");
+    vi.spyOn(first, "tune").mockRejectedValue(firstPruneFailure);
+    vi.spyOn(second, "tune").mockRejectedValue(secondPruneFailure);
+    const firstClose = vi.spyOn(first, "close").mockImplementation(() => {
+      throw firstCloseFailure;
+    });
+    const secondClose = vi.spyOn(second, "close");
+
+    void scheduleDerivedCachePrune(firstRoot);
+    void scheduleDerivedCachePrune(secondRoot);
+
+    let shutdownFailure: unknown;
+    try {
+      await closeDerivedCacheCoordinators();
+    } catch (error) {
+      shutdownFailure = error;
+    }
+
+    expect(shutdownFailure).toBeInstanceOf(AggregateError);
+    expect((shutdownFailure as AggregateError).errors).toEqual([
+      firstPruneFailure,
+      secondPruneFailure,
+      firstCloseFailure,
+    ]);
+    expect(firstClose).toHaveBeenCalledOnce();
+    expect(secondClose).toHaveBeenCalledOnce();
+    expect(derivedCacheCoordinator(firstRoot)).toBe(first);
+
+    firstClose.mockRestore();
+    const reopenedSecond = derivedCacheCoordinator(secondRoot);
+    expect(reopenedSecond).not.toBe(second);
+    await closeDerivedCacheCoordinators();
   });
 });

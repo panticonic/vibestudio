@@ -15,6 +15,7 @@ import {
   dependencyContentMaintenanceEntry,
   drainDependencyContentMaintenance,
   scheduleDependencyContentMaintenance,
+  scheduleDependencyContentPrune,
 } from "./dependencyContentMaintenance.js";
 import { serializeRpcFailure } from "@vibestudio/rpc";
 
@@ -72,6 +73,23 @@ describe("dependency content maintenance scheduling", () => {
     expect(child.unref).toHaveBeenCalledOnce();
     child.emit("close", 0, null);
     await drainDependencyContentMaintenance();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("admits content-only pruning through the same child with no cache arguments", async () => {
+    const child = makeChild();
+    fork.mockReturnValue(child);
+    process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
+    scheduleDependencyContentPrune();
+    await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS);
+
+    expect(fork).toHaveBeenCalledWith(
+      dependencyContentMaintenanceEntry(),
+      [],
+      expect.objectContaining({ detached: false })
+    );
+    child.emit("close", 0, null);
+    await drainDependencyContentMaintenance();
   });
 
   it("retains the child failure graph and waits for close before draining", async () => {
@@ -99,36 +117,48 @@ describe("dependency content maintenance scheduling", () => {
     child.emit("close", 1, null);
 
     await expect(drain).rejects.toMatchObject({
-      errors: [
-        expect.objectContaining({
-          message: "maintenance failed",
-          errors: [expect.objectContaining({ message: "source link failed", code: "EIO" })],
-        }),
-      ],
+      message: "maintenance failed",
+      errors: [expect.objectContaining({ message: "source link failed", code: "EIO" })],
     });
   });
 
-  it("collects independent child failures and preserves spawn failures", async () => {
+  it("serializes children and joins queued pruning work and every failure", async () => {
     const first = makeChild();
     const second = makeChild();
     fork.mockReturnValueOnce(first).mockReturnValueOnce(second);
     process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = process.cwd();
-    scheduleDependencyContentMaintenance(
-      "/tmp/profile/derived-cache/external-deps/4444444444444444"
-    );
+    const firstDir = "/tmp/profile/derived-cache/external-deps/4444444444444444";
+    const secondDir = "/tmp/profile/derived-cache/external-deps/5555555555555555";
+    scheduleDependencyContentMaintenance(firstDir);
     await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS);
-    scheduleDependencyContentMaintenance(
-      "/tmp/profile/derived-cache/external-deps/5555555555555555"
-    );
-    await vi.advanceTimersByTimeAsync(DEPENDENCY_CONTENT_MAINTENANCE_DELAY_MS);
+    scheduleDependencyContentMaintenance(secondDir);
+    scheduleDependencyContentPrune();
+    expect(fork).toHaveBeenCalledOnce();
 
     reportFailure(first, "first source link failed");
     first.emit("close", 1, null);
+    const drain = drainDependencyContentMaintenance();
+    await vi.waitFor(() => expect(fork).toHaveBeenCalledTimes(2));
+    expect(fork).toHaveBeenLastCalledWith(
+      dependencyContentMaintenanceEntry(),
+      [path.resolve(secondDir)],
+      expect.any(Object)
+    );
     const spawnError = Object.assign(new Error("spawn denied"), { code: "EACCES" });
     second.emit("error", spawnError);
     second.emit("close", -2, null);
 
-    await expect(drainDependencyContentMaintenance()).rejects.toMatchObject({
+    let drainFailure: unknown;
+    try {
+      await drain;
+    } catch (error) {
+      drainFailure = error;
+    }
+    if (!(drainFailure instanceof AggregateError)) {
+      throw new Error("Expected independent maintenance child failures to be aggregated");
+    }
+    expect(drainFailure.cause).toBe(drainFailure.errors[0]);
+    expect(drainFailure).toMatchObject({
       errors: expect.arrayContaining([
         expect.objectContaining({
           errors: [expect.objectContaining({ message: "first source link failed" })],
@@ -151,18 +181,14 @@ describe("dependency content maintenance scheduling", () => {
     child.emit("close", null, "SIGTERM");
 
     await expect(drainDependencyContentMaintenance()).rejects.toMatchObject({
-      errors: [
+      errors: expect.arrayContaining([
         expect.objectContaining({
-          errors: expect.arrayContaining([
-            expect.objectContaining({
-              errors: [expect.objectContaining({ message: "source link failed" })],
-            }),
-            expect.objectContaining({
-              message: "Dependency maintenance terminated by signal SIGTERM",
-            }),
-          ]),
+          errors: [expect.objectContaining({ message: "source link failed" })],
         }),
-      ],
+        expect.objectContaining({
+          message: "Dependency maintenance terminated by signal SIGTERM",
+        }),
+      ]),
     });
   });
 
@@ -176,7 +202,7 @@ describe("dependency content maintenance scheduling", () => {
 
     expect(fork).not.toHaveBeenCalled();
     await expect(drainDependencyContentMaintenance()).rejects.toMatchObject({
-      errors: [expect.objectContaining({ message: expect.stringContaining("entry is missing") })],
+      message: expect.stringContaining("entry is missing"),
     });
   });
 });

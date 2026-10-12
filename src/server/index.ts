@@ -1,6 +1,7 @@
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import { drainDependencyContentMaintenance } from "./buildV2/dependencyContentMaintenance.js";
 import { drainBuildStorePublications } from "./buildV2/buildStore.js";
+import { drainExternalDependencyPruning } from "./buildV2/externalDeps.js";
 import { REPORT_POLICY } from "@vibestudio/service-schemas/problemReportBundle";
 import { workspaceMethodPrincipals } from "./workspaceRpcAuthority.js";
 import { serializeRpcFailure } from "@vibestudio/rpc";
@@ -8144,6 +8145,7 @@ async function main() {
     // Derived-data operations retain ownership through their actual completion.
     // Stop/join their producers before releasing the shared SQLite lease stores.
     for (const drain of [
+      drainExternalDependencyPruning,
       drainDependencyContentMaintenance,
       drainBuildStorePublications,
       closeDerivedCacheCoordinators,

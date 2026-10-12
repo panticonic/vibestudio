@@ -637,8 +637,19 @@ export async function closeDerivedCacheCoordinators(): Promise<void> {
   tuningTimers.clear();
   tuningOptions.clear();
   const results = await Promise.allSettled(scheduledPrunes.values());
-  for (const coordinator of coordinators.values()) coordinator.close();
-  coordinators.clear();
-  const rejected = results.find((result) => result.status === "rejected");
-  if (rejected?.status === "rejected") throw rejected.reason;
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : []
+  );
+  for (const [root, coordinator] of [...coordinators]) {
+    try {
+      coordinator.close();
+      if (coordinators.get(root) === coordinator) coordinators.delete(root);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Derived cache shutdown failed", { cause: failures[0] });
+  }
 }

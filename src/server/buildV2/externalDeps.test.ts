@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import * as derivedCache from "@vibestudio/shared/derivedCache";
 
 const { testExtDepsRoot } = vi.hoisted(() => ({
   testExtDepsRoot: `/tmp/test-extdeps-${process.pid}`,
@@ -75,6 +76,7 @@ vi.mock("@vibestudio/shared/npmInstaller", async (importOriginal) => ({
 vi.mock("./dependencyContentMaintenance.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dependencyContentMaintenance.js")>()),
   scheduleDependencyContentMaintenance: vi.fn(),
+  scheduleDependencyContentPrune: vi.fn(),
 }));
 
 import { PackageGraph, type GraphNode } from "./packageGraph.js";
@@ -84,6 +86,7 @@ import {
   collectExternalDependencyClosure,
   dependencyPatchesForExternalRoots,
   acquireExternalDeps,
+  drainExternalDependencyPruning,
   ensureExtensionRuntimeDeps,
   mergeExternalDependencySpecs,
   resolveHostDependencyProjection,
@@ -94,7 +97,10 @@ import {
   deduplicateDependencyContent,
   pruneUnreferencedDependencyContent,
 } from "./dependencyContentStore.js";
-import { scheduleDependencyContentMaintenance } from "./dependencyContentMaintenance.js";
+import {
+  scheduleDependencyContentMaintenance,
+  scheduleDependencyContentPrune,
+} from "./dependencyContentMaintenance.js";
 
 async function ensureExternalDeps(
   deps: Record<string, string>,
@@ -141,8 +147,11 @@ function writePackage(root: string, name: string, version: string): void {
 }
 
 describe("extension runtime dependency publication", () => {
-  it("publishes an immutable tree and defers physical content sharing off the critical path", async () => {
+  it("publishes the validated tree before scheduling physical content sharing", async () => {
     vi.mocked(scheduleDependencyContentMaintenance).mockClear();
+    vi.mocked(scheduleDependencyContentMaintenance).mockImplementationOnce((cacheDir) => {
+      expect(fs.existsSync(path.join(cacheDir, ".ready"))).toBe(true);
+    });
     const borrowed = await ensureExtensionRuntimeDeps(process.cwd(), {
       "extension-runtime-background-test": "1.0.0",
     });
@@ -158,6 +167,66 @@ describe("extension runtime dependency publication", () => {
       expect(fs.statSync(manifest).mode & 0o222).not.toBe(0);
     } finally {
       borrowed.release();
+    }
+  });
+
+  it("uses the same post-publication maintenance path for compile dependencies", async () => {
+    vi.mocked(scheduleDependencyContentMaintenance).mockClear();
+    vi.mocked(scheduleDependencyContentMaintenance).mockImplementationOnce((cacheDir) => {
+      expect(fs.existsSync(path.join(cacheDir, ".ready"))).toBe(true);
+    });
+    const borrowed = await ensureExternalDeps({ "compile-dependency-maintenance-test": "1.0.0" });
+    expect(scheduleDependencyContentMaintenance).toHaveBeenCalledWith(path.dirname(borrowed));
+  });
+
+  it("routes CAS cleanup after an actual cache prune to the maintenance owner", async () => {
+    const derivedPrune = vi.spyOn(derivedCache, "scheduleDerivedCachePrune").mockResolvedValue({
+      root: "/tmp/profile/derived-cache/external-deps",
+      bytes: 0,
+      entries: 0,
+      leasedEntries: 0,
+      reclaimableBytes: 0,
+      availableBytes: 0,
+      removedEntries: 1,
+      removedBytes: 1,
+      targetBytes: 0,
+    });
+    vi.mocked(scheduleDependencyContentPrune).mockClear();
+    const borrowed = await acquireExternalDeps(
+      { "compile-dependency-prune-route-test": "1.0.0" },
+      {},
+      { appRoot: process.cwd() }
+    );
+    try {
+      borrowed.release();
+      await vi.waitFor(() => expect(scheduleDependencyContentPrune).toHaveBeenCalledOnce());
+      await drainExternalDependencyPruning();
+    } finally {
+      derivedPrune.mockRestore();
+    }
+  });
+
+  it("retains release-prune failures until the derived-data drain", async () => {
+    const failure = new Error("base cache prune failed");
+    const derivedPrune = vi
+      .spyOn(derivedCache, "scheduleDerivedCachePrune")
+      .mockRejectedValue(failure);
+    const borrowed = await acquireExternalDeps(
+      { "compile-dependency-prune-failure-test": "1.0.0" },
+      {},
+      { appRoot: process.cwd() }
+    );
+    try {
+      borrowed.release();
+      let drainFailure: unknown;
+      try {
+        await drainExternalDependencyPruning();
+      } catch (error) {
+        drainFailure = error;
+      }
+      expect(drainFailure).toBe(failure);
+    } finally {
+      derivedPrune.mockRestore();
     }
   });
 });

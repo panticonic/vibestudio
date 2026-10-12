@@ -28,10 +28,26 @@ import {
 import { optionalPeerNames, type PackageGraph, type GraphNode } from "./packageGraph.js";
 import { BuildRequestError } from "./diagnostics.js";
 import {
-  deduplicateDependencyContent,
-  pruneUnreferencedDependencyContent,
-} from "./dependencyContentStore.js";
-import { scheduleDependencyContentMaintenance } from "./dependencyContentMaintenance.js";
+  scheduleDependencyContentMaintenance,
+  scheduleDependencyContentPrune,
+} from "./dependencyContentMaintenance.js";
+
+const externalDependencyPruneOperations = new Set<Promise<void>>();
+const externalDependencyPruneFailures: unknown[] = [];
+
+/** Join release-triggered cache prunes before draining content maintenance. */
+export async function drainExternalDependencyPruning(): Promise<void> {
+  while (externalDependencyPruneOperations.size > 0) {
+    await Promise.all(externalDependencyPruneOperations);
+  }
+  if (externalDependencyPruneFailures.length > 0) {
+    const errors = externalDependencyPruneFailures.splice(0);
+    if (errors.length === 1) throw errors[0];
+    throw new AggregateError(errors, "External dependency cache pruning failed", {
+      cause: errors[0],
+    });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Transitive collection
@@ -1134,13 +1150,18 @@ function borrowedDependencyEnvironment(
       if (released) return;
       released = true;
       lease.release();
-      void scheduleDerivedCachePrune(baseDir)
-        .then((pruned) => (pruned ? pruneUnreferencedDependencyContent() : undefined))
+      const operation = scheduleDerivedCachePrune(baseDir)
+        .then((pruned) =>
+          pruned && pruned.removedEntries > 0 ? scheduleDependencyContentPrune() : undefined
+        )
         .catch((error) => {
+          externalDependencyPruneFailures.push(error);
           console.warn(
             `[externalDeps] Cache prune failed: ${error instanceof Error ? error.message : String(error)}`
           );
-        });
+        })
+        .finally(() => externalDependencyPruneOperations.delete(operation));
+      externalDependencyPruneOperations.add(operation);
     },
   };
 }
@@ -1161,7 +1182,6 @@ export async function acquireExternalDeps(
     overrides,
     patches,
     signal: options.signal,
-    contentDeduplication: "background",
   });
 }
 
@@ -1351,13 +1371,6 @@ export async function ensureExtensionRuntimeDeps(
     overrides,
     patches: validatedPatches,
     signal,
-    // Runtime publication requires an immutable dependency tree, not immediate
-    // physical byte sharing. Hashing and relinking every installed payload in
-    // the workspace server can monopolize its event loop for tens of seconds,
-    // stalling unrelated panel and Iroh RPC work. The background mode makes
-    // the tree immutable before publication and hands content deduplication to
-    // the detached maintenance process after the first-use critical path.
-    contentDeduplication: "background",
   });
 }
 
@@ -1369,7 +1382,6 @@ type EnsureDepsOptions = {
   appRoot: string;
   overrides?: Record<string, string>;
   patches?: readonly ExternalDependencyPatch[];
-  contentDeduplication: "blocking" | "background";
 };
 
 // Builds for several panels commonly converge on the same dependency graph.
@@ -1402,7 +1414,6 @@ async function ensureDepsInstalledOnce(
     npmInstallMs: 0,
     patchMs: 0,
     receiptMs: 0,
-    contentFinalizationMs: 0,
     publishMs: 0,
   };
   const logProfile = (result: "hit" | "installed"): void => {
@@ -1489,15 +1500,6 @@ async function ensureDepsInstalledOnce(
     );
     profile.receiptMs = Date.now() - receiptStartedAt;
 
-    // A closure owns resolution topology, not another physical copy of every
-    // immutable package byte. Content-address the completed, patched tree while
-    // it is still unpublished so readers never observe a partially linked view.
-    const deduplicateStartedAt = Date.now();
-    if (options.contentDeduplication === "blocking") {
-      await deduplicateDependencyContent(tmpDir);
-    }
-    profile.contentFinalizationMs = Date.now() - deduplicateStartedAt;
-
     // Race-safe promotion: try rename, handle concurrent winner
     const publishStartedAt = Date.now();
     try {
@@ -1514,6 +1516,7 @@ async function ensureDepsInstalledOnce(
           } catch (cleanupError) {
             warnCleanupFailure(tmpDir, cleanupError);
           }
+          scheduleDependencyContentMaintenance(cacheDir);
           return nodeModulesDir;
         }
         // Winner incomplete — remove stale dir, retry rename
@@ -1540,9 +1543,7 @@ async function ensureDepsInstalledOnce(
     }
 
     profile.publishMs = Date.now() - publishStartedAt;
-    if (options.contentDeduplication === "background") {
-      scheduleDependencyContentMaintenance(cacheDir);
-    }
+    scheduleDependencyContentMaintenance(cacheDir);
     logProfile("installed");
 
     return nodeModulesDir;

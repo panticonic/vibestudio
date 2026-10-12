@@ -107,6 +107,25 @@ Compiler diagnostics report admission and terminal completion before a build
 receipt exists, so an unfinished resolver can be distinguished from a large
 finite module graph.
 
+Every prepared file has one canonical virtual identity, regardless of whether
+a plugin rewrites its import or esbuild resolves it directly. Returning a
+physical filename in the prepared namespace creates another module instance:
+React providers and consumers can then reference different context objects,
+and the compiler repeats work for the duplicate graph. Preserve custom plugin
+namespaces while normalizing file resolutions through the same owned-root map.
+The composition test executes both import forms and checks singleton identity.
+
+Import resolver filesystem reads are asynchronous and memoized within one
+immutable build. Dependency content sharing and CAS pruning use the existing
+maintenance child, rather than taking profile-wide SQLite writer locks on the
+workspace event loop. One maintenance owner admits one child at a time because
+its jobs mutate the same content store. Independent workspace builds continue
+while that child runs. At retirement, first join cache-prune callbacks that can
+admit maintenance, then join maintenance and artifact publications, then close
+their coordinators and remove scratch. Both servers and release producers retain
+all failures through this dependency order; an ownership failure keeps its state
+anchor until the owner has actually retired.
+
 BuildV2's three build lanes belong to one Node process. They are not a host-wide
 resource budget: the Hub's template preparation and each workspace server have
 independent builders, and each compiler can fan out internally. Do not multiply
