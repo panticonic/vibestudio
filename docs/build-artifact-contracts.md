@@ -247,11 +247,11 @@ instantiations, and created about 3.9 million types. Attribute excessive memory
 to the compiler's actual allocations and type-checking work before declaring
 a larger allowance to be a fix. Prefer a heap profile over a full type trace:
 retaining and serializing every expanded type can itself exceed the compiler's
-normal memory use and invalidate the measurement. During that
-investigation, admit one composition compiler at a time on this host and leave
-headroom for its projection and the desktop. Measure again when the source
-graph or compiler changes. Independent unit checks can overlap when their
-measured peaks fit the remaining budget.
+normal memory use and invalidate the measurement. For an attribution sample, admit one composition compiler so its allocations
+can be attributed to the exact program. Deployment scheduling uses the available
+CPU and memory budget: admit independent checks concurrently when their aggregate
+measured peaks, projection costs, and desktop headroom fit that budget. Measure
+again when the source graph or compiler changes.
 
 TypeScript 7.0.2 defaults to four independent checker instances, with files
 assigned across them in its [checker pool](https://github.com/microsoft/typescript-go/blob/typescript/v7.0.2/internal/compiler/checkerpool.go).
@@ -278,3 +278,18 @@ retain their worker resources until their terminal result. Close auxiliary
 workers only after that join, and preserve operation and retirement failures
 together. A timeout, a larger heap allowance, or a smaller local lane override
 does not repair missing ownership or establish a safe host-wide budget.
+
+Merkle scaffold publication follows the actual tree dependency graph. Independent
+sibling branches run concurrently under one eight-write admission budget for the
+composition. A parent waits for its child hashes, preserves canonical entry order,
+and uses the existing authenticated CAS publication path. Every admitted branch
+settles before a failure returns, retaining all original errors; the state pointer
+is published only after the complete scaffold succeeds. Permit handoff reserves
+capacity for the next queued operation before new work can acquire it.
+
+Host-local dependency fingerprinting shares a sixteen-operation I/O budget across
+all package trees in one fingerprint. Files stream into incremental SHA-256 hashes,
+so concurrency does not retain entire source files. Completion order does not
+change the sorted depth-first fingerprint encoding. Sibling preparation failures
+are joined before the fingerprint rejects. These bounds keep useful I/O overlap
+while preserving content identity and lifecycle ownership.

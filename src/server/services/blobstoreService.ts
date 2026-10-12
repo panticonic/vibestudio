@@ -789,6 +789,29 @@ export interface MerkleTreeComposerOptions {
 
 const DEFAULT_STATE_ROOT_CACHE_ENTRIES = 2_048;
 const DEFAULT_TREE_EXTENT_CACHE_ENTRIES = 16_384;
+const MERKLE_SCAFFOLD_WRITE_CONCURRENCY = 8;
+
+class AsyncSemaphore {
+  private active = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(private readonly limit: number) {}
+
+  async run<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.active >= this.limit) {
+      await new Promise<void>((resolve) => this.waiting.push(resolve));
+    } else {
+      this.active += 1;
+    }
+    try {
+      return await operation();
+    } finally {
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.active -= 1;
+    }
+  }
+}
 
 /**
  * Merkle-native composition of independently addressed content states.
@@ -895,7 +918,18 @@ export class MerkleTreeComposer {
       node.graftRootHash = graft.root.rootTreeHash;
     }
 
-    const treeHash = await this.writeScaffold(trie);
+    const scaffoldFailures: unknown[] = [];
+    const scaffoldWrites = new AsyncSemaphore(MERKLE_SCAFFOLD_WRITE_CONCURRENCY);
+    const treeHash = await this.writeScaffold(trie, scaffoldWrites, scaffoldFailures);
+    if (scaffoldFailures.length === 1) throw scaffoldFailures[0];
+    if (scaffoldFailures.length > 1) {
+      throw new AggregateError(scaffoldFailures, "Merkle scaffold publication failed", {
+        cause: scaffoldFailures[0],
+      });
+    }
+    if (treeHash === null) {
+      throw new Error("Merkle scaffold publication completed without a root tree");
+    }
     const scaffoldPublishedAt = performance.now();
     const state = encodeStateNode(treeHash);
     const stateWrite = await putBytes(this.blobsDir, Buffer.from(state.canonicalText, "utf8"));
@@ -996,18 +1030,40 @@ export class MerkleTreeComposer {
     }
   }
 
-  private async writeScaffold(node: GraftTrie): Promise<string> {
+  private async writeScaffold(
+    node: GraftTrie,
+    writes: AsyncSemaphore,
+    failures: unknown[]
+  ): Promise<string | null> {
     if (node.graftRootHash !== undefined) {
       if (node.children.size !== 0) {
         throw new Error("MerkleTreeComposer: a graft root cannot also contain scaffold children");
       }
       return node.graftRootHash;
     }
+    const children = [...node.children];
+    const childResults = await Promise.allSettled(
+      children.map(([, child]) => this.writeScaffold(child, writes, failures))
+    );
     const entries: ManifestHashEntry[] = [];
-    for (const [name, child] of node.children) {
-      entries.push({ name, kind: "dir", childHash: await this.writeScaffold(child) });
+    let childFailed = false;
+    for (const [index, result] of childResults.entries()) {
+      if (result.status === "rejected") {
+        failures.push(result.reason);
+        childFailed = true;
+      } else if (result.value === null) {
+        childFailed = true;
+      } else {
+        entries.push({ name: children[index]![0], kind: "dir", childHash: result.value });
+      }
     }
-    return (await putTree(this.blobsDir, entries)).treeHash;
+    if (childFailed) return null;
+    try {
+      return await writes.run(async () => (await putTree(this.blobsDir, entries)).treeHash);
+    } catch (error) {
+      failures.push(error);
+      return null;
+    }
   }
 }
 

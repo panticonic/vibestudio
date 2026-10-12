@@ -966,6 +966,212 @@ describe("blobstoreService", () => {
       ).resolves.toEqual({ contentHash: appSource, mode: 33188 });
     });
 
+    it("publishes independent scaffold branches concurrently with canonical hashes", async () => {
+      const firstBody = await seed("first repository\n");
+      const secondBody = await seed("second repository\n");
+      const first = await mirrorWorktreeTree(blobsDir, [
+        { path: "index.txt", contentHash: firstBody, mode: 33188 },
+      ]);
+      const second = await mirrorWorktreeTree(blobsDir, [
+        { path: "index.txt", contentHash: secondBody, mode: 33188 },
+      ]);
+      const composer = new MerkleTreeComposer(blobsDir);
+      await composer.composeStateGrafts([{ path: "warm/first", stateHash: first.stateHash }]);
+      await composer.composeStateGrafts([{ path: "warm/second", stateHash: second.stateHash }]);
+
+      const branchReads = [first, second].map(async (repository) => {
+        const filePath = blobPath(blobsDir, treeHashDigest(repository.treeHash));
+        const bytes = await fsp.readFile(filePath);
+        return { filePath, bytes, gate: deferred<typeof bytes>() };
+      });
+      const reads = await Promise.all(branchReads);
+      const started = new Set<string>();
+      const readFile = fsp.readFile.bind(fsp);
+      const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+        const filePath = String(args[0]);
+        const branch = reads.find((candidate) => candidate.filePath === filePath);
+        if (!branch) return readFile(...args);
+        started.add(filePath);
+        return branch.gate.promise;
+      });
+
+      const composedPromise = composer.composeStateGrafts([
+        { path: "apps/first", stateHash: first.stateHash },
+        { path: "packages/second", stateHash: second.stateHash },
+      ]);
+      let admissionFailure: unknown;
+      try {
+        await vi.waitFor(() => expect(started.size).toBe(2), { timeout: 1000 });
+      } catch (error) {
+        admissionFailure = error;
+      } finally {
+        for (const branch of reads) branch.gate.resolve(branch.bytes);
+      }
+
+      let composed: Awaited<typeof composedPromise>;
+      try {
+        composed = await composedPromise;
+      } finally {
+        readSpy.mockRestore();
+      }
+      if (admissionFailure) throw admissionFailure;
+
+      const expected = buildWorktreeManifest([
+        { path: "apps/first/index.txt", contentHash: firstBody, mode: 33188 },
+        { path: "packages/second/index.txt", contentHash: secondBody, mode: 33188 },
+      ]);
+      expect(composed).toEqual({ stateHash: expected.stateHash, treeHash: expected.rootHash });
+    });
+
+    it("keeps scaffold writes bounded while admitting the next branch on completion", async () => {
+      const repositories = await Promise.all(
+        Array.from({ length: 10 }, async (_, index) => {
+          const digest = await seed(`repository ${index}\n`);
+          const repository = await mirrorWorktreeTree(blobsDir, [
+            { path: "index.txt", contentHash: digest, mode: 33188 },
+          ]);
+          return { digest, repository };
+        })
+      );
+      const composer = new MerkleTreeComposer(blobsDir);
+      await composer.composeStateGrafts(
+        repositories.map(({ repository }, index) => ({
+          path: `warm-${index}/repository`,
+          stateHash: repository.stateHash,
+        }))
+      );
+
+      const reads = await Promise.all(
+        repositories.map(async ({ repository }) => {
+          const filePath = blobPath(blobsDir, treeHashDigest(repository.treeHash));
+          const bytes = await fsp.readFile(filePath);
+          return { filePath, bytes, gate: deferred<typeof bytes>() };
+        })
+      );
+      const started = new Set<string>();
+      let active = 0;
+      let maximumActive = 0;
+      const readFile = fsp.readFile.bind(fsp);
+      const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+        const filePath = String(args[0]);
+        const branch = reads.find((candidate) => candidate.filePath === filePath);
+        if (!branch) return readFile(...args);
+        started.add(filePath);
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        return branch.gate.promise.finally(() => {
+          active -= 1;
+        });
+      });
+
+      const composedPromise = composer.composeStateGrafts(
+        repositories.map(({ repository }, index) => ({
+          path: `app-${index}/unit`,
+          stateHash: repository.stateHash,
+        }))
+      );
+      let admissionFailure: unknown;
+      try {
+        await vi.waitFor(() => expect(started.size).toBe(8), { timeout: 1000 });
+        reads[0]!.gate.resolve(reads[0]!.bytes);
+        await vi.waitFor(() => expect(started.size).toBe(9), { timeout: 1000 });
+        expect(active).toBe(8);
+        expect(maximumActive).toBe(8);
+      } catch (error) {
+        admissionFailure = error;
+      } finally {
+        for (const branch of reads) branch.gate.resolve(branch.bytes);
+      }
+
+      let composed: Awaited<typeof composedPromise>;
+      try {
+        composed = await composedPromise;
+      } finally {
+        readSpy.mockRestore();
+      }
+      if (admissionFailure) throw admissionFailure;
+
+      const expected = buildWorktreeManifest(
+        repositories.map(({ digest }, index) => ({
+          path: `app-${index}/unit/index.txt`,
+          contentHash: digest,
+          mode: 33188,
+        }))
+      );
+      expect(composed).toEqual({ stateHash: expected.stateHash, treeHash: expected.rootHash });
+      expect(maximumActive).toBe(8);
+    });
+
+    it("joins every admitted scaffold write failure before rejecting", async () => {
+      const firstBody = await seed("first repository\n");
+      const secondBody = await seed("second repository\n");
+      const first = await mirrorWorktreeTree(blobsDir, [
+        { path: "index.txt", contentHash: firstBody, mode: 33188 },
+      ]);
+      const second = await mirrorWorktreeTree(blobsDir, [
+        { path: "index.txt", contentHash: secondBody, mode: 33188 },
+      ]);
+      const composer = new MerkleTreeComposer(blobsDir);
+      await composer.composeStateGrafts([{ path: "warm/first", stateHash: first.stateHash }]);
+      await composer.composeStateGrafts([{ path: "warm/second", stateHash: second.stateHash }]);
+
+      const errors = [
+        new Error("first scaffold write failed"),
+        new Error("second scaffold write failed"),
+      ];
+      const started = new Set<string>();
+      const readFile = fsp.readFile.bind(fsp);
+      const targets = new Map(
+        [first, second].map((repository, index) => [
+          blobPath(blobsDir, treeHashDigest(repository.treeHash)),
+          index,
+        ])
+      );
+      const readSample = await fsp.readFile([...targets.keys()][0]!);
+      const rejections = errors.map((error) => {
+        let reject!: (reason: Error) => void;
+        const promise = new Promise<typeof readSample>((_resolve, rejectPromise) => {
+          reject = rejectPromise;
+        });
+        return { error, promise, reject };
+      });
+      const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+        const filePath = String(args[0]);
+        const index = targets.get(filePath);
+        if (index === undefined) return readFile(...args);
+        started.add(filePath);
+        return rejections[index]!.promise;
+      });
+
+      const composedPromise = composer.composeStateGrafts([
+        { path: "apps/first", stateHash: first.stateHash },
+        { path: "packages/second", stateHash: second.stateHash },
+      ]);
+      let admissionFailure: unknown;
+      try {
+        await vi.waitFor(() => expect(started.size).toBe(2), { timeout: 1000 });
+      } catch (error) {
+        admissionFailure = error;
+      } finally {
+        for (const rejection of rejections) rejection.reject(rejection.error);
+      }
+
+      const failure = await composedPromise.then(
+        () => {
+          throw new Error("Failed scaffold publication unexpectedly completed");
+        },
+        (error: unknown) => error
+      );
+      readSpy.mockRestore();
+      if (admissionFailure) throw admissionFailure;
+
+      expect(failure).toBeInstanceOf(AggregateError);
+      const aggregate = failure as AggregateError;
+      expect(aggregate.errors).toHaveLength(2);
+      expect(new Set(aggregate.errors)).toEqual(new Set(errors));
+      expect(aggregate.cause).toBe(aggregate.errors[0]);
+    });
+
     it("single-flights concurrent inspection of one immutable repository state", async () => {
       const digest = await seed("shared repository body\n");
       const repository = await mirrorWorktreeTree(blobsDir, [

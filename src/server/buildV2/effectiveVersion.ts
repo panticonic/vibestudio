@@ -353,30 +353,72 @@ const IGNORED_LOCAL_PACKAGE_ENTRIES = new Set([
   "node_modules",
 ]);
 
-async function localPackageTreeHash(packageDir: string): Promise<string> {
-  const records: string[] = [];
-  const visit = async (dir: string, relativeDir: string): Promise<void> => {
-    const entries = (await fs.promises.readdir(dir, { withFileTypes: true })).sort((a, b) =>
-      a.name.localeCompare(b.name)
-    );
-    for (const entry of entries) {
-      if (IGNORED_LOCAL_PACKAGE_ENTRIES.has(entry.name) || entry.name.endsWith(".tsbuildinfo")) {
-        continue;
-      }
-      const absolute = path.join(dir, entry.name);
-      const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        await visit(absolute, relative);
-      } else if (entry.isSymbolicLink()) {
-        records.push(`link\0${relative}\0${await fs.promises.readlink(absolute)}\0`);
-      } else if (entry.isFile()) {
-        const contents = await fs.promises.readFile(absolute);
-        records.push(`file\0${relative}\0${await fullHash(contents)}\0`);
-      }
+/** One fingerprint owns its I/O budget across every local package tree. */
+class FingerprintIO {
+  private active = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  async run<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.active >= 16) await new Promise<void>((resolve) => this.waiting.push(resolve));
+    else this.active++;
+    try {
+      return await operation();
+    } finally {
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.active--;
     }
+  }
+}
+
+async function joinFingerprintWork<T>(work: Promise<T>[]): Promise<T[]> {
+  const results = await Promise.allSettled(work);
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1)
+    throw new AggregateError(errors, "Dependency fingerprint preparation failed", {
+      cause: errors[0],
+    });
+  return results.map((result) => {
+    if (result.status !== "fulfilled") throw new Error("Unjoined fingerprint operation");
+    return result.value;
+  });
+}
+
+async function localPackageTreeHash(packageDir: string, io: FingerprintIO): Promise<string> {
+  const visit = async (dir: string, relativeDir: string): Promise<string[]> => {
+    const entries = (await io.run(() => fs.promises.readdir(dir, { withFileTypes: true })))
+      .filter(
+        (entry) =>
+          !IGNORED_LOCAL_PACKAGE_ENTRIES.has(entry.name) && !entry.name.endsWith(".tsbuildinfo")
+      )
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const records = await joinFingerprintWork(
+      entries.map(async (entry): Promise<string[]> => {
+        const absolute = path.join(dir, entry.name);
+        const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) return visit(absolute, relative);
+        if (entry.isSymbolicLink()) {
+          const target = await io.run(() => fs.promises.readlink(absolute));
+          return [`link\0${relative}\0${target}\0`];
+        }
+        if (entry.isFile()) {
+          const digest = await io.run(async () => {
+            const hash = crypto.createHash("sha256");
+            for await (const chunk of fs.createReadStream(absolute)) hash.update(chunk);
+            return hash.digest("hex");
+          });
+          return [`file\0${relative}\0${digest}\0`];
+        }
+        return [];
+      })
+    );
+    return records.flat();
   };
-  await visit(packageDir, "");
-  return fullHash(Buffer.from(records.join("")));
+  // Parallel scheduling does not change the sorted depth-first byte encoding.
+  const hash = crypto.createHash("sha256");
+  for (const record of await visit(packageDir, "")) hash.update(record);
+  return hash.digest("hex");
 }
 
 /**
@@ -397,7 +439,8 @@ async function localPackageFingerprintInputs(
   } catch {
     // A packaged deployment may have no host-local package workspace.
   }
-  const files = await Promise.all(
+  const io = new FingerprintIO();
+  const files = await joinFingerprintWork(
     directories.map(async (entry) => {
       const packageDir = path.join(packagesDir, entry.name);
       try {
@@ -409,7 +452,7 @@ async function localPackageFingerprintInputs(
         file: `packages/${entry.name}/**`,
         path: packageDir,
         present: true,
-        contentHash: await localPackageTreeHash(packageDir),
+        contentHash: await localPackageTreeHash(packageDir, io),
       } satisfies RootDependencyFingerprintFile;
     })
   );
@@ -508,7 +551,7 @@ async function installedDependencyFingerprintInputs(
   root: string
 ): Promise<RootDependencyFingerprintFile[]> {
   const nodeModulesRoots = getExistingAppNodeModulesRoots(root);
-  return Promise.all(
+  return joinFingerprintWork(
     nodeModulesRoots.map(async (nodeModulesRoot, index) => ({
       file: `installed-node-modules:${index}`,
       path: nodeModulesRoot,
@@ -553,10 +596,11 @@ export async function computeRootDependencyFingerprint(
   hash.update("root-deps-v7\0");
 
   const physicalRoot = getPhysicalAppPath(root, "");
-  const [localPackages, installedDependencies] = await Promise.all([
-    localPackageFingerprintInputs(physicalRoot),
-    installedDependencyFingerprintInputs(root),
-  ]);
+  const localPackagesWork = localPackageFingerprintInputs(physicalRoot);
+  const installedDependenciesWork = installedDependencyFingerprintInputs(root);
+  await joinFingerprintWork([localPackagesWork, installedDependenciesWork]);
+  const localPackages = await localPackagesWork;
+  const installedDependencies = await installedDependenciesWork;
   const files: RootDependencyFingerprintFile[] = [];
   for (const input of dependencyFingerprintInputs(physicalRoot, workspaceRoot)) {
     const file = input.file;

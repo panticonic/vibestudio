@@ -510,6 +510,31 @@ describe("effectiveVersion", () => {
       expect(installed?.contentHash).toBe(hash(records.join("")));
     });
 
+    it("preserves the local tree digest across streaming files, links and nested siblings", async () => {
+      const dir = path.join(root, "streamed");
+      writeRootFiles(dir, '{"name":"host"}', "lock", "ws");
+      const packageDir = path.join(dir, "packages", "sdk");
+      fs.mkdirSync(path.join(packageDir, "a"), { recursive: true });
+      fs.mkdirSync(path.join(packageDir, "node_modules"));
+      fs.writeFileSync(path.join(packageDir, "node_modules", "ignored.ts"), "ignored");
+      const records: string[] = [];
+      const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+      for (const [relative, contents] of [
+        ["a/large.bin", Buffer.alloc(192 * 1024, 0xab)],
+        ["b.ts", Buffer.from("export const value = '🙂';\n")],
+        ["package.json", Buffer.from('{"name":"sdk"}')],
+      ] as const) {
+        fs.writeFileSync(path.join(packageDir, relative), contents);
+        records.push(`file\0${relative}\0${hash(contents)}\0`);
+      }
+      fs.symlinkSync("a/large.bin", path.join(packageDir, "z-link"));
+      records.push("link\0z-link\0a/large.bin\0");
+      const fingerprint = await computeRootDependencyFingerprint(dir);
+      expect(fingerprint.files.find((file) => file.file === "packages/sdk/**")?.contentHash).toBe(
+        hash(records.join(""))
+      );
+    });
+
     it("yields the event loop while fingerprinting local package trees", async () => {
       const dir = path.join(root, "responsive");
       writeRootFiles(dir, '{"name":"host"}', "lock\n", "ws\n");
