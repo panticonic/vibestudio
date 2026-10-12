@@ -54,24 +54,37 @@ function grant(buildKey = "build-1"): AppPrincipalGrantResponse {
 }
 
 function harness(results: Array<Awaited<ReturnType<TerminalSessionDependencies["runBrowser"]>>>) {
-  const devices: Array<{ release: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }> = [];
+  const devices: Array<{
+    credentials: DeviceCredential;
+    release: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
+    workspaces: Array<{ credentials: DeviceCredential; close: ReturnType<typeof vi.fn> }>;
+  }> = [];
   const routes: RemoteWorkspaceSelector[] = [];
   const progress: string[] = [];
   const deps: TerminalSessionDependencies = {
     route: vi.fn(async (_creds, selector) => {
       routes.push(selector);
-      return typeof selector === "object" && "workspaceId" in selector
+      if (typeof selector === "string") return routed(`ws_${selector}`, selector);
+      return "workspaceId" in selector
         ? routed(selector.workspaceId, selector.workspaceId.replace(/^ws_/, ""))
-        : routed("ws_system", "system");
+        : routed(`ws_${selector.privateRole}`, selector.privateRole);
     }),
-    createDevice: vi.fn(() => {
+    createDevice: vi.fn((device: DeviceCredential) => {
       const release = vi.fn(async () => undefined);
       const close = vi.fn(async () => undefined);
-      devices.push({ release, close });
+      const workspaces: Array<{ credentials: DeviceCredential; close: ReturnType<typeof vi.fn> }> =
+        [];
+      devices.push({ credentials: device, release, close, workspaces });
       return {
         retainConnection: () => release,
         close,
         openControlConnection: vi.fn(),
+        openWorkspaceConnection: vi.fn(async (workspace: DeviceCredential) => {
+          const entry = { credentials: workspace, close: vi.fn(async () => undefined) };
+          workspaces.push(entry);
+          return { close: entry.close } as unknown as RpcClient;
+        }),
       } as unknown as RpcClient;
     }),
     runGate: vi.fn(async () => ({
@@ -107,35 +120,56 @@ const options = (deps: Partial<TerminalSessionDependencies>, progress: string[])
 });
 
 describe("runTerminalSessions", () => {
-  it("opens the System workspace by default and returns the browser's quit", async () => {
+  it("runs the browser from System, shows the Personal workspace by default, and returns its quit", async () => {
     const { deps, devices, routes, progress } = harness([{ kind: "exit", exit: { kind: "quit" } }]);
     await expect(runTerminalSessions(options(deps, progress))).resolves.toEqual({ kind: "quit" });
-    expect(routes).toEqual([{ privateRole: "system" }]);
+    expect(routes).toEqual([{ privateRole: "system" }, { privateRole: "personal" }]);
     expect(deps.requestGrant).toHaveBeenCalledWith(expect.anything(), "apps/terminal-browser");
     expect(deps.loadModule).toHaveBeenCalledWith(expect.anything(), grant().app);
     expect(vi.mocked(deps.runBrowser).mock.calls[0]![0]).toMatchObject({
-      workspace: { id: "ws_system", name: "system" },
+      system: { id: "ws_system", name: "system" },
+      workspace: { id: "ws_personal", name: "personal" },
       server: { kind: "owned", logFile: "/tmp/x.log" },
     });
-    // The one device connection is released and closed after the browser exits.
+    // The gate, grant and module use the System connection; the shown
+    // workspace gets its own connection from the same device.
     expect(devices).toHaveLength(1);
+    expect(devices[0]!.credentials.workspaceId).toBe("ws_system");
+    expect(devices[0]!.workspaces.map((entry) => entry.credentials.workspaceId)).toEqual([
+      "ws_personal",
+    ]);
+    // Every connection is released and closed after the browser exits.
+    expect(devices[0]!.workspaces[0]!.close).toHaveBeenCalled();
     expect(devices[0]!.release).toHaveBeenCalled();
     expect(devices[0]!.close).toHaveBeenCalled();
     expect(progress.some((line) => line.includes("system"))).toBe(true);
   });
 
-  it("relaunches against the chosen workspace on switch-workspace", async () => {
+  it("shows System through the System connection itself", async () => {
+    const { deps, devices, progress } = harness([{ kind: "exit", exit: { kind: "quit" } }]);
+    await runTerminalSessions({ ...options(deps, progress), workspace: { privateRole: "system" } });
+    expect(devices[0]!.workspaces).toEqual([]);
+    const call = vi.mocked(deps.runBrowser).mock.calls[0]![0];
+    expect(call.workspaceDevice).toBe(call.device);
+  });
+
+  it("shows the chosen workspace on switch-workspace, still running the browser from System", async () => {
     const switched: TerminalBrowserExit = { kind: "switch-workspace", workspaceId: "ws_other" };
     const { deps, routes, progress } = harness([
       { kind: "exit", exit: switched },
       { kind: "exit", exit: { kind: "quit" } },
     ]);
     await runTerminalSessions(options(deps, progress));
-    expect(routes).toEqual([{ privateRole: "system" }, { workspaceId: "ws_other" }]);
+    expect(routes).toEqual([
+      { privateRole: "system" },
+      { privateRole: "personal" },
+      { privateRole: "system" },
+      { workspaceId: "ws_other" },
+    ]);
     expect(deps.runGate).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(deps.runBrowser).mock.calls[1]![0].workspace).toEqual({
-      id: "ws_other",
-      name: "other",
+    expect(vi.mocked(deps.runBrowser).mock.calls[1]![0]).toMatchObject({
+      system: { id: "ws_system", name: "system" },
+      workspace: { id: "ws_other", name: "other" },
     });
   });
 
@@ -155,7 +189,7 @@ describe("runTerminalSessions", () => {
   it("uses an explicitly requested workspace", async () => {
     const { deps, routes, progress } = harness([{ kind: "exit", exit: { kind: "quit" } }]);
     await runTerminalSessions({ ...options(deps, progress), workspace: "lab" });
-    expect(routes).toEqual(["lab"]);
+    expect(routes).toEqual([{ privateRole: "system" }, "lab"]);
   });
 
   it("reports a declined launch gate without starting the browser", async () => {
@@ -186,7 +220,7 @@ describe("runTerminalSessions", () => {
       },
     });
     await expect(runTerminalSessions(options(deps, progress))).rejects.toThrow(
-      /not available in system: No terminal app is configured.*hostTargets\.terminal\.app/
+      /terminal browser is not available in system: No terminal app is configured.*hostTargets\.terminal\.app/
     );
   });
 });

@@ -529,6 +529,57 @@ export class RpcClient {
   }
 
   /**
+   * A second session for this device's own shell principal over this
+   * client's transport, for a client that drives the workspace through
+   * `createRpcClient` (the terminal browser's workspace connection).
+   */
+  async openShellTransport(
+    options: Omit<PrincipalTransportOptions, "selfId" | "getToken">
+  ): Promise<PrincipalTransport> {
+    this.deviceCredential();
+    return await this.openPrincipalTransport({
+      ...options,
+      selfId: this.callerId,
+      getToken: async () => this.authToken(),
+    });
+  }
+
+  /**
+   * A device client for another workspace of this account, routed with
+   * `selectRemoteWorkspace`, that shares this client's transport: a new
+   * loopback client for a local credential, or a second peer dialed from the
+   * same Iroh endpoint (binding the endpoint twice is invalid). The caller
+   * closes it; this client keeps owning the endpoint.
+   */
+  async openWorkspaceConnection(routed: CliDeviceCredentials): Promise<RpcClient> {
+    this.assertOpen();
+    const device = this.deviceCredential();
+    if (routed.deviceId !== device.deviceId) {
+      throw new Error("A workspace connection must use this client's device credential");
+    }
+    if (!this.isIroh) return new RpcClient(routed);
+    if (routed.transport !== "iroh") {
+      throw new Error("A workspace route of an Iroh credential must carry Iroh reach");
+    }
+    const parent = await this.ensureIrohClient();
+    this.assertOpen();
+    const workspace = new RpcClient(routed);
+    workspace.irohClient = Promise.resolve(
+      parent.peer({
+        reach: routed.workspacePairing,
+        callerId: this.callerId,
+        callerKind: this.callerKind,
+        getToken: () => this.authToken(),
+        clientLabel: "Vibestudio CLI",
+        onPaired: () => undefined,
+      })
+    );
+    // Like the control connection: the peer lives until its owner closes it.
+    workspace.keepPushOpen = true;
+    return workspace;
+  }
+
+  /**
    * A client for the hub control service (workspace listing and routing) that
    * shares this device client's transport: the loopback hub for a local
    * credential, or a second peer dialed from the same Iroh endpoint. The

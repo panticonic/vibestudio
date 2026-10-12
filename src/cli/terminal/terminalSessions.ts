@@ -22,9 +22,9 @@ export interface TerminalSessionsOptions {
   /** The paired device credential (any selected workspace). */
   credentials: DeviceCredential;
   /**
-   * Where the browser opens. Defaults to the account's System workspace: the
-   * terminal browser is a client app, and client apps are installed there,
-   * exactly as the desktop shell's own connection is.
+   * The workspace the browser shows. Defaults to the account's Personal
+   * workspace, as the desktop does. The browser itself always runs from the
+   * account's System workspace, where client apps are installed.
    */
   workspace?: RemoteWorkspaceSelector;
   server: TerminalBrowserServerInfo;
@@ -66,21 +66,22 @@ const DEFAULT_DEPENDENCIES: TerminalSessionDependencies = {
 /**
  * Run the terminal browser until the user quits or the connection is lost.
  *
- * Each pass routes to the browser's workspace, runs the launch gate (build,
- * approvals, activation) while the terminal is still in line mode, obtains
- * the device's terminal-app principal, imports the exact module that
- * principal is bound to, and runs it. A `switch-workspace` exit routes to the
- * chosen workspace and runs another pass; so does an app update observed
- * while reconnecting.
+ * Each pass routes to the account's System workspace, runs the launch gate
+ * (build, approvals, activation) there while the terminal is still in line
+ * mode, obtains the device's terminal-app principal, imports the exact module
+ * that principal is bound to, and runs it showing the selected workspace. A
+ * `switch-workspace` exit shows the chosen workspace in another pass; so does
+ * an app update observed while reconnecting.
  */
 export async function runTerminalSessions(
   options: TerminalSessionsOptions
 ): Promise<TerminalBrowserExit> {
   const deps = { ...DEFAULT_DEPENDENCIES, ...options.dependencies };
-  let selector: RemoteWorkspaceSelector = options.workspace ?? { privateRole: "system" };
+  let selector: RemoteWorkspaceSelector = options.workspace ?? { privateRole: "personal" };
   for (;;) {
-    const routed = await deps.route(options.credentials, selector);
-    const result = await runOnce(routed, options, deps);
+    const system = await deps.route(options.credentials, { privateRole: "system" });
+    const shown = await deps.route(options.credentials, selector);
+    const result = await runOnce(system, shown, options, deps);
     if (result.kind === "app-updated") {
       options.progress("The terminal app was updated; loading the new version…");
       continue;
@@ -94,21 +95,27 @@ export async function runTerminalSessions(
 }
 
 async function runOnce(
-  routed: DeviceCredential,
+  systemRoute: DeviceCredential,
+  shownRoute: DeviceCredential,
   options: TerminalSessionsOptions,
   deps: TerminalSessionDependencies
 ): Promise<Awaited<ReturnType<typeof runTerminalBrowser>>> {
-  const workspace: TerminalBrowserWorkspace = {
-    id: routed.workspaceId,
-    name: routed.workspaceName,
+  const system: TerminalBrowserWorkspace = {
+    id: systemRoute.workspaceId,
+    name: systemRoute.workspaceName,
   };
-  const device = deps.createDevice(routed);
-  // One device connection carries the gate, the grant, the module download and
+  const workspace: TerminalBrowserWorkspace = {
+    id: shownRoute.workspaceId,
+    name: shownRoute.workspaceName,
+  };
+  const device = deps.createDevice(systemRoute);
+  // One System connection carries the gate, the grant, the module download and
   // the app principal's session (a second session on the same Iroh connection).
   const releaseDevice = device.retainConnection();
   let control: RpcClient | null = null;
+  let workspaceDevice: RpcClient | null = null;
   try {
-    options.progress(`Preparing the terminal app in ${workspace.name}…`);
+    options.progress(`Preparing the terminal browser in ${system.name}…`);
     const gate = await deps.runGate(device, {
       target: "terminal",
       yes: options.yes,
@@ -122,17 +129,23 @@ async function runOnce(
     if (gate.launch?.status !== "ready") {
       const reason = gate.launch && "reason" in gate.launch ? gate.launch.reason : gate.status;
       throw new CliError(
-        `The terminal app is not available in ${workspace.name}: ${reason}. ` +
-          "Its workspace must declare it under hostTargets.terminal.app in meta/vibestudio.yml."
+        `The terminal browser is not available in ${system.name}: ${reason}. ` +
+          "The System workspace must declare it under hostTargets.terminal.app in meta/vibestudio.yml."
       );
     }
     const grant = await deps.requestGrant(device, gate.launch.entity.source || null);
-    options.progress("Loading the terminal app…");
+    options.progress("Loading the terminal browser…");
     const module = await deps.loadModule(device, grant.app);
+    // The workspace the browser shows is reached as this device, exactly as
+    // the desktop shell reaches the workspace it shows.
+    workspaceDevice =
+      workspace.id === system.id ? device : await device.openWorkspaceConnection(shownRoute);
     return await deps.runBrowser({
       device,
+      workspaceDevice,
       grant,
       module,
+      system,
       workspace,
       server: options.server,
       ...(options.serverExited ? { serverExited: options.serverExited } : {}),
@@ -149,7 +162,12 @@ async function runOnce(
     });
   } finally {
     const openControl = control as RpcClient | null;
-    await Promise.allSettled([openControl?.close(), releaseDevice()]);
+    const openWorkspace = workspaceDevice as RpcClient | null;
+    await Promise.allSettled([
+      openControl?.close(),
+      openWorkspace && openWorkspace !== device ? openWorkspace.close() : undefined,
+      releaseDevice(),
+    ]);
     await device.close();
   }
 }

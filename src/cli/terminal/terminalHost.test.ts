@@ -92,7 +92,9 @@ function fakeTty() {
 
 function harness(module: { run: (host: TerminalBrowserHost) => Promise<unknown> }) {
   const transport = fakeTransport();
+  const workspaceTransport = fakeTransport();
   let transportOptions: PrincipalTransportOptions | null = null;
+  let workspaceOptions: Omit<PrincipalTransportOptions, "selfId" | "getToken"> | null = null;
   const device = {
     openPrincipalTransport: vi.fn(async (options: PrincipalTransportOptions) => {
       transportOptions = options;
@@ -101,20 +103,38 @@ function harness(module: { run: (host: TerminalBrowserHost) => Promise<unknown> 
     }),
     call: vi.fn(async () => grant()),
   };
+  const workspaceDevice = {
+    openShellTransport: vi.fn(
+      async (options: Omit<PrincipalTransportOptions, "selfId" | "getToken">) => {
+        workspaceOptions = options;
+        return workspaceTransport;
+      }
+    ),
+  };
   const tty = fakeTty();
   const run = () =>
     runTerminalBrowser({
       device: device as unknown as RpcClient,
+      workspaceDevice: workspaceDevice as unknown as RpcClient,
       grant: grant(),
       module: module as never,
-      workspace: { id: "ws_system", name: "system" },
+      system: { id: "ws_system", name: "system" },
+      workspace: { id: "ws_personal", name: "personal" },
       server: { kind: "owned", endpoint: "http://127.0.0.1:4000", logFile: "/tmp/server.log" },
       listWorkspaces: async () => [{ id: "ws_system", name: "system" }],
       openExternal: vi.fn(async () => undefined),
       stdin: tty.stdin,
       stdout: tty.stdout,
     });
-  return { transport, device, tty, run, options: () => transportOptions! };
+  return {
+    transport,
+    workspaceTransport,
+    device,
+    tty,
+    run,
+    options: () => transportOptions!,
+    workspaceOptions: () => workspaceOptions!,
+  };
 }
 
 describe("TerminalConnectionState", () => {
@@ -122,20 +142,24 @@ describe("TerminalConnectionState", () => {
     const state = new TerminalConnectionState("http://127.0.0.1:4000");
     const seen: string[] = [];
     state.subscribe((next) => seen.push(next.phase));
-    state.transportStatus("connecting");
+    state.transportStatus("app", "connecting");
     expect(state.current()).toMatchObject({ phase: "reconnecting" });
-    state.transportStatus("connected");
+    state.transportStatus("workspace", "connecting");
+    state.transportStatus("app", "connected");
+    // Connected again only once every connection is.
+    expect(state.current()).toMatchObject({ phase: "reconnecting" });
+    state.transportStatus("workspace", "connected");
     state.lose("the local server exited (code 1)");
-    state.transportStatus("connected");
+    state.transportStatus("app", "connected");
     expect(state.current()).toEqual({ phase: "lost", cause: "the local server exited (code 1)" });
     expect(seen).toEqual(["reconnecting", "connected", "lost"]);
   });
 });
 
 describe("runTerminalBrowser", () => {
-  it("hands the browser an app-principal host and returns its exit", async () => {
+  it("hands the browser an app-principal host for System and a device session for the shown workspace", async () => {
     let received: TerminalBrowserHost | null = null;
-    const { run, device, transport, options } = harness({
+    const { run, device, transport, workspaceTransport, options } = harness({
       run: async (host) => {
         received = host;
         return { kind: "quit" };
@@ -143,15 +167,19 @@ describe("runTerminalBrowser", () => {
     });
     await expect(run()).resolves.toEqual({ kind: "exit", exit: { kind: "quit" } });
     const host = received as unknown as TerminalBrowserHost;
-    expect(host.contractVersion).toBe(1);
+    expect(host.contractVersion).toBe(2);
     expect(host.appId).toBe("app:apps/terminal-browser:dev_1");
     expect(host.rpc.selfId).toBe("app:apps/terminal-browser:dev_1");
+    expect(host.system).toEqual({ id: "ws_system", name: "system" });
+    expect(host.workspace).toEqual({ id: "ws_personal", name: "personal" });
+    expect(host.workspaceRpc.selfId).toBe("shell:dev_1");
     expect(host.connectionState()).toEqual({ phase: "connected" });
     expect(await host.listWorkspaces()).toEqual([{ id: "ws_system", name: "system" }]);
     expect(options().selfId).toBe("app:apps/terminal-browser:dev_1");
     // The first authentication redeems the grant the launch already obtained.
     expect(device.call).not.toHaveBeenCalled();
     expect(transport.close).toHaveBeenCalled();
+    expect(workspaceTransport.close).toHaveBeenCalled();
   });
 
   it("re-grants on reconnect and reports an app update as a reload", async () => {
@@ -181,6 +209,20 @@ describe("runTerminalBrowser", () => {
     expect(tty.stdout.write).toHaveBeenCalledWith(expect.stringContaining("\x1b[?1049l"));
     expect(tty.stdin.isRaw).toBe(false);
     expect(transport.close).toHaveBeenCalled();
+  });
+
+  it("reports reconnecting while the workspace session recovers", async () => {
+    const { run, workspaceTransport, workspaceOptions } = harness({
+      run: async (host) => {
+        expect(workspaceOptions().onTerminalClose).toBeDefined();
+        workspaceTransport.setStatus("connecting");
+        expect(host.connectionState()).toMatchObject({ phase: "reconnecting" });
+        workspaceTransport.setStatus("connected");
+        expect(host.connectionState()).toEqual({ phase: "connected" });
+        return { kind: "quit" };
+      },
+    });
+    await expect(run()).resolves.toEqual({ kind: "exit", exit: { kind: "quit" } });
   });
 
   it("reports the server's terminal close as a lost connection", async () => {

@@ -18,7 +18,7 @@ import {
   type AppPrincipalGrantResponse,
 } from "@vibestudio/service-schemas/auth";
 import { CliError } from "../output.js";
-import type { PrincipalTransport, RpcClient } from "../rpcClient.js";
+import { shellCallerId, type PrincipalTransport, type RpcClient } from "../rpcClient.js";
 import { guardTerminal } from "./ttyRestore.js";
 
 /** Requests the device's terminal-app principal over the CLI's own connection. */
@@ -78,13 +78,15 @@ export async function loadTerminalBrowserModule(
 }
 
 /**
- * Connection state reported to the browser. `reconnecting` follows the
- * transport's own recovery; `lost` is set only by an authoritative terminal
- * event (session closed by the server, owned server exited, app updated).
+ * Connection state reported to the browser, over every connection it uses.
+ * `reconnecting` follows the transports' own recovery (connected only when
+ * all of them are); `lost` is set only by an authoritative terminal event
+ * (session closed by the server, owned server exited, app updated).
  */
 export class TerminalConnectionState {
   private state: TerminalServerConnectionState = { phase: "connected" };
   private readonly listeners = new Set<(state: TerminalServerConnectionState) => void>();
+  private readonly interrupted = new Set<string>();
 
   constructor(private readonly endpoint: string) {}
 
@@ -97,10 +99,14 @@ export class TerminalConnectionState {
     return () => this.listeners.delete(listener);
   }
 
-  transportStatus(status: RpcConnectionStatus): void {
+  /** Status of one named connection (the System app session, the workspace session). */
+  transportStatus(connection: string, status: RpcConnectionStatus): void {
     if (this.state.phase === "lost") return;
-    if (status === "connected") this.set({ phase: "connected" });
-    else if (this.state.phase === "connected") {
+    if (status === "connected") this.interrupted.delete(connection);
+    else this.interrupted.add(connection);
+    if (this.interrupted.size === 0) {
+      if (this.state.phase !== "connected") this.set({ phase: "connected" });
+    } else if (this.state.phase === "connected") {
       this.set({ phase: "reconnecting", cause: `connection to ${this.endpoint} interrupted` });
     }
   }
@@ -121,10 +127,13 @@ export class TerminalConnectionState {
 }
 
 export interface TerminalBrowserRunOptions {
-  /** The CLI's device connection, routed to the browser's workspace. */
+  /** The CLI's device connection to the System workspace, where the browser is installed. */
   device: RpcClient;
+  /** The CLI's device connection to the workspace the browser shows (may be `device`). */
+  workspaceDevice: RpcClient;
   grant: AppPrincipalGrantResponse;
   module: TerminalBrowserModule;
+  system: TerminalBrowserWorkspace;
   workspace: TerminalBrowserWorkspace;
   server: TerminalBrowserServerInfo;
   /** Owned server lifetime: its exit is an authoritative terminal event. */
@@ -141,9 +150,10 @@ export type TerminalBrowserRunResult =
   | { kind: "app-updated" };
 
 /**
- * Connect the app principal over the device's transport, hand the browser
- * its host, and run it until it settles. The terminal is restored on every
- * exit path, including errors and `process.exit` inside the app.
+ * Connect the app principal (System) and this device's workspace session over
+ * the CLI's transports, hand the browser its host, and run it until it
+ * settles. The terminal is restored on every exit path, including errors and
+ * `process.exit` inside the app.
  */
 export async function runTerminalBrowser(
   options: TerminalBrowserRunOptions
@@ -170,53 +180,107 @@ export async function runTerminalBrowser(
     }
     return next.connectionGrant;
   };
-  const recoveryHandlers = new Set<(kind: RecoveryKind) => void>();
-  const transport: PrincipalTransport = await device.openPrincipalTransport({
-    selfId: grant.callerId,
-    getToken,
-    clientLabel: "Vibestudio terminal",
-    onRecovery: (kind) => {
-      for (const handler of [...recoveryHandlers]) handler(kind);
-    },
-    onTerminalClose: (error) => state.lose(error.message),
-  });
-  const unsubscribeStatus = transport.onStatusChange((status) => state.transportStatus(status));
-  void options.serverExited?.then((cause) => state.lose(cause));
   const lifetime = new AbortController();
-  const rpc = createRpcClient({
-    selfId: grant.callerId,
-    callerKind: "app",
-    transport,
-    lifetime: lifetime.signal,
-    onRecovery: (handler) => {
-      recoveryHandlers.add(handler);
-      return () => recoveryHandlers.delete(handler);
-    },
-  });
-  const host: TerminalBrowserHost = {
-    contractVersion: TERMINAL_BROWSER_HOST_CONTRACT_VERSION,
-    rpc,
-    appId: grant.callerId,
-    workspace: options.workspace,
-    server: options.server,
-    stdin: options.stdin,
-    stdout: options.stdout,
-    connectionState: () => state.current(),
-    onConnectionState: (listener) => state.subscribe(listener),
-    listWorkspaces: () => options.listWorkspaces(),
-    openExternal: (url) => options.openExternal(url),
-    readLocalFile,
+  const transports: PrincipalTransport[] = [];
+  const unsubscribes: Array<() => void> = [];
+  const connect = async (
+    connection: "app" | "workspace",
+    open: (onRecovery: (kind: RecoveryKind) => void) => Promise<PrincipalTransport>,
+    selfId: string,
+    callerKind: "app" | "shell"
+  ) => {
+    const recoveryHandlers = new Set<(kind: RecoveryKind) => void>();
+    const transport = await open((kind) => {
+      for (const handler of [...recoveryHandlers]) handler(kind);
+    });
+    transports.push(transport);
+    unsubscribes.push(
+      transport.onStatusChange((status) => state.transportStatus(connection, status))
+    );
+    return createRpcClient({
+      selfId,
+      callerKind,
+      transport,
+      lifetime: lifetime.signal,
+      onRecovery: (handler) => {
+        recoveryHandlers.add(handler);
+        return () => recoveryHandlers.delete(handler);
+      },
+    });
   };
-  const releaseTerminal = guardTerminal(options.stdin, options.stdout);
+  const onTerminalClose = (error: Error) => state.lose(error.message);
+  let releaseTerminal: (() => void) | null = null;
+  let outcome: { ok: true; result: TerminalBrowserRunResult } | { ok: false; error: unknown };
   try {
+    const rpc = await connect(
+      "app",
+      (onRecovery) =>
+        device.openPrincipalTransport({
+          selfId: grant.callerId,
+          getToken,
+          clientLabel: "Vibestudio terminal",
+          onRecovery,
+          onTerminalClose,
+        }),
+      grant.callerId,
+      "app"
+    );
+    const workspaceRpc = await connect(
+      "workspace",
+      (onRecovery) =>
+        options.workspaceDevice.openShellTransport({
+          clientLabel: "Vibestudio terminal",
+          onRecovery,
+          onTerminalClose,
+        }),
+      shellCallerId(grant.deviceId),
+      "shell"
+    );
+    void options.serverExited?.then((cause) => state.lose(cause));
+    const host: TerminalBrowserHost = {
+      contractVersion: TERMINAL_BROWSER_HOST_CONTRACT_VERSION,
+      rpc,
+      appId: grant.callerId,
+      system: options.system,
+      workspace: options.workspace,
+      workspaceRpc,
+      server: options.server,
+      stdin: options.stdin,
+      stdout: options.stdout,
+      connectionState: () => state.current(),
+      onConnectionState: (listener) => state.subscribe(listener),
+      listWorkspaces: () => options.listWorkspaces(),
+      openExternal: (url) => options.openExternal(url),
+      readLocalFile,
+    };
+    releaseTerminal = guardTerminal(options.stdin, options.stdout);
     const exit = await options.module.run(host);
-    return appUpdated ? { kind: "app-updated" } : { kind: "exit", exit };
-  } finally {
-    releaseTerminal();
-    unsubscribeStatus();
-    lifetime.abort(new Error("terminal browser exited"));
-    await transport.close();
+    outcome = { ok: true, result: appUpdated ? { kind: "app-updated" } : { kind: "exit", exit } };
+  } catch (error) {
+    outcome = { ok: false, error };
   }
+  releaseTerminal?.();
+  for (const unsubscribe of unsubscribes) unsubscribe();
+  lifetime.abort(new Error("terminal browser exited"));
+  // Join every session's close; none may be abandoned, and no failure is dropped.
+  const closeFailures = (
+    await Promise.allSettled(transports.map((transport) => transport.close()))
+  ).flatMap((result) => (result.status === "rejected" ? [result.reason as unknown] : []));
+  if (!outcome.ok) {
+    if (closeFailures.length === 0) throw outcome.error;
+    throw new AggregateError(
+      [outcome.error, ...closeFailures],
+      "The terminal browser failed and its connections could not all be closed"
+    );
+  }
+  if (closeFailures.length === 1) throw closeFailures[0];
+  if (closeFailures.length > 1) {
+    throw new AggregateError(
+      closeFailures,
+      "The terminal browser's connections could not all be closed"
+    );
+  }
+  return outcome.result;
 }
 
 function describeLost(state: TerminalConnectionState): string {

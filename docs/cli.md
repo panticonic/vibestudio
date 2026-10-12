@@ -147,11 +147,13 @@ How it connects:
 
 To use a different server, run `vibestudio remote logout` and pair again.
 
-The browser opens in your account's System workspace, where client apps live
-(the desktop shell's own connection routes there too); `--workspace <name>`
-opens another. Before the browser takes over the screen, the command prepares
-the workspace's terminal app and asks any startup approvals as ordinary
-questions; `--yes` approves each startup request once, for automation.
+The browser shows your Personal workspace, like the desktop app;
+`--workspace <name>` shows another, and inside the browser `Ctrl-Space w`
+switches. The browser itself is a client app installed in your account's
+System workspace (the desktop shell's own connection routes there too).
+Before it takes over the screen, the command prepares it there and asks any
+startup approvals as ordinary questions; `--yes` approves each startup request
+once, for automation.
 
 `--keep-server` leaves a server this command started running after you quit.
 The exit message prints its pid and log path; a later `vibestudio terminal`

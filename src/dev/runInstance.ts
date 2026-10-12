@@ -347,7 +347,7 @@ Usage: pnpm terminal [--instance <id>] [--ephemeral] [--workspace <name>] [--yes
   --instance <id>     Use a named persistent isolated instance (default: source).
                       When that instance is already running, attach to it.
   --ephemeral         Use a temporary instance root, removed on exit.
-  --workspace <name>  Open the browser in this workspace (default: System).
+  --workspace <name>  Show this workspace (default: your Personal workspace).
   --yes               Approve startup approvals once without asking.
 
 Build, template and server output go to <instanceRoot>/logs/server.log.

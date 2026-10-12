@@ -21,9 +21,12 @@ your terminal ── terminal browser (trusted, runs in the CLI process)
 ## Using it
 
 `vibestudio terminal` starts (or attaches to) a server and opens the browser
-in the current terminal. On first start the **launcher** lists the terminal
-apps in the workspace; afterwards the most recently used session resumes and
-the others stay listed under *Resume*.
+in the current terminal. Like the desktop app, it shows your **Personal**
+workspace unless you pick another (`--workspace`, or prefix `w` inside). On
+first start the **launcher** lists the terminal apps of that workspace;
+afterwards its most recently used session resumes and the others stay listed
+under *Resume*. Each workspace has its own apps and sessions: Server Logs, for
+example, lives in your System workspace.
 
 Every key goes to the app in the focused tab except the **prefix key**
 (Ctrl-Space by default; change it in Settings). Press the prefix, then:
@@ -51,8 +54,9 @@ with the wheel (unless the app uses the mouse itself); hold Shift to select
 text natively. Pastes reach the app as bracketed pastes when the app asked for
 them and never trigger browser commands.
 
-Settings are stored for you on the server (`workers/terminal-sessions`), so
-they follow you to other devices.
+Settings and the list of resumable sessions are stored for you on the server
+(`workers/terminal-sessions` in your System workspace), so they follow you to
+other devices.
 
 ## Writing a terminal app
 
@@ -174,8 +178,9 @@ the focused tab and badges the tab (`!`) otherwise. Never draw your own
 
 ### Lifecycle
 
-- **Start.** The launcher creates a fresh context (`runtime.createContext`),
-  records the session in the registry, activates the DO
+- **Start.** In the workspace the browser shows, the launcher creates a
+  fresh context (`runtime.createContext`), records the session (with that
+  workspace) in the registry, activates the DO
   (`runtime.createEntity` with the session id as key and that context) and
   calls `terminalAttach`.
 - **Attached.** The `terminalAttach` response stream is the attachment. While
@@ -242,12 +247,23 @@ code in the workspace can draw on, or ask questions through, its chrome.
 
 - **Contract with the CLI.** The CLI imports the server-built artifact of
   `hostTargets.terminal.app` and calls `run(host)` (see
-  `packages/shell-core/src/terminal/terminalBrowserHost.ts`). It provides the
-  app-principal RPC client, the workspace, server information, stdin and
-  stdout, connection state, `listWorkspaces`, `openExternal` and
-  `readLocalFile`. `run` settles with `quit`, `switch-workspace` or
+  `packages/shell-core/src/terminal/terminalBrowserHost.ts`). It provides
+  two RPC clients, server information, stdin and stdout, connection state,
+  `listWorkspaces`, `openExternal` and `readLocalFile`. `run` settles with
+  `quit`, `switch-workspace` or
   `connection-lost`. It never exits the process, and it restores the terminal
   on every path, including errors, `SIGTERM`/`SIGHUP` and process exit.
+- **Two workspaces, like the desktop shell.** The browser is installed in the
+  account's System workspace, and `host.rpc` is its app principal there
+  (`app:<source>:<deviceId>`); it reaches only the browser's own state, the
+  session registry. Everything about the workspace it shows (`host.workspace`)
+  goes through `host.workspaceRpc`, this device's own session in that
+  workspace (`shell:<deviceId>`): listing terminal apps, creating contexts and
+  session DOs, the attachment stream, and the approval queue. The desktop
+  shell does the same for the workspace it shows. The browser runs inside the
+  CLI process, which already holds the device credential, so handing it the
+  device session grants nothing the process did not have; the app principal
+  needs no manifest authority at all.
 - **Compositor.** Each session is an `@xterm/headless` grid. The browser's
   own chrome (tab strip, status bar, launcher, palette, approvals, help,
   settings, dialogs) is Ink rendered into separate headless VT layers. The
@@ -258,8 +274,10 @@ code in the workspace can draw on, or ask questions through, its chrome.
 - **Keys.** A tokenizer splits input into keys (keeping their exact bytes),
   bracketed pastes and SGR mouse reports; the prefix state machine routes
   them. Application-cursor mode is mirrored for the focused app.
-- **Sessions.** `workers/terminal-sessions` keeps each person's resumable
-  sessions and settings, partitioned by the caller's user id.
+- **Sessions.** `workers/terminal-sessions` (a System singleton service)
+  keeps each person's resumable sessions, keyed by workspace, and settings,
+  partitioned by the caller's user id. The app principal's user is the
+  device owner, whose device session minted its grant.
 - **Connection.** While the CLI reports `reconnecting`, the status bar says
   so and tabs show that they will reattach. On `connected`, every interrupted
   attachment is reopened (with a full repaint) and the approval queue is
@@ -273,8 +291,9 @@ the client runs it. It never runs as a server process. `vibestudio terminal`
 
 1. Connects with its paired device credential, starting this machine's local
    server first when it is not paired or that server is not running, and
-   routes to the account's System workspace unless `--workspace` names another.
-2. Runs the launch gate for the `terminal` target while the TTY is still in
+   routes to the account's System workspace and to the workspace to show
+   (Personal unless `--workspace` names another).
+2. Runs the launch gate in System for the `terminal` target while the TTY is still in
    line mode: build, startup approvals (asked as questions, or `--yes`), and
    activation. `apps:available` reports terminal targets with
    `launchMode: "client-module"`.
@@ -283,12 +302,13 @@ the client runs it. It never runs as a server process. `vibestudio terminal`
    endpoint, so it works over loopback and Iroh alike, and names the device's
    app principal (`app:<source>:<deviceId>`) and the exact build it may run.
 4. Downloads that build's primary `index.mjs` through `gateway.fetch` of its
-   `/_a/<buildKey>/index.mjs` route, imports it in-process, and calls its
-   exported `run(host)`.
+   `/_a/<buildKey>/index.mjs` route, imports it in-process, opens a second
+   device session to the shown workspace (a second peer from the same Iroh
+   endpoint when remote), and calls the module's exported `run(host)`.
 
 The CLI restores the terminal when the browser exits, and runs another pass
-when the browser switches workspace or an adopted app update is observed while
-reconnecting.
+when the browser switches workspace (the browser still comes from System) or
+an adopted app update is observed while reconnecting.
 
 ### Rendering in workerd
 

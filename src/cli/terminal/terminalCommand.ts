@@ -45,9 +45,11 @@ const DETAILS = `How it connects:
     directory, so conversations survive restarts; its output goes to a log
     file, never to your terminal.
 
-The terminal browser opens in your System workspace, where client apps live.
-Before it takes over the screen, startup approvals are asked here as
-questions; answer them or pass --yes.
+The terminal browser shows your Personal workspace (another one with
+--workspace, or switch inside it with Ctrl-Space w). Like the desktop app, the
+browser itself is installed in your System workspace; before it takes over
+the screen, its startup approvals are asked here as questions; answer them or
+pass --yes.
 
 To use a different server, run \`vibestudio remote logout\` and pair again.`;
 
@@ -63,7 +65,7 @@ export function createTerminalCommand(context: TerminalCommandContext): CliComma
       {
         name: "workspace",
         takesValue: true,
-        description: "Open the browser in this workspace (default: your System workspace)",
+        description: "Show this workspace (default: your Personal workspace)",
       },
       {
         name: "yes",
