@@ -31,6 +31,18 @@ const WorkerSourceSchema = z
       .passthrough()
       .optional()
       .describe("Chat-agent manifest metadata, when declared."),
+    terminal: z
+      .object({
+        title: z.string(),
+        description: z.string().optional(),
+        icon: z.string().optional(),
+        className: z.string(),
+      })
+      .strict()
+      .optional()
+      .describe(
+        "Terminal app metadata (vibestudio.terminal), when the worker renders in the terminal browser."
+      ),
   })
   .strict();
 
