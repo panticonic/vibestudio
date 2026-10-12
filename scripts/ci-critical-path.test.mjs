@@ -189,6 +189,7 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
     "windows-installer-candidate",
     "quality-desktop",
     "android-iroh-smoke",
+    "application-candidate-mac",
   ]);
 
   for (const target of targets) {
@@ -209,10 +210,14 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
     "linux-installer-arm64",
     "application-candidate-windows",
     "windows-installer-candidate",
+    "application-candidate-mac",
+    "darwin-production-host",
   ]) {
     assert.equal(jobs[target].uses, ci[target].uses, `${target} must call CI's implementation`);
   }
   assert.equal(jobs["quality-desktop"].uses, ci["quality-desktop"].uses);
+  assert.equal(jobs["darwin-production-host"].uses, ci["darwin-production-host"].uses);
+  assert.equal(jobs["application-candidate-mac"].uses, ci["application-candidate-mac"].uses);
   const desktopWorkflow = await readWorkflow("quality-desktop.yml");
   const desktopIntegration = desktopWorkflow.jobs.integration;
   assert.equal(desktopIntegration["runs-on"], "ubuntu-24.04");
@@ -241,6 +246,12 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
   ]);
   assert.deepEqual(dependenciesOf(jobs["quality-desktop"]), ["quality-inputs"]);
   assert.deepEqual(dependenciesOf(jobs["android-iroh-smoke"]), []);
+  assert.deepEqual(dependenciesOf(jobs["darwin-production-host"]), [
+    "native-input-darwin-arm64",
+  ]);
+  assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), [
+    "darwin-production-host",
+  ]);
   const androidWorkflow = await readWorkflow("android-iroh-smoke.yml");
   const androidJob = androidWorkflow.jobs["android-iroh-smoke"];
   assert.equal(androidJob["runs-on"], "ubuntu-24.04");
@@ -272,6 +283,33 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
   assert.equal(jobs["windows-installer-candidate"].with["release-tag"], undefined);
   assert.equal(jobs["linux-installer-x64"].with["release-tag"], undefined);
   assert.equal(jobs["linux-installer-arm64"].with["release-tag"], undefined);
+  assert.deepEqual(
+    dependenciesOf(jobs["application-candidate-mac"]),
+    dependenciesOf(ci["application-candidate-mac"]).filter(
+      (dependency) => dependency !== "release-metadata"
+    )
+  );
+  assert.deepEqual(jobs["application-candidate-mac"].with, {
+    runner: "macos-14",
+    target: "darwin-arm64",
+    package: "mac",
+    "release-candidate": true,
+    "release-tag": "\${{ inputs.release-tag }}",
+  });
+  assert.deepEqual(Object.keys(jobs["application-candidate-mac"].secrets).sort(), [
+    "APPLE_APP_SPECIFIC_PASSWORD",
+    "APPLE_CSC_KEY_PASSWORD",
+    "APPLE_CSC_LINK",
+    "APPLE_ID",
+    "APPLE_TEAM_ID",
+  ]);
+  for (const name of Object.keys(jobs["application-candidate-mac"].secrets)) {
+    assert.equal(
+      jobs["application-candidate-mac"].secrets[name],
+      `\${{ github.ref == 'refs/heads/main' && vars.RELEASE_MAC == 'true' && secrets.${name} || '' }}`
+    );
+  }
+  assert.equal(diagnostic.on.workflow_dispatch.inputs["release-tag"].required, false);
   assert.equal(jobs["release-candidate-gate"], undefined);
   assert.equal(jobs["release-metadata"], undefined);
   assert.equal(diagnostic.on.workflow_dispatch.inputs["release-candidate"], undefined);

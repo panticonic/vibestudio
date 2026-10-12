@@ -14,6 +14,7 @@ on:
           - windows-installer-candidate
           - quality-desktop
           - android-iroh-smoke
+          - application-candidate-mac
         required: true
       base-ref:
         description: Base template branch or commit used by the npm preflight
@@ -25,6 +26,11 @@ on:
         type: string
         default: windows-2025
         required: true
+      release-tag:
+        description: Exact vX.Y.Z package version tag; required for application-candidate-mac
+        type: string
+        default: ""
+        required: false
 
 permissions: {}
 
@@ -60,7 +66,7 @@ jobs:
 
   native-input-darwin-arm64:
     name: Prepare native release input (darwin-arm64)
-    if: ${{ inputs.target == 'npm-server-preflight' }}
+    if: ${{ inputs.target == 'npm-server-preflight' || inputs.target == 'application-candidate-mac' }}
     uses: ./.github/workflows/native-input.yml
     with:
       runner: macos-14
@@ -92,6 +98,37 @@ jobs:
     name: Android Iroh UX and recovery
     if: ${{ inputs.target == 'android-iroh-smoke' }}
     uses: ./.github/workflows/android-iroh-smoke.yml
+    permissions:
+      contents: read
+
+  darwin-production-host:
+    name: Build and verify exact Darwin production host inputs
+    if: ${{ inputs.target == 'application-candidate-mac' }}
+    needs: native-input-darwin-arm64
+    uses: ./.github/workflows/darwin-production-host.yml
+    with:
+      runner: macos-14
+    permissions:
+      contents: read
+
+  application-candidate-mac:
+    name: Package macOS application candidate from tested host inputs
+    if: ${{ inputs.target == 'application-candidate-mac' }}
+    needs: darwin-production-host
+    uses: ./.github/workflows/application-candidate.yml
+    with:
+      runner: macos-14
+      target: darwin-arm64
+      package: mac
+      release-candidate: true
+      release-tag: ${{ inputs.release-tag }}
+    # Match CI's repository-variable gate for Apple signing credentials.
+    secrets:
+      APPLE_CSC_LINK: ${{ github.ref == 'refs/heads/main' && vars.RELEASE_MAC == 'true' && secrets.APPLE_CSC_LINK || '' }}
+      APPLE_CSC_KEY_PASSWORD: ${{ github.ref == 'refs/heads/main' && vars.RELEASE_MAC == 'true' && secrets.APPLE_CSC_KEY_PASSWORD || '' }}
+      APPLE_ID: ${{ github.ref == 'refs/heads/main' && vars.RELEASE_MAC == 'true' && secrets.APPLE_ID || '' }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ github.ref == 'refs/heads/main' && vars.RELEASE_MAC == 'true' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ github.ref == 'refs/heads/main' && vars.RELEASE_MAC == 'true' && secrets.APPLE_TEAM_ID || '' }}
     permissions:
       contents: read
 

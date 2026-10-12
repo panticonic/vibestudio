@@ -272,12 +272,30 @@ gh workflow run ci-diagnostic.yml --ref my-fix-branch \
 
 Targets are `npm-server-preflight`, `linux-installer-x64`,
 `linux-installer-arm64`, `windows-installer-candidate`, `quality-desktop`, and
-`android-iroh-smoke`. The workflow runs the selected job's declared
+`android-iroh-smoke`. `application-candidate-mac` also reruns the Darwin native
+input, production-host build, and macOS application candidate. That target
+requires `release-tag` set to the exact `vX.Y.Z` version in `package.json`, so
+the reusable candidate workflow exercises its release-candidate validation
+path. It passes Apple signing secrets only on `main` when `RELEASE_MAC=true`;
+feature-branch runs therefore exercise the empty-secret path without exposing
+signing credentials to branch code. The reusable workflow applies the same
+all-five-or-none credential handling.
+For example:
+
+```sh
+gh workflow run ci-diagnostic.yml --ref my-fix-branch \
+  -f target=application-candidate-mac \
+  -f release-tag=v1.2.3
+```
+
+The workflow runs the selected job's declared
 prerequisites and calls the same reusable workflows as CI or the Iroh nightly
 workflow. The Android target runs only the Android Iroh emulator job; dispatching
 `iroh-e2e-nightly.yml` directly still runs its desktop and Android jobs together.
 The diagnostic workflow does not call release metadata or the release
-candidate gate, and has no release-candidate input. Its run and artifacts are
+candidate gate. Its macOS target alone sets the reusable app job's
+`release-candidate=true` to reproduce that packaging path. The top-level
+workflow does not offer a full-candidate switch, and its run and artifacts are
 separate from the protected-main `CI` workflow run that release publication
 requires.
 
