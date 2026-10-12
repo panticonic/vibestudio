@@ -273,13 +273,18 @@ gh workflow run ci-diagnostic.yml --ref my-fix-branch \
 Targets are `npm-server-preflight`, `linux-installer-x64`,
 `linux-installer-arm64`, `windows-installer-candidate`, `quality-desktop`, and
 `android-iroh-smoke`. `application-candidate-mac` also reruns the Darwin native
-input, production-host build, and macOS application candidate. That target
-requires `release-tag` set to the exact `vX.Y.Z` version in `package.json`, so
+input, production-host build, macOS application candidate, installed-app
+acceptance on macos-14 and macos-26, installer packaging, and installed release
+acceptance. It calls the same reusable installer and release-acceptance
+workflows as protected CI. That target requires `release-tag` set to the exact
+`vX.Y.Z` version in `package.json`, so
 the reusable candidate workflow exercises its release-candidate validation
 path. It passes Apple signing secrets only on `main` when `RELEASE_MAC=true`;
 feature-branch runs therefore exercise the empty-secret path without exposing
-signing credentials to branch code. The reusable workflow applies the same
-all-five-or-none credential handling.
+signing credentials to branch code. The reusable application workflow applies the same
+all-five-or-none credential handling. On a feature branch, the diagnostic
+installer follows the candidate's ad-hoc signing mode and still verifies the
+DMG checksum, app signature, installation, and launch path.
 For example:
 
 ```sh

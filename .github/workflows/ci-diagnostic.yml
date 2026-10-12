@@ -132,6 +132,48 @@ jobs:
     permissions:
       contents: read
 
+  packaged-acceptance-macos-14:
+    name: Installed application (darwin-arm64, macos-14)
+    if: ${{ inputs.target == 'application-candidate-mac' }}
+    needs: application-candidate-mac
+    uses: ./.github/workflows/packaged-acceptance.yml
+    with:
+      runner: macos-14
+      target: darwin-arm64
+      app: Vibestudio.app
+    permissions:
+      contents: read
+
+  packaged-acceptance-macos-26:
+    name: Installed application (darwin-arm64, macos-26)
+    if: ${{ inputs.target == 'application-candidate-mac' }}
+    needs: application-candidate-mac
+    uses: ./.github/workflows/packaged-acceptance.yml
+    with:
+      runner: macos-26
+      target: darwin-arm64
+      app: Vibestudio.app
+    permissions:
+      contents: read
+
+  macos-release-candidate:
+    name: Package macOS release installers from the accepted app candidate
+    if: ${{ inputs.target == 'application-candidate-mac' }}
+    needs: application-candidate-mac
+    uses: ./.github/workflows/macos-release-candidate.yml
+    with:
+      release-tag: ${{ inputs.release-tag }}
+    permissions:
+      contents: read
+
+  accept-macos-release-candidate:
+    name: Install and launch the exact macOS release candidate
+    if: ${{ inputs.target == 'application-candidate-mac' }}
+    needs: macos-release-candidate
+    uses: ./.github/workflows/accept-macos-release-candidate.yml
+    permissions:
+      contents: read
+
   linux-installer-x64:
     name: Build Linux x64 installer candidate
     if: ${{ inputs.target == 'linux-installer-x64' }}

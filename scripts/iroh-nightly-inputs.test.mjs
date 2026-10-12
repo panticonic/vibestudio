@@ -65,21 +65,19 @@ test("desktop nightly smoke installs its native keyring and display runtime", ()
     workflow.indexOf("  iroh-remote-e2e:"),
     workflow.indexOf("  android-iroh-smoke:")
   );
-  const androidJob = workflow.slice(workflow.indexOf("  android-iroh-smoke:"));
+  const androidWorkflow = fs.readFileSync(
+    path.join(root, ".github/workflows/android-iroh-smoke.yml"),
+    "utf8"
+  );
+  const androidJob = androidWorkflow.slice(androidWorkflow.indexOf("  android-iroh-smoke:"));
   const ci = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
+  const qualityJob = ci.slice(ci.indexOf("  quality:"), ci.indexOf("  quality-followup:"));
   const qualityDesktop = fs.readFileSync(
     path.join(root, ".github/workflows/quality-desktop.yml"),
     "utf8"
   );
-  const androidSmoke = fs.readFileSync(
-    path.join(root, ".github/workflows/android-iroh-smoke.yml"),
-    "utf8"
-  );
-  const qualityJob = ci.slice(ci.indexOf("  quality:"), ci.indexOf("  quality-desktop:"));
-  const qualityDesktopJob = ci.slice(
-    ci.indexOf("  quality-desktop:"),
-    ci.indexOf("  mac-portability:")
-  );
+  const qualityDesktopJob = qualityDesktop.slice(qualityDesktop.indexOf("  integration:"));
+  const nightlyAndroidJob = workflow.slice(workflow.indexOf("  android-iroh-smoke:"));
 
   assert.match(action, /packages=\(bubblewrap gnome-keyring dbus-x11\)/u);
   assert.match(action, /packages\+=\(xvfb\)/u);
@@ -92,19 +90,15 @@ test("desktop nightly smoke installs its native keyring and display runtime", ()
   assert.match(qualityJob, /uses: \.\/\.github\/actions\/setup-linux-source-runtime/u);
   assert.match(
     qualityDesktopJob,
-    /uses: \.\/\.github\/workflows\/quality-desktop\.yml/u
-  );
-  assert.match(
-    qualityDesktop,
     /uses: \.\/\.github\/actions\/setup-linux-source-runtime[\s\S]*?desktop: "true"/u
   );
   assert.match(
     desktopJob,
     /uses: \.\/\.github\/actions\/setup-linux-source-runtime[\s\S]*?desktop: "true"/u
   );
-  assert.match(androidJob, /uses: \.\/\.github\/workflows\/android-iroh-smoke\.yml/u);
-  assert.match(androidSmoke, /uses: \.\/\.github\/actions\/setup-linux-source-runtime\n/u);
-  assert.doesNotMatch(androidSmoke, /desktop: "true"/u);
+  assert.match(nightlyAndroidJob, /uses: \.\/\.github\/workflows\/android-iroh-smoke\.yml/u);
+  assert.match(androidJob, /uses: \.\/\.github\/actions\/setup-linux-source-runtime\n/u);
+  assert.doesNotMatch(androidJob, /desktop: "true"/u);
 });
 
 test("public Vitest Iroh entrypoints prepare the development desktop host", () => {
