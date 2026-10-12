@@ -35,9 +35,10 @@ test("extracts Hermes line and column and formats a bounded source excerpt", () 
 
 test("parses the managed bundle compiler's bare line and column signature", () => {
   assert.deepEqual(
-    parseHermesLocation("Compiling JS failed: 301:1233:';' expected"),
+    parseHermesLocation("10-12 19:59:14.307 E/AndroidRuntime: Compiling JS failed: 301:1233:';' expected"),
     { line: 301, column: 1233 }
   );
+  assert.equal(parseHermesLocation("10-12 19:59:14.307 E/AndroidRuntime: reload failed"), null);
 });
 
 test("caps excerpt content around a location on a minified bundle line", () => {

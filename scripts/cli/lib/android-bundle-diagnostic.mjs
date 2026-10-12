@@ -36,9 +36,9 @@ export function activeBundleCacheRelativePath(preferencesXml) {
 
 export function parseHermesLocation(message) {
   const patterns = [
+    /\bCompiling JS failed:\s*(\d+)\s*:\s*(\d+)\s*:/i,
     /\bline\s+(\d+)\s*,\s*column\s+(\d+)\b/i,
     /\bline\s+(\d+)\s*:\s*(\d+)\b/i,
-    /(?:^|\s)(\d+)\s*:\s*(\d+)\s*:/,
     /\((\d+)\s*:\s*(\d+)\)/,
   ];
   for (const pattern of patterns) {
