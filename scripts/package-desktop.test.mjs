@@ -35,7 +35,7 @@ function fixture() {
   );
   fs.writeFileSync(
     path.join(root, "electron-builder.yml"),
-    `directories:\n  output: release\nfiles: ["dist/**/*", "scripts/cli/**/*", "node_modules/**/*"]\nasarUnpack: ["scripts/cli/**/*"]\nlinux:\n  target:\n    - target: deb\n      arch: [x64, arm64]\n`
+    `directories:\n  output: release\nfiles: ["dist/**/*", "scripts/cli/**/*", "node_modules/**/*"]\nasarUnpack: ["scripts/cli/**/*"]\nafterPack: ./scripts/electron-after-pack.mjs\nlinux:\n  target:\n    - target: deb\n      arch: [x64, arm64]\n`
   );
   return root;
 }
@@ -138,6 +138,59 @@ test("promotes final installers and retires each joined staging tree", async () 
   );
   assert.ok(seen[0].asarUnpack.includes("scripts/lib/runtime-helper.mjs"));
   assert.deepEqual(fs.readdirSync(path.join(root, "release")).sort(), ["installer-1.deb"]);
+});
+
+test("produces one Linux application through the canonical configured packager", async () => {
+  const root = fixture();
+  let buildOptions;
+  const published = await packageDesktop("linux", {
+    appRoot: root,
+    arch: "x64",
+    linuxMode: "app",
+    runBuild: async (options) => {
+      buildOptions = options;
+      const config = JSON.parse(fs.readFileSync(options.config, "utf8"));
+      assert.equal(config.afterPack, "./scripts/electron-after-pack.mjs");
+      assert.equal(options.prepackaged, undefined);
+      assert.deepEqual([...options.targets.values()][0].keys().next().value, 1);
+      fs.mkdirSync(path.join(config.directories.output, "linux-unpacked"), { recursive: true });
+      fs.writeFileSync(path.join(config.directories.output, "linux-unpacked", "vibestudio"), "app");
+      return [];
+    },
+  });
+
+  assert.ok(buildOptions);
+  assert.deepEqual(published, [path.join(root, "release/linux-unpacked")]);
+  assert.equal(fs.readFileSync(path.join(root, "release/linux-unpacked/vibestudio"), "utf8"), "app");
+  assert.deepEqual(fs.readdirSync(path.join(root, "release")), ["linux-unpacked"]);
+});
+
+test("packages one declared Linux format from an isolated prepackaged app copy", async () => {
+  const root = fixture();
+  const prepackaged = path.join(root, "release/linux-unpacked");
+  fs.mkdirSync(prepackaged, { recursive: true });
+  let buildOptions;
+  const published = await packageDesktop("linux", {
+    appRoot: root,
+    arch: "x64",
+    linuxMode: "format",
+    linuxFormat: "deb",
+    prepackaged: "release/linux-unpacked",
+    runBuild: async (options) => {
+      buildOptions = options;
+      assert.equal(options.prepackaged, prepackaged);
+      assert.deepEqual([...options.targets.values()][0].keys().next().value, 1);
+      const artifact = path.join(JSON.parse(fs.readFileSync(options.config, "utf8")).directories.output, "vibestudio.deb");
+      fs.writeFileSync(artifact, "deb");
+      return [artifact];
+    },
+  });
+
+  assert.ok(buildOptions);
+  assert.deepEqual(published, [path.join(root, "release/vibestudio.deb")]);
+  assert.equal(fs.readFileSync(published[0], "utf8"), "deb");
+  assert.ok(fs.existsSync(prepackaged));
+  assert.deepEqual(fs.readdirSync(path.join(root, "release")).sort(), ["linux-unpacked", "vibestudio.deb"]);
 });
 
 test("retires failed packaging scratch while preserving inherited release products", async () => {

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import plist from "plist";
 import {
   parseOptions,
   readableTail,
@@ -71,16 +72,32 @@ test("records phase boundaries and elapsed time on success and failure", async (
     elapsedMs: 27,
   });
 });
-test("resolves actual macOS bundle executable without assuming product name", async () => {
+test("resolves the executable declared by a macOS bundle with multiple helper binaries", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "packaged-resolver-"));
   roots.push(root);
   const app = path.join(root, "Product.app");
   const bin = path.join(app, "Contents", "MacOS");
   await fs.mkdir(bin, { recursive: true });
+  await fs.writeFile(
+    path.join(app, "Contents", "Info.plist"),
+    plist.build({ CFBundleExecutable: "Real Product" })
+  );
   await fs.writeFile(path.join(bin, "Real Product"), "fixture");
+  await fs.writeFile(path.join(bin, "Helper"), "fixture");
   assert.equal(await resolvePackagedExecutable(app, "darwin"), path.join(bin, "Real Product"));
-  await fs.writeFile(path.join(bin, "ambiguous"), "fixture");
-  await assert.rejects(resolvePackagedExecutable(app, "darwin"), /one main/);
+});
+test("rejects a macOS bundle whose declared executable is absent or escapes MacOS", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "packaged-resolver-invalid-"));
+  roots.push(root);
+  const app = path.join(root, "Product.app");
+  const bin = path.join(app, "Contents", "MacOS");
+  await fs.mkdir(bin, { recursive: true });
+  await fs.writeFile(path.join(bin, "Helper"), "fixture");
+  const infoPath = path.join(app, "Contents", "Info.plist");
+  await fs.writeFile(infoPath, plist.build({ CFBundleExecutable: "Missing" }));
+  await assert.rejects(resolvePackagedExecutable(app, "darwin"), /CFBundleExecutable/u);
+  await fs.writeFile(infoPath, plist.build({ CFBundleExecutable: "../Helper" }));
+  await assert.rejects(resolvePackagedExecutable(app, "darwin"), /Invalid CFBundleExecutable/u);
 });
 test("accepts explicit installed executable outside checkout", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "packaged-exe-"));

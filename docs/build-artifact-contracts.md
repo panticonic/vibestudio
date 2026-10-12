@@ -228,11 +228,15 @@ electron-builder: it eagerly imports configured hooks even when `--prepackaged`
 skips their execution, and the hook import closure needs the built RPC package.
 This does not rebuild the application layout.
 Linux installer candidates live inside the same reusable graph as their native
-inputs. Separate x64 and arm64 jobs each wait only for their matching native
-producer and use one shared packaging recipe; neither waits for the other
-architecture, native verification, or the quality suite. These candidates run
-for configured Linux releases on tags. Each downloads only its architecture's
-payload and uploads checksum-protected installers bound to the exact source SHA.
+inputs. Separate x64 and arm64 application producers each wait only for their
+matching native payload. Each builds and prepares one installed application.
+Debian, RPM, and Arch format jobs then run concurrently from separate copies of
+that exact application: the package tool writes metadata into its input tree,
+so the copies are required to keep format jobs independent. The candidate job
+joins all three format results and uploads checksum-protected installers bound
+to the exact source SHA. Neither architecture waits for the other, native
+verification, or the quality suite. These candidates run for configured Linux
+releases on tags.
 Linux signing and attachment explicitly wait for both the complete reusable CI
 workflow, which includes both candidates, and its validated draft. Signing,
 artifact attachment, and making the release public still wait

@@ -11,7 +11,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 
 test("Linux candidate checksums admit native package architecture names and reject incomplete sets", async () => {
   const workflow = await readWorkflow("linux-installer.yml");
-  const command = workflow.jobs.package.steps
+  const command = workflow.jobs.candidate.steps
     .find((step) => step.name === "Generate installer checksums")
     .run.replaceAll("${{ inputs.arch }}", "x64");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "linux-candidate-checksums-"));
@@ -124,11 +124,22 @@ test("native artifact consumers wait for their exact producers without unrelated
     runner: { type: "string", required: true },
     arch: { type: "string", required: true },
   });
-  const linuxInstallerJob = linuxInstaller.jobs.package;
-  assert.equal(linuxInstallerJob["runs-on"], "\${{ inputs.runner }}");
-  assert.deepEqual(linuxInstallerJob.permissions, { contents: "read" });
-  const linuxSteps = linuxInstallerJob.steps;
-  const linuxDownload = linuxSteps.find(
+  const appJob = linuxInstaller.jobs.app;
+  const formatJob = linuxInstaller.jobs.format;
+  const candidateJob = linuxInstaller.jobs.candidate;
+  assert.equal(appJob["runs-on"], "\${{ inputs.runner }}");
+  assert.deepEqual(appJob.permissions, { contents: "read" });
+  assert.equal(appJob.needs, undefined);
+  assert.deepEqual(formatJob.needs, "app");
+  assert.deepEqual(formatJob.strategy, {
+    "max-parallel": 3,
+    "fail-fast": false,
+    matrix: { format: ["deb", "rpm", "pacman"] },
+  });
+  assert.deepEqual(candidateJob.needs, "format");
+
+  const appSteps = appJob.steps;
+  const linuxDownload = appSteps.find(
     (step) => step.name === "Download this architecture's tested MXC payload"
   );
   assert.equal(linuxDownload.with.name, "native-isolation-linux-\${{ inputs.arch }}");
@@ -136,17 +147,57 @@ test("native artifact consumers wait for their exact producers without unrelated
     linuxDownload.with.path,
     "native/isolation/artifacts/native-isolation-linux-\${{ inputs.arch }}"
   );
-  assert.equal(
-    linuxSteps.find((step) => step.name === "Build Linux installers").run,
-    "pnpm dist:linux"
+  const buildAppStep = appSteps.find(
+    (step) => step.name === "Build exact Linux application and prepare its installed workspace release"
   );
-  const linuxUpload = linuxSteps.find(
+  assert.equal(
+    buildAppStep.run,
+    'pnpm generate:workspace-template-release && pnpm build && node scripts/package-desktop.mjs linux app "${{ inputs.arch }}"'
+  );
+  const appUpload = appSteps.find(
+    (step) => step.name === "Upload exact Linux application for independent format packaging"
+  );
+  assert.equal(appUpload.with.name, "vibestudio-linux-app-\${{ inputs.arch }}-\${{ github.sha }}");
+  assert.equal(appUpload.with["compression-level"], 0);
+  const archiveStep = appSteps.find((step) => step.name === "Archive the immutable prepared application");
+  assert.match(archiveStep.run, /packages\/\*\/dist/u);
+  assert.match(archiveStep.run, /tar -cf linux-app\.tar release\/linux-unpacked/u);
+  assert.doesNotMatch(archiveStep.run, /--dereference|--hard-dereference/u);
+
+  const formatSteps = formatJob.steps;
+  const appArchiveDownload = formatSteps.find(
+    (step) => step.name === "Download exact prepared Linux application"
+  );
+  assert.equal(
+    appArchiveDownload.with.name,
+    "vibestudio-linux-app-\${{ inputs.arch }}-\${{ github.sha }}"
+  );
+  const packageStep = formatSteps.find(
+    (step) => step.name === "Package one installer from the prepared application"
+  );
+  assert.equal(
+    packageStep.run,
+    'node scripts/package-desktop.mjs linux format "\${{ matrix.format }}" release/linux-unpacked "\${{ inputs.arch }}"'
+  );
+  assert.doesNotMatch(packageStep.run, /pnpm (?:build|dist:linux)/u);
+  assert.doesNotMatch(JSON.stringify(formatSteps), /pnpm build:infrastructure/u);
+  const formatUpload = formatSteps.find(
+    (step) => step.name === "Upload one immutable Linux format candidate"
+  );
+  assert.equal(
+    formatUpload.with.name,
+    "vibestudio-linux-\${{ inputs.arch }}-\${{ github.sha }}-\${{ matrix.format }}"
+  );
+  assert.equal(formatUpload.with["compression-level"], 0);
+
+  const candidateSteps = candidateJob.steps;
+  const linuxUpload = candidateSteps.find(
     (step) => step.name === "Upload immutable Linux release candidate"
   );
   assert.equal(linuxUpload.with.name, "vibestudio-linux-\${{ inputs.arch }}-\${{ github.sha }}");
   assert.equal(linuxUpload.with["if-no-files-found"], "error");
   assert.equal(linuxUpload.with["retention-days"], 7);
-  assert.deepEqual(linuxInstallerJob.permissions, { contents: "read" });
+  assert.deepEqual(candidateJob.permissions, { contents: "read" });
   assert.doesNotMatch(JSON.stringify(linuxInstaller), /\$\{\{\s*secrets\./);
   assert.doesNotMatch(JSON.stringify(linuxInstaller), /softprops\/action-gh-release/);
 

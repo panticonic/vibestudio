@@ -13,6 +13,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { _electron as electron } from "@playwright/test";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
+import { resolveMacAppExecutable } from "./lib/mac-app-executable.mjs";
 
 const execute = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -20,11 +21,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function resolvePackagedExecutable(appPath, platform = process.platform) {
   const resolved = path.resolve(appPath);
   if ((await fs.stat(resolved)).isFile()) return resolved;
-  if (platform === "darwin" && resolved.endsWith(".app")) {
-    const binaries = await fs.readdir(path.join(resolved, "Contents", "MacOS"));
-    if (binaries.length !== 1) throw new Error("Packaged app must have one main MacOS executable");
-    return path.join(resolved, "Contents", "MacOS", binaries[0]);
-  }
+  if (platform === "darwin" && resolved.endsWith(".app")) return resolveMacAppExecutable(resolved);
   throw new Error("Pass the installed executable, or a macOS .app bundle");
 }
 export function parseOptions(argv) {

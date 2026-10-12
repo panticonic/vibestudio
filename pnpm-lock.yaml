@@ -446,6 +446,9 @@ importers:
       oxlint-tsgolint:
         specifier: 7.0.2001
         version: 7.0.2001
+      plist:
+        specifier: 3.1.0
+        version: 3.1.0
       prettier:
         specifier: ^3.6.2
         version: 3.8.1
@@ -11392,9 +11395,7 @@ snapshots:
       protobufjs: 7.6.6
       ws: 8.21.1
     transitivePeerDependencies:
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@grpc/grpc-js@1.14.4':
     dependencies:
@@ -13161,7 +13162,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

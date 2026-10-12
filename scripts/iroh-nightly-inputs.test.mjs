@@ -21,6 +21,24 @@ test("Android nightly smoke uses its source-server producer entrypoint", () => {
     "pnpm build:infrastructure && node scripts/cli/mobile-smoke.mjs --platform android"
   );
   assert.doesNotMatch(scripts["test:iroh-mobile-e2e"], /pnpm build(?!:infrastructure)/u);
+
+  const kvmGrant = androidJob.indexOf("- name: Grant the runner its KVM device access");
+  const emulatorAction = androidJob.indexOf("uses: reactivecircus/android-emulator-runner@");
+  assert.notEqual(kvmGrant, -1, "runner KVM access must be prepared explicitly");
+  assert.ok(kvmGrant < emulatorAction, "KVM access must be granted before the action detects acceleration");
+  const kvmSetup = androidJob.slice(kvmGrant, emulatorAction);
+  assert.match(kvmSetup, /set -euo pipefail/u);
+  assert.match(kvmSetup, /\[\[ ! -c "\$kvm_device" \]\]/u);
+  assert.match(kvmSetup, /command -v setfacl/u);
+  assert.match(kvmSetup, /sudo setfacl -m "u:\$\(id -u\):rw" "\$kvm_device"/u);
+  assert.match(kvmSetup, /! -r "\$kvm_device" \|\| ! -w "\$kvm_device"/u);
+
+  const emulatorConfig = androidJob.slice(emulatorAction);
+  assert.match(emulatorConfig, /disable-linux-hw-accel: false/u);
+  assert.match(
+    emulatorConfig,
+    /pre-emulator-launch-script: \|\n\s+set -euo pipefail\n\s+"\$ANDROID_HOME\/emulator\/emulator" -accel-check/u
+  );
 });
 
 test("desktop nightly smoke installs its native keyring and display runtime", () => {

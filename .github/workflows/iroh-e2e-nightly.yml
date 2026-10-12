@@ -87,10 +87,34 @@ jobs:
       - name: Set up Linux mobile source runtime
         uses: ./.github/actions/setup-linux-source-runtime
 
+      - name: Grant the runner its KVM device access
+        shell: bash
+        run: |
+          set -euo pipefail
+          kvm_device=/dev/kvm
+          if [[ ! -c "$kvm_device" ]]; then
+            echo "Android x86_64 emulator requires the runner's KVM device" >&2
+            exit 1
+          fi
+          if ! command -v setfacl >/dev/null 2>&1; then
+            echo "The runner image must provide setfacl to grant scoped KVM access" >&2
+            exit 1
+          fi
+
+          sudo setfacl -m "u:$(id -u):rw" "$kvm_device"
+          if [[ ! -r "$kvm_device" || ! -w "$kvm_device" ]]; then
+            echo "The runner still cannot read and write $kvm_device" >&2
+            exit 1
+          fi
+
       - name: Android Iroh pairing, approvals, panel lifecycle, and recovery
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 35
           arch: x86_64
           profile: pixel_6
+          disable-linux-hw-accel: false
+          pre-emulator-launch-script: |
+            set -euo pipefail
+            "$ANDROID_HOME/emulator/emulator" -accel-check
           script: pnpm test:iroh-mobile-e2e

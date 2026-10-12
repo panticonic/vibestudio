@@ -13,19 +13,22 @@ import {
   writeHostBuildFingerprint,
 } from "./host-build-fingerprint.mjs";
 
-test("runtime asset producer changes invalidate the host build fingerprint", () => {
+test("host artifact and release resolver changes invalidate the host build fingerprint", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-fingerprint-input-"));
   try {
-    const helper = path.join(root, "scripts/lib/sql-js-runtime-asset.mjs");
-    fs.mkdirSync(path.dirname(helper), { recursive: true });
-    fs.writeFileSync(helper, "export const revision = 1;\n");
+    const assetProducer = path.join(root, "scripts/lib/sql-js-runtime-asset.mjs");
+    const executableResolver = path.join(root, "scripts/lib/mac-app-executable.mjs");
+    for (const helper of [assetProducer, executableResolver])
+      fs.mkdirSync(path.dirname(helper), { recursive: true });
+    fs.writeFileSync(assetProducer, "export const revision = 1;\n");
+    fs.writeFileSync(executableResolver, "export const revision = 1;\n");
     const first = computeHostBuildFingerprint({ cwd: root, mode: "development" });
 
-    fs.writeFileSync(helper, "export const revision = 2;\n");
+    fs.writeFileSync(executableResolver, "export const revision = 2;\n");
     const second = computeHostBuildFingerprint({ cwd: root, mode: "development" });
 
-    assert.equal(first.inputCount, 1);
-    assert.equal(second.inputCount, 1);
+    assert.equal(first.inputCount, 2);
+    assert.equal(second.inputCount, 2);
     assert.notEqual(first.fingerprint, second.fingerprint);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

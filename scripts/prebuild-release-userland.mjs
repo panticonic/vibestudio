@@ -8,6 +8,7 @@ import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
 import { joinChildProcess } from "./lib/join-child-process.mjs";
+import { resolveMacAppExecutable } from "./lib/mac-app-executable.mjs";
 import {
   hasOwnershipFailure,
   runOwnedCleanupSteps,
@@ -219,7 +220,7 @@ export async function withInstalledReleaseSession(context, operation) {
   const product = context.packager.appInfo.productFilename;
   const executable =
     context.electronPlatformName === "darwin"
-      ? path.join(context.appOutDir, `${product}.app`, "Contents", "MacOS", product)
+      ? await resolveMacAppExecutable(path.join(context.appOutDir, `${product}.app`))
       : path.join(context.appOutDir, `${product}${process.platform === "win32" ? ".exe" : ""}`);
   const appRoot = path.join(resources, "app.asar");
   const unpacked = path.join(resources, "app.asar.unpacked");
@@ -517,7 +518,7 @@ export async function prepareInstalledWorkspaceTemplates(context) {
   const product = context.packager.appInfo.productFilename;
   const executable =
     context.electronPlatformName === "darwin"
-      ? path.join(context.appOutDir, `${product}.app`, "Contents", "MacOS", product)
+      ? await resolveMacAppExecutable(path.join(context.appOutDir, `${product}.app`))
       : path.join(context.appOutDir, `${product}${process.platform === "win32" ? ".exe" : ""}`);
   await prepareInstalledTemplateRelease({
     appRoot: path.join(resources, "app.asar"),
