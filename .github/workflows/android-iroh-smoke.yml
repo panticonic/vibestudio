@@ -68,3 +68,14 @@ jobs:
             set -eu
             "$ANDROID_HOME/emulator/emulator" -accel-check
           script: pnpm test:iroh-mobile-e2e
+
+      # This smoke compiles checked-in public System mobile source in isolated
+      # test mode. Runtime provider credentials are not embedded in the bundle.
+      - name: Upload Android bundle failure evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-bundle-failure-${{ github.run_id }}
+          path: test-results/mobile-smoke/bundle-failure-*/*
+          if-no-files-found: ignore
+          retention-days: 3

@@ -106,6 +106,7 @@ export function observeMobileSmokeLog(child, { expectedPhases, deadlineMs, packa
     throwIfTerminalFailure();
     return phases.has(phase);
   };
+  const observedPhase = (phase) => phases.has(phase);
   const phaseCount = (phase) => phases.get(phase) ?? 0;
   const waitForPhaseAfter = async (phase, previousCount, timeoutMs) => {
     const occurrenceDeadlineMs = Date.now() + timeoutMs;
@@ -147,6 +148,7 @@ export function observeMobileSmokeLog(child, { expectedPhases, deadlineMs, packa
     waitForPhaseAfter,
     waitForAnyPhase,
     hasPhase,
+    observedPhase,
     phaseCount,
     releaseAppProcess,
   };

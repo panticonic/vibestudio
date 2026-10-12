@@ -4,6 +4,7 @@
 // the workspace app, and rendering the automatic Personal onboarding chat.
 
 import fsp from "node:fs/promises";
+import crypto from "node:crypto";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +24,11 @@ import {
   waitForRootInvite,
 } from "./lib/smoke-remote-server.mjs";
 import { observeMobileSmokeLog } from "./lib/mobile-smoke-log.mjs";
+import {
+  activeBundleCacheRelativePath,
+  bundleLineExcerpt,
+  parseHermesLocation,
+} from "./lib/android-bundle-diagnostic.mjs";
 import { buildAndroidApp } from "./lib/mobile-native-android.mjs";
 import {
   androidEmulatorSerial,
@@ -788,6 +794,181 @@ function runCommandBuffer(command, args, options = {}) {
 
 async function adbCaptureBuffer(device, ...args) {
   return runCommandBuffer("adb", makeAdbArgs(device, args));
+}
+
+async function retainAndroidBundleFailure(device, packageName, failure, compilerMatchesHost) {
+  const preferences = await adbCapture(
+    device,
+    "shell",
+    "run-as",
+    packageName,
+    "cat",
+    "shared_prefs/vibestudio-mobile-host.xml"
+  );
+  const relativePath = activeBundleCacheRelativePath(preferences.stdout);
+  const { stdout: bundle } = await adbCaptureBuffer(
+    device,
+    "exec-out",
+    "run-as",
+    packageName,
+    "cat",
+    relativePath
+  );
+  let sourceMap = null;
+  try {
+    const result = await adbCaptureBuffer(
+      device,
+      "exec-out",
+      "run-as",
+      packageName,
+      "cat",
+      `${relativePath}.map`
+    );
+    sourceMap = result.stdout;
+  } catch {
+    // Android source maps are optional; retain one only when the exact sibling
+    // emitted with this build was delivered to the app cache.
+  }
+  const diagnosticRoot = path.join(
+    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
+    "vibestudio",
+    "mobile-smoke-failures"
+  );
+  await fsp.mkdir(diagnosticRoot, { recursive: true, mode: 0o700 });
+  await fsp.chmod(diagnosticRoot, 0o700);
+  const diagnosticDir = await fsp.mkdtemp(path.join(diagnosticRoot, `${Date.now()}-`));
+  await fsp.chmod(diagnosticDir, 0o700);
+  const bundlePath = path.join(diagnosticDir, "activated.bundle");
+  await fsp.writeFile(bundlePath, bundle, { mode: 0o600 });
+  if (sourceMap) {
+    await fsp.writeFile(path.join(diagnosticDir, "activated.bundle.map"), sourceMap, {
+      mode: 0o600,
+    });
+  }
+
+  const failureText = String(failure?.stack ?? failure);
+  const bundleText = bundle.toString("utf8");
+  let excerpt = null;
+  const platformHermesDir =
+    process.platform === "darwin"
+      ? "osx-bin"
+      : process.platform === "win32"
+        ? "win64-bin"
+        : "linux64-bin";
+  const hermesExecutable = process.platform === "win32" ? "hermesc.exe" : "hermesc";
+  const hermesc =
+    process.env.VIBESTUDIO_HERMESC ??
+    path.join(
+      repoRoot,
+      "node_modules",
+      "react-native",
+      "sdks",
+      "hermesc",
+      platformHermesDir,
+      hermesExecutable
+    );
+  let hermes = { status: "unavailable", executable: hermesc };
+  let hermesDiagnostic = "";
+  try {
+    const version = await runCommandBuffer(hermesc, ["-version"]);
+    const parsed = await runCommandBuffer(hermesc, [
+      "-dump-ast",
+      "-out",
+      process.platform === "win32" ? "NUL" : "/dev/null",
+      bundlePath,
+    ]);
+    hermes = {
+      status: "parsed",
+      executable: hermesc,
+      version: version.stdout.toString("utf8").trim(),
+      diagnostic: parsed.stderr.slice(-8000),
+    };
+  } catch (error) {
+    hermesDiagnostic = String(error?.message ?? error).slice(-8000);
+    hermes = {
+      status: hermesDiagnostic.includes("failed with code") ? "rejected" : "unavailable",
+      executable: hermesc,
+      diagnostic: hermesDiagnostic,
+    };
+  }
+  const location =
+    parseHermesLocation(failureText) ?? parseHermesLocation(hermesDiagnostic);
+  excerpt = bundleLineExcerpt(bundleText, location);
+  const report = {
+    capturedAt: new Date().toISOString(),
+    activeBundlePath: relativePath,
+    bundlePath,
+    bundleBytes: bundle.byteLength,
+    sha256: crypto.createHash("sha256").update(bundle).digest("hex"),
+    sourceMap: sourceMap
+      ? {
+          path: path.join(diagnosticDir, "activated.bundle.map"),
+          bytes: sourceMap.byteLength,
+          sha256: crypto.createHash("sha256").update(sourceMap).digest("hex"),
+        }
+      : null,
+    failure: failureText.slice(-12000),
+    location,
+    excerpt,
+    hermes,
+    compilerMatchesHost,
+    note: "Hermes ran against the exact activated bytes after the failure. A true compilerMatchesHost value means this smoke run built and installed the Android host with the same VIBESTUDIO_HERMESC environment and React Native toolchain used here.",
+  };
+  await fsp.writeFile(
+    path.join(diagnosticDir, "diagnostic.json"),
+    `${JSON.stringify(report, null, 2)}\n`,
+    { mode: 0o600 }
+  );
+  await fsp.chmod(path.join(diagnosticDir, "diagnostic.json"), 0o600);
+  console.error(`[mobile-smoke] Retained activated Android bundle failure evidence: ${diagnosticDir}`);
+  if (location) {
+    console.error(
+      `[mobile-smoke] Hermes failure location: ${JSON.stringify(location)} (excerpt retained in diagnostic.json)`
+    );
+  }
+  console.error(`[mobile-smoke] Hermes parse result: ${hermes.status}`);
+  console.error(`[mobile-smoke] Activated bundle SHA-256: ${report.sha256}`);
+
+  const summaryDir = path.join(repoRoot, "test-results", "mobile-smoke");
+  await fsp.mkdir(summaryDir, { recursive: true, mode: 0o700 });
+  const artifactDir = path.join(
+    summaryDir,
+    `bundle-failure-${process.env.GITHUB_RUN_ID ?? Date.now()}-${process.pid}`
+  );
+  await fsp.mkdir(artifactDir, { recursive: true, mode: 0o700 });
+  await fsp.chmod(artifactDir, 0o700);
+  await fsp.writeFile(path.join(artifactDir, "activated.bundle"), bundle, { mode: 0o600 });
+  if (sourceMap) {
+    await fsp.writeFile(path.join(artifactDir, "activated.bundle.map"), sourceMap, {
+      mode: 0o600,
+    });
+  }
+  const artifactManifest = {
+    capturedAt: report.capturedAt,
+    activeBundlePath: relativePath,
+    bundleBytes: report.bundleBytes,
+    sha256: report.sha256,
+    sourceMap: report.sourceMap
+      ? {
+          file: "activated.bundle.map",
+          bytes: report.sourceMap.bytes,
+          sha256: report.sourceMap.sha256,
+        }
+      : null,
+    hermes: {
+      status: hermes.status,
+      version: hermes.version ?? null,
+      compilerMatchesHost,
+      location,
+      diagnostic: hermes.status === "rejected" ? "Hermes rejected the activated bundle" : null,
+    },
+  };
+  const manifestPath = path.join(artifactDir, "manifest.json");
+  await fsp.writeFile(manifestPath, `${JSON.stringify(artifactManifest, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  await fsp.chmod(manifestPath, 0o600);
+  console.error(`[mobile-smoke] CI bundle evidence directory: ${artifactDir}`);
 }
 
 async function runMobileInstall(options, lifetime) {
@@ -2017,6 +2198,8 @@ async function runSmoke(
   const readyFilePath = path.join(tempRoot, "server-ready.json");
 
   let operationFailure;
+  let managedBundleActivated = false;
+  let logcat = null;
   let cleanupPromise;
   const cleanup = () => cleanupPromise ??= (async () => {
     const failures = [];
@@ -2270,7 +2453,7 @@ async function runSmoke(
       "workspace-panel-asset-no-store",
     ];
     const pairingDeadlineMs = Date.now() + options.pairingTimeoutMs;
-    const logcat = startLogcat(lifetime.acquire, options.device, phases, pairingDeadlineMs, options.packageName);
+    logcat = startLogcat(lifetime.acquire, options.device, phases, pairingDeadlineMs, options.packageName);
     await waitForLogcatReady(options.device, logcat);
 
     const link = buildConnectLinkFromLog(invite.pairUrl);
@@ -2312,6 +2495,7 @@ async function runSmoke(
       // network pairing, and legitimately use the runner's build timeout.
       const phaseDeadlineMs = Date.now() + options.timeoutMs;
       await waitForPhaseTappingApprovals(options.device, logcat, phase, phaseDeadlineMs);
+      if (phase === "embedded-bundle-activate-complete") managedBundleActivated = true;
     }
     const managedConnectionDeadlineMs = Date.now() + options.pairingTimeoutMs;
     await waitForPhaseTappingApprovals(
@@ -2509,6 +2693,23 @@ async function runSmoke(
     );
   } catch (error) {
     operationFailure = error;
+    if (
+      options.platform === "android" &&
+      (managedBundleActivated || logcat?.observedPhase("native-bundle-activated"))
+    ) {
+      try {
+        await retainAndroidBundleFailure(
+          options.device,
+          options.packageName,
+          error,
+          !options.noBuild && !options.noInstall
+        );
+      } catch (diagnosticError) {
+        console.error(
+          `[mobile-smoke] Could not retain activated Android bundle evidence: ${diagnosticError?.stack ?? diagnosticError}`
+        );
+      }
+    }
   } finally {
     ownerSignal.removeEventListener("abort", stop);
     for (const signal of ["SIGINT", "SIGTERM"]) process.off(signal, stop);
