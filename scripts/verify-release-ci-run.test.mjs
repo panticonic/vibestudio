@@ -19,6 +19,9 @@ test("candidate gate requires every quality result and each enabled release acce
   needs["accept-macos-release-candidate"] = { result: "success" };
   const enabled = { linux: true, mac: true, windows: true };
   assert.doesNotThrow(() => validateCandidateGate(needs, enabled));
+  needs["quality-followup"] = { result: "failure" };
+  assert.throws(() => validateCandidateGate(needs, enabled), /quality-followup/u);
+  needs["quality-followup"] = { result: "success" };
   needs["quality-desktop"] = { result: "skipped" };
   needs["accept-macos-release-candidate"] = { result: "failure" };
   assert.throws(

@@ -725,6 +725,7 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.ok(gate.steps.some((step) => step.name === "Download exact quality template inputs"));
   assert.ok(gate.needs.includes("quality"));
+  assert.ok(gate.needs.includes("quality-followup"));
   assert.ok(gate.needs.includes("quality-desktop"));
   assert.ok(gate.needs.includes("npm-server-preflight"));
   assert.ok(gate.needs.includes("sign-linux-release-candidate"));

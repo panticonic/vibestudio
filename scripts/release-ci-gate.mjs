@@ -4,6 +4,7 @@ import fs from "node:fs";
 export const requiredResults = [
   "release-metadata",
   "quality",
+  "quality-followup",
   "quality-desktop",
   "mac-portability",
   "native-isolation-linux-x64",
