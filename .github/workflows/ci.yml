@@ -208,6 +208,31 @@ jobs:
     permissions:
       contents: read
 
+  linux-installer-x64:
+    name: Build Linux x64 installer candidate
+    # Release candidates need only their matching native input. These jobs run
+    # inside release-quality on tags; the release publishers still wait for the
+    # entire reusable CI workflow and every candidate gate.
+    needs: native-input-linux-x64
+    if: ${{ vars.RELEASE_LINUX == 'true' && github.ref_type == 'tag' }}
+    uses: ./.github/workflows/linux-installer.yml
+    with:
+      runner: ubuntu-24.04
+      arch: x64
+    permissions:
+      contents: read
+
+  linux-installer-arm64:
+    name: Build Linux arm64 installer candidate
+    needs: native-input-linux-arm64
+    if: ${{ vars.RELEASE_LINUX == 'true' && github.ref_type == 'tag' }}
+    uses: ./.github/workflows/linux-installer.yml
+    with:
+      runner: ubuntu-24.04-arm
+      arch: arm64
+    permissions:
+      contents: read
+
   native-isolation-linux-x64:
     name: Verify native workspace execution (linux-x64)
     needs: native-input-linux-x64

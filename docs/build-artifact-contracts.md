@@ -118,6 +118,15 @@ source artifact production distinct from a cold installed launch with completed
 prepared artifacts. Neither increasing a smoke deadline nor serving an unproven
 workspace establishes fast startup.
 
+Source preparation uses the canonical shared derived build cache. Each hit must
+pass the existing build identity, manifest, payload, and workspace-authority
+checks before export into the launch's complete local artifact set. Fresh scratch
+paths must not force a new cache identity on every launch. A packaged consumer
+uses its exported release artifacts and does not depend on the producer's cache.
+Cold verification and profiling select a private cache through the existing
+`VIBESTUDIO_SHARED_DERIVED_CACHE_DIR` input; their owner retires that cache after
+joining all work. Ordinary launch never deletes the inherited shared cache.
+
 The CI graph in `.github/workflows/ci.yml` expresses per-platform artifact
 dependencies, rather than broad verification barriers. Native producer jobs
 prepare executor payloads and source-attested Darwin observers once. Each Unix
@@ -159,10 +168,15 @@ variation in shared reusable workflows rather than copying build recipes.
 The reusable CI workflow must still succeed in full before the release
 workflow creates its draft. Windows installer jobs prepare private, run-scoped
 candidates alongside that validation, using read-only repository permissions.
-Linux installers wait for the reusable CI boundary because their native input
-producers are internal jobs of that workflow. Exposing those exact producer edges
-at the caller is the prerequisite for overlapping Linux packaging with unrelated
-checks. Signing, artifact attachment, and making the release public still wait
+Linux installer candidates live inside the same reusable graph as their native
+inputs. Separate x64 and arm64 jobs each wait only for their matching native
+producer and use one shared packaging recipe; neither waits for the other
+architecture, native verification, or the quality suite. These candidates run
+for configured Linux releases on tags. Each downloads only its architecture's
+payload and uploads checksum-protected installers bound to the exact source SHA.
+Linux signing and attachment explicitly wait for both the complete reusable CI
+workflow, which includes both candidates, and its validated draft. Signing,
+artifact attachment, and making the release public still wait
 for the validated draft and exact candidate; installed acceptance remains a
 required gate where defined.
 The Apple-credentialed macOS build stays behind the draft. Keep `needs` edges

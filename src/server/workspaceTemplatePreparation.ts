@@ -63,12 +63,9 @@ export async function prepareWorkspaceTemplates(input: {
   process.env["VIBESTUDIO_INSTANCE_ROOT"] = input.scratch;
   const centralDataRoot = getCentralDataPath();
   const sharedDerivedRoot = getSharedDerivedDataPath();
-  // All release roles compile from independent state roots but share this
-  // operation-owned reconstruction cache. Build keys include the exact root
-  // dependency fingerprint and effective source identity, so a role can reuse
-  // a completed build only after its own store validates and hydrates it.
-  const sharedBuildArtifactPoolRoot = path.join(input.scratch, "shared-build-artifacts");
-  const sharedBuildResultCacheRoot = path.join(input.scratch, "shared-build-results");
+  // Each role uses the canonical shared derived cache. BuildStore validates
+  // exact build identity and hydrates into that role's private state before
+  // reusing cached artifacts.
   const processOwner = createBuildProcessOwner({
     appRoot: input.appRoot,
     appNodeModules: getExistingAppNodeModulesRoots(input.appRoot),
@@ -315,8 +312,6 @@ export async function prepareWorkspaceTemplates(input: {
                 stateRoot: statePath,
                 centralDataRoot,
                 sharedDerivedRoot,
-                artifactPoolOverride: sharedBuildArtifactPoolRoot,
-                buildResultCacheOverride: sharedBuildResultCacheRoot,
               }),
               releaseBuildRoot: path.join(
                 workspaceReleaseResourceRoot(input.appRoot),

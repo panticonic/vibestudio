@@ -62,6 +62,64 @@ test("native artifact consumers wait for their exact producers without unrelated
     assert.equal(jobs[producer].with.runner, runner);
   }
 
+  for (const [candidate, producer, verifier, runner, arch] of [
+    [
+      "linux-installer-x64",
+      "native-input-linux-x64",
+      "native-isolation-linux-x64",
+      "ubuntu-24.04",
+      "x64",
+    ],
+    [
+      "linux-installer-arm64",
+      "native-input-linux-arm64",
+      "native-isolation-linux-arm64",
+      "ubuntu-24.04-arm",
+      "arm64",
+    ],
+  ]) {
+    const job = jobs[candidate];
+    assert.deepEqual(dependenciesOf(job), [producer]);
+    assert.equal(job.if, "\${{ vars.RELEASE_LINUX == 'true' && github.ref_type == 'tag' }}");
+    assert.equal(job.uses, "./.github/workflows/linux-installer.yml");
+    assert.deepEqual(job.with, { runner, arch });
+    assert.ok(
+      !transitiveDependencies(jobs, candidate).has(verifier),
+      `${candidate} must not wait for its native verification job`
+    );
+  }
+
+  const linuxInstaller = await readWorkflow("linux-installer.yml");
+  assert.deepEqual(linuxInstaller.on.workflow_call.inputs, {
+    runner: { type: "string", required: true },
+    arch: { type: "string", required: true },
+  });
+  const linuxInstallerJob = linuxInstaller.jobs.package;
+  assert.equal(linuxInstallerJob["runs-on"], "\${{ inputs.runner }}");
+  assert.deepEqual(linuxInstallerJob.permissions, { contents: "read" });
+  const linuxSteps = linuxInstallerJob.steps;
+  const linuxDownload = linuxSteps.find(
+    (step) => step.name === "Download this architecture's tested MXC payload"
+  );
+  assert.equal(linuxDownload.with.name, "native-isolation-linux-\${{ inputs.arch }}");
+  assert.equal(
+    linuxDownload.with.path,
+    "native/isolation/artifacts/native-isolation-linux-\${{ inputs.arch }}"
+  );
+  assert.equal(
+    linuxSteps.find((step) => step.name === "Build Linux installers").run,
+    "pnpm dist:linux"
+  );
+  const linuxUpload = linuxSteps.find(
+    (step) => step.name === "Upload immutable Linux release candidate"
+  );
+  assert.equal(linuxUpload.with.name, "vibestudio-linux-\${{ inputs.arch }}-\${{ github.sha }}");
+  assert.equal(linuxUpload.with["if-no-files-found"], "error");
+  assert.equal(linuxUpload.with["retention-days"], 7);
+  assert.deepEqual(linuxInstallerJob.permissions, { contents: "read" });
+  assert.doesNotMatch(JSON.stringify(linuxInstaller), /\$\{\{\s*secrets\./);
+  assert.doesNotMatch(JSON.stringify(linuxInstaller), /softprops\/action-gh-release/);
+
   for (const [verifier, producer, target, runner] of [
     ["native-isolation-linux-x64", "native-input-linux-x64", "linux-x64", "ubuntu-22.04"],
     ["native-isolation-linux-arm64", "native-input-linux-arm64", "linux-arm64", "ubuntu-22.04-arm"],
@@ -224,15 +282,15 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.equal(releaseJobs["release-quality"].uses, "./.github/workflows/ci.yml");
   assert.deepEqual(dependenciesOf(releaseJobs["github-release"]), ["release-quality"]);
 
-  assert.deepEqual(
-    dependenciesOf(releaseJobs["linux-installers"]),
-    ["release-quality"],
-    "Linux packaging must wait until the reusable CI workflow has uploaded its native payloads"
-  );
+  assert.equal(releaseJobs["linux-installers"], undefined);
+  assert.deepEqual(dependenciesOf(releaseJobs["publish-linux"]), [
+    "github-release",
+    "release-quality",
+  ]);
   assert.match(
-    JSON.stringify(releaseJobs["linux-installers"]),
-    /native-isolation-/,
-    "Linux packaging consumes the native artifacts published by reusable CI"
+    JSON.stringify(releaseJobs["publish-linux"]),
+    /vibestudio-linux-\*-/,
+    "Linux publication consumes the per-architecture candidates from release-quality"
   );
   assert.deepEqual(
     dependenciesOf(releaseJobs["windows-installer"]),
@@ -241,10 +299,7 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.doesNotMatch(JSON.stringify(releaseJobs["windows-installer"]), /download-artifact/);
 
-  for (const [producer, publisher] of [
-    ["linux-installers", "publish-linux"],
-    ["windows-installer", "publish-windows"],
-  ]) {
+  for (const [producer, publisher] of [["windows-installer", "publish-windows"]]) {
     const job = releaseJobs[producer];
     const ancestors = transitiveDependencies(releaseJobs, producer);
     assert.ok(
@@ -276,7 +331,7 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
 
   for (const [publisher, producer, acceptance] of [
-    ["publish-linux", "linux-installers", undefined],
+    ["publish-linux", "release-quality", undefined],
     ["publish-windows", "windows-installer", "accept-windows-installer"],
     ["publish-macos", "mac-dmg", "accept-macos-installer"],
   ]) {
