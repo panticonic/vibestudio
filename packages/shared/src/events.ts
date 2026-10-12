@@ -48,6 +48,7 @@ export type EventName =
   | "workspace:revision-bumped"
   | "workspace:protected-refs-changed"
   | "workspace:config-changed"
+  | "workspace:units-changed"
   | "credential:capture-request"
   | "server-log:append"
   | "presence:panel-active"
@@ -499,6 +500,14 @@ export interface EventPayloads {
   "workspace:protected-refs-changed": { repoPaths: string[] };
   "workspace:config-changed": Record<string, never>;
   /**
+   * Workspace units changed effective version after a protected publication
+   * (added, removed or edited units). Launchable-unit catalogs (e.g.
+   * `workers.listSources`) are stale after this event.
+   */
+  "workspace:units-changed": {
+    units: Array<{ name: string; relativePath: string; kind: string }>;
+  };
+  /**
    * The server asks the attached desktop shell to run an interactive session
    * credential capture (browser sign-in). The shell answers with
    * `credentials.completeCapture(captureId, completion)`, carrying either the
@@ -608,6 +617,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "workspace:revision-bumped",
   "workspace:protected-refs-changed",
   "workspace:config-changed",
+  "workspace:units-changed",
   "credential:capture-request",
   "server-log:append",
   "presence:panel-active",

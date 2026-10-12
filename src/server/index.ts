@@ -2797,6 +2797,25 @@ async function main() {
     },
   });
 
+  // Unit-set changes are a workspace event: clients that list launchable units
+  // (agent galleries, recovery of installed agents) re-read on this instead of
+  // polling. The build system reports one change per unit; a publication's
+  // changes are coalesced into one event per turn.
+  container.registerManaged({
+    name: "buildUnitEvents",
+    dependencies: ["buildSystem"],
+    async start(resolve) {
+      const { forwardUnitChanges } = await import("./buildUnitEvents.js");
+      return forwardUnitChanges(
+        assertPresent(resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")),
+        (payload) => eventService.emit("workspace:units-changed", payload)
+      );
+    },
+    async stop(unsubscribe: (() => void) | undefined) {
+      unsubscribe?.();
+    },
+  });
+
   // ── RPC-only services (replacing serverServiceRegistry.ts) ──
 
   const { createBuildService } = await import("./services/buildService.js");
