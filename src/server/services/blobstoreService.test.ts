@@ -164,6 +164,14 @@ function digestForRepeatedByte(byte: number, totalBytes: number, chunkBytes = 64
   return hash.digest("hex");
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("blobstoreService", () => {
   let rootDir: string;
   let blobsDir: string;
@@ -370,6 +378,217 @@ describe("blobstoreService", () => {
     expect(readFile.mock.calls.filter(([file]) => file === statePath)).toHaveLength(1);
     expect(readFile.mock.calls.filter(([file]) => file === treePath)).toHaveLength(1);
     readFile.mockRestore();
+  });
+
+  it("loads an available subtree while an independent sibling read is still pending", async () => {
+    const slowLeafBytes = await putBytes(blobsDir, Buffer.from("slow leaf", "utf8"));
+    const fastLeafBytes = await putBytes(blobsDir, Buffer.from("fast leaf", "utf8"));
+    const slowRoot = await putTree(blobsDir, [
+      { name: "slow.txt", kind: "file", contentHash: slowLeafBytes.digest, mode: 0o100644 },
+    ]);
+    const fastChild = await putTree(blobsDir, [
+      { name: "fast.txt", kind: "file", contentHash: fastLeafBytes.digest, mode: 0o100644 },
+    ]);
+    const fastRoot = await putTree(blobsDir, [
+      { name: "child", kind: "dir", childHash: fastChild.treeHash },
+    ]);
+    const slowPath = blobPath(blobsDir, treeHashDigest(slowRoot.treeHash));
+    const childPath = blobPath(blobsDir, treeHashDigest(fastChild.treeHash));
+    const slowBytes = await fsp.readFile(slowPath);
+    const slowRead = deferred<typeof slowBytes>();
+    const slowReadEntered = deferred<void>();
+    let childReadWasEntered = false;
+    const readFile = fsp.readFile.bind(fsp);
+    const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+      const filePath = String(args[0]);
+      if (filePath === slowPath) {
+        slowReadEntered.resolve();
+        return slowRead.promise;
+      }
+      if (filePath === childPath) childReadWasEntered = true;
+      return readFile(...args);
+    });
+
+    const proofPromise = proveTreeReachabilityBatch(blobsDir, [
+      slowRoot.treeHash,
+      fastRoot.treeHash,
+    ]);
+    let interleavingFailure: unknown;
+    try {
+      await slowReadEntered.promise;
+      await vi.waitFor(() => expect(childReadWasEntered).toBe(true), { timeout: 1000 });
+    } catch (error) {
+      interleavingFailure = error;
+    } finally {
+      slowRead.resolve(slowBytes);
+    }
+
+    let proof: Awaited<typeof proofPromise>;
+    try {
+      proof = await proofPromise;
+    } finally {
+      readSpy.mockRestore();
+    }
+    if (interleavingFailure) throw interleavingFailure;
+    expect(proof.outcomes).toEqual([
+      { status: "fulfilled", value: { ref: slowRoot.treeHash, treeHash: slowRoot.treeHash } },
+      { status: "fulfilled", value: { ref: fastRoot.treeHash, treeHash: fastRoot.treeHash } },
+    ]);
+    expect(proof.profile.uniqueTreeNodes).toBe(3);
+  });
+
+  it("keeps all four read slots available for a single root's wide subtree", async () => {
+    const childTrees = await Promise.all(
+      Array.from({ length: 5 }, async (_, index) => {
+        const file = await putBytes(blobsDir, Buffer.from(`child-${index}`, "utf8"));
+        return putTree(blobsDir, [
+          { name: `value-${index}`, kind: "file", contentHash: file.digest, mode: 0o100644 },
+        ]);
+      })
+    );
+    const root = await putTree(
+      blobsDir,
+      childTrees.map(({ treeHash }, index) => ({
+        name: `child-${index}`,
+        kind: "dir" as const,
+        childHash: treeHash,
+      }))
+    );
+    const childReads = await Promise.all(
+      childTrees.map(async ({ treeHash }) => {
+        const filePath = blobPath(blobsDir, treeHashDigest(treeHash));
+        const bytes = await fsp.readFile(filePath);
+        return { path: filePath, bytes, gate: deferred<typeof bytes>() };
+      })
+    );
+    const started = new Set<string>();
+    let active = 0;
+    let maxActive = 0;
+    const readFile = fsp.readFile.bind(fsp);
+    const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+      const filePath = String(args[0]);
+      const childRead = childReads.find((candidate) => candidate.path === filePath);
+      if (!childRead) return readFile(...args);
+      started.add(filePath);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      return childRead.gate.promise.finally(() => {
+        active -= 1;
+      });
+    });
+
+    const proofPromise = proveTreeReachabilityBatch(blobsDir, [root.treeHash]);
+    let admissionFailure: unknown;
+    try {
+      await vi.waitFor(() => expect(started.size).toBe(4), { timeout: 1000 });
+      const first = childReads[0]!;
+      first.gate.resolve(first.bytes);
+      await vi.waitFor(() => expect(started.size).toBe(5), { timeout: 1000 });
+      expect(maxActive).toBe(4);
+    } catch (error) {
+      admissionFailure = error;
+    } finally {
+      for (const childRead of childReads) childRead.gate.resolve(childRead.bytes);
+    }
+
+    let proof: Awaited<typeof proofPromise>;
+    try {
+      proof = await proofPromise;
+    } finally {
+      readSpy.mockRestore();
+    }
+    if (admissionFailure) throw admissionFailure;
+    expect(proof.outcomes).toEqual([
+      { status: "fulfilled", value: { ref: root.treeHash, treeHash: root.treeHash } },
+    ]);
+    expect(proof.profile.uniqueTreeNodes).toBe(6);
+  });
+
+  it("revisits a shared loaded node when a shallower root path arrives later", async () => {
+    const leaf = await putBytes(blobsDir, Buffer.from("shared child", "utf8"));
+    const child = await putTree(blobsDir, [
+      { name: "value", kind: "file", contentHash: leaf.digest, mode: 0o100644 },
+    ]);
+    const shared = await putTree(blobsDir, [
+      { name: "child", kind: "dir", childHash: child.treeHash },
+    ]);
+    let deepRootHash = shared.treeHash;
+    for (let depth = 0; depth < 128; depth += 1) {
+      deepRootHash = (
+        await putTree(blobsDir, [{ name: "next", kind: "dir", childHash: deepRootHash }])
+      ).treeHash;
+    }
+    const sentinelLeaf = await putBytes(blobsDir, Buffer.from("shallow sentinel", "utf8"));
+    const sentinel = await putTree(blobsDir, [
+      { name: "sentinel", kind: "file", contentHash: sentinelLeaf.digest, mode: 0o100644 },
+    ]);
+    const shallowRoot = await putTree(blobsDir, [
+      { name: "a-sentinel", kind: "dir", childHash: sentinel.treeHash },
+      { name: "z-shared", kind: "dir", childHash: shared.treeHash },
+    ]);
+    const sharedPath = blobPath(blobsDir, treeHashDigest(shared.treeHash));
+    const shallowRootPath = blobPath(blobsDir, treeHashDigest(shallowRoot.treeHash));
+    const childPath = blobPath(blobsDir, treeHashDigest(child.treeHash));
+    const sharedBytes = await fsp.readFile(sharedPath);
+    const shallowRootBytes = await fsp.readFile(shallowRootPath);
+    const sharedRead = deferred<typeof sharedBytes>();
+    const shallowRootRead = deferred<typeof shallowRootBytes>();
+    const sharedReadEntered = deferred<void>();
+    const shallowRootReadEntered = deferred<void>();
+    let sentinelReadEntered = false;
+    let childReadEntered = false;
+    let sharedReadCount = 0;
+    const readFile = fsp.readFile.bind(fsp);
+    const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+      const filePath = String(args[0]);
+      if (filePath === sharedPath) {
+        sharedReadCount += 1;
+        sharedReadEntered.resolve();
+        return sharedRead.promise;
+      }
+      if (filePath === shallowRootPath) {
+        shallowRootReadEntered.resolve();
+        return shallowRootRead.promise;
+      }
+      if (filePath === blobPath(blobsDir, treeHashDigest(sentinel.treeHash))) {
+        sentinelReadEntered = true;
+      }
+      if (filePath === childPath) childReadEntered = true;
+      return readFile(...args);
+    });
+
+    const proofPromise = proveTreeReachabilityBatch(blobsDir, [deepRootHash, shallowRoot.treeHash]);
+    let schedulingFailure: unknown;
+    try {
+      await Promise.all([sharedReadEntered.promise, shallowRootReadEntered.promise]);
+      shallowRootRead.resolve(shallowRootBytes);
+      await vi.waitFor(() => expect(sentinelReadEntered).toBe(true), { timeout: 3000 });
+      sharedRead.resolve(sharedBytes);
+      await vi.waitFor(() => expect(childReadEntered).toBe(true), { timeout: 1000 });
+    } catch (error) {
+      schedulingFailure = error;
+    } finally {
+      sharedRead.resolve(sharedBytes);
+      shallowRootRead.resolve(shallowRootBytes);
+    }
+
+    let proof: Awaited<typeof proofPromise>;
+    try {
+      proof = await proofPromise;
+    } finally {
+      readSpy.mockRestore();
+    }
+    if (schedulingFailure) throw schedulingFailure;
+    expect(sharedReadCount).toBe(1);
+    expect(proof.outcomes[0]).toMatchObject({ status: "rejected" });
+    if (proof.outcomes[0]?.status === "rejected") {
+      expect((proof.outcomes[0].reason as Error).message).toMatch(/max depth/);
+    }
+    expect(proof.outcomes[1]).toEqual({
+      status: "fulfilled",
+      value: { ref: shallowRoot.treeHash, treeHash: shallowRoot.treeHash },
+    });
+    expect(proof.graph.has(child.treeHash)).toBe(true);
   });
 
   it("checks a shared subtree's depth at every root occurrence", async () => {

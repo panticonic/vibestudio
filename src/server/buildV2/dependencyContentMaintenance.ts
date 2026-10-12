@@ -287,5 +287,4 @@ function startPendingMaintenance(): void {
     else scheduleMaintenanceTimer();
   });
   activeOperation = operation;
-  child.unref();
 }

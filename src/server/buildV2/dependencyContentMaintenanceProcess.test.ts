@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { execFile, fork } from "node:child_process";
 import { promisify } from "node:util";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 
@@ -187,6 +188,64 @@ it("transfers the original maintenance failure graph to its process owner", asyn
     expect(Buffer.concat(stderr).toString()).toContain(
       "Refusing invalid dependency cache directory"
     );
+  } finally {
+    await fs.rm(fixture, { recursive: true, force: true });
+  }
+});
+
+it("keeps the parent alive for awaited and queued maintenance preparations", async () => {
+  const scratch = path.join(process.cwd(), ".cache/dependency-maintenance-tests");
+  await fs.mkdir(scratch, { recursive: true });
+  const fixture = await fs.mkdtemp(path.join(scratch, "awaited-parent-"));
+  try {
+    const cacheDirs = [
+      path.join(fixture, "external-deps/5555555555555555"),
+      path.join(fixture, "external-deps/6666666666666666"),
+    ];
+    const stagingDirs = cacheDirs.map(
+      (cacheDir, index) => `${cacheDir}.tmp.${String(index + 1).repeat(32)}`
+    );
+    for (const stagingDir of stagingDirs) {
+      await fs.mkdir(path.join(stagingDir, "node_modules/example"), { recursive: true });
+      await fs.writeFile(path.join(stagingDir, "node_modules/example/index.js"), "export {};\n");
+      await fs.writeFile(path.join(stagingDir, ".ready"), "ready");
+    }
+    const moduleUrl = pathToFileURL(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "dependencyContentMaintenance.ts")
+    ).href;
+    const program = `
+      const maintenance = await import(${JSON.stringify(moduleUrl)});
+      const root = process.env.VIBESTUDIO_HOST_ARTIFACT_ROOT;
+      const first = maintenance.prepareDependencyContent(
+        process.env.FIRST_STAGING_DIR,
+        process.env.FIRST_CACHE_DIR,
+        root
+      );
+      await Promise.resolve();
+      const second = maintenance.prepareDependencyContent(
+        process.env.SECOND_STAGING_DIR,
+        process.env.SECOND_CACHE_DIR,
+        root
+      );
+      await Promise.all([first, second]);
+      await maintenance.drainDependencyContentMaintenance();
+    `;
+    await execute(process.execPath, ["--import", "tsx", "--input-type=module", "-e", program], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
+        VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: fixture,
+        FIRST_STAGING_DIR: stagingDirs[0]!,
+        FIRST_CACHE_DIR: cacheDirs[0]!,
+        SECOND_STAGING_DIR: stagingDirs[1]!,
+        SECOND_CACHE_DIR: cacheDirs[1]!,
+      },
+    });
+    for (const stagingDir of stagingDirs)
+      await expect(
+        fs.readFile(path.join(stagingDir, "node_modules/example/index.js"), "utf8")
+      ).resolves.toBe("export {};\n");
   } finally {
     await fs.rm(fixture, { recursive: true, force: true });
   }

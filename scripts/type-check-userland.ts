@@ -14,6 +14,8 @@ import { composeDevelopmentTemplateCheckouts } from "../src/dev/developmentTempl
 import { buildNativeIsolation } from "./build-native-isolation.mjs";
 import { stageNodeRuntime } from "./node-runtime-artifacts.mjs";
 import { assertTemplateCheckoutHygiene } from "./lib/template-checkout-hygiene.mjs";
+import { runOwnedCleanupSteps, runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
+import { retireUserlandProjectionProcess } from "./lib/userland-projection-process-owner.js";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceArgumentIndex = process.argv.indexOf("--workspace-root");
@@ -52,23 +54,24 @@ if (workspaceArgumentIndex < 0) {
         url,
       }))
     );
-    try {
-      execFileSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          fileURLToPath(import.meta.url),
-          "--workspace-root",
-          composition.root,
-          ...(name === "base" ? ["--host-integration"] : []),
-          ...(packageRelease ? ["--package-release", path.resolve(packageRelease)] : []),
-        ],
-        { cwd: appRoot, stdio: "inherit" }
-      );
-    } finally {
-      composition.release();
-    }
+    await runWithOwnedCleanup(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            fileURLToPath(import.meta.url),
+            "--workspace-root",
+            composition.root,
+            ...(name === "base" ? ["--host-integration"] : []),
+            ...(packageRelease ? ["--package-release", path.resolve(packageRelease)] : []),
+          ],
+          { cwd: appRoot, stdio: "inherit" }
+        ),
+      () => composition.release(),
+      `Userland typecheck cleanup failed for ${name}`
+    );
   }
   assertTemplateCheckoutHygiene(selected);
   process.exit(0);
@@ -80,64 +83,71 @@ const workspaceRoot = path.resolve(process.argv[workspaceArgumentIndex + 1]!);
 const projects = new ValidationProjects(appRoot);
 let projection: UserlandDependencyProjection | undefined;
 let temporaryRoot: string | undefined;
-try {
-  // This checkout command installs workspace-declared dependencies before a host
-  // build exists. Prepare the same installed toolchain used by runtime installs.
-  buildNativeIsolation(appRoot);
-  await stageNodeRuntime(appRoot);
-  // Packages built with the `tsc-output` profile publish their types from dist/,
-  // so a workspace importing one cannot be type-checked until they are compiled.
-  // The build is cached and reuses verified output, so a checkout that is already
-  // built pays nothing for this.
-  buildInfrastructurePackages({ cwd: appRoot });
-  const preparedProjection = await prepareUserlandDependencyProjection({
-    appRoot,
-    workspaceRoot,
-    includeDevelopmentDependencies: true,
-    packageRelease,
-  });
-  projection = preparedProjection;
-  const temporaryParent = path.join(appRoot, ".cache");
-  fs.mkdirSync(temporaryParent, { recursive: true });
-  temporaryRoot = fs.mkdtempSync(path.join(temporaryParent, "checkout-typecheck-"));
+await runWithOwnedCleanup(
+  async () => {
+    // This checkout command installs workspace-declared dependencies before a host
+    // build exists. Prepare the same installed toolchain used by runtime installs.
+    buildNativeIsolation(appRoot);
+    await stageNodeRuntime(appRoot);
+    // Packages built with the `tsc-output` profile publish their types from dist/,
+    // so a workspace importing one cannot be type-checked until they are compiled.
+    // The build is cached and reuses verified output, so a checkout that is already
+    // built pays nothing for this.
+    buildInfrastructurePackages({ cwd: appRoot });
+    const preparedProjection = await prepareUserlandDependencyProjection({
+      appRoot,
+      workspaceRoot,
+      includeDevelopmentDependencies: true,
+      packageRelease,
+    });
+    projection = preparedProjection;
+    const temporaryParent = path.join(appRoot, ".cache");
+    fs.mkdirSync(temporaryParent, { recursive: true });
+    temporaryRoot = fs.mkdtempSync(path.join(temporaryParent, "checkout-typecheck-"));
 
-  projectCheckoutSource(temporaryRoot, preparedProjection.units);
-  projectNodeModules(temporaryRoot, [
-    preparedProjection.nodeModulesDir,
-    path.join(appRoot, "node_modules"),
-  ]);
+    projectCheckoutSource(temporaryRoot, preparedProjection.units);
+    projectNodeModules(temporaryRoot, [
+      preparedProjection.nodeModulesDir,
+      path.join(appRoot, "node_modules"),
+    ]);
 
-  // Host integration tests validate the configured Base pair. An explicit
-  // workspace target validates only the units it actually contains.
-  const configs = ["tsconfig.json"];
-  if (process.argv.includes("--host-integration")) configs.push("tsconfig.integration.json");
-  if (preparedProjection.units.some((unit) => requiresNativeHost(unit, preparedProjection.graph))) {
-    configs.push("tsconfig.integration.mobile.json");
-  }
-  const typeRoots = [
-    path.join(preparedProjection.nodeModulesDir, "@types"),
-    path.join(appRoot, "node_modules/@types"),
-    preparedProjection.nodeModulesDir,
-    path.join(appRoot, "node_modules"),
-  ];
-  for (const configName of configs) {
-    const config = path.join(temporaryRoot, "workspace", configName);
-    const configuration = JSON.parse(fs.readFileSync(config, "utf8"));
-    configuration.compilerOptions = { ...configuration.compilerOptions, typeRoots };
-    fs.writeFileSync(config, JSON.stringify(configuration));
-    projects.check(`userland:${configName}`, config);
-  }
-} finally {
-  try {
-    if (temporaryRoot) fs.rmSync(temporaryRoot, { recursive: true, force: true });
-  } finally {
-    try {
-      projection?.release();
-    } finally {
-      await projects.close();
+    // Host integration tests validate the configured Base pair. An explicit
+    // workspace target validates only the units it actually contains.
+    const configs = ["tsconfig.json"];
+    if (process.argv.includes("--host-integration")) configs.push("tsconfig.integration.json");
+    if (
+      preparedProjection.units.some((unit) => requiresNativeHost(unit, preparedProjection.graph))
+    ) {
+      configs.push("tsconfig.integration.mobile.json");
     }
-  }
-}
+    const typeRoots = [
+      path.join(preparedProjection.nodeModulesDir, "@types"),
+      path.join(appRoot, "node_modules/@types"),
+      preparedProjection.nodeModulesDir,
+      path.join(appRoot, "node_modules"),
+    ];
+    for (const configName of configs) {
+      const config = path.join(temporaryRoot, "workspace", configName);
+      const configuration = JSON.parse(fs.readFileSync(config, "utf8"));
+      configuration.compilerOptions = { ...configuration.compilerOptions, typeRoots };
+      fs.writeFileSync(config, JSON.stringify(configuration));
+      projects.check(`userland:${configName}`, config);
+    }
+  },
+  async () => {
+    await runOwnedCleanupSteps(
+      [
+        () => projects.close(),
+        () => retireUserlandProjectionProcess(projection ? [projection.release] : []),
+        () => {
+          if (temporaryRoot) fs.rmSync(temporaryRoot, { recursive: true, force: true });
+        },
+      ],
+      "Userland typecheck cleanup failed"
+    );
+  },
+  "Userland typecheck and cleanup failed"
+);
 
 console.log("✓ Userland typecheck passed using the semantic dependency projection.");
 

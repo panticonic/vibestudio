@@ -146,6 +146,12 @@ idle. Account for builds and verification together, and distinguish reclaimable
 file cache from process memory before attributing growth to a leak. Avoid duplicate
 builds and keep shared mutable artifact production under its existing owner.
 
+Protected-ref validation likewise admits a tree read when its parent is available,
+without waiting for unrelated nodes at the same depth. One bounded queue reads
+each authenticated hash once; later shallower paths reuse that read and propagate
+their depth through the graph. Join all admitted reads before returning the
+per-root completeness verdict.
+
 ## Compiler memory and ownership
 
 Prepared-dependency resolution distinguishes plugin requests from delegation to
@@ -176,10 +182,17 @@ that tree. Background maintenance therefore prunes unreferenced CAS content,
 while preparation requests carry the exact private staging and destination
 coordinates to the existing child and are joined before the caller publishes.
 One maintenance owner admits one child at a time because its jobs mutate the
-same content store. Independent workspace builds continue while that child
+same content store. Every admitted child retains its natural process handle
+until terminal close, including pruning. An awaited promise does not keep Node
+alive; unreferencing its child can retire the parent before the owned work
+settles. Only the idle scheduling timer may be unreferenced, before it admits
+any job. Independent workspace builds continue while that child
 runs. At retirement, first join cache-prune callbacks that can admit
 maintenance, then join maintenance and artifact publications, then close their
-coordinators and remove scratch. Both servers and release producers retain all
+coordinators and remove scratch. Standalone projection commands and awaitable
+test-runner teardown own the same retirement sequence; reusable build functions
+release their borrow without closing another caller’s process-wide resources.
+Both servers and release producers retain all
 failures through this dependency order; an ownership failure keeps its state
 anchor until the owner has actually retired.
 

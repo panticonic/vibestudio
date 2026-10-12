@@ -20,7 +20,7 @@ import {
 import { serializeRpcFailure } from "@vibestudio/rpc";
 
 function makeChild() {
-  return Object.assign(new EventEmitter(), { unref: vi.fn() });
+  return new EventEmitter();
 }
 
 function reportResults(child: EventEmitter, results: unknown[]) {
@@ -75,7 +75,6 @@ describe("dependency content maintenance scheduling", () => {
         env: expect.objectContaining({ VIBESTUDIO_HOST_ARTIFACT_ROOT: appRoot }),
       })
     );
-    expect(child.unref).toHaveBeenCalledOnce();
     reportResults(child, [{ ok: true }, { ok: true }]);
     child.emit("close", 0, null);
     await Promise.all([firstTicket, secondTicket]);

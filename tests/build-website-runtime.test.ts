@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { it, expect } from "vitest";
 import { buildWebsiteRuntime } from "../scripts/build-website-runtime.js";
+import { runOwnedCleanupSteps, runWithOwnedCleanup } from "../scripts/lib/owned-cleanup.mjs";
+import { retireUserlandProjectionProcess } from "../scripts/lib/userland-projection-process-owner.js";
 
 it("builds external workspace sources with package exports, host typings, and disposable declarations", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-website-build-test-"));
@@ -14,6 +16,8 @@ it("builds external workspace sources with package exports, host typings, and di
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.writeFileSync(destination, content);
   };
+  let operationFailure: unknown;
+  let hasOperationFailure = false;
   try {
     write(
       "packages/ui/package.json",
@@ -74,7 +78,20 @@ export function WorkspaceConnection() { return createElement("button", null, "Co
       "Symbol.asyncDispose"
     );
     expect(fs.existsSync(path.join(workspaceRoot, "node_modules"))).toBe(false);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+  } catch (error) {
+    operationFailure = error;
+    hasOperationFailure = true;
   }
+  await runWithOwnedCleanup(
+    () => (hasOperationFailure ? Promise.reject(operationFailure) : Promise.resolve()),
+    () =>
+      runOwnedCleanupSteps(
+        [
+          () => retireUserlandProjectionProcess(),
+          () => fs.rmSync(root, { recursive: true, force: true }),
+        ],
+        "Website runtime test cleanup failed"
+      ),
+    "Website runtime test and cleanup failed"
+  );
 }, 60_000);

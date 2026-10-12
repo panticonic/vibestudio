@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as http from "node:http";
 import { buildWebsiteAssets } from "../../apps/webhook-relay/build-website-assets.mjs";
+import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
+import { retireUserlandProjectionProcess } from "../../scripts/lib/userland-projection-process-owner.js";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 const { handleApexLanding } = createRequire(import.meta.url)(
@@ -32,7 +34,11 @@ export async function websiteInventionScenario(environment: Record<string, strin
   test.setTimeout(1_200_000);
   test.skip(!hasOwnedX11Display(), "Requires the E2E-owned native display for approval input");
   const assets = path.join(process.env["VIBESTUDIO_E2E_TEMP_ROOT"]!, "website-assets");
-  await buildWebsiteAssets(assets);
+  await runWithOwnedCleanup(
+    () => buildWebsiteAssets(assets),
+    () => retireUserlandProjectionProcess(),
+    "Website invention fixture projection cleanup failed"
+  );
   // Freeze this run's built assets: another checkout build may replace dist.
   const assetNames = [
     "/runtime.js",

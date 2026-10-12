@@ -1090,40 +1090,88 @@ export async function proveTreeReachabilityBatch(
   await Promise.all(refWorkers);
   const resolveRefsMs = performance.now() - resolveStartedAt;
 
-  // Load each authenticated tree node once. The breadth frontier ensures the
-  // union includes every node that can be reached within the depth bound.
+  // Load each authenticated tree node once. Keep one bounded work queue across
+  // the graph instead of waiting for every node at a depth to finish before
+  // admitting its children. Tree depth is a validation property checked below;
+  // it does not require a filesystem-read barrier between levels.
   const loadStartedAt = performance.now();
   const entriesByHash = new Map<string, readonly ManifestHashEntry[]>();
   let uniqueTreeBytes = 0;
   const failuresByHash = new Map<string, unknown>();
-  const attempted = new Set<string>();
-  let frontier = new Set(roots.map(({ treeHash }) => treeHash));
+  const bestDepthByHash = new Map<string, number>();
+  const readsByHash = new Map<string, Promise<readonly ManifestHashEntry[] | null>>();
   const depthLimited = new Set<string>();
-  for (let depth = 0; depth <= MAX_TREE_DEPTH && frontier.size > 0; depth += 1) {
-    const current = [...frontier].filter((treeHash) => !attempted.has(treeHash));
-    frontier = new Set();
-    let cursor = 0;
-    const treeWorkers = Array.from({ length: Math.min(4, current.length) }, async () => {
-      while (cursor < current.length) {
-        const treeHash = current[cursor++]!;
-        attempted.add(treeHash);
-        try {
-          const node = await readTreeNodeWithSize(blobsDir, treeHash);
+  const pendingTrees: Array<{ treeHash: string; depth: number }> = [];
+  const enqueueTree = (treeHash: string, depth: number): void => {
+    if (depth > MAX_TREE_DEPTH) {
+      depthLimited.add(treeHash);
+      return;
+    }
+    const bestDepth = bestDepthByHash.get(treeHash);
+    if (bestDepth !== undefined && bestDepth <= depth) return;
+    bestDepthByHash.set(treeHash, depth);
+    pendingTrees.push({ treeHash, depth });
+  };
+  for (const { treeHash } of roots) enqueueTree(treeHash, 0);
+
+  const loadTreeEntries = (treeHash: string): Promise<readonly ManifestHashEntry[] | null> => {
+    let loading = readsByHash.get(treeHash);
+    if (!loading) {
+      loading = readTreeNodeWithSize(blobsDir, treeHash)
+        .then((node) => {
           if (!node) throw missingTreeObjectError(treeHash);
           entriesByHash.set(treeHash, node.entries);
           uniqueTreeBytes += node.byteLength;
-          for (const entry of node.entries) {
-            if (entry.kind !== "dir") continue;
-            if (depth === MAX_TREE_DEPTH) depthLimited.add(entry.childHash);
-            else if (!attempted.has(entry.childHash)) frontier.add(entry.childHash);
-          }
-        } catch (reason) {
+          return node.entries;
+        })
+        .catch((reason: unknown) => {
           failuresByHash.set(treeHash, reason);
-        }
+          return null;
+        });
+      readsByHash.set(treeHash, loading);
+    }
+    return loading;
+  };
+
+  const processTree = async ({ treeHash, depth }: { treeHash: string; depth: number }) => {
+    const entries = await loadTreeEntries(treeHash);
+    if (!entries) return;
+    for (const entry of entries) {
+      if (entry.kind !== "dir") continue;
+      if (depth === MAX_TREE_DEPTH) {
+        depthLimited.add(entry.childHash);
+      } else {
+        enqueueTree(entry.childHash, depth + 1);
       }
-    });
-    await Promise.all(treeWorkers);
-  }
+    }
+  };
+
+  let nextTree = 0;
+  let activeTrees = 0;
+  let resolveTreesDrained!: () => void;
+  const treesDrained = new Promise<void>((resolve) => {
+    resolveTreesDrained = resolve;
+  });
+  const pumpTreeWorkers = (): void => {
+    while (activeTrees < 4 && nextTree < pendingTrees.length) {
+      const task = pendingTrees[nextTree++]!;
+      activeTrees += 1;
+      void processTree(task).then(
+        () => {
+          activeTrees -= 1;
+          pumpTreeWorkers();
+        },
+        (reason: unknown) => {
+          failuresByHash.set(task.treeHash, reason);
+          activeTrees -= 1;
+          pumpTreeWorkers();
+        }
+      );
+    }
+    if (activeTrees === 0 && nextTree === pendingTrees.length) resolveTreesDrained();
+  };
+  pumpTreeWorkers();
+  await treesDrained;
   const loadTreesMs = performance.now() - loadStartedAt;
 
   // Height memoization proves shared subtrees once while each root still
