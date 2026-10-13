@@ -100,3 +100,35 @@ export function tolerateTerminalHangup(
     for (const release of listeners) release();
   };
 }
+
+type WarningProcess = Pick<NodeJS.Process, "on" | "off" | "listeners" | "removeAllListeners">;
+
+/**
+ * Send this process's own warnings (Node's `ExperimentalWarning` for
+ * `node:sqlite`, deprecations) to `write` instead of stderr. While a terminal
+ * command runs, the TTY belongs to the user — its prompts and then the
+ * terminal browser's screen — and launcher diagnostics belong in its log.
+ *
+ * Node emits a warning on the tick after the code that raised it, so a
+ * command that installs this before its first `await` also routes warnings
+ * raised while its modules loaded. Returns a function that restores Node's
+ * own reporting.
+ */
+export function routeProcessWarnings(
+  write: (text: string) => void,
+  processLike: WarningProcess = process
+): () => void {
+  const previous = processLike.listeners("warning") as ((warning: Error) => void)[];
+  processLike.removeAllListeners("warning");
+  const onWarning = (warning: Error) => {
+    write(`(node:${process.pid}) ${warning.name}: ${warning.message}\n`);
+  };
+  processLike.on("warning", onWarning);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    processLike.off("warning", onWarning);
+    for (const listener of previous) processLike.on("warning", listener);
+  };
+}

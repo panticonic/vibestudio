@@ -11,9 +11,8 @@ import { CLI_WORKSPACE_ENV, isCliWorkspaceSelection } from "./cliWorkspaceSelect
 import type { StdioOptions } from "node:child_process";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
 import { LaunchTermination, joinProducer, runOwnedChild } from "./launchTermination.js";
-import { tolerateTerminalHangup } from "../cli/terminal/ttyRestore.js";
+import { routeProcessWarnings, tolerateTerminalHangup } from "../cli/terminal/ttyRestore.js";
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
-import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 import {
   clearDevInstanceReady,
   createEphemeralInstanceRoot,
@@ -53,6 +52,10 @@ interface TerminalLaunch {
 
 async function prunePersistentInstanceBuildCache(root: string, instanceId: string): Promise<void> {
   const buildCacheRoot = path.join(root, "build-cache");
+  // Loaded here, not with the launcher: its `node:sqlite` import raises an
+  // ExperimentalWarning, which a disposable launch has no reason to see.
+  const { DerivedCacheCoordinator, derivedCacheDatabasePath } =
+    await import("@vibestudio/shared/derivedCache");
   const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(buildCacheRoot));
   try {
     const result = await coordinator.prune(buildCacheRoot);
@@ -584,6 +587,10 @@ async function main(): Promise<void> {
     startedAt: Date.now(),
   });
   const terminal = terminalOptions ? openTerminalLog(root, terminalOptions) : undefined;
+  // The TTY belongs to the user: the launcher's own warnings go to the log.
+  const releaseWarnings = terminal
+    ? routeProcessWarnings((text) => terminal.log.write(text))
+    : undefined;
   // In terminal mode the screen belongs to the browser: instance details go
   // to the server log, and the user sees a handful of progress lines.
   const detail = terminal
@@ -804,6 +811,7 @@ async function main(): Promise<void> {
         retirementFailure ??= error;
       }
       if (terminal) {
+        releaseWarnings?.();
         await new Promise<void>((resolve) => terminal.log.end(() => resolve()));
         fs.closeSync(terminal.logFd);
         if (!retirementFailure) console.log("Server stopped.");

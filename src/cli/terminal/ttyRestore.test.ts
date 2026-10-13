@@ -4,6 +4,7 @@ import {
   TERMINAL_RESET_SEQUENCE,
   guardTerminal,
   restoreTerminal,
+  routeProcessWarnings,
   tolerateTerminalHangup,
 } from "./ttyRestore.js";
 
@@ -85,5 +86,31 @@ describe("tolerateTerminalHangup", () => {
     tolerateTerminalHangup([stdout]);
     const failure = Object.assign(new Error("write EIO"), { code: "EIO" });
     expect(() => stdout.emit("error", failure)).toThrow(failure);
+  });
+});
+
+describe("routeProcessWarnings", () => {
+  it("writes warnings to the log instead of Node's stderr reporter, and restores it", () => {
+    const processLike = new EventEmitter();
+    const stderrReporter = vi.fn();
+    processLike.on("warning", stderrReporter);
+    const write = vi.fn();
+    const release = routeProcessWarnings(write, processLike as never);
+
+    const warning = Object.assign(new Error("SQLite is an experimental feature"), {
+      name: "ExperimentalWarning",
+    });
+    processLike.emit("warning", warning);
+    expect(stderrReporter).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledWith(
+      `(node:${process.pid}) ExperimentalWarning: SQLite is an experimental feature\n`
+    );
+
+    release();
+    release();
+    processLike.emit("warning", warning);
+    expect(stderrReporter).toHaveBeenCalledOnce();
+    expect(write).toHaveBeenCalledOnce();
+    expect(processLike.listenerCount("warning")).toBe(1);
   });
 });

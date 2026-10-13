@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatRpcFailure } from "@vibestudio/rpc";
@@ -30,7 +31,7 @@ import { refreshShell } from "../rpcClient.js";
 import { EXIT_INTERRUPTED } from "../terminalLaunchGate.js";
 import { localServerPaths, startLocalServer, type LocalServer } from "./localServer.js";
 import { runTerminalSessions } from "./terminalSessions.js";
-import { tolerateTerminalHangup } from "./ttyRestore.js";
+import { routeProcessWarnings, tolerateTerminalHangup } from "./ttyRestore.js";
 
 export interface TerminalCommandContext {
   /** Exact application root of this installation (contains `dist/server.mjs`). */
@@ -51,6 +52,9 @@ The terminal browser shows your Personal workspace (another one with
 browser itself is installed in your System workspace; before it takes over
 the screen, its startup approvals are asked here as questions; answer them or
 pass --yes.
+
+Diagnostics of the command itself go to logs/terminal.log in the Vibestudio
+config directory.
 
 To use a different server, run \`vibestudio remote logout\` and pair again.`;
 
@@ -93,6 +97,10 @@ async function runTerminalCommand(
   inv: ParsedInvocation,
   context: TerminalCommandContext
 ): Promise<number> {
+  // First, before any await: the terminal is the user's, so this command's own
+  // warnings — including those raised while the CLI loaded, which Node emits
+  // on the next tick — go to its log.
+  const releaseWarnings = routeProcessWarnings(appendTerminalLog);
   const progress = (line: string) => process.stdout.write(`${line}\n`);
   // A hang-up stops the server this command owns (the supervisor forwards
   // SIGHUP); the dead terminal must not crash the command while it joins it.
@@ -151,7 +159,19 @@ async function runTerminalCommand(
   } finally {
     process.off("SIGINT", onInterrupt);
     if (server) await retireServer(server, progress);
+    releaseWarnings();
   }
+}
+
+/** Where `vibestudio terminal` writes its own diagnostics. */
+function terminalLogFile(): string {
+  return path.join(cliConfigRoot(), "logs", "terminal.log");
+}
+
+function appendTerminalLog(text: string): void {
+  const file = terminalLogFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.appendFileSync(file, text, { mode: 0o600 });
 }
 
 interface TerminalOptions {

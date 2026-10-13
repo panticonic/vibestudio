@@ -1,12 +1,7 @@
 import { compactCompletedSystemTestTrajectories } from "./systemTestStore.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-  DerivedCacheCoordinator,
-  derivedCacheDatabasePath,
-  derivedCacheMaxBytes,
-  type DerivedCachePruneResult,
-} from "@vibestudio/shared/derivedCache";
+import type { DerivedCachePruneResult } from "@vibestudio/shared/derivedCache";
 import {
   getCentralDataPath,
   getProfileDataPath,
@@ -146,9 +141,14 @@ function offlineStatus(root: Extract<StorageRoot, { kind: "offline-only" }>) {
   };
 }
 
+// The cache coordinator is loaded by the commands that use it: its
+// `node:sqlite` import raises an ExperimentalWarning that every other command
+// (the terminal browser among them) has no reason to show.
 async function status(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
+    const { DerivedCacheCoordinator, derivedCacheDatabasePath, derivedCacheMaxBytes } =
+      await import("@vibestudio/shared/derivedCache");
     const roots = await Promise.all(
       cacheRoots().map(async (root) => {
         if (root.kind === "offline-only") return offlineStatus(root);
@@ -206,6 +206,8 @@ async function prune(inv: ParsedInvocation): Promise<number> {
     // through printError is what preserves the exit code and the --json error
     // shape that scripted callers parse.
     const maxBytes = gibibytes(inv.flags["max-gib"]);
+    const { DerivedCacheCoordinator, derivedCacheDatabasePath } =
+      await import("@vibestudio/shared/derivedCache");
     const results: Array<StorageRoot & DerivedCachePruneResult> = [];
     for (const root of cacheRoots().filter((candidate) => candidate.kind === "live-safe")) {
       const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root.path));

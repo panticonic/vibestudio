@@ -32,9 +32,9 @@ pnpm system-test --instance test-a doctor --approve-startup
 `pnpm terminal [--instance ID] [--ephemeral] [--workspace <name>] [--yes]`
 runs this checkout's server under the same instance supervisor as
 `pnpm server:live` and then opens the terminal browser through the same code
-path as `vibestudio terminal`. Build, template, and server output go to
-`<instanceRoot>/logs/server.log`, so the terminal stays free for the browser.
-Quitting the browser, closing the
+path as `vibestudio terminal`. Build, template, and server output, and the
+launcher's own warnings, go to `<instanceRoot>/logs/server.log`, so the
+terminal stays free for the browser. Quitting the browser, closing the
 terminal (a hang-up), SIGTERM, or Ctrl-C during startup stops and joins what
 this command started and removes an `--ephemeral` instance. When the selected
 instance is already running, it attaches to it instead (through
@@ -149,6 +149,8 @@ How it connects:
   (default `Terminal on <host>`).
 
 To use a different server, run `vibestudio remote logout` and pair again.
+The command's own diagnostics (such as Node warnings) go to
+`<stateDir>/logs/terminal.log`.
 
 The browser shows your Personal workspace, like the desktop app;
 `--workspace <name>` shows another, and inside the browser `Ctrl-Space w`
