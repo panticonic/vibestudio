@@ -137,6 +137,39 @@ describe("self-provisioning system-test instance", () => {
     unregisterDevInstance(repoRoot, "existing");
   });
 
+  it("waits for the owning generation instead of expiring slow readiness", async () => {
+    vi.useFakeTimers();
+    const root = fs.mkdtempSync(path.join(tempDir, "slow-ready-"));
+    const instance = registerDevInstance({
+      id: "slow-ready",
+      root,
+      repoRoot,
+      supervisorPid: process.pid,
+      kind: "server",
+      lifecycle: "persistent",
+      startedAt: Date.now(),
+    });
+    let settled = false;
+    const ensuring = ensureSystemTestInstance(repoRoot, instance.id, {
+      explicitInstance: true,
+    }).finally(() => {
+      settled = true;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(settled).toBe(false);
+      publishDevInstanceReady(instance, { status: "paired", workspaceName: "dev" });
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(ensuring).resolves.toMatchObject({
+        instance: { id: "slow-ready" },
+        ready: { status: "paired", workspaceName: "dev" },
+      });
+    } finally {
+      unregisterDevInstance(repoRoot, instance.id);
+      vi.useRealTimers();
+    }
+  });
+
   it("retains managed ownership when reusing an instance after launcher recovery", async () => {
     const root = fs.mkdtempSync(path.join(tempDir, "instance-"));
     const instance = registerDevInstance({

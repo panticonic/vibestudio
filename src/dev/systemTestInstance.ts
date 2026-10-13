@@ -7,7 +7,7 @@ import {
 import { SYSTEM_TEST_INSTANCE_ENV } from "../server/systemTestInstanceMode.js";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import {
   persistentInstanceRoot,
@@ -30,11 +30,6 @@ import {
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
 const DEFAULT_SYSTEM_TEST_INSTANCE = "system-test";
-// Cold managed workspaces may need to seal npm-backed runtime dependencies
-// before they can publish semantic readiness. Keep the outer self-provisioner
-// on the same finite budget as the child supervisor; a shorter competing
-// deadline can kill a generation before npm's own bounded operation settles.
-const STARTUP_TIMEOUT_MS = 12 * 60_000;
 
 type LauncherArgs = {
   instanceId: string;
@@ -316,7 +311,7 @@ function spawnManagedInstance(
   outputFile: string,
   persistent: boolean,
   extraEnvironment: NodeJS.ProcessEnv = {}
-): void {
+): ChildProcess {
   fs.mkdirSync(path.dirname(outputFile), { recursive: true, mode: 0o700 });
   const output = fs.openSync(outputFile, "a", 0o600);
   try {
@@ -337,37 +332,34 @@ function spawnManagedInstance(
         stdio: ["ignore", output, output],
       }
     );
-    child.once("error", () => undefined);
     child.unref();
+    return child;
   } finally {
     fs.closeSync(output);
   }
 }
 
-function timeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-    timer.unref?.();
-  });
-  return Promise.race([promise, deadline]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
-}
-
 async function waitForRegistration(
   repoRoot: string,
   instanceId: string,
-  timeoutMs: number
+  owner: ChildProcess
 ): Promise<DevInstanceRecord> {
-  const deadline = Date.now() + timeoutMs;
+  const ownerFailure = new Promise<never>((_resolve, reject) => {
+    owner.once("error", reject);
+    owner.once("exit", (code, signal) => {
+      reject(
+        new Error(
+          `System-test instance owner exited ${
+            signal ? `on signal ${signal}` : `with code ${code ?? 1}`
+          } before registration`
+        )
+      );
+    });
+  });
   for (;;) {
     const instance = resolveRunning(repoRoot, instanceId);
     if (instance) return instance;
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting for system-test instance ${JSON.stringify(instanceId)}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await Promise.race([new Promise((resolve) => setTimeout(resolve, 100)), ownerFailure]);
   }
 }
 
@@ -391,7 +383,6 @@ export async function ensureSystemTestInstance(
   instanceId: string,
   options: {
     explicitInstance?: boolean;
-    startupTimeoutMs?: number;
     /** Keep this instance's state on disk across restarts. */
     persistent?: boolean;
     /** Serve the developer's own checkouts so their projects can be adopted. */
@@ -419,17 +410,19 @@ export async function ensureSystemTestInstance(
         })
       );
     }
-    spawnManagedInstance(repoRoot, instanceId, outputFile, options.persistent === true, {
-      ...mirrorEnvironment,
-      ...(options.workspace ? { [CLI_WORKSPACE_ENV]: options.workspace } : {}),
-    });
+    const owner = spawnManagedInstance(
+      repoRoot,
+      instanceId,
+      outputFile,
+      options.persistent === true,
+      {
+        ...mirrorEnvironment,
+        ...(options.workspace ? { [CLI_WORKSPACE_ENV]: options.workspace } : {}),
+      }
+    );
     created = true;
     try {
-      instance = await waitForRegistration(
-        repoRoot,
-        instanceId,
-        options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS
-      );
+      instance = await waitForRegistration(repoRoot, instanceId, owner);
     } catch (error) {
       throw startupFailure(
         instanceId,
@@ -450,11 +443,9 @@ export async function ensureSystemTestInstance(
   const managed = readManagedMarker(instance) !== null;
   let ready: DevInstanceReadyRecord;
   try {
-    ready = await timeout(
-      waitForDevInstanceReady(instance),
-      options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS,
-      `Timed out waiting for system-test instance ${JSON.stringify(instanceId)} to become ready`
-    );
+    // Readiness belongs to the registered supervisor generation. Its process
+    // exit is the terminal failure event; elapsed cold-build time is not.
+    ready = await waitForDevInstanceReady(instance);
   } catch (error) {
     throw startupFailure(
       instanceId,
