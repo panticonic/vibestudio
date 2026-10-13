@@ -1542,6 +1542,45 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
   });
 
+  it("persists a withdrawn approval as cancellation with its lifecycle cause", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    setPriv(instance, "runLocked", () =>
+      Promise.reject(
+        Object.assign(
+          new Error("Approval wait cancelled", { cause: new Error("planned restart") }),
+          {
+            code: "APPROVAL_WAIT_CANCELLED",
+          }
+        )
+      )
+    );
+    seedPendingRun(sql, "approval-withdrawn-run");
+
+    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "approval-withdrawn-run"
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failureKind: "cancelled",
+      failureCode: "eval_cancelled",
+      error: {
+        code: "APPROVAL_WAIT_CANCELLED",
+        cause: expect.objectContaining({ message: "planned restart" }),
+      },
+    });
+    expect(
+      priv<(id: string) => { status: string; result?: RunResult }>(instance, "getRun").call(
+        instance,
+        "approval-withdrawn-run"
+      )
+    ).toMatchObject({
+      status: "done",
+      result: { failureKind: "cancelled", failureCode: "eval_cancelled" },
+    });
+  });
+
   it("retains a small structured return for REPL-style follow-up inspection", async () => {
     const { instance } = await createTestDO(EvalDO);
     const scope: Record<string, unknown> = {};

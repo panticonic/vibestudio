@@ -1,4 +1,5 @@
 import { residentChannelRpcMethods } from "@vibestudio/shared/residentSession";
+import { APPROVAL_WAIT_CANCELLED_CODE } from "@vibestudio/shared/approvals";
 import { schemaRpcClient } from "@vibestudio/rpc/internal";
 import { mainRpcMethod, mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { wireClientFor, registerRpcWireClient, createRpcPeer } from "@vibestudio/rpc/internal";
@@ -1812,13 +1813,14 @@ export class EvalDO extends DurableObjectBase {
       const cancelled = currentStatus === "cancelling" || currentStatus === "cancelled";
       const errorCode = errorCodeInChain(err);
       const approvalRouteLost = errorCode === "EAPPROVALROUTELOST";
+      const approvalWaitCancelled = errorCode === APPROVAL_WAIT_CANCELLED_CODE;
       const executionAdmissionLost =
         errorCode === "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE" ||
         errorCode === "EVALUATED_EXECUTION_SESSION_STALE" ||
         errorCode === "INVOCATION_AUTHORITY_PARENT_NOT_ACTIVE";
       if (approvalRouteLost) {
         console.warn(`[EvalDO] approval route lost for run ${runId}`);
-      } else if (!deadlineExceeded && !cancelled) {
+      } else if (!deadlineExceeded && !cancelled && !approvalWaitCancelled) {
         const log = deadlineFired ? console.warn : console.error;
         log(
           `[EvalDO] run ${runId} failed`,
@@ -1841,43 +1843,52 @@ export class EvalDO extends DurableObjectBase {
             failureCode: "eval_deadline_exceeded",
             kernel: kernel ?? this.kernelStatusForRun(),
           }
-        : {
-            success: false,
-            console: "",
-            error: serializeRpcFailure(
-              approvalRouteLost
-                ? new Error(
-                    "Attached-host approval route was lost; restart this eval on a live attached run",
-                    { cause: err }
-                  )
-                : err
-            ),
-            failureKind: "infrastructure",
-            failureCode: approvalRouteLost
-              ? "approval-route-lost"
-              : executionAdmissionLost
-                ? evalLifecycleFailureCodes.executionAdmissionLost
-                : "eval_host_failed",
-            ...(executionAdmissionLost
-              ? {
-                  error: {
-                    ...serializeRpcFailure(err),
-                    errorData: {
-                      retry: {
-                        policy: "reobserve",
-                        commandIdPolicy: "use-new-after-reobserve",
-                      },
-                      recovery: {
-                        action: "reobserve",
-                        instruction:
-                          "Inspect the effects and current state reached by this eval, then issue a new eval for only the unfinished work; the runtime creates a fresh execution admission automatically.",
+        : approvalWaitCancelled
+          ? {
+              success: false,
+              console: "",
+              error: serializeRpcFailure(err),
+              failureKind: "cancelled",
+              failureCode: "eval_cancelled",
+              kernel: kernel ?? this.kernelStatusForRun(),
+            }
+          : {
+              success: false,
+              console: "",
+              error: serializeRpcFailure(
+                approvalRouteLost
+                  ? new Error(
+                      "Attached-host approval route was lost; restart this eval on a live attached run",
+                      { cause: err }
+                    )
+                  : err
+              ),
+              failureKind: "infrastructure",
+              failureCode: approvalRouteLost
+                ? "approval-route-lost"
+                : executionAdmissionLost
+                  ? evalLifecycleFailureCodes.executionAdmissionLost
+                  : "eval_host_failed",
+              ...(executionAdmissionLost
+                ? {
+                    error: {
+                      ...serializeRpcFailure(err),
+                      errorData: {
+                        retry: {
+                          policy: "reobserve",
+                          commandIdPolicy: "use-new-after-reobserve",
+                        },
+                        recovery: {
+                          action: "reobserve",
+                          instruction:
+                            "Inspect the effects and current state reached by this eval, then issue a new eval for only the unfinished work; the runtime creates a fresh execution admission automatically.",
+                        },
                       },
                     },
-                  },
-                }
-              : {}),
-            kernel: kernel ?? this.kernelStatusForRun(),
-          };
+                  }
+                : {}),
+              kernel: kernel ?? this.kernelStatusForRun(),
+            };
     } finally {
       if (timer) clearTimeout(timer);
       this.runPendingAuthorityRequests.delete(runId);

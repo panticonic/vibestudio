@@ -70,7 +70,9 @@ export async function cleanupRuntimeEntity(
   if (record.kind === "panel") {
     await attempt(() => deps.panelRuntimeCoordinator?.retireRuntimeEntity(record.id));
   }
-  await attempt(() => deps.approvalQueue.cancelForCaller(record.id));
+  await attempt(() =>
+    deps.approvalQueue.cancelForCaller(record.id, new Error(`Runtime entity ${record.id} retired`))
+  );
   await attempt(() => deps.credentialSessionGrantStore.dropForCaller(record.id));
   await attempt(() => deps.connectionGrants?.revokeForPrincipal(record.id));
   await attempt(() => deps.getFsService()?.closeHandlesForCaller(record.id));

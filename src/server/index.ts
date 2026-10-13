@@ -5323,7 +5323,7 @@ async function main() {
           // grace in RpcServer is the lifecycle boundary for these callers;
           // once it expires, pending approvals and open fs handles must not
           // survive an abandoned client.
-          approvalQueue.cancelForCaller(callerId);
+          approvalQueue.cancelForCaller(callerId, new Error("RPC caller disconnected"));
           panelRuntimeCoordinator.unregisterClientsForCaller(callerId);
           return fsService.closeHandlesForCaller(callerId);
         },
@@ -6783,7 +6783,7 @@ async function main() {
     },
     ensureUserlandDoPrepared: (ref, witness) =>
       durableObjectExecutionReadiness.ensurePrepared(ref, witness),
-    withdrawDecisionWaits: (callerId) => approvalQueue.cancelForCaller(callerId),
+    withdrawDecisionWaits: (callerId, reason) => approvalQueue.cancelForCaller(callerId, reason),
     republishStorageOwner: async (ref) => {
       const id = canonicalEntityId({
         kind: "do",

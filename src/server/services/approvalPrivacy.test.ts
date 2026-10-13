@@ -50,8 +50,9 @@ describe("approval audience", () => {
         service.handler(context("alice"), "resolve", [visible[0]!.approvalId, "once"])
       ).rejects.toThrow("No pending approval");
     } finally {
-      queue.cancelForCaller("shell:alice");
-      await pending;
+      const reason = new Error("account access revoked");
+      queue.cancelForCaller("shell:alice", reason);
+      await expect(pending).rejects.toBe(reason);
     }
   });
 
@@ -218,8 +219,10 @@ describe("approval audience", () => {
       await expect(alice).resolves.toBe("once");
       expect(queue.listPending()).toHaveLength(1);
     } finally {
-      queue.cancelForCaller("shared-worker");
-      await Promise.all([alice, bob]);
+      const reason = new Error("test cleanup");
+      queue.cancelForCaller("shared-worker", reason);
+      await expect(bob).rejects.toBe(reason);
+      await alice;
     }
   });
 
@@ -320,7 +323,7 @@ describe("approval audience", () => {
       expect(bobUpdate.payload.pending).toEqual([]);
       await expect(decision).resolves.toBe("once");
     } finally {
-      queue.cancelForCaller("private-worker");
+      queue.cancelForCaller("private-worker", new Error("test cleanup"));
       await Promise.all([alice.cancel(), bob.cancel(), decision]);
     }
   });

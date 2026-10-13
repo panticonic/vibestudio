@@ -299,7 +299,7 @@ export class AcquisitionCoordinator {
     for (const callerId of new Set(
       [...this.presentingTargetRequests.values()].map((owner) => owner.callerId)
     ))
-      this.deps.approvalQueue.cancelForCaller(callerId);
+      this.deps.approvalQueue.cancelForCaller(callerId, this.presentationLifetime.signal.reason);
     await this.joinPresentations();
     for (const entry of this.byId.values()) {
       entry.delivery.ownerRedrive = false;
@@ -717,7 +717,11 @@ export class AcquisitionCoordinator {
       )
     );
     const retired = store.retireSubject(subject);
-    for (const caller of callers) this.deps.approvalQueue.cancelForCaller(caller);
+    for (const caller of callers)
+      this.deps.approvalQueue.cancelForCaller(
+        caller,
+        new Error(`Authority target ${subject} retired`)
+      );
     for (const request of pending) this.settleTargetJoiners(request.requestId, { state: "closed" });
     return retired;
   }

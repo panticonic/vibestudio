@@ -205,7 +205,11 @@ describe("DODispatch", () => {
       expect(withdraw).not.toHaveBeenCalled();
       await prepare("quiesce");
       expect(withdraw).toHaveBeenCalledExactlyOnceWith(
-        `do:${ref.source}:${ref.className}:${ref.objectKey}`
+        `do:${ref.source}:${ref.className}:${ref.objectKey}`,
+        expect.objectContaining({
+          code: "APPROVAL_WAIT_CANCELLED",
+          cause: expect.objectContaining({ message: "test" }),
+        })
       );
     });
   });

@@ -65,7 +65,7 @@ export interface WorkerdBootstrapDeps {
   ensureUserlandDoReady(ref: DORef): Promise<void>;
   ensureUserlandDoPrepared(ref: DORef, witness: LifecycleCloneInput): Promise<void>;
   /** Withdraw the person-decision waits of the object a lifecycle release is quiescing. */
-  withdrawDecisionWaits(callerId: string): void;
+  withdrawDecisionWaits(callerId: string, reason: unknown): void;
   republishStorageOwner?: (ref: DORef) => Promise<void>;
   onManagerStarted(manager: WorkerdManager): void;
   /** Sole owner of source-build publication into durable and derived runtime state. */
