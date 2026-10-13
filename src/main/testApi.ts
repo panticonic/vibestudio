@@ -200,6 +200,9 @@ export interface TestApi {
   /** Call a server RPC through the panel orchestrator's verified path */
   rpcCall(service: string, method: string, args?: unknown[]): Promise<unknown>;
 
+  /** Call a resolved runtime target through the captured workspace session. */
+  rpcCallTarget(targetId: string, method: string, args?: unknown[]): Promise<unknown>;
+
   /** Inspect one agent through the owning host's channel.admin authority. Test mode only. */
   inspectAgentState(channelId: string, participantId: string): Promise<unknown>;
 
@@ -798,6 +801,10 @@ function createWorkspaceTestApi(
 
     async rpcCall(service, method, args = []): Promise<unknown> {
       return panelOrchestrator.callServer(service, method, args);
+    },
+
+    async rpcCallTarget(targetId, method, args = []): Promise<unknown> {
+      return panelOrchestrator.callServerTarget(targetId, method, args);
     },
 
     inspectAgentState(channelId, participantId): Promise<unknown> {

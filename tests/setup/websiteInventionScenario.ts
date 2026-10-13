@@ -32,13 +32,14 @@ const TEST_MODEL_REF = "vibestudio-test:deterministic";
 async function selectDeterministicTestModel(app: TestApp, workspaceId: string) {
   const selection = await app.app.evaluate(async (_electron, id) => {
     const api = await globalThis.__testApi!.forWorkspace(id);
-    const service = (await api.rpcCall("main", "workers.resolveService", [
-      "vibestudio.models.v1",
-    ])) as { kind?: unknown; targetId?: unknown };
+    const service = (await api.rpcCall("workers", "resolveService", ["vibestudio.models.v1"])) as {
+      kind?: unknown;
+      targetId?: unknown;
+    };
     if (service.kind !== "durable-object" || typeof service.targetId !== "string") {
       throw new Error("Workspace model-settings service did not resolve to a durable object");
     }
-    const settings = (await api.rpcCall(service.targetId, "getSettings")) as {
+    const settings = (await api.rpcCallTarget(service.targetId, "getSettings")) as {
       defaultAgentConfig?: Record<string, unknown>;
       catalog?: { models?: Array<{ ref?: string; availability?: { state?: string } }> };
     };
@@ -48,7 +49,7 @@ async function selectDeterministicTestModel(app: TestApp, workspaceId: string) {
     if (model?.availability?.state !== "ready") {
       throw new Error("The deterministic test model is unavailable in this workspace");
     }
-    const updated = (await api.rpcCall(service.targetId, "setDefaultAgentConfig", [
+    const updated = (await api.rpcCallTarget(service.targetId, "setDefaultAgentConfig", [
       { ...settings.defaultAgentConfig, model: "vibestudio-test:deterministic" },
     ])) as { defaultModel?: unknown; defaultAgentConfig?: { model?: unknown } };
     return {
