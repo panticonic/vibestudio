@@ -28,6 +28,22 @@ describe("mobile approval surface lifecycle", () => {
     });
   });
 
+  it.each([
+    "Connecting to this workspace’s approval queue…",
+    "Approvals unavailable",
+  ])("keeps the approval modal owned while it reports %s", (message) => {
+    const xml = `<hierarchy>
+      <node text="System · Approvals" enabled="true" clickable="false" />
+      <node text="${message}" enabled="true" clickable="false" />
+      <node text="Close" enabled="true" clickable="true" />
+    </hierarchy>`;
+
+    expect(mobileApprovalSurfaceState(xml)).toEqual({
+      visible: true,
+      loadRemainingKey: null,
+    });
+  });
+
   it("does not mistake the mounted Personal chat for an approval", () => {
     const xml = `<hierarchy>
       <node text="Personal" enabled="true" clickable="false" />

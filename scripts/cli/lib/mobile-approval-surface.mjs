@@ -25,7 +25,13 @@ export function mobileApprovalSurfaceState(xml) {
   for (const node of nodes) {
     const resourceId = attribute(node, "resource-id");
     const label = attribute(node, "text") || attribute(node, "content-desc");
-    if (resourceId === "approval-action-dismiss" || label === "Dismiss approval") {
+    if (
+      resourceId === "approval-action-dismiss" ||
+      label === "Dismiss approval" ||
+      / · Approvals$/.test(label) ||
+      label === "Connecting to this workspace’s approval queue…" ||
+      label === "Approvals unavailable"
+    ) {
       visible = true;
     }
     if (/^More reviews in .+\.$/.test(label)) unavailableOwners = label;
