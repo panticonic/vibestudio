@@ -11,6 +11,11 @@ import {
   executionSourceClosureDigest,
 } from "@vibestudio/shared/execution/retention";
 import { AppOrchestrator, readBakedElectronApp } from "./appOrchestrator.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
 import { APP_CAPABILITIES_BY_NATIVE_HOST } from "@vibestudio/shared/unitManifest";
 
 const EXECUTION_DIGEST_1 = "1".repeat(64);
@@ -335,17 +340,26 @@ describe("AppOrchestrator", () => {
       );
       const panelView = createPanelView();
       const orchestrator = new AppOrchestrator({ getPanelView: () => panelView });
-
-      expect(readBakedElectronApp(root)).toMatchObject({
-        appId: "@workspace-apps/shell",
-        source: "apps/shell",
-        target: "electron",
-        capabilities: ["notifications"],
-        effectiveVersion: BAKED_EFFECTIVE_VERSION,
-        executionDigest: execution.executionDigest,
-        authority: { requests: [], provides: [] },
-      });
-      await expect(orchestrator.loadBakedApp(root)).resolves.toBe(true);
+      const read = vi.mocked(fs.readFileSync);
+      read.mockClear();
+      try {
+        expect(readBakedElectronApp(root)).toMatchObject({
+          appId: "@workspace-apps/shell",
+          source: "apps/shell",
+          target: "electron",
+          capabilities: ["notifications"],
+          effectiveVersion: BAKED_EFFECTIVE_VERSION,
+          executionDigest: execution.executionDigest,
+          authority: { requests: [], provides: [] },
+        });
+        await expect(orchestrator.loadBakedApp(root)).resolves.toBe(true);
+        expect(read.mock.calls.map(([file]) => String(file))).toEqual([
+          path.join(root, "manifest.json"),
+          path.join(root, "manifest.json"),
+        ]);
+      } finally {
+        read.mockClear();
+      }
 
       expect(panelView.createViewForApp).toHaveBeenCalledWith(
         "@workspace-apps/shell",

@@ -667,7 +667,10 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     const build = await readBuildDir(sharedDir, key, { verifyExecution: false });
     if (!build) throw new Error(`Shared build ${key} is incomplete or has a different build key`);
     // Verify every payload before an existing directory wins publication.
-    await mapJoined(build.artifacts, (artifact) => readStoredArtifactBytes(build, artifact));
+    await mapJoined(build.artifacts, async (artifact) => {
+      const bytes = await readStoredArtifactBytes(build, artifact);
+      await verifyPublishedArtifactBytes(artifact, bytes);
+    });
   }
 
   async function mapJoined<T, R>(items: readonly T[], work: (item: T) => Promise<R>): Promise<R[]> {
@@ -714,12 +717,20 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     });
   }
 
-  /** Read and verify one stored artifact without blocking the workspace-server thread. */
+  /** Runtime artifacts are immutable publication outputs. Payload admission
+   * belongs to creation/publication, not to every consumer of the same bytes. */
   async function readStoredArtifactBytes(
     build: Pick<{ dir: string }, "dir">,
     entry: BuildArtifactManifestEntry
   ): Promise<Buffer> {
-    const bytes = await fs.promises.readFile(artifactFilePath(build, entry));
+    return fs.promises.readFile(artifactFilePath(build, entry));
+  }
+
+  /** An existing directory must prove its payloads before winning publication. */
+  async function verifyPublishedArtifactBytes(
+    entry: BuildArtifactManifestEntry,
+    bytes: Buffer
+  ): Promise<void> {
     if (bytes.byteLength !== entry.byteLength) {
       throw new Error(`Build artifact length mismatch: ${entry.path}`);
     }
@@ -729,7 +740,6 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     if (entry.integrity !== `sha256-${digest}`) {
       throw new Error(`Build artifact integrity mismatch: ${entry.path}`);
     }
-    return bytes;
   }
 
   async function readStoredArtifactContent(
@@ -964,8 +974,9 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
 
   async function has(key: string): Promise<boolean> {
     // Cache presence means a complete, identity-verified manifest whose files
-    // exist at their sealed lengths. Payload hashes are verified when consumed.
-    // This keeps lazy artifacts off startup while rejecting partial cache trees.
+    // exist at their sealed lengths. Payload integrity belongs to publication;
+    // ordinary consumers trust those immutable bytes. Lazy artifacts stay off
+    // startup while partial cache trees are still rejected.
     return (await get(key)) !== null;
   }
 

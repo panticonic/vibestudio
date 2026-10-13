@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -727,7 +727,7 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("defers full payload hashing until artifact content is consumed", async () => {
+  it("reads published immutable payloads without repeating integrity hashing", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     try {
       setStateRoot(root);
@@ -740,27 +740,18 @@ describe("build artifact helpers", () => {
           buildKey: "lazy-build",
         }
       );
-      const artifactPath = path.join(root, "builds", "lazy-build", "worker.js");
       const cachedBefore = await store.get("lazy-build");
-      expect(
-        await store.readStoredArtifactContent(cachedBefore!, cachedBefore!.artifacts[0]!)
-      ).toBe("export default {};");
-      const bytes = fs.readFileSync(artifactPath, "utf8");
-      fs.writeFileSync(artifactPath, "x".repeat(Buffer.byteLength(bytes)));
-
-      const cached = await store.get("lazy-build");
-      expect(cached).not.toBeNull();
-      const artifact = cached!.artifacts[0]!;
-      if (artifact.byteLength === undefined) throw new Error("Fixture artifact has no byte length");
-      await expect(
-        store.readStoredArtifactContent(cached!, {
-          ...artifact,
-          byteLength: artifact.byteLength + 1,
-        })
-      ).rejects.toThrow(/length mismatch/i);
-      await expect(store.readStoredArtifactContent(cached!, cached!.artifacts[0]!)).rejects.toThrow(
-        /integrity mismatch/i
-      );
+      const digest = vi.spyOn(webcrypto.subtle, "digest");
+      try {
+        for (let read = 0; read < 3; read++) {
+          expect(
+            await store.readStoredArtifactContent(cachedBefore!, cachedBefore!.artifacts[0]!)
+          ).toBe("export default {};");
+        }
+        expect(digest).not.toHaveBeenCalled();
+      } finally {
+        digest.mockRestore();
+      }
     } finally {
       await cleanupRoot(root);
     }
