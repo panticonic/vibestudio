@@ -18,7 +18,7 @@ const log = createDevLogger("BuildArtifactTransport");
 export interface TransportBuild {
   dir: string;
   artifacts: readonly BuildArtifactManifestEntry[];
-  metadata: Pick<BuildMetadata, "bundleReport">;
+  metadata: Pick<BuildMetadata, "bundleReport" | "kind">;
 }
 
 export interface BuildArtifactStore {

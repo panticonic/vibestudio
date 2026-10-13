@@ -19,8 +19,11 @@ import type {
 import type { CdpBridge } from "./cdpBridge.js";
 import { assertPresent } from "../lintHelpers";
 import { TransportDerivativeCache } from "./buildV2/transportDerivativeCache.js";
-import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
-import { BuildArtifactTransport, preferredContentEncoding } from "./buildArtifactTransport.js";
+import {
+  BuildArtifactTransport,
+  preferredContentEncoding,
+  type TransportBuild,
+} from "./buildArtifactTransport.js";
 import type { ResolvedUnitIcon } from "./buildV2/index.js";
 import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
 import { getPanelRuntimeHelperSet } from "./panelRuntimeHelpers.js";
@@ -148,6 +151,17 @@ function isPanelAssetRequest(resource: string): boolean {
     /\.[cm]?js(?:\.map)?$/iu.test(normalized) ||
     /\.css(?:\.map)?$/iu.test(normalized) ||
     /\.(?:png|jpe?g|gif|svg|webp|avif|ico|woff2?|ttf|otf|wasm)$/iu.test(normalized)
+  );
+}
+
+/** An app document may load only its own origin's scripts, styles and images. */
+const APP_DOCUMENT_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
+
+/** `enc=gzip` asks for each text-like record of a bundle in its compressed form. */
+function bundleWantsGzip(req: import("http").IncomingMessage): boolean {
+  return (
+    new URL(req.url ?? "/", "http://build-artifacts.invalid").searchParams.get("enc") === "gzip"
   );
 }
 
@@ -527,9 +541,7 @@ export class PanelHttpServer {
       }
       if (resource === "/__bundle" || resource.startsWith("/__bundle?")) {
         await this.transport.writeBundle(req, res, build, {
-          gzip:
-            new URL(req.url ?? "/", "http://panel-gateway.invalid").searchParams.get("enc") ===
-            "gzip",
+          gzip: bundleWantsGzip(req),
           runtimeHelpers: this.runtimeHelperSet,
         });
         return;
@@ -831,8 +843,7 @@ export class PanelHttpServer {
   /**
    * Serve one file of an immutable app build: `/_a/<buildKey>/<path>`, its
    * inventory, or its bundle. The caller has already decided the build is one
-   * this host serves. A request carrying the resumable-gzip header receives the
-   * canonical gzip representation, and a Range is read over those bytes.
+   * this host serves. The bytes follow the same protocol as a panel build's.
    */
   async serveAppArtifact(
     req: import("http").IncomingMessage,
@@ -856,7 +867,7 @@ export class PanelHttpServer {
       return;
     }
     if (build && artifactPath === "__bundle") {
-      await this.transport.writeBundle(req, res, build, { gzip: true });
+      await this.transport.writeBundle(req, res, build, { gzip: bundleWantsGzip(req) });
       return;
     }
     const artifact = build?.artifacts.find((entry) => entry.path === artifactPath);
@@ -865,64 +876,7 @@ export class PanelHttpServer {
       res.end("App artifact not found");
       return;
     }
-    const headers: Record<string, string> = {
-      "Content-Type": artifact.contentType,
-      // The build key names an immutable artifact graph. This allows both the
-      // loopback façade and Chromium to reuse app bytes across launches.
-      "Cache-Control": "public, max-age=31536000, immutable",
-    };
-    if (artifact.integrity) headers["X-Vibestudio-Content-Digest"] = artifact.integrity;
-    if (artifact.role === "html") {
-      headers["Content-Security-Policy"] =
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
-    }
-    const identityBody = await this.transport.readBytes(build, artifact);
-    const resumableGzip = req.headers[RESUMABLE_GZIP_HEADER] === "1";
-    let body = identityBody;
-    if (resumableGzip) {
-      const encoded = await this.transport.compressed(
-        artifact.integrity,
-        artifact.path,
-        identityBody
-      );
-      if (!encoded) throw new Error(`Failed to gzip app artifact ${artifact.path}`);
-      body = encoded;
-      headers["Content-Encoding"] = "gzip";
-      headers["Accept-Ranges"] = "bytes";
-      headers[RESUMABLE_GZIP_HEADER] = "1";
-      if (artifact.integrity) headers["X-Vibestudio-Artifact-Integrity"] = artifact.integrity;
-    }
-
-    const rangeHeader = resumableGzip ? req.headers.range : undefined;
-    if (typeof rangeHeader === "string") {
-      const match = /^bytes=(\d+)-(\d*)$/u.exec(rangeHeader);
-      const start = match ? Number(match[1]) : Number.NaN;
-      const requestedEnd = match?.[2] ? Number(match[2]) : body.byteLength - 1;
-      if (
-        !Number.isSafeInteger(start) ||
-        !Number.isSafeInteger(requestedEnd) ||
-        start < 0 ||
-        requestedEnd < start ||
-        start >= body.byteLength
-      ) {
-        headers["Content-Range"] = `bytes */${body.byteLength}`;
-        headers["Content-Length"] = "0";
-        res.writeHead(416, headers);
-        res.end();
-        return;
-      }
-      const end = Math.min(requestedEnd, body.byteLength - 1);
-      const partial = body.subarray(start, end + 1);
-      headers["Content-Range"] = `bytes ${start}-${end}/${body.byteLength}`;
-      headers["Content-Length"] = String(partial.byteLength);
-      res.writeHead(206, headers);
-      res.end(req.method === "HEAD" ? undefined : partial);
-      return;
-    }
-
-    headers["Content-Length"] = String(body.byteLength);
-    res.writeHead(200, headers);
-    res.end(req.method === "HEAD" ? undefined : body);
+    await this.writeArtifact(req, res, build, artifact, true);
   }
 
   private async serveActivatedPanelResource(
@@ -1106,10 +1060,20 @@ export class PanelHttpServer {
     }
   }
 
+  /**
+   * The one way build-pinned bytes leave this server, for panels and apps.
+   *
+   * The representation is chosen by `Accept-Encoding` (br, gzip or identity;
+   * bodies under 1 KiB stay identity) and is the same canonical bytes on every
+   * request. That makes a byte `Range` taken from one response valid against the
+   * next, so a client on a flaky link resumes with `Range` (and `If-Range` to
+   * guard against a changed representation) instead of a private header: the
+   * range applies to the selected, encoded representation, as HTTP defines it.
+   */
   private async writeArtifact(
     req: import("http").IncomingMessage,
     res: import("http").ServerResponse,
-    build: CachedBuild,
+    build: TransportBuild & { revision?: number },
     artifact: BuildArtifactManifestEntry,
     immutableDocument = false,
     contentOverride?: string | Buffer
@@ -1120,32 +1084,100 @@ export class PanelHttpServer {
       artifact.role === "html" && !immutableDocument
         ? "no-store"
         : "public, max-age=31536000, immutable";
-    const body =
+    const identity =
       contentOverride === undefined
         ? await this.transport.readBytes(build, artifact)
         : Buffer.isBuffer(contentOverride)
           ? contentOverride
           : Buffer.from(contentOverride);
     const encoding =
-      body.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
-    const compressedBody = encoding
+      identity.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
+    const encoded = encoding
       ? await this.transport.compressed(
           contentOverride === undefined ? artifact.integrity : undefined,
           artifact.path,
-          body,
+          identity,
           encoding
         )
       : null;
-    res.writeHead(200, {
+    const body = encoded ?? identity;
+    const headers: Record<string, string | number> = {
       "Content-Type": artifact.contentType,
-      "Content-Length": compressedBody?.length ?? body.length,
       "Cache-Control": cacheControl,
-      ...(encoding && compressedBody
-        ? { "Content-Encoding": encoding, Vary: "Accept-Encoding" }
-        : {}),
-      "X-Vibestudio-Build-Revision": String(build.revision),
-    });
-    res.end(compressedBody ?? (artifact.encoding === "utf8" ? body.toString("utf8") : body));
+      Vary: "Accept-Encoding",
+      "Accept-Ranges": "bytes",
+      ...(encoded && encoding ? { "Content-Encoding": encoding } : {}),
+      ...(build.revision === undefined ? {} : { "X-Vibestudio-Build-Revision": build.revision }),
+    };
+    // Only the build's own bytes carry a digest identity; a rewritten document does not.
+    const etag =
+      contentOverride === undefined && artifact.integrity
+        ? `"${artifact.integrity}${encoded && encoding ? `;${encoding}` : ""}"`
+        : null;
+    if (etag && artifact.integrity) {
+      headers["ETag"] = etag;
+      headers["X-Vibestudio-Content-Digest"] = artifact.integrity;
+    }
+    if (artifact.role === "html" && build.metadata.kind === "app") {
+      headers["Content-Security-Policy"] = APP_DOCUMENT_CSP;
+    }
+
+    const range = this.requestedRange(req, etag, body.length);
+    if (range === "unsatisfiable") {
+      res.writeHead(416, {
+        ...headers,
+        "Content-Range": `bytes */${body.length}`,
+        "Content-Length": 0,
+      });
+      res.end();
+      return;
+    }
+    if (range) {
+      const partial = body.subarray(range.start, range.end + 1);
+      res.writeHead(206, {
+        ...headers,
+        "Content-Range": `bytes ${range.start}-${range.end}/${body.length}`,
+        "Content-Length": partial.length,
+      });
+      res.end(req.method === "HEAD" ? undefined : partial);
+      return;
+    }
+    res.writeHead(200, { ...headers, "Content-Length": body.length });
+    res.end(
+      req.method === "HEAD"
+        ? undefined
+        : encoded
+          ? encoded
+          : artifact.encoding === "utf8"
+            ? identity.toString("utf8")
+            : identity
+    );
+  }
+
+  /** A single byte range over the selected representation, if one was asked for and still applies. */
+  private requestedRange(
+    req: import("http").IncomingMessage,
+    etag: string | null,
+    size: number
+  ): { start: number; end: number } | "unsatisfiable" | null {
+    const header = req.headers.range;
+    if (typeof header !== "string") return null;
+    // If-Range ties the range to the representation the client already holds; a
+    // different one is sent whole rather than spliced onto the old bytes.
+    const ifRange = req.headers["if-range"];
+    if (typeof ifRange === "string" && ifRange !== etag) return null;
+    const match = /^bytes=(\d+)-(\d*)$/u.exec(header);
+    const start = match ? Number(match[1]) : Number.NaN;
+    const requestedEnd = match?.[2] ? Number(match[2]) : size - 1;
+    if (
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(requestedEnd) ||
+      requestedEnd < start ||
+      start >= size
+    ) {
+      return "unsatisfiable";
+    }
+    return { start, end: Math.min(requestedEnd, size - 1) };
   }
 
   private requireCallbacks(): PanelHttpCallbacks {

@@ -2,7 +2,7 @@ import { gatewayMethods } from "@vibestudio/service-schemas/gateway";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { NativeModules, Platform } from "react-native";
 import { RN_HOST_ABI } from "@vibestudio/shared/buildProvider";
-import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
+import { GZIP_MARKER_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { loadShellCredential } from "./connect.js";
 import { retryBundleTransfer } from "./bundleTransferRetry.js";
 
@@ -239,7 +239,9 @@ export async function streamArtifactToNative(
   const requestStartedAt = Date.now();
   const headers = {
     ...((descriptor["headers"] as Record<string, string> | undefined) ?? {}),
-    [RESUMABLE_GZIP_HEADER]: "1",
+    // Ask for the compressed representation and resume within it by byte
+    // range: the server's encoded bytes are the same on every request.
+    "Accept-Encoding": "gzip",
     // One open-ended response lets QUIC apply continuous stream backpressure
     // instead of paying an application round trip for every fixed-size range.
     // If the connection drops, the last native-acknowledged byte remains the
@@ -258,10 +260,10 @@ export async function streamArtifactToNative(
         new TextDecoder().decode(bytes).slice(0, 300)
     );
   }
+  // Small bodies stay identity; the transfer is whatever the server selected.
   const gzipped = decoded.headers.some(
-    (h) => h[0].toLowerCase() === "x-vibestudio-content-gzip" && h[1] === "1"
+    (h) => h[0].toLowerCase() === GZIP_MARKER_HEADER && h[1] === "1"
   );
-  if (!gzipped) throw new Error("bundle artifact server did not honor resumable gzip transfer");
   const contentRange = decoded.headers.find((h) => h[0].toLowerCase() === "content-range")?.[1];
   const match = contentRange ? /^bytes (\d+)-(\d+)\/(\d+)$/u.exec(contentRange) : null;
   const rangeStart = Number(match?.[1]);
@@ -312,7 +314,7 @@ export async function streamArtifactToNative(
     `[mobile-bundle] streamed ${received} bytes at offset ${rangeStart} in ` +
       `${Date.now() - requestStartedAt}ms (${transfer.offset}/${declaredTotal})`
   );
-  return true;
+  return gzipped;
 }
 
 function transferCanResume(error: unknown): boolean {

@@ -49,11 +49,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { gatewayMethods, type GatewayFetchDescriptor } from "@vibestudio/service-schemas/gateway";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
-import {
-  GZIP_MARKER_HEADER,
-  RESUMABLE_GZIP_HEADER,
-  hasRangeRequestHeader,
-} from "@vibestudio/shared/panel/assetHeaders";
+import { GZIP_MARKER_HEADER, hasRangeRequestHeader } from "@vibestudio/shared/panel/assetHeaders";
 
 const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
   "connection",
@@ -242,45 +238,34 @@ export function createGatewayFetchService(deps: {
         // bidirectional request. A buffered base64 body in either direction would
         // exceed that limit for real payloads (MB).
         const requestHasRange = hasRangeRequestHeader(descriptor.headers);
-        const resumableGzip =
-          descriptor.gzip === true &&
-          requestHeader(descriptor.headers, RESUMABLE_GZIP_HEADER) === "1";
-        const response =
-          descriptor.gzip && (!requestHasRange || resumableGzip)
-            ? await rawLoopbackFetch(port, target, descriptor, ctx.body)
-            : await fetch(url, {
-                method: descriptor.method ?? "GET",
-                headers: descriptor.headers,
-                ...(ctx.body
-                  ? // undici requires half-duplex to be declared for stream bodies.
-                    { body: ctx.body, duplex: "half" }
-                  : {}),
-              } as RequestInit);
+        // A Range reads the representation the caller asked for. A caller that
+        // names gzip in its own Accept-Encoding wants those encoded bytes (the
+        // mobile bundle transfer resumes this way); one that does not wants
+        // plain bytes at plain offsets, as a webview seeking in media does.
+        const encodedRange =
+          requestHasRange &&
+          /\bgzip\b/iu.test(requestHeader(descriptor.headers, "accept-encoding") ?? "");
+        const encodeOnWire = descriptor.gzip === true && (!requestHasRange || encodedRange);
+        const response = encodeOnWire
+          ? await rawLoopbackFetch(port, target, descriptor, ctx.body)
+          : await fetch(url, {
+              method: descriptor.method ?? "GET",
+              headers: descriptor.headers,
+              ...(ctx.body
+                ? // undici requires half-duplex to be declared for stream bodies.
+                  { body: ctx.body, duplex: "half" }
+                : {}),
+            } as RequestInit);
 
         console.log(
           `[gateway.fetch] <- ${response.status} ${label} in ${Date.now() - startedAt}ms`
         );
-        const hasRangeSemantics =
-          requestHasRange || response.status === 206 || response.headers.has("content-range");
-        if (
-          descriptor.gzip &&
-          response.ok &&
-          response.body &&
-          (!hasRangeSemantics || resumableGzip)
-        ) {
+        if (encodeOnWire && response.ok && response.body) {
           const headers = new Headers(response.headers);
-          if (resumableGzip && headers.get(RESUMABLE_GZIP_HEADER) !== "1") {
-            throw new ServiceError(
-              serviceName,
-              "fetch",
-              "gateway.fetch resumable gzip representation was not honored",
-              "EIO"
-            );
-          }
-          headers.set(GZIP_MARKER_HEADER, "1");
           if (headers.get("content-encoding")?.toLowerCase() === "gzip") {
             // The raw Node request deliberately bypasses fetch's transparent
             // decompression. Forward the gateway's encoded bytes unchanged.
+            headers.set(GZIP_MARKER_HEADER, "1");
             headers.delete("content-encoding");
             return new Response(response.body, {
               status: response.status,
@@ -288,9 +273,13 @@ export function createGatewayFetchService(deps: {
               headers,
             });
           }
+          // A ranged answer is already a slice of the representation the server
+          // chose; compressing it again would break its offsets.
+          if (requestHasRange || response.status === 206) return response;
 
           // The gateway returned identity despite Accept-Encoding. Preserve the
           // streaming fallback, but only pay the compression cost in this cold case.
+          headers.set(GZIP_MARKER_HEADER, "1");
           headers.delete("content-length");
           return new Response(response.body.pipeThrough(new CompressionStream("gzip")), {
             status: response.status,

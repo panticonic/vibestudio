@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 
 vi.mock("react-native", () => ({
@@ -83,7 +82,7 @@ describe("mobile bundle delivery over Iroh", () => {
         path: "/bundle",
         method: "GET",
         gzip: true,
-        headers: { [RESUMABLE_GZIP_HEADER]: "1", Range: "bytes=0-" },
+        headers: { "Accept-Encoding": "gzip", Range: "bytes=0-" },
       },
     ]);
     expect(host.appendBundleChunk).toHaveBeenNthCalledWith(

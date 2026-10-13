@@ -18,7 +18,6 @@ import { unitIconTarget } from "@vibestudio/shared/panel/assetPathPolicy";
 import { getPanelRuntimeHelperSet } from "./panelRuntimeHelpers.js";
 import type { BuildArtifactManifestEntry, StoredBuildResult } from "./buildV2/buildStore.js";
 import type { PanelHttpCallbacks } from "./panelHttpServer.js";
-import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 
 // ---------------------------------------------------------------------------
 // extractSourcePath is module-private, so we test the regex logic directly.
@@ -1283,7 +1282,7 @@ describe("PanelHttpServer app artifacts", () => {
     ]);
     expect(inventory.artifacts[1]).not.toHaveProperty("initial");
 
-    const bundle = await serve(server, "__bundle", {}, "/_a/app-key/__bundle?want=0");
+    const bundle = await serve(server, "__bundle", {}, "/_a/app-key/__bundle?want=0&enc=gzip");
     const reader = createBlobBundleReader();
     const records = reader.push(new Uint8Array(Buffer.concat(bundle.chunks ?? [])));
     reader.end();
@@ -1295,12 +1294,12 @@ describe("PanelHttpServer app artifacts", () => {
     expect((await serve(server, "missing.js")).statusCodeWritten).toBe(404);
   });
 
-  it("serves deterministic gzip byte ranges for resumable native app transfer", async () => {
+  it("serves deterministic byte ranges over the negotiated representation", async () => {
     const source = "mobile workspace bundle ".repeat(2048);
     const server = appServer([
       fixtureArtifact(APP_DIR, "index.android.bundle", "primary", "application/javascript", source),
     ]);
-    const resumable = { [RESUMABLE_GZIP_HEADER]: "1" };
+    const resumable = { "accept-encoding": "gzip" };
 
     const full = await serve(server, "index.android.bundle", resumable);
     expect(full.statusCodeWritten).toBe(200);
@@ -1326,5 +1325,19 @@ describe("PanelHttpServer app artifacts", () => {
     expect(bounded.statusCodeWritten).toBe(206);
     expect(bounded.headersWritten?.["Content-Range"]).toBe(`bytes 7-38/${body.length}`);
     expect(bounded.body).toEqual(body.subarray(7, 39));
+
+    // A client that holds a different representation gets the whole body, not a splice.
+    const stale = await serve(server, "index.android.bundle", {
+      ...resumable,
+      range: "bytes=7-38",
+      "if-range": '"sha256-other"',
+    });
+    expect(stale.statusCodeWritten).toBe(200);
+
+    // Without gzip in Accept-Encoding the range is over the plain bytes.
+    const plain = await serve(server, "index.android.bundle", { range: "bytes=0-9" });
+    expect(plain.statusCodeWritten).toBe(206);
+    expect(plain.headersWritten?.["Content-Encoding"]).toBeUndefined();
+    expect(plain.headersWritten?.["Content-Range"]).toBe(`bytes 0-9/${source.length}`);
   });
 });

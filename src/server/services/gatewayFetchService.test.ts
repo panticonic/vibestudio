@@ -3,7 +3,7 @@ import * as http from "node:http";
 import { gzipSync, gunzipSync } from "node:zlib";
 import type { AddressInfo } from "node:net";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { GZIP_MARKER_HEADER, RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
+import { GZIP_MARKER_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { createGatewayFetchService } from "./gatewayFetchService.js";
 
 interface CapturedRequest {
@@ -186,17 +186,16 @@ describe("gatewayFetchService — §1.6 upload path", () => {
     expect(await response.text()).toBe("0123");
   });
 
-  it("preserves deterministic encoded ranges for resumable mobile bundles", async () => {
+  it("preserves deterministic encoded ranges when the caller accepts gzip", async () => {
     const source = Buffer.from("resumable mobile bundle ".repeat(1024));
     const encoded = gzipSync(source, { level: 6 });
     const gateway = await startFakeGateway((req, res) => {
-      expect(req.headers[RESUMABLE_GZIP_HEADER]).toBe("1");
+      expect(req.headers["accept-encoding"]).toBe("gzip");
       const match = /^bytes=(\d+)-$/u.exec(req.headers.range ?? "");
       const start = match ? Number(match[1]) : 0;
       res.writeHead(start > 0 ? 206 : 200, {
         "content-type": "application/javascript",
         "content-encoding": "gzip",
-        [RESUMABLE_GZIP_HEADER]: "1",
         ...(start > 0
           ? { "content-range": `bytes ${start}-${encoded.length - 1}/${encoded.length}` }
           : {}),
@@ -209,7 +208,7 @@ describe("gatewayFetchService — §1.6 upload path", () => {
       {
         path: "/_a/build/index.android.bundle",
         gzip: true,
-        headers: { [RESUMABLE_GZIP_HEADER]: "1", Range: `bytes=${offset}-` },
+        headers: { "Accept-Encoding": "gzip", Range: `bytes=${offset}-` },
       },
     ])) as Response;
     const tail = Buffer.from(await response.arrayBuffer());
