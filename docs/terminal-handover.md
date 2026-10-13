@@ -63,11 +63,11 @@ Nothing is merged into main or pushed. The integration branch is
 
 | Repo | Worktree | Tip | Ahead of main |
 |---|---|---|---|
-| host | `/home/werg/vibestudio-worktrees/apps/vibestudio` | `af1f4ccd2` + this doc | 70 commits |
-| base | `…/apps/templates/base` | `cb68db2` | 44 |
-| system | `…/apps/templates/system` | `a7b2121` | 35 |
-| system-testing | `…/apps/templates/system-testing` | `c741f03` | 14 |
-| personal | `…/apps/templates/personal` | `eee6625` | 2 |
+| host | `/home/werg/vibestudio-worktrees/apps/vibestudio` | `057fb0441` + this doc | 72 commits + this doc |
+| base | `…/apps/templates/base` | `163e26b` | 46 |
+| system | `…/apps/templates/system` | `304c2b4` | 36 |
+| system-testing | `…/apps/templates/system-testing` | `4547499` | 16 |
+| personal | `…/apps/templates/personal` | `81a01c1` | 3 |
 
 The other template worktrees (examples, google-workspace, news, spectrolite)
 have no changes.
@@ -117,7 +117,9 @@ belongs to someone else.
 - **Template scope.** Template preparation has a scope, `sources` or
   `release` (`runInstance.ts`). Only the terminal path uses `sources`, which
   skips the exhaustive runtime prebuild. Server, desktop and the packagers use
-  `release`.
+  `release`. Main's `sourcesReady` receipt hands prepared sources to the server
+  before the owned release producer finishes; packaging still requires its
+  completion. Producer failures propagate to the foreground owner.
 - **Browser contract.** `packages/shell-core/src/terminal/terminalBrowserHost.ts`
   is the contract between the CLI and the browser, now version 2. It carries
   `system` and `workspaceRpc`; `readLocalFile` has been removed. Personal is
@@ -195,6 +197,10 @@ belongs to someone else.
   `ChatHostController.conversationState(channelId)` supplies the target
   conversation's own agent roster on fork switch, in both the desktop panel
   and the terminal chat.
+  The parent transcript's durable `channel.forked` marker is distinct from the
+  terminal-local confirmation that navigation completed. Neither inserts a
+  model message or rewrites the inherited native knowledge prefix. The local
+  notice is in-memory, not timer-expiring, and is not sent to agents.
 
 ### Apps lifecycle (AppHost and unit-host)
 
@@ -228,13 +234,13 @@ belongs to someone else.
 
 | Check | Result |
 |---|---|
-| Full commit hooks | Passed on host `a52e2fb42` and `af1f4ccd2`, including type-check, lint, format and the unit authority audit |
+| Full commit hooks | Passed on host merge `057fb0441`, including type-check, lint, format, dependency census, template hygiene and the unit authority audit |
 | `type-check:userland` | Base, System, System-testing and Personal passed, each run on its own; Base and System-testing were rerun after the latest changes |
 | System test `eval-cancel-run` | Passed in run `st_d9d4ff370ac8466bb55d3a5f322dc7e0` |
-| System test `terminal-chat-approval-fork-resume` | Extended through fork reply and switch-back, but currently errors at `fork-agent-reply`; latest run `st_0090e03ceb4f4dad84116c1c4ac3cbfb`. The managed instance was stopped. See §5. |
-| Host focused suites | Passed, latest 4314 of 4316 (the 2 were fixed after) |
-| Base terminal/core focused tests | 28 passed after the latest input/join lifecycle fixes |
-| System-testing terminal scenario tests | 12 passed |
+| System test `terminal-chat-approval-fork-resume` | Passed after main integration in run `st_1093b70974ba4c53ae2d1d8045c18ab2`: fork-agent reply, switch-back, kill/relaunch and history restoration; zero tool failures, concurrency 1. The managed instance was stopped. See §5. |
+| Host focused suites | 45 passed after main integration; release preparation tests 20 passed |
+| Base terminal/core focused tests | 34 passed after removing speculative input/join changes; projected composition typecheck passed |
+| System-testing terminal scenario tests | 13 passed; projected composition typecheck passed |
 | Terminal browser tests | 108 passed |
 | Live `pnpm terminal` checks | Launcher, Chat streaming, detach/resume, kill/relaunch with transcript, shell cwd, quit with a live PTY (~10 s, clean). Fork plus fork-agent reply checked only before the upstream merge |
 | Cold start to launcher | Before: about 26 min to template-preparation done. After: ~70 s on a quiet host; ~27.5 s with a warm derived cache |
@@ -254,22 +260,20 @@ belongs to someone else.
      (`AbortSignal.any`).
 
    Run at least one agent-driven test and one eval-lifecycle test.
-2. **Finish the fork-agent delivery defect exposed by the extended system
-   test.** The test now proves these boundaries separately:
-   - the fork and cloned agent initialize successfully;
-   - the terminal accepts the fork-only prompt;
-   - Enter submits and clears the composer;
-   - the fork channel processes subsequent observations;
-   - the cloned agent never produces the requested reply, so the test reaches
-     its explicit 900 s orchestration ceiling in `fork-agent-reply`.
+2. **Fork scenario harness corrected.** The earlier cloned-agent delivery
+   diagnosis was wrong. `/Forked/` matched the parent's transcript marker before
+   navigation completed, so the harness sent its prompt to the wrong conversation.
+   It now waits for the exact child-navigation confirmation and an online screen;
+   `/forks` waits for the composer, not a notice mentioning the command.
 
-   Base `cb68db2` removed two real losses found on the way: React conversation
-   synchronization now settles in the layout phase before Ink publishes a
-   frame, and `ChatSession.sendMessage` owns a draft submitted during its
-   initial join instead of silently returning without a client. System-testing
-   `c741f03` records compose, submit and reply as distinct phases. The next
-   investigation should start at cloned-agent live delivery after
-   `importChannelKnowledge`; do not add a delay or retry to the terminal test.
+   Diagnostic run `st_18a824f29d224feb9038cd882b9938ad` proved that the child
+   replied and switching back worked. Its parent-history assertion then waited
+   for a question outside the initial 50-envelope replay. System-testing
+   `4547499` uses PageUp when that question is on the previous history page,
+   both after switch-back and after relaunch, retaining the original restoration
+   assertions. No delay or retry was added. Base `163e26b` removes the speculative
+   `cb68db2` input/join fixes and their artificial regression tests. The complete
+   corrected scenario passed in `st_1093b70974ba4c53ae2d1d8045c18ab2`.
 3. **Approval withdrawal cancellation is complete.** Host `a52e2fb42`
    propagates a typed cancellation with the original lifecycle cause through
    approval waiters, DO dispatch and EvalDO. `eval-cancel-run` passed.
@@ -304,11 +308,11 @@ belongs to someone else.
 
 ### Upstream sync
 
-11. **Held-back template commits.** Base `1e4f7ce`, `da5f7f9`, `d4c44f8`,
-    `daf815c`, `06860b5` and System `2e9c3ad`, `2fc93d6` need host `99e0a0497`
-    (on `fix/release-105-repair`). When host main has it, merge the rest of
-    each template's `origin/main`. With `1e4f7ce`, the chat host controller
-    must stop passing `workspaceDefaultAgentConfig`.
+11. **Main integration complete.** Host main `39554dbe0` and all configured
+    Base, System, System-testing and Personal mains are ancestors of these
+    worktree branches. The formerly held-back model-authority changes are
+    integrated. Model authority presentation has one bounded `model:` path,
+    without duplicate broad `model.use` entries.
 
 ### Design questions for the user
 

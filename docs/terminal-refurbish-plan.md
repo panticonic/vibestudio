@@ -425,31 +425,29 @@ The workerd terminal stack, the Ink-in-workerd builder support and
 
 ### Upstream sync status (2026-10-13)
 
-`terminal/native` merges host `main` (3f404a951) in full. Upstream template
-`origin/main` is ahead of host `main`: its later commits need the host change
-99e0a0497 ("Mediate local model runtime authority in the host"), which lives on
-`fix/release-105-repair` and is not in host `main` yet. The template merges
-therefore stop at these cut points (each verified with `type-check:userland`
-and `check:runtime-docs` on the merged result):
-
-- Base: through `dc69e1d` ("Keep deterministic Pi sessions stable across tool
-  rounds"). Not merged yet: `1e4f7ce` (inherit workspace model settings across
-  agent launches; the chat host controller here must stop passing
-  `workspaceDefaultAgentConfig` when it is merged), `da5f7f9`, `d4c44f8`,
-  `daf815c`, `06860b5`.
-- System: through `730a960`. Not merged yet: `2e9c3ad` (confine local model
-  runtime secrets to the host) and `2fc93d6`.
-
-When host `main` contains 99e0a0497, merge the rest of each template's
-`origin/main`.
+`terminal/apps-lifecycle` now merges host `main` (`39554dbe0`) and all configured
+Base, System, System-testing and Personal mains. The formerly held-back
+model-authority changes are integrated. Nothing has been merged into main or
+pushed. The host merge passed the full commit gate; Base and System-testing
+passed focused projected tests and composition typechecks.
 
 ### System test `terminal-chat-approval-fork-resume` (status 2026-10-13)
 
-Passing (run `st_5c337951097e4d40b33fc96ab1c036dc` on the integrated branch).
+Passing after main integration (run `st_1093b70974ba4c53ae2d1d8045c18ab2`,
+concurrency 1, zero tool failures; managed instance stopped).
 The scenario no longer answers the person's approval queue. Like every other
 system test, its approvals are decided by the runner's test policy. The launch
 service now creates the session context with a caller that carries the
 launching call's policy.
+
+The extended scenario verifies a fork-only agent reply, switching back to the
+parent, and killing/relaunching with history restored. Its remaining blocker
+was harness readiness: it confused the parent fork marker with the child's
+navigation confirmation, and expected an older question in the initial
+50-envelope history replay. It now waits for the actual navigation confirmation
+and uses PageUp to retrieve older history. The speculative input/join changes
+based on the earlier delivery diagnosis were removed; no production delay,
+timeout or retry was introduced.
 
 See [terminal-handover.md](terminal-handover.md) for the full state at handover
 and the open work.
