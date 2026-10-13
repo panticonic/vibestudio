@@ -509,6 +509,41 @@ describe("createRpcClient", () => {
     expect(sent.map((envelope) => envelope.message.type)).toEqual(["request", "request-cancel"]);
   });
 
+  it("delivers a cancellation as the caller the request was delivered as", async () => {
+    const sent: RpcEnvelope[] = [];
+    const transport: EnvelopeRpcTransport = {
+      async send(envelope) {
+        sent.push(envelope);
+      },
+      onMessage() {
+        return () => {};
+      },
+    };
+    const rpc = createRpcClient({ selfId: "bridge", callerKind: "server", transport });
+    const initiator = { callerId: "terminal-apps", callerKind: "server" as const };
+    const controller = new AbortController();
+    const pending = rpc.call(
+      "ext",
+      "wait",
+      [],
+      bindInvocationParent(
+        { signal: controller.signal },
+        { nonce: "invocation:one", caller: initiator, provenance: [initiator] }
+      )
+    );
+    await flushMicrotasks();
+    controller.abort(new Error("released"));
+    await flushMicrotasks();
+
+    const [request, cancel] = sent;
+    expect(request?.message.type).toBe("request");
+    expect(cancel?.message.type).toBe("request-cancel");
+    // The receiver aborts a handler only for a cancel from the caller it served.
+    expect(cancel?.delivery.caller).toEqual(request?.delivery.caller);
+    expect(cancel?.delivery.caller).toMatchObject(initiator);
+    void pending.catch(() => {});
+  });
+
   it("preserves both remote cleanup and cancellation delivery failures", async () => {
     let request!: RpcEnvelope;
     let receive!: (envelope: RpcEnvelope) => void;

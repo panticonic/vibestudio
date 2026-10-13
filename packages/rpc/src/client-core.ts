@@ -420,6 +420,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       /** Envelope target — drives the direct-server vs routed rejection policy (§3.4). */
       target: string;
       destination?: RpcDestination;
+      /** Destination and invocation parent a cancel envelope must carry. */
+      cancelOptions?: RpcCallOptions;
     }
   >();
   const pendingStreams = new Map<
@@ -669,6 +671,23 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     }
   }
 
+  /**
+   * Options for a cancel envelope: the request's destination and its invocation
+   * parent. A receiver registers an active handler under the caller the request
+   * was delivered as (the invocation parent's caller when one is bound), and
+   * honours a cancel only from that same caller, so a cancel sent as the bare
+   * transport identity would be ignored.
+   */
+  function cancelOptionsFor(
+    options: { destination?: RpcDestination } | undefined
+  ): RpcCallOptions | undefined {
+    const parent = invocationParentFor(options as RpcCallOptions | undefined);
+    if (!options?.destination && !parent) return undefined;
+    const cancel: RpcCallOptions = options?.destination ? { destination: options.destination } : {};
+    if (parent) bindInvocationParent(cancel, parent);
+    return cancel;
+  }
+
   function requestPendingCancellation(
     requestId: string,
     pending: {
@@ -678,6 +697,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       timeout: ReturnType<typeof setTimeout> | null;
       target: string;
       destination?: RpcDestination;
+      cancelOptions?: RpcCallOptions;
     },
     reason: Error,
     provenance: AuthenticatedCaller[]
@@ -689,11 +709,10 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       clearTimeout(pending.timeout);
       pending.timeout = null;
     }
-    const options = pending.destination ? { destination: pending.destination } : undefined;
     const cancellation = send(
       pending.target,
       { type: "request-cancel", requestId, fromId: config.selfId },
-      options,
+      pending.cancelOptions,
       provenance
     );
     pending.cancellationSend = cancellation;
@@ -1083,6 +1102,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         responseSettling: false,
         target: targetId,
         ...(options?.destination ? { destination: options.destination } : {}),
+        ...(cancelOptionsFor(options) ? { cancelOptions: cancelOptionsFor(options)! } : {}),
       };
       // No implicit deadline: callers opt in with a positive timeoutMs when a
       // specific operation should be time-bounded.
@@ -1388,7 +1408,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     });
     let bodyController: ReadableStreamDefaultController<Uint8Array> | null = null;
     const sendCancel = (): void => {
-      const cancelOptions = options?.destination ? { destination: options.destination } : undefined;
+      const cancelOptions = cancelOptionsFor(options);
       const envelope = makeEnvelope(
         targetId,
         { type: "stream-cancel", requestId, fromId: config.selfId },
