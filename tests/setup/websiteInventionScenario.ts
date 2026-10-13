@@ -19,7 +19,10 @@ import {
   reloadPanel,
   type TestApp,
 } from "../setup/electronSetup";
-import { findWorkspaceShellPage } from "../e2e/support/workspaceCreation";
+import {
+  declineFirstRunReporting,
+  findWorkspaceShellPage,
+} from "../e2e/support/workspaceCreation";
 import { clickNativeApproval } from "../e2e/support/nativeApproval";
 import { hasOwnedX11Display } from "../setup/ownedXvfb";
 import { getChannelRpcReadBundle } from "../e2e/support/channelRpcReadBundle";
@@ -77,6 +80,7 @@ export async function websiteInventionScenario(environment: Record<string, strin
   const browserErrors: string[] = [];
   try {
     app = await launchManagedServerApp(environment);
+    await declineFirstRunReporting(app);
     await approvePendingStartupUnits(app);
     const workspaces = await app.app.evaluate(() => globalThis.__testApi!.listWorkspaces());
     for (const workspace of workspaces) {
