@@ -2076,7 +2076,7 @@ describe("ExtensionHost activation", () => {
   });
 
   it("projects process readiness when the persisted registry status is stale", async () => {
-    const { host, extensionNode } = await makeHost({ status: "available" });
+    const { host, extensionNode } = await makeHost({ status: "building" });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(host.listWorkspaceUnits()).resolves.toMatchObject([
