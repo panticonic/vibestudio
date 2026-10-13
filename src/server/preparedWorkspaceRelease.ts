@@ -17,6 +17,7 @@ import {
 import { blobCasPath } from "./storage/blobCas.js";
 import { verifyReleaseBuildDirectory } from "../../scripts/prebuild-release-userland.mjs";
 import { readHostBuildFingerprint, resolveRequiredHostArtifactRoot } from "./appRoot.js";
+import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
 
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/u);
 const hostBuildFingerprintSchema = z
@@ -255,13 +256,15 @@ export async function validateExistingPreparedWorkspaceRelease(
     }
   }
 
-  for (const buildKey of artifactKeys) {
+  // Each build has its own sealed directory. Four concurrent validators bound
+  // open files and hashing memory without serializing unrelated runtimes.
+  await forEachOwnedConcurrent([...artifactKeys], 4, async (buildKey) => {
     await verifyReleaseBuildDirectory(
       path.join(input.output, "userland-builds", buildKey),
       buildKey,
       true
     );
-  }
+  });
   await verifyExactDirectoryEntries(
     path.join(input.output, "userland-builds"),
     new Set(["release.json", ...artifactKeys])
@@ -288,7 +291,7 @@ async function verifyPreparedTemplateFiles(
   record: z.infer<typeof preparedWorkspaceTemplateSchema>
 ): Promise<void> {
   const expectedFiles = new Set(["template.json"]);
-  for (const blob of record.blobs) {
+  await forEachOwnedConcurrent(record.blobs, 8, async (blob) => {
     const relative = path.relative(
       directory,
       blobCasPath(path.join(directory, "blobs"), blob.digest)
@@ -303,7 +306,7 @@ async function verifyPreparedTemplateFiles(
     if (actual.size !== blob.size || actual.digest !== blob.digest) {
       throw new Error(`Prepared template blob ${blob.digest} failed integrity verification`);
     }
-  }
+  });
   const actualFiles = new Set<string>();
   await collectRegularFiles(directory, directory, actualFiles);
   if (

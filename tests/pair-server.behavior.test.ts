@@ -62,10 +62,19 @@ function invite() {
 }
 
 function ready(rootInvite: ReturnType<typeof invite> | null) {
+  const rootCredential =
+    rootInvite &&
+    (() => {
+      const { endpointId, relays, v, deepLink, pairUrl, ...credential } = rootInvite;
+      return {
+        ...credential,
+        reach: { status: "ready", endpointId, relays, v, deepLink, pairUrl },
+      };
+    })();
   return {
     mode: "hub",
     gatewayUrl: "http://127.0.0.1:3456",
-    rootInvite,
+    rootInvite: rootCredential,
     serverId: `srv_${"S".repeat(24)}`,
     serverBootId: `boot_${"B".repeat(24)}`,
     gatewayPort: 3456,

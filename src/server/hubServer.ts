@@ -97,6 +97,7 @@ import {
   type PairedDeviceCredential,
 } from "./hostCore/deviceAuthStore.js";
 import { RootBootstrapInviteLifecycle } from "./rootBootstrapInviteLifecycle.js";
+import { runOwnedCleanupSteps } from "../../scripts/lib/owned-cleanup.mjs";
 import { updateAccountProfile } from "./hostCore/accountProfile.js";
 import { workspaceCreationAuthorityPreparation } from "./services/workspaceCreationAuthority.js";
 import {
@@ -236,6 +237,53 @@ export interface HubRuntimeState {
   /** Installed only while a fresh server is waiting for its first/root device. */
   onRootBootstrapCompleted?: () => void;
   shuttingDown: boolean;
+}
+
+type HubShutdownStep = () => void | Promise<void>;
+
+/** Own the shutdown dependency graph: invitation arming can depend on ingress
+ * retirement, and both must settle before their transport or stores disappear.
+ * Revocation maintenance still calls children, so join it before capturing and
+ * terminating them. Both are joined before the shared databases close. */
+export async function shutdownHubRuntime(operations: {
+  stopRootInvitation: HubShutdownStep;
+  stopIngress: HubShutdownStep;
+  stopRpc: HubShutdownStep;
+  quiesceAuthority: HubShutdownStep;
+  closeGrants: HubShutdownStep;
+  stopChildren: () => readonly HubShutdownStep[];
+  closeGateway: HubShutdownStep;
+  joinMaintenance: HubShutdownStep;
+  closeGovernance: HubShutdownStep;
+  releaseOwnership: HubShutdownStep;
+  closeCentralData: HubShutdownStep;
+  closeIdentity: HubShutdownStep;
+}): Promise<void> {
+  const join = async (steps: readonly HubShutdownStep[]): Promise<void> => {
+    const settled = await Promise.allSettled(steps.map((step) => Promise.resolve().then(step)));
+    await runOwnedCleanupSteps(
+      settled.map((outcome) => () => {
+        if (outcome.status === "rejected") throw outcome.reason;
+      }),
+      "Concurrent hub retirement failed"
+    );
+  };
+  await runOwnedCleanupSteps(
+    [
+      () => join([operations.stopRootInvitation, operations.stopIngress]),
+      operations.stopRpc,
+      operations.quiesceAuthority,
+      operations.joinMaintenance,
+      operations.closeGrants,
+      () => join(operations.stopChildren()),
+      operations.closeGateway,
+      operations.closeGovernance,
+      operations.releaseOwnership,
+      operations.closeCentralData,
+      operations.closeIdentity,
+    ],
+    "Hub shutdown failed"
+  );
 }
 
 interface HubControlTransport {
@@ -3503,7 +3551,8 @@ export async function runHubServer(input: {
     await ensureWorkspaceRuntime(activeState, bootstrapWorkspace);
   }
 
-  let startupInvite: HubPairingInvite | null = null;
+  let startupInvite: HubReadyPayload["rootInvite"] = null;
+  const currentStartupInvite = (): HubReadyPayload["rootInvite"] => startupInvite;
   let readyPublished = false;
   const publishReady = (): void => {
     if (!readyPublished || !args.readyFile) return;
@@ -3517,9 +3566,22 @@ export async function runHubServer(input: {
           deviceAuthStore.createPairingInvite(DEFAULT_PAIRING_CODE_TTL_MS, {
             intent: "root-bootstrap",
           }),
+        describePairing: (pairing): NonNullable<HubReadyPayload["rootInvite"]> => ({
+          code: pairing.code,
+          expiresAt: pairing.expiresAt,
+          expiresInMs: Math.max(1, pairing.expiresAt - Date.now()),
+          serverId: activeState.deviceAuthStore.getServerId(),
+          serverBootId: activeState.serverBootId,
+          reach: { status: "preparing" },
+        }),
         armPairing: async (pairing) => {
           const reach = await armControlInvite(activeState, pairing);
-          return pairingInviteFromReach(activeState, pairing.code, pairing.expiresAt, reach);
+          const { endpointId, relays, v, deepLink, pairUrl, ...credential } =
+            pairingInviteFromReach(activeState, pairing.code, pairing.expiresAt, reach);
+          return {
+            ...credential,
+            reach: { status: "ready" as const, endpointId, relays, v, deepLink, pairUrl },
+          };
         },
         cancelPairing: async (pairing): Promise<void> => {
           await disarmControlInvite(activeState, pairing.code);
@@ -3527,13 +3589,16 @@ export async function runHubServer(input: {
         publish: (invite) => {
           startupInvite = invite;
           publishReady();
+          if (!args.readyFile && invite?.reach.status === "ready")
+            console.log(`[Hub] Root pairing invitation available: ${invite.reach.pairUrl}`);
         },
         onRenewed: (invite) => {
           // A ready-file caller has selected the protected structured handoff;
           // its wrapper decides whether the secret belongs on an interactive
           // terminal. Only a low-level hub with no handoff logs the replacement.
           if (!args.readyFile) {
-            console.log(`[Hub] Root pairing invite renewed: ${invite.pairUrl}`);
+            if (invite.reach.status === "ready")
+              console.log(`[Hub] Root pairing invite renewed: ${invite.reach.pairUrl}`);
           }
         },
         onRenewalError: (error) => {
@@ -3543,7 +3608,7 @@ export async function runHubServer(input: {
     : null;
   if (rootBootstrapLifecycle) {
     activeState.onRootBootstrapCompleted = () => rootBootstrapLifecycle.complete();
-    startupInvite = await rootBootstrapLifecycle.start();
+    await rootBootstrapLifecycle.start();
   }
   // Prewarm every registered workspace runtime WITHOUT blocking hub readiness.
   // A persisted endpoint-bound device membership is a live reach contract, so children must
@@ -3581,35 +3646,57 @@ export async function runHubServer(input: {
   async function shutdown(): Promise<void> {
     if (!state || state.shuttingDown) return;
     state.shuttingDown = true;
-    rootBootstrapLifecycle?.stop();
     clearInterval(revocationCleanupTimer);
     console.log("[Hub] Shutting down...");
-    if (state.controlTransport) {
-      for (const invite of state.controlTransport.invites.values()) {
+    const transport = state.controlTransport;
+    if (transport) {
+      for (const invite of transport.invites.values()) {
         if (invite.timer) clearTimeout(invite.timer);
         if (!invite.settled) {
           invite.settled = true;
           invite.reject(new Error("Hub is shutting down"));
         }
       }
-      state.controlTransport.invites.clear();
-      await state.controlTransport.ingress.stop();
-      await state.controlTransport.rpcServer.stop();
-      await state.controlTransport.quiesceAuthority();
-      state.controlTransport.grantStore.close();
+      transport.invites.clear();
     }
-    const childProcesses = workspaceChildren();
-    await Promise.all(childProcesses.map((child) => terminateWorkspaceChild(child)));
-    for (const child of childProcesses) state.workspaceChildren.delete(child);
-    console.log("[Hub] Shutdown: workspace children stopped");
-    console.log("[Hub] Shutdown: gateway close started");
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    console.log("[Hub] Shutdown: gateway closed; governance close started");
-    await state.governanceLog?.close();
-    console.log("[Hub] Shutdown: governance closed; persistence close started");
-    state.centralData.releaseHubProcessOwnership(state.serverBootId);
-    state.centralData.close();
-    state.identityDb.close();
+    const ownedState = state;
+    await shutdownHubRuntime({
+      stopRootInvitation: async () => {
+        await rootBootstrapLifecycle?.stop();
+      },
+      stopIngress: async () => {
+        await transport?.ingress.stop();
+      },
+      stopRpc: async () => {
+        await transport?.rpcServer.stop();
+      },
+      quiesceAuthority: async () => {
+        await transport?.quiesceAuthority();
+      },
+      closeGrants: () => {
+        transport?.grantStore.close();
+      },
+      stopChildren: () =>
+        workspaceChildren().map((child) => async () => {
+          await terminateWorkspaceChild(child);
+          ownedState.workspaceChildren.delete(child);
+        }),
+      closeGateway: () =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve()))
+        ),
+      joinMaintenance: async () => {
+        await revocationCleanupDrain;
+      },
+      closeGovernance: async () => {
+        await ownedState.governanceLog?.close();
+      },
+      releaseOwnership: () => {
+        ownedState.centralData.releaseHubProcessOwnership(ownedState.serverBootId);
+      },
+      closeCentralData: () => ownedState.centralData.close(),
+      closeIdentity: () => ownedState.identityDb.close(),
+    });
     console.log("[Hub] Shutdown complete");
     process.exit(0);
   }
@@ -3620,7 +3707,10 @@ export async function runHubServer(input: {
       return;
     }
     console.log(`[Hub] Received ${signal}; starting ordered shutdown`);
-    void shutdown();
+    void shutdown().catch((error) => {
+      console.error("[Hub] Ordered shutdown failed:", error);
+      process.exit(1);
+    });
   };
   process.on("SIGTERM", () => onShutdownSignal("SIGTERM"));
   process.on("SIGINT", () => onShutdownSignal("SIGINT"));
@@ -3633,9 +3723,12 @@ export async function runHubServer(input: {
   console.log("vibestudio-server hub ready:");
   console.log(`  Gateway:     ${connectUrl} (loopback)`);
   console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
-  if (startupInvite && !args.readyFile) {
-    console.log(`  Root Pair URL: ${startupInvite?.pairUrl ?? "unavailable"}`);
-  } else if (!startupInvite) {
+  const publishedInvitation = currentStartupInvite();
+  if (publishedInvitation && !args.readyFile) {
+    console.log(
+      `  Root Pair URL: ${publishedInvitation.reach.status === "ready" ? publishedInvitation.reach.pairUrl : "preparing remote reach"}`
+    );
+  } else if (!publishedInvitation) {
     console.log("  Identity:    root already bootstrapped (add users via invite)");
   }
   if (args.readyFile) {

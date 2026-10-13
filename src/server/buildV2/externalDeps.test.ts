@@ -91,6 +91,7 @@ import {
   extensionRuntimeDependencyKey,
   mergeExternalDependencySpecs,
   resolveHostDependencyProjection,
+  prepareExternalDependencyEnvironment,
   type ExternalDependencyPatch,
 } from "./externalDeps.js";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
@@ -266,6 +267,43 @@ describe("extension runtime dependency publication", () => {
 });
 
 describe("resolveHostDependencyProjection", () => {
+  it.each(["development", "production"])(
+    "uses the selected %s installation policy",
+    async (mode) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-dependency-policy-"));
+      const priorMode = process.env["NODE_ENV"];
+      try {
+        process.env["NODE_ENV"] = mode;
+        const hostModules = path.join(root, "node_modules");
+        writePackage(hostModules, "policy-dependency", "1.2.3");
+        const unit = makeNode("policy-consumer", { "policy-dependency": "1.2.3" });
+        const graph = new PackageGraph();
+        graph.addNode(unit);
+        const environment = await prepareExternalDependencyEnvironment(
+          unit,
+          graph,
+          root,
+          process.cwd(),
+          [hostModules]
+        );
+        try {
+          if (mode === "development") expect(environment.nodeModulesDir).toBe(hostModules);
+          else expect(environment.nodeModulesDir).not.toBe(hostModules);
+          expect(
+            environment.dependencyResolution.packageDirectories.has(
+              path.join(environment.nodeModulesDir, "policy-dependency")
+            )
+          ).toBe(true);
+        } finally {
+          environment.release();
+        }
+      } finally {
+        if (priorMode === undefined) delete process.env["NODE_ENV"];
+        else process.env["NODE_ENV"] = priorMode;
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
   it("reuses explicitly supplied host packages only within their declared ranges", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-dependency-projection-"));
     try {

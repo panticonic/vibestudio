@@ -31,6 +31,7 @@ import {
   observeWorkspaceChildDevices,
   applyHubWorkspacePresenceReport,
   snapshotInternalDOBundleForHub,
+  shutdownHubRuntime,
   handleWorkspaceChildExit,
   HubCompletePairingBodySchema,
   HubDeviceCredentialBodySchema,
@@ -48,6 +49,106 @@ import {
   type WorkspaceRuntime,
 } from "./hubServer.js";
 import { WORKSPACE_EPOCH_HANDOFF_EXIT_CODE } from "./historicalWorkspaceHost.js";
+
+describe("hub shutdown ownership", () => {
+  it("retires ingress alongside invitation arming and joins both before transport and stores", async () => {
+    const events: string[] = [];
+    let finishInvitation!: () => void;
+    const invitation = new Promise<void>((resolve) => {
+      finishInvitation = resolve;
+    });
+    let finishChild!: () => void;
+    const child = new Promise<void>((resolve) => {
+      finishChild = resolve;
+    });
+    const operation = shutdownHubRuntime({
+      stopRootInvitation: async () => {
+        events.push("root:start");
+        await invitation;
+        events.push("root:done");
+      },
+      stopIngress: () => {
+        events.push("ingress:stop");
+        finishInvitation();
+      },
+      stopRpc: () => {
+        events.push("rpc:stop");
+      },
+      quiesceAuthority: () => {
+        events.push("authority:quiesced");
+      },
+      closeGrants: () => {
+        events.push("grants:closed");
+      },
+      stopChildren: () => [
+        async () => {
+          events.push("child:start");
+          await child;
+          events.push("child:done");
+        },
+      ],
+      closeGateway: () => {
+        events.push("gateway:closed");
+      },
+      joinMaintenance: () => {
+        events.push("maintenance:joined");
+      },
+      closeGovernance: () => {
+        events.push("governance:closed");
+      },
+      releaseOwnership: () => {
+        events.push("ownership:released");
+      },
+      closeCentralData: () => {
+        events.push("central:closed");
+      },
+      closeIdentity: () => {
+        events.push("identity:closed");
+      },
+    });
+    await vi.waitFor(() => expect(events).toContain("child:start"));
+    expect(events.indexOf("root:done")).toBeLessThan(events.indexOf("rpc:stop"));
+    expect(events).not.toContain("central:closed");
+    finishChild();
+    await operation;
+    expect(events.slice(-5)).toEqual([
+      "gateway:closed",
+      "governance:closed",
+      "ownership:released",
+      "central:closed",
+      "identity:closed",
+    ]);
+  });
+
+  it("retains original failures and attempts every admitted cleanup and store retirement", async () => {
+    const errors = Array.from({ length: 12 }, (_, index) => new Error(`cleanup:${index}`));
+    const calls: number[] = [];
+    const fail = (index: number) => async () => {
+      calls.push(index);
+      throw errors[index];
+    };
+    const failure = await shutdownHubRuntime({
+      stopRootInvitation: fail(0),
+      stopIngress: fail(1),
+      stopRpc: fail(2),
+      quiesceAuthority: fail(3),
+      joinMaintenance: fail(4),
+      closeGrants: fail(5),
+      stopChildren: () => [fail(6), fail(7)],
+      closeGateway: fail(8),
+      closeGovernance: fail(9),
+      releaseOwnership: fail(10),
+      closeCentralData: fail(11),
+      closeIdentity: () => {
+        calls.push(12);
+      },
+    }).catch((error: unknown) => error);
+    const flatten = (error: unknown): unknown[] =>
+      error instanceof AggregateError ? error.errors.flatMap(flatten) : [error];
+    expect(flatten(failure)).toEqual(errors);
+    expect(calls).toEqual(Array.from({ length: 13 }, (_, index) => index));
+  });
+});
 
 describe("hub control HTTP routing", () => {
   it("routes both RPC dispatch and pre-upgrade admission to the control server", () => {
@@ -1819,9 +1920,15 @@ describe("hub RPC pairing surfacing (§5)", () => {
         v: 5 as const,
       };
       return {
-        ...pairing,
-        deepLink: createConnectDeepLink(pairing),
-        pairUrl: createConnectPairUrl(pairing),
+        code: pairing.code,
+        reach: {
+          status: "ready" as const,
+          endpointId: pairing.endpointId,
+          relays: pairing.relays,
+          v: pairing.v,
+          deepLink: createConnectDeepLink(pairing),
+          pairUrl: createConnectPairUrl(pairing),
+        },
         expiresInMs: 60_000,
         expiresAt: 2_000_000_000_000,
         serverId: state.deviceAuthStore.getServerId(),

@@ -116,11 +116,54 @@ export const HubPairingInviteSchema = z
     }
   });
 
+export const HubPairingCredentialSchema = HubPairingInviteSchema.innerType()
+  .pick({
+    code: true,
+    expiresInMs: true,
+    expiresAt: true,
+    serverId: true,
+    serverBootId: true,
+  })
+  .strict();
+
+export const HubRootBootstrapInviteSchema = HubPairingCredentialSchema.extend({
+  reach: z.discriminatedUnion("status", [
+    z.object({ status: z.literal("preparing") }).strict(),
+    HubPairingInviteSchema.innerType()
+      .pick({
+        endpointId: true,
+        relays: true,
+        v: true,
+        deepLink: true,
+        pairUrl: true,
+      })
+      .extend({ status: z.literal("ready") })
+      .strict(),
+  ]),
+})
+  .strict()
+  .superRefine((invite, ctx) => {
+    if (invite.reach.status !== "ready") return;
+    const { reach, ...credential } = invite;
+    const { status: _status, ...coordinates } = reach;
+    const parsed = HubPairingInviteSchema.safeParse({ ...credential, ...coordinates });
+    if (!parsed.success) for (const issue of parsed.error.issues) ctx.addIssue(issue);
+  });
+
+export function rootBootstrapPairingInvite(
+  invite: z.infer<typeof HubRootBootstrapInviteSchema> | null
+): HubPairingInvite | null {
+  if (!invite || invite.reach.status !== "ready") return null;
+  const { reach, ...credential } = invite;
+  const { status: _status, ...coordinates } = reach;
+  return HubPairingInviteSchema.parse({ ...credential, ...coordinates });
+}
+
 export const HubReadyPayloadSchema = z
   .object({
     mode: z.literal("hub"),
     gatewayUrl: z.string().url(),
-    rootInvite: HubPairingInviteSchema.nullable(),
+    rootInvite: HubRootBootstrapInviteSchema.nullable(),
     serverId: z.string().regex(SERVER_ID_PATTERN),
     serverBootId: z.string().regex(SERVER_BOOT_ID_PATTERN),
     gatewayPort: z.number().int().min(1).max(65_535),

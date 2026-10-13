@@ -116,6 +116,7 @@ import type {
 } from "@vibestudio/shared/buildProvider";
 import { WorkspaceRpcCatalogWorkerClient } from "./workspaceRpcCatalogWorkerClient.js";
 import { composePreparedDependencyPlugins } from "./preparedDependencyPlugins.js";
+import type { PreparedDependencyResolution } from "./preparedDependencyResolution.js";
 import {
   unknownWorkspaceRpcSchemaError,
   workspaceRpcSchema,
@@ -2865,6 +2866,7 @@ interface BuildEnv {
   outdir: string;
   sourcePath: string;
   nodePaths: string[];
+  dependencyResolution: PreparedDependencyResolution;
   nodeModulesDir: string | null;
   externalDeps: Record<string, string>;
   /** Closure externals the composing realm provides; never bundled into this unit. */
@@ -2951,6 +2953,7 @@ async function prepareBuildEnv(
       outdir,
       sourcePath,
       nodePaths,
+      dependencyResolution: dependencyEnvironment.dependencyResolution,
       nodeModulesDir,
       externalDeps,
       providedPeers,
@@ -3360,10 +3363,13 @@ async function buildWebsiteBundle(
     const dedupe = createDedupePlugin(env.resolveDir, dedupePackages);
     if (dedupe) plugins.push(dedupe);
     if (adapter.plugins) plugins.push(...(await adapter.plugins()));
-    const preparedPlugins = composePreparedDependencyPlugins(plugins, env.nodePaths, [
-      sourceRoot,
-      env.outdir,
-    ]);
+    const preparedPlugins = composePreparedDependencyPlugins(
+      plugins,
+      env.nodePaths,
+      [sourceRoot, env.outdir],
+      [],
+      env.dependencyResolution
+    );
 
     const options: esbuild.BuildOptions = {
       absWorkingDir: env.outdir,
@@ -3565,7 +3571,8 @@ async function buildPanel(
     plugins,
     nodePaths,
     [sourceRoot, outdir],
-    externalSpecifiers
+    externalSpecifiers,
+    env.dependencyResolution
   );
 
   // Build esbuild options with adapter-driven JSX settings
@@ -4326,7 +4333,8 @@ async function buildWorker(
     plugins,
     nodePaths,
     [sourceRoot, outdir],
-    workerExternals
+    workerExternals,
+    env.dependencyResolution
   );
   const configureReadyAt = Date.now();
 
@@ -4754,7 +4762,8 @@ async function buildTerminalApp(
         ],
         nodePaths,
         [sourceRoot, outdir],
-        WORKER_RUNTIME_EXTERNALS
+        WORKER_RUNTIME_EXTERNALS,
+        env.dependencyResolution
       ),
       nodePaths,
       absWorkingDir: resolveDir,
@@ -5026,7 +5035,8 @@ async function buildExtension(
     plugins,
     nodePaths,
     [sourceRoot, outdir],
-    extensionExternals
+    extensionExternals,
+    env.dependencyResolution
   );
 
   try {
@@ -5542,7 +5552,8 @@ async function buildLibraryBundle(
         [
           ...libraryExternals,
           ...(target === "worker" ? WORKER_RUNTIME_EXTERNALS : NODE_BUILTIN_EXTERNALS),
-        ]
+        ],
+        env.dependencyResolution
       ),
       nodePaths: env.nodePaths,
       loader: LIBRARY_ASSET_LOADERS,

@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
-import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
+import { parseHubReadyPayload, rootBootstrapPairingInvite } from "./cli/lib/hub-ready.mjs";
 
 import { joinChildProcess } from "./lib/join-child-process.mjs";
 import { resolveMacAppExecutable } from "./lib/mac-app-executable.mjs";
@@ -39,7 +39,8 @@ export function awaitHubReady(child, readyFile, signal) {
     const check = () => {
       if (settled) return;
       try {
-        finish(null, parseHubReadyPayload(JSON.parse(fs.readFileSync(readyFile, "utf8"))));
+        const ready = parseHubReadyPayload(JSON.parse(fs.readFileSync(readyFile, "utf8")));
+        if (!ready.rootInvite || rootBootstrapPairingInvite(ready.rootInvite)) finish(null, ready);
       } catch (error) {
         if (error.code !== "ENOENT") finish(error);
       }
@@ -436,7 +437,7 @@ async function withReleaseConsumerSession(
             cancellation.signal.removeEventListener("abort", onCancellation);
           }
         };
-        await cli(["remote", "pair", ready.rootInvite.deepLink]);
+        await cli(["remote", "pair", rootBootstrapPairingInvite(ready.rootInvite).deepLink]);
         const pair = await cli(["remote", "ensure-user-workspaces"]);
         const result = await operation({
           cli,

@@ -249,7 +249,15 @@ export async function persistEvState(
 // "34": module registries distinguish owned exports from missing and inherited entries.
 // "35": owned dependency resolution preserves esbuild's guarded optional imports.
 // "36": worker entries expose constructor-free preparation of exact executable units.
-const BUILD_CACHE_VERSION = "36";
+// Native esbuild resolution replaces the guarded virtual-file namespace.
+// Its output recipe must not borrow artifacts emitted by that old resolver.
+const BUILD_CACHE_VERSION = "37";
+
+/** Development borrows the host's installation; production prepares its own.
+ * This selection is also an input to the build key, not a compiler guard. */
+export function dependencyInstallationPolicy(): "shared-host" | "prepared" {
+  return process.env["NODE_ENV"] === "development" ? "shared-host" : "prepared";
+}
 
 /** Build identity shared by runtime artifact manifests and build-key derivation. */
 export function buildCompilerProtocolIdentity(): {
@@ -578,7 +586,8 @@ export async function computeRootDependencyFingerprint(
 
   const hash = crypto.createHash("sha256");
   // Domain tag; bumped when the input set/encoding changes.
-  hash.update("root-deps-v7\0");
+  hash.update("root-deps-v8\0");
+  hash.update(`dependency-installation:${dependencyInstallationPolicy()}\0`);
 
   const physicalRoot = getPhysicalAppPath(root, "");
   const localPackagesWork = localPackageFingerprintInputs(physicalRoot);

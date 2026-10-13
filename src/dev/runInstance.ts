@@ -8,7 +8,8 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 import { CLI_WORKSPACE_ENV, isCliWorkspaceSelection } from "./cliWorkspaceSelection.js";
-import { spawn } from "node:child_process";
+import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
+import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 import {
@@ -163,31 +164,49 @@ function optionValue(argv: readonly string[], name: string): string | undefined 
   return undefined;
 }
 
-function run(
+async function run(
   command: string,
   args: string[],
   options: { env: NodeJS.ProcessEnv; allowFailure?: boolean }
 ): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: process.cwd(),
-      env: options.env,
-      stdio: "inherit",
-    });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (signal) {
-        reject(new Error(`${path.basename(command)} exited on ${signal}`));
-        return;
-      }
-      const exitCode = code ?? 1;
-      if (exitCode !== 0 && !options.allowFailure) {
-        reject(new Error(`${path.basename(command)} exited with code ${exitCode}`));
-        return;
-      }
-      resolve(exitCode);
-    });
+  const owner = new DevInstanceSupervisor({
+    sourceRoot: fs.realpathSync(process.cwd()),
+    command,
+    args,
+    env: options.env,
+    stdio: "inherit",
+    forwardParentSignals: true,
   });
+  return runWithOwnedCleanup(
+    async () => {
+      await owner.start();
+      const code = await owner.wait();
+      if (code !== 0 && !options.allowFailure)
+        throw new Error(`${path.basename(command)} exited with code ${code}`);
+      return code;
+    },
+    () => owner.close(),
+    "Development prerequisite and resource retirement failed"
+  );
+}
+
+async function prepareHostArtifacts(mode: Mode, env: NodeJS.ProcessEnv): Promise<void> {
+  const startedAt = performance.now();
+  await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
+  await run(
+    process.execPath,
+    mode === "desktop"
+      ? ["scripts/ensure-host-build.mjs"]
+      : ["build.mjs", "--source-server-prereqs"],
+    { env }
+  );
+  env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(
+    process.cwd(),
+    mode === "desktop" ? "desktop" : "source"
+  );
+  console.log(
+    `[Perf] development host prerequisites: ${Math.round(performance.now() - startedAt)}ms`
+  );
 }
 
 /** Source launches publish the same resources an installed product ships.
@@ -221,11 +240,12 @@ async function runServer(
   // environment, so an ephemeral server can never mistake the developer's
   // ordinary CLI credential for its own.
   const { bootstrapInstanceCli } = await import("./bootstrapInstanceCli.js");
-  await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
-  await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
-  env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
+  const preparationStartedAt = performance.now();
   resources.preparation = prepareLaunchTemplates(env, instance.root, instance.generationId);
   await resources.preparation.sourcesReady;
+  console.log(
+    `[Perf] development workspace sources: ${Math.round(performance.now() - preparationStartedAt)}ms`
+  );
   const configuredReadyFile = optionValue(forwarded, "--ready-file");
   const readyFile =
     configuredReadyFile ?? path.join(instance.root, "server-auth", "hub-ready.json");
@@ -288,15 +308,12 @@ async function runDesktop(
   instance: DevInstanceRecord,
   resources: { preparation?: WorkspaceReleasePreparation; supervisor?: DevInstanceSupervisor }
 ): Promise<DevInstanceSupervisor> {
-  await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
-  // Desktop launches share the repository host artifacts with parallel
-  // developer instances. The coordinator waits for an in-flight build and
-  // reuses its verified output; invoking build.mjs directly would clean the
-  // shared dist/ while another instance is starting its workspace runtime.
-  await run(process.execPath, ["scripts/ensure-host-build.mjs"], { env });
-  env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "desktop");
+  const preparationStartedAt = performance.now();
   resources.preparation = prepareLaunchTemplates(env, instance.root, instance.generationId);
   await resources.preparation.sourcesReady;
+  console.log(
+    `[Perf] development workspace sources: ${Math.round(performance.now() - preparationStartedAt)}ms`
+  );
   const supervisor = new DevInstanceSupervisor({
     sourceRoot: fs.realpathSync(process.cwd()),
     command: process.execPath,
@@ -311,6 +328,7 @@ async function runDesktop(
 }
 
 async function main(): Promise<void> {
+  const launchStartedAt = performance.now();
   const rawMode = process.argv[2];
   if (rawMode !== "desktop" && rawMode !== "server") {
     throw new Error("usage: runInstance.ts desktop|server [options]");
@@ -375,14 +393,41 @@ async function main(): Promise<void> {
     preparation?: WorkspaceReleasePreparation;
     supervisor?: DevInstanceSupervisor;
   } = {};
+  const sourceCoupled = id === "source" && !disposable;
+  const env = developmentInstanceEnvironment({
+    parent: process.env,
+    repoRoot,
+    instanceRoot: root,
+    instanceId: id,
+    sourceCoupled,
+    disposable,
+    cleanRoom,
+  });
   try {
-    const defaultTemplates =
-      (await resolveDevelopmentTemplateSet({
-        repoRoot,
-        checkpointRoot: checkpointTarget,
-        ...(parsed.templateCheckouts ? { explicitRoot: parsed.templateCheckouts } : {}),
-        productionTemplates: parsed.productionTemplates,
-      })) ?? undefined;
+    let defaultTemplates: Awaited<ReturnType<typeof resolveDevelopmentTemplateSet>> | undefined;
+    // Host artifacts depend on host source, not template checkpoints. Start
+    // both independent producers together; join both (and all failures) before
+    // consuming either input or retiring this instance's resources.
+    await forEachOwnedConcurrent(
+      [
+        () => prepareHostArtifacts(mode, env),
+        async () => {
+          const startedAt = performance.now();
+          defaultTemplates =
+            (await resolveDevelopmentTemplateSet({
+              repoRoot,
+              checkpointRoot: checkpointTarget,
+              ...(parsed.templateCheckouts ? { explicitRoot: parsed.templateCheckouts } : {}),
+              productionTemplates: parsed.productionTemplates,
+            })) ?? undefined;
+          console.log(
+            `[Perf] development template checkpoints: ${Math.round(performance.now() - startedAt)}ms`
+          );
+        },
+      ],
+      2,
+      (prepare) => prepare()
+    );
     if (!parsed.productionTemplates && !defaultTemplates) {
       throw new Error(
         "No development template checkouts are configured. Run `pnpm dev:templates setup`, " +
@@ -442,19 +487,21 @@ async function main(): Promise<void> {
               ]
             : []),
         ];
-    const sourceCoupled = id === "source" && !disposable;
-    const env = developmentInstanceEnvironment({
-      parent: process.env,
-      repoRoot,
-      instanceRoot: root,
-      instanceId: id,
-      sourceCoupled,
-      disposable,
-      cleanRoom,
-      ...(defaultTemplates ? { defaultTemplates } : {}),
-      ...(targetWorkspace ? { initialWorkspaceTemplate: targetWorkspace.pin } : {}),
-      ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
-    });
+    Object.assign(
+      env,
+      developmentInstanceEnvironment({
+        parent: env,
+        repoRoot,
+        instanceRoot: root,
+        instanceId: id,
+        sourceCoupled,
+        disposable,
+        cleanRoom,
+        ...(defaultTemplates ? { defaultTemplates } : {}),
+        ...(targetWorkspace ? { initialWorkspaceTemplate: targetWorkspace.pin } : {}),
+        ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
+      })
+    );
     process.env["VIBESTUDIO_INSTANCE_ROOT"] = root;
     process.env["VIBESTUDIO_INSTANCE"] = id;
 
@@ -500,6 +547,9 @@ async function main(): Promise<void> {
       mode === "server"
         ? await runServer(launchArgs, env, instance, resources)
         : await runDesktop(launchArgs, env, instance, resources);
+    console.log(
+      `[Perf] development launch inputs ready: ${Math.round(performance.now() - launchStartedAt)}ms`
+    );
     const foreground = supervisor.wait();
     process.exitCode = await Promise.race([
       foreground,

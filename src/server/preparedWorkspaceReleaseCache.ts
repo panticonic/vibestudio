@@ -11,6 +11,7 @@ import {
 import { SharedBuildCoordinator } from "./buildV2/sharedBuildCoordinator.js";
 import { BuildPriorityOwner } from "./buildV2/builderLifetime.js";
 import { runWithOwnedCleanup, runOwnedCleanupSteps } from "../../scripts/lib/owned-cleanup.mjs";
+import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
 import {
   validateExistingPreparedWorkspaceRelease,
   workspaceReleaseIdentity,
@@ -21,28 +22,34 @@ import {
  * private hardlink projection, so deleting instance state never deletes the
  * shared cache, and collecting the cache cannot invalidate a live instance. */
 async function projectRelease(source: string, destination: string): Promise<void> {
-  await fs.mkdir(destination, { recursive: true });
-  for (const entry of await fs.readdir(source, { withFileTypes: true })) {
-    const from = path.join(source, entry.name);
-    const to = path.join(destination, entry.name);
-    if (entry.isDirectory()) {
-      await projectRelease(from, to);
-    } else if (entry.isFile()) {
-      try {
-        await fs.link(from, to);
-      } catch (error) {
-        if (
-          !["EXDEV", "EPERM", "EACCES", "EMLINK"].includes(
-            (error as NodeJS.ErrnoException).code ?? ""
-          )
-        )
-          throw error;
-        await fs.copyFile(from, to);
-      }
-    } else {
-      throw new Error(`Prepared release contains a non-immutable resource: ${from}`);
+  const directories = [{ from: source, to: destination }];
+  const files: Array<{ from: string; to: string }> = [];
+  while (directories.length) {
+    const directory = directories.pop()!;
+    await fs.mkdir(directory.to, { recursive: true });
+    for (const entry of await fs.readdir(directory.from, { withFileTypes: true })) {
+      const from = path.join(directory.from, entry.name);
+      const to = path.join(directory.to, entry.name);
+      if (entry.isDirectory()) directories.push({ from, to });
+      else if (entry.isFile()) files.push({ from, to });
+      else throw new Error(`Prepared release contains a non-immutable resource: ${from}`);
     }
   }
+  // Independent files share a bounded I/O budget. Directory discovery finishes
+  // first, and every admitted link/copy joins before failure or retirement.
+  await forEachOwnedConcurrent(files, 32, async ({ from, to }) => {
+    try {
+      await fs.link(from, to);
+    } catch (error) {
+      if (
+        !["EXDEV", "EPERM", "EACCES", "EMLINK"].includes(
+          (error as NodeJS.ErrnoException).code ?? ""
+        )
+      )
+        throw error;
+      await fs.copyFile(from, to);
+    }
+  });
 }
 
 export async function prepareCachedWorkspaceRelease(

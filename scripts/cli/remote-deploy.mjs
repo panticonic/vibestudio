@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { printConnectBanner } from "./lib/connect-banner.mjs";
-import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
+import { parseHubReadyPayload, rootBootstrapPairingInvite } from "./lib/hub-ready.mjs";
 import { DEFAULT_IROH_RELAYS } from "./lib/connect-grammar.generated.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -173,11 +173,15 @@ export async function showManagedPairing({
       );
     }
   }
-  const invite = ready.rootInvite;
-  if (!invite) {
+  const invite = rootBootstrapPairingInvite(ready.rootInvite);
+  if (!ready.rootInvite) {
     console.log(
       "Root account already claimed. Create another device invite from a paired desktop, mobile, or CLI client."
     );
+    return ready;
+  }
+  if (!invite) {
+    console.log("The root invitation is issued; its remote reach is still preparing.");
     return ready;
   }
   const defaultWorkspace = ready.workspaces.find((workspace) => workspace.name === "default");

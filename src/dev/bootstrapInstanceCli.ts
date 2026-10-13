@@ -3,6 +3,7 @@ import {
   HubReadyPayloadSchema,
   HubWorkspaceRouteSchema,
   type HubPairingInvite,
+  type HubReadyPayload,
 } from "@vibestudio/service-schemas/hubControl";
 import { selectedWorkspacePath } from "@vibestudio/shared/connect";
 import {
@@ -63,7 +64,7 @@ function pairingResponse(value: unknown): PairingResponse {
 
 async function postPairing(
   gatewayUrl: string,
-  invite: HubPairingInvite,
+  invite: Pick<HubPairingInvite, "code">,
   fetchImpl: typeof fetch = fetch
 ): Promise<PairingResponse> {
   const response = await fetchImpl(new URL("/_r/s/auth/complete-pairing", gatewayUrl), {
@@ -208,7 +209,7 @@ async function pairWithInvite(
   input: {
     gatewayUrl: string;
     serverId: string;
-    invite: HubPairingInvite;
+    invite: HubPairingInvite | NonNullable<HubReadyPayload["rootInvite"]>;
     workspace?: DevCliWorkspaceSelection;
   },
   credentialFile: string | undefined,

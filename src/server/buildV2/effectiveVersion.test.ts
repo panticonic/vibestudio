@@ -403,6 +403,24 @@ describe("effectiveVersion", () => {
       expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).not.toBe(before);
     });
 
+    it("distinguishes a shared development installation from prepared production dependencies", async () => {
+      const dir = path.join(root, "installation-policy");
+      writeRootFiles(dir, '{"name":"host"}', "lock\n", "ws\n");
+      const previous = process.env["NODE_ENV"];
+      try {
+        process.env["NODE_ENV"] = "development";
+        const development = await prepareBuildRootConfig({ appRoot: dir });
+        process.env["NODE_ENV"] = "production";
+        const production = await prepareBuildRootConfig({ appRoot: dir });
+        expect(computeBuildKey(development, "unit-a", "ev1", true)).not.toBe(
+          computeBuildKey(production, "unit-a", "ev1", true)
+        );
+      } finally {
+        if (previous === undefined) delete process.env["NODE_ENV"];
+        else process.env["NODE_ENV"] = previous;
+      }
+    });
+
     it("uses the injected app root when VIBESTUDIO_APP_ROOT is unset", async () => {
       const dirA = path.join(root, "a");
       const dirB = path.join(root, "b");

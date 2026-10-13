@@ -1,10 +1,41 @@
-import * as fs from "node:fs";
+import fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as esbuild from "esbuild";
 import { describe, expect, it, vi } from "vitest";
-import { composePreparedDependencyPlugins } from "./preparedDependencyPlugins.js";
+import { composePreparedDependencyPlugins as composePlugins } from "./preparedDependencyPlugins.js";
+import { prepareDependencyResolution } from "./preparedDependencyResolution.js";
+import { collectExternalDependencyClosure } from "./externalDeps.js";
+import { unownedPeerRefusal } from "./dependencyAudit.js";
+import { PackageGraph, type GraphNode } from "./packageGraph.js";
 import { createTsExtensionPlugin } from "./builder.js";
+
+/** Exercise the preparation boundary as well as ordinary native compilation. */
+function composePreparedDependencyPlugins(
+  plugins: readonly esbuild.Plugin[],
+  nodePaths: readonly string[],
+  sourceRoots: readonly string[],
+  externals: readonly string[] = []
+): esbuild.Plugin[] {
+  const names: string[] = [];
+  for (const root of nodePaths) {
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      if (entry.name.startsWith("@") && entry.isDirectory())
+        names.push(
+          ...fs.readdirSync(path.join(root, entry.name)).map((name) => `${entry.name}/${name}`)
+        );
+      else if (entry.isDirectory() || entry.isSymbolicLink()) names.push(entry.name);
+    }
+  }
+  return composePlugins(
+    plugins,
+    nodePaths,
+    sourceRoots,
+    externals,
+    prepareDependencyResolution(nodePaths, names)
+  );
+}
 
 function writePackage(nodeModules: string, name: string, marker: string): void {
   const root = path.join(nodeModules, ...name.split("/"));
@@ -20,7 +51,65 @@ function writePackage(nodeModules: string, name: string, marker: string): void {
 }
 
 describe("dependency-environment resolver", () => {
-  it("bounds filesystem identity reads independently of the number of imports and refreshes them for each compile", async () => {
+  it("reads admitted package manifests once per compilation and refreshes changed declarations", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-resolver-manifests-"));
+    const read = vi.spyOn(fs, "readFileSync");
+    const exists = vi.spyOn(fs, "existsSync");
+    try {
+      const source = path.join(root, "source");
+      const modules = path.join(root, "prepared", "node_modules");
+      fs.mkdirSync(source, { recursive: true });
+      writePackage(modules, "owner", "prepared");
+      const owner = path.join(modules, "owner");
+      const manifestPath = path.join(owner, "package.json");
+      const manifest = {
+        name: "owner",
+        version: "1.0.0",
+        type: "module",
+        exports: "./index.js",
+        optionalDependencies: { "missing-peer": "1.0.0" },
+      };
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      const imports: string[] = [];
+      for (let index = 0; index < 32; index++) {
+        fs.writeFileSync(
+          path.join(owner, `module-${index}.js`),
+          `export const value${index} = () => import("missing-peer");`
+        );
+        imports.push(`export { value${index} } from "./module-${index}.js";`);
+      }
+      fs.writeFileSync(path.join(owner, "index.js"), imports.join("\n"));
+      const entry = path.join(source, "entry.js");
+      fs.writeFileSync(entry, 'export * from "owner";');
+      const options: esbuild.BuildOptions = {
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        write: false,
+        logLevel: "silent",
+        nodePaths: [modules],
+        plugins: composePreparedDependencyPlugins([], [modules], [source]),
+      };
+      await esbuild.build(options);
+      expect(read.mock.calls.filter(([file]) => file === manifestPath)).toHaveLength(1);
+      expect(
+        exists.mock.calls.filter(([file]) => file === manifestPath).length
+      ).toBeLessThanOrEqual(2);
+      fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, optionalDependencies: {} }));
+      await expect(
+        esbuild.build({
+          ...options,
+          plugins: composePreparedDependencyPlugins([], [modules], [source]),
+        })
+      ).rejects.toThrow("missing-peer");
+      expect(read.mock.calls.filter(([file]) => file === manifestPath)).toHaveLength(2);
+    } finally {
+      read.mockRestore();
+      exists.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("does not perform filesystem identity checks while compiling source imports", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-resolver-identities-"));
     const realpath = vi.spyOn(fs.realpathSync, "native");
     try {
@@ -43,10 +132,9 @@ describe("dependency-environment resolver", () => {
       expect(first.outputFiles![0]!.text).toContain("value31");
       const rootReads = () =>
         realpath.mock.calls.filter(([candidate]) => candidate === root).length;
-      expect(rootReads()).toBeLessThanOrEqual(2);
-      const before = rootReads();
+      expect(rootReads()).toBe(0);
       await esbuild.build(options);
-      expect(rootReads()).toBeGreaterThan(before);
+      expect(rootReads()).toBe(0);
     } finally {
       realpath.mockRestore();
       fs.rmSync(root, { recursive: true, force: true });
@@ -80,7 +168,7 @@ describe("dependency-environment resolver", () => {
     }
   });
 
-  it("uses stable virtual identities for prepared files and retains physical diagnostics", async () => {
+  it("uses stable native identities in the exact build working directory and retains physical diagnostics", async () => {
     const build = async (prefix: string) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
       const source = path.join(root, "source");
@@ -88,6 +176,7 @@ describe("dependency-environment resolver", () => {
       fs.mkdirSync(source, { recursive: true });
       fs.writeFileSync(entry, 'export const marker = "stable";\n');
       const result = await esbuild.build({
+        absWorkingDir: source,
         entryPoints: [entry],
         bundle: true,
         format: "cjs",
@@ -108,6 +197,7 @@ describe("dependency-environment resolver", () => {
       fs.writeFileSync(broken, "const broken = );\n");
       const failure = await esbuild
         .build({
+          absWorkingDir: first.source,
           entryPoints: [broken],
           bundle: true,
           write: false,
@@ -115,7 +205,7 @@ describe("dependency-environment resolver", () => {
           plugins: composePreparedDependencyPlugins([], [], [first.source]),
         })
         .catch((error: unknown) => error as esbuild.BuildFailure);
-      expect(failure.errors[0]?.location?.file).toBe(broken);
+      expect(path.resolve(first.source, failure.errors[0]?.location?.file ?? "")).toBe(broken);
     } finally {
       fs.rmSync(first.root, { recursive: true, force: true });
       fs.rmSync(second.root, { recursive: true, force: true });
@@ -156,6 +246,7 @@ describe("dependency-environment resolver", () => {
         'import { marker as left } from "left"; import { marker as right } from "right"; export { left, right };\n'
       );
       const result = await esbuild.build({
+        absWorkingDir: root,
         entryPoints: [entry],
         bundle: true,
         format: "esm",
@@ -329,7 +420,7 @@ describe("dependency-environment resolver", () => {
       }
     }
   );
-  it("preserves prefix-only Node built-ins without admitting unknown Node modules", async () => {
+  it("preserves native prefix-only Node built-ins", async () => {
     const options: esbuild.BuildOptions = {
       bundle: true,
       format: "esm",
@@ -347,61 +438,7 @@ describe("dependency-environment resolver", () => {
     const output = result.outputFiles?.[0]?.text;
     expect(output).toContain('"node:sqlite"');
     expect(output).toContain('"node:test"');
-    await expect(
-      esbuild.build({
-        ...options,
-        stdin: { contents: 'import "node:unknown-vibestudio-module";' },
-      })
-    ).rejects.toThrow("not present in the prepared build environment");
   });
-  it.each([true, false])(
-    "owns only declared transitive workspace source links (declared=%s)",
-    async (declared) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workspace-dependency-"));
-      try {
-        const modules = path.join(root, "prepared", "node_modules");
-        const source = path.join(root, "packages", "owner");
-        const child = path.join(root, "packages", "child");
-        fs.mkdirSync(modules, { recursive: true });
-        fs.mkdirSync(path.join(source, "node_modules"), { recursive: true });
-        fs.mkdirSync(child, { recursive: true });
-        fs.writeFileSync(
-          path.join(source, "package.json"),
-          JSON.stringify({
-            name: "owner",
-            type: "module",
-            exports: "./index.js",
-            dependencies: declared ? { child: "workspace:*" } : {},
-          })
-        );
-        fs.writeFileSync(path.join(source, "index.js"), 'export { marker } from "child";');
-        fs.writeFileSync(
-          path.join(child, "package.json"),
-          JSON.stringify({ name: "child", type: "module", exports: "./index.js" })
-        );
-        fs.writeFileSync(
-          path.join(child, "index.js"),
-          'export const marker = "declared workspace source";'
-        );
-        fs.symlinkSync(source, path.join(modules, "owner"), "junction");
-        fs.symlinkSync(child, path.join(source, "node_modules", "child"), "junction");
-        const entry = path.join(root, "entry.js");
-        fs.writeFileSync(entry, 'export { marker } from "owner";');
-        const build = esbuild.build({
-          entryPoints: [entry],
-          bundle: true,
-          write: false,
-          logLevel: "silent",
-          plugins: composePreparedDependencyPlugins([], [modules], []),
-        });
-        if (declared)
-          expect((await build).outputFiles[0]?.text).toContain("declared workspace source");
-        else await expect(build).rejects.toThrow('Could not resolve "child"');
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-      }
-    }
-  );
 
   it("prefers an importer's owned dependency over the app-level copy", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-nearest-prepared-dependency-"));
@@ -453,56 +490,6 @@ describe("dependency-environment resolver", () => {
     }
   });
 
-  it("does not inherit workspace dependency declarations from an ancestor package", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-nearest-workspace-owner-"));
-    try {
-      const modules = path.join(root, "prepared", "node_modules");
-      const owner = path.join(root, "packages", "owner");
-      const child = path.join(owner, "packages", "child");
-      const leaf = path.join(root, "packages", "leaf");
-      fs.mkdirSync(modules, { recursive: true });
-      fs.mkdirSync(path.join(owner, "node_modules"), { recursive: true });
-      fs.mkdirSync(path.join(child, "node_modules"), { recursive: true });
-      fs.mkdirSync(leaf, { recursive: true });
-      fs.writeFileSync(
-        path.join(owner, "package.json"),
-        JSON.stringify({
-          name: "owner",
-          type: "module",
-          dependencies: { child: "workspace:*", leaf: "workspace:*" },
-        })
-      );
-      fs.writeFileSync(path.join(owner, "index.js"), 'export { marker } from "child";');
-      fs.writeFileSync(
-        path.join(child, "package.json"),
-        JSON.stringify({ name: "child", type: "module", exports: "./index.js" })
-      );
-      fs.writeFileSync(path.join(child, "index.js"), 'export { marker } from "leaf";');
-      fs.writeFileSync(
-        path.join(leaf, "package.json"),
-        JSON.stringify({ name: "leaf", type: "module", exports: "./index.js" })
-      );
-      fs.writeFileSync(path.join(leaf, "index.js"), 'export const marker = "leaf";');
-      fs.symlinkSync(owner, path.join(modules, "owner"), "junction");
-      fs.symlinkSync(child, path.join(owner, "node_modules", "child"), "junction");
-      fs.symlinkSync(leaf, path.join(child, "node_modules", "leaf"), "junction");
-      const entry = path.join(root, "entry.js");
-      fs.writeFileSync(entry, 'export { marker } from "owner";');
-
-      await expect(
-        esbuild.build({
-          entryPoints: [entry],
-          bundle: true,
-          write: false,
-          logLevel: "silent",
-          plugins: composePreparedDependencyPlugins([], [modules], []),
-        })
-      ).rejects.toThrow('Could not resolve "leaf"');
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it("accepts owned descendants whose names begin with two dots", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-dot-prefix-owned-"));
     try {
@@ -542,76 +529,6 @@ describe("dependency-environment resolver", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
-
-  it.each([true, false])(
-    "keeps framework-owned module imports inside the prepared graph (guarded=%s)",
-    async (guarded) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-composed-plugin-"));
-      const source = path.join(root, "source");
-      const preparedModules = path.join(root, "prepared", "node_modules");
-      const ambientModules = path.join(root, "node_modules");
-      const fixturePath = path.join(source, "panel.component");
-      const opaquePluginData = { owner: "framework-plugin" };
-      try {
-        fs.mkdirSync(source, { recursive: true });
-        writePackage(preparedModules, "prepared-helper", "prepared");
-        writePackage(ambientModules, "ambient-helper", "ambient");
-        fs.writeFileSync(fixturePath, "component source is handled by the plugin");
-        const frameworkPlugin: esbuild.Plugin = {
-          name: "framework-fixture",
-          setup(build) {
-            build.onResolve({ filter: /\.component$/ }, (args) => ({
-              path: args.path,
-              namespace: "component-source",
-              pluginData: opaquePluginData,
-            }));
-            build.onLoad({ filter: /.*/, namespace: "component-source" }, async (args) => {
-              expect(args.pluginData).toBe(opaquePluginData);
-              const prepared = await build.resolve("prepared-helper", {
-                kind: "import-statement",
-                resolveDir: preparedModules,
-                pluginData: opaquePluginData,
-              });
-              expect(prepared.errors).toHaveLength(0);
-              expect(prepared.path).toContain(
-                path.join("prepared", "node_modules", "prepared-helper")
-              );
-              const ambient = await build.resolve("ambient-helper", {
-                kind: "import-statement",
-                resolveDir: source,
-              });
-              expect(ambient.errors.length).toBeGreaterThan(0);
-              return {
-                contents: guarded
-                  ? 'import { marker } from "prepared-helper"; export function read(){ try { return require("ambient-helper"); } catch { return marker; } }'
-                  : 'import { marker } from "prepared-helper"; export function read(){ return require("ambient-helper"); }',
-                loader: "js",
-                resolveDir: source,
-              };
-            });
-          },
-        };
-        const result = await esbuild.build({
-          entryPoints: [fixturePath],
-          bundle: true,
-          format: "cjs",
-          platform: "node",
-          nodePaths: [preparedModules],
-          write: false,
-          logLevel: "silent",
-          plugins: composePreparedDependencyPlugins([frameworkPlugin], [preparedModules], [source]),
-        });
-        if (!guarded) throw new Error("unguarded ambient import unexpectedly built");
-        expect(result.outputFiles[0]?.text).toContain('"prepared"');
-        expect(result.outputFiles[0]?.text).not.toContain('"ambient"');
-      } catch (error) {
-        if (guarded) throw error;
-        expect(String(error)).toContain('Could not resolve "ambient-helper"');
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-      }
-    }
-  );
 
   it.each([false, true])(
     "adapts plugin-generated modules to ordinary loaders (aliased=%s)",
@@ -670,7 +587,9 @@ describe("dependency-environment resolver", () => {
         const inputPaths = Object.keys(metafile!.inputs);
         expect(inputPaths).toContain(`component-source:${entry}`);
         // Ordinary files have physical identities; plugin-owned virtual identities stay intact.
-        const helperIdentity = fs.realpathSync(path.join(source, "helper.ts"));
+        const helperIdentity = path
+          .relative(process.cwd(), fs.realpathSync(path.join(source, "helper.ts")))
+          .replaceAll("\\", "/");
         expect(inputPaths).toContain(helperIdentity);
         expect(JSON.stringify(metafile)).not.toContain("vibestudio-prepared-");
         expect(pluginEndInputs).toContain(`component-source:${entry}`);
@@ -996,32 +915,6 @@ describe("dependency-environment resolver", () => {
     }
   });
 
-  it("refuses an ambient dependency absent from the prepared environment", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hermetic-build-"));
-    try {
-      const ambientModules = path.join(root, "node_modules");
-      const ownedModules = path.join(root, "owned", "node_modules");
-      const sourceDir = path.join(root, "workspace", "source");
-      fs.mkdirSync(ownedModules, { recursive: true });
-      fs.mkdirSync(sourceDir, { recursive: true });
-      writePackage(ambientModules, "ambient-only", "ambient");
-      const entry = path.join(sourceDir, "entry.js");
-      fs.writeFileSync(entry, 'import "ambient-only";\n');
-
-      await expect(
-        esbuild.build({
-          entryPoints: [entry],
-          bundle: true,
-          write: false,
-          logLevel: "silent",
-          plugins: composePreparedDependencyPlugins([], [ownedModules], []),
-        })
-      ).rejects.toThrow("Dependency ambient-only is not present in the prepared build environment");
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it.each([false, true])(
     "keeps an absent optional peer unavailable even when ambient resolution finds it (ambient=%s)",
     async (ambientPresent) => {
@@ -1106,7 +999,50 @@ describe("dependency-environment resolver", () => {
     }
   });
 
-  it("continues to reject required peers resolved only from ambient modules", async () => {
+  it("does not inherit an enclosing package's absent optional imports into a required child", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-nearest-optional-owner-"));
+    try {
+      const modules = path.join(root, "node_modules");
+      writePackage(modules, "parent", "parent");
+      const parent = path.join(modules, "parent");
+      fs.writeFileSync(
+        path.join(parent, "package.json"),
+        JSON.stringify({
+          name: "parent",
+          version: "1.0.0",
+          type: "module",
+          exports: "./index.js",
+          dependencies: { child: "1.0.0" },
+          optionalDependencies: { "missing-peer": "1.0.0" },
+        })
+      );
+      writePackage(path.join(parent, "node_modules"), "child", "child");
+      const child = path.join(parent, "node_modules", "child");
+      fs.writeFileSync(path.join(parent, "index.js"), 'export { marker } from "child";');
+      fs.writeFileSync(
+        path.join(child, "index.js"),
+        'import "missing-peer"; export const marker = "child";'
+      );
+      const prepared = prepareDependencyResolution([modules], ["parent"]);
+      expect(prepared.absentOptionalImports.get(parent)?.has("missing-peer")).toBe(true);
+      expect(prepared.absentOptionalImports.get(child)?.size).toBe(0);
+      await expect(
+        esbuild.build({
+          entryPoints: [path.join(parent, "index.js")],
+          bundle: true,
+          format: "esm",
+          platform: "node",
+          write: false,
+          logLevel: "silent",
+          plugins: composePlugins([], [modules], [], [], prepared),
+        })
+      ).rejects.toThrow('Could not resolve "missing-peer"');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an unowned required peer at the environment boundary even if the host has it", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-required-peer-"));
     try {
       const preparedModules = path.join(root, "derived", "external-deps", "cache", "node_modules");
@@ -1125,17 +1061,24 @@ describe("dependency-environment resolver", () => {
       fs.writeFileSync(entry, 'import "required-peer";\n');
       writePackage(path.join(root, "node_modules"), "required-peer", "ambient");
 
-      await expect(
-        esbuild.build({
-          entryPoints: [entry],
-          bundle: true,
-          format: "esm",
-          platform: "node",
-          write: false,
-          logLevel: "silent",
-          plugins: composePreparedDependencyPlugins([], [preparedModules], []),
-        })
-      ).rejects.toThrow('Could not resolve "required-peer"');
+      const graph = new PackageGraph();
+      const unit: GraphNode = {
+        name: "required-owner",
+        path: owner,
+        relativePath: "required-owner",
+        kind: "worker",
+        dependencies: {},
+        internalDeps: [],
+        peerDependencies: { "required-peer": "^1.0.0" },
+        optionalPeerDependencies: [],
+        dependencyOverrides: {},
+        manifest: {},
+      };
+      graph.addNode(unit);
+      const closure = collectExternalDependencyClosure(unit, graph, root, [
+        path.join(root, "node_modules"),
+      ]);
+      expect(unownedPeerRefusal(unit.name, closure)).toContain("required-peer@^1.0.0");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
