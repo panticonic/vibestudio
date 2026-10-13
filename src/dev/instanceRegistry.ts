@@ -177,7 +177,10 @@ export function registerDevInstance(
   assertInstanceId(input.id);
   const root = path.resolve(input.root);
   const profileRoot = input.profileRoot ? path.resolve(input.profileRoot) : undefined;
-  if (profileRoot && (input.lifecycle !== "ephemeral" || profileRoot !== path.join(root, "profile"))) {
+  if (
+    profileRoot &&
+    (input.lifecycle !== "ephemeral" || profileRoot !== path.join(root, "profile"))
+  ) {
     throw new Error("A private developer profile must be the ephemeral instance's profile root");
   }
   const record: DevInstanceRecord = {
