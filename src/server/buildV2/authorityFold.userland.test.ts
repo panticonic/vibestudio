@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TypeCheckService } from "@vibestudio/typecheck";
+import { HOST_AUTHORITY_METHODS } from "@vibestudio/shared/authority/hostAuthorityCatalog.generated";
 import { authorityDiagnosticsForProgram } from "./authorityFold.js";
 import { createExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js";
 
@@ -785,5 +786,32 @@ describe("userland authority fold", () => {
       environment,
     });
     expect(diagnostics).toEqual([]);
+  });
+
+  it("admits an open host method without a manifest request but requires one for a gated method", async () => {
+    // credentials.configureClient is a host-owned protected-input prompt: the
+    // reviewed tier is open, which waives the unit request and grant. Install
+    // code that calls it must build with no authority.requests entry.
+    expect(HOST_AUTHORITY_METHODS["credentials.configureClient"].tier.tier).toBe("open");
+    const gated = (
+      Object.entries(HOST_AUTHORITY_METHODS) as Array<
+        [string, { tier: { tier: string }; capability?: string }]
+      >
+    ).find(([, row]) => row.tier.tier === "gated" && row.capability);
+    expect(gated).toBeDefined();
+    const diagnose = async (method: string) => {
+      const { root, project } = programFor(`export const method = ${JSON.stringify(method)};`);
+      return authorityDiagnosticsForProgram({
+        project,
+        sourceRoot: root,
+        unitRelativePath: ".",
+        units: [{ name: "consumer", relativePath: "." }],
+        manifest: { authority: { requests: [], provides: [] } },
+      });
+    };
+    expect(await diagnose("credentials.configureClient")).toEqual([]);
+    expect(await diagnose(gated![0])).toEqual([
+      expect.objectContaining({ message: expect.stringContaining(gated![1].capability!) }),
+    ]);
   });
 });
