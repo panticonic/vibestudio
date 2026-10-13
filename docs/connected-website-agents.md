@@ -20,14 +20,15 @@ that scope explicitly. Grants retain the selected task, page, or remembered
 lifetime and do not grant credential administration, private state, or native access.
 
 ```js
-import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import {
   connectWorkspace,
   workspaceConnection,
+  runtime,
   rpc,
   contextId,
   launchAgentIntoChannel,
   createConversationClient,
+  formatRpcFailure,
 } from "/runtime.js";
 
 await connectWorkspace();
@@ -35,15 +36,13 @@ await connectWorkspace();
 const channelId = crypto.randomUUID();
 const agentKey = crypto.randomUUID();
 const messageId = crypto.randomUUID();
-const channel = await rpc.call("main", mainRpcMethods["runtime.createEntity"], [
-  {
-    kind: "do",
-    execution: { surface: "code", source: "workers/pubsub-channel" },
-    className: "PubSubChannel",
-    key: channelId,
-    contextId,
-  },
-]);
+const channel = await runtime.createEntity({
+  kind: "do",
+  execution: { surface: "code", source: "workers/pubsub-channel" },
+  className: "PubSubChannel",
+  key: channelId,
+  contextId,
+});
 const agent = await launchAgentIntoChannel(rpc, {
   source: "workers/agent-worker",
   className: "AiChatWorker",
@@ -61,7 +60,11 @@ void conversation
   .subscribe(channel.targetId, `website:${crypto.randomUUID()}`, { kind: "user" }, onRecord, {
     signal: updates.signal,
   })
-  .catch(showError);
+  .catch((error) => {
+    if (updates.signal.aborted) return;
+    setInteractionState("failed");
+    showError(formatRpcFailure(error));
+  });
 const history = await conversation.history(channel.targetId);
 for (const record of history.logEvents ?? []) onRecord(record);
 await conversation.send(channel.targetId, "Build my invention", {
@@ -71,9 +74,12 @@ await conversation.send(channel.targetId, "Build my invention", {
 ```
 
 `subscribe` lasts until disconnection or abort; do not await it before sending a
-message. Deduplicate live/replayed records by message identity. Persist the agent,
-channel, context and request IDs so reloads reconnect to accepted work. Aborting
-the subscription stops observation; it does not cancel the agent's task.
+message. It rejects when the transport or the record callback fails. Treat either
+as a terminal observation failure, restore the UI from its working state, and
+render the complete failure graph with `formatRpcFailure`. Deduplicate
+live/replayed records by message identity. Persist the agent, channel, context and
+request IDs so reloads reconnect to accepted work. Aborting the subscription stops
+observation; it does not cancel the agent's task.
 
 ## Embed a generated invention
 

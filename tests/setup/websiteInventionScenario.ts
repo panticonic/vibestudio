@@ -169,13 +169,13 @@ async function captureAgentRoutingEvidence(page: Page, app: TestApp, workspaceId
           if (!event || typeof event !== "object") return { malformed: true };
           const record = event as { kind?: unknown; payload?: unknown; failure?: unknown };
           const payload = record.payload as
-            | { role?: unknown; model?: { ref?: unknown } }
+            | { role?: unknown; model?: { ref?: unknown }; failure?: unknown }
             | undefined;
           return {
             kind: record.kind ?? null,
             role: payload?.role ?? null,
             modelRef: payload?.model?.ref ?? null,
-            failure: record.failure ?? null,
+            failure: payload?.failure ?? record.failure ?? null,
           };
         });
         evidence.push({ channel, events });
@@ -234,7 +234,7 @@ export async function websiteInventionScenario(environment: Record<string, strin
   let app: TestApp | undefined;
   let website: Page | undefined;
   const approvals: unknown[] = [];
-  const browserErrors: string[] = [];
+  const browserErrors: Error[] = [];
   try {
     app = await launchManagedServerApp(environment);
     await declineFirstRunReporting(app);
@@ -253,6 +253,16 @@ export async function websiteInventionScenario(environment: Record<string, strin
       await settleWorkspaceCreationReviews(app);
       await selectDeterministicTestModel(app, app.workspaceId);
     }
+    const observedPages = new WeakSet<Page>();
+    const observePageErrors = (candidate: Page) => {
+      if (observedPages.has(candidate)) return;
+      observedPages.add(candidate);
+      candidate.on("pageerror", (error) => {
+        if (candidate.url() === url) browserErrors.push(error);
+      });
+    };
+    for (const candidate of app.app.context().pages()) observePageErrors(candidate);
+    app.app.context().on("page", observePageErrors);
     const parentId = await getFocusedPanelId(app);
     const panel = await createBrowserPanel(app, parentId!, url, { focus: true });
     await expect
@@ -264,7 +274,6 @@ export async function websiteInventionScenario(environment: Record<string, strin
         return Boolean(website);
       })
       .toBe(true);
-    website!.on("pageerror", (error) => browserErrors.push(error.message));
     const page = website!;
 
     // Follow the visible native queue. Only this run's System requests are
@@ -363,7 +372,9 @@ export async function websiteInventionScenario(environment: Record<string, strin
       const end = Date.now() + timeout;
       while (Date.now() < end) {
         await approvePending();
-        if (browserErrors.length) throw new Error(browserErrors.join("\n"));
+        if (browserErrors.length) {
+          throw new AggregateError(browserErrors, `${label}: connected website script failed`);
+        }
         const error = await page
           .locator("#lab-status")
           .evaluate((element) =>
@@ -412,11 +423,19 @@ export async function websiteInventionScenario(environment: Record<string, strin
     const request = `Permit to teach clouds to whisper ${randomUUID()}`;
     await frame.getByRole("textbox", { name: "Request", exact: true }).fill(request);
     await frame.getByRole("button", { name: "Petition the moon", exact: true }).click();
-    await untilReady("live embedded agent reply", async () =>
-      (await frame.getByRole("region", { name: "Moon verdict", exact: true }).innerText()).includes(
-        request
-      )
-    );
+    await untilReady("live embedded agent reply", async () => {
+      const verdict = await frame
+        .getByRole("region", { name: "Moon verdict", exact: true })
+        .innerText();
+      if (verdict.includes(request)) return true;
+      const embeddedStatus = frame.locator("#status");
+      const state = await embeddedStatus.getAttribute("data-state");
+      if (state === "failed")
+        throw new Error(`live embedded agent reply: ${await embeddedStatus.innerText()}`);
+      if (state === "complete")
+        throw new Error(`live embedded agent reply did not include the request: ${verdict}`);
+      return false;
+    });
     const verdict = await frame
       .getByRole("region", { name: "Moon verdict", exact: true })
       .innerText();

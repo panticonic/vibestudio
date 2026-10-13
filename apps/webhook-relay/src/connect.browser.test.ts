@@ -22,7 +22,21 @@ const connectedRuntime = String.raw`
     for (const listener of listeners) listener();
   }
   export const contextId = "ctx-invention-test";
-  export const formatRpcFailure = error => error?.message ?? String(error);
+  export const formatRpcFailure = error => {
+    const seen = new Set();
+    const visit = value => {
+      if (!value || typeof value !== "object") return String(value);
+      if (seen.has(value)) return "";
+      seen.add(value);
+      const message = typeof value.message === "string" ? value.message : String(value);
+      const details = [
+        ...(Array.isArray(value.errors) ? value.errors.map(visit) : []),
+        ...("cause" in value ? [visit(value.cause)] : []),
+      ].filter(Boolean);
+      return details.length ? message + ": " + details.join("; ") : message;
+    };
+    return visit(error);
+  };
   const files = new Map();
   let notify;
   window.emitInventionEvent = event => notify({kind:"message",payload:{message:{kind:"log",event:{payload:event}}}});
@@ -267,14 +281,21 @@ describe.skipIf(!existsSync(chromium.executablePath()))("apex connected experien
         })
       );
       expect(await page.locator("#lab-machine").isVisible()).toBe(true);
-      const failure = "[credentials.resolveCredential] This operation is closed to websites";
-      await page.evaluate((reason) => {
+      const failure = {
+        message: "Inventor tool chain failed",
+        errors: [
+          { message: "[credentials.resolveCredential] This operation is closed to websites" },
+          { message: "Workspace update subscription stopped" },
+        ],
+        cause: { message: "Provider disconnected" },
+      };
+      await page.evaluate((failure) => {
         const emit = (window as any).emitInventionEvent;
         emit({
           kind: "invocation.failed",
           actor: { kind: "agent", id: "agent:inventor" },
           turnId: "turn-1",
-          payload: { reason },
+          payload: { failure },
         });
       }, failure);
       // An individual tool failure can still be recovered within its turn.
@@ -288,7 +309,11 @@ describe.skipIf(!existsSync(chromium.executablePath()))("apex connected experien
         })
       );
       await expect.poll(() => page.locator("#lab-machine").isVisible()).toBe(false);
-      expect(await page.locator("#lab-status").textContent()).toBe(failure);
+      const renderedFailure = await page.locator("#lab-status").textContent();
+      expect(renderedFailure).toContain(failure.message);
+      expect(renderedFailure).toContain(failure.errors[0]!.message);
+      expect(renderedFailure).toContain(failure.errors[1]!.message);
+      expect(renderedFailure).toContain(failure.cause.message);
       expect(await page.locator("#lab-status").getAttribute("data-error")).toBe("true");
       expect(
         await page.getByRole("button", { name: "Invent the impossible", exact: true }).isEnabled()

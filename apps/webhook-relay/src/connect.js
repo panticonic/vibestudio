@@ -175,14 +175,19 @@ async function record(value) {
     (event.actor?.participantId === invention.participantId ||
       event.actor?.id === invention.participantId);
   if (fromInventor && event.turnId && event.kind === "invocation.failed") {
-    turnFailures.set(event.turnId, event.payload?.reason ?? event.payload?.failure?.message);
+    turnFailures.set(event.turnId, event.payload?.failure ?? event.payload?.reason);
   }
   if (event.kind === "turn.closed") {
     const failure = turnFailures.get(event.turnId);
     turnFailures.delete(event.turnId);
     if (fromInventor && event.payload?.reason === "work_failed") {
       setBusy(false);
-      message(failure ?? "The inventor's turn failed before completing the invention.", true);
+      message(
+        failure
+          ? formatRpcFailure(failure)
+          : "The inventor's turn failed before completing the invention.",
+        true
+      );
     }
     return;
   }
@@ -367,7 +372,7 @@ make.addEventListener("click", async () => {
     append(idea, "You");
     await conversation.send(
       work.channelTarget,
-      `Invent something that shouldn't exist from this collision: ${idea}\n\nUse the workspace project-creation workflow to create projects/impossible-inventions if it does not exist. Build a delightful, polished, surprising AI-powered invention as HTML at ${work.directory}/index.html in this conversation's workspace context. It is embedded INSIDE the connected website as an unsandboxed same-origin document. Its JavaScript accesses the actual connected SDK using: const workspace = window.parent.inventionWorkspace; (do not import or initialize a second runtime, and do not navigate the parent page). The SDK exposes rpc, fs, contextId, images, services, createConversationClient and launchAgentIntoChannel. These are real workspace capabilities with normal approvals, not mocks.
+      `Invent something that shouldn't exist from this collision: ${idea}\n\nUse the workspace project-creation workflow to create projects/impossible-inventions if it does not exist. Build a delightful, polished, surprising AI-powered invention as HTML at ${work.directory}/index.html in this conversation's workspace context. It is embedded INSIDE the connected website as an unsandboxed same-origin document. Its JavaScript accesses the actual connected SDK using: const workspace = window.parent.inventionWorkspace; (do not import or initialize a second runtime, and do not navigate the parent page). The SDK exposes runtime, rpc, fs, contextId, images, services, createConversationClient and launchAgentIntoChannel. These are real workspace capabilities with normal approvals, not mocks.
 
 The invention MUST use a real AI or agent action triggered by its own UI: for example an agentic oracle tending an evolving world, an illustrated cabinet that invents new creatures, or a committee of agents debating an impossible decision. Build a small, polished first version with one exceptional live interaction, honest loading/approval/error states, persistent workspace data under ${work.directory}/data, keyboard-accessible controls and a mobile layout. No canned AI results. Managed workspace directories are implicit: save data files directly with fs.writeFile; fs.mkdir is only for scratch directories. Consult the workspace runtime and agent-launch source for exact contracts. To launch an agent, create a PubSubChannel via runtime.createEntity, then use launchAgentIntoChannel(workspace.rpc, {source:"workers/agent-worker", className:"AiChatWorker", key, contextId:workspace.contextId, channelId, replay:true}); use createConversationClient(workspace.rpc) to subscribe and send messages addressed to the returned subscription.participantId. Keep channel IDs and request IDs stable in persisted state so repeated clicks/reloads don't duplicate work.
 
