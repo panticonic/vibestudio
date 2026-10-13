@@ -43,7 +43,7 @@ async function withProducer(
 
 void test("validates a declared release through the producer and preserves borrowed output", async () => {
   await withProducer(
-    `const fs=require("fs"); const output=process.argv[process.argv.indexOf("--output")+1]; fs.writeFileSync("selected-output",output); process.send({kind:"completed"},()=>process.disconnect());`,
+    `const fs=require("fs"); const output=process.argv[process.argv.indexOf("--output")+1]; fs.writeFileSync("selected-output",output); process.send({kind:"sources-ready",root:output},()=>process.send({kind:"completed"},()=>process.disconnect()));`,
     async (owner, root, env) => {
       await owner.completed;
       const output = path.join(root, "borrowed");
@@ -95,7 +95,7 @@ void test("budgets exhaustive build admission from CPU and memory", () => {
 
 void test("gives the producer its one operation-scoped build budget", async () => {
   await withProducer(
-    `require("fs").writeFileSync("build-concurrency", process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing"); process.send({kind:"completed"},()=>process.disconnect());`,
+    `const output=process.argv[process.argv.indexOf("--output")+1]; require("fs").writeFileSync("build-concurrency", process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing"); process.send({kind:"sources-ready",root:output},()=>process.send({kind:"completed"},()=>process.disconnect()));`,
     async (owner, root) => {
       await owner.completed;
       assert.equal(await fs.readFile(path.join(root, "build-concurrency"), "utf8"), "6");
@@ -160,7 +160,7 @@ async function waitForFile(file) {
 
 void test("launches the producer from its entry directory and joins completion", async () => {
   await withProducer(
-    `process.send({kind:"completed"},()=>process.disconnect());`,
+    `const output=process.argv[process.argv.indexOf("--output")+1]; process.send({kind:"sources-ready",root:output},()=>process.send({kind:"completed"},()=>process.disconnect()));`,
     async (owner, root, env) => {
       await owner.completed;
       assert.equal(env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"], root);
@@ -222,7 +222,7 @@ void test("preserves an earlier failure when a completion receipt is duplicated"
   const sourceFailure = Object.assign(new Error("source build broke"), { code: "ECOMPILER" });
   const failure = JSON.stringify(serializeRpcFailure(sourceFailure));
   await withProducer(
-    `process.send({kind:"completed"},()=>process.send({kind:"failed",failure:${failure}},()=>process.send({kind:"completed"},()=>{process.exitCode=1;process.disconnect();})));`,
+    `const output=process.argv[process.argv.indexOf("--output")+1]; process.send({kind:"sources-ready",root:output},()=>process.send({kind:"completed"},()=>process.send({kind:"failed",failure:${failure}},()=>process.send({kind:"completed"},()=>{process.exitCode=1;process.disconnect();}))));`,
     async (owner) => {
       await assert.rejects(owner.completed, (error) => {
         assert.ok(error instanceof AggregateError);
@@ -378,11 +378,46 @@ void test("stop accepts the child's cancellation receipt after joining it", asyn
   );
 });
 
-void test("a completion receipt is not handed off until the producer exits", async () => {
-  const script = `const fs=require("fs"); process.send({kind:"completed"},()=>{const finish=()=>{if(fs.existsSync("allow-exit")){watcher.close();process.disconnect();}}; const watcher=fs.watch(".",finish); finish(); fs.writeFileSync("receipt-sent","yes");});`;
+void test("publishes an immutable source root before exhaustive completion", async () => {
+  const script = `const fs=require("fs"); const source=process.argv[process.argv.indexOf("--source-output")+1]; process.send({kind:"sources-ready",root:source},()=>{fs.writeFileSync("sources-sent","yes"); const finish=()=>{if(fs.existsSync("allow-completion")){watcher.close();process.send({kind:"completed"},()=>process.disconnect());}}; const watcher=fs.watch(".",finish); finish();});`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-release-sources-"));
+  let owner;
+  try {
+    const entry = path.join(root, "producer.cjs");
+    const sourceOutput = path.join(root, "sources");
+    await fs.writeFile(entry, script);
+    const env = { ...process.env };
+    delete env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT;
+    owner = prepareWorkspaceRelease({
+      appRoot: root,
+      output: path.join(root, "release"),
+      sourceOutput,
+      scratch: path.join(root, "scratch"),
+      env,
+      executable: process.execPath,
+      entry,
+    });
+    await owner.sourcesReady;
+    assert.equal(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT, sourceOutput);
+    await waitForFile(path.join(root, "sources-sent"));
+    let completed = false;
+    void owner.completed.finally(() => (completed = true)).catch(() => {});
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(completed, false);
+    await fs.writeFile(path.join(root, "allow-completion"), "yes");
+    await owner.completed;
+    assert.equal(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT, path.join(root, "release"));
+  } finally {
+    await owner?.stop().catch(() => {});
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("source handoff does not imply exhaustive producer completion", async () => {
+  const script = `const fs=require("fs"); const output=process.argv[process.argv.indexOf("--output")+1]; process.send({kind:"sources-ready",root:output},()=>process.send({kind:"completed"},()=>{const finish=()=>{if(fs.existsSync("allow-exit")){watcher.close();process.disconnect();}}; const watcher=fs.watch(".",finish); finish(); fs.writeFileSync("receipt-sent","yes");}));`;
   await withProducer(script, async (owner, root, env) => {
     await waitForFile(path.join(root, "receipt-sent"));
-    assert.equal(env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"], undefined);
+    assert.equal(env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"], root);
     await fs.writeFile(path.join(root, "allow-exit"), "yes");
     await owner.completed;
     assert.equal(env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"], root);
@@ -391,6 +426,6 @@ void test("a completion receipt is not handed off until the producer exits", asy
 
 void test("rejects a clean producer exit without a completion receipt", async () => {
   await withProducer(`process.disconnect();`, async (owner) => {
-    await assert.rejects(owner.completed, /without a completed release receipt/);
+    await assert.rejects(owner.completed, /without publishing template sources/);
   });
 });

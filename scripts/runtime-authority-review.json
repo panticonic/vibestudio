@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:436f102fe334d260d97cee97b07de416f476d815c255275237864d65ce6e8fab",
+  "censusDigest": "sha256:9682bc52bad8efff1b5fd36c4daba21f430b8c9c10dba59cb558446dfed8de40",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",

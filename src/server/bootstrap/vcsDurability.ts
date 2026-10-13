@@ -118,7 +118,7 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
       return coordinator;
     },
     async stop(instance: GcEpochCoordinator | null) {
-      instance?.stop();
+      await instance?.stop();
     },
   });
 }

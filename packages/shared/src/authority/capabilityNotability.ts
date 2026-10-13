@@ -146,6 +146,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "credentials.resolveNativeModel", notability: "everyday" },
   { key: "localModelRuntime.prepareNativeModel", notability: "everyday" },
   { key: "internal-model-runtime.use", notability: "everyday" },
+  { key: "model.use", notability: "everyday" },
 
   // ── People & devices ───────────────────────────────────────────────────────
   { key: "devices.pair", notability: "headline" },

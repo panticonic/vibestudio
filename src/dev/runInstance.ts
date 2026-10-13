@@ -36,6 +36,7 @@ import {
 import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
+import { resolveDevelopmentInstanceIsolation } from "./developmentInstanceIsolation.js";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import {
   inspectWorkspaceSources,
@@ -185,10 +186,6 @@ function hasFlag(argv: readonly string[], name: string): boolean {
   return argv.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
 
-function withoutFlag(argv: readonly string[], name: string): string[] {
-  return argv.filter((arg) => arg !== name && !arg.startsWith(`${name}=`));
-}
-
 function optionValue(argv: readonly string[], name: string): string | undefined {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -215,6 +212,7 @@ function prepareLaunchTemplates(
     entry: path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "prepare-workspace-templates.mjs"),
     appRoot: process.cwd(),
     output,
+    sourceOutput: path.join(root, "workspace-sources", generationId),
     scratch: path.join(root, "template-preparation", generationId),
     env,
     scope,
@@ -230,7 +228,7 @@ interface LaunchResources {
 
 /**
  * Prepare templates as an owned resource: a termination request stops the
- * producer, and its `completed` then settles with the cancellation.
+ * producer. Interactive launch waits for sources; cleanup joins completion.
  */
 async function prepareOwnedTemplates(
   termination: LaunchTermination,
@@ -242,7 +240,7 @@ async function prepareOwnedTemplates(
   resources.preparation = preparation;
   // The launcher's cleanup joins the same stop and reports its failure.
   termination.onRequest(() => void preparation.stop().catch(() => {}));
-  await preparation.completed;
+  await preparation.sourcesReady;
 }
 
 /**
@@ -605,6 +603,8 @@ async function main(): Promise<void> {
   --instance <id>  Use a named persistent isolated instance (default: source)
   --ephemeral      Use an isolated temporary instance root; combine with
                    --instance to give parallel CLI commands a stable target
+  --clean-room     Use an ephemeral instance with private state, profile credentials,
+                   and derived caches
   --template-checkouts <path>
                    Complete registry-defined official template source root
   --extra-template-checkout <path>
@@ -623,11 +623,9 @@ async function main(): Promise<void> {
     );
     return;
   }
-  const disposable = hasFlag(parsed.forwarded, "--ephemeral");
-  // `--ephemeral` selects a disposable instance root and nothing else. It is
-  // consumed here so that no launcher further down can read a second meaning
-  // into the same word.
-  const forwarded = withoutFlag(parsed.forwarded, "--ephemeral");
+  const { cleanRoom, disposable, forwarded } = resolveDevelopmentInstanceIsolation(
+    parsed.forwarded
+  );
   const id = parsed.instanceId ?? (disposable ? generatedInstanceId(mode) : "source");
   // From here this launcher owns state; a termination request (Ctrl-C,
   // SIGTERM, a terminal hang-up) must reach the cleanup below, not end the
@@ -637,6 +635,7 @@ async function main(): Promise<void> {
   if (terminalOptions) tolerateTerminalHangup();
   const root = disposable ? createEphemeralInstanceRoot(id) : persistentInstanceRoot(repoRoot, id);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const cleanRoomProfileRoot = cleanRoom ? path.join(root, "profile") : undefined;
   const instance = registerDevInstance({
     id,
     root,
@@ -644,6 +643,7 @@ async function main(): Promise<void> {
     supervisorPid: process.pid,
     kind: mode,
     lifecycle: disposable ? "ephemeral" : "persistent",
+    ...(cleanRoomProfileRoot ? { profileRoot: cleanRoomProfileRoot } : {}),
     startedAt: Date.now(),
   });
   const terminal = terminalOptions ? openTerminalLog(root, terminalOptions) : undefined;
@@ -750,6 +750,7 @@ async function main(): Promise<void> {
       instanceId: id,
       sourceCoupled,
       disposable,
+      cleanRoom,
       ...(defaultTemplates ? { defaultTemplates } : {}),
       ...(targetWorkspace ? { initialWorkspaceTemplate: targetWorkspace.pin } : {}),
       ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
@@ -761,6 +762,11 @@ async function main(): Promise<void> {
     // registered, concurrent CLI readers reject an older generation.
     if (mode === "server") clearDevInstanceReady(instance);
     detail(`[instance:${id}] ${instance.lifecycle} ${mode} state: ${root}`);
+    detail(
+      cleanRoom
+        ? `[instance:${id}] Clean room: private disposable state, credentials, and caches`
+        : `[instance:${id}] Derived cache: shared development profile`
+    );
     detail(`[instance:${id}] CLI: pnpm cli --instance ${id} <command>`);
     if (parsed.productionTemplates) {
       detail(`[instance:${id}] Templates: canonical pinned production releases`);
@@ -841,6 +847,10 @@ async function main(): Promise<void> {
         console.error(`[instance:${id}] resource retirement failed; retaining owned state ${root}`);
       } else {
         fs.rmSync(path.join(root, "workspace-release", instance.generationId), {
+          recursive: true,
+          force: true,
+        });
+        fs.rmSync(path.join(root, "workspace-sources", instance.generationId), {
           recursive: true,
           force: true,
         });

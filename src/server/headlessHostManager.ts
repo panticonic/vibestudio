@@ -147,7 +147,11 @@ export function formatBridgeDiagnostic(
 export class HeadlessHostManager {
   private child: ChildProcess | null = null;
   private spawnInFlight: Promise<ClientSession | null> | null = null;
-  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private idleTimer: {
+    handle: ReturnType<typeof setTimeout>;
+    child: ChildProcess;
+    sessionId: string;
+  } | null = null;
   private consecutiveFailures = 0;
   private firstFailureAt = 0;
   private nextAttemptAt = 0;
@@ -171,6 +175,7 @@ export class HeadlessHostManager {
   startKeepAlive(): void {
     if (!this.config.enabled) return;
     this.keepAlive = true;
+    this.clearIdleTimer();
     this.scheduleEnsure();
   }
 
@@ -242,7 +247,7 @@ export class HeadlessHostManager {
     this.stopped = true;
     this.keepAlive = false;
     this.stopLeaseListener?.();
-    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.clearIdleTimer();
     if (this.respawnTimer) clearTimeout(this.respawnTimer);
     this.respawnTimer = null;
     this.terminateChild("manager stopping");
@@ -276,6 +281,10 @@ export class HeadlessHostManager {
       this.recordFailure();
       return null;
     }
+    // A child is the physical owner of its idle deadline. A prior process may
+    // still deliver its exit event after this replacement is installed, so
+    // retire that generation's timer before publishing the new child.
+    this.clearIdleTimer();
     this.child = child;
     let childReportedRegistered = false;
     let childReportedReady = false;
@@ -291,6 +300,7 @@ export class HeadlessHostManager {
     });
     child.once("exit", (code) => {
       if (this.child === child) {
+        this.clearIdleTimer(child);
         this.child = null;
         this.spawnedClientSessionId = null;
       }
@@ -433,33 +443,52 @@ export class HeadlessHostManager {
 
   private updateIdleTimer(): void {
     // An always-on host must never idle-terminate.
-    if (this.keepAlive) return;
-    if (!this.child || !this.spawnedClientSessionId) return;
+    if (this.keepAlive) {
+      this.clearIdleTimer();
+      return;
+    }
+    const child = this.child;
     const sessionId = this.spawnedClientSessionId;
+    if (!child || !sessionId) {
+      this.clearIdleTimer();
+      return;
+    }
     const holdsLeases = this.deps.coordinator
       .getSnapshot()
       .leases.some((lease) => lease.clientSessionId === sessionId);
     if (holdsLeases) {
-      if (this.idleTimer) clearTimeout(this.idleTimer);
-      this.idleTimer = null;
+      this.clearIdleTimer();
       return;
     }
-    if (this.idleTimer) return;
+    if (this.idleTimer?.child === child && this.idleTimer.sessionId === sessionId) return;
+    this.clearIdleTimer();
     const idleMs = this.config.idleShutdownMs ?? 10 * 60_000;
-    this.idleTimer = setTimeout(() => {
+    const handle = setTimeout(() => {
+      const owner = this.idleTimer;
+      if (
+        owner?.handle !== handle ||
+        owner.child !== child ||
+        owner.sessionId !== sessionId ||
+        this.child !== child ||
+        this.spawnedClientSessionId !== sessionId
+      ) {
+        return;
+      }
       this.idleTimer = null;
       const stillIdle = !this.deps.coordinator
         .getSnapshot()
         .leases.some((lease) => lease.clientSessionId === sessionId);
       if (stillIdle) this.terminateChild("idle shutdown");
     }, idleMs);
-    this.idleTimer.unref?.();
+    this.idleTimer = { handle, child, sessionId };
+    handle.unref?.();
   }
 
   private terminateChild(reason: string): void {
     if (!this.child) return;
     log.info(`terminating headless host: ${reason}`);
     const child = this.child;
+    this.clearIdleTimer(child);
     this.child = null;
     this.spawnedClientSessionId = null;
     this.signalChildTree(child, "SIGTERM");
@@ -467,6 +496,13 @@ export class HeadlessHostManager {
       if (child.exitCode === null) this.signalChildTree(child, "SIGKILL");
     }, 5_000);
     killTimer.unref?.();
+  }
+
+  private clearIdleTimer(expectedChild?: ChildProcess): void {
+    const owner = this.idleTimer;
+    if (!owner || (expectedChild && owner.child !== expectedChild)) return;
+    clearTimeout(owner.handle);
+    this.idleTimer = null;
   }
 
   private signalChildTree(child: ChildProcess, signal: NodeJS.Signals): void {

@@ -54,6 +54,42 @@ describe("developer instance registry", () => {
   it("rejects ids that could escape the registry", () => {
     expect(() => persistentInstanceRoot(tempDir, "../escape")).toThrow(/Invalid instance id/u);
   });
+
+  it("retains a clean-room profile root for instance-scoped CLI commands", () => {
+    const repoRoot = fs.mkdtempSync(path.join(tempDir, "repo-clean-"));
+    const root = fs.mkdtempSync(path.join(tempDir, "instance-clean-"));
+    const profileRoot = path.join(root, "profile");
+    registerDevInstance({
+      id: "clean",
+      root,
+      profileRoot,
+      repoRoot,
+      supervisorPid: process.pid,
+      kind: "desktop",
+      lifecycle: "ephemeral",
+      startedAt: 123,
+    });
+
+    expect(resolveDevInstance(repoRoot, "clean")).toMatchObject({ profileRoot });
+    unregisterDevInstance(repoRoot, "clean");
+  });
+
+  it("rejects a private profile outside an ephemeral instance root", () => {
+    const repoRoot = fs.mkdtempSync(path.join(tempDir, "repo-invalid-profile-"));
+    const root = fs.mkdtempSync(path.join(tempDir, "instance-invalid-profile-"));
+    expect(() =>
+      registerDevInstance({
+        id: "invalid-profile",
+        root,
+        profileRoot: path.join(tempDir, "foreign-profile"),
+        repoRoot,
+        supervisorPid: process.pid,
+        kind: "desktop",
+        lifecycle: "ephemeral",
+        startedAt: 123,
+      })
+    ).toThrow(/private developer profile/u);
+  });
   it("publishes an atomic CLI-ready barrier after instance pairing", async () => {
     const root = fs.mkdtempSync(path.join(tempDir, "instance-"));
     const instance = {

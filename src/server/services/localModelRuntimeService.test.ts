@@ -4,13 +4,25 @@ import {
   localModelRuntimeMethods,
   PREPARE_NATIVE_LOCAL_MODEL_AUTHORITY_RESOLVER,
 } from "@vibestudio/service-schemas/localModelRuntime";
-import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  type AuthorityAcquirer,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import { testAuthority } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { createLocalModelRuntimeService } from "./localModelRuntimeService.js";
 
 const request = {
   providerId: "local" as const,
   modelId: "lfm2.5-1.2b",
   endpoint: null,
+};
+const workerImage = {
+  source: "workers/agent",
+  effectiveVersion: "version:one",
+  executionDigest: "a".repeat(64),
 };
 const nativeInvocation = nativeInvocationIdentity({
   owner: {
@@ -19,11 +31,9 @@ const nativeInvocation = nativeInvocationIdentity({
     contextId: "context:one",
     incarnation: "storage:one",
     channelId: "channel:one",
-    source: "workers/agent",
-    effectiveVersion: "version:one",
+    ...workerImage,
     className: "Agent",
     objectKey: "one",
-    executionDigest: "a".repeat(64),
   },
   task: { conversationId: 4, taskId: 23, kind: "pi.model", version: 1 },
   operation: {
@@ -65,7 +75,96 @@ function fixture() {
   return { service, ctx, prepare, resolveNativeInvocation, ensureLoaded };
 }
 
+function dispatchFixture(declaresModelUse: boolean) {
+  const f = fixture();
+  const authority = parseUnitAuthorityManifest({
+    requests: declaresModelUse
+      ? [
+          {
+            capability: "model.use",
+            resource: { kind: "prefix", prefix: "model:" },
+            tier: "gated",
+            evidence: "bounded-dynamic",
+          },
+        ]
+      : [],
+    provides: [],
+  });
+  f.ctx.caller = {
+    ...createVerifiedCaller(caller.runtime.id, "do", {
+      callerId: caller.runtime.id,
+      callerKind: "do",
+      repoPath: workerImage.source,
+      effectiveVersion: workerImage.effectiveVersion,
+      executionDigest: workerImage.executionDigest,
+      requested: authority.requests,
+    }),
+    nativeInvocation,
+    causalParent: caller.causalParent,
+  };
+  f.ctx.authorityAcquisition = "wait";
+  const dispatcher = new ServiceDispatcher();
+  const approvedResources = new Set<string>();
+  dispatcher.setAuthorityResolver(({ caller: author, capability, resourceKey }) => {
+    const resolved = testAuthority(author, capability, resourceKey);
+    return {
+      ...resolved,
+      grants:
+        capability === "model.use" && !approvedResources.has(resourceKey) ? [] : resolved.grants,
+    };
+  });
+  const acquire = vi.fn<AuthorityAcquirer["acquire"]>(async (input) => {
+    expect(f.ensureLoaded).not.toHaveBeenCalled();
+    approvedResources.add(input.snapshot.resourceKey);
+    return { state: "decided", decision: "version" };
+  });
+  dispatcher.setAuthorityAcquirer({
+    acquire,
+    request: vi.fn(),
+    consume: vi.fn(() => false),
+    invalidate: vi.fn(),
+  });
+  dispatcher.registerService(f.service);
+  dispatcher.markInitialized();
+  return {
+    ...f,
+    acquire,
+    dispatch: () =>
+      dispatcher.dispatch(f.ctx, "localModelRuntime", "prepareNativeModel", [request]),
+  };
+}
+
 describe("native local model preparation", () => {
+  it("denies an undeclared local model before starting the runtime", async () => {
+    const f = dispatchFixture(false);
+    await expect(f.dispatch()).rejects.toMatchObject({
+      code: "EACCES",
+      errorData: {
+        authorityFailure: { reasonCode: "fixed-code-not-requested", capability: "model.use" },
+      },
+    });
+    expect(f.acquire).not.toHaveBeenCalled();
+    expect(f.ensureLoaded).not.toHaveBeenCalled();
+  });
+
+  it("starts only the exact local model after acquiring its declared model authority", async () => {
+    const f = dispatchFixture(true);
+    await expect(f.dispatch()).resolves.toEqual({ baseUrl: "http://127.0.0.1:43117/v1" });
+    expect(f.acquire).toHaveBeenCalledOnce();
+    expect(f.acquire).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          capability: "model.use",
+          resourceKey: "model:local/lfm2.5-1.2b@runtime",
+        }),
+        resource: { kind: "exact", key: "model:local/lfm2.5-1.2b@runtime" },
+      }),
+      undefined
+    );
+    expect(f.ensureLoaded).toHaveBeenCalledOnce();
+    expect(f.ensureLoaded).toHaveBeenCalledWith(request.modelId, undefined);
+  });
+
   it("exposes one typed website contract and prepares the exact local model", async () => {
     expect(localModelRuntimeMethods.prepareNativeModel.website.kind).toBe("eligible");
     const { prepare, ctx, resolveNativeInvocation } = fixture();

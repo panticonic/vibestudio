@@ -26,6 +26,8 @@ async function main(): Promise<void> {
     const instance = resolveDevInstance(repoRoot, parsed.instanceId);
     process.env["VIBESTUDIO_INSTANCE_ROOT"] = instance.root;
     process.env["VIBESTUDIO_INSTANCE"] = instance.id;
+    if (instance.profileRoot) process.env["VIBESTUDIO_PROFILE_ROOT"] = instance.profileRoot;
+    else delete process.env["VIBESTUDIO_PROFILE_ROOT"];
     if (instance.kind === "server") await waitForDevInstanceReady(instance);
   }
 

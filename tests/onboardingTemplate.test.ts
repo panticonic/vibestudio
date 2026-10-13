@@ -9,6 +9,12 @@ import {
 } from "@vibestudio/workspace/templateManifest";
 import { mergeTemplateManifests } from "@vibestudio/workspace/templateManifestMerge";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { summarizeAuthorityRequests } from "@vibestudio/shared/authorityPresentation";
+import {
+  authorityRequestsFromManifest,
+  capabilityPatternCovers,
+} from "@vibestudio/shared/authorityManifest";
+import { resourceScopeContains } from "@vibestudio/shared/authorization";
 import { exactAllTemplateRoots, exactTemplateRoots } from "./exactUserlandRoot";
 
 const basePath = (...parts: string[]) => path.join(exactTemplateRoots.base, ...parts);
@@ -41,6 +47,50 @@ const composedRuntime = canonicalTemplateYaml(
 );
 
 describe("shipped Personal first-run workspace", () => {
+  it("declares native model admission for every shipping agent worker", () => {
+    for (const source of [
+      "workers/agent-worker",
+      "workers/silent-agent-worker",
+      "workers/mission-agent",
+      "workers/explorer-agent",
+      "workers/system-agent",
+      "workers/gmail-agent",
+      "workers/news-agent",
+      "workers/adventure-agents",
+      "workers/grimoire-agents",
+      "workers/regency-agents",
+    ]) {
+      const content = readServiceManifest(source);
+      expect(content, source).not.toBeNull();
+      const manifest = JSON.parse(content!) as { vibestudio: { authority?: unknown } };
+      const requests = authorityRequestsFromManifest(manifest.vibestudio, source);
+      // Unit discovery uses this review projection before the desktop can launch.
+      expect(
+        () =>
+          summarizeAuthorityRequests(
+            requests.filter((request) => request.capability === "model.use")
+          ),
+        source
+      ).not.toThrow();
+      // The host selects the exact provider/model/account at invocation time;
+      // local models use the same admission contract with a runtime resource.
+      for (const key of [
+        "model:openai-codex/gpt-6.1-sol@openai-codex%3Aaccount-1",
+        "model:anthropic/claude-sonnet@credential%3Aaccount-2",
+        "model:local/qwen@runtime",
+      ]) {
+        expect(
+          requests.some(
+            (request) =>
+              capabilityPatternCovers(request.capability, "model.use") &&
+              resourceScopeContains(request.resource, { kind: "exact", key })
+          ),
+          `${source} must request model.use for ${key}`
+        ).toBe(true);
+      }
+    }
+  });
+
   it("is valid as its own source and with development layers", () => {
     expect(() => parseWorkspace(personalRuntime, "personal-layer")).not.toThrow();
     expect(() => parseWorkspace(composedRuntime, "personal-workspace")).not.toThrow();

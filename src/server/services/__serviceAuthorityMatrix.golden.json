@@ -2305,6 +2305,23 @@
         "capability": null,
         "presentation": null
       },
+      "mobileUpdateStatus": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "build.native-installation",
+          "rationale": "Read-only comparison of caller-supplied native bundle identity with the selected workspace app build"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "prepareTypecheck": {
         "authority": {
           "inherits": true

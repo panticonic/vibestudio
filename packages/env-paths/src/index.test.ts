@@ -11,10 +11,13 @@ import {
 
 describe("profile and instance paths", () => {
   const previousInstanceRoot = process.env["VIBESTUDIO_INSTANCE_ROOT"];
+  const previousProfileRoot = process.env["VIBESTUDIO_PROFILE_ROOT"];
 
   afterEach(() => {
     if (previousInstanceRoot === undefined) delete process.env["VIBESTUDIO_INSTANCE_ROOT"];
     else process.env["VIBESTUDIO_INSTANCE_ROOT"] = previousInstanceRoot;
+    if (previousProfileRoot === undefined) delete process.env["VIBESTUDIO_PROFILE_ROOT"];
+    else process.env["VIBESTUDIO_PROFILE_ROOT"] = previousProfileRoot;
   });
 
   it("defaults instance state to the user profile", () => {
@@ -27,6 +30,16 @@ describe("profile and instance paths", () => {
     expect(getCentralDataPath()).toBe(path.resolve("relative-instance"));
     expect(getProfileDataPath()).not.toBe(getCentralDataPath());
     expect(getSharedDerivedDataPath()).toBe(path.join(getProfileDataPath(), "derived-cache", "v2"));
+  });
+
+  it("supports an explicitly isolated profile including its default derived cache", () => {
+    process.env["VIBESTUDIO_PROFILE_ROOT"] = "./relative-profile";
+    delete process.env["VIBESTUDIO_INSTANCE_ROOT"];
+    expect(getProfileDataPath()).toBe(path.resolve("relative-profile"));
+    expect(getCentralDataPath()).toBe(path.resolve("relative-profile"));
+    expect(getSharedDerivedDataPath()).toBe(
+      path.join(path.resolve("relative-profile"), "derived-cache", "v2")
+    );
   });
 });
 

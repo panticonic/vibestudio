@@ -71,10 +71,12 @@ export type WorkspacePreparationProgress =
 export async function prepareWorkspaceTemplates(input: {
   appRoot: string;
   output: string;
+  sourceOutput?: string;
   scratch: string;
   scope: WorkspacePreparationScope;
   signal?: AbortSignal;
   onProgress?: (progress: WorkspacePreparationProgress) => void;
+  onSourcesPrepared?: (root: string) => void | Promise<void>;
 }): Promise<void> {
   const pins = readDefaultWorkspaceTemplates(input.appRoot);
   const releaseInput: PreparedWorkspaceReleaseInput = {
@@ -85,6 +87,7 @@ export async function prepareWorkspaceTemplates(input: {
   input.signal?.throwIfAborted();
   if (input.scope === "release" && (await validateExistingPreparedWorkspaceRelease(releaseInput))) {
     input.signal?.throwIfAborted();
+    await input.onSourcesPrepared?.(input.output);
     return;
   }
   const releaseIdentity =
@@ -247,6 +250,25 @@ export async function prepareWorkspaceTemplates(input: {
         record,
       });
     }
+    input.signal?.throwIfAborted();
+    if (input.sourceOutput) {
+      for (const { record, blobsDir } of prepared) {
+        const directory = preparedWorkspaceTemplatePath(input.sourceOutput, record.pin, "use");
+        for (const blob of record.blobs) {
+          await linkReconstructableBlobFile(
+            path.join(directory, "blobs"),
+            blob.digest,
+            blobPath(blobsDir, blob.digest),
+            blob.size
+          );
+        }
+        fs.mkdirSync(directory, { recursive: true });
+        const recordPath = path.join(directory, "template.json");
+        fs.writeFileSync(`${recordPath}.publishing`, JSON.stringify(record));
+        fs.renameSync(`${recordPath}.publishing`, recordPath);
+      }
+    }
+    await input.onSourcesPrepared?.(input.sourceOutput ?? input.output);
     input.signal?.throwIfAborted();
     const roleOutcomes = await Promise.allSettled(
       (input.scope === "release" ? prepared : []).map(

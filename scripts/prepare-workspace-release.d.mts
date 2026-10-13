@@ -2,6 +2,7 @@ export type WorkspacePreparationProgress =
   | { phase: "sources"; done: number; total: number; item: string }
   | { phase: "runtimes"; done: number; total: number | null; item: string };
 export interface WorkspaceReleasePreparation {
+  sourcesReady: Promise<void>;
   completed: Promise<void>;
   stop(): Promise<void>;
 }
@@ -9,6 +10,7 @@ export function isCancellationOnly(error: unknown, active?: Set<object>): boolea
 export function prepareWorkspaceRelease(input: {
   appRoot: string;
   output: string;
+  sourceOutput?: string;
   scratch: string;
   env: NodeJS.ProcessEnv;
   executable: string;

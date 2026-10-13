@@ -902,20 +902,20 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "network",
   },
   {
+    prefix: "model.use",
+    authorityCategory: { domain: "automation", verb: "act" },
+    title: "Use AI models",
+    action: "send prompts to an approved AI model",
+    description: "Generate responses with an approved connected account or a model on this device",
+    group: "models",
+  },
+  {
     prefix: "credential.use",
     authorityCategory: { domain: "accounts", verb: "act" },
     title: "Use a connected account",
     action: "use a saved account for its intended service",
     description: "Use an approved account for its intended service",
     group: "credentials",
-  },
-  {
-    prefix: "model.use",
-    authorityCategory: { domain: "automation", verb: "act" },
-    title: "Use an AI model",
-    action: "send prompts to an approved AI model",
-    description: "Use an approved AI model for this task",
-    group: "runtime",
   },
   {
     prefix: "panel.navigate",

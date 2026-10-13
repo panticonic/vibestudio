@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 
@@ -122,6 +123,27 @@ describe("development instance environment", () => {
     expect(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]).toBe(
       hasTemplates ? JSON.stringify(defaultTemplates.pins) : undefined
     );
+  });
+
+  it("gives a clean-room run private profile credentials and derived data", () => {
+    const env = developmentInstanceEnvironment({
+      parent: {
+        VIBESTUDIO_PROFILE_ROOT: "/ambient/profile",
+        VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: "/ambient/cache",
+      },
+      repoRoot: "/host",
+      instanceRoot: "/instance",
+      instanceId: "clean",
+      sourceCoupled: false,
+      disposable: true,
+      cleanRoom: true,
+      defaultTemplates,
+    });
+    expect(env).toMatchObject({
+      VIBESTUDIO_PROFILE_ROOT: path.join("/instance", "profile"),
+      VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: path.join("/instance", "derived-cache"),
+      VIBESTUDIO_INSTANCE_ROOT: "/instance",
+    });
   });
 });
 
