@@ -734,7 +734,7 @@ describe("PanelManager", () => {
     await expect(manager.refreshPanel(slotId)).rejects.toBe(failure);
   });
 
-  it("projects one root when concurrent first reads resolve together", async () => {
+  it("orders concurrent durable refreshes per slot and projects one root", async () => {
     const sourceRegistry = new PanelRegistry({ workspaceId: "workspace-test" });
     const { deps } = makeManagerDeps("/tmp/workspace");
     const sourceManager = new PanelManager({
@@ -753,24 +753,74 @@ describe("PanelManager", () => {
       allowMissingManifests: true,
     });
     const originalGetPanelDetail = deps.workspaceState.getPanelDetail.bind(deps.workspaceState);
-    let releaseReads!: () => void;
-    const readsBlocked = new Promise<void>((resolve) => {
-      releaseReads = resolve;
-    });
+    const durableDetail = await originalGetPanelDetail(created.panelId);
+    expect(durableDetail).not.toBeNull();
+    const responses: Array<(detail: NonNullable<typeof durableDetail>) => void> = [];
     const detailRead = vi
       .spyOn(deps.workspaceState, "getPanelDetail")
-      .mockImplementation(async (slotId) => {
-        await readsBlocked;
-        return originalGetPanelDetail(slotId);
-      });
+      .mockImplementation(
+        () =>
+          new Promise<NonNullable<typeof durableDetail>>((resolve) => responses.push(resolve))
+      );
 
     const first = projectedManager.refreshPanel(created.panelId);
     const second = projectedManager.refreshPanel(created.panelId);
+    await vi.waitFor(() => expect(detailRead).toHaveBeenCalledTimes(1));
+    expect(responses).toHaveLength(1);
+
+    responses[0]!({
+      ...durableDetail!,
+      slot: { ...durableDetail!.slot, current_entity_title: "Older projection" },
+    });
+    await first;
     await vi.waitFor(() => expect(detailRead).toHaveBeenCalledTimes(2));
-    releaseReads();
-    await Promise.all([first, second]);
+    responses[1]!({
+      ...durableDetail!,
+      slot: { ...durableDetail!.slot, current_entity_title: "Newer projection" },
+    });
+    await second;
 
     expect(projectedRegistry.getRootPanels().map((panel) => panel.id)).toEqual([created.panelId]);
+    expect(projectedRegistry.getPanel(created.panelId)?.title).toBe("Newer projection");
+  });
+
+  it("keeps durable refreshes for different slots concurrent", async () => {
+    const sourceRegistry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const sourceManager = new PanelManager({
+      registry: sourceRegistry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const firstPanel = await sourceManager.createBrowser(null, "about:blank", { addAsRoot: true });
+    const secondPanel = await sourceManager.createBrowser(null, "about:blank", { addAsRoot: true });
+    const originalGetPanelDetail = deps.workspaceState.getPanelDetail.bind(deps.workspaceState);
+    const details = new Map([
+      [firstPanel.panelId, await originalGetPanelDetail(firstPanel.panelId)],
+      [secondPanel.panelId, await originalGetPanelDetail(secondPanel.panelId)],
+    ]);
+    type PanelDetail = NonNullable<
+      Awaited<ReturnType<WorkspaceStateClient["getPanelDetail"]>>
+    >;
+    const responses = new Map<PanelSlotId, (detail: PanelDetail) => void>();
+    const detailRead = vi.spyOn(deps.workspaceState, "getPanelDetail").mockImplementation(
+      (slotId) =>
+        new Promise((resolve) => {
+          responses.set(slotId, resolve);
+        })
+    );
+    const projectedManager = new PanelManager({
+      registry: new PanelRegistry({ workspaceId: "workspace-test" }),
+      ...deps,
+      allowMissingManifests: true,
+    });
+
+    const first = projectedManager.refreshPanel(firstPanel.panelId);
+    const second = projectedManager.refreshPanel(secondPanel.panelId);
+    await vi.waitFor(() => expect(detailRead).toHaveBeenCalledTimes(2));
+    responses.get(firstPanel.panelId)!(details.get(firstPanel.panelId)!);
+    responses.get(secondPanel.panelId)!(details.get(secondPanel.panelId)!);
+    await Promise.all([first, second]);
   });
 
   it("does not consume product presentation from raw workspace-state detail", async () => {
