@@ -61,7 +61,7 @@ vibestudio mobile doctor
 ## Verification
 
 ```bash
-pnpm vitest run tests/ios-entitlements.test.ts tests/remote-overhaul-skill-guard.test.ts --config vitest.host.config.ts
+pnpm vitest run tests/ios-entitlements.test.ts --config vitest.host.config.ts
 pnpm type-check:userland -- --template system
 node scripts/cli/mobile-install.mjs --platform ios --simulator --launch
 pnpm smoke:full

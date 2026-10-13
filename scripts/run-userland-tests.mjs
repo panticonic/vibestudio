@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertTemplateCheckoutHygiene } from "./lib/template-checkout-hygiene.mjs";
+import { resolveUserlandTestFilters } from "./lib/userland-test-filters.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const vitest = path.join(root, "node_modules", "vitest", "vitest.mjs");
@@ -11,6 +13,9 @@ const { requireDevelopmentTemplateCheckouts } = createRequire(import.meta.url)(
   "../src/dev/developmentTemplateConfig.cjs"
 );
 const selected = requireDevelopmentTemplateCheckouts(root);
+const { exactPairTests } = JSON.parse(
+  fs.readFileSync(path.join(root, "vitest.exactPairTests.json"), "utf8")
+);
 assertTemplateCheckoutHygiene(selected);
 const args = process.argv.slice(2);
 let requestedTemplate;
@@ -62,14 +67,12 @@ const templates = requestedTemplate ? [requestedTemplate] : knownTemplates;
 
 for (const template of templates) {
   const checkout = selected.checkouts[template];
-  const testFilters = filters.map((filter) => {
-    if (path.isAbsolute(filter)) throw new Error(`--filter must be template-relative: ${filter}`);
-    const resolved = path.resolve(checkout, filter);
-    const relative = path.relative(checkout, resolved);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error(`--filter must stay inside the ${template} checkout: ${filter}`);
-    }
-    return resolved;
+  const testFilters = resolveUserlandTestFilters({
+    root,
+    checkout,
+    template,
+    filters,
+    exactPairTests,
   });
   const result = spawnSync(
     process.execPath,
