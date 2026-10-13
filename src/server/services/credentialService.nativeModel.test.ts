@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { rpcErrorDataOf, type AcquisitionInfo } from "@vibestudio/rpc";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { nativeInvocationIdentity } from "@vibestudio/service-schemas/nativeInvocation";
 import {
   credentialsMethods,
@@ -7,6 +11,7 @@ import {
 import {
   createVerifiedCaller,
   ServiceDispatcher,
+  ServiceAccessError,
   type AuthorityAcquirer,
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
@@ -14,6 +19,8 @@ import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest
 import { testAuthority } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { describe, expect, it, vi } from "vitest";
 import { createCredentialService } from "./credentialService.js";
+import { AcquisitionCoordinator, type AcquisitionRequestInput } from "./acquisitionCoordinator.js";
+import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
 const request = {
   providerId: "openai",
@@ -124,7 +131,10 @@ function dispatchFixture(options: { declaresModelUse?: boolean; connected?: bool
     requested: authority.requests,
   };
   const workerCaller = {
-    ...createVerifiedCaller(source.owner.runtimeId, "do", code),
+    ...createVerifiedCaller(source.owner.runtimeId, "do", code, null, {
+      userId: "one",
+      handle: "one",
+    }),
     nativeInvocation,
     causalParent: caller.causalParent,
   };
@@ -180,10 +190,89 @@ function dispatchFixture(options: { declaresModelUse?: boolean; connected?: bool
   const ctx: ServiceContext = { caller: workerCaller, authorityAcquisition: "wait" };
   const dispatch = (params = request) =>
     dispatcher.dispatch(ctx, "credentials", "resolveNativeModel", [params]);
-  return { ctx, dispatch, acquire, requestApproval, handler, resolveNativeInvocation };
+  return { ctx, dispatch, dispatcher, acquire, requestApproval, handler, resolveNativeInvocation };
 }
 
 describe("native model credential admission", () => {
+  it("joins the existing unit review before resolving credentials and retries after its acceptance", async () => {
+    const options = { declaresModelUse: true, connected: true };
+    const f = dispatchFixture(options);
+    delete f.ctx.authorityAcquisition;
+    const review = { approvalId: "approval:welcome", title: "What's in your workspace" };
+    let reviewPending = true;
+    f.dispatcher.setOpenReviewLookup((code) => {
+      expect(code).toEqual({
+        repoPath: workerImage.source,
+        effectiveVersion: workerImage.effectiveVersion,
+      });
+      return reviewPending ? review : null;
+    });
+    const statePath = mkdtempSync(join(tmpdir(), "native-model-review-"));
+    const grantStore = new CapabilityGrantStore({ statePath });
+    const requestApproval = vi.fn();
+    let acceptReview!: () => void;
+    const waitForUnitReview = vi.fn(
+      (_review: NonNullable<AcquisitionRequestInput["pendingReview"]>, signal: AbortSignal) =>
+        new Promise<"accepted">((resolve, reject) => {
+          acceptReview = () => resolve("accepted");
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        })
+    );
+    const coordinator = new AcquisitionCoordinator({
+      grantStore,
+      approvalQueue: { request: requestApproval } as never,
+      waitForUnitReview,
+    });
+    f.dispatcher.setAuthorityAcquirer({
+      request: (input) => coordinator.request(input),
+      acquire: (input, signal) => coordinator.requestAndWait(input, signal),
+      consume: (grantId) => coordinator.consume(grantId),
+      invalidate: (inputs) => coordinator.invalidate(inputs),
+    });
+    try {
+      const error = await f.dispatch().catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(ServiceAccessError);
+      expect(error).toMatchObject({
+        code: "EACQUIRE",
+        errorData: {
+          acquisition: { pending: true, existingReview: review },
+          authorityFailure: { reasonCode: "review-pending", capability: "model.use" },
+        },
+      });
+      const { acquisition: info } = rpcErrorDataOf(error) as { acquisition: AcquisitionInfo };
+      expect(waitForUnitReview).toHaveBeenCalledWith(
+        {
+          ...review,
+          code: { repoPath: workerImage.source, effectiveVersion: workerImage.effectiveVersion },
+        },
+        expect.any(AbortSignal)
+      );
+      expect(f.handler).not.toHaveBeenCalled();
+      expect(requestApproval).not.toHaveBeenCalled();
+      const receipt = coordinator.awaitDecision({
+        acquisitionId: info.acquisitionId,
+        ownerRuntimeId: info.ownerRuntimeId,
+        sessionId: `test:${f.ctx.caller.runtime.id}`,
+      });
+      // Account disconnection while the Welcome review is open must remain a
+      // canonical provider miss when the exact invocation is released to retry.
+      options.connected = false;
+      reviewPending = false;
+      acceptReview();
+      await expect(receipt).resolves.toMatchObject({ state: "decided" });
+      expect(grantStore.listActiveAuthorityGrants()).toEqual([]);
+      await expect(f.dispatch()).resolves.toBeNull();
+      expect(f.handler).toHaveBeenCalledOnce();
+      expect(waitForUnitReview).toHaveBeenCalledOnce();
+      expect(requestApproval).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.quiescePresentations();
+      await coordinator.quiesceOwnerDelivery();
+      grantStore.close();
+      rmSync(statePath, { recursive: true, force: true });
+    }
+  });
+
   it("denies an undeclared model capability before invoking credential resolution", async () => {
     const f = dispatchFixture();
     await expect(f.dispatch()).rejects.toMatchObject({

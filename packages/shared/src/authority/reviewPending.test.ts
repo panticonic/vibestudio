@@ -101,6 +101,64 @@ describe("pendingAuthorityNotice", () => {
     expect(isAuthorityPending(wrapped)).toBe(true);
   });
 
+  it("routes an acquisition joining an open review to that review's original decision", () => {
+    const error = {
+      cause: {
+        errorCode: "EACQUIRE",
+        errorData: {
+          acquisition: {
+            acquisitionId: "acq:waiting-on-welcome",
+            renderedAction: "use the selected model",
+            pending: true,
+            existingReview: {
+              approvalId: "welcome:personal",
+              title: "Welcome — here's what's in your workspace",
+            },
+          },
+        },
+      },
+    };
+    expect(pendingAuthorityNotice(error)).toEqual({
+      kind: "review",
+      approvalId: "welcome:personal",
+      title: "Welcome — here's what's in your workspace",
+      message: "Waiting for you to finish reviewing Welcome — here's what's in your workspace.",
+    });
+    expect(isAuthorityPending(error)).toBe(true);
+    expect(isReviewPending(error)).toBe(true);
+    expect(pendingReviewNotice(error)?.approvalId).toBe("welcome:personal");
+    expect(pendingAuthorityNotice({ data: error.cause.errorData })?.approvalId).toBe(
+      "welcome:personal"
+    );
+  });
+
+  it("does not link a completed joined review or malformed review reference to an acquisition card", () => {
+    const acquisition = {
+      acquisitionId: "acq:waiting-on-welcome",
+      renderedAction: "use the selected model",
+      pending: true,
+      existingReview: { approvalId: "welcome:personal", title: "Welcome" },
+    };
+    expect(
+      pendingAuthorityNotice({
+        code: "EACQUIRE",
+        data: { acquisition: { ...acquisition, pending: false } },
+      })
+    ).toBeNull();
+    expect(
+      pendingAuthorityNotice({
+        code: "EACQUIRE",
+        data: { acquisition: { ...acquisition, existingReview: { title: "Welcome" } } },
+      })
+    ).toBeNull();
+    expect(
+      isAuthorityPending({
+        code: "EACQUIRE",
+        data: { acquisition: { ...acquisition, existingReview: { title: "Welcome" } } },
+      })
+    ).toBe(false);
+  });
+
   it("does not present a completed or malformed acquisition", () => {
     expect(
       pendingAuthorityNotice({
@@ -112,7 +170,7 @@ describe("pendingAuthorityNotice", () => {
             pending: false,
           },
         },
-      }),
+      })
     ).toBeNull();
     expect(pendingAuthorityNotice({ code: "EACQUIRE", errorData: {} })).toBeNull();
   });

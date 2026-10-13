@@ -795,7 +795,29 @@ describe("dispatcher: access descriptor + JIT errors", () => {
 describe("a part waiting on a review that is already open", () => {
   function reviewPendingDispatcher(openReview: { approvalId: string; title: string } | null) {
     const acquire = vi.fn();
-    const request = vi.fn();
+    const request = vi.fn(
+      (
+        input: Parameters<Parameters<ServiceDispatcher["setAuthorityAcquirer"]>[0]["request"]>[0]
+      ) => ({
+        acquisitionId: "acq:joined-review",
+        ownerRuntimeId: input.caller.runtime.id,
+        snapshotDigest: input.snapshotDigest,
+        capability: input.snapshot.capability,
+        resourceKey: input.snapshot.resourceKey,
+        tier: input.tier,
+        cardType: "permission.gated" as const,
+        renderedAction: input.renderedAction,
+        pending: true,
+        ...(input.pendingReview
+          ? {
+              existingReview: {
+                approvalId: input.pendingReview.approvalId,
+                title: input.pendingReview.title,
+              },
+            }
+          : {}),
+      })
+    );
     const d = createTestServiceDispatcher({
       methods: {
         "dry.write": { tier: "gated", capability: "test:dry.write" },
@@ -837,18 +859,24 @@ describe("a part waiting on a review that is already open", () => {
 
   const openReview = { approvalId: "review-1", title: "what's in your workspace" };
 
-  it("creates no acquisition entry, however many methods it calls", async () => {
+  it("joins the existing review through canonical acquisitions without invoking a new prompt", async () => {
     const { d, acquire, request } = reviewPendingDispatcher(openReview);
 
     await expect(d.dispatch(ctx("worker"), "dry", "write", ["x"])).rejects.toMatchObject({
-      code: "EREVIEWPENDING",
+      code: "EACQUIRE",
+      errorData: { acquisition: { existingReview: openReview } },
     });
     await expect(d.dispatch(ctx("worker"), "dry", "read", [])).rejects.toMatchObject({
-      code: "EREVIEWPENDING",
+      code: "EACQUIRE",
+      errorData: { acquisition: { existingReview: openReview } },
     });
 
     expect(acquire).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[0]?.[0].pendingReview).toMatchObject({
+      ...openReview,
+      code: { repoPath: expect.any(String), effectiveVersion: expect.any(String) },
+    });
   });
 
   it("reports the leaf as denied rather than acquirable when preflighted", async () => {

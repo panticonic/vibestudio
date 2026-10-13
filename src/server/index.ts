@@ -1076,6 +1076,15 @@ async function main() {
     approvalQueue,
     grantStore: capabilityGrantStore,
     resolveTaskTitle,
+    waitForUnitReview: async (review, signal) => {
+      signal.throwIfAborted();
+      // Admission is durable across a host restart. An unanswered review is
+      // rebound to its exact unit's current application, whose lifetime also
+      // covers the startup placeholder before the shared review is published.
+      if (unitAdmissionStore.hasVersion(review.code.repoPath, review.code.effectiveVersion))
+        return "accepted";
+      return unitInstallReviewCoordinator.whenUnitReviewSettled(review.code, signal);
+    },
     notifyOwner: createAcquisitionOwnerNotifier(() => {
       const doDispatch = resolvedDoDispatchForTitles;
       const manager = workerdManagerForGateway;
@@ -2415,7 +2424,10 @@ async function main() {
     listPendingReviews: () =>
       approvalQueue.listPending().filter((pending) => pending.kind === "unit-install-review"),
     isLaunchGateRepoPath,
-    creationReviewOwed: () => creationReviewOwed,
+    creationReviewOwed: () =>
+      creationReviewOwed &&
+      (workspaceCreationReviewState.status === "preparing" ||
+        workspaceCreationReviewState.status === "pending"),
     creationReviewUnits: () => creationReviewUnits,
     hasVersion: (repoPath, effectiveVersion) =>
       unitAdmissionStore.hasVersion(repoPath, effectiveVersion),
@@ -7944,6 +7956,7 @@ async function main() {
         error: err instanceof Error ? err.message : String(err),
       };
       console.warn("[Units] Failed to resolve the workspace creation review:", err);
+      unitInstallReviewCoordinator.finishStartupReviewStaging(err);
     }
   };
 
@@ -7977,6 +7990,7 @@ async function main() {
       // publishPending starts the queue entries synchronously; its promise is the
       // later human decision/application and therefore remains detached.
       await prepareWorkspaceCreationReview();
+      unitInstallReviewCoordinator.finishStartupReviewStaging();
       void reconcileDefaultAutomations();
       void unitInstallReviewCoordinator
         .publishPending("startup")
@@ -7984,6 +7998,7 @@ async function main() {
     })
     .catch((error: unknown) => {
       rejectInitialExtensionDeclarations(error);
+      unitInstallReviewCoordinator.finishStartupReviewStaging(error);
       throw error;
     });
   const startupWorkerArtifactPreparation = Promise.resolve().then(async () => {
