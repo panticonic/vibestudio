@@ -60,7 +60,12 @@ function sourceDigest(integrity: string): string | null {
   return match?.[1] ?? null;
 }
 
-function compress(body: Buffer, encoding: TransportEncoding): Promise<Buffer> {
+/**
+ * The one transport codec policy. Every representation served for an artifact,
+ * cached or compressed on demand, is exactly these bytes, so a byte range taken
+ * from one response stays valid against the next.
+ */
+export function compressTransport(body: Buffer, encoding: TransportEncoding): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const callback = (error: Error | null, result: Buffer) =>
       error ? reject(error) : resolve(result);
@@ -247,7 +252,7 @@ export class TransportDerivativeCache {
   ): Promise<void> {
     const key = sourceDigest(integrity);
     if (!key) return;
-    const body = await compress(source, encoding);
+    const body = await compressTransport(source, encoding);
     const paths = this.paths(key, encoding);
     await fs.promises.mkdir(paths.dir, { recursive: true });
     const nonce = `${process.pid}-${randomUUID()}`;

@@ -1,12 +1,7 @@
-import { writeHttpBytes } from "./httpStreamWrite.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHostBuildUnitGate } from "@vibestudio/shared/hostBuildUnits";
-import { createHash } from "node:crypto";
 import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { gzip } from "node:zlib";
-import { promisify } from "node:util";
 import {
   UnitHost,
   UnitRegistry,
@@ -74,8 +69,6 @@ import {
 } from "@vibestudio/shared/unitManifest";
 import type { HostTarget, HostTargetCandidate } from "@vibestudio/shared/hostTargets";
 import { appArtifactRoute } from "@vibestudio/shared/appArtifacts";
-import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
-import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { writeAppDistBake, type AppDistBakeManifest } from "./buildV2/distBake.js";
@@ -86,7 +79,6 @@ import {
   type StoredBuildResult,
 } from "./buildV2/buildStore.js";
 
-const gzipAsync = promisify(gzip);
 import {
   createCapabilityAuthorizer,
   type CapabilityAuthorizer,
@@ -1290,157 +1282,16 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     });
   }
 
-  async handleAppArtifactRequest(
-    req: IncomingMessage,
-    res: ServerResponse,
-    buildKey: string,
-    remainderPath: string
-  ): Promise<void> {
+  /** Whether this app registry serves the build: it is active or retained for rollback. */
+  async servesBuild(buildKey: string): Promise<boolean> {
     await this.initialize();
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      res.writeHead(405, { "Content-Type": "text/plain" });
-      res.end("Method Not Allowed");
-      return;
-    }
-    if (
-      !this.registry
-        .list()
-        .some(
-          (entry) =>
-            entry.activeBundleKey === buildKey ||
-            entry.previousVersions.some((version) => version.activeBundleKey === buildKey)
-        )
-    ) {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("App artifact not active");
-      return;
-    }
-    const build = await this.deps.buildSystem.getBuildByKey(buildKey);
-    const artifactPath = normalizeArtifactPath(remainderPath || "index.html");
-    if (build && artifactPath === "__manifest.json") {
-      const initialArtifacts = new Set(build.metadata.bundleReport?.initialArtifacts ?? []);
-      const body = JSON.stringify({
-        artifacts: (build.artifacts ?? []).map((artifact) => ({
-          path: artifact.path,
-          contentType: artifact.contentType,
-          ...(artifact.byteLength === undefined ? {} : { byteLength: artifact.byteLength }),
-          ...(artifact.integrity === undefined ? {} : { integrity: artifact.integrity }),
-          ...(initialArtifacts.has(artifact.path) ? { initial: true } : {}),
-        })),
-      });
-      res.writeHead(200, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "public, max-age=31536000, immutable",
-        "Content-Length": String(Buffer.byteLength(body)),
-      });
-      if (req.method === "HEAD") res.end();
-      else res.end(body);
-      return;
-    }
-    if (build && artifactPath === "__bundle") {
-      const query = new URL(req.url ?? "/", "http://app-artifact.invalid").searchParams;
-      const wanted = [
-        ...new Set(
-          (query.get("want") ?? "")
-            .split(",")
-            .map((raw) => Number.parseInt(raw, 10))
-            .filter(
-              (index) =>
-                Number.isInteger(index) && index >= 0 && index < (build.artifacts?.length ?? 0)
-            )
-        ),
-      ];
-      res.writeHead(200, {
-        "Content-Type": "application/octet-stream",
-        "Cache-Control": "no-store",
-        "X-Vibestudio-Bundle-Encoding": "gzip",
-      });
-      if (req.method === "HEAD") {
-        res.end();
-        return;
-      }
-      for (const index of wanted) {
-        const artifact = build.artifacts?.[index];
-        if (!artifact?.integrity) continue;
-        const raw = await this.deps.buildSystem.readBuildArtifactBytes(build, artifact);
-        const digest = artifact.integrity.replace(/^sha256-/u, "");
-        const encoded =
-          artifact.encoding !== "base64" && raw.byteLength >= 1_024
-            ? await gzipAsync(raw, { level: 6 })
-            : null;
-        const record = encoded
-          ? encodeBlobRecord(
-              digest,
-              new Uint8Array(encoded),
-              createHash("sha256").update(encoded).digest("hex")
-            )
-          : encodeBlobRecord(digest, new Uint8Array(raw));
-        await writeHttpBytes(res, record);
-      }
-      res.end();
-      return;
-    }
-    const artifact = build?.artifacts?.find((entry) => entry.path === artifactPath);
-    if (!build || !artifact) {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("App artifact not found");
-      return;
-    }
-    const headers: Record<string, string> = {
-      "Content-Type": artifact.contentType,
-      // The build key names an immutable artifact graph. This allows both the
-      // loopback façade and Chromium to reuse app bytes across launches.
-      "Cache-Control": "public, max-age=31536000, immutable",
-    };
-    if (artifact.integrity) headers["X-Vibestudio-Content-Digest"] = artifact.integrity;
-    if (artifact.role === "html") {
-      headers["Content-Security-Policy"] =
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
-    }
-    const identityBody = await this.deps.buildSystem.readBuildArtifactBytes(build, artifact);
-    const requestHeaders = req.headers ?? {};
-    const resumableGzip = requestHeaders[RESUMABLE_GZIP_HEADER] === "1";
-    const body = resumableGzip ? await gzipAsync(identityBody, { level: 6 }) : identityBody;
-    if (resumableGzip) {
-      headers["Content-Encoding"] = "gzip";
-      headers["Accept-Ranges"] = "bytes";
-      headers["X-Vibestudio-Resumable-Gzip"] = "1";
-      if (artifact.integrity) headers["X-Vibestudio-Artifact-Integrity"] = artifact.integrity;
-    }
-
-    const rangeHeader = resumableGzip ? requestHeaders.range : undefined;
-    const rawRange = typeof rangeHeader === "string" ? rangeHeader : undefined;
-    if (rawRange) {
-      const match = /^bytes=(\d+)-(\d*)$/u.exec(rawRange);
-      const start = match ? Number(match[1]) : Number.NaN;
-      const requestedEnd = match?.[2] ? Number(match[2]) : body.byteLength - 1;
-      if (
-        !Number.isSafeInteger(start) ||
-        !Number.isSafeInteger(requestedEnd) ||
-        start < 0 ||
-        requestedEnd < start ||
-        start >= body.byteLength
-      ) {
-        headers["Content-Range"] = `bytes */${body.byteLength}`;
-        headers["Content-Length"] = "0";
-        res.writeHead(416, headers);
-        res.end();
-        return;
-      }
-      const end = Math.min(requestedEnd, body.byteLength - 1);
-      const partial = body.subarray(start, end + 1);
-      headers["Content-Range"] = `bytes ${start}-${end}/${body.byteLength}`;
-      headers["Content-Length"] = String(partial.byteLength);
-      res.writeHead(206, headers);
-      if (req.method === "HEAD") res.end();
-      else res.end(partial);
-      return;
-    }
-
-    headers["Content-Length"] = String(body.byteLength);
-    res.writeHead(200, headers);
-    if (req.method === "HEAD") res.end();
-    else res.end(body);
+    return this.registry
+      .list()
+      .some(
+        (entry) =>
+          entry.activeBundleKey === buildKey ||
+          entry.previousVersions.some((version) => version.activeBundleKey === buildKey)
+      );
   }
 
   async ensureElectronReady(
@@ -2658,12 +2509,6 @@ function isBuildArtifactEncoding(
   encoding: string
 ): encoding is BuildArtifactManifestEntry["encoding"] {
   return encoding === "utf8" || encoding === "base64";
-}
-
-function normalizeArtifactPath(remainderPath: string): string {
-  const clean = decodeURIComponent(remainderPath.replace(/^\/+/, "")) || "index.html";
-  if (path.isAbsolute(clean) || clean.split(/[\\/]/).includes("..")) return "__invalid__";
-  return clean.replace(/\\/g, "/");
 }
 
 /**

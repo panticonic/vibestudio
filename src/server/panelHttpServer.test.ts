@@ -18,6 +18,7 @@ import { unitIconTarget } from "@vibestudio/shared/panel/assetPathPolicy";
 import { getPanelRuntimeHelperSet } from "./panelRuntimeHelpers.js";
 import type { BuildArtifactManifestEntry, StoredBuildResult } from "./buildV2/buildStore.js";
 import type { PanelHttpCallbacks } from "./panelHttpServer.js";
+import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 
 // ---------------------------------------------------------------------------
 // extractSourcePath is module-private, so we test the regex logic directly.
@@ -93,7 +94,8 @@ vi.mock("fs", () => ({
   existsSync: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("./buildV2/transportDerivativeCache.js", () => ({
+vi.mock("./buildV2/transportDerivativeCache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./buildV2/transportDerivativeCache.js")>()),
   TransportDerivativeCache: class {
     async get() {
       return null;
@@ -1215,5 +1217,114 @@ describe("PanelHttpServer build cache", () => {
     });
     expect(pinned.statusCodeWritten).toBe(200);
     expect(pinned.body).toBe("console.log('ref')");
+  });
+});
+
+describe("PanelHttpServer app artifacts", () => {
+  const APP_DIR = "/tmp/app-build";
+  function appServer(artifacts: BuildArtifactManifestEntry[], initialArtifacts: string[] = []) {
+    const server = createPanelServer();
+    const build = {
+      dir: APP_DIR,
+      buildKey: "app-key",
+      sourceStateHash: "state:test",
+      artifacts,
+      metadata: { kind: "app", buildKey: "app-key", bundleReport: { initialArtifacts } },
+    } as unknown as StoredBuildResult;
+    server.setCallbacks(
+      withArtifactCallbacks({
+        getBuild: async () => build,
+        getUnitIcon: async () => null,
+        getBuildByKey: async () => build,
+        findSharedStyleBuild: async () => null,
+      })
+    );
+    return server;
+  }
+  async function serve(
+    server: InstanceType<typeof PanelHttpServer>,
+    remainder: string,
+    headers: Record<string, string> = {},
+    url = `/_a/app-key/${remainder}`
+  ) {
+    const res = createMockResponse();
+    await server.serveAppArtifact(
+      { method: "GET", url, headers } as unknown as IncomingMessage,
+      res,
+      "app-key",
+      remainder
+    );
+    return res;
+  }
+
+  it("serves an immutable inventory, a framed bundle and individual files", async () => {
+    const script = "export const ready = true;".repeat(100);
+    const server = appServer(
+      [
+        fixtureArtifact(APP_DIR, "bundle.js", "primary", "application/javascript", script),
+        fixtureArtifact(
+          APP_DIR,
+          "lazy.js",
+          "asset",
+          "application/javascript",
+          "export const l = 1;"
+        ),
+      ],
+      ["bundle.js"]
+    );
+
+    const manifest = await serve(server, "__manifest.json");
+    expect(manifest.statusCodeWritten).toBe(200);
+    expect(manifest.headersWritten?.["cache-control"]).toContain("immutable");
+    const inventory = JSON.parse(String(manifest.body)) as { artifacts: Array<{ path: string }> };
+    expect(inventory.artifacts).toEqual([
+      expect.objectContaining({ path: "bundle.js", initial: true }),
+      expect.objectContaining({ path: "lazy.js" }),
+    ]);
+    expect(inventory.artifacts[1]).not.toHaveProperty("initial");
+
+    const bundle = await serve(server, "__bundle", {}, "/_a/app-key/__bundle?want=0");
+    const reader = createBlobBundleReader();
+    const records = reader.push(new Uint8Array(Buffer.concat(bundle.chunks ?? [])));
+    reader.end();
+    expect(records).toHaveLength(1);
+    expect(gunzipSync(records[0]!.bytes).toString()).toBe(script);
+
+    const file = await serve(server, "bundle.js");
+    expect(file.headersWritten?.["Cache-Control"]).toContain("immutable");
+    expect((await serve(server, "missing.js")).statusCodeWritten).toBe(404);
+  });
+
+  it("serves deterministic gzip byte ranges for resumable native app transfer", async () => {
+    const source = "mobile workspace bundle ".repeat(2048);
+    const server = appServer([
+      fixtureArtifact(APP_DIR, "index.android.bundle", "primary", "application/javascript", source),
+    ]);
+    const resumable = { [RESUMABLE_GZIP_HEADER]: "1" };
+
+    const full = await serve(server, "index.android.bundle", resumable);
+    expect(full.statusCodeWritten).toBe(200);
+    expect(full.headersWritten?.["Content-Encoding"]).toBe("gzip");
+    const body = full.body as Buffer;
+    expect(gunzipSync(body).toString()).toBe(source);
+
+    const offset = Math.floor(body.length / 2);
+    const resumed = await serve(server, "index.android.bundle", {
+      ...resumable,
+      range: `bytes=${offset}-`,
+    });
+    expect(resumed.statusCodeWritten).toBe(206);
+    expect(resumed.headersWritten?.["Content-Range"]).toBe(
+      `bytes ${offset}-${body.length - 1}/${body.length}`
+    );
+    expect(Buffer.concat([body.subarray(0, offset), resumed.body as Buffer])).toEqual(body);
+
+    const bounded = await serve(server, "index.android.bundle", {
+      ...resumable,
+      range: "bytes=7-38",
+    });
+    expect(bounded.statusCodeWritten).toBe(206);
+    expect(bounded.headersWritten?.["Content-Range"]).toBe(`bytes 7-38/${body.length}`);
+    expect(bounded.body).toEqual(body.subarray(7, 39));
   });
 });

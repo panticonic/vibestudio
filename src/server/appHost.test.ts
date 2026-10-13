@@ -1,9 +1,7 @@
-import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
@@ -17,8 +15,6 @@ import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
-import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
-import { createBlobBundleReader } from "@vibestudio/shared/panel/blobBundle";
 import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import {
@@ -571,27 +567,6 @@ async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
 }
 
-function createMockResponse() {
-  return Object.assign(new EventEmitter(), {
-    statusCode: 0,
-    headers: {} as Record<string, string>,
-    body: Buffer.alloc(0) as Buffer<ArrayBufferLike>,
-    writeHead(statusCode: number, headers: Record<string, string>) {
-      this.statusCode = statusCode;
-      this.headers = headers;
-    },
-    write(chunk: string | Buffer) {
-      this.body = Buffer.concat([this.body, Buffer.from(chunk)]);
-      return true;
-    },
-    end(chunk?: string | Buffer) {
-      if (chunk !== undefined) {
-        this.body = Buffer.concat([this.body, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
-      }
-    },
-  });
-}
-
 describe("AppHost", () => {
   it("requires initialization before synchronous version reads and reuses one initialization flight", async () => {
     await makeHarness({
@@ -781,144 +756,17 @@ describe("AppHost", () => {
     }
   );
 
-  it("publishes one immutable initial-artifact transfer for remote desktop startup", async () => {
-    const { host, buildSystem, graphNode, root } = await makeHarness();
+  it("serves only active builds and builds retained for rollback", async () => {
+    const { host, graphNode } = await makeHarness();
     installAppEntry(host, graphNode, {
       activeBundleKey: "app-key",
       activeExecutionDigest: TEST_EXECUTION_IDENTITY.executionDigest,
+      previousVersions: [{ activeBundleKey: "app-key-old", activeEv: "ev-old" }],
     });
-    const buildDir = path.join(root, "state", "builds", "app-key");
-    const script = Buffer.from("export const ready = true;".repeat(100));
-    const lazy = Buffer.from("export const later = true;");
-    const scriptArtifact = storedArtifact(buildDir, "bundle.js", script, {
-      role: "primary",
-      contentType: "application/javascript",
-      encoding: "utf8",
-    });
-    const lazyArtifact = storedArtifact(buildDir, "lazy.js", lazy, {
-      role: "asset",
-      contentType: "application/javascript",
-      encoding: "utf8",
-    });
-    buildSystem.getBuildByKey.mockResolvedValue({
-      sourceStateHash: "state:test",
 
-      dir: buildDir,
-      buildKey: "app-key",
-      metadata: {
-        ...TEST_SEALED_APP_BUILD_METADATA,
-        bundleReport: { initialArtifacts: ["bundle.js"] },
-        buildKey: "app-key",
-      },
-      artifacts: [scriptArtifact, lazyArtifact],
-    } as never);
-
-    const manifestResponse = createMockResponse();
-    await host.handleAppArtifactRequest(
-      { method: "GET", url: "/_a/app-key/__manifest.json", headers: {} } as never,
-      manifestResponse as never,
-      "app-key",
-      "__manifest.json"
-    );
-    expect(manifestResponse.statusCode).toBe(200);
-    expect(manifestResponse.headers["Cache-Control"]).toContain("immutable");
-    expect(JSON.parse(manifestResponse.body.toString()).artifacts).toEqual([
-      expect.objectContaining({ path: "bundle.js", initial: true }),
-      expect.objectContaining({ path: "lazy.js" }),
-    ]);
-    expect(JSON.parse(manifestResponse.body.toString()).artifacts[1]).not.toHaveProperty("initial");
-
-    const bundleResponse = createMockResponse();
-    await host.handleAppArtifactRequest(
-      { method: "GET", url: "/_a/app-key/__bundle?want=0", headers: {} } as never,
-      bundleResponse as never,
-      "app-key",
-      "__bundle"
-    );
-    const reader = createBlobBundleReader();
-    const records = reader.push(new Uint8Array(bundleResponse.body));
-    reader.end();
-    expect(records).toHaveLength(1);
-    expect(records[0]?.digest).toBe(scriptArtifact.integrity?.replace(/^sha256-/u, ""));
-    expect(gunzipSync(records[0]!.bytes)).toEqual(script);
-
-    const assetResponse = createMockResponse();
-    await host.handleAppArtifactRequest(
-      { method: "GET", url: "/_a/app-key/bundle.js", headers: {} } as never,
-      assetResponse as never,
-      "app-key",
-      "bundle.js"
-    );
-    expect(assetResponse.headers["Cache-Control"]).toContain("immutable");
-  });
-
-  it("serves deterministic gzip byte ranges for resumable native app transfer", async () => {
-    const { host, buildSystem, graphNode, root } = await makeHarness();
-    installApp(host, graphNode);
-    const source = Buffer.from("mobile workspace bundle ".repeat(2048));
-    const buildDir = path.join(root, "state", "builds", "app-key");
-    buildSystem.getBuildByKey.mockResolvedValue({
-      sourceStateHash: "state:test",
-
-      dir: buildDir,
-      buildKey: "app-key",
-      metadata: {
-        ...TEST_SEALED_APP_BUILD_METADATA,
-        details: { kind: "app", target: "react-native", integrity: "sha256-app" },
-        buildKey: "app-key",
-      },
-      artifacts: [
-        storedArtifact(buildDir, "index.android.bundle", source, {
-          role: "primary",
-          platform: "android",
-          contentType: "application/javascript",
-          encoding: "base64",
-        }),
-      ],
-    } as never);
-
-    const full = createMockResponse();
-    await host.handleAppArtifactRequest(
-      { method: "GET", headers: { [RESUMABLE_GZIP_HEADER]: "1" } } as never,
-      full as never,
-      "app-key",
-      "index.android.bundle"
-    );
-    expect(full.statusCode).toBe(200);
-    expect(full.headers["Content-Encoding"]).toBe("gzip");
-    expect(gunzipSync(full.body)).toEqual(source);
-
-    const offset = Math.floor(full.body.length / 2);
-    const resumed = createMockResponse();
-    await host.handleAppArtifactRequest(
-      {
-        method: "GET",
-        headers: { [RESUMABLE_GZIP_HEADER]: "1", range: `bytes=${offset}-` },
-      } as never,
-      resumed as never,
-      "app-key",
-      "index.android.bundle"
-    );
-    expect(resumed.statusCode).toBe(206);
-    expect(resumed.headers["Content-Range"]).toBe(
-      `bytes ${offset}-${full.body.length - 1}/${full.body.length}`
-    );
-    expect(Buffer.concat([full.body.subarray(0, offset), resumed.body])).toEqual(full.body);
-
-    const bounded = createMockResponse();
-    await host.handleAppArtifactRequest(
-      {
-        method: "GET",
-        headers: { [RESUMABLE_GZIP_HEADER]: "1", range: "bytes=7-38" },
-      } as never,
-      bounded as never,
-      "app-key",
-      "index.android.bundle"
-    );
-    expect(bounded.statusCode).toBe(206);
-    expect(bounded.headers["Content-Range"]).toBe(`bytes 7-38/${full.body.length}`);
-    expect(bounded.headers["Content-Length"]).toBe("32");
-    expect(bounded.body).toEqual(full.body.subarray(7, 39));
+    await expect(host.servesBuild("app-key")).resolves.toBe(true);
+    await expect(host.servesBuild("app-key-old")).resolves.toBe(true);
+    await expect(host.servesBuild("unrelated-key")).resolves.toBe(false);
   });
 
   it("computes meta-change approvals from committed workspace config", async () => {
@@ -1303,15 +1151,7 @@ describe("AppHost", () => {
         ]),
       })
     );
-    const res = createMockResponse();
-    await host.handleAppArtifactRequest(
-      { method: "GET" } as never,
-      res as never,
-      "app-key",
-      "index.html"
-    );
-    expect(res.statusCode).toBe(200);
-    expect(res.body.toString()).toContain("old");
+    await expect(host.servesBuild("app-key")).resolves.toBe(true);
 
     await host.rollbackAppVersion("@workspace-apps/shell");
 

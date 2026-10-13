@@ -7453,7 +7453,23 @@ async function main() {
       ).server;
     },
     getExtensionHttpHandler: () => extensionHostForGateway,
-    getAppArtifactHandler: () => appHostForGateway,
+    getAppArtifactHandler: () => {
+      const apps = appHostForGateway;
+      if (!apps || !container.has("panelHttpServer")) return null;
+      const { server } = container.get<{
+        server: import("./panelHttpServer.js").PanelHttpServer;
+      }>("panelHttpServer");
+      return {
+        handleAppArtifactRequest: async (req, res, buildKey, remainderPath) => {
+          if (!(await apps.servesBuild(buildKey))) {
+            res.writeHead(404, { "Content-Type": "text/plain" });
+            res.end("App artifact not active");
+            return;
+          }
+          await server.serveAppArtifact(req, res, buildKey, remainderPath);
+        },
+      };
+    },
     getWorkerdPort: () => workerdManagerForGateway?.getPort() ?? null,
     getWorkerHost: () => workerdManagerForGateway,
     ensureDORoute: async (source, className, objectKey) => {
