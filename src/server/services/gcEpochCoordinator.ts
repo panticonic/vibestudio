@@ -77,8 +77,8 @@ export class GcEpochCoordinator {
   }
 
   private async executeEpoch(): Promise<boolean> {
-    const epoch = this.deps.publicationJournal.beginEpoch();
     try {
+      const epoch = this.deps.publicationJournal.beginEpoch();
       // This snapshot is read-only. In particular, no artifact can be renamed
       // before semantic source traversal proves the whole shared epoch safe.
       const buildPreparation = await this.deps.buildSystem.prepareGc({ epoch });

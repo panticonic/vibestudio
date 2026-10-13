@@ -90,6 +90,45 @@ describe("GcEpochCoordinator", () => {
     );
   });
 
+  it("reports epoch admission failure and keeps periodic collection live", async () => {
+    const logger = { warn: vi.fn() };
+    const journal = publicationJournal();
+    journal.beginEpoch
+      .mockImplementationOnce(() => {
+        throw new Error("journal unavailable");
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("journal still unavailable");
+      });
+    const prepareGc = vi.fn(async () => preparedBuild());
+    const coordinator = new GcEpochCoordinator({
+      buildSystem: { prepareGc, peekBuildByKey: vi.fn() } as never,
+      workspaceVcs: { attached: true, prepareGc: vi.fn(async () => preparedContent()) } as never,
+      publicationJournal: journal,
+      logger,
+      initialDelayMs: 5,
+      intervalMs: 20,
+    });
+
+    await expect(coordinator.runOnce()).resolves.toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[GcEpochCoordinator] GC run failed",
+      expect.objectContaining({ message: "journal unavailable" })
+    );
+    expect(prepareGc).not.toHaveBeenCalled();
+
+    coordinator.start();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[GcEpochCoordinator] GC run failed",
+      expect.objectContaining({ message: "journal still unavailable" })
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    expect(journal.beginEpoch).toHaveBeenCalledTimes(3);
+    expect(prepareGc).toHaveBeenCalledOnce();
+    await coordinator.stop();
+  });
+
   it("snapshots rooted build metadata before preserving its source composition root", async () => {
     const key = "build:retained";
     const content = preparedContent();
