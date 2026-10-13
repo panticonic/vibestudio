@@ -39,6 +39,7 @@ import {
   waitForAndroidBoot,
 } from "./lib/android-avd.mjs";
 import { flagValue } from "./lib/args.mjs";
+import { visibleAgentTurnState } from "./lib/mobile-agent-turn-state.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
@@ -162,7 +163,7 @@ Runner options:
   --no-reset          Do not clear app data before pairing.
   --no-tap            Do not automate the Pair button tap.
   --real-model        Use the real model provider/credential path instead of
-                       the deterministic E2E model stub.
+                       test-mode model availability.
   --production-templates
                        Use the canonical pinned templates instead of development checkouts.
   --template-checkouts <dir>
@@ -1720,15 +1721,10 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
     }
 
     const visualAgentTurn = visibleAgentTurnState(labels);
-    if (options.rejectTestModelResponse && visualAgentTurn.hasTestModelStub) {
+    if (visualAgentTurn.hasCredentialSetupPrompt) {
+      const mode = options.realModel ? "Real-model" : "Deterministic-mode";
       throw new Error(
-        "Real-model smoke saw the deterministic E2E model response; " +
-          "VIBESTUDIO_TEST_MODE is still reaching the model worker"
-      );
-    }
-    if (options.failOnCredentialSetup && visualAgentTurn.hasCredentialSetupPrompt) {
-      throw new Error(
-        `Real-model smoke reached the model credential setup UI instead of an agent response. ` +
+        `${mode} smoke reached model credential setup instead of an agent response. ` +
           `Visible labels: ${summarizeLabels(labels)}`
       );
     }
@@ -1801,34 +1797,6 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
   );
 }
 
-function visibleAgentTurnState(labels) {
-  const text = labels.join("\n");
-  const isTyping = /\b(?:AI Chat|Agent) typing\b/i.test(text);
-  const agentIndex = labels.findLastIndex((label) => isAgentAttributionLabel(label));
-  const agentLabels = agentIndex >= 0 ? labels.slice(agentIndex + 1, agentIndex + 12) : [];
-  const agentText = agentLabels.join("\n");
-  const hasAgentAttribution =
-    agentIndex >= 0 || /(?:^|\n)AI Chat(?:\s*|\n)@[a-z0-9][a-z0-9_-]*(?:\s|\n|$)/i.test(text);
-  const hasTestModelStub = /E2E model response:\s*initial agent turn completed/i.test(text);
-  const hasCredentialSetupPrompt =
-    /Credential (?:required|needs refresh) for/i.test(agentText) ||
-    /Connect a URL-bound model credential for/i.test(agentText) ||
-    /No built-in setup is available for this model provider/i.test(agentText) ||
-    /No provider details available/i.test(agentText);
-  const hasUnresolvedApproval = hasVisibleApprovalPrompt(labels);
-  const hasSubstantialContent = agentLabels.some(isSubstantialAgentContent);
-  const hasAgentOutput = hasAgentAttribution && hasSubstantialContent && !hasCredentialSetupPrompt;
-  return {
-    hasAgentOutput,
-    hasFinalVisibleOutput: hasAgentOutput && !isTyping && !hasUnresolvedApproval,
-    hasCredentialSetupPrompt,
-    hasTestModelStub,
-    hasUnresolvedApproval,
-    isTyping,
-    fingerprint: (agentLabels.length ? agentLabels : labels).filter(Boolean).slice(0, 60).join("|"),
-  };
-}
-
 function hasVisibleApprovalPrompt(labels) {
   return labels.some((label) => {
     const normalized = label.replace(/\s+/g, " ").trim();
@@ -1838,29 +1806,6 @@ function hasVisibleApprovalPrompt(labels) {
       /Approve workspace extensions/i.test(normalized)
     );
   });
-}
-
-function isAgentAttributionLabel(label) {
-  const normalized = label.replace(/\s+/g, " ").trim();
-  return (
-    /^(?:AI Chat\s*)?@[a-z0-9][a-z0-9_-]*$/i.test(normalized) ||
-    /^AI Chat\s*@[a-z0-9][a-z0-9_-]*(?:\s|$)/i.test(normalized)
-  );
-}
-
-function isSubstantialAgentContent(label) {
-  const normalized = label.replace(/\s+/g, " ").trim();
-  if (normalized.length < 8) return false;
-  if (/^(?:AI Chat|AI Chat typing|Agent typing)$/i.test(normalized)) return false;
-  if (isAgentAttributionLabel(normalized)) return false;
-  if (
-    /^(?:Approve all|Use once|Reply|Copy message|Enter API Key|Internal Browser|External Browser)$/i.test(
-      normalized
-    )
-  ) {
-    return false;
-  }
-  return true;
 }
 
 function summarizeLabels(labels) {
@@ -1881,12 +1826,7 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
   let agentTurnCompleted = false;
   if (options.checkAgentTurn !== false) {
     const waitOptions = options.realModel
-      ? {
-          requireVisibleAgentOutput: true,
-          rejectTestModelResponse: true,
-          failOnCredentialSetup: true,
-          requireNoUnresolvedApproval: true,
-        }
+      ? { requireVisibleAgentOutput: true, requireNoUnresolvedApproval: true }
       : {};
     await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, waitOptions);
     agentTurnCompleted = true;
