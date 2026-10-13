@@ -256,6 +256,36 @@ describe("build artifact helpers", () => {
     }
   });
 
+  it("verifies a published shared build once, not on every read of the build", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-shared-verify-once-"));
+    const sharedCache = path.join(root, "shared", "build-results");
+    const store = createBuildStore(
+      {
+        stateRoot: path.join(root, "workspace", "state"),
+        sharedArtifactPoolRoot: path.join(root, "shared", "build-artifacts"),
+        sharedBuildResultCacheRoot: sharedCache,
+        releaseBuildRoot: null,
+        executionIdentity: null,
+      },
+      owner
+    );
+    const key = "b".repeat(64);
+    const sharedArtifactReads = () =>
+      readSpy.mock.calls.filter(([file]) => String(file).startsWith(sharedCache)).length;
+    const readSpy = vi.spyOn(fs.promises, "readFile");
+    try {
+      await store.put(key, { entries: build().artifacts }, { ...build().metadata, buildKey: key });
+      await store.get(key);
+      const afterVerification = sharedArtifactReads();
+      for (let read = 0; read < 5; read += 1) await store.get(key);
+      expect(sharedArtifactReads()).toBe(afterVerification);
+    } finally {
+      readSpy.mockRestore();
+      await owner.drain();
+      await cleanupRoot(root);
+    }
+  });
+
   it("keeps execution identity isolated across overlapping role stores", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-role-identities-"));
     const sharedRoot = path.join(root, "shared");

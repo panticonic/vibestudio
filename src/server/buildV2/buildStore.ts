@@ -568,12 +568,27 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     });
   }
 
+  /**
+   * Shared builds whose published copy this process has verified complete. A
+   * shared build directory is immutable once published, and `get` asks for its
+   * publication on every read; re-reading and re-hashing every artifact each
+   * time put whole-bundle hashing on the path of every extension invocation.
+   */
+  const verifiedSharedPublications = new ByteBudgetCache<string, true>(
+    1024 * 1024,
+    (_, id) => id.length * 2 + 128
+  );
+
   async function publishSharedBuild(key: string, sourceDir: string): Promise<void> {
     const sharedDir = getSharedBuildDir(key);
     if (!sharedDir) return;
     const cacheRoot = path.dirname(sharedDir);
+    const publicationId = path.resolve(sharedDir);
     if (await sharedBuildDirectoryExists(sharedDir)) {
-      await assertCompleteSharedBuild(sharedDir, key);
+      if (!verifiedSharedPublications.has(publicationId)) {
+        await assertCompleteSharedBuild(sharedDir, key);
+        verifiedSharedPublications.set(publicationId, true);
+      }
       return;
     }
 
