@@ -62,6 +62,317 @@ function reviewedPresentation() {
 }
 
 describe("AcquisitionCoordinator", () => {
+  it.each([
+    ["target", "accepted"],
+    ["target", "deny"],
+    ["source-delta", "accepted"],
+    ["source-delta", "deny"],
+  ] as const)("routes a %s only after the original unit review is %s", async (route, decision) => {
+    const path = mkdtempSync(join(tmpdir(), "unit-review-routing-"));
+    const grantStore = new CapabilityGrantStore({ statePath: path });
+    let queued!: () => void;
+    const queueEntered = new Promise<void>((resolve) => {
+      queued = resolve;
+    });
+    const requestWithHandle = vi.fn((input: { signal?: AbortSignal }) => {
+      const outcome = new Promise<{ decision: "deny" }>((resolve) => {
+        input.signal?.addEventListener("abort", () => resolve({ decision: "deny" }), {
+          once: true,
+        });
+      });
+      queued();
+      return {
+        approvalId: "runtime-review",
+        resolution: outcome,
+        decision: outcome.then((result) => result.decision),
+      };
+    });
+    let settleReview!: (decision: "accepted" | "deny") => void;
+    const coordinator = new AcquisitionCoordinator({
+      grantStore,
+      approvalQueue: { requestWithHandle, cancelForCaller: vi.fn() } as never,
+      waitForUnitReview: (_review, signal) =>
+        new Promise((resolve, reject) => {
+          settleReview = resolve;
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    });
+    try {
+      const taskAuthority = `task:${"e".repeat(64)}` as const;
+      const snap = { ...snapshot(), taskAuthority, lineageClasses: [`source:${"b".repeat(64)}`] };
+      const input = {
+        snapshot: snap,
+        snapshotDigest: invocationSnapshotDigest(snap),
+        tier: "gated" as const,
+        caller: createVerifiedCaller("panel:chat", "panel", null, null, {
+          userId: "u",
+          handle: "user",
+        }),
+        renderedAction: "read example.com",
+        resource: { kind: "exact" as const, key: snap.resourceKey },
+        presentation: reviewedPresentation(),
+        pendingReview: {
+          approvalId: "welcome",
+          title: "what's in your workspace",
+          code: { repoPath: "workers/agent", effectiveVersion: "version-one" },
+        },
+      };
+      if (route === "target") {
+        coordinator.requestForTarget({
+          targetSubject: taskAuthority,
+          authorityPlanDigest: "f".repeat(64),
+          operationKey: "gateway.fetch",
+          capability: snap.capability,
+          capabilityDefinitionDigest: snap.capabilityDefinitionDigest,
+          resource: input.resource,
+          tier: "gated",
+          sourceUser: "user:u",
+          renderedAction: input.renderedAction,
+          review: {
+            action: input.renderedAction,
+            domain: "web",
+            verb: "see",
+            declaredBy: "test:gateway.fetch",
+          },
+        });
+        await queueEntered;
+      } else {
+        grantStore.issue({
+          effect: "allow",
+          subject: taskAuthority,
+          capability: snap.capability,
+          resource: input.resource,
+          constraints: { lineageAtConsent: [] },
+          issuedBy: "user:u",
+          provenance: "acquisition",
+          scope: "task",
+        });
+      }
+      const joined = coordinator.request(input);
+      const original = coordinator.awaitDecision({
+        acquisitionId: joined.acquisitionId,
+        ownerRuntimeId: joined.ownerRuntimeId,
+        sessionId: snap.sessionId,
+      });
+      settleReview(decision);
+      await original;
+      const { pendingReview: _review, ...runtimeInput } = input;
+      coordinator.invalidate([runtimeInput]);
+      const next = coordinator.request(runtimeInput);
+      if (decision === "deny") {
+        expect(next).toMatchObject({
+          acquisitionId: joined.acquisitionId,
+          denied: true,
+          pending: false,
+        });
+        expect(requestWithHandle).toHaveBeenCalledTimes(route === "target" ? 1 : 0);
+      } else {
+        expect(next.acquisitionId).not.toBe(joined.acquisitionId);
+        expect(next.existingReview).toBeUndefined();
+        expect(next.pending).toBe(true);
+        await queueEntered;
+        expect(requestWithHandle).toHaveBeenCalledOnce();
+      }
+    } finally {
+      await coordinator.quiescePresentations();
+      await coordinator.quiesceOwnerDelivery();
+      grantStore.close();
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  it("retains and rethrows the original failed review application for the same invocation", async () => {
+    const path = mkdtempSync(join(tmpdir(), "unit-review-failure-"));
+    const grantStore = new CapabilityGrantStore({ statePath: path });
+    const failure = new Error("original unit application failed");
+    const waitForUnitReview = vi.fn(async () => {
+      throw failure;
+    });
+    const request = vi.fn();
+    const coordinator = new AcquisitionCoordinator({
+      grantStore,
+      approvalQueue: { request } as never,
+      waitForUnitReview,
+    });
+    try {
+      const snap = snapshot();
+      const input = {
+        snapshot: snap,
+        snapshotDigest: invocationSnapshotDigest(snap),
+        tier: "gated" as const,
+        caller: createVerifiedCaller("panel:chat", "panel", null, null, {
+          userId: "u",
+          handle: "user",
+        }),
+        renderedAction: "read example.com",
+        resource: { kind: "exact" as const, key: snap.resourceKey },
+        presentation: reviewedPresentation(),
+        pendingReview: {
+          approvalId: "welcome",
+          title: "what's in your workspace",
+          code: { repoPath: "workers/agent", effectiveVersion: "version-one" },
+        },
+      };
+      const info = coordinator.request(input);
+      await expect(
+        coordinator.awaitDecision({
+          acquisitionId: info.acquisitionId,
+          ownerRuntimeId: info.ownerRuntimeId,
+          sessionId: snap.sessionId,
+        })
+      ).rejects.toMatchObject({ message: failure.message });
+      coordinator.invalidate([input]);
+      expect(() => coordinator.request(input)).toThrow(failure.message);
+      expect(waitForUnitReview).toHaveBeenCalledOnce();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.quiescePresentations();
+      await coordinator.quiesceOwnerDelivery();
+      grantStore.close();
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["accepted", "deny"] as const)(
+    "joins an existing unit review and retains its %s outcome without another prompt or grant",
+    async (decision) => {
+      const path = mkdtempSync(join(tmpdir(), "unit-review-acquisition-"));
+      const grantStore = new CapabilityGrantStore({ statePath: path });
+      const request = vi.fn();
+      let settle!: (decision: "accepted" | "deny") => void;
+      const waitForUnitReview = vi.fn<
+        NonNullable<ConstructorParameters<typeof AcquisitionCoordinator>[0]["waitForUnitReview"]>
+      >(
+        (_review, signal) =>
+          new Promise<"accepted" | "deny">((resolve, reject) => {
+            settle = resolve;
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          })
+      );
+      const coordinator = new AcquisitionCoordinator({
+        grantStore,
+        approvalQueue: { request } as never,
+        waitForUnitReview,
+      });
+      try {
+        const snap = snapshot();
+        const input = {
+          snapshot: snap,
+          snapshotDigest: invocationSnapshotDigest(snap),
+          tier: "gated" as const,
+          caller: createVerifiedCaller("panel:chat", "panel", null, null, {
+            userId: "u",
+            handle: "user",
+          }),
+          renderedAction: "read example.com",
+          resource: { kind: "exact" as const, key: snap.resourceKey },
+          presentation: reviewedPresentation(),
+          pendingReview: {
+            approvalId: "welcome",
+            title: "what's in your workspace",
+            code: { repoPath: "workers/agent", effectiveVersion: "version-one" },
+          },
+        };
+        const info = coordinator.request(input);
+        expect(info).toMatchObject({
+          pending: true,
+          existingReview: { approvalId: "welcome", title: "what's in your workspace" },
+        });
+        expect(request).not.toHaveBeenCalled();
+        const outcome = coordinator.awaitDecision({
+          acquisitionId: info.acquisitionId,
+          ownerRuntimeId: info.ownerRuntimeId,
+          sessionId: snap.sessionId,
+        });
+        settle(decision);
+        await expect(outcome).resolves.toMatchObject({
+          state: "decided",
+          ...(decision === "deny" ? { decision: "deny" } : {}),
+        });
+        expect(grantStore.listActiveAuthorityGrants()).toEqual([]);
+        expect(request).not.toHaveBeenCalled();
+        if (decision === "deny") {
+          coordinator.invalidate([input]);
+          expect(coordinator.request(input)).toMatchObject({
+            acquisitionId: info.acquisitionId,
+            pending: false,
+            denied: true,
+          });
+          expect(waitForUnitReview).toHaveBeenCalledOnce();
+        }
+      } finally {
+        await coordinator.quiescePresentations();
+        await coordinator.quiesceOwnerDelivery();
+        grantStore.close();
+        rmSync(path, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it("rebinds a persisted unit-review acquisition after host restart without another prompt", async () => {
+    const path = mkdtempSync(join(tmpdir(), "unit-review-restart-"));
+    const grantStore = new CapabilityGrantStore({ statePath: path });
+    const request = vi.fn();
+    const first = new AcquisitionCoordinator({
+      grantStore,
+      approvalQueue: { request } as never,
+      waitForUnitReview: async (_review, signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    });
+    const rebound = vi.fn<
+      NonNullable<ConstructorParameters<typeof AcquisitionCoordinator>[0]["waitForUnitReview"]>
+    >(async () => "accepted" as const);
+    const second = new AcquisitionCoordinator({
+      grantStore,
+      approvalQueue: { request } as never,
+      waitForUnitReview: rebound,
+    });
+    try {
+      const snap = snapshot();
+      const info = first.request({
+        snapshot: snap,
+        snapshotDigest: invocationSnapshotDigest(snap),
+        tier: "gated",
+        caller: createVerifiedCaller("panel:chat", "panel", null, null, {
+          userId: "u",
+          handle: "user",
+        }),
+        renderedAction: "read example.com",
+        resource: { kind: "exact", key: snap.resourceKey },
+        presentation: reviewedPresentation(),
+        pendingReview: {
+          approvalId: "old-welcome-id",
+          title: "what's in your workspace",
+          code: { repoPath: "workers/agent", effectiveVersion: "version-one" },
+        },
+      });
+      await first.quiescePresentations();
+      second.resumePending();
+      await expect(
+        second.awaitDecision({
+          acquisitionId: info.acquisitionId,
+          ownerRuntimeId: info.ownerRuntimeId,
+          sessionId: snap.sessionId,
+        })
+      ).resolves.toMatchObject({ state: "decided" });
+      expect(rebound).toHaveBeenCalledOnce();
+      expect(rebound.mock.calls[0]?.[0]).toMatchObject({
+        code: { repoPath: "workers/agent", effectiveVersion: "version-one" },
+      });
+      expect(request).not.toHaveBeenCalled();
+      expect(grantStore.listActiveAuthorityGrants()).toEqual([]);
+    } finally {
+      await first.quiescePresentations();
+      await first.quiesceOwnerDelivery();
+      await second.quiescePresentations();
+      await second.quiesceOwnerDelivery();
+      grantStore.close();
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   it("withdraws only one native invocation while its sibling approval stays actionable", async () => {
     const path = mkdtempSync(join(tmpdir(), "native-acquisition-ownership-"));
     const grantStore = new CapabilityGrantStore({ statePath: path });

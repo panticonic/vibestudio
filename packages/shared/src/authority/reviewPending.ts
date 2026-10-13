@@ -77,6 +77,9 @@ export function pendingAuthorityNotice(error: unknown): PendingAuthorityNotice |
     ) {
       continue;
     }
+    // A joined review has no acquisition card of its own. Invalid review
+    // coordinates cannot safely become a link to a different decision.
+    if (value["existingReview"] !== undefined) continue;
     return {
       kind: "acquisition",
       approvalId: value["acquisitionId"],
@@ -88,7 +91,7 @@ export function pendingAuthorityNotice(error: unknown): PendingAuthorityNotice |
 }
 
 export function isAuthorityPending(error: unknown): boolean {
-  return isReviewPending(error) || pendingAuthorityNotice(error)?.kind === "acquisition";
+  return isReviewPending(error) || pendingAuthorityNotice(error) !== null;
 }
 
 /** True for a `review-pending` outcome even when its payload did not survive. */
@@ -98,6 +101,14 @@ export function isReviewPending(error: unknown): boolean {
 
 function hasReviewPendingCode(error: CodedError): boolean {
   for (const candidate of payloads(error)) {
+    const acquisition = candidate["acquisition"];
+    if (
+      typeof acquisition === "object" &&
+      acquisition !== null &&
+      (acquisition as Record<string, unknown>)["pending"] === true &&
+      reviewReference((acquisition as Record<string, unknown>)["existingReview"])
+    )
+      return true;
     // `code` on a reconstructed error, `errorCode` on the raw wire response —
     // the same field under the two names it travels by. Never the message: a
     // caller that parses prose is one wording change from silently deciding
@@ -121,18 +132,35 @@ function hasReviewPendingCode(error: CodedError): boolean {
 
 function findReview(error: CodedError): { approvalId: string; title: string } | null {
   for (const candidate of payloads(error)) {
+    const acquisition = candidate["acquisition"];
+    if (
+      typeof acquisition === "object" &&
+      acquisition !== null &&
+      (acquisition as Record<string, unknown>)["pending"] === true
+    ) {
+      const review = reviewReference((acquisition as Record<string, unknown>)["existingReview"]);
+      if (review) return review;
+    }
     const failure = (candidate as { authorityFailure?: unknown }).authorityFailure;
     if (typeof failure !== "object" || failure === null) continue;
     const remediation = (failure as { remediation?: unknown }).remediation;
     if (typeof remediation !== "object" || remediation === null) continue;
     const review = (remediation as { review?: unknown }).review;
-    if (typeof review !== "object" || review === null) continue;
-    const { approvalId, title } = review as { approvalId?: unknown; title?: unknown };
-    if (typeof approvalId === "string" && typeof title === "string") {
-      return { approvalId, title };
-    }
+    const reference = reviewReference(review);
+    if (reference) return reference;
   }
   return null;
+}
+
+function reviewReference(value: unknown): { approvalId: string; title: string } | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { approvalId, title } = value as { approvalId?: unknown; title?: unknown };
+  return typeof approvalId === "string" &&
+    approvalId.length > 0 &&
+    typeof title === "string" &&
+    title.length > 0
+    ? { approvalId, title }
+    : null;
 }
 
 /** The error itself and every nested envelope an RPC hop may have wrapped it in. */

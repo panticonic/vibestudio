@@ -65,6 +65,11 @@ export interface AcquisitionRequestInput {
   presentation?: AuthorityChallengePresentation;
   target?: ApprovalTargetIdentity;
   substance?: OperationSubstance;
+  pendingReview?: {
+    approvalId: string;
+    title: string;
+    code: { repoPath: string; effectiveVersion: string };
+  };
 }
 
 export interface AcquisitionOutcome {
@@ -202,6 +207,10 @@ export class AcquisitionCoordinator {
       ) => Promise<void> | void;
       resolveTaskTitle?: (taskSubject: string, signal: AbortSignal) => Promise<string | null>;
       expandLineageKeys?: (keys: readonly string[]) => readonly string[];
+      waitForUnitReview?: (
+        review: NonNullable<AcquisitionRequestInput["pendingReview"]>,
+        signal: AbortSignal
+      ) => Promise<"accepted" | "deny" | "dismiss">;
     }
   ) {}
 
@@ -379,12 +388,33 @@ export class AcquisitionCoordinator {
     const presentationSignal = signal
       ? AbortSignal.any([signal, entry.presentationLifetime.signal])
       : entry.presentationLifetime.signal;
-    const presentation = facts.sourceDelta
-      ? this.presentSourceDelta(entry, facts.sourceDelta, presentationSignal)
-      : this.present(entry, inputs, attention, presentationSignal);
+    const presentation = input.pendingReview
+      ? this.joinUnitReview(entry, input.pendingReview, presentationSignal)
+      : facts.sourceDelta
+        ? this.presentSourceDelta(entry, facts.sourceDelta, presentationSignal)
+        : this.present(entry, inputs, attention, presentationSignal);
     entry.presentation = presentation.catch((error) => this.presentationFailed(entry, error));
     this.trackPresentation(entry.presentation);
     return { ...info };
+  }
+
+  private async joinUnitReview(
+    entry: PendingAcquisition,
+    review: NonNullable<AcquisitionRequestInput["pendingReview"]>,
+    invocationSignal: AbortSignal
+  ): Promise<void> {
+    if (!this.deps.waitForUnitReview) throw new Error("Unit review settlement is unavailable");
+    const signal = AbortSignal.any([invocationSignal, this.presentationLifetime.signal]);
+    const decision = await this.deps.waitForUnitReview(review, signal);
+    signal.throwIfAborted();
+    // Unit admission supplies its own grants. This receipt only releases the
+    // exact invocation to reauthorize against that canonical admission.
+    this.finish(
+      entry,
+      decision === "accepted"
+        ? { state: "decided", info: entry.info }
+        : { state: "decided", decision: "deny", info: entry.info }
+    );
   }
 
   private async presentTargetJoin(entry: PendingAcquisition, requestId: string): Promise<void> {
@@ -940,6 +970,7 @@ export class AcquisitionCoordinator {
       }
       return { ...existing.info };
     }
+    if (record.state === "failed") acquisitionOutcome(invocationAcquisitionSettlement(record));
     if (record.state !== "pending")
       return invocationAcquisitionInfo(record, restoreInvocationInputs(record));
     return this.startInvocation(record, continuation);
@@ -1011,8 +1042,6 @@ export class AcquisitionCoordinator {
     allowedDecisionsForGroup(inputs);
     const now = Date.now();
     this.pruneTerminalCaches(now);
-    const targetRequest = inputs.length === 1 ? this.matchingTargetRequest(input) : null;
-    if (targetRequest) return this.joinTargetRequest(targetRequest, input, continuation);
     const requestKey = acquisitionRequestGroupKey(inputs);
     const existing = this.byRequestKey.get(requestKey);
     if (existing) {
@@ -1039,6 +1068,8 @@ export class AcquisitionCoordinator {
         continuation
       );
     if (retained) {
+      if (retained.state === "failed")
+        acquisitionOutcome(invocationAcquisitionSettlement(retained));
       const retainedInputs = restoreInvocationInputs(retained);
       const info = invocationAcquisitionInfo(retained, retainedInputs);
       if (retained.state === "pending")
@@ -1054,7 +1085,10 @@ export class AcquisitionCoordinator {
     }
     const acquisitionId = acquisitionIdFor(requestKey);
 
-    const sourceDelta = this.sourceDeltaFor(input);
+    // The original invocation's canonical cycle wins before an alternate
+    // presentation route. In particular, redirecting cannot erase its denial.
+    const { target, sourceDelta } = this.acquisitionRoute(inputs);
+    if (target) return this.joinTargetRequest(target, input, continuation);
     if (sourceDelta) {
       return this.requestSourceDelta(
         input,
@@ -1066,7 +1100,7 @@ export class AcquisitionCoordinator {
     }
 
     const testPolicy = input.caller.testPolicy ?? input.caller.executionSession?.testPolicy ?? null;
-    if (input.snapshot.executionMode === "test") {
+    if (!input.pendingReview && input.snapshot.executionMode === "test") {
       if (!testPolicy) {
         throw testPolicyIntegrityError(
           "ETESTPOLICYMISSING",
@@ -1265,6 +1299,7 @@ export class AcquisitionCoordinator {
         owner,
         continuation
       );
+    if (retained?.state === "failed") acquisitionOutcome(invocationAcquisitionSettlement(retained));
     if (retained)
       return retained.state === "pending"
         ? this.startInvocation(
@@ -1783,8 +1818,23 @@ export class AcquisitionCoordinator {
   /** A fresh ask supersedes only its exact current cycle; retained history is never scanned or forgotten. */
   invalidate(inputs: readonly AcquisitionRequestInput[]): void {
     const input = validateAcquisitionGroup(inputs);
-    const target = inputs.length === 1 ? this.matchingTargetRequest(input) : null;
-    const delta = this.sourceDeltaFor(input);
+    const originalKey = acquisitionRequestGroupKey(inputs);
+    const owner = { ownerRuntimeId: input.caller.runtime.id, sessionId: input.snapshot.sessionId };
+    const retire = (requestKey: string): boolean => {
+      const record = this.deps.grantStore.acquisitions.current(requestKey, owner);
+      if (!record) return true;
+      if (record.state === "failed") return false;
+      if (record.state === "decided") {
+        const outcome = invocationAcquisitionSettlement(record);
+        if (outcome.state === "decided" && outcome.decision === "deny") return false;
+      }
+      const info = invocationAcquisitionInfo(record, restoreInvocationInputs(record));
+      if (info.cooldownUntil && info.cooldownUntil > Date.now()) return false;
+      this.deps.grantStore.acquisitions.supersede(requestKey, owner);
+      return true;
+    };
+    if (!retire(originalKey)) return;
+    const { target, sourceDelta: delta } = this.acquisitionRoute(inputs);
     const requestKey = target
       ? targetJoinRequestKey(
           target.requestId,
@@ -1794,14 +1844,17 @@ export class AcquisitionCoordinator {
         )
       : delta
         ? sourceDeltaRequestKey(input, delta.grants, delta.lineage)
-        : acquisitionRequestGroupKey(inputs);
-    const owner = { ownerRuntimeId: input.caller.runtime.id, sessionId: input.snapshot.sessionId };
-    const record = this.deps.grantStore.acquisitions.current(requestKey, owner);
-    if (record) {
-      const info = invocationAcquisitionInfo(record, restoreInvocationInputs(record));
-      if (info.cooldownUntil && info.cooldownUntil > Date.now()) return;
-      this.deps.grantStore.acquisitions.supersede(requestKey, owner);
-    }
+        : originalKey;
+    if (requestKey !== originalKey) retire(requestKey);
+  }
+
+  /** Review joins always retain their exact original invocation route. */
+  private acquisitionRoute(inputs: readonly AcquisitionRequestInput[]) {
+    const input = validateAcquisitionGroup(inputs);
+    const target =
+      !input.pendingReview && inputs.length === 1 ? this.matchingTargetRequest(input) : null;
+    const sourceDelta = input.pendingReview || target ? null : this.sourceDeltaFor(input);
+    return { target, sourceDelta };
   }
 
   private async present(
@@ -2103,7 +2156,13 @@ export class AcquisitionCoordinator {
       () => {
         write?.();
         const settled = typeof outcome === "function" ? outcome() : outcome;
-        const info = { ...entry.info, pending: Boolean(entry.info.cooldownUntil) };
+        const info = {
+          ...entry.info,
+          pending: Boolean(entry.info.cooldownUntil),
+          ...(settled.state === "decided" && settled.decision === "deny"
+            ? { denied: true as const }
+            : {}),
+        };
         committed = settled;
         return {
           state: settled.state,
@@ -2471,6 +2530,14 @@ function invocationAcquisitionInfo(
       facts.kind === "invocation" && facts.sourceDelta ? "task.rules" : cardTypeForGroup(inputs),
     renderedAction: input.renderedAction,
     pending: record.state === "pending",
+    ...(input.pendingReview
+      ? {
+          existingReview: {
+            approvalId: input.pendingReview.approvalId,
+            title: input.pendingReview.title,
+          },
+        }
+      : {}),
   };
 }
 
