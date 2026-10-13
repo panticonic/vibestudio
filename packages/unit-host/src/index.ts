@@ -390,6 +390,8 @@ export interface UnitHostOptions<
   onBackgroundError(error: unknown): void;
 }
 
+/** How a review was answered. */
+export type UnitReviewOutcome = "accepted" | "declined";
 export type UnitReconcileTrigger = "startup" | "meta-change";
 /** A unit review reports whether its exact parts were accepted, not a grant scope. */
 export type UnitApprovalDecision = "accepted" | "deny" | "dismiss";
@@ -583,7 +585,8 @@ export class UnitHost<
   private preapprovedTrust = new Set<string>();
   private preapprovedTrustRevision = 0;
   private readonly preapprovedTrustRevisions = new Map<string, number>();
-  private pendingApprovalIdentityKeys = new Set<string>();
+  /** Reviews in flight, by the exact build identity each one decides. */
+  private reviewFlows = new Map<string, Promise<UnitReviewOutcome>>();
   private readonly trustResolver: UnitTrustResolver<Entry>;
 
   constructor(private readonly opts: UnitHostOptions<Entry, Decl, Node, ApprovalEntry>) {
@@ -1100,7 +1103,7 @@ export class UnitHost<
         continue;
       }
       if (!entry) this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
-      if (!this.pendingApprovalIdentityKeys.has(trust.identityKey)) {
+      if (!this.reviewFlows.has(trust.identityKey)) {
         needsApproval.push({ node, decl, identityKey: trust.identityKey });
       }
     }
@@ -1140,8 +1143,7 @@ export class UnitHost<
     trigger: UnitReconcileTrigger,
     maxConcurrentApplies?: number,
     publishNow = false
-  ): Promise<void> {
-    for (const item of items) this.pendingApprovalIdentityKeys.add(item.identityKey);
+  ): { staged: Promise<void>; outcome: Promise<UnitReviewOutcome> } {
     let staged!: { resolve(): void; reject(error: unknown): void };
     const whenStaged = new Promise<void>((resolve, reject) => {
       staged = { resolve, reject };
@@ -1154,19 +1156,23 @@ export class UnitHost<
         staged.resolve();
       });
     const flow = this.backgroundFlow ? this.backgroundFlow.then(startApproval) : startApproval();
-    const tracked = flow
-      .catch((err) => {
-        staged.reject(err);
-        this.opts.onBackgroundError(err);
-      })
+    for (const item of items) this.reviewFlows.set(item.identityKey, flow);
+    const tracked: Promise<void> = flow
+      .then(
+        () => undefined,
+        (err: unknown) => {
+          staged.reject(err);
+          this.opts.onBackgroundError(err);
+        }
+      )
       .finally(() => {
-        for (const item of items) this.pendingApprovalIdentityKeys.delete(item.identityKey);
+        for (const item of items) this.reviewFlows.delete(item.identityKey);
         if (this.backgroundFlow === tracked) {
           this.backgroundFlow = null;
         }
       });
     this.backgroundFlow = tracked;
-    return whenStaged;
+    return { staged: whenStaged, outcome: flow };
   }
 
   /**
@@ -1179,7 +1185,7 @@ export class UnitHost<
   async requestReview(node: Node, decl: Decl): Promise<"reviewing" | "reviewed"> {
     const trust = this.trustForCandidate(node, decl, this.opts.registry.get(node.name));
     if (trust.decision !== "needs-approval") return "reviewed";
-    if (!this.pendingApprovalIdentityKeys.has(trust.identityKey)) {
+    if (!this.reviewFlows.has(trust.identityKey)) {
       if (!this.opts.registry.has(node.name)) {
         this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
       }
@@ -1190,9 +1196,37 @@ export class UnitHost<
         "meta-change",
         undefined,
         true
-      );
+      ).staged;
     }
     return "reviewing";
+  }
+
+  /**
+   * Settle on the person's answer about this exact declaration, asking if no
+   * review is open. Resolves "accepted" once the accepted build has been
+   * applied (or when no review is needed and the unit has finished applying),
+   * and "declined" if the person declined. It waits on the review's own
+   * resolution, so there is nothing to poll; a failed apply rejects.
+   */
+  async whenReviewed(node: Node, decl: Decl): Promise<UnitReviewOutcome> {
+    const trust = this.trustForCandidate(node, decl, this.opts.registry.get(node.name));
+    if (trust.decision !== "needs-approval") {
+      await this.whenApplied(node.name);
+      return "accepted";
+    }
+    const open = this.reviewFlows.get(trust.identityKey);
+    if (open) return open;
+    if (!this.opts.registry.has(node.name)) {
+      this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
+    }
+    const review = this.beginReview(
+      [{ node, decl, identityKey: trust.identityKey }],
+      "meta-change",
+      undefined,
+      true
+    );
+    await review.staged;
+    return review.outcome;
   }
 
   private async promptAndApply(
@@ -1200,8 +1234,9 @@ export class UnitHost<
     trigger: UnitReconcileTrigger,
     maxConcurrentApplies?: number,
     onStaged?: () => void
-  ): Promise<void> {
+  ): Promise<UnitReviewOutcome> {
     if (this.opts.approvalCoordinator) {
+      let outcome: UnitReviewOutcome = "declined";
       const entries = await Promise.all(
         items.map(({ node, decl }) => this.opts.approvalEntry(node, decl))
       );
@@ -1211,6 +1246,7 @@ export class UnitHost<
         trigger,
         ...(origins ? { origins } : {}),
         applyApproved: async () => {
+          outcome = "accepted";
           // Acceptance is the state transition from "waiting for a human"
           // to "work is in flight". Publish it for the whole accepted batch
           // before any member waits for an apply/build slot.
@@ -1222,7 +1258,7 @@ export class UnitHost<
       });
       onStaged?.();
       await resolved;
-      return;
+      return outcome;
     }
     onStaged?.();
     const entries = await Promise.all(
@@ -1231,11 +1267,12 @@ export class UnitHost<
     const decision = await this.opts.requestApproval(entries, trigger);
     if (decision === "deny" || decision === "dismiss") {
       this.opts.onApprovalDenied?.(items);
-      return;
+      return "declined";
     }
     const apply = this.prepareTrustedApplications(items, maxConcurrentApplies);
     this.markAcceptedItemsBuilding(items);
     await apply();
+    return "accepted";
   }
 
   private markAcceptedItemsBuilding(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void {

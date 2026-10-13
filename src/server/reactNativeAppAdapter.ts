@@ -71,6 +71,8 @@ export interface ReactNativeAppAdapterDeps {
   ensureRequiredExtensions(): Promise<void>;
   whenDeclarationsStaged(): Promise<void>;
   whenReconciled(): Promise<void>;
+  /** Settles when the unit's queued or running application ends, preserving its failure. */
+  whenApplied(name: string): Promise<void>;
   reconcileDeclaration(
     declaration: WorkspaceAppDeclaration,
     options: { waitForApproval?: boolean }
@@ -205,6 +207,9 @@ export class ReactNativeAppAdapter {
       }
     }
     await this.deps.reconcileDeclaration(declared, options);
+    // Staging returns before the build it started finishes. Join that build so
+    // a caller is answered with the app's settled state, not asked to ask again.
+    await this.deps.whenApplied(candidate.name);
     return this.readinessSnapshot(candidate.source);
   }
 

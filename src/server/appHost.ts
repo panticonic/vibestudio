@@ -462,6 +462,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       ensureRequiredExtensions: () => deps.prepareHostTarget?.("react-native") ?? Promise.resolve(),
       whenDeclarationsStaged: () => this.unitHost.whenDeclarationsStaged(),
       whenReconciled: () => this.unitHost.whenReconciled(),
+      whenApplied: (name) => this.unitHost.whenApplied(name),
       reconcileDeclaration: (declaration, options) =>
         this.reconcileHostTargetDeclaration("react-native", declaration, options),
       approvalForDeclarations: (declarations) =>

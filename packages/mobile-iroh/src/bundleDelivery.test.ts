@@ -228,4 +228,21 @@ describe("complete native app artifact delivery", () => {
       artifacts[0]!.integrity
     );
   });
+  it("reports a bootstrap the server cannot provide instead of waiting for it", async () => {
+    const unavailable = Object.assign(new Error("React Native app is not ready"), {
+      code: "MOBILE_APP_UNAVAILABLE",
+    });
+    const rpc = {
+      call: vi.fn(async () => {
+        throw unavailable;
+      }),
+      streamReadable: vi.fn(),
+    } as unknown as BundleDeliveryRpc;
+    const transport = { rpc, close: vi.fn(async () => undefined) };
+
+    await expect(
+      activateApprovedWorkspaceApp(transport, { nativeHost: nativeHost() })
+    ).rejects.toBe(unavailable);
+    expect(rpc.call).toHaveBeenCalledTimes(1);
+  });
 });

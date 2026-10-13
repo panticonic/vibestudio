@@ -530,6 +530,7 @@ describe("UnitHost", () => {
       applyTrusted?: (node: TestNode) => Promise<void>;
       approvalCoordinator?: UnitApprovalCoordinator<TestApproval>;
       isAdmitted?: (repoPath: string, effectiveVersion: string) => boolean;
+      decision?: "accepted" | "deny";
       /** Stands in for the durable activation-trust file. */
       approvalStore?: {
         has(key: string): boolean;
@@ -622,7 +623,7 @@ describe("UnitHost", () => {
       approvalEntry: async (n, decl) => ({ name: n.name, ref: decl.ref }),
       requestApproval: async (entries) => {
         prompted.push(entries);
-        return "accepted";
+        return opts.decision ?? "accepted";
       },
       ...(opts.approvalCoordinator ? { approvalCoordinator: opts.approvalCoordinator } : {}),
       onApprovalDenied: (items) => {
@@ -634,6 +635,24 @@ describe("UnitHost", () => {
     });
     return { host, registry, applied, removed, prompted, denied, node };
   }
+
+  it("settles on the answer to the review it opens", async () => {
+    const accepted = makeHarness();
+    const decl = { source: accepted.node.relativePath, ref: "main" };
+    await expect(accepted.host.whenReviewed(accepted.node, decl)).resolves.toBe("accepted");
+    expect(accepted.prompted).toHaveLength(1);
+    expect(accepted.applied).toEqual([accepted.node.name]);
+
+    const declined = makeHarness({ decision: "deny" });
+    await expect(
+      declined.host.whenReviewed(declined.node, {
+        source: declined.node.relativePath,
+        ref: "main",
+      })
+    ).resolves.toBe("declined");
+    expect(declined.applied).toEqual([]);
+    expect(declined.denied).toEqual([declined.node.name]);
+  });
 
   it("does not inspect seed authority again for an admitted version", async () => {
     const isSeedTrusted = vi.fn(() => true);

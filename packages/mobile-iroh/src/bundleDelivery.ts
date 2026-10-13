@@ -74,8 +74,6 @@ export interface ActivateWorkspaceAppOptions {
   smokePhase?: (phase: string) => void;
 }
 
-const MOBILE_BOOTSTRAP_WAIT_MS = 180_000;
-const MOBILE_BOOTSTRAP_RETRY_MS = 1_000;
 const MOBILE_BUNDLE_TRANSFER_RETRY_MS = 1_500;
 const MOBILE_BUNDLE_RECONNECT_WAIT_MS = 30_000;
 const MOBILE_BUNDLE_TRANSFER_TIMEOUT_MS = 5 * 60_000;
@@ -197,34 +195,22 @@ export function selectPlatformArtifacts(
   return { primary: primary[0]!, artifacts };
 }
 
-function retryableMobileBootstrapError(error: unknown): boolean {
-  return (
-    !!error &&
-    typeof error === "object" &&
-    (error as { code?: unknown }).code === "MOBILE_APP_UNAVAILABLE"
-  );
-}
-
-async function waitForMobileBootstrap(
+/**
+ * The server answers once the app's own build has settled, so the bootstrap is
+ * either ready or a real, reported reason it cannot be. There is nothing to
+ * wait out here.
+ */
+async function requestMobileBootstrap(
   rpc: BundleDeliveryRpc,
   options: ActivateWorkspaceAppOptions
 ): Promise<Record<string, unknown>> {
-  const deadline = Date.now() + MOBILE_BOOTSTRAP_WAIT_MS;
-  for (;;) {
-    try {
-      const result = await rpc.call("main", mainRpcMethods["auth.getMobileAppBootstrap"], [
-        options.source ?? null,
-      ]);
-      if (!result?.bootstrap || typeof result.bootstrap !== "object") {
-        throw new Error("Mobile app bootstrap returned no manifest");
-      }
-      return result.bootstrap as Record<string, unknown>;
-    } catch (error) {
-      if (!retryableMobileBootstrapError(error) || Date.now() >= deadline) throw error;
-      options.smokePhase?.("embedded-host-target-preparing");
-      await new Promise((resolve) => setTimeout(resolve, MOBILE_BOOTSTRAP_RETRY_MS));
-    }
+  const result = await rpc.call("main", mainRpcMethods["auth.getMobileAppBootstrap"], [
+    options.source ?? null,
+  ]);
+  if (!result?.bootstrap || typeof result.bootstrap !== "object") {
+    throw new Error("Mobile app bootstrap returned no manifest");
   }
+  return result.bootstrap as Record<string, unknown>;
 }
 
 export async function streamArtifactToNative(
@@ -340,7 +326,7 @@ export async function activateApprovedWorkspaceApp(
     throw new Error("The mobile workspace route was not committed before app activation.");
   }
   const rpc = transport.rpc;
-  const bootstrap = await waitForMobileBootstrap(rpc, options);
+  const bootstrap = await requestMobileBootstrap(rpc, options);
   if (bootstrap["rnHostAbi"] !== RN_HOST_ABI) {
     throw new Error(
       `React Native host ABI mismatch: expected ${RN_HOST_ABI}, got ${String(bootstrap["rnHostAbi"])}. Reinstall the Vibestudio mobile shell.`
