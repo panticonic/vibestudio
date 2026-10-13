@@ -11,6 +11,7 @@ import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
 import type { PanelPresentationSnapshot } from "./panel/presentation.js";
 import type { PanelTreeInvalidation } from "./panel/treeIndex.js";
+import type { UnitAuthorityManifest } from "./authorityManifest.js";
 import type { CallerKind } from "./principalKinds.js";
 import type { ProtectedPublicationEvent } from "./protectedPublicationEvents.js";
 import type { WorkspacePresenceEntry } from "./workspacePresence.js";
@@ -37,12 +38,55 @@ export interface CommandAgentSurfaceRequest {
 }
 
 /**
+ * How a client adopts a newly available build of an app target. The policy is
+ * a property of the target, not of the event that announces it: Electron asks
+ * before replacing a loaded view, React Native asks before installing a
+ * bundle, and terminal apps are fetched by the client when it launches.
+ */
+export type AppAdoptionPolicy = "immediate" | "prompt" | "artifact-only";
+
+/**
+ * A supervised unit's state changed. One event describes every unit kind the
+ * host supervises, so clients subscribe once and filter by `identity.kind`.
+ */
+export interface SupervisionChange {
+  identity: { kind: "app" | "extension"; entityId: string };
+  source: string;
+  /** Lifecycle of the adopted build. A unit that keeps running its adopted build reports "running" even when a newer build was refused; that refusal is `lastError`. */
+  status: "starting" | "running" | "stopped" | "error";
+  lastError: string | null;
+  artifact: {
+    effectiveVersion: string | null;
+    buildKey: string | null;
+    executionDigest: string | null;
+  };
+  canRollback: boolean;
+  /**
+   * What happened: "status" for any lifecycle or error change, "adopted" and
+   * "rolled-back" when a build became the one in use, and "update-rejected"
+   * when a newer build was refused and the adopted one stays in use.
+   */
+  change: "status" | "adopted" | "rolled-back" | "update-rejected";
+  previousBuildKey: string | null;
+  previousEffectiveVersion: string | null;
+  /** Present on "adopted" and "rolled-back" for app targets. */
+  adoption: AppAdoptionPolicy | null;
+  /** Present for apps. `artifactRoute` and `authority` accompany adoption. */
+  app?: {
+    target: "electron" | "react-native" | "terminal";
+    capabilities: string[];
+    artifactRoute?: string;
+    authority?: UnitAuthorityManifest;
+  };
+}
+
+/**
  * Known event names that can be subscribed to.
  */
 export type EventName =
   | "build:complete"
   | `extensions:${string}`
-  | `apps:${string}`
+  | "supervision:changed"
   | "vcs:publication"
   | "workspace:unit-log"
   | "workspace:revision-bumped"
@@ -548,7 +592,8 @@ export interface EventPayloads {
   };
   "presence:panel-active": { panelId: string; ownerCallerId: string; updatedAt: number };
   [key: `extensions:${string}`]: unknown;
-  [key: `apps:${string}`]: unknown;
+  /** See {@link SupervisionChange}. */
+  "supervision:changed": SupervisionChange;
   "vcs:publication": ProtectedPublicationEvent;
   "workspace:unit-log": {
     workspaceId: string;
@@ -627,6 +672,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "credential:capture-request",
   "server-log:append",
   "presence:panel-active",
+  "supervision:changed",
 ];
 
 /**
@@ -634,7 +680,6 @@ export const VALID_EVENT_NAMES: EventName[] = [
  */
 export function isValidEventName(name: string): name is EventName {
   if (name.startsWith("extensions:")) return true;
-  if (name.startsWith("apps:")) return true;
   if (name === "vcs:publication") return true;
   if (name === "workspace:unit-log") return true;
   if (name === "workspace:revision-bumped") return true;

@@ -3300,21 +3300,9 @@ async function main() {
             },
           ];
         },
-        "apps:status": async () => [
-          {
-            snapshot: true,
-            apps:
-              (await appHostForGateway?.listWorkspaceUnits())?.map((entry) => ({
-                name: entry.name,
-                status: entry.status,
-                error: entry.lastError,
-                errorDetails: entry.lastErrorDetails ?? null,
-                buildKey: entry.activeBundleKey ?? null,
-                effectiveVersion: entry.activeEv ?? null,
-                canRollback: entry.canRollback,
-                target: entry.target,
-              })) ?? [],
-          },
+        "supervision:changed": () => [
+          ...(appHostForGateway?.supervisionSnapshot() ?? []),
+          ...(extensionHostForGateway?.supervisionSnapshot() ?? []),
         ],
       },
     })

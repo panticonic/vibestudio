@@ -9,7 +9,7 @@ import {
 
 function createHarness(
   opts: {
-    resolveAppAvailableEvent?: (payload: unknown) => unknown;
+    onSupervisionChanged?: (change: never) => Promise<void> | void;
     onCredentialCaptureRequest?: (
       payload: Record<string, unknown>
     ) => Promise<Record<string, unknown>>;
@@ -28,20 +28,17 @@ function createHarness(
     recoverShellSnapshot: vi.fn(async () => undefined),
     createBrowserUrlPanel: vi.fn(async () => ({ panelId: "panel:tree/browser" })),
   };
-  const applyAppAvailable = vi.fn(async () => {});
   const serverClient = {
     call: vi.fn(async (_service: string, _method: string, _args: unknown[]) => undefined),
   };
   const warn = vi.fn();
-  const onAppHostTargetChanged = vi.fn();
+  const onSupervisionChanged = vi.fn(async (_change: unknown) => {});
   const handle = createServerEventBridge({
     eventService: eventService as never,
     getPanelOrchestrator: () => panelOrchestrator as never,
-    applyAppAvailable,
     getServerClient: () => serverClient as never,
     openExternal: vi.fn(async () => {}),
-    onAppHostTargetChanged,
-    resolveAppAvailableEvent: opts.resolveAppAvailableEvent,
+    onSupervisionChanged: opts.onSupervisionChanged ?? onSupervisionChanged,
     onCredentialCaptureRequest: opts.onCredentialCaptureRequest,
     onNotificationAction: opts.onNotificationAction,
     onPanelTreeInvalidated: opts.onPanelTreeInvalidated,
@@ -51,9 +48,8 @@ function createHarness(
     handle,
     eventService,
     panelOrchestrator,
-    applyAppAvailable,
     serverClient,
-    onAppHostTargetChanged,
+    onSupervisionChanged,
     warn,
   };
 }
@@ -343,67 +339,35 @@ describe("createServerEventBridge", () => {
     );
   });
 
-  it("applies app availability locally and still forwards the app event to shell UI", async () => {
-    const { handle, eventService, applyAppAvailable, onAppHostTargetChanged } = createHarness();
-    const payload = {
-      appId: "@workspace-apps/shell",
-      target: "electron",
-      url: "http://127.0.0.1/_a/app/index.html",
-      adoptionPolicy: "prompt",
+  it("hands a supervision change to the host and still forwards it to shell UI", async () => {
+    const { handle, eventService, onSupervisionChanged } = createHarness();
+    const change = {
+      identity: { kind: "app", entityId: "@workspace-apps/shell" },
+      change: "adopted",
+      adoption: "prompt",
     };
 
-    handle("apps:available", payload);
+    handle("supervision:changed", change);
     await Promise.resolve();
 
-    expect(applyAppAvailable).toHaveBeenCalledWith(payload);
-    expect(onAppHostTargetChanged).toHaveBeenCalledWith({ event: "apps:available", payload });
-    expect(eventService.emit).toHaveBeenCalledWith("apps:available", payload);
+    expect(onSupervisionChanged).toHaveBeenCalledWith(change);
+    expect(eventService.emit).toHaveBeenCalledWith("supervision:changed", change);
   });
 
-  it("normalizes app availability before local apply, host sync, and shell emit", async () => {
-    const resolvedPayload = {
-      appId: "@workspace-apps/shell",
-      target: "electron",
-      artifactRoute: "/_a/app/index.html",
-      url: "http://127.0.0.1:39479/_a/app/index.html",
-      adoptionPolicy: "prompt",
-    };
-    const { handle, eventService, applyAppAvailable, onAppHostTargetChanged } = createHarness({
-      resolveAppAvailableEvent: () => resolvedPayload,
+  it("reports a host failure to adopt a change without dropping the shell event", async () => {
+    const failure = new Error("panel host unavailable");
+    const { handle, eventService, warn } = createHarness({
+      onSupervisionChanged: vi.fn(async () => {
+        throw failure;
+      }),
     });
-    const payload = {
-      appId: "@workspace-apps/shell",
-      target: "electron",
-      artifactRoute: "/_a/app/index.html",
-      adoptionPolicy: "prompt",
-    };
-
-    handle("apps:available", payload);
-    await Promise.resolve();
-
-    expect(applyAppAvailable).toHaveBeenCalledWith(resolvedPayload);
-    expect(onAppHostTargetChanged).toHaveBeenCalledWith({
-      event: "apps:available",
-      payload: resolvedPayload,
-    });
-    expect(eventService.emit).toHaveBeenCalledWith("apps:available", resolvedPayload);
-  });
-
-  it("drops app availability rejected by the local resolver", async () => {
-    const { handle, eventService, applyAppAvailable, onAppHostTargetChanged } = createHarness({
-      resolveAppAvailableEvent: () => null,
-    });
-
-    handle("apps:available", {
-      appId: "@workspace-apps/shell",
-      target: "electron",
-      url: "https://old.example/_a/app/index.html",
-    });
-    await Promise.resolve();
-
-    expect(applyAppAvailable).not.toHaveBeenCalled();
-    expect(onAppHostTargetChanged).not.toHaveBeenCalled();
-    expect(eventService.emit).not.toHaveBeenCalled();
+    handle("supervision:changed", { identity: { kind: "app", entityId: "a" } });
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "[supervision] failed to apply unit change: panel host unavailable"
+      )
+    );
+    expect(eventService.emit).toHaveBeenCalled();
   });
 });
 

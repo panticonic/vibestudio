@@ -80,7 +80,6 @@ export interface ReactNativeAppAdapterDeps {
     identityKeys: string[];
   }>;
   acceptPreapprovedTrust(keys: Iterable<string>): void;
-  emitStatus(appId: string, status: AppRegistryEntry["status"], error: string | null): void;
 }
 
 /** Owns the native-host artifact, readiness, and launch-approval lifecycle. */
@@ -332,9 +331,7 @@ export class ReactNativeAppAdapter {
         applyApproved: async () => {
           this.approvedLaunchPreflights.set(sourceKey, { ...declared });
         },
-        applyDenied: () => {
-          this.deps.emitStatus(candidate.name, "pending-approval", null);
-        },
+        applyDenied: () => undefined,
       })
       .catch((error) => {
         console.error(

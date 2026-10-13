@@ -23,6 +23,8 @@ import {
   requireExactUnitAdmission,
   UNIT_ROLLBACK_HISTORY_LIMIT,
   unitBuildIdentityFromRegistryEntry,
+  unitSupervisionChange,
+  observeUnitSupervision,
   canonicalUnitBuildIdentity,
   unitAuthorityManifestFromPackageJson,
   type UnitBuildIdentity,
@@ -37,7 +39,11 @@ import {
 } from "@vibestudio/unit-host";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { EventService } from "@vibestudio/shared/eventsService";
-import type { EventName, NotificationPayload } from "@vibestudio/shared/events";
+import type {
+  AppAdoptionPolicy,
+  NotificationPayload,
+  SupervisionChange,
+} from "@vibestudio/shared/events";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
@@ -67,7 +73,7 @@ import {
   type WorkspaceAppTarget,
 } from "@vibestudio/shared/unitManifest";
 import type { HostTarget, HostTargetCandidate } from "@vibestudio/shared/hostTargets";
-import { appArtifactRoute, appArtifactUrl } from "@vibestudio/shared/appArtifacts";
+import { appArtifactRoute } from "@vibestudio/shared/appArtifacts";
 import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
@@ -149,38 +155,6 @@ export interface AppActivationTrustRecord {
   actor: "shell-host";
   reason: string;
   acceptedAt: number;
-}
-
-interface AppAvailablePayload {
-  appId: string;
-  source: string;
-  target: WorkspaceAppTarget;
-  launchMode: AppLaunchMode;
-  url?: string;
-  artifactRoute: string;
-  artifacts: Array<{
-    path: string;
-    role: string;
-    contentType: string;
-    encoding: string;
-    platform?: string;
-    integrity?: string;
-    route: string;
-    url?: string;
-  }>;
-  capabilities: AppCapability[];
-  buildKey: string | null;
-  effectiveVersion: string | null;
-  executionDigest: string | null;
-  authority: import("@vibestudio/shared/authorityManifest").UnitAuthorityManifest;
-  previousBuildKey: string | null;
-  previousEffectiveVersion: string | null;
-  canRollback: boolean;
-  adoptionPolicy: "immediate" | "prompt" | "artifact-only";
-  selectedForHost?: boolean;
-  integrity?: string | null;
-  rnHostAbi?: string | null;
-  provider?: AppBuildProviderDetails | null;
 }
 
 export type ElectronHostReadiness =
@@ -408,6 +382,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       }),
       publicationPort: deps.executionPublicationPort,
     });
+    observeUnitSupervision(this.registry, (change, entry) => this.publish(change, entry));
     this.trustResolver = new UnitTrustResolver<AppRegistryEntry>({
       entryIdentity: (entry) => this.registryEntryIdentity(entry),
     });
@@ -443,14 +418,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       removeUndeclared: async (entry) => {
         this.principals.retireForEntry(entry);
         this.retireAppEntity(entry.name);
-        this.emitStatus(entry.name, "stopped", null);
-      },
-      emitRemoved: (entry) => {
-        this.deps.eventService.emit("apps:status" as EventName, {
-          name: entry.name,
-          status: "stopped",
-          error: null,
-        });
       },
       notifyUnresolved: (sources) => {
         this.deps.notificationService?.show({
@@ -460,8 +427,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         });
       },
       validateBeforeApproval: (node) => this.validateAppManifestAtPath(node.path, node.name),
-      onApprovalCandidateError: (node, _decl, message) =>
-        this.emitStatus(node.name, "error", message),
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl),
       approvalOrigins: (entries) => this.resolveOriginsFor(entries),
       requestApproval: async (entries, trigger) => {
@@ -484,9 +449,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         });
       },
       approvalCoordinator: deps.approvalCoordinator,
-      onApprovalDenied: (items) => {
-        for (const { node } of items) this.emitStatus(node.name, "pending-approval", null);
-      },
       onBackgroundError: (err) => {
         console.error(
           "[AppHost] Background app approval flow failed:",
@@ -513,7 +475,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       approvalForDeclarations: (declarations) =>
         this.unitHost.approvalForDeclarations(declarations),
       acceptPreapprovedTrust: (keys) => this.unitHost.acceptPreapprovedTrust(keys),
-      emitStatus: (appId, status, error) => this.emitStatus(appId, status, error),
     });
     this.principals = new DeviceAppPrincipals({
       workspaceId: deps.workspaceId,
@@ -1087,17 +1048,8 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       lastErrorDetails: null,
       activationTrust: null,
     });
-    await this.activateAppEntity(updated, build);
     const activated = this.registry.get(updated.name) ?? updated;
-    await this.emitAvailable(
-      activated,
-      {
-        lifecycleType: "rolled-back",
-        previousBuildKey: entry.activeBundleKey ?? null,
-        notify: true,
-      },
-      build
-    );
+    await this.adopt(activated, "rolled-back", build, { notify: true });
     return activated;
   }
 
@@ -1109,7 +1061,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
     if (!build) throw new Error(`Active app build is missing: ${entry.activeBundleKey}`);
     this.validateBuildForTarget(entry.name, entry.target, build);
-    await this.emitAvailable(entry, { lifecycleType: "available" }, build);
+    await this.adopt(entry, "adopted", build);
   }
 
   /** Ensure the declared release has an owned preparation and activation.
@@ -1194,9 +1146,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.requireAdmission(prepared.name, prepared.source.repo, build.metadata.ev);
     // A recorded update that was not adopted describes the candidate, not this
     // build, so activating the adopted build leaves it in place.
-    const entry = this.registry.patch(prepared.name, { status: "running" });
-    await this.activateAppEntity(entry, build);
-    await this.emitAvailable(entry, { lifecycleType: "available" }, build);
+    await this.adopt(this.registry.patch(prepared.name, { status: "running" }), "adopted", build);
   }
 
   async retire(sourceOrName: string): Promise<void> {
@@ -1204,7 +1154,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!entry) throw new Error(`Unknown app: ${sourceOrName}`);
     this.retireAppEntity(entry.name);
     this.registry.patch(entry.name, { status: "stopped", lastError: null });
-    this.emitStatus(entry.name, "stopped", null);
   }
 
   listWorkspaceUnitLogs(name: string): Array<{
@@ -1291,7 +1240,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * The server-vetted capability set for an app entry: the self-declared
    * capabilities with `panel-hosting` removed unless the app's source is
    * authorized. This is the set that MUST be
-   * projected onto client-facing surfaces (e.g. the `apps:available` event), so
+   * projected onto client-facing surfaces (e.g. the `supervision:changed` event), so
    * that a client can never treat an unauthorized self-declaration as granted.
    */
   private effectiveCapabilities(entry: AppRegistryEntry): AppCapability[] {
@@ -1695,12 +1644,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       // registration can reconcile on demand.
       const existing = this.registry.get(node.name) ?? null;
       if (!existing) this.registry.upsert(this.pendingEntryFor(node, decl));
-      const deferred = this.registry.patch(node.name, {
+      this.registry.patch(node.name, {
         status: existing?.activeBundleKey ? "running" : "stopped",
         lastError: null,
         lastErrorDetails: null,
       });
-      this.emitStatus(deferred.name, deferred.status, null);
       return;
     }
     await this.unitHost.applyRuntimeDeclaration({
@@ -1708,18 +1656,20 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       decl,
       validateBeforeApply: () => this.validateAppManifestAtPath(node.path, node.name),
       needsBuildRefresh: (entry) => this.needsBuildRefresh(entry, node, decl),
-      buildAndActivate: (n, d) => this.buildAndActivate(n, d),
+      buildAndActivate: async (n, d) => {
+        await this.buildAndActivate(n, d);
+      },
       validateBeforeActivateCurrent: (entry) => this.validateActiveBuild(entry),
-      activateCurrent: async (entry) => {
-        this.emitStatus(entry.name, entry.status, null);
-      },
-      onError: (_node, _decl, message) => {
-        this.emitStatus(node.name, this.registry.get(node.name)?.status ?? "error", message);
-      },
+      // Nothing to activate for an up-to-date unit; activation is demand-driven.
+      activateCurrent: async () => undefined,
     });
   }
 
-  private async buildAndActivate(node: AppGraphNode, decl: WorkspaceAppDeclaration): Promise<void> {
+  /** Build, prove and adopt the declared release; returns the adopted build. */
+  private async buildAndActivate(
+    node: AppGraphNode,
+    decl: WorkspaceAppDeclaration
+  ): Promise<AppBuildResultLike> {
     this.assertAppHosting();
     const previous = this.registry.get(node.name) ?? null;
     const diagnostic: AppUpdateErrorDiagnostic = { phase: "build", source: node.relativePath };
@@ -1734,7 +1684,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       this.validateBuildForTarget(node.name, target, build);
       this.requireAdmission(node.name, node.relativePath, build.metadata.ev);
       diagnostic.phase = "activation";
-      const entry = this.adoptBuild(
+      this.adoptBuild(
         node,
         target,
         decl.ref,
@@ -1745,7 +1695,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         },
         null
       );
-      this.emitStatus(entry.name, entry.status, null);
+      return build;
     } catch (err) {
       if (err && typeof err === "object") {
         (err as { appUpdateDiagnostic?: AppUpdateErrorDiagnostic }).appUpdateDiagnostic =
@@ -1762,102 +1712,77 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     }
   }
 
-  private async emitAvailable(
+  /**
+   * Announce an adopted build to clients and, unless it is an update, activate
+   * its entity. `adopted` covers first activation and updates alike; the
+   * target's adoption policy tells each client whether to take it now, ask
+   * first, or ignore it. An update is announced only: the running build keeps
+   * serving, with its principals and capabilities, until a client takes it.
+   */
+  private async adopt(
     entry: AppRegistryEntry,
-    opts: {
-      lifecycleType?: "available" | "update-available" | "rolled-back";
-      previousBuildKey?: string | null;
-      previousEffectiveVersion?: string | null;
-      notify?: boolean;
-    } = {},
-    activatedBuild?: AppBuildResultLike
-  ): Promise<AppAvailablePayload> {
-    await this.activateAppEntity(entry, activatedBuild);
-    const buildKey = entry.activeBundleKey ?? "";
-    const build =
-      activatedBuild ?? (buildKey ? await this.deps.buildSystem.getBuildByKey(buildKey) : null);
-    const artifactRefs = (build?.artifacts ?? []).map((artifact) => {
-      const url = this.getAppArtifactUrl(buildKey, entry.target, artifact.path);
-      return {
-        path: artifact.path,
-        role: artifact.role,
-        contentType: artifact.contentType,
-        encoding: artifact.encoding,
-        platform: artifact.platform,
-        integrity: artifact.integrity,
-        route: appArtifactRoute(buildKey, artifact.path),
-        ...(url ? { url } : {}),
-      };
-    });
-    const primaryArtifact =
-      artifactRefs.find((artifact) => entry.target === "electron" && artifact.role === "html") ??
-      artifactRefs.find((artifact) => artifact.role === "primary") ??
-      artifactRefs[0];
-    const selectedForHost = true;
-    const details =
-      build?.metadata.details &&
-      build.metadata.details.kind === "app" &&
-      "integrity" in build.metadata.details
-        ? build.metadata.details
-        : null;
-    if (!build?.metadata.authority) {
+    change: "adopted" | "rolled-back",
+    build: AppBuildResultLike,
+    opts: { update?: boolean; notify?: boolean } = {}
+  ): Promise<void> {
+    if (opts.update !== true) await this.activateAppEntity(entry, build);
+    if (!build.metadata.authority) {
       throw new Error(`Active app ${entry.name} build is missing sealed authority metadata`);
     }
-    const artifactRoute = primaryArtifact?.route ?? appArtifactRoute(buildKey, "index.html");
-    const url =
-      primaryArtifact?.url ?? this.getAppArtifactUrl(buildKey, entry.target, "index.html");
-    const payload: AppAvailablePayload = {
-      appId: entry.name,
-      source: normalizeRepoPath(entry.source.repo),
-      target: entry.target,
-      launchMode: appLaunchMode(entry.target),
-      artifactRoute,
-      artifacts: artifactRefs,
-      capabilities: this.effectiveCapabilities(entry),
-      buildKey: entry.activeBundleKey,
-      effectiveVersion: entry.activeEv,
-      executionDigest: build?.metadata.execution?.executionDigest ?? null,
-      authority: build.metadata.authority,
-      previousBuildKey: opts.previousBuildKey ?? null,
-      previousEffectiveVersion: opts.previousEffectiveVersion ?? null,
-      canRollback: entry.previousVersions.length > 0,
-      adoptionPolicy: appAdoptionPolicy(opts.lifecycleType ?? "available"),
-      selectedForHost,
-      integrity: details?.integrity ?? null,
-      rnHostAbi: details?.rnHostAbi ?? null,
-      provider: details?.provider ?? null,
-    };
-    if (url) payload.url = url;
-    this.deps.eventService.emit("apps:available" as EventName, payload);
-    this.emitAppLifecycle({
-      type: opts.lifecycleType ?? "available",
-      appId: entry.name,
-      source: normalizeRepoPath(entry.source.repo),
-      target: entry.target,
-      buildKey: entry.activeBundleKey,
-      effectiveVersion: entry.activeEv,
-      previousBuildKey: opts.previousBuildKey ?? null,
-      previousEffectiveVersion: opts.previousEffectiveVersion ?? null,
-      canRollback: entry.previousVersions.length > 0,
-      requiresReload: true,
-      adoptionPolicy: appAdoptionPolicy(opts.lifecycleType ?? "available"),
-      ...(selectedForHost === undefined ? {} : { selectedForHost }),
-    });
+    const primary =
+      (entry.target === "electron"
+        ? build.artifacts.find((artifact) => artifact.role === "html")
+        : undefined) ??
+      build.artifacts.find((artifact) => artifact.role === "primary") ??
+      build.artifacts[0];
+    this.publish(
+      {
+        ...unitSupervisionChange(entry, null, change),
+        previousBuildKey: entry.previousVersions[0]?.activeBundleKey ?? null,
+        previousEffectiveVersion: entry.previousVersions[0]?.activeEv ?? null,
+        adoption: appAdoptionPolicy(entry.target, opts.update === true),
+        app: {
+          ...this.appInfo(entry),
+          artifactRoute: appArtifactRoute(
+            entry.activeBundleKey ?? "",
+            primary?.path ?? "index.html"
+          ),
+          authority: build.metadata.authority,
+        },
+      },
+      entry
+    );
     if (opts.notify) this.notifyAppUpdateAvailable(entry);
-    this.emitStatus(entry.name, entry.status, entry.lastError ?? null);
-    return payload;
   }
 
-  private getAppArtifactUrl(
-    buildKey: string,
-    target: WorkspaceAppTarget,
-    artifactPath: string
-  ): string | undefined {
-    if (target === "electron") return undefined;
-    if (target === "react-native") {
-      return appArtifactUrl(this.deps.getReactNativeAppArtifactBaseUrl(), buildKey, artifactPath);
-    }
-    return appArtifactUrl(this.deps.getTerminalAppArtifactBaseUrl(), buildKey, artifactPath);
+  private appInfo(entry: AppRegistryEntry): NonNullable<SupervisionChange["app"]> {
+    return { target: entry.target, capabilities: this.effectiveCapabilities(entry) };
+  }
+
+  /** The one place an app's state leaves the host: diagnostics, then clients. */
+  private publish(change: SupervisionChange, entry: AppRegistryEntry): void {
+    const name = change.identity.entityId;
+    this.deps.diagnostics.record({
+      workspaceId: this.deps.workspaceId,
+      entityId: name,
+      kind: "app",
+      level: change.status === "error" || change.lastError ? "error" : "info",
+      message: change.lastError ?? `App ${name} is ${change.status}`,
+      source: "lifecycle",
+      fields: { status: change.status, errorDetails: entry.lastErrorDetails ?? null },
+    });
+    this.deps.eventService.emit("supervision:changed", {
+      ...change,
+      app: { ...this.appInfo(entry), ...change.app },
+    });
+  }
+
+  /** Current state of every app, for clients that start watching late. */
+  supervisionSnapshot(): SupervisionChange[] {
+    return this.registry.list().map((entry) => ({
+      ...unitSupervisionChange(entry, null),
+      app: this.appInfo(entry),
+    }));
   }
 
   private async validateActiveBuild(entry: AppRegistryEntry): Promise<void> {
@@ -1919,59 +1844,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   ): void {
     this.assertAppHosting();
     validateAppBuildContract(appName, target, build);
-  }
-
-  private emitStatus(
-    name: string,
-    status: AppRegistryEntry["status"],
-    error: string | null,
-    errorDetails?: AppUpdateErrorDiagnostic | null
-  ): void {
-    const entry = this.registry.get(name);
-    this.deps.diagnostics.record({
-      workspaceId: this.deps.workspaceId,
-      entityId: name,
-      kind: "app",
-      level: status === "error" || error ? "error" : "info",
-      message: error ?? `App ${name} is ${status}`,
-      source: "lifecycle",
-      fields: {
-        status,
-        errorDetails: errorDetails ?? entry?.lastErrorDetails ?? null,
-      },
-    });
-    this.deps.eventService.emit("apps:status" as EventName, {
-      name,
-      status,
-      error,
-      errorDetails: errorDetails ?? entry?.lastErrorDetails ?? null,
-      buildKey: entry?.activeBundleKey ?? null,
-      effectiveVersion: entry?.activeEv ?? null,
-      canRollback: !!entry?.previousVersions?.length,
-      target: entry?.target,
-    });
-  }
-
-  private emitAppLifecycle(payload: {
-    type: "available" | "update-available" | "update-error" | "rolled-back";
-    appId: string;
-    source: string;
-    target?: WorkspaceAppTarget;
-    buildKey?: string | null;
-    effectiveVersion?: string | null;
-    previousBuildKey?: string | null;
-    previousEffectiveVersion?: string | null;
-    error?: string;
-    errorDetails?: AppUpdateErrorDiagnostic | null;
-    canRollback: boolean;
-    requiresReload?: boolean;
-    adoptionPolicy?: "immediate" | "prompt";
-    selectedForHost?: boolean;
-  }): void {
-    this.deps.eventService.emit("apps:lifecycle" as EventName, {
-      ...payload,
-      emittedAt: Date.now(),
-    });
   }
 
   private notifyAppUpdateAvailable(entry: AppRegistryEntry): void {
@@ -2370,7 +2242,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     // reactNative.ensureReady() themselves.
     this.emitDevStatusDiagnostic("provider-change");
     const entry = candidate ? this.registry.get(candidate.name) : null;
-    if (entry) this.emitStatus(entry.name, entry.status, entry.lastError);
+    if (entry) this.publish(unitSupervisionChange(entry, null), entry);
   }
 
   private declaredForCandidate(
@@ -2442,25 +2314,13 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!this.sourceChangeAppliesToEntry(trigger, entry)) return;
     const node = this.findAppNode(entry.name);
     try {
-      await this.buildAndActivate(node, {
+      const build = await this.buildAndActivate(node, {
         source: node.relativePath,
         ref: entry.source.ref,
       });
       const prepared = this.registry.get(entry.name);
       if (prepared?.activeBundleKey && prepared.activeBundleKey !== entry.activeBundleKey) {
-        this.emitAppLifecycle({
-          type: "update-available",
-          appId: prepared.name,
-          source: normalizeRepoPath(prepared.source.repo),
-          target: prepared.target,
-          buildKey: prepared.activeBundleKey,
-          effectiveVersion: prepared.activeEv,
-          previousBuildKey: entry.activeBundleKey,
-          previousEffectiveVersion: entry.activeEv,
-          canRollback: prepared.previousVersions.length > 0,
-          requiresReload: true,
-          adoptionPolicy: appAdoptionPolicy("update-available"),
-        });
+        await this.adopt(prepared, "adopted", build, { update: true });
         this.notifyAppUpdateAvailable(prepared);
       }
       this.emitDevStatusDiagnostic("source-rebuilt");
@@ -2472,19 +2332,13 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
             null)
           : null;
       const updated = this.registry.get(entry.name) ?? entry;
-      this.emitStatus(entry.name, updated.status, message, diagnostic);
-      this.emitAppLifecycle({
-        type: "update-error",
-        appId: entry.name,
-        source: normalizeRepoPath(entry.source.repo),
-        target: entry.target,
-        buildKey: updated.activeBundleKey,
-        effectiveVersion: updated.activeEv,
-        error: message,
-        errorDetails: diagnostic,
-        canRollback: updated.previousVersions.length > 0,
-        requiresReload: false,
-      });
+      this.publish(
+        {
+          ...unitSupervisionChange(updated, null, "update-rejected"),
+          lastError: message,
+        },
+        updated
+      );
       this.notifyAppUpdateError(updated, message, diagnostic);
     }
   }
@@ -2706,14 +2560,6 @@ function buildProviderIdentityValue(provider: AppBuildProviderDetails): string {
  * imports the terminal app's ESM module into its own process. No target runs
  * as a server process.
  */
-export type AppLaunchMode = "hosted-view" | "native-bootstrap" | "client-module";
-
-function appLaunchMode(target: WorkspaceAppTarget): AppLaunchMode {
-  if (target === "electron") return "hosted-view";
-  if (target === "react-native") return "native-bootstrap";
-  return "client-module";
-}
-
 function requireBuildSourceStateHash(unitName: string, build: AppBuildResultLike): string {
   if (build.sourceStateHash) return build.sourceStateHash;
   if (build.metadata.sourceStateHash) return build.metadata.sourceStateHash;
@@ -2820,10 +2666,14 @@ function normalizeArtifactPath(remainderPath: string): string {
   return clean.replace(/\\/g, "/");
 }
 
-function appAdoptionPolicy(
-  lifecycleType: "available" | "update-available" | "rolled-back"
-): "immediate" | "prompt" {
-  return lifecycleType === "update-available" ? "prompt" : "immediate";
+/**
+ * Per-target adoption policy. Electron and React Native ask before replacing
+ * what is running with an update; a terminal app is fetched by the client each
+ * time it launches, so nothing is pushed to it.
+ */
+function appAdoptionPolicy(target: WorkspaceAppTarget, update: boolean): AppAdoptionPolicy {
+  if (target === "terminal") return "artifact-only";
+  return update ? "prompt" : "immediate";
 }
 
 function appUpdateTargetCopy(target: WorkspaceAppTarget): { title: string; message: string } {

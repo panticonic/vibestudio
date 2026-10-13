@@ -942,11 +942,14 @@ describe("ExtensionHost reconcileDeclared", () => {
           lastError: failure.lastError,
         })
       );
-      expect(eventService.emit).toHaveBeenCalledWith("extensions:status", {
-        name: extensionNode.name,
-        status: "error",
-        error: failure.lastError,
-      });
+      expect(eventService.emit).toHaveBeenCalledWith(
+        "supervision:changed",
+        expect.objectContaining({
+          identity: { kind: "extension", entityId: extensionNode.name },
+          status: "error",
+          lastError: failure.lastError,
+        })
+      );
       await expect(
         host.invoke(panelCtx(), extensionNode.name, "confirm", [])
       ).rejects.toMatchObject({
@@ -991,11 +994,14 @@ describe("ExtensionHost reconcileDeclared", () => {
     await host.whenSettled();
     const current = host.registry.get(extensionNode.name)!;
     expect(current).toEqual({ ...approved, lastError: expect.stringMatching(/website/) });
-    expect(eventService.emit).toHaveBeenCalledWith("extensions:status", {
-      name: extensionNode.name,
-      status: "running",
-      error: current.lastError,
-    });
+    expect(eventService.emit).toHaveBeenCalledWith(
+      "supervision:changed",
+      expect.objectContaining({
+        identity: { kind: "extension", entityId: extensionNode.name },
+        status: "running",
+        lastError: current.lastError,
+      })
+    );
     await expect(host.invoke(panelCtx(), extensionNode.name, "confirm", [])).resolves.toBe(
       "approved image result"
     );

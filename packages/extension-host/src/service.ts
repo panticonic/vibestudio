@@ -26,7 +26,7 @@ import {
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { EventName } from "@vibestudio/shared/events";
-import type { NotificationPayload } from "@vibestudio/shared/events";
+import type { NotificationPayload, SupervisionChange } from "@vibestudio/shared/events";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
@@ -66,8 +66,10 @@ import {
   normalizeUnitRepoPath as normalizeRepoPath,
   normalizeUnitRef as normalizeRef,
   requestUnitInstallReview,
+  observeUnitSupervision,
   requireExactUnitAdmission,
   UNIT_ROLLBACK_HISTORY_LIMIT,
+  unitSupervisionChange,
   unitAuthorityManifestFromPackageJson,
   unitBuildIdentityFromRegistryEntry,
   type UnitDeclaration,
@@ -376,6 +378,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       unitKind: EXTENSION_UNIT_DESCRIPTOR.kind,
       publicationPort: deps.executionPublicationPort,
     });
+    observeUnitSupervision(this.registry, (change) =>
+      this.deps.eventService.emit("supervision:changed", change)
+    );
     this.extensionTrustResolver = new UnitTrustResolver<RegistryEntry>({
       entryIdentity: (entry) => this.registryEntryBuildIdentity(entry),
     });
@@ -389,7 +394,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         if (this.registry.has(name)) {
           this.registry.patch(name, { status, lastError: error ?? null });
         }
-        this.deps.eventService.emit("extensions:status", { name, status, error: error ?? null });
         this.deps.onWorkspaceUnitsChanged?.("extension-status");
       },
       onError: (name, error, attempts) => {
@@ -435,11 +439,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       },
       onInspectorUrl: (name, inspectorUrl) => {
         this.inspectorUrls.set(name, inspectorUrl);
-        this.deps.eventService.emit("extensions:status", {
-          name,
-          status: this.registry.get(name)?.status ?? "running",
-          inspectorUrl,
-        });
         this.deps.onWorkspaceUnitsChanged?.("extension-status");
       },
     });
@@ -477,14 +476,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         await this.processes.stop(entry.name);
         this.unregisterBuildProvidersFor(entry.name);
       },
-      emitRemoved: (entry) => {
-        this.deps.eventService.emit("extensions:status", {
-          name: entry.name,
-          status: "stopped",
-          error: null,
-        });
-        this.deps.onWorkspaceUnitsChanged?.("extension-removed");
-      },
+      emitRemoved: () => this.deps.onWorkspaceUnitsChanged?.("extension-removed"),
       notifyUnresolved: (sources) => {
         this.deps.notificationService?.show({
           type: "error",
@@ -493,14 +485,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         });
       },
       validateBeforeApproval: (node) => this.validateExtensionManifestAtPath(node.path, node.name),
-      onApprovalCandidateError: (node, _decl, message) => {
-        this.deps.eventService.emit("extensions:status", {
-          name: node.name,
-          status: this.registry.get(node.name)!.status,
-          error: message,
-        });
-        this.deps.onWorkspaceUnitsChanged?.("extension-status");
-      },
+      onApprovalCandidateError: () => this.deps.onWorkspaceUnitsChanged?.("extension-status"),
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl.ref),
       approvalOrigins: (entries) =>
         this.resolveOriginsFor(entries.map((entry) => entry.source.repo)),
@@ -526,13 +511,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       approvalCoordinator: deps.approvalCoordinator,
       onApprovalDenied: (items) => {
         const names = items.map((item) => item.node.name);
-        for (const name of names) {
-          this.deps.eventService.emit("extensions:status", {
-            name,
-            status: "pending-approval",
-            error: null,
-          });
-        }
         this.deps.onWorkspaceUnitsChanged?.("extension-status");
         this.deps.notificationService?.show({
           type: "info",
@@ -2757,6 +2735,11 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       }
       throw err;
     }
+  }
+
+  /** Current state of every extension, for clients that start watching late. */
+  supervisionSnapshot(): SupervisionChange[] {
+    return this.registry.list().map((entry) => unitSupervisionChange(entry, null));
   }
 
   /** Retained builds of an extension, newest first. */

@@ -1062,7 +1062,10 @@ describe("AppHost", () => {
       activeSourceHash: "state:test",
       status: "available",
     });
-    expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
+    expect(eventService.emit).not.toHaveBeenCalledWith(
+      "supervision:changed",
+      expect.objectContaining({ change: "adopted" })
+    );
     expect(entityCache.resolveActive("@workspace-apps/shell")).toBeNull();
   });
 
@@ -1100,13 +1103,13 @@ describe("AppHost", () => {
       activeEv: "ev-app",
     });
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:status",
+      "supervision:changed",
       expect.objectContaining({
-        name: "@workspace-apps/shell",
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
+        change: "status",
         status: "running",
-        error: "broken app code",
-        errorDetails: expect.objectContaining({ phase: "build", source: "apps/shell" }),
-        buildKey: "app-key",
+        lastError: "broken app code",
+        artifact: expect.objectContaining({ buildKey: "app-key" }),
         canRollback: false,
       })
     );
@@ -1118,12 +1121,12 @@ describe("AppHost", () => {
       },
     });
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:lifecycle",
+      "supervision:changed",
       expect.objectContaining({
-        type: "update-error",
-        appId: "@workspace-apps/shell",
-        error: "broken app code",
-        errorDetails: expect.objectContaining({ phase: "build", source: "apps/shell" }),
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
+        change: "update-rejected",
+        status: "running",
+        lastError: "broken app code",
       })
     );
     expect(notificationService.show).toHaveBeenCalledWith(
@@ -1192,11 +1195,13 @@ describe("AppHost", () => {
       ],
     });
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:lifecycle",
+      "supervision:changed",
       expect.objectContaining({
-        type: "update-available",
-        appId: "@workspace-apps/shell",
-        buildKey: "app-key-2",
+        change: "adopted",
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
+        artifact: expect.objectContaining({ buildKey: "app-key-2" }),
+        previousBuildKey: "app-key",
+        adoption: "prompt",
       })
     );
   });
@@ -1319,11 +1324,11 @@ describe("AppHost", () => {
       ],
     });
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:lifecycle",
+      "supervision:changed",
       expect.objectContaining({
-        type: "rolled-back",
-        appId: "@workspace-apps/shell",
-        buildKey: "app-key",
+        change: "rolled-back",
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
+        artifact: expect.objectContaining({ buildKey: "app-key" }),
         canRollback: true,
       })
     );
@@ -1373,12 +1378,12 @@ describe("AppHost", () => {
 
     await expect(host.activateRelease("@workspace-apps/shell")).resolves.toBeUndefined();
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
+      "supervision:changed",
       expect.objectContaining({
-        appId: "@workspace-apps/shell",
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
         source: "apps/shell",
-        target: "electron",
-        selectedForHost: true,
+        change: "adopted",
+        app: expect.objectContaining({ target: "electron" }),
       })
     );
   });
@@ -1399,12 +1404,12 @@ describe("AppHost", () => {
       status: "running",
     });
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
+      "supervision:changed",
       expect.objectContaining({
-        appId: "@workspace-apps/shell",
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
         source: "apps/shell",
-        target: "electron",
-        selectedForHost: true,
+        change: "adopted",
+        app: expect.objectContaining({ target: "electron" }),
       })
     );
   });
@@ -1479,12 +1484,12 @@ describe("AppHost", () => {
     );
     expect(buildSystem.getStoredBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
+      "supervision:changed",
       expect.objectContaining({
-        appId: "@workspace-apps/shell",
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
         source: "apps/shell",
-        target: "electron",
-        selectedForHost: true,
+        change: "adopted",
+        app: expect.objectContaining({ target: "electron" }),
       })
     );
   });
@@ -1587,7 +1592,10 @@ describe("AppHost", () => {
     });
     expect(buildSystem.getStoredBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
     expect(host.registry.get("@workspace-apps/shell")).toBeNull();
-    expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
+    expect(eventService.emit).not.toHaveBeenCalledWith(
+      "supervision:changed",
+      expect.objectContaining({ change: "adopted" })
+    );
   });
 
   it("advertises Electron shell artifacts as gateway routes", async () => {
@@ -1609,23 +1617,21 @@ describe("AppHost", () => {
       artifactRoute: "/_a/app-key/index.html",
     });
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
+      "supervision:changed",
       expect.objectContaining({
-        appId: "@workspace-apps/shell",
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
         source: "apps/shell",
-        target: "electron",
-        artifactRoute: "/_a/app-key/index.html",
-        artifacts: expect.arrayContaining([
-          expect.objectContaining({
-            path: "index.html",
-            route: "/_a/app-key/index.html",
-          }),
-        ]),
+        change: "adopted",
+        adoption: "immediate",
+        app: expect.objectContaining({
+          target: "electron",
+          artifactRoute: "/_a/app-key/index.html",
+        }),
       })
     );
   });
 
-  it("keeps panel-hosting in apps:available for a trusted chrome app", async () => {
+  it("keeps panel-hosting in the adoption for a trusted chrome app", async () => {
     const { host, eventService, graphNode } = await makeHarness();
     // This workspace manifest grants chrome authority to apps/shell.
     graphNode.manifest.app.capabilities = ["panel-hosting", "notifications"] as never;
@@ -1635,11 +1641,14 @@ describe("AppHost", () => {
     await host.activateRelease("@workspace-apps/shell");
 
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
+      "supervision:changed",
       expect.objectContaining({
-        appId: "@workspace-apps/shell",
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
         source: "apps/shell",
-        capabilities: expect.arrayContaining(["panel-hosting", "notifications"]),
+        change: "adopted",
+        app: expect.objectContaining({
+          capabilities: expect.arrayContaining(["panel-hosting", "notifications"]),
+        }),
       })
     );
   });
@@ -1661,16 +1670,19 @@ describe("AppHost", () => {
     expect(system.host.hasAppCapability("@workspace-apps/shell", "panel-hosting")).toBe(true);
     expect(other.host.hasAppCapability("@workspace-apps/shell", "panel-hosting")).toBe(false);
     expect(system.eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
+      "supervision:changed",
       expect.objectContaining({
-        capabilities: expect.arrayContaining(["panel-hosting", "notifications"]),
+        change: "adopted",
+        app: expect.objectContaining({
+          capabilities: expect.arrayContaining(["panel-hosting", "notifications"]),
+        }),
       })
     );
     systemTrust = { chromeApps: [] };
     expect(system.host.hasAppCapability("@workspace-apps/shell", "panel-hosting")).toBe(false);
   });
 
-  it("strips panel-hosting from apps:available for an app absent from trust.chromeApps", async () => {
+  it("strips panel-hosting from the adoption for an app absent from trust.chromeApps", async () => {
     const { host, eventService, graphNode } = await makeHarness({
       getWorkspaceTrustGrants: () => ({ chromeApps: [] }),
     });
@@ -1681,11 +1693,11 @@ describe("AppHost", () => {
     await host.activateRelease("@workspace-apps/shell");
 
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
+      "supervision:changed",
       expect.objectContaining({
-        appId: "@workspace-apps/shell",
-        source: "apps/shell",
-        capabilities: ["notifications"],
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
+        change: "adopted",
+        app: expect.objectContaining({ capabilities: ["notifications"] }),
       })
     );
     // And the server-side authorization check agrees: the capability is not granted.
@@ -2180,22 +2192,17 @@ describe("AppHost", () => {
       status: "active",
     });
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
+      "supervision:changed",
       expect.objectContaining({
-        appId: graphNode.name,
+        identity: { kind: "app", entityId: graphNode.name },
         source: "apps/terminal-browser",
-        target: "terminal",
-        launchMode: "client-module",
-        buildKey: "terminal-key",
-        artifactRoute: "/_a/terminal-key/index.mjs",
-        url: "http://127.0.0.1:1234/_a/terminal-key/index.mjs",
-        artifacts: [
-          expect.objectContaining({
-            path: "index.mjs",
-            role: "primary",
-            route: "/_a/terminal-key/index.mjs",
-          }),
-        ],
+        change: "adopted",
+        adoption: "artifact-only",
+        artifact: expect.objectContaining({ buildKey: "terminal-key" }),
+        app: expect.objectContaining({
+          target: "terminal",
+          artifactRoute: "/_a/terminal-key/index.mjs",
+        }),
       })
     );
 
@@ -2325,7 +2332,10 @@ describe("AppHost", () => {
       activeBundleKey: "terminal-key",
       status: "available",
     });
-    expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
+    expect(eventService.emit).not.toHaveBeenCalledWith(
+      "supervision:changed",
+      expect.objectContaining({ change: "adopted" })
+    );
     expect(
       await host.registerDevicePrincipal("terminal", "device-1", graphNode.relativePath)
     ).toBeNull();
@@ -2594,13 +2604,13 @@ describe("AppHost", () => {
       ],
     });
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:lifecycle",
+      "supervision:changed",
       expect.objectContaining({
-        type: "rolled-back",
-        appId: graphNode.name,
-        target: "terminal",
-        buildKey: "terminal-key-1",
-        adoptionPolicy: "immediate",
+        change: "rolled-back",
+        identity: { kind: "app", entityId: graphNode.name },
+        artifact: expect.objectContaining({ buildKey: "terminal-key-1" }),
+        adoption: "artifact-only",
+        app: expect.objectContaining({ target: "terminal" }),
       })
     );
     expect(notificationService.show).toHaveBeenCalledWith(
@@ -2662,7 +2672,10 @@ describe("AppHost", () => {
       activeBundleKey: "app-key",
       status: "available",
     });
-    expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
+    expect(eventService.emit).not.toHaveBeenCalledWith(
+      "supervision:changed",
+      expect.objectContaining({ change: "adopted" })
+    );
   });
 
   it("previews and applies React Native provider changes from trusted main", async () => {
@@ -2788,32 +2801,15 @@ describe("AppHost", () => {
       },
     });
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
+      "supervision:changed",
       expect.objectContaining({
-        target: "react-native",
-        url: "https://mobile.gateway.test/_a/rn-app-key/index.android.bundle",
-        artifactRoute: "/_a/rn-app-key/index.android.bundle",
-        integrity: "sha256-rn-app",
-        rnHostAbi: "rn-host-2",
-        provider,
-        artifacts: expect.arrayContaining([
-          expect.objectContaining({
-            path: "index.android.bundle",
-            role: "primary",
-            platform: "android",
-            integrity: `sha256-${createHash("sha256").update("android bundle").digest("hex")}`,
-            route: "/_a/rn-app-key/index.android.bundle",
-            url: "https://mobile.gateway.test/_a/rn-app-key/index.android.bundle",
-          }),
-          expect.objectContaining({
-            path: "index.ios.bundle",
-            role: "primary",
-            platform: "ios",
-            integrity: `sha256-${createHash("sha256").update("ios bundle").digest("hex")}`,
-            route: "/_a/rn-app-key/index.ios.bundle",
-            url: "https://mobile.gateway.test/_a/rn-app-key/index.ios.bundle",
-          }),
-        ]),
+        change: "adopted",
+        artifact: expect.objectContaining({ buildKey: "rn-app-key" }),
+        adoption: "immediate",
+        app: expect.objectContaining({
+          target: "react-native",
+          artifactRoute: "/_a/rn-app-key/index.android.bundle",
+        }),
       })
     );
     expect(await host.reactNative.getBootstrap(graphNode.relativePath)).toMatchObject({
@@ -3797,8 +3793,11 @@ describe("AppHost", () => {
       lastError: expect.stringContaining("provider identity"),
     });
     expect(eventService.emit).not.toHaveBeenCalledWith(
-      "apps:available",
-      expect.objectContaining({ target: "react-native" })
+      "supervision:changed",
+      expect.objectContaining({
+        change: "adopted",
+        app: expect.objectContaining({ target: "react-native" }),
+      })
     );
   });
 
@@ -3857,8 +3856,11 @@ describe("AppHost", () => {
       lastError: expect.stringContaining("missing a mobile platform"),
     });
     expect(eventService.emit).not.toHaveBeenCalledWith(
-      "apps:available",
-      expect.objectContaining({ target: "react-native" })
+      "supervision:changed",
+      expect.objectContaining({
+        change: "adopted",
+        app: expect.objectContaining({ target: "react-native" }),
+      })
     );
   });
 
@@ -3963,11 +3965,11 @@ describe("AppHost", () => {
       lastError: expect.stringContaining("pure-thin"),
     });
     expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:status",
+      "supervision:changed",
       expect.objectContaining({
-        name: "@workspace-apps/shell",
+        identity: { kind: "app", entityId: "@workspace-apps/shell" },
         status: "error",
-        error: expect.stringContaining("pure-thin"),
+        lastError: expect.stringContaining("pure-thin"),
       })
     );
   });

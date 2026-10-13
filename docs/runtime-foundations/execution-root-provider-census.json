@@ -14,6 +14,7 @@
       "id": "app-generation",
       "backingSources": ["src/server/appHost.ts", "packages/unit-host/src/index.ts"],
       "reviewedReaders": [
+        "packages/unit-host/src/supervisionChange.ts",
         "src/server/services/appUnitDriver.ts",
         "src/server/services/buildUnitCatalog.ts",
         "src/server/deviceAppPrincipals.ts"

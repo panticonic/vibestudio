@@ -23,6 +23,9 @@ import {
   type UnitSource,
   type UnitVersionRecord,
 } from "./types.js";
+export { normalizeUnitRepoPath } from "./repoPath.js";
+export { observeUnitSupervision, unitSupervisionChange } from "./supervisionChange.js";
+import { normalizeUnitRepoPath } from "./repoPath.js";
 export {
   UNIT_ROLLBACK_HISTORY_LIMIT,
   type UnitKind,
@@ -315,7 +318,7 @@ export interface UnitRuntimeApplyOptions<
    */
   deferBuild?: (node: Node, decl: Decl) => boolean;
   buildAndActivate: (node: Node, decl: Decl) => Promise<void>;
-  activateCurrent: (entry: Entry, node: Node, decl: Decl) => Promise<void>;
+  activateCurrent?: (entry: Entry, node: Node, decl: Decl) => Promise<void>;
   onError?: (node: Node, decl: Decl, message: string) => void;
 }
 
@@ -369,7 +372,7 @@ export interface UnitHostOptions<
   /** Lower groups settle before higher groups; units within one group run concurrently. */
   applyGroup?(node: Node, decl: Decl): number;
   removeUndeclared(entry: Entry): Promise<void>;
-  emitRemoved(entry: Entry): void;
+  emitRemoved?(entry: Entry): void;
   notifyUnresolved(sources: string[]): void;
   validateBeforeApproval?: (node: Node, decl: Decl) => void;
   onApprovalCandidateError?: (node: Node, decl: Decl, message: string) => void;
@@ -383,7 +386,7 @@ export interface UnitHostOptions<
     trigger: UnitReconcileTrigger
   ): Promise<UnitApprovalDecision>;
   approvalCoordinator?: UnitApprovalCoordinator<ApprovalEntry>;
-  onApprovalDenied(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void;
+  onApprovalDenied?(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void;
   onBackgroundError(error: unknown): void;
 }
 
@@ -549,13 +552,6 @@ export interface UnitChangeApprovalProvider<ApprovalEntry = unknown> {
 export interface InstalledUnit<Entry extends UnitRegistryEntryBase, Node extends UnitGraphNode> {
   entry: Entry;
   node: Node;
-}
-
-export function normalizeUnitRepoPath(repoPath: string): string {
-  return repoPath
-    .replace(/^\/+/, "")
-    .replace(/^workspace\//, "")
-    .replace(/\/+$/, "");
 }
 
 export function normalizeUnitRef(ref: string): string {
@@ -802,7 +798,7 @@ export class UnitHost<
       }
 
       await opts.validateBeforeActivateCurrent?.(entry, node, decl);
-      await opts.activateCurrent(entry, node, decl);
+      await opts.activateCurrent?.(entry, node, decl);
     } catch (err) {
       const message = formatRpcFailure(err);
       try {
@@ -1113,7 +1109,7 @@ export class UnitHost<
         await this.opts.removeUndeclared(entry);
         this.opts.registry.delete(entry.name);
         this.applications.delete(entry.name);
-        this.opts.emitRemoved(entry);
+        this.opts.emitRemoved?.(entry);
       }
     }
 
@@ -1170,7 +1166,7 @@ export class UnitHost<
           this.markAcceptedItemsBuilding(items);
           await apply();
         },
-        applyDenied: () => this.opts.onApprovalDenied(items),
+        applyDenied: () => this.opts.onApprovalDenied?.(items),
       });
       return;
     }
@@ -1179,7 +1175,7 @@ export class UnitHost<
     );
     const decision = await this.opts.requestApproval(entries, trigger);
     if (decision === "deny" || decision === "dismiss") {
-      this.opts.onApprovalDenied(items);
+      this.opts.onApprovalDenied?.(items);
       return;
     }
     const apply = this.prepareTrustedApplications(items, maxConcurrentApplies);

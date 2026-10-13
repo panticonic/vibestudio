@@ -21,7 +21,7 @@ For authoring guidance, see `workspace/skills/appdev/SKILL.md`.
     provider bootstrap.
   - `terminal` produces one primary Node ESM (`.mjs`) artifact that the
     `vibestudio terminal` CLI downloads over its own connection and runs
-    in-process (`launchMode: "client-module"`).
+    in-process (adoption policy `artifact-only`).
 
 ## App Update Adoption
 
@@ -37,11 +37,12 @@ Trusted app activation is server-side; client adoption is target-specific.
   app again: on the next run, or when the CLI reconnects and its renewed app
   principal grant names a newer build.
 
-The protocol surface is `apps:available`, `apps:status`, `apps:lifecycle`,
+The protocol surface is the `supervision:changed` event (one event for every
+supervised unit, carrying each target's adoption policy),
 `runtime.supervision.versions`, and `runtime.supervision.rollback`. Release
-operations use exact `{kind, releaseId}` identities. Rollback history is retained
-per app with a bounded retention limit and old artifacts remain servable while
-they are retained.
+operations use exact `{kind, releaseId}` identities. Rollback history is kept by
+the unit host for apps and extensions alike, with a bounded retention limit, and
+old artifacts remain servable while they are retained.
 
 ## Device And Principal Model
 
