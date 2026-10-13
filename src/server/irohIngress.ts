@@ -20,8 +20,17 @@ export interface IrohIngressOptions<
   maxConnections?: number;
   /** Runs after the authenticated QUIC handshake and before any stream is accepted. */
   admitPeer(endpointId: string): boolean | Promise<boolean>;
-  attach(connection: Connection): Promise<void>;
+  attach(connection: Connection): Promise<IrohIngressAttachment>;
   log?(message: string, error?: unknown): void;
+}
+
+export interface IrohIngressAttachment {
+  /** Makes this handshaken generation eligible to admit logical sessions. */
+  activate(): void;
+  /** Synchronously fences logical dispatch, then starts physical retirement. */
+  retire(code: bigint, reason: Uint8Array): void;
+  /** Settles after all work owned by this physical generation has retired. */
+  readonly lifetime: Promise<void>;
 }
 
 export interface IrohIngress<Endpoint = IrohPhysicalEndpoint<IrohPhysicalConnection>> {
@@ -52,16 +61,24 @@ export function startIrohIngress<
     throw new Error("Iroh ingress maxConnections must be a positive safe integer");
   }
   // `live` owns every accepted physical connection through its terminal
-  // receipt, including rejected peers and predecessors asked to retire. The peer
-  // index contains only the generation eligible to carry newly opened logical
-  // sessions. A durable client Endpoint identity has one physical owner per
-  // server reach; admitting its successor fences a force-killed process before
-  // QUIC loss detection eventually notices the abandoned predecessor.
+  // receipt, including rejected peers and predecessors asked to retire. The
+  // per-peer tail serializes every handshaken generation through full lifetime
+  // retirement. A durable client Endpoint identity therefore has one physical
+  // dispatch owner per server reach even when several replacements overlap
+  // before QUIC loss detection retires their predecessors.
   const live = new Set<Connection>();
-  const activeByPeer = new Map<string, Connection>();
+  const latestByPeer = new Map<
+    string,
+    { connection: Connection; attachment: IrohIngressAttachment }
+  >();
+  const ownershipTailByPeer = new Map<string, Promise<void>>();
   const candidateByPeer = new Map<string, Connection>();
   const liveClosures = new Set<Promise<void>>();
   const attachments = new Set<Promise<void>>();
+  const attached = new Map<Connection, IrohIngressAttachment>();
+  const attachmentLifetimes = new Set<Promise<void>>();
+  const attachmentFailures: unknown[] = [];
+  const retiredAttachments = new WeakSet<IrohIngressAttachment>();
   const endpointClosures = new WeakMap<object, Promise<void>>();
   let endpoint: Endpoint | null = null;
   type EndpointGeneration = {
@@ -85,6 +102,15 @@ export function startIrohIngress<
   let stopFailure: Error | null = null;
   let wakeBackoff: (() => void) | null = null;
   let readySucceeded = false;
+  const retireAttachment = (
+    owner: IrohIngressAttachment,
+    code: bigint,
+    reason: Uint8Array
+  ): void => {
+    if (retiredAttachments.has(owner)) return;
+    retiredAttachments.add(owner);
+    owner.retire(code, reason);
+  };
   const closeEndpoint = (owner: Endpoint | null): Promise<void> => {
     if (!owner) return Promise.resolve();
     const existing = endpointClosures.get(owner);
@@ -129,9 +155,6 @@ export function startIrohIngress<
         .finally(() => {
           unsubscribeDiagnostics();
           live.delete(connection);
-          if (activeByPeer.get(connection.peerEndpointId) === connection) {
-            activeByPeer.delete(connection.peerEndpointId);
-          }
           if (candidateByPeer.get(connection.peerEndpointId) === connection) {
             candidateByPeer.delete(connection.peerEndpointId);
           }
@@ -190,39 +213,78 @@ export function startIrohIngress<
             }`
           );
         }) ?? unsubscribeDiagnostics;
-      // attachIrohConnection resolves after the bounded control handshake and
-      // launches its connection-owned loops; it is not a lifetime wait. Fence
-      // the predecessor only after that handshake proves the successor usable.
+      // The attachment handshake proves the successor usable but returns it
+      // inactive. Fence and fully join the predecessor before activation so
+      // two physical generations for one authenticated peer can never dispatch
+      // or retain native stream work in the same runtime concurrently.
+      let attachedOwner: IrohIngressAttachment | undefined;
       const attachment = options
         .attach(connection)
-        .then(() => {
-          if (stopped) {
-            connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
-            return;
-          }
-          if (candidateByPeer.get(connection.peerEndpointId) !== connection) {
-            connection.close(
+        .then(async (owner) => {
+          attachedOwner = owner;
+          attached.set(connection, owner);
+          let lifetime!: Promise<void>;
+          lifetime = owner.lifetime
+            .catch((error) => {
+              attachmentFailures.push(error);
+            })
+            .finally(() => {
+              attachmentLifetimes.delete(lifetime);
+              if (attached.get(connection) === owner) attached.delete(connection);
+              if (latestByPeer.get(connection.peerEndpointId)?.attachment === owner) {
+                latestByPeer.delete(connection.peerEndpointId);
+              }
+            });
+          attachmentLifetimes.add(lifetime);
+          const peerId = connection.peerEndpointId;
+          const predecessor = latestByPeer.get(peerId);
+          const predecessorTail = ownershipTailByPeer.get(peerId) ?? Promise.resolve();
+          latestByPeer.set(peerId, { connection, attachment: owner });
+          if (predecessor && predecessor.connection !== connection) {
+            retireAttachment(
+              predecessor.attachment,
               PEER_REPLACED,
               new TextEncoder().encode("replaced by newer peer connection")
             );
-            return;
           }
-          candidateByPeer.delete(connection.peerEndpointId);
-          const replaced = activeByPeer.get(connection.peerEndpointId);
-          activeByPeer.set(connection.peerEndpointId, connection);
-          if (replaced && replaced !== connection) {
-            replaced.close(
-              PEER_REPLACED,
-              new TextEncoder().encode("replaced by newer peer connection")
-            );
-          }
+          let ownership!: Promise<void>;
+          ownership = (async () => {
+            await predecessorTail;
+            if (stopped) {
+              retireAttachment(owner, SERVER_STOPPED, new TextEncoder().encode("server stopped"));
+              await owner.lifetime;
+              return;
+            }
+            if (candidateByPeer.get(peerId) !== connection) {
+              retireAttachment(
+                owner,
+                PEER_REPLACED,
+                new TextEncoder().encode("replaced by newer peer connection")
+              );
+              await owner.lifetime;
+              return;
+            }
+            candidateByPeer.delete(peerId);
+            owner.activate();
+            await owner.lifetime;
+          })().finally(() => {
+            if (ownershipTailByPeer.get(peerId) === ownership) {
+              ownershipTailByPeer.delete(peerId);
+            }
+          });
+          ownershipTailByPeer.set(peerId, ownership);
+          await ownership;
         })
         .catch((error) => {
           if (candidateByPeer.get(connection.peerEndpointId) === connection) {
             candidateByPeer.delete(connection.peerEndpointId);
           }
           const reason = error instanceof Error ? error.message : String(error);
-          connection.close(ADMISSION_REJECTED, new TextEncoder().encode(reason));
+          if (attachedOwner) {
+            retireAttachment(attachedOwner, ADMISSION_REJECTED, new TextEncoder().encode(reason));
+          } else {
+            connection.close(ADMISSION_REJECTED, new TextEncoder().encode(reason));
+          }
           options.log?.(`Iroh connection setup failed: ${reason}`);
         });
       attachments.add(attachment);
@@ -465,7 +527,10 @@ export function startIrohIngress<
       }
       wakeBackoff?.();
       for (const connection of live) {
-        connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
+        const owner = attached.get(connection);
+        if (owner)
+          retireAttachment(owner, SERVER_STOPPED, new TextEncoder().encode("server stopped"));
+        else connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
       }
       const admittedClosures = [...liveClosures];
       const pendingAttachments = [...attachments];
@@ -475,9 +540,16 @@ export function startIrohIngress<
         ...pendingAttachments,
         ...admittedClosures,
       ]);
+      // A pending handshake can return an attachment during the first join.
+      // Retire it above in the handshake continuation, then join every explicit
+      // lifetime receipt to quiescence before stop returns.
+      while (attachmentLifetimes.size > 0) {
+        await Promise.allSettled([...attachmentLifetimes]);
+      }
       const errors = settled
         .filter((result): result is PromiseRejectedResult => result.status === "rejected")
         .map((result) => result.reason);
+      errors.push(...attachmentFailures);
       const uniqueErrors = errors.filter((error, index) => errors.indexOf(error) === index);
       if (uniqueErrors.length === 1) throw uniqueErrors[0];
       if (uniqueErrors.length > 1) {

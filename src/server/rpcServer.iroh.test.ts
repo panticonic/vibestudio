@@ -1,4 +1,15 @@
 import { createRpcClient } from "@vibestudio/rpc";
+import {
+  IROH_WIRE_VERSION,
+  MAX_CONTROL_FRAME_BYTES,
+  writeFrame,
+  writeIrohStreamPreamble,
+} from "@vibestudio/iroh-transport";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
+import {
+  encodeIrohSessionControlFrame,
+  IROH_SESSION_HELLO,
+} from "@vibestudio/rpc/protocol/irohSession";
 import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import {
@@ -104,10 +115,11 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
 
     const clientConnection = new NodePhysicalConnection(clientNative);
     const pipe = createIrohClientPipe(clientConnection);
-    await Promise.all([
+    const [attachment] = await Promise.all([
       server.attachIrohConnection(new NodePhysicalConnection(serverNative)),
       pipe.ready(),
     ]);
+    attachment.activate();
     const session = pipe.openSession({ getToken: () => token });
     const rpc = createRpcClient({
       selfId: "electron-main",
@@ -165,6 +177,7 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
       stalled.recv.stop(0x202n).catch(() => undefined),
     ]);
     await pipe.close();
+    await attachment.lifetime;
   });
 
   it("closes concurrent peer connections through one terminal owner each", async () => {
@@ -193,6 +206,7 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
     const clients: Array<{
       connection: NodePhysicalConnection;
       pipe: ReturnType<typeof createIrohClientPipe>;
+      attachment?: Awaited<ReturnType<RpcServer["attachIrohConnection"]>>;
     }> = [];
     try {
       const connect = async () => {
@@ -213,17 +227,79 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
 
         const connection = new NodePhysicalConnection(serverNative);
         const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
-        clients.push({ connection, pipe });
-        await Promise.all([server.attachIrohConnection(connection), pipe.ready()]);
+        const client: (typeof clients)[number] = { connection, pipe };
+        clients.push(client);
+        const [attachment] = await Promise.all([
+          server.attachIrohConnection(connection),
+          pipe.ready(),
+        ]);
+        client.attachment = attachment;
+        attachment.activate();
       };
 
       await Promise.all([connect(), connect()]);
       const serverClosed = clients.map(({ connection }) => connection.closed());
       await Promise.all(clients.map(({ pipe }) => pipe.close()));
       await Promise.all(serverClosed);
+      await Promise.all(clients.map(({ attachment }) => attachment?.lifetime));
     } finally {
       await Promise.all(clients.map(({ pipe }) => pipe.close()));
       await server.stop();
     }
+  });
+
+  it("rejects attachment lifetime with the original control-loop failure", async () => {
+    const server = new RpcServer({
+      tokenManager: new TokenManager(),
+      dispatcher: {
+        dispatch: vi.fn(),
+        assertAuthority: vi.fn().mockResolvedValue(undefined),
+        getPolicy: vi.fn(() => ({ allowed: ["shell"] })),
+        getMethodPolicy: vi.fn(() => undefined),
+      } as unknown as ServiceDispatcher,
+      workspaceId: "test-workspace",
+      entityCache: new EntityCache(),
+      runtimeCoordinator: new PanelRuntimeCoordinator(),
+      userSubjectSource: { resolve: () => ({ userId: "usr_root", handle: "root" }) },
+      resolveExtensionCodeIdentity: async () => null,
+      ensureUserlandDoReady: async () => undefined,
+      resolveExactCausalInvocation: async () => ({ initiatingUser: null }),
+    });
+    const serverEndpoint = await bind();
+    const clientEndpoint = await bind();
+    const incomingPromise = serverEndpoint.acceptNext();
+    const clientConnectionPromise = clientEndpoint.connect(serverEndpoint.addr(), [
+      ...VIBESTUDIO_IROH_ALPN,
+    ]);
+    const incoming = await incomingPromise;
+    if (!incoming) throw new Error("server endpoint closed before connection");
+    const accepting = await incoming.accept();
+    const [serverNative, clientNative] = await Promise.all([
+      accepting.connect(),
+      clientConnectionPromise,
+    ]);
+    configureNodeConnection(serverNative);
+    configureNodeConnection(clientNative);
+    const clientConnection = new NodePhysicalConnection(clientNative);
+    const attaching = server.attachIrohConnection(new NodePhysicalConnection(serverNative));
+    const control = await clientConnection.openBi();
+    await writeIrohStreamPreamble(control.send, { k: "control", v: IROH_WIRE_VERSION });
+    const hello = encodeIrohSessionControlFrame({
+      t: IROH_SESSION_HELLO,
+      protocolVersion: IROH_WIRE_VERSION,
+      contractVersion: RPC_CONTRACT_VERSION,
+    });
+    await writeFrame(control.send, hello, MAX_CONTROL_FRAME_BYTES);
+    const attachment = await attaching;
+    attachment.activate();
+    const lifetimeFailure = attachment.lifetime.catch((error: unknown) => error);
+
+    await writeFrame(control.send, hello, MAX_CONTROL_FRAME_BYTES);
+    const failure = await lifetimeFailure;
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: "Duplicate Iroh session hello" }),
+    ]);
+    await server.stop();
   });
 });

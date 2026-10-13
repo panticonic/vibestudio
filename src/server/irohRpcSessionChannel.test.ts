@@ -3,6 +3,16 @@ import type { IrohPhysicalBiStream, IrohPhysicalConnection } from "@vibestudio/i
 import type { RpcEnvelope } from "@vibestudio/rpc";
 import { IrohRpcSessionChannel } from "./irohRpcSessionChannel.js";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
+    resolve = next;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 function fakeStream(): IrohPhysicalBiStream & {
   send: IrohPhysicalBiStream["send"] & { finish: ReturnType<typeof vi.fn> };
   recv: IrohPhysicalBiStream["recv"] & { read: ReturnType<typeof vi.fn> };
@@ -214,6 +224,37 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
 });
 
 describe("IrohRpcSessionChannel shutdown lifecycle", () => {
+  it("fences dispatch immediately and joins outstanding drains, resets, and stops", async () => {
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+      writeControl: vi.fn(async () => undefined),
+      onClosed: vi.fn(),
+    });
+    const stream = fakeStream();
+    const drain = deferred<Uint8Array>();
+    const reset = deferred<void>();
+    const stop = deferred<void>();
+    stream.recv.read.mockImplementationOnce(() => drain.promise);
+    vi.mocked(stream.send.reset).mockImplementationOnce(() => reset.promise);
+    vi.mocked(stream.recv.stop).mockImplementationOnce(() => stop.promise);
+    channel.deliverEnvelope(requestEnvelope(), stream);
+
+    let retired = false;
+    const retirement = channel.remoteClosed(1006, "physical connection closed").then(() => {
+      retired = true;
+    });
+    expect(channel.readyState).toBe(channel.CLOSED);
+    expect(retired).toBe(false);
+    drain.resolve(new Uint8Array(0));
+    await Promise.resolve();
+    expect(retired).toBe(false);
+    reset.resolve();
+    stop.resolve();
+    await retirement;
+    expect(retired).toBe(true);
+  });
+
   it("owns a cancellation observer when connection closure also rejects reset observation", async () => {
     const log = vi.fn();
     const channel = new IrohRpcSessionChannel({
@@ -234,7 +275,8 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
     channel.onError(removedHandler)();
 
     channel.deliverEnvelope(requestEnvelope(), stream);
-    channel.remoteClosed(1006, "physical connection closed");
+    const retirement = channel.remoteClosed(1006, "physical connection closed");
+    const retirementFailure = retirement.catch((error: unknown) => error);
 
     await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
     const failure = onError.mock.calls[0]![0] as AggregateError;
@@ -243,6 +285,9 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining(resetFailure.message));
     expect(log).toHaveBeenCalledWith(expect.stringContaining(readFailure.message));
     expect(removedHandler).not.toHaveBeenCalled();
+    const lifetimeFailure = await retirementFailure;
+    expect(lifetimeFailure).toBeInstanceOf(AggregateError);
+    expect((lifetimeFailure as AggregateError).errors).toEqual([failure]);
   });
 
   it("closes locally when the peer is already gone before the close notification", async () => {
@@ -258,10 +303,12 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
       log,
     });
 
-    channel.close(4001, "authentication rejected");
+    const retirement = channel.close(4001, "authentication rejected");
+    const completedRetirement = expect(retirement).resolves.toBeUndefined();
 
-    await vi.waitFor(() => expect(onClosed).toHaveBeenCalledWith("shell"));
+    expect(onClosed).toHaveBeenCalledWith("shell");
     expect(channel.readyState).toBe(channel.CLOSED);
+    await completedRetirement;
     expect(log).toHaveBeenCalledWith(
       "Iroh session shell close notification failed: connection closed"
     );
@@ -280,7 +327,8 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
       log,
     });
 
-    channel.terminate();
+    const retirement = channel.terminate();
+    const completedRetirement = expect(retirement).resolves.toBeUndefined();
 
     expect(onClosed).toHaveBeenCalledWith("shell");
     expect(channel.readyState).toBe(channel.CLOSED);
@@ -289,6 +337,7 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
         "Iroh session shell termination notification failed: connection closed"
       )
     );
+    await completedRetirement;
   });
 });
 
@@ -311,10 +360,10 @@ describe("IrohRpcSessionChannel close notification ownership", () => {
       });
       const onClose = vi.fn();
       channel.onClose(onClose);
-      if (operation === "close") channel.close(4001, "pairing rejected");
-      else channel.terminate();
-      if (operation === "terminate") expect(onClosed).toHaveBeenCalledOnce();
-      else expect(onClosed).not.toHaveBeenCalled();
+      const retirement =
+        operation === "close" ? channel.close(4001, "pairing rejected") : channel.terminate();
+      const completedRetirement = expect(retirement).resolves.toBeUndefined();
+      expect(onClosed).toHaveBeenCalledOnce();
       rejectWrite(new Error("ConnectionLost(ApplicationClosed)"));
       await vi.waitFor(() =>
         expect(log).toHaveBeenCalledWith(
@@ -327,6 +376,7 @@ describe("IrohRpcSessionChannel close notification ownership", () => {
         operation === "close" ? 4001 : 1006,
         operation === "close" ? "pairing rejected" : "terminated"
       );
+      await completedRetirement;
       channel.remoteClosed(1006, "physical connection closed");
       expect(onClosed).toHaveBeenCalledOnce();
     }
