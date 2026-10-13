@@ -467,6 +467,46 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     expect(coordinator.authorizePanelConnection("panel:nav-a", "route-a")).toEqual({ ok: true });
   });
 
+  it("replaces a disconnected same-host route without letting its expiry retire the successor", async () => {
+    vi.useFakeTimers();
+    const { coordinator, attempt } = resident();
+    coordinator.markConnected("panel:nav-a", "route-a");
+    coordinator.reportView(
+      "panel:nav-a",
+      "route-a",
+      {
+        url: "http://panel/",
+        loading: false,
+        boot: { kind: "observed", observation: { phase: "ready" } },
+      },
+      { principal: "renderer" }
+    );
+    coordinator.markDisconnected("panel:nav-a", "route-a");
+
+    const acquired = coordinator.acquire("panel:nav-a", {
+      slotId: "panel:tree/a",
+      clientSessionId: "desktop",
+      connectionId: "route-b",
+    });
+
+    expect(acquired).toMatchObject({
+      acquired: true,
+      lease: { connectionId: "route-b", clientSessionId: "desktop" },
+    });
+    expect(coordinator.currentAttemptForSlot("panel:tree/a")?.attemptId).not.toBe(
+      attempt.attemptId
+    );
+    expect(coordinator.authorizePanelConnection("panel:nav-a", "route-a")).toMatchObject({
+      ok: false,
+    });
+    expect(coordinator.authorizePanelConnection("panel:nav-a", "route-b")).toEqual({ ok: true });
+
+    await vi.advanceTimersByTimeAsync(3_001);
+
+    expect(coordinator.getLease("panel:nav-a")).toMatchObject({ connectionId: "route-b" });
+    expect(coordinator.authorizePanelConnection("panel:nav-a", "route-b")).toEqual({ ok: true });
+  });
+
   it("versions acquired, denied and takeover outcomes against the same lease event clock", () => {
     const { coordinator } = resident();
     const before = coordinator.getSnapshot().version;

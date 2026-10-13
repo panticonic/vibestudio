@@ -955,6 +955,7 @@ export class PanelRuntimeCoordinator {
       }
       const attempt = this.currentAttempt(asPanelSlotId(input.slotId));
       if (
+        existing.expiresAt === undefined &&
         attempt?.runtimeEntityId === entityId &&
         attempt.phase !== "failed" &&
         attempt.phase !== "stopped"
@@ -963,8 +964,11 @@ export class PanelRuntimeCoordinator {
         // already owned by the same host. Replacement transfers can arrive
         // immediately before a host's explicit presentation request, and
         // rewriting that lease would create two valid-looking connection ids
-        // whose events race in the host. Route replacement is the distinct,
-        // explicit takeOver operation.
+        // whose events race in the host. A lease in disconnect grace is not a
+        // healthy route: a restarted host has a new connection id, and handing
+        // it the disconnected route would leave the old expiry armed against
+        // its newly materialized panel. writeLease below replaces that route
+        // and cancels the prior generation's expiry.
         return { acquired: true, lease: existing, version: this.currentVersion() };
       }
     }
@@ -1111,12 +1115,14 @@ export class PanelRuntimeCoordinator {
     const next = { ...lease, expiresAt };
     this.leases.set(entityId, next);
     this.emitChange(entityId, lease.slotId, lease, next, "released");
-    this.expiryTimers.set(
-      entityId,
-      setTimeout(() => {
-        this.release(runtimeEntityId, connectionId, "expired");
-      }, LEASE_RECONNECT_GRACE_MS)
-    );
+    const expiry = setTimeout(() => {
+      // The entity may have disconnected again, or a new route may have
+      // replaced it, since this timer was admitted. Only the currently owned
+      // expiry generation may retire the lease.
+      if (this.expiryTimers.get(entityId) !== expiry) return;
+      this.release(runtimeEntityId, connectionId, "expired");
+    }, LEASE_RECONNECT_GRACE_MS);
+    this.expiryTimers.set(entityId, expiry);
   }
 
   resolveRouteLease(targetId: string): PanelRuntimeLease | null {
