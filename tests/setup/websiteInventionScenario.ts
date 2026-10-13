@@ -151,6 +151,13 @@ export async function websiteInventionScenario(environment: Record<string, strin
         { ids: workspaces.map((workspace) => workspace.workspaceId), approvalId: target.id }
       );
       if (!item) return; // A resolved card can remain visible during its exit animation.
+      if (item.kind === "unit-install-review") {
+        await approvePendingWorkspaceCreationReview(
+          { app: app!.app, workspaceId: item.workspaceId },
+          [item.approvalId]
+        );
+        return;
+      }
       const surface = app!.app
         .context()
         .pages()
