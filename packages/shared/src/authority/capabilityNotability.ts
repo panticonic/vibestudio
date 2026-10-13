@@ -140,6 +140,11 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "development.sessions.destroy", notability: "everyday" },
   { key: "development.sessions.force-retire", notability: "everyday" },
   { key: "service:development.", notability: "everyday" },
+  // These are the secret-free preparation steps behind an already selected
+  // native model invocation. The separately reviewed model.use, credential.use,
+  // and network capabilities retain the authority for inference and egress.
+  { key: "credentials.resolveNativeModel", notability: "everyday" },
+  { key: "localModelRuntime.prepareNativeModel", notability: "everyday" },
   { key: "internal-model-runtime.use", notability: "everyday" },
 
   // ── People & devices ───────────────────────────────────────────────────────

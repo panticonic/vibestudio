@@ -18,8 +18,8 @@ const blobstore: ServiceDefinition = {
   methods: {
     putText: {
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver policy for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       description: "Store a UTF-8 string and return its digest",
       args: z.tuple([z.string()]),
@@ -28,8 +28,8 @@ const blobstore: ServiceDefinition = {
     },
     "admin.wipe": {
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver policy for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       description: "Delete everything",
       args: z.tuple([]),
@@ -109,8 +109,8 @@ describe("createCatalogIndex", () => {
         methods: {
           ping: {
             website: {
-              kind: "eligible",
-              rationale: "Explicit receiver policy for this test fixture.",
+              kind: "closed",
+              reason: "This fixture is not exposed to website origins.",
             },
             args: z.tuple([]),
             tier: TEST_OPEN_TIER,
@@ -160,8 +160,8 @@ describe("createCatalogIndex", () => {
           ...blobstore.methods,
           "admin.wipe": {
             website: {
-              kind: "eligible",
-              rationale: "Explicit receiver policy for this test fixture.",
+              kind: "closed",
+              reason: "This fixture is not exposed to website origins.",
             } as const,
             description: "Delete everything, now panel-visible.",
             args: z.tuple([]),

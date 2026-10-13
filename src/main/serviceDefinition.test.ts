@@ -22,8 +22,8 @@ describe("ServiceDispatcher.registerService", () => {
       methods: {
         inspect: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([]),
           tier: {
@@ -52,8 +52,8 @@ describe("ServiceDispatcher.registerService", () => {
       methods: {
         inspect: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([]),
           tier: {
@@ -77,8 +77,8 @@ describe("ServiceDispatcher.registerService", () => {
       methods: {
         greet: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([z.string()]),
         },
@@ -105,8 +105,8 @@ describe("ServiceDispatcher.registerService", () => {
       methods: {
         add: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([z.number(), z.number()]),
         },
@@ -134,8 +134,8 @@ describe("ServiceDispatcher.registerService", () => {
       methods: {
         known: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([z.string()]),
         },
@@ -201,8 +201,8 @@ describe("ServiceDispatcher.registerService", () => {
       methods: {
         foo: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: argsSchema,
           description: "test method",

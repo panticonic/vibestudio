@@ -212,7 +212,7 @@ class FrameworkBase {
 }
 class IntermediateBase extends FrameworkBase {
   @rpc({
-    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
+    website: { kind: "closed", reason: "This fixture is not exposed to website origins." },
     effect: { kind: "open" },
     tier: "open",
     principals: ["code"],
@@ -224,7 +224,7 @@ class IntermediateBase extends FrameworkBase {
 }
 class ConcreteDO extends IntermediateBase {
   @rpc({
-    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
+    website: { kind: "closed", reason: "This fixture is not exposed to website origins." },
     effect: { kind: "open" },
     tier: "open",
     principals: ["code"],
@@ -285,7 +285,7 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
 // Direct authority declarations register both exposure and their compositional requirement.
 class PolicyBase {
   @rpc({
-    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
+    website: { kind: "closed", reason: "This fixture is not exposed to website origins." },
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -297,7 +297,7 @@ class PolicyBase {
 }
 class PolicyDO extends PolicyBase {
   @rpc({
-    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
+    website: { kind: "closed", reason: "This fixture is not exposed to website origins." },
     principals: ["user", "code"],
     effect: { kind: "open" },
     tier: "open",
@@ -313,8 +313,8 @@ describe("@rpc direct authority declaration", () => {
     const inst = new PolicyDO();
     expect(rpcMethodAuthority(inst, "broad")).toEqual({
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver exposure for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       principals: ["user", "code"],
       effect: { kind: "open" },
@@ -323,8 +323,8 @@ describe("@rpc direct authority declaration", () => {
     });
     expect(rpcMethodAuthority(inst, "serverOnly")).toEqual({
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver exposure for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       principals: ["host"],
       effect: { kind: "open" },

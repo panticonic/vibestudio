@@ -589,7 +589,10 @@ describe("authorityService", () => {
           handler,
           methods: {
             activate: {
-              website: { kind: "eligible", rationale: "Explicit fixture policy" },
+              website: {
+                kind: "closed",
+                reason: "This fixture is not exposed to website origins.",
+              },
               args: z.tuple([z.object({ kind: z.string(), releaseId: z.string() })]),
               capability,
               tier: { tier: "gated", session: "family", rationale: "Starts admitted code" },

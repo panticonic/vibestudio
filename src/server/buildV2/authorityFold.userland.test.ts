@@ -101,7 +101,10 @@ const catalog = {
         sensitivity: "destructive" as const,
         resource: { kind: "receiver-object" as const, resourceType: "note" },
         access: {
-          website: { kind: "eligible" as const, rationale: "Explicit fixture exposure." },
+          website: {
+            kind: "closed" as const,
+            reason: "This fixture is not exposed to website origins.",
+          },
           principals: ["code" as const],
           codeOnly: false,
           codeReachable: true,

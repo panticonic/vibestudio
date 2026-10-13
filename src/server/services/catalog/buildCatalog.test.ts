@@ -62,8 +62,8 @@ const demo: ServiceDefinition = {
   methods: {
     get: {
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver policy for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       description: "Get a value.",
       args: z.tuple([z.string()]),
@@ -73,8 +73,8 @@ const demo: ServiceDefinition = {
     },
     "admin.wipe": {
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver policy for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       description: "Destroy everything (server only).",
       args: z.tuple([]),
@@ -83,8 +83,8 @@ const demo: ServiceDefinition = {
     },
     probe: {
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver policy for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       description: "A probe method.",
       args: z.tuple([]),
@@ -94,8 +94,8 @@ const demo: ServiceDefinition = {
     },
     internalTransport: {
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver policy for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       description: "Implementation detail.",
       args: z.tuple([]),
@@ -285,8 +285,8 @@ describe("buildCatalog", () => {
       methods: {
         call: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([]),
           agentFacing: false,

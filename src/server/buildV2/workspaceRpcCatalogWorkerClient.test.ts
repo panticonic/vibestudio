@@ -66,7 +66,7 @@ describe("WorkspaceRpcCatalogWorkerClient", () => {
     fs.writeFileSync(
       path.join(root, "provider.ts"),
       `class NotesDO {
-        @rpc({ website: { kind: "eligible", rationale: "Explicit receiver exposure for this physical compiler fixture." }, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+        @rpc({ website: { kind: "closed", reason: "This fixture is not exposed to website origins." }, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
         async getNote(): Promise<void> {}
       }`
     );
@@ -97,7 +97,7 @@ describe("WorkspaceRpcCatalogWorkerClient", () => {
       `declare const root: any;
        const generated = root${".value".repeat(12_000)};
        class NotesDO {
-         @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+         @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
          async getNote(): Promise<void> {}
        }`
     );
