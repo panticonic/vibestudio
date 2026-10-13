@@ -94,6 +94,23 @@ export type DiscoverTrackedGitSnapshotIndexOptions = Omit<
   "sink"
 >;
 
+export type AcquireExactGitCheckoutOptions = Omit<
+  AcquireExactGitSnapshotIndexOptions,
+  "subdir" | "reservedPaths"
+>;
+export type DiscoverExactGitCheckoutOptions = Omit<
+  DiscoverExactGitSnapshotIndexOptions,
+  "subdir" | "reservedPaths"
+>;
+export type DiscoverTrackedGitCheckoutOptions = Omit<
+  DiscoverTrackedGitSnapshotIndexOptions,
+  "subdir" | "reservedPaths"
+>;
+export interface ExactGitCheckoutCoordinate {
+  readonly commit: string;
+  readonly ref: string;
+}
+
 const FULL_OID = /^[0-9a-f]{40}$/i;
 const CANONICAL_REF = /^refs\/(?:heads|tags)\/[^\s~^:?*[\]\\]+$/;
 const TRACK_GLOB_META = /[*?]/u;
@@ -407,6 +424,15 @@ export async function acquireExactGitSnapshot(
 export async function acquireExactGitSnapshotIndex(
   options: AcquireExactGitSnapshotIndexOptions
 ): Promise<ExactGitSnapshotIndex> {
+  const coordinate = await acquireExactGitCheckout(options);
+  return readExactGitSnapshotIndex({ ...options, commit: coordinate.commit });
+}
+
+/** Publishable checkout evidence contains coordinates, never readers capturing
+ * its temporary directory. Open an index only after the owner's atomic rename. */
+export async function acquireExactGitCheckout(
+  options: AcquireExactGitCheckoutOptions
+): Promise<ExactGitCheckoutCoordinate> {
   assertExactCoordinates(options.ref, options.expectedCommit);
   options.git.resolveUrl(options.url);
   await options.git.clone({
@@ -427,14 +453,13 @@ export async function acquireExactGitSnapshotIndex(
   if (head?.toLowerCase() !== options.expectedCommit.toLowerCase()) {
     await options.git.checkout(options.dir, options.expectedCommit, { force: true });
   }
-  return readExactGitSnapshotIndex({
+  await assertExactSnapshotCommit({
     git: options.git,
     dir: options.dir,
     commit: options.expectedCommit,
     label: options.label,
-    ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
+  return { commit: options.expectedCommit.toLowerCase(), ref: options.ref };
 }
 
 /**
@@ -451,6 +476,13 @@ export async function discoverExactGitSnapshot(
 export async function discoverExactGitSnapshotIndex(
   options: DiscoverExactGitSnapshotIndexOptions
 ): Promise<ExactGitSnapshotIndex> {
+  const coordinate = await discoverExactGitCheckout(options);
+  return readExactGitSnapshotIndex({ ...options, commit: coordinate.commit });
+}
+
+export async function discoverExactGitCheckout(
+  options: DiscoverExactGitCheckoutOptions
+): Promise<ExactGitCheckoutCoordinate> {
   assertExactCoordinates(options.ref, "0".repeat(40));
   options.git.resolveUrl(options.url);
   await options.git.clone({
@@ -464,14 +496,13 @@ export async function discoverExactGitSnapshotIndex(
   if (!observed || !FULL_OID.test(observed)) {
     throw new Error(`Git ref ${options.ref} did not resolve to a full commit`);
   }
-  return readExactGitSnapshotIndex({
+  await assertExactSnapshotCommit({
     git: options.git,
     dir: options.dir,
     commit: observed.toLowerCase(),
     label: options.label,
-    ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
+  return { commit: observed.toLowerCase(), ref: options.ref };
 }
 
 /** Discover a remote's advertised default branch and freeze it to exact coordinates. */
@@ -520,12 +551,19 @@ export async function discoverTrackedGitSnapshot(
 export async function discoverTrackedGitSnapshotIndex(
   options: DiscoverTrackedGitSnapshotIndexOptions
 ): Promise<ExactGitSnapshotIndex & { ref: string }> {
+  const coordinate = await discoverTrackedGitCheckout(options);
+  const index = await readExactGitSnapshotIndex({ ...options, commit: coordinate.commit });
+  return { ...index, ref: coordinate.ref };
+}
+
+export async function discoverTrackedGitCheckout(
+  options: DiscoverTrackedGitCheckoutOptions
+): Promise<ExactGitCheckoutCoordinate> {
   if (!TRACK_GLOB_META.test(options.track)) {
-    const snapshot = await discoverExactGitSnapshotIndex({
+    return discoverExactGitCheckout({
       ...options,
       ref: options.track,
     });
-    return { ...snapshot, ref: options.track };
   }
   if (!options.track.startsWith("refs/tags/") || /[\s~^:[\]\\]/u.test(options.track)) {
     throw new Error("Template track glob must be a canonical refs/tags/* pattern");
@@ -553,13 +591,5 @@ export async function discoverTrackedGitSnapshotIndex(
   if (!commit || !FULL_OID.test(commit)) {
     throw new Error(`Git tag ${ref} did not resolve to a full commit`);
   }
-  const snapshot = await readExactGitSnapshotIndex({
-    git: options.git,
-    dir: options.dir,
-    commit: commit.toLowerCase(),
-    label: options.label,
-    ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
-  });
-  return { ...snapshot, ref };
+  return { commit: commit.toLowerCase(), ref };
 }
