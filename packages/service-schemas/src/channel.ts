@@ -62,21 +62,34 @@ export interface ChannelProtocolEvent<T = unknown> {
   externalKeys?: string[];
   contentType?: string;
   ts: number;
-  attachments?: Array<{ id: string; type?: string; data: string; mimeType: string; filename?: string; size: number }>;
+  attachments?: Array<{
+    id: string;
+    type?: string;
+    data: string;
+    mimeType: string;
+    filename?: string;
+    size: number;
+  }>;
   annotations?: Record<string, unknown>;
 }
 export type ChannelProtocolBootstrapSnapshot =
   | {
       kind: "roster-snapshot";
-      participants: Array<{ id: string; ref: ChannelProtocolParticipantRef; metadata: Record<string, unknown> }>;
+      participants: Array<{
+        id: string;
+        ref: ChannelProtocolParticipantRef;
+        metadata: Record<string, unknown>;
+      }>;
       ts: number;
     }
-  | { kind: "receipt-snapshot"; events: ChannelProtocolEvent[]; ts: number };
+  /** Projection observations retain identity but do not manufacture a durable sequence. */
+  | { kind: "receipt-snapshot"; events: Array<Omit<ChannelProtocolEvent, "id">>; ts: number };
 export interface ChannelProtocolReplayReady {
   contextId?: string;
   channelConfig?: ChannelConfig;
   totalCount: number;
   envelopeCount: number;
+  /** First durable envelope in this returned replay window, not the owner's global history start. */
   firstEnvelopeSeq?: number;
   replayFromId?: number;
   replayToId?: number;
@@ -84,7 +97,11 @@ export interface ChannelProtocolReplayReady {
   hasMoreBefore?: boolean;
   hasMoreAfter?: boolean;
 }
-export interface ChannelReplayAfterRequest { after: number; limit?: number; throughSeq?: number }
+export interface ChannelReplayAfterRequest {
+  after: number;
+  limit?: number;
+  throughSeq?: number;
+}
 export interface ChannelReplayEnvelope {
   mode: "initial" | "after" | "before";
   logEvents: ChannelProtocolEvent[];
@@ -94,24 +111,36 @@ export interface ChannelReplayEnvelope {
 
 /** Host-driven subset of the actual channel Durable Object receiver. */
 export interface ChannelCliRpc {
-  subscribe(participantId: string, metadata: Record<string, unknown>, subscriptionId?: string): Promise<Response>;
-  sendAsCaller(text: string, opts?: {
-    handle?: string;
-    to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
-    mentions?: string[];
-    idempotencyKey?: string;
-  }): Promise<{ id?: number; messageId: string }>;
+  subscribe(
+    participantId: string,
+    metadata: Record<string, unknown>,
+    subscriptionId?: string
+  ): Promise<Response>;
+  sendAsCaller(
+    text: string,
+    opts?: {
+      handle?: string;
+      to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
+      mentions?: string[];
+      idempotencyKey?: string;
+    }
+  ): Promise<{ id?: number; messageId: string }>;
   getReplayAfter(request: ChannelReplayAfterRequest): Promise<ChannelReplayEnvelope>;
-  getParticipants(): Promise<Array<{
-    participantId: string;
-    ref: ChannelProtocolParticipantRef;
-    metadata: Record<string, unknown>;
-    transport: string;
-    doRef?: { source: string; className: string; objectKey: string };
-  }>>;
+  getParticipants(): Promise<
+    Array<{
+      participantId: string;
+      ref: ChannelProtocolParticipantRef;
+      metadata: Record<string, unknown>;
+      transport: string;
+      doRef?: { source: string; className: string; objectKey: string };
+    }>
+  >;
 }
 export const channelClientRpcMethods = createReceiverRpcMethods<ChannelCliRpc>([
-  "subscribe", "sendAsCaller", "getReplayAfter", "getParticipants",
+  "subscribe",
+  "sendAsCaller",
+  "getReplayAfter",
+  "getParticipants",
 ]);
 
 /**
@@ -287,7 +316,11 @@ export const channelHistoryArgsSchema = z
 
 export const channelMethods = defineServiceMethods({
   list: {
-    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     args: z.tuple([]),
     returns: z.array(channelSummarySchema),
     description:
@@ -295,7 +328,11 @@ export const channelMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   history: {
-    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     args: z.tuple([channelHistoryArgsSchema]),
     returns: z.array(channelHistoryEntrySchema),
     description:
@@ -303,7 +340,11 @@ export const channelMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   send: {
-    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     args: z.tuple([z.string(), z.string(), channelSendOptsSchema.optional()]),
     returns: channelSendResultSchema,
     description:
@@ -311,7 +352,11 @@ export const channelMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   roster: {
-    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     args: z.tuple([z.string()]),
     returns: z.array(channelRosterEntrySchema),
     description: "List a channel's current participants (channel DO getParticipants).",

@@ -2538,6 +2538,200 @@ describe("createRpcClient lifetime ownership", () => {
     await expect(read).rejects.toThrow(/retired/);
   });
 
+  it.each(["response", "readable"] as const)(
+    "preserves explicit and ambient cancellation reasons after a native %s head without a client lifetime",
+    async (mode) => {
+      for (const ambient of [false, true]) {
+        const owner = new AbortController();
+        const reason = new Error("the owning operation ended");
+        const open = (signal?: AbortSignal | null) =>
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              // Fetch-like bodies normalize cancellation instead of returning
+              // the caller's reason. The RPC operation owns that provenance.
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  controller.error(new DOMException("The operation was aborted", "AbortError"));
+                },
+                { once: true }
+              );
+            },
+          });
+        const base = createRpcClient({
+          selfId: "stream-owner",
+          transport: {
+            send: async () => {},
+            onMessage: () => () => {},
+            ...(mode === "response"
+              ? {
+                  stream: async (_envelope: RpcEnvelope, signal?: AbortSignal | null) =>
+                    new Response(open(signal)),
+                }
+              : {
+                  streamReadable: async (_envelope: RpcEnvelope, signal?: AbortSignal | null) => ({
+                    status: 200,
+                    statusText: "OK",
+                    headers: [],
+                    finalUrl: "",
+                    body: open(signal),
+                  }),
+                }),
+          },
+        });
+        const rpc = ambient ? withRpcAbortSignal(base, owner.signal) : base;
+        const response = await rpc.streamReadable(
+          "main",
+          "watch",
+          [],
+          ambient ? undefined : { signal: owner.signal }
+        );
+        const reader = response.body.getReader();
+        try {
+          const read = reader.read();
+          owner.abort(reason);
+          await expect(read).rejects.toBe(reason);
+        } finally {
+          reader.releaseLock();
+        }
+      }
+    }
+  );
+
+  it("propagates an independent AbortError unchanged and detaches body cancellation ownership", async () => {
+    const owner = new AbortController();
+    const remove = vi.spyOn(owner.signal, "removeEventListener");
+    const failure = new DOMException("independent transport failure", "AbortError");
+    let fail!: () => void;
+    const cancel = vi.fn();
+    const rpc = createRpcClient({
+      selfId: "stream-owner",
+      transport: {
+        send: async () => {},
+        onMessage: () => () => {},
+        stream: async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                fail = () => controller.error(failure);
+              },
+              cancel,
+            })
+          ),
+      },
+    });
+    const response = await rpc.stream("main", "watch", [], { signal: owner.signal });
+    const reader = response.body!.getReader();
+    const read = reader.read();
+    fail();
+    await expect(read).rejects.toBe(failure);
+    owner.abort(new Error("later cancellation"));
+    expect(cancel).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    reader.releaseLock();
+  });
+
+  it("joins owned response-body cancellation before settling the waiting read", async () => {
+    const owner = new AbortController();
+    const reason = new Error("owner ended");
+    let finish!: () => void;
+    const cancellation = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const cancel = vi.fn(() => cancellation);
+    const rpc = createRpcClient({
+      selfId: "stream-owner",
+      transport: {
+        send: async () => {},
+        onMessage: () => () => {},
+        stream: async () => new Response(new ReadableStream<Uint8Array>({ cancel })),
+      },
+    });
+    const response = await rpc.stream("main", "watch", [], { signal: owner.signal });
+    const reader = response.body!.getReader();
+    let settled = false;
+    const read = reader.read().catch((error) => {
+      settled = true;
+      throw error;
+    });
+    owner.abort(reason);
+    await flushMicrotasks();
+    expect(cancel).toHaveBeenCalledWith(reason);
+    expect(settled).toBe(false);
+    finish();
+    await expect(read).rejects.toBe(reason);
+    reader.releaseLock();
+  });
+
+  it("retains source teardown failure alongside the cancelling owner's reason", async () => {
+    const owner = new AbortController();
+    const reason = new Error("owner ended");
+    const teardownFailure = new Error("source cancellation failed");
+    const remove = vi.spyOn(owner.signal, "removeEventListener");
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        throw teardownFailure;
+      },
+    });
+    const rpc = createRpcClient({
+      selfId: "stream-owner",
+      transport: {
+        send: async () => {},
+        onMessage: () => () => {},
+        stream: async () => new Response(body),
+      },
+    });
+    const response = await rpc.stream("main", "watch", [], { signal: owner.signal });
+    const reader = response.body!.getReader();
+    const read = reader.read();
+    owner.abort(reason);
+    await expect(read).rejects.toMatchObject({
+      name: "AggregateError",
+      errors: [reason, teardownFailure],
+      cause: reason,
+    });
+    expect(body.locked).toBe(false);
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    reader.releaseLock();
+  });
+
+  it.each(["call", "lifetime"] as const)(
+    "settles the native body with the first authoritative %s cancellation",
+    async (first) => {
+      const call = new AbortController();
+      const lifetime = new AbortController();
+      const reason = new Error("call ended");
+      const cancel = vi.fn();
+      const rpc = createRpcClient({
+        selfId: "stream-owner",
+        lifetime: lifetime.signal,
+        transport: {
+          send: async () => {},
+          onMessage: () => () => {},
+          stream: async () => new Response(new ReadableStream<Uint8Array>({ cancel })),
+        },
+      });
+      const response = await rpc.stream("main", "watch", [], { signal: call.signal });
+      const reader = response.body!.getReader();
+      const read = reader.read();
+      if (first === "call") {
+        call.abort(reason);
+        lifetime.abort();
+        await expect(read).rejects.toBe(reason);
+        expect(cancel).toHaveBeenCalledWith(reason);
+      } else {
+        lifetime.abort();
+        call.abort(reason);
+        await expect(read).rejects.toThrow(/retired/);
+        expect(cancel).toHaveBeenCalledWith(
+          expect.objectContaining({ message: expect.stringContaining("retired") })
+        );
+      }
+      expect(cancel).toHaveBeenCalledTimes(1);
+      reader.releaseLock();
+    }
+  );
+
   it("cancels a native body that arrives after retirement and preserves responses without a lifetime", async () => {
     const lifetime = new AbortController();
     let resolveHead!: (response: Response) => void;

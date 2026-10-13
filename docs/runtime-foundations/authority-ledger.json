@@ -31034,11 +31034,11 @@
       "rpcPlane": "host-service",
       "owner": "terminalApps",
       "method": "launch",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
       "mechanismFamily": "terminal-apps.run",
-      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "reviewRationale": "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace",
       "resourceDerivation": {
         "kind": "literal",
         "key": "terminal-apps.run"
@@ -31069,8 +31069,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "single-prepared-terminal-program-consent",
+        "change": "Opens only the transport; the exact prepared terminal-apps.run leaf remains gated for user and code callers. Declared code authority and approved prepared state are still required before a program starts."
       },
       "capability": "service:terminalApps.launch",
       "parityAssertion": "generated-census:host-authority"
@@ -31084,7 +31084,7 @@
       "sessionAdmission": "family",
       "residency": "native-effect",
       "mechanismFamily": "terminal-apps.run",
-      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "reviewRationale": "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace",
       "capability": "terminal-apps.run",
       "resourceDerivation": {
         "kind": "prepared",
@@ -31169,11 +31169,11 @@
       "rpcPlane": "host-service",
       "owner": "terminalApps",
       "method": "restart",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
       "mechanismFamily": "terminal-apps.run",
-      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "reviewRationale": "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace",
       "resourceDerivation": {
         "kind": "literal",
         "key": "terminal-apps.run"
@@ -31204,8 +31204,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "single-prepared-owned-terminal-restart-consent",
+        "change": "Opens only the transport; restarting still requires one exact prepared gated terminal-apps.run leaf. Preparation validates session ownership before revealing program details; no foreign session or undeclared code authority is admitted."
       },
       "capability": "service:terminalApps.restart",
       "parityAssertion": "generated-census:host-authority"
@@ -31219,7 +31219,7 @@
       "sessionAdmission": "family",
       "residency": "native-effect",
       "mechanismFamily": "terminal-apps.run",
-      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "reviewRationale": "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace",
       "capability": "terminal-apps.run",
       "resourceDerivation": {
         "kind": "prepared",
@@ -31259,11 +31259,11 @@
       "rpcPlane": "host-service",
       "owner": "terminalApps",
       "method": "resume",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
       "mechanismFamily": "terminal-apps.run",
-      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "reviewRationale": "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace",
       "resourceDerivation": {
         "kind": "literal",
         "key": "terminal-apps.run"
@@ -31294,8 +31294,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "single-prepared-owned-terminal-resume-consent",
+        "change": "Opens only the transport; resuming still requires one exact prepared gated terminal-apps.run leaf. Preparation validates session ownership before revealing program details; no foreign session or undeclared code authority is admitted."
       },
       "capability": "service:terminalApps.resume",
       "parityAssertion": "generated-census:host-authority"
@@ -31309,7 +31309,7 @@
       "sessionAdmission": "family",
       "residency": "native-effect",
       "mechanismFamily": "terminal-apps.run",
-      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "reviewRationale": "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace",
       "capability": "terminal-apps.run",
       "resourceDerivation": {
         "kind": "prepared",

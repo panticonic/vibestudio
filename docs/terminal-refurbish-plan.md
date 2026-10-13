@@ -451,3 +451,50 @@ timeout or retry was introduced.
 
 See [terminal-handover.md](terminal-handover.md) for the full state at handover
 and the open work.
+
+### Infrastructure and polish follow-ups (2026-10-14)
+
+Terminal launch/resume/restart now use one app/version/workspace-specific
+prepared approval for user and code callers, preserving declared authority and
+session ownership. Canonical requester labels no longer fall back to opaque
+runtime IDs.
+
+Native startup profiling exposed and repaired build-report inconsistencies:
+reports now include declared compiler-only dependencies, and authority folding
+and checkout audit apply the mobile context baseline consistently. The terminal
+browser's native report now passes with an identical-key verified repeat.
+No startup scheduling regression or user-visible speedup was established.
+
+Concurrent projected Base/System typechecks passed; no cache collision was
+reproduced, but compiler memory pressure was observed. The two mobile suites now
+wait for visible operation completion instead of mock entry, with a controlled
+pending-refresh regression and passing two-worker coverage.
+
+Stricter history traversal also exposed a real resume defect: replay readiness
+used the global history start rather than the retained window, and receipt
+snapshots manufactured sequence zero. Replay now derives its retained durable
+boundary and preserves sequence-less receipt identities. Eighty-eight focused
+regressions pass; fresh fork/resume run
+`st_27c3756523324092a716c2425cafdbce` passed in 50.957 s with zero tool failures.
+Artifact review also found a completed tool card losing its name when older
+start metadata arrived later. The canonical reducer now enriches that metadata
+without rewinding lifecycle state; 73 protocol tests pass. The scenario's final
+repeat additionally checks the originally observed tool title after resume.
+That stricter run exposed transport-ready being mistaken for projection-ready
+before the subscriber's retained replay drained. Ordered, non-durable replay
+completion now travels on the existing event stream, with generation-owned
+readiness and atomic replay/live admission. Connection cancellation joins its
+reader and active callback while retaining original failures. The final Base
+composition check, 101 focused replay tests and 17 connection tests pass.
+Fresh strict fork/resume run `st_79a0805c43fa446597cdb60c3a3c7c24` passed in
+55.440 s with zero tool failures, including original tool-title preservation.
+Final `eval-cancel-run` passed in `st_4c1422d4fdc04f2a81939af8eafbc0af`,
+1.515 s. All owned instances were stopped and retired. The restoration
+assertion remains strict, and model context receives no replay controls.
+
+The existing terminal smoke test supports exact installed artifacts and checks
+pins, complete release validation, fresh/warm-profile readiness and clean
+shutdown. Actual installed acceptance, including session restoration, still
+requires published terminal template versions and a matching package; neither
+the stale local installation nor current published pins represent this branch.
+Publication has not been performed.

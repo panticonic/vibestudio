@@ -427,20 +427,12 @@ export function createTerminalAppsService(
       command?: string;
       args?: string[];
     };
-    const userId = verifiedInitiatingUserId(ctx);
-    const source =
-      input.source ??
-      (input.sessionId && userId
-        ? registryFile().sessions.find(
-            (s) => s.sessionId === input.sessionId && s.userId === userId
-          )?.source
-        : undefined);
+    const userId = userSubject(ctx).userId;
+    const session = input.sessionId ? requireSession(userId, input.sessionId) : undefined;
+    const source = input.source ?? session?.source;
     const unit = source ? await deps.resolveUnit(source) : null;
     if (source && !unit) throw new Error(`There is no terminal app at ${source}`);
-    const stored =
-      !source && input.sessionId
-        ? registryFile().sessions.find((s) => s.sessionId === input.sessionId)?.program
-        : undefined;
+    const stored = session?.program;
     const shellCommand = input.command
       ? [input.command, ...(input.args ?? [])].join(" ")
       : stored
@@ -472,6 +464,7 @@ export function createTerminalAppsService(
             resource,
             operation: { kind: "unknown", verb: "Run", object: resource },
             details: [
+              { label: "Workspace", value: deps.workspaceLabel() },
               {
                 label: "Program",
                 value: unit ? `${unit.title} (${source})` : (shellCommand ?? "Login shell"),

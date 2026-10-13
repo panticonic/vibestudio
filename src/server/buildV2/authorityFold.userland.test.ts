@@ -442,33 +442,60 @@ describe("userland authority fold", () => {
     expect(diagnostics).toEqual([]);
   });
 
-  it("still charges a library for an explicit context-bearing host call", async () => {
-    const { root, project } = programFor(
-      `export const method = "workspace-state.slot.commitPreparedNavigation";`
-    );
+  it.each(["terminal", "electron", "react-native"] as const)(
+    "keeps the automatic context baseline only for the mobile host contract (%s)",
+    async (target) => {
+      const { root, project } = programFor("export const entry = true;");
+      const diagnostics = await authorityDiagnosticsForProgram({
+        project,
+        sourceRoot: root,
+        unitRelativePath: ".",
+        units: [{ name: "consumer", relativePath: "." }],
+        manifest: { app: { target }, authority: { requests: [], provides: [] } },
+      });
+      expect(diagnostics).toEqual(
+        target === "react-native"
+          ? [
+              expect.objectContaining({
+                message: expect.stringContaining("capability 'context.boundary'"),
+              }),
+            ]
+          : []
+      );
+    }
+  );
 
-    const diagnostics = await authorityDiagnosticsForProgram({
-      project,
-      sourceRoot: root,
-      unitRelativePath: ".",
-      units: [{ name: "@workspace/library", relativePath: "." }],
-      manifest: {
-        authority: {
-          requests: [],
-          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
-          provides: [],
+  it.each([undefined, "terminal", "electron", "react-native"] as const)(
+    "charges an explicit context-bearing call independently of the host contract (%s)",
+    async (target) => {
+      const { root, project } = programFor(
+        `export const method = "workspace-state.slot.commitPreparedNavigation";`
+      );
+
+      const diagnostics = await authorityDiagnosticsForProgram({
+        project,
+        sourceRoot: root,
+        unitRelativePath: ".",
+        units: [{ name: "@workspace/library", relativePath: "." }],
+        manifest: {
+          ...(target ? { app: { target } } : {}),
+          authority: {
+            requests: [],
+            serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+            provides: [],
+          },
         },
-      },
-    });
+      });
 
-    expect(diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: expect.stringContaining("capability 'context.boundary'"),
-        }),
-      ])
-    );
-  });
+      expect(diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.stringContaining("capability 'context.boundary'"),
+          }),
+        ])
+      );
+    }
+  );
 
   it("does not treat trusted runtime dispatch plumbing as consumer service intent", async () => {
     const { root, project } = programFor("export const entry = true;");

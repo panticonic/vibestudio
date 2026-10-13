@@ -640,7 +640,8 @@ function inferCapabilities(pkg) {
   // the inference baseline `context.boundary` belongs only to a mobile app
   // package. Any other unit owes it only when an explicit host call depends on
   // it, which the dependency expansion below adds.
-  if (!pkg.manifest.app) capabilities.delete("context.boundary");
+  if (pkg.manifest.vibestudio?.app?.target !== "react-native")
+    capabilities.delete("context.boundary");
 
   for (const capability of pkg.manifest.vibestudio?.app?.capabilities ?? []) {
     if (typeof capability === "string") capabilities.add(capability);

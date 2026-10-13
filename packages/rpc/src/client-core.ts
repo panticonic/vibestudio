@@ -328,8 +328,12 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         .finally(() => config.lifetime!.removeEventListener("abort", onAbort));
     });
   };
-  const responseWithinLifetime = (response: Response, release: () => void): Response => {
-    if (!config.lifetime) {
+  const responseWithinLifetime = (
+    response: Response,
+    release: () => void,
+    signal?: AbortSignal | null
+  ): Response => {
+    if (!config.lifetime && !signal) {
       release();
       return response;
     }
@@ -342,37 +346,64 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       statusText: response.statusText,
       headers: [...response.headers.entries()],
       finalUrl: response.url,
-      body: bodyWithinLifetime(response.body, release),
+      body: bodyWithinLifetime(response.body, release, signal),
     });
   };
   const bodyWithinLifetime = (
     body: ReadableStream<Uint8Array>,
-    release: () => void = () => {}
+    release: () => void = () => {},
+    signal?: AbortSignal | null
   ): ReadableStream<Uint8Array> => {
-    if (!config.lifetime) {
+    if (!config.lifetime && !signal) {
       release();
       return body;
     }
     const lifetime = config.lifetime;
     let reader: ReadableStreamDefaultReader<Uint8Array>;
     let ended = false;
-    let onAbort: () => void;
+    let onLifetimeAbort: () => void;
+    let onCallAbort: () => void;
     const cleanup = (): void => {
-      lifetime.removeEventListener("abort", onAbort);
+      lifetime?.removeEventListener("abort", onLifetimeAbort);
+      signal?.removeEventListener("abort", onCallAbort);
+      reader.releaseLock();
       release();
     };
     return new ReadableStream<Uint8Array>({
       start(controller) {
         reader = body.getReader();
-        onAbort = () => {
+        const abort = (reason: unknown) => {
           if (ended) return;
           ended = true;
-          void reader.cancel(retiredError()).catch(() => {});
-          controller.error(retiredError());
-          cleanup();
+          // cancel() on an already-errored body rejects with its stored error
+          // without admitting source teardown. Otherwise the reader closes
+          // before the source cancel algorithm runs: a rejection then is an
+          // actual teardown failure, which must survive the owner's reason.
+          const closed = reader.closed;
+          void Promise.allSettled([closed, reader.cancel(reason)]).then(
+            ([terminal, cancellation]) => {
+              const teardownFailed =
+                cancellation.status === "rejected" &&
+                !(terminal.status === "rejected" && terminal.reason === cancellation.reason);
+              cleanup();
+              controller.error(
+                teardownFailed && cancellation.status === "rejected"
+                  ? new AggregateError(
+                      [reason, cancellation.reason],
+                      "RPC stream cancellation failed",
+                      { cause: reason }
+                    )
+                  : reason
+              );
+            }
+          );
         };
-        lifetime.addEventListener("abort", onAbort, { once: true });
-        if (lifetime.aborted) onAbort();
+        onLifetimeAbort = () => abort(retiredError());
+        onCallAbort = () => abort(signal!.reason);
+        lifetime?.addEventListener("abort", onLifetimeAbort, { once: true });
+        signal?.addEventListener("abort", onCallAbort, { once: true });
+        if (signal?.aborted) onCallAbort();
+        else if (lifetime?.aborted) onLifetimeAbort();
       },
       async pull(controller) {
         if (ended) return;
@@ -396,8 +427,11 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       async cancel(reason) {
         if (ended) return;
         ended = true;
-        cleanup();
-        await reader.cancel(reason);
+        try {
+          await reader.cancel(reason);
+        } finally {
+          cleanup();
+        }
       },
     });
   };
@@ -1310,7 +1344,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         ),
         (late) => void late.body?.cancel(retiredError()).catch(() => {})
       )
-        .then((response) => responseWithinLifetime(response, operation.cleanup))
+        .then((response) => responseWithinLifetime(response, operation.cleanup, options?.signal))
         .catch((error) => {
           operation.cleanup();
           throw error;
@@ -1341,7 +1375,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
           config.transport.streamBody(envelope, operation.signal, bodyWithinLifetime(options.body)),
           (late) => void late.body?.cancel(retiredError()).catch(() => {})
         )
-          .then((response) => responseWithinLifetime(response, operation.cleanup))
+          .then((response) => responseWithinLifetime(response, operation.cleanup, options?.signal))
           .catch((error) => {
             operation.cleanup();
             throw error;
@@ -1402,11 +1436,10 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       (late) => void late.body.cancel(retiredError()).catch(() => {})
     )
       .then((response) => {
-        if (!config.lifetime) {
-          operation.cleanup();
-          return response;
-        }
-        return { ...response, body: bodyWithinLifetime(response.body, operation.cleanup) };
+        return {
+          ...response,
+          body: bodyWithinLifetime(response.body, operation.cleanup, options?.signal),
+        };
       })
       .catch((error) => {
         operation.cleanup();

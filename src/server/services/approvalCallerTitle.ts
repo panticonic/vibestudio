@@ -34,12 +34,6 @@ function basename(path: string): string {
   return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
 }
 
-function shortRuntimeId(id: string): string {
-  const stripped = id.replace(/^(do-service:|do:|worker:|panel:|app:|session:)/, "");
-  const parts = stripped.split(":").filter(Boolean);
-  return parts[parts.length - 1] ?? stripped;
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
@@ -123,15 +117,36 @@ function evalMeta(record: EntityRecord | null | undefined): ApprovalRequesterIde
   };
 }
 
-function fallbackLabel(record: EntityRecord | null | undefined, id: string): string {
-  if (!record) return shortRuntimeId(id);
+function fallbackLabel(
+  record: EntityRecord | null | undefined,
+  sourcePath = "",
+  kind: ApprovalRequesterBreadcrumb["kind"] = record?.kind ?? "system"
+): string {
   if (isEvalRecord(record)) {
     const meta = evalMeta(record);
     return meta?.subKey && meta.subKey !== "default" ? `Eval ${meta.subKey}` : "Eval sandbox";
   }
-  const sourceName = basename(record.source.repoPath);
+  const sourceName = basename(record?.source.repoPath ?? sourcePath);
   if (sourceName) return sourceName;
-  return shortRuntimeId(id);
+  switch (kind) {
+    case "panel":
+      return "Workspace panel";
+    case "app":
+      return "Workspace app";
+    case "worker":
+      return "Background worker";
+    case "do":
+      return "Workspace service";
+    case "extension":
+      return "Workspace extension";
+    case "session":
+      return "Workspace session";
+    case "shell":
+      return "Terminal client";
+    case "system":
+    case "server":
+      return "Vibestudio";
+  }
 }
 
 function collectLineage(deps: ApprovalCallerTitleDeps, callerId: string): EntityRecord[] {
@@ -168,7 +183,7 @@ function breadcrumbForRecord(
       : "system",
     record.id === callerId ? callerCategoryOverride : undefined
   );
-  const label = cleanTitle(deps.getTitle(record.id)) ?? fallbackLabel(record, record.id);
+  const label = cleanTitle(deps.getTitle(record.id)) ?? fallbackLabel(record);
   return {
     id: record.id,
     kind: entityKindToRequesterKind(record.kind),
@@ -193,7 +208,7 @@ export function resolveApprovalRequester(
   const title =
     (input.callerKind === "worker" || input.callerKind === "do"
       ? (panelTitle ?? directTitle)
-      : (directTitle ?? panelTitle)) ?? fallbackLabel(callerRecord, input.callerId);
+      : (directTitle ?? panelTitle)) ?? fallbackLabel(callerRecord, sourcePath, input.callerKind);
   const iconSource = panel?.source.repoPath ?? callerRecord?.source.repoPath ?? input.repoPath;
   const icon = cleanTitle(deps.getIcon?.(iconSource));
   const evalIdentity = input.eval ?? evalMeta(callerRecord);
@@ -227,7 +242,7 @@ export function resolveApprovalRequester(
       ? {
           panel: {
             id: panel.id,
-            title: panelTitle ?? fallbackLabel(panel, panel.id),
+            title: panelTitle ?? fallbackLabel(panel),
           },
         }
       : {}),

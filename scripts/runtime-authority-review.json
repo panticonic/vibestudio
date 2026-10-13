@@ -1,6 +1,18 @@
 {
-  "censusDigest": "sha256:9682bc52bad8efff1b5fd36c4daba21f430b8c9c10dba59cb558446dfed8de40",
+  "censusDigest": "sha256:cfda71bafbd0951fb4c8547fa5e4bdba5068919f2ff963468f7bf292f82343a6",
   "decisions": {
+    "host:terminalApps.launch": {
+      "review": "single-prepared-terminal-program-consent",
+      "change": "Opens only the transport; the exact prepared terminal-apps.run leaf remains gated for user and code callers. Declared code authority and approved prepared state are still required before a program starts."
+    },
+    "host:terminalApps.restart": {
+      "review": "single-prepared-owned-terminal-restart-consent",
+      "change": "Opens only the transport; restarting still requires one exact prepared gated terminal-apps.run leaf. Preparation validates session ownership before revealing program details; no foreign session or undeclared code authority is admitted."
+    },
+    "host:terminalApps.resume": {
+      "review": "single-prepared-owned-terminal-resume-consent",
+      "change": "Opens only the transport; resuming still requires one exact prepared gated terminal-apps.run leaf. Preparation validates session ownership before revealing program details; no foreign session or undeclared code authority is admitted."
+    },
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
       "change": "The host-owned cookie projection and credential-session adapter may read one canonical origin after deriving the vault from the authenticated user/workspace. Workspace code has no receiver or host-service route to plaintext cookies."

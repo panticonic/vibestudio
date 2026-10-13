@@ -3,7 +3,11 @@ import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  type ServiceContext,
+  type ServiceDispatcher,
+} from "@vibestudio/shared/serviceDispatcher";
 import {
   createTerminalAppsService,
   SHELL_EXTENSION,
@@ -12,6 +16,10 @@ import {
   type TerminalAppsServiceDeps,
 } from "./terminalAppsService.js";
 import { TERMINAL_APPS_RUN_PREPARATION } from "@vibestudio/service-schemas/terminalApps";
+import {
+  createTestServiceDispatcher,
+  testAuthority,
+} from "@vibestudio/shared/serviceDispatcherTestUtils";
 
 const SUBJECT = { userId: "alice", kind: "user" } as never;
 
@@ -84,6 +92,144 @@ async function harness(registryPath?: string) {
 }
 
 describe("terminalApps launch service", () => {
+  it.each(["user", "code"])(
+    "reviews one exact app run for a %s caller on launch, resume and restart",
+    async (kind) => {
+      const h = await harness();
+      const caller =
+        kind === "user"
+          ? personCtx().caller
+          : createVerifiedCaller(
+              "panel:launcher",
+              "panel",
+              {
+                callerId: "panel:launcher",
+                callerKind: "panel",
+                repoPath: "panels/terminal",
+                effectiveVersion: "version-1",
+                executionDigest: "a".repeat(64),
+                requested: [
+                  { capability: "terminal-apps.run", resource: { kind: "prefix", prefix: "" } },
+                ],
+              },
+              null,
+              SUBJECT
+            );
+      const dispatcher = createTestServiceDispatcher();
+      const resolved = vi.fn<Parameters<ServiceDispatcher["setAuthorityResolver"]>[0]>(
+        ({ caller: author, capability, resourceKey }) =>
+          testAuthority(author, capability, resourceKey)
+      );
+      dispatcher.setAuthorityResolver(resolved);
+      dispatcher.registerService(h.service);
+      dispatcher.markInitialized();
+      try {
+        let sessionId: string | undefined;
+        for (const method of ["launch", "resume", "restart"]) {
+          const input = {
+            ...(sessionId ? { sessionId } : { source: "terminal-apps/chat" }),
+            cols: 80,
+            rows: 24,
+          };
+          const preflight = await dispatcher.preflightAuthority(
+            { caller },
+            "terminalApps",
+            method,
+            [input]
+          );
+          expect(preflight.leaves.map(({ capability, tier }) => ({ capability, tier }))).toEqual([
+            { capability: `service:terminalApps.${method}`, tier: "open" },
+            { capability: "terminal-apps.run", tier: "gated" },
+          ]);
+          expect(resolved.mock.calls.at(-1)?.[0]).toMatchObject({
+            capability: "terminal-apps.run",
+            resourceKey: "terminal-app:terminal-apps/chat",
+            challenge: {
+              title: "Run Chat abcdef012345 in Personal?",
+              details: [
+                { label: "Workspace", value: "Personal" },
+                { label: "Program", value: "Chat (terminal-apps/chat)" },
+                { label: "Version", value: "abcdef012345" },
+              ],
+            },
+          });
+          const session = (await dispatcher.dispatch({ caller }, "terminalApps", method, [
+            input,
+          ])) as {
+            sessionId: string;
+          };
+          sessionId = session.sessionId;
+        }
+      } finally {
+        await h.service.stop();
+      }
+    }
+  );
+
+  it("refuses another person's session before revealing its command in a review", async () => {
+    const h = await harness();
+    try {
+      const session = (await call(h, "launch", personCtx(), {
+        command: "private-program",
+        cols: 80,
+        rows: 24,
+      })) as { sessionId: string };
+      const prepare = h.service.authorityPreparation![TERMINAL_APPS_RUN_PREPARATION]!;
+      const caller = createVerifiedCaller("shell:bob", "shell", null, null, {
+        kind: "user",
+        userId: "bob",
+      } as never);
+      await expect(prepare({ caller }, [{ sessionId: session.sessionId }])).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await h.service.stop();
+    }
+  });
+
+  it("keeps declared code authority admission on the exact prepared run leaf", async () => {
+    const h = await harness();
+    const caller = createVerifiedCaller(
+      "panel:undeclared",
+      "panel",
+      {
+        callerId: "panel:undeclared",
+        callerKind: "panel",
+        repoPath: "panels/terminal",
+        effectiveVersion: "version-1",
+        executionDigest: "a".repeat(64),
+        requested: [],
+      },
+      null,
+      SUBJECT
+    );
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(h.service);
+    dispatcher.markInitialized();
+    try {
+      const input = { source: "terminal-apps/chat", cols: 80, rows: 24 };
+      await expect(
+        dispatcher.preflightAuthority({ caller }, "terminalApps", "launch", [input])
+      ).resolves.toMatchObject({
+        decision: "denied",
+        leaves: [
+          { capability: "service:terminalApps.launch", status: "granted" },
+          {
+            capability: "terminal-apps.run",
+            status: "denied",
+            failure: { reasonCode: "fixed-code-not-requested" },
+          },
+        ],
+      });
+      await expect(
+        dispatcher.dispatch({ caller }, "terminalApps", "launch", [input])
+      ).rejects.toMatchObject({ code: "EACCES" });
+      expect(h.shellCalls).toEqual([]);
+    } finally {
+      await h.service.stop();
+    }
+  });
+
   it("launches an app as a host-held panel runtime the person owns, through a one-shot launch file", async () => {
     const h = await harness();
     const entry = (await call(h, "launch", personCtx("terminal-apps/chat"), {

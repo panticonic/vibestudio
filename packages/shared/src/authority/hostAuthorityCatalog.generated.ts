@@ -7419,11 +7419,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "terminalApps.launch": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "native-effect",
       family: "terminal-apps.run",
-      rationale: "Controls only the calling person's own terminal sessions",
+      rationale:
+        "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace",
     },
     capability: "terminal-apps.run",
     presentation: {
@@ -7450,11 +7451,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "terminalApps.restart": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "native-effect",
       family: "terminal-apps.run",
-      rationale: "Controls only the calling person's own terminal sessions",
+      rationale:
+        "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace",
     },
     capability: "terminal-apps.run",
     presentation: {
@@ -7470,11 +7472,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "terminalApps.resume": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "native-effect",
       family: "terminal-apps.run",
-      rationale: "Controls only the calling person's own terminal sessions",
+      rationale:
+        "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace",
     },
     capability: "terminal-apps.run",
     presentation: {

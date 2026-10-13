@@ -91,6 +91,15 @@ const runPresentation = {
   authorityCategory: { domain: "computer" as const, verb: "act" as const },
 };
 
+// Preparation resolves the exact program before consent. The transport itself
+// must not add a second, generic approval in front of that semantic run leaf.
+const runTier = {
+  ...controlTier,
+  family: "terminal-apps.run",
+  rationale:
+    "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace",
+};
+
 const runAccess: MethodAccessDescriptor = {
   sensitivity: "write" as const,
   approval: [
@@ -121,7 +130,7 @@ export const terminalAppsMethods = defineServiceMethods({
     presentation: runPresentation,
     description:
       "Start a terminal app (`source` = terminal-apps/<name>) or, without a source, a shell, in a new terminal session sized cols×rows. A shell runs the person's login shell, or `command` with `args`, in `cwd` (inside its context's folder) and `contextId` (default: a fresh context for the session). Returns the session; attach to its shellSessionId.",
-    tier: { ...controlTier, tier: "gated" as const, family: "terminal-apps.run" },
+    tier: runTier,
     authority: runAuthority,
     args: z.tuple([
       z
@@ -151,7 +160,7 @@ export const terminalAppsMethods = defineServiceMethods({
     presentation: runPresentation,
     description:
       "Return a session; when its program is no longer running, start it again in the same session (an app keeps its state and context).",
-    tier: { ...controlTier, tier: "gated" as const, family: "terminal-apps.run" },
+    tier: runTier,
     authority: runAuthority,
     args: z.tuple([
       z.object({ sessionId, ...size, approvalsKey: z.string().max(40).optional() }).strict(),
@@ -165,7 +174,7 @@ export const terminalAppsMethods = defineServiceMethods({
     presentation: runPresentation,
     description:
       "Stop a session's running program (if any) and start it again in a new PTY of the same session: same program, context and folder (an app keeps its state).",
-    tier: { ...controlTier, tier: "gated" as const, family: "terminal-apps.run" },
+    tier: runTier,
     authority: runAuthority,
     args: z.tuple([
       z.object({ sessionId, ...size, approvalsKey: z.string().max(40).optional() }).strict(),

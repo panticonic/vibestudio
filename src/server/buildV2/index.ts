@@ -1840,7 +1840,6 @@ export async function initBuildSystemV2(
     moduleConditions: readonly string[],
     built: StoredBuildResult | null
   ): Promise<{ diagnostics: BuildDiagnostic[]; reusable: boolean }> => {
-    const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
     let reusable = true;
     let diagnosticSourceRoot: string | null = null;
@@ -1850,20 +1849,29 @@ export async function initBuildSystemV2(
     // The same source root gives esbuild failure paths workspace coordinates
     // instead of cache/temp checkout paths.
     try {
+      const compiler = typecheckDependencyGraph(node, graphAtView, appRoot, appNodeModuleRoots);
+      const compilerNodes = compiler.graph.allNodes();
       const { sourceRoot } = await source.materializeForBuild(
-        internalDeps,
+        compilerNodes.filter((candidate) => graphAtView.has(candidate.name)),
         viewStateHash,
         workspaceRoot
       );
       diagnosticSourceRoot = sourceRoot;
+      for (const candidate of compilerNodes) {
+        if (!graphAtView.has(candidate.name))
+          candidate.relativePath = path
+            .relative(sourceRoot, candidate.path)
+            .split(path.sep)
+            .join("/");
+      }
       // Provision resolution exactly like the build: workspace deps from the
       // materialized subtrees, external deps from the app node_modules. Without
       // both, the bare source root resolves nothing → false "Cannot find module".
       // TypeScript and its virtual standard-library payload are build-report
       // dependencies, not server-bootstrap dependencies.
       const dependencyEnvironment = await prepareExternalDependencyEnvironment(
-        node,
-        graphAtView,
+        compiler.graph.get(node.name),
+        compiler.graph,
         sourceRoot,
         appRoot,
         [...appNodeModuleRoots]
@@ -1899,7 +1907,7 @@ export async function initBuildSystemV2(
         const tsc = await typecheckWorker.check({
           unitRelativePath: node.relativePath,
           sourceRoot,
-          internalDeps: internalDeps.map((u) => ({
+          internalDeps: compilerNodes.map((u) => ({
             name: u.name,
             relativePath: u.relativePath,
             serviceRequests: u.manifest.authority?.serviceRequests ?? [],
