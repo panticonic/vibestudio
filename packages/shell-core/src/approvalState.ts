@@ -44,7 +44,6 @@ export function createApprovalStateController(
   let disposed = false;
   let refreshSeq = 0;
   let unsubscribe: (() => void) | null = null;
-  let admitted = false;
   let admission: Promise<void> | null = null;
   let starting: Promise<PendingApproval[]> | null = null;
   let stopping: Promise<void> | null = null;
@@ -97,9 +96,7 @@ export function createApprovalStateController(
         void refresh("event-fallback").catch(() => undefined);
       });
       admission = deps.subscribePendingChanged().then(
-        () => {
-          admitted = true;
-        },
+        () => undefined,
         (error: unknown) => {
           if (!disposed) deps.onError?.(error, "subscribe");
           throw error;
@@ -119,9 +116,14 @@ export function createApprovalStateController(
       unsubscribe?.();
       unsubscribe = null;
       stopping = (async () => {
-        await admission?.catch(() => undefined);
+        let admissionFailure: unknown;
+        try {
+          await admission;
+        } catch (error) {
+          admissionFailure = error;
+        }
         let unsubscribeFailure: unknown;
-        if (admitted && deps.unsubscribePendingChanged) {
+        if (admission && deps.unsubscribePendingChanged) {
           try {
             await deps.unsubscribePendingChanged();
           } catch (error) {
@@ -130,7 +132,15 @@ export function createApprovalStateController(
           }
         }
         await Promise.allSettled([...reads]);
+        if (admissionFailure !== undefined && unsubscribeFailure !== undefined) {
+          throw new AggregateError(
+            [admissionFailure, unsubscribeFailure],
+            "Approval observation admission and retirement failed",
+            { cause: admissionFailure }
+          );
+        }
         if (unsubscribeFailure !== undefined) throw unsubscribeFailure;
+        if (admissionFailure !== undefined) throw admissionFailure;
       })();
       return stopping;
     },

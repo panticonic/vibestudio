@@ -194,7 +194,55 @@ describe("approvalState", () => {
 
     await expect(controller.start()).rejects.toBe(failure);
     expect(onError).toHaveBeenCalledWith(failure, phase);
-    await controller.stop();
+    if (phase === "subscribe") await expect(controller.stop()).rejects.toBe(failure);
+    else await controller.stop();
+  });
+
+  it("retires a subscription whose admission response rejected", async () => {
+    const admissionFailure = new Error("Subscription response lost");
+    const unsubscribePendingChanged = vi.fn(async () => undefined);
+    const controller = createApprovalStateController({
+      listPending: vi.fn(async () => []),
+      subscribePendingChanged: async () => {
+        throw admissionFailure;
+      },
+      unsubscribePendingChanged,
+      onPendingChanged: () => () => {},
+      onChange: vi.fn(),
+    });
+
+    await expect(controller.start()).rejects.toBe(admissionFailure);
+    await expect(controller.stop()).rejects.toBe(admissionFailure);
+    expect(unsubscribePendingChanged).toHaveBeenCalledTimes(1);
+    await expect(controller.stop()).rejects.toBe(admissionFailure);
+    expect(unsubscribePendingChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves admission and retirement failures in one causal aggregate", async () => {
+    const admissionFailure = new Error("Subscription response lost");
+    const retirementFailure = new Error("Subscription retirement failed");
+    const onError = vi.fn();
+    const controller = createApprovalStateController({
+      listPending: vi.fn(async () => []),
+      subscribePendingChanged: async () => {
+        throw admissionFailure;
+      },
+      unsubscribePendingChanged: async () => {
+        throw retirementFailure;
+      },
+      onPendingChanged: () => () => {},
+      onChange: vi.fn(),
+      onError,
+    });
+
+    await expect(controller.start()).rejects.toBe(admissionFailure);
+    const retirement = controller.stop();
+    await expect(retirement).rejects.toMatchObject({
+      message: "Approval observation admission and retirement failed",
+      cause: admissionFailure,
+      errors: [admissionFailure, retirementFailure],
+    });
+    expect(onError).toHaveBeenCalledWith(retirementFailure, "unsubscribe");
   });
 
   it("joins delayed admission, remote retirement, and an owned read when stopped", async () => {
