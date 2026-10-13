@@ -19,7 +19,7 @@ describe("website chrome connection state", () => {
     let notify!: (entry: WebsiteConnectionEntry) => void;
     const changed = vi.fn();
     const list = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(latest.promise);
-    const stop = observeWebsiteConnections({
+    const observation = observeWebsiteConnections({
       list,
       listen: (listener) => {
         notify = listener;
@@ -45,7 +45,7 @@ describe("website chrome connection state", () => {
     latest.resolve([entry]);
     await flush();
     expect(changed.mock.lastCall?.[0].get("browser-slot").connected).toBe(false);
-    stop();
+    await observation.stop();
   });
 
   it("retires a late subscription without reading or publishing into a new workspace", async () => {
@@ -54,7 +54,7 @@ describe("website chrome connection state", () => {
     const changed = vi.fn();
     const list = vi.fn();
     const unlisten = vi.fn();
-    const stop = observeWebsiteConnections({
+    const observation = observeWebsiteConnections({
       list,
       listen: () => unlisten,
       subscribe: () => subscribed.promise,
@@ -62,12 +62,27 @@ describe("website chrome connection state", () => {
       changed,
       error: vi.fn(),
     });
-    stop();
+    const stopping = observation.stop();
     expect(unlisten).toHaveBeenCalledOnce();
     subscribed.resolve();
-    await flush();
+    await stopping;
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(list).not.toHaveBeenCalled();
     expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("exposes initial readiness and preserves an inventory failure", async () => {
+    const failure = new Error("inventory unavailable");
+    const error = vi.fn();
+    const observation = observeWebsiteConnections({
+      list: () => Promise.reject(failure),
+      listen: () => vi.fn(),
+      subscribe: async () => {},
+      unsubscribe: async () => {},
+      changed: vi.fn(),
+      error,
+    });
+    await expect(observation.ready).rejects.toBe(failure);
+    expect(error).toHaveBeenCalledWith(failure);
   });
 });

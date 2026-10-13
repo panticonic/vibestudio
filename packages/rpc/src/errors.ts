@@ -26,22 +26,30 @@ export function isTerminalAuthorityFailure(error: unknown): boolean {
 
 /** Routine logical-session loss; callers still own recovery and mutation policy. */
 export function isRpcConnectionLost(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  if (
-    "code" in error &&
-    error.code === SESSION_CONNECTION_LOST_CODE &&
-    (!("errorKind" in error) || error.errorKind === "transport")
-  ) {
-    return true;
-  }
-  // Domain wrappers such as PubSubError keep their own category in `code`,
-  // preserve the lower RPC code in `errorCode`, and retain the typed cause.
-  return (
-    "errorCode" in error &&
-    error.errorCode === SESSION_CONNECTION_LOST_CODE &&
-    "cause" in error &&
-    isRpcConnectionLost(error.cause)
-  );
+  const visited = new Set<object>();
+  const visit = (value: unknown): boolean => {
+    if (!value || typeof value !== "object" || visited.has(value)) return false;
+    visited.add(value);
+    if (value instanceof AggregateError) {
+      return value.errors.length > 0 && value.errors.every(visit);
+    }
+    if (
+      "code" in value &&
+      value.code === SESSION_CONNECTION_LOST_CODE &&
+      (!("errorKind" in value) || value.errorKind === "transport")
+    ) {
+      return true;
+    }
+    // Domain wrappers such as PubSubError keep their own category in `code`,
+    // preserve the lower RPC code in `errorCode`, and retain the typed cause.
+    return (
+      "errorCode" in value &&
+      value.errorCode === SESSION_CONNECTION_LOST_CODE &&
+      "cause" in value &&
+      visit(value.cause)
+    );
+  };
+  return visit(error);
 }
 
 /** A caller cancelled its own call; nothing failed and nothing needs recovery. */
