@@ -109,7 +109,8 @@ test("Linux quality consumers share one verified template and infrastructure pro
   const qualityInputsWorkflow = await readWorkflow("quality-inputs.yml");
   const producer = qualityInputsWorkflow.jobs.prepare;
   const quality = jobs.quality;
-  const followup = jobs["quality-followup"];
+  const followupCaller = jobs["quality-followup"];
+  const followup = (await readWorkflow("quality-linux.yml")).jobs["quality-followup"];
   const desktop = (await readWorkflow("quality-desktop.yml")).jobs.integration;
   const desktopCaller = jobs["quality-desktop"];
   assert.equal(jobs["quality-inputs"].uses, "./.github/workflows/quality-inputs.yml");
@@ -117,7 +118,8 @@ test("Linux quality consumers share one verified template and infrastructure pro
     "base-ref": "\${{ inputs.base-ref || 'main' }}",
   });
   assert.deepEqual(dependenciesOf(quality), ["quality-inputs"]);
-  assert.deepEqual(dependenciesOf(followup), ["quality-inputs"]);
+  assert.deepEqual(dependenciesOf(followupCaller), ["quality-inputs"]);
+  assert.equal(followupCaller.uses, "./.github/workflows/quality-linux.yml");
   assert.deepEqual(dependenciesOf(desktopCaller), ["quality-inputs"]);
   assert.equal(desktopCaller.uses, "./.github/workflows/quality-desktop.yml");
   const step = (job, name) => job.steps.find((entry) => entry.name === name);
@@ -189,6 +191,7 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
     "linux-installer-arm64",
     "windows-installer-candidate",
     "quality-desktop",
+    "quality-linux",
     "android-iroh-smoke",
     "application-candidate-mac",
   ]);
@@ -226,6 +229,7 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
     assert.equal(jobs[target].uses, ci[target].uses, `${target} must call CI's implementation`);
   }
   assert.equal(jobs["quality-desktop"].uses, ci["quality-desktop"].uses);
+  assert.equal(jobs["quality-linux"].uses, ci["quality-followup"].uses);
   assert.equal(jobs["darwin-production-host"].uses, ci["darwin-production-host"].uses);
   assert.equal(jobs["application-candidate-mac"].uses, ci["application-candidate-mac"].uses);
   const desktopWorkflow = await readWorkflow("quality-desktop.yml");
@@ -253,6 +257,7 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
     "application-candidate-windows",
   ]);
   assert.deepEqual(dependenciesOf(jobs["quality-desktop"]), ["quality-inputs"]);
+  assert.deepEqual(dependenciesOf(jobs["quality-linux"]), ["quality-inputs"]);
   assert.deepEqual(dependenciesOf(jobs["android-iroh-smoke"]), []);
   assert.deepEqual(dependenciesOf(jobs["darwin-production-host"]), ["native-input-darwin-arm64"]);
   assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), ["darwin-production-host"]);
@@ -298,6 +303,9 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
     );
   }
   assert.equal(jobs["quality-inputs"].uses, ci["quality-inputs"].uses);
+  assert.deepEqual(jobs["quality-inputs"].with, {
+    "base-ref": "${{ inputs.base-ref }}",
+  });
   assert.equal(jobs["native-input-linux-x64"].uses, ci["native-input-linux-x64"].uses);
   assert.equal(jobs["native-input-linux-arm64"].uses, ci["native-input-linux-arm64"].uses);
   assert.equal(jobs["native-input-darwin-arm64"].uses, ci["native-input-darwin-arm64"].uses);

@@ -162,10 +162,11 @@ Linux quality has its own source-input edge. `quality-inputs` checks out the
 selected Base ref and complete template catalog once, builds the infrastructure
 packages once, and uploads those outputs with a receipt for the host commit,
 infrastructure manifest, and every template commit and tree. The `quality`,
-`quality-followup`, and `quality-desktop` jobs verify that receipt after
+`quality-followup` CI caller of the `quality-linux` reusable workflow, and
+`quality-desktop` jobs verify that receipt after
 restoring the exact artifact. Template type-checking and the complete userland
 suite stay together in `quality`; the mobile, host-boundary, packaged host,
-lint, formatting, and unit checks run in `quality-followup`. Native remote
+lint, formatting, and unit checks run in `quality-linux`. Native remote
 transport and desktop pairing run in `quality-desktop` so they share one
 development host build. Each quality consumer owns its generated files on its
 own runner, while the infrastructure packages and template inputs come from the
@@ -271,8 +272,10 @@ gh workflow run ci-diagnostic.yml --ref my-fix-branch \
 ```
 
 Targets are `npm-server-preflight`, `linux-installer-x64`,
-`linux-installer-arm64`, `windows-installer-candidate`, `quality-desktop`, and
-`android-iroh-smoke`. `application-candidate-mac` also reruns the Darwin native
+`linux-installer-arm64`, `windows-installer-candidate`, `quality-desktop`,
+`quality-linux`, and `android-iroh-smoke`. `quality-linux` invokes the same
+reusable workflow as CI and prepares `quality-inputs` with the selected
+`base-ref`. `application-candidate-mac` also reruns the Darwin native
 input, production-host build, macOS application candidate, installed-app
 acceptance on macos-14 and macos-26, installer packaging, and installed release
 acceptance. It calls the same reusable installer and release-acceptance
