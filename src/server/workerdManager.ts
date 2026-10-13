@@ -154,7 +154,6 @@ interface SchemaProbeBuild {
   className: string;
   version: string;
   modules: Record<string, string>;
-  wasmModules?: Record<string, string>;
 }
 
 /** Diagnostic env vars forwarded from the host process into every worker's
@@ -2199,9 +2198,6 @@ export class WorkerdManager {
     compatibilityFlags: string[];
     mainModule: string;
     modules: Record<string, string>;
-    /** Extra pre-compiled wasm modules, base64 (e.g. terminal/Ink `yoga.wasm`).
-     *  The UniversalDO host decodes these to ArrayBuffers for the loader. */
-    wasmModules?: Record<string, string>;
     env: Record<string, unknown>;
   } | null> {
     const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
@@ -2217,7 +2213,6 @@ export class WorkerdManager {
         ...USER_CODE_COMPATIBILITY,
         compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
         modules: probe.modules,
-        ...(probe.wasmModules ? { wasmModules: probe.wasmModules } : {}),
         env: {
           WORKER_SOURCE: source,
           WORKER_CLASS_NAME: className,
@@ -2253,19 +2248,6 @@ export class WorkerdManager {
     const modules = await workerJavaScriptModules(
       buildResult,
       workspaceProvider.readBuildArtifactContent
-    );
-    // Terminal (Ink) DOs import a pre-compiled `yoga.wasm` module — it must be
-    // loaded alongside the JS bundle (the only way to run WASM in workerd).
-    const wasmModules: Record<string, string> = {};
-    await Promise.all(
-      buildResult.artifacts
-        .filter((artifact) => artifact.role === "wasm")
-        .map(async (artifact) => {
-          wasmModules[artifact.path] = await workspaceProvider.readBuildArtifactContent(
-            buildResult,
-            artifact
-          );
-        })
     );
 
     // Service-level token shared by all instances of this source:className;
@@ -2307,7 +2289,6 @@ export class WorkerdManager {
       ...USER_CODE_COMPATIBILITY,
       compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
       modules,
-      ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
       env,
       version,
       egressIdentity,
@@ -2361,7 +2342,7 @@ export class WorkerdManager {
       if (!builtin) {
         throw new Error(`Internal Durable Object ${className} has no builtin catalog entry`);
       }
-      // Internal DOs ship as a single pre-built bundle (no wasm artifacts).
+      // Internal DOs ship as a single pre-built bundle.
       const internalBundle = this.internalDOBundle();
       const bundleContent = internalBundle.bundle;
       doService.buildKey = internalBundle.buildKey;
@@ -2661,7 +2642,7 @@ export class WorkerdManager {
   }
 
   /**
-   * Flush bundle/wasm files collected during `toCapnpText` to disk asynchronously.
+   * Flush bundle files collected during `toCapnpText` to disk asynchronously.
    * (Serialization stays sync for the recursion; the heavy IO is async so it
    * never blocks the relay event loop during a (re)start.)
    */
@@ -2674,7 +2655,7 @@ export class WorkerdManager {
   }
 
   private bundleFileCounter = 0;
-  private pendingConfigWrites: Array<{ filename: string; content: string | Buffer }> = [];
+  private pendingConfigWrites: Array<{ filename: string; content: string }> = [];
 
   private capnpValue(value: unknown, depth: number): string {
     if (value === null || value === undefined) return "void";
@@ -2703,12 +2684,6 @@ export class WorkerdManager {
         if (k === "esModule" && typeof v === "string") {
           const filename = `bundle-${this.bundleFileCounter++}.js`;
           this.pendingConfigWrites.push({ filename, content: v });
-          return `${indent}${k} = embed "${filename}",`;
-        }
-        // wasm module bindings: value is base64; decode to binary + embed.
-        if (k === "wasm" && typeof v === "string") {
-          const filename = `module-${this.bundleFileCounter++}.wasm`;
-          this.pendingConfigWrites.push({ filename, content: Buffer.from(v, "base64") });
           return `${indent}${k} = embed "${filename}",`;
         }
         return `${indent}${k} = ${this.capnpValue(v, depth + 1)},`;
@@ -4167,20 +4142,12 @@ export class WorkerdManager {
     if (build.metadata.kind !== "worker" || build.metadata.sourcePath !== source) {
       throw new Error(`Schema probe build does not belong to worker source ${source}`);
     }
-    const wasmModules: Record<string, string> = {};
-    for (const artifact of build.artifacts) {
-      if (artifact.role === "wasm")
-        wasmModules[artifact.path] = await this.requireWorkspaceProvider(
-          "DO schema probe"
-        ).readBuildArtifactContent(build, artifact);
-    }
     return this.probeSchemaExecutable(source, className, {
       version: `${build.metadata.ev}:${build.buildKey}`,
       modules: await workerJavaScriptModules(
         build,
         this.requireWorkspaceProvider("DO schema probe").readBuildArtifactContent
       ),
-      ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
     });
   }
 

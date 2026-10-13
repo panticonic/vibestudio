@@ -1348,40 +1348,6 @@ describe("UniversalDO facet host (real workerd)", () => {
     expect(admissionFetches.get(ref.objectKey)).toBe(1);
   }, 30_000);
 
-  it("loads a userland DO that imports a wasm module (e.g. terminal yoga.wasm)", async () => {
-    // Minimal valid wasm module (8-byte header) — instantiates to an empty module.
-    const WASM_B64 = "AGFzbQEAAAA=";
-    const WASM_DO = `import wasmMod from "extra.wasm";
-import { DurableObject } from "cloudflare:workers";
-export class WasmDO extends DurableObject {
-  constructor(ctx, env) { super(ctx, env); this.env = env; }
-  async fetch() {
-    return new Response(JSON.stringify({ result: {
-      wasmLoaded: wasmMod instanceof WebAssembly.Module, cls: this.env.WORKER_CLASS_NAME,
-    }}), { headers: { "content-type": "application/json" } });
-  }
-}
-export default { fetch() { return new Response("h"); } };`;
-    const build = doBuild("workers/wasm", "ev-1", WASM_DO);
-    build.artifacts.push({
-      path: "extra.wasm",
-      role: "wasm",
-      contentType: "application/wasm",
-      encoding: "base64",
-      content: WASM_B64,
-    });
-
-    active = await createHarness({ "workers/wasm": build });
-    const { manager, dispatch } = active;
-    await manager.ensureDOClass("workers/wasm", "WasmDO");
-
-    const res = await dispatch(
-      { source: "workers/wasm", className: "WasmDO", objectKey: "w1" },
-      "get"
-    );
-    expect(res).toEqual({ wasmLoaded: true, cls: "WasmDO" });
-  }, 30_000);
-
   it("loads JavaScript chunks from a userland DO module map", async () => {
     const source = "workers/chunked-do";
     const primary = `import { DurableObject } from "cloudflare:workers";

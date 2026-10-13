@@ -51,7 +51,6 @@ import {
   appUnitManifestDescriptor,
   extensionUnitManifestDescriptor,
   validateUnitManifest,
-  isTerminalWorker,
   parseExtensionMethodAuthority,
 } from "@vibestudio/shared/unitManifest";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
@@ -89,15 +88,7 @@ import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRunti
 import { getAdapter } from "./adapters/index.js";
 import type { FrameworkAdapter } from "./adapters/types.js";
 import { resolveTemplate } from "./templateResolver.js";
-import {
-  RUNTIME_MODULE,
-  TERMINAL_SHIM_YOGA,
-  TERMINAL_SHIM_SIGNAL_EXIT,
-  TERMINAL_SHIM_TERMINAL_SIZE,
-  TERMINAL_YOGA_WASM_MODULE,
-  TERMINAL_WORKER_RUNTIME_EXTERNALS,
-  WORKER_RUNTIME_COMPANION_MODULES,
-} from "./platformModules.js";
+import { RUNTIME_MODULE, WORKER_RUNTIME_COMPANION_MODULES } from "./platformModules.js";
 import { resolveExportSubpath } from "@vibestudio/typecheck/workspace";
 import { assertPresent } from "../../lintHelpers";
 import { resolveBuildProvider } from "./buildProviderRegistry.js";
@@ -3948,109 +3939,6 @@ export const createInterface = stubFn;
   };
 }
 
-// ---------------------------------------------------------------------------
-// Terminal-worker (Ink) build support
-// ---------------------------------------------------------------------------
-
-interface YogaPaths {
-  wasmEsm: string;
-  wrapAssembly: string;
-  enums: string;
-}
-
-/**
- * Locate yoga-layout's internal files from the worker's resolve dir. yoga's
- * `exports` map blocks deep imports, so we resolve the package main and derive
- * the sibling paths (`<root>/dist/src/index.js` → `<root>/dist/...`).
- */
-function resolveYogaPaths(resolveDir: string): YogaPaths {
-  const req = createRequire(path.join(resolveDir, "__terminal_resolve__.js"));
-  const main = req.resolve("yoga-layout"); // <root>/dist/src/index.js
-  const root = path.resolve(path.dirname(main), "../..");
-  return {
-    wasmEsm: path.join(root, "dist", "binaries", "yoga-wasm-base64-esm.js"),
-    wrapAssembly: path.join(root, "dist", "src", "wrapAssembly.js"),
-    enums: path.join(root, "dist", "src", "generated", "YGEnums.js"),
-  };
-}
-
-/**
- * Build plugin for Ink terminal workers. Routes Ink's `import Yoga from
- * 'yoga-layout'` to the terminal-shim sync loader, resolves that loader's deep
- * yoga imports (which yoga's exports map blocks), shims the two npm packages
- * that break in workerd, and marks the terminal wasm binding external (workerd supplies it as
- * a module binding). Register BEFORE the workspace plugin so these intercepts win.
- */
-function createTerminalWorkerAliasPlugin(resolveDir: string): esbuild.Plugin {
-  const yoga = resolveYogaPaths(resolveDir);
-  return {
-    name: "terminal-worker-alias",
-    setup(build) {
-      // Ink's `yoga-layout` default import → the terminal-shim sync loader.
-      build.onResolve({ filter: /^yoga-layout$/ }, async (args) => {
-        const r = await build.resolve(TERMINAL_SHIM_YOGA, {
-          kind: args.kind,
-          resolveDir,
-        });
-        if (r.errors.length > 0) return r;
-        return { path: r.path, external: r.external };
-      });
-      // The loader's deep yoga imports (blocked by yoga's exports map).
-      build.onResolve({ filter: /^yoga-layout\/dist\// }, (args) => {
-        if (args.path.endsWith("yoga-wasm-base64-esm.js")) return { path: yoga.wasmEsm };
-        if (args.path.endsWith("wrapAssembly.js")) return { path: yoga.wrapAssembly };
-        if (args.path.endsWith("YGEnums.js")) return { path: yoga.enums };
-        return null;
-      });
-      // npm packages that break in workerd → terminal-shim replacements.
-      build.onResolve({ filter: /^signal-exit$/ }, async (args) => {
-        const r = await build.resolve(TERMINAL_SHIM_SIGNAL_EXIT, {
-          kind: args.kind,
-          resolveDir,
-        });
-        return r.errors.length > 0 ? r : { path: r.path, external: r.external };
-      });
-      build.onResolve({ filter: /^terminal-size$/ }, async (args) => {
-        const r = await build.resolve(TERMINAL_SHIM_TERMINAL_SIZE, {
-          kind: args.kind,
-          resolveDir,
-        });
-        return r.errors.length > 0 ? r : { path: r.path, external: r.external };
-      });
-      // Provided by workerd as a pre-compiled wasm module binding.
-      build.onResolve({ filter: /.*/ }, (args) =>
-        args.path === TERMINAL_YOGA_WASM_MODULE
-          ? { path: TERMINAL_YOGA_WASM_MODULE, external: true }
-          : null
-      );
-    },
-  };
-}
-
-// yoga.wasm is identical for a given yoga-layout install; extract once per path.
-const yogaWasmCache = new Map<string, Buffer>();
-
-/** Yoga's raw wasm bytes, decoded from its base64-inlined emscripten module. */
-async function extractYogaWasm(resolveDir: string): Promise<Buffer> {
-  const { wasmEsm } = resolveYogaPaths(resolveDir);
-  const cached = yogaWasmCache.get(wasmEsm);
-  if (cached) return cached;
-  // yoga-layout's base64 ESM binary inlines its module as exactly one
-  // `data:application/octet-stream;base64,` literal; read it from the source.
-  const source = await fs.promises.readFile(wasmEsm, "utf8");
-  const payloads = [
-    ...source.matchAll(/"data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)"/g),
-  ];
-  const wasm = payloads.length === 1 ? Buffer.from(payloads[0]![1]!, "base64") : null;
-  if (!wasm || wasm.subarray(0, 4).toString("binary") !== "\0asm") {
-    throw new Error(
-      `terminal worker build: ${wasmEsm} does not inline exactly one yoga.wasm module`
-    );
-  }
-  yogaWasmCache.set(wasmEsm, wasm);
-  return wasm;
-}
-
 /**
  * Node built-in modules that must stay external in the worker bundle so that
  * workerd's `nodejs_compat` compat flag satisfies them at runtime. Registry
@@ -4190,7 +4078,6 @@ async function buildWorker(
   const rpcCatalogReadyAt = Date.now();
   const exposeModules = normalizeManifestSpecList(extractedManifest.exposeModules);
   const dedupePackages = normalizeManifestSpecList(extractedManifest.dedupeModules);
-  const terminalWorker = isTerminalWorker(extractedManifest, node.name);
 
   // Generate the expose entry (always — even with empty exposeModules, this
   // sets up __vibestudioRequire__/__vibestudioModuleMap__ so eval has a working
@@ -4213,9 +4100,6 @@ async function buildWorker(
   fs.writeFileSync(wrapperPath, wrapperCode);
 
   const plugins: esbuild.Plugin[] = [
-    // Terminal (Ink) workers: intercept yoga-layout / signal-exit / terminal-size
-    // BEFORE the workspace resolver so these aliases win. No-op for other workers.
-    ...(terminalWorker ? [createTerminalWorkerAliasPlugin(resolveDir)] : []),
     createWorkspaceResolvePlugin(graph, sourceRoot, WORKER_CONDITIONS),
     createTsExtensionPlugin(sourceRoot),
     createWorkerBufferShimPlugin(resolveDir, session.processOwner.appNodeModules),
@@ -4233,15 +4117,11 @@ async function buildWorker(
   if (dedupePlugin) {
     plugins.push(dedupePlugin);
   }
-  const workerExternals = [
-    ...WORKER_RUNTIME_EXTERNALS,
-    ...(terminalWorker ? TERMINAL_WORKER_RUNTIME_EXTERNALS : []),
-  ];
   const preparedPlugins = composePreparedDependencyPlugins(
     plugins,
     nodePaths,
     [sourceRoot, outdir],
-    workerExternals
+    WORKER_RUNTIME_EXTERNALS
   );
   const configureReadyAt = Date.now();
 
@@ -4276,12 +4156,7 @@ async function buildWorker(
       // createWorkerNodeStubPlugin plugin and replaced with throwing
       // stubs — transitively imported by aws-sdk/proxy-agent/etc. from
       // dead code paths we never reach at runtime.
-      // Terminal workers import "yoga.wasm" — workerd provides it as a
-      // pre-compiled wasm module binding, so it stays external.
-      external: [
-        ...WORKER_RUNTIME_EXTERNALS,
-        ...(terminalWorker ? TERMINAL_WORKER_RUNTIME_EXTERNALS : []),
-      ],
+      external: [...WORKER_RUNTIME_EXTERNALS],
       plugins: preparedPlugins,
       nodePaths,
       // Same automatic JSX runtime the userland type-check and panel builds use.
@@ -4325,49 +4200,6 @@ async function buildWorker(
         executableModules: executableModules.length,
       });
     };
-
-    if (terminalWorker) {
-      // Emit the JS bundle plus the extracted yoga.wasm so workerdManager can
-      // attach it as a module binding for this DO. Mirrors buildPanel's
-      // multi-artifact pattern.
-      const yogaWasm = await extractYogaWasm(resolveDir);
-      const artifacts: BuildArtifacts = {
-        entries: [
-          ...workerArtifacts.entries,
-          {
-            path: TERMINAL_YOGA_WASM_MODULE,
-            role: "wasm",
-            contentType: "application/wasm",
-            encoding: "base64",
-            content: yogaWasm.toString("base64"),
-          },
-        ],
-      };
-      const metadata: BuildMetadata = {
-        kind: runtimeTest ? "worker" : (node.kind as BuildMetadata["kind"]),
-        name: node.name,
-        buildKey,
-        sourcePath: node.relativePath,
-        ev,
-        sourceStateHash,
-        sourcemap,
-        authority,
-        workspaceRpcCatalog,
-        executableModules,
-        details: runtimeTest
-          ? {
-              kind: "test",
-              suite: runtimeTest.suite,
-              runtime: runtimeTest.runtime,
-              selectedFiles: runtimeTest.selectedFiles,
-            }
-          : { kind: "generic" },
-        builtAt: new Date().toISOString(),
-      };
-      const stored = await session.store.putStored(buildKey, artifacts, metadata);
-      logProfile(Date.now());
-      return stored;
-    }
 
     const stored = await storeSimpleBuild(
       session,

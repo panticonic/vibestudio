@@ -19,7 +19,6 @@ export const exactPairTests: ReadonlyArray<{ path: string; template: string }> =
   { path: "packages/typecheck/src/userland-policy.test.ts", template: "base" },
   { path: "packages/shared/src/channelEnvelopeSkillDocs.test.ts", template: "base" },
   { path: "src/server/mobileMetroNativeBoundary.test.ts", template: "system" },
-  { path: "src/server/buildV2/builder.terminalWorker.test.ts", template: "system" },
   { path: "src/server/buildV2/cdpClientBuild.test.ts", template: "base" },
   { path: "src/server/buildV2/index.librarySubpath.test.ts", template: "base" },
   { path: "src/server/buildV2/scaffoldAcceptance.test.ts", template: "base" },

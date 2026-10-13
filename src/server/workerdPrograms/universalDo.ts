@@ -21,7 +21,6 @@ interface UniversalDoEnv {
 interface DurableObjectCodePayload extends WorkerLoaderWorkerCode {
   version: string;
   egressIdentity: string | null;
-  wasmModules?: Record<string, string>;
 }
 
 interface LoadedFacetClass {
@@ -114,15 +113,6 @@ function loadExecutable(
     ) {
       throw new Error(`universal-do: executable ${identity} has no network identity`);
     }
-    const modules = { ...code.modules };
-    if (code.wasmModules) {
-      for (const [name, encodedModule] of Object.entries(code.wasmModules)) {
-        const binary = atob(encodedModule);
-        const bytes = new Uint8Array(binary.length);
-        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-        modules[name] = { wasm: bytes.buffer };
-      }
-    }
     console.info(
       "Durable Object executable loaded",
       JSON.stringify({
@@ -138,7 +128,7 @@ function loadExecutable(
       compatibilityDate: code.compatibilityDate,
       compatibilityFlags: code.compatibilityFlags,
       mainModule: code.mainModule,
-      modules,
+      modules: code.modules,
       env: code.env,
       globalOutbound: code.egressIdentity === null ? null : egressBinding(ctx, code.egressIdentity),
     };

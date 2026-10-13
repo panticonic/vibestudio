@@ -458,60 +458,6 @@ describe("workerService workspace service resolution", () => {
     expect(listBuildUnits).toHaveBeenCalledWith("ctx:ctx-local", ["worker"]);
   });
 
-  it("lists terminal apps with their launcher metadata and skips malformed blocks", async () => {
-    const deps = createDeps();
-    const listBuildUnits = vi.fn(async () => [
-      {
-        unitPath: "workers/terminal-activity",
-        unitName: "terminal-activity",
-        kind: "worker" as const,
-        stateHash: "state:a",
-        effectiveVersion: "ev:a",
-        manifest: {
-          entry: "index.tsx",
-          durable: { classes: [{ className: "TerminalActivitySession" }] },
-          terminal: {
-            renderer: "ink",
-            title: "Activity",
-            description: "Watch the workspace.",
-            icon: "📈",
-          },
-        },
-      },
-      {
-        unitPath: "workers/terminal-broken",
-        unitName: "terminal-broken",
-        kind: "worker" as const,
-        stateHash: "state:b",
-        effectiveVersion: "ev:b",
-        manifest: {
-          entry: "index.tsx",
-          durable: { classes: [{ className: "BrokenSession" }] },
-          terminal: { renderer: "ink" },
-        },
-      },
-    ]);
-    const dispatcher = createTestServiceDispatcher();
-    dispatcher.registerService(
-      createWorkerService({
-        ...(deps as object),
-        buildSystem: { ...deps.buildSystem, listBuildUnits },
-      } as never)
-    );
-    dispatcher.markInitialized();
-
-    const rows = (await dispatcher.dispatch(panelCtx, "workers", "listSources", [])) as Array<
-      Record<string, unknown>
-    >;
-    expect(rows[0]?.["terminal"]).toEqual({
-      title: "Activity",
-      description: "Watch the workspace.",
-      icon: "📈",
-      className: "TerminalActivitySession",
-    });
-    expect(rows[1]).not.toHaveProperty("terminal");
-  });
-
   it("lists and resolves manifest-declared services", async () => {
     const deps = createDeps();
     const dispatcher = createTestServiceDispatcher();

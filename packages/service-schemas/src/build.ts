@@ -112,7 +112,7 @@ export type BuildBundleResult = z.infer<typeof buildBundleResultSchema>;
 export const buildArtifactSchema = z
   .object({
     path: z.string(),
-    role: z.enum(["primary", "asset", "html", "css", "shared-style", "map", "wasm"]),
+    role: z.enum(["primary", "asset", "html", "css", "shared-style", "map"]),
     contentType: z.string(),
     encoding: z.enum(["utf8", "base64"]),
     byteLength: z.number().int().nonnegative().optional(),

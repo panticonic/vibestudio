@@ -7,7 +7,6 @@ import {
   extensionUnitManifestDescriptor,
   validateUnitManifest,
   validateUnitIconDeclaration,
-  workerTerminalConfig,
 } from "./unitManifest.js";
 
 describe("stored unit icons", () => {
@@ -292,52 +291,5 @@ describe("validateUnitManifest", () => {
         { unitName: "@workspace-apps/mobile" }
       )
     ).toThrow(/known react-native capabilities/);
-  });
-});
-
-describe("vibestudio.terminal", () => {
-  const durable = { classes: [{ className: "LogsSession" }] };
-
-  it("is absent for ordinary workers", () => {
-    expect(workerTerminalConfig({ durable })).toBeNull();
-  });
-
-  it("normalizes a minimal block and infers the only durable class", () => {
-    expect(
-      workerTerminalConfig({ durable, terminal: { renderer: "ink", title: " Logs ", icon: "📜" } })
-    ).toEqual({ renderer: "ink", title: "Logs", icon: "📜", className: "LogsSession" });
-  });
-
-  it.each([
-    [{ renderer: "react", title: "x" }, "MANIFEST_TERMINAL_RENDERER"],
-    [{ renderer: "ink" }, "MANIFEST_TERMINAL_TITLE"],
-    [{ renderer: "ink", title: "x", description: "" }, "MANIFEST_TERMINAL_DESCRIPTION"],
-    [{ renderer: "ink", title: "x", icon: "./icon.svg" }, "MANIFEST_TERMINAL_ICON"],
-    [{ renderer: "ink", title: "x", className: "Nope" }, "MANIFEST_TERMINAL_CLASS"],
-    [{ renderer: "ink", title: "x", viewport: { columns: 1, rows: 1 } }, "MANIFEST_TERMINAL_FIELD"],
-    ["ink", "MANIFEST_TERMINAL_BLOCK"],
-  ])("rejects %j with %s", (terminal, code) => {
-    expect(() => workerTerminalConfig({ durable, terminal }, "logs")).toThrow(
-      expect.objectContaining({ code, message: expect.stringContaining("Terminal app logs") })
-    );
-  });
-
-  it("requires className when several durable classes are declared", () => {
-    const two = { classes: [{ className: "A" }, { className: "B" }] };
-    expect(() =>
-      workerTerminalConfig({ durable: two, terminal: { renderer: "ink", title: "x" } })
-    ).toThrow(/set vibestudio.terminal.className to one of A, B/);
-    expect(
-      workerTerminalConfig({
-        durable: two,
-        terminal: { renderer: "ink", title: "x", className: "B" },
-      })
-    ).toMatchObject({ className: "B" });
-  });
-
-  it("rejects a terminal app without a session class", () => {
-    expect(() => workerTerminalConfig({ terminal: { renderer: "ink", title: "x" } })).toThrow(
-      UnitManifestError
-    );
   });
 });
