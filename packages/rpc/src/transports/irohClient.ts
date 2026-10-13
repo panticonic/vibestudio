@@ -233,6 +233,15 @@ class ClientSession implements IrohClientSession {
   async send(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void> {
     workspaceRpcDestination(envelope.destination);
     const requestId = requestIdOf(envelope);
+    const method = envelope.message.type === "request" ? envelope.message.method : undefined;
+    const traceMethod =
+      method === "browserPermissions.snapshot" || method === "panelRuntime.registerClient"
+        ? method
+        : undefined;
+    const trace = (phase: string): void => {
+      if (traceMethod) console.log("[MobileIrohTrace]", traceMethod, requestId, phase);
+    };
+    trace("send-enter");
     if (envelope.message.type === "request-cancel" && requestId) {
       const opening = this.outboundRequestAdmissions.get(requestId);
       if (opening) {
@@ -258,7 +267,9 @@ class ClientSession implements IrohClientSession {
       this.outboundRequestAdmissions.set(requestId, admission);
     }
     try {
+      trace("ready-start");
       await this.ready();
+      trace("ready-complete");
       if (this.terminal) throw new Error(`Iroh session ${this.sid} is closed`);
       if (
         requestId &&
@@ -286,7 +297,9 @@ class ClientSession implements IrohClientSession {
       }
 
       const generation = this.requestGeneration;
+      trace("open-bi-start");
       const stream = await this.pipe.connection.openBi();
+      trace("open-bi-complete");
       const unaryRequest = envelope.message.type === "request" && requestId !== null;
       const cancellable = signal !== undefined && requestId !== null;
       const retainRequestHalf = unaryRequest || cancellable;
@@ -338,6 +351,7 @@ class ClientSession implements IrohClientSession {
           new TextEncoder().encode(encodeRpcJson(envelope)),
           MAX_ENVELOPE_FRAME_BYTES
         );
+        trace("envelope-written");
         // Reset is ordered after the complete envelope on this same stream. A
         // waiting request-cancel may now safely reset the request half without
         // racing the receiver's envelope admission.
@@ -352,6 +366,7 @@ class ClientSession implements IrohClientSession {
         throw error;
       }
       void this.readResponses(stream, requestId).finally(async () => {
+        trace("response-reader-complete");
         if (retainRequestHalf) await stream.send.finish().catch(() => undefined);
         await cancellation;
         signal?.removeEventListener("abort", abort);

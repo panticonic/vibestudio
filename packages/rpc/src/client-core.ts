@@ -417,6 +417,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       cancellationSend: Promise<void> | null;
       cancellationDeliveryError: Error | null;
       responseSettling: boolean;
+      traceMethod?: string;
       /** Envelope target — drives the direct-server vs routed rejection policy (§3.4). */
       target: string;
       destination?: RpcDestination;
@@ -710,6 +711,9 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
   function handleResponse(envelope: RpcEnvelope, response: RpcResponse): void {
     const pending = pendingRequests.get(response.requestId);
     if (!pending) return;
+    if (pending.traceMethod) {
+      console.log("[MobileRpcTrace]", pending.traceMethod, response.requestId, "response-received");
+    }
     if (!rpcDestinationMatchesCaller(pending.destination, envelope.delivery.caller)) return;
     if (pending.responseSettling) return;
     pending.responseSettling = true;
@@ -1116,6 +1120,11 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       return Promise.reject(rpcCallerAbortedError(options.signal.reason));
     }
     const requestId = generateRequestId();
+    const traceMethod =
+      method === "browserPermissions.snapshot" || method === "panelRuntime.registerClient"
+        ? method
+        : undefined;
+    if (traceMethod) console.log("[MobileRpcTrace]", traceMethod, requestId, "call-created");
     const request: RpcRequest = {
       type: "request",
       requestId,
@@ -1136,6 +1145,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         cancellationSend: null as Promise<void> | null,
         cancellationDeliveryError: null as Error | null,
         responseSettling: false,
+        traceMethod,
         target: targetId,
         ...(options?.destination ? { destination: options.destination } : {}),
       };
@@ -1173,14 +1183,20 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       // The client lifetime is a physical transport owner; per-call aborts use
       // request-cancel and must leave this response route intact. Keep the
       // original options object so its invocation ancestry stays attached.
-      void send(targetId, request, options, provenance, config.lifetime ?? null).catch((error) => {
-        const pending = pendingRequests.get(requestId);
-        if (!pending) return;
-        pendingRequests.delete(requestId);
-        if (pending?.timeout) clearTimeout(pending.timeout);
-        pending?.abortCleanup?.();
-        pending.reject(error);
-      });
+      void send(targetId, request, options, provenance, config.lifetime ?? null)
+        .then(() => {
+          if (traceMethod) console.log("[MobileRpcTrace]", traceMethod, requestId, "send-complete");
+        })
+        .catch((error) => {
+          if (traceMethod)
+            console.log("[MobileRpcTrace]", traceMethod, requestId, "send-failed", String(error));
+          const pending = pendingRequests.get(requestId);
+          if (!pending) return;
+          pendingRequests.delete(requestId);
+          if (pending?.timeout) clearTimeout(pending.timeout);
+          pending?.abortCleanup?.();
+          pending.reject(error);
+        });
     });
   }
 

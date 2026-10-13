@@ -5946,6 +5946,15 @@ export class RpcServer {
           sid: streamPreamble.sid,
         });
       }
+      if (
+        receivedMessage.type === "request" &&
+        receivedMessage.method === "panelRuntime.registerClient"
+      ) {
+        log.info("panelRuntime.registerClient ingress", {
+          requestId: receivedMessage.requestId,
+          sid: streamPreamble.sid,
+        });
+      }
       const body =
         streamPreamble.k === "stream" && streamPreamble.body
           ? irohReceiveStreamBody(stream.recv)
