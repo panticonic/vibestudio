@@ -81,6 +81,7 @@ import { eventWatchOwner } from "@vibestudio/service-schemas/bindings/eventsServ
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
+import { HostTargetStaging } from "./hostTargetStaging.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { stateLayout } from "./stateLayout.js";
 import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
@@ -1922,7 +1923,15 @@ async function main() {
   ]);
   const runtimeExtensionDeclarations = (config: typeof workspaceConfig) =>
     resolveExtensionsForHostTargets(config, [...demandedHostTargets]);
-  const hostTargetStaging = new Map<string, Promise<void>>();
+  const hostTargetStaging = new HostTargetStaging(demandedHostTargets, async () => {
+    const host = extensionHostForGateway;
+    if (!host) throw new Error("Extension host is not available");
+    const staging = host.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig), {
+      trigger: "startup",
+      waitFor: "staged",
+    });
+    await staging;
+  });
   const ensureHostTargetExtensions = async (
     target: import("@vibestudio/shared/hostTargets").HostTarget
   ): Promise<void> => {
@@ -1933,23 +1942,7 @@ async function main() {
     // builds at this boundary before staging makes them activatable.
     const requiredExtensions = resolveHostTargetRequiredExtensions(workspaceConfig, target);
     admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(requiredExtensions));
-    const pending = hostTargetStaging.get(target);
-    if (pending) return pending;
-    if (demandedHostTargets.has(target)) return extensionHost.whenDeclarationsStaged();
-    demandedHostTargets.add(target);
-    const staging = extensionHost.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig), {
-      trigger: "startup",
-      waitFor: "staged",
-    });
-    hostTargetStaging.set(target, staging);
-    try {
-      await staging;
-    } catch (error) {
-      demandedHostTargets.delete(target);
-      throw error;
-    } finally {
-      hostTargetStaging.delete(target);
-    }
+    await hostTargetStaging.ensure(target);
   };
   // Optional artifact warming shares the explicit activation owner.
   let startupExtensionWarming: Promise<void> | null = null;
