@@ -93,6 +93,7 @@ import {
 } from "@vibestudio/rpc/protocol/irohSession";
 import { irohReceiveStreamBody } from "@vibestudio/rpc/transports/irohClient";
 import type { IrohIngressAttachment } from "./irohIngress.js";
+import { settleIrohPhysicalClosure } from "./irohAttachmentLifetime.js";
 import { IrohRpcSessionChannel } from "./irohRpcSessionChannel.js";
 import { WebSocketSessionChannel, type RpcSessionChannel } from "./rpcServer/sessionChannel.js";
 import { ProcessSessionChannel } from "./rpcServer/processSessionChannel.js";
@@ -5967,10 +5968,7 @@ export class RpcServer {
       }
     };
 
-    const physicalClosure = connection.closed().then(
-      (reason) => closeAll(reason),
-      (error) => closeAll(error instanceof Error ? error.message : String(error))
-    );
+    const physicalClosure = settleIrohPhysicalClosure(connection.closed(), closeAll);
     const currentLoopTasks = (): Promise<void>[] => {
       const tasks: Promise<void>[] = [];
       if (controlTask) tasks.push(controlTask);

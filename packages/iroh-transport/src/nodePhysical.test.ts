@@ -178,4 +178,20 @@ describe("Node Iroh physical stream failure classification", () => {
       }
     }
   });
+
+  it("tags a rejected physical closure receipt at the native edge", async () => {
+    const nativeFailure = Object.assign(new Error("ClosedStream { _private: () }"), {
+      code: "GenericFailure",
+    });
+    const connection = new NodePhysicalConnection({
+      remoteId: () => ({ toString: () => "peer-endpoint" }),
+      closed: () => Promise.reject(nativeFailure),
+    } as unknown as Connection);
+
+    await expect(connection.closed()).rejects.toMatchObject({
+      message: nativeFailure.message,
+      code: "CONNECTION_LOST",
+      errorKind: "transport",
+    });
+  });
 });

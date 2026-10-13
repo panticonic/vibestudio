@@ -103,7 +103,9 @@ export class NodePhysicalConnection implements IrohPhysicalConnection {
   }
 
   closed(): Promise<string> {
-    return this.native.closed().finally(() => this.stopDiagnostics());
+    return withIrohConnectionLossTag(() => this.native.closed()).finally(() =>
+      this.stopDiagnostics()
+    );
   }
 
   diagnostics() {
