@@ -15,6 +15,7 @@ import {
   BUILDABLE_UNIT_DIRS,
   expectedBuildUnitName,
   WORKSPACE_PACKAGE_SCOPES,
+  isTerminalAppLocation,
 } from "@vibestudio/workspace-contracts/sourceDirs";
 
 // ---------------------------------------------------------------------------
@@ -725,10 +726,11 @@ function finalizePackageGraph(graph: PackageGraph): PackageGraph {
     }
   }
 
-  // Inject template dependencies into panels so template content flows into EVs
+  // Inject template dependencies into panels so template content flows into EVs.
+  // Terminal apps are panels hosted by terminals: no browser page template.
   const hasDefaultTemplate = graph.has("template:default");
   for (const node of graph.allNodes()) {
-    if (node.kind !== "panel") continue;
+    if (node.kind !== "panel" || isTerminalAppLocation(node.relativePath)) continue;
 
     if (node.manifest.template) {
       // Explicit template reference

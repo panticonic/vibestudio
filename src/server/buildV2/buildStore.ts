@@ -546,7 +546,11 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     metadata: BuildMetadata,
     manifest: BuildArtifactManifestEntry[]
   ): Promise<void> {
-    if (metadata.kind === "worker" || metadata.kind === "extension") {
+    if (
+      metadata.kind === "worker" ||
+      metadata.kind === "extension" ||
+      metadata.details.kind === "terminal"
+    ) {
       await fs.promises.writeFile(path.join(dir, "package.json"), '{"type":"module"}');
     }
     await fs.promises.writeFile(

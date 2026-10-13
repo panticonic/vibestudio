@@ -390,7 +390,14 @@ for (const pkg of packages.values()) {
   }
 }
 
-const EXECUTABLE_UNIT_ROOTS = new Set(["about", "apps", "extensions", "panels", "workers"]);
+const EXECUTABLE_UNIT_ROOTS = new Set([
+  "about",
+  "apps",
+  "extensions",
+  "panels",
+  "terminal-apps",
+  "workers",
+]);
 
 /**
  * Authority is part of every executable artifact's source contract. Requiring

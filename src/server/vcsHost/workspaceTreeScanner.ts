@@ -4,6 +4,7 @@
  * skill metadata.
  */
 
+import { isTerminalAppLocation } from "@vibestudio/workspace-contracts/sourceDirs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -211,7 +212,13 @@ export class WorkspaceTreeScanner {
       | { title?: string; description?: string; icon?: string; hiddenInLauncher?: boolean }
       | undefined
   ): void {
-    if (!manifest || (!unitRel.startsWith("panels/") && !isAboutSource(unitRel))) return;
+    // Panels, about panels and terminal apps (panels hosted by terminals) are
+    // launchable; each launcher lists the locations it can host.
+    if (
+      !manifest ||
+      (!unitRel.startsWith("panels/") && !isAboutSource(unitRel) && !isTerminalAppLocation(unitRel))
+    )
+      return;
     node.launchable = {
       type: "app",
       title: manifest.title ?? name,

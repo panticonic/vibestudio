@@ -1,4 +1,5 @@
 import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
+import { isTerminalAppLocation } from "@vibestudio/workspace-contracts/sourceDirs";
 import type { GraphNode } from "./packageGraph.js";
 
 export const PANEL_CONDITIONS = ["vibestudio-panel", "import", "default"] as const;
@@ -14,7 +15,7 @@ export function conditionsForLibraryTarget(target: LibraryBuildTarget): readonly
 export function conditionsForRuntimeUnit(node: GraphNode): readonly string[] {
   switch (node.kind) {
     case "panel":
-      return PANEL_CONDITIONS;
+      return isTerminalAppLocation(node.relativePath) ? NODE_CONDITIONS : PANEL_CONDITIONS;
     case "worker":
       return WORKER_CONDITIONS;
     case "extension":

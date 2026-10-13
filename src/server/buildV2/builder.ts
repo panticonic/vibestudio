@@ -1,3 +1,4 @@
+import { isTerminalAppLocation } from "@vibestudio/workspace-contracts/sourceDirs";
 import { logVerbose } from "@vibestudio/dev-log";
 import {
   PANEL_CONDITIONS,
@@ -2345,9 +2346,7 @@ export async function buildUnitStored(
     cached = await session.store.rebindSourceState(cached, stateRef);
   }
   if (cached) {
-    if (node.kind === "extension") {
-      await refreshCachedExtensionRuntimeDeps(session, cached);
-    }
+    await refreshCachedNodeProgramRuntimeDeps(session, cached);
     return cached;
   }
 
@@ -2592,6 +2591,19 @@ async function doBuild(
         // panel. Falling through to buildPanel would produce a bogus artifact.
         throw new Error(
           `package ${node.name} cannot be built as a runtime unit; build it as a library (options.library + libraryTarget)`
+        );
+      } else if (isTerminalAppLocation(node.relativePath)) {
+        return await buildTerminalProgram(
+          session,
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          extracted.sourceRoot,
+          stateRef,
+          authority,
+          signal
         );
       } else {
         return await buildPanel(
@@ -4692,6 +4704,119 @@ function sealedExtensionMethodAuthority(
   return result;
 }
 
+/**
+ * A Node program bundled to run from its build directory inside the workspace
+ * native runtime: one ESM bundle plus the npm dependencies that cannot be
+ * bundled (native bindings, WASM assets), acquired here and projected next to
+ * the bundle once it is stored. Extensions and terminal apps are both built
+ * this way. Callers must `release()` the acquired runtime dependencies.
+ */
+interface NodeProgramBundle {
+  bundle: string;
+  dependencyDiagnostics: ExtensionDependencyDiagnostics;
+  runtimeExternalDeps: Record<string, string>;
+  runtimeDependencyPatches: ReturnType<typeof dependencyPatchesForExternalRoots>;
+  dependencyOverrides: Record<string, string>;
+  runtimeDeps: Awaited<ReturnType<typeof ensureExtensionRuntimeDeps>>;
+}
+
+async function bundleNodeProgram(
+  session: BuilderSession,
+  env: Awaited<ReturnType<typeof prepareBuildEnv>>,
+  graph: PackageGraph,
+  sourceRoot: string,
+  input: {
+    entryFile: string;
+    conditions: readonly string[];
+    dependencyMode: ExtensionDependencyMode;
+    dedupeModules: string[];
+  },
+  signal: AbortSignal
+): Promise<NodeProgramBundle> {
+  const { outdir, nodePaths, resolveDir } = env;
+  const dependencyDiagnostics = await analyzeExtensionDependencies(
+    env.externalDeps,
+    nodePaths,
+    input.dependencyMode
+  );
+  const { classifiedDeps, runtimeExternalDeps } = dependencyDiagnostics;
+  const runtimeDependencyPatches = dependencyPatchesForExternalRoots(
+    env.dependencyPatches,
+    runtimeExternalDeps
+  );
+  const plugins: esbuild.Plugin[] = [
+    createWorkspaceResolvePlugin(graph, sourceRoot, input.conditions),
+    createTsExtensionPlugin(sourceRoot),
+  ];
+  const cjsShimPlugin = createExtensionCjsShimPlugin(outdir, classifiedDeps);
+  if (cjsShimPlugin) plugins.push(cjsShimPlugin);
+  const dedupePlugin = createDedupePlugin(resolveDir, input.dedupeModules);
+  if (dedupePlugin) plugins.push(dedupePlugin);
+  const externals = [
+    ...KNOWN_NATIVE_EXTERNALS,
+    ...NODE_BUILTIN_EXTERNALS,
+    ...expandExternalSpecifiers(runtimeExternalDeps),
+  ];
+  await buildWithEsbuild({
+    entryPoints: [input.entryFile],
+    bundle: true,
+    platform: "node",
+    target: "node20",
+    format: "esm",
+    splitting: false,
+    outfile: path.join(outdir, "bundle.js"),
+    banner: {
+      js: [
+        "import { createRequire as __vibestudioCreateRequire } from 'node:module';",
+        "import { fileURLToPath as __vibestudioFileURLToPath } from 'node:url';",
+        "import { dirname as __vibestudioDirname } from 'node:path';",
+        "const require = __vibestudioCreateRequire(import.meta.url);",
+        "const __filename = __vibestudioFileURLToPath(import.meta.url);",
+        "const __dirname = __vibestudioDirname(__filename);",
+      ].join("\n"),
+    },
+    sourcemap: "inline",
+    metafile: true,
+    logLevel: "warning",
+    conditions: [...input.conditions],
+    mainFields: ["module", "main"],
+    external: [...KNOWN_NATIVE_EXTERNALS, ...expandExternalSpecifiers(runtimeExternalDeps)],
+    plugins: composePreparedDependencyPlugins(plugins, nodePaths, [sourceRoot, outdir], externals),
+    nodePaths,
+    // Same automatic JSX runtime the userland type-check and panel builds use.
+    tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
+  });
+  const runtimeDeps = await ensureExtensionRuntimeDeps(
+    session.processOwner.appRoot,
+    runtimeExternalDeps,
+    env.dependencyOverrides,
+    runtimeDependencyPatches,
+    signal
+  );
+  return {
+    bundle: fs.readFileSync(path.join(outdir, "bundle.js"), "utf-8"),
+    dependencyDiagnostics,
+    runtimeExternalDeps,
+    runtimeDependencyPatches,
+    dependencyOverrides: env.dependencyOverrides,
+    runtimeDeps,
+  };
+}
+
+/** Project a stored Node program's runtime dependencies next to its bundle. */
+async function projectNodeProgramRuntimeDeps(
+  session: BuilderSession,
+  result: StoredBuildResult,
+  program: NodeProgramBundle,
+  name: string
+): Promise<void> {
+  const nodeModulesDir = program.runtimeDeps.nodeModulesDir;
+  if (!nodeModulesDir) return;
+  await session.processOwner.projectExtensionRuntimeDeps(result.dir, () =>
+    materializeExtensionRuntimeDeps(session, result.dir, nodeModulesDir, name)
+  );
+}
+
 async function buildExtension(
   session: BuilderSession,
   node: GraphNode,
@@ -4714,7 +4839,7 @@ async function buildExtension(
     "runtime-root",
     signal
   );
-  const { outdir, nodePaths, resolveDir } = env;
+  const { outdir } = env;
   const entryFile = await resolveEntryPoint(node, env.sourcePath, {
     conditions: EXTENSION_CONDITIONS,
   });
@@ -4734,84 +4859,27 @@ async function buildExtension(
     authority
   );
   const dependencyMode = normalizeExtensionDependencyMode(extensionManifest?.["dependencyMode"]);
-  const dependencyDiagnostics = await analyzeExtensionDependencies(
-    env.externalDeps,
-    nodePaths,
-    dependencyMode
-  );
-  const { classifiedDeps, runtimeExternalDeps } = dependencyDiagnostics;
-  const runtimeDependencyPatches = dependencyPatchesForExternalRoots(
-    env.dependencyPatches,
-    runtimeExternalDeps
-  );
-  const dedupePackages = normalizeManifestSpecList(
-    extractedManifest["dedupeModules"] as string[] | undefined
-  );
-
-  const plugins: esbuild.Plugin[] = [
-    createWorkspaceResolvePlugin(graph, sourceRoot, EXTENSION_CONDITIONS),
-    createTsExtensionPlugin(sourceRoot),
-  ];
-  const cjsShimPlugin = createExtensionCjsShimPlugin(outdir, classifiedDeps);
-  if (cjsShimPlugin) {
-    plugins.push(cjsShimPlugin);
-  }
-  const dedupePlugin = createDedupePlugin(resolveDir, dedupePackages);
-  if (dedupePlugin) {
-    plugins.push(dedupePlugin);
-  }
-  const extensionExternals = [
-    ...KNOWN_NATIVE_EXTERNALS,
-    ...NODE_BUILTIN_EXTERNALS,
-    ...expandExternalSpecifiers(runtimeExternalDeps),
-  ];
-  const preparedPlugins = composePreparedDependencyPlugins(
-    plugins,
-    nodePaths,
-    [sourceRoot, outdir],
-    extensionExternals
-  );
 
   try {
-    await buildWithEsbuild({
-      entryPoints: [entryFile],
-      bundle: true,
-      platform: "node",
-      target: "node20",
-      format: "esm",
-      splitting: false,
-      outfile: path.join(outdir, "bundle.js"),
-      banner: {
-        js: [
-          "import { createRequire as __vibestudioCreateRequire } from 'node:module';",
-          "import { fileURLToPath as __vibestudioFileURLToPath } from 'node:url';",
-          "import { dirname as __vibestudioDirname } from 'node:path';",
-          "const require = __vibestudioCreateRequire(import.meta.url);",
-          "const __filename = __vibestudioFileURLToPath(import.meta.url);",
-          "const __dirname = __vibestudioDirname(__filename);",
-        ].join("\n"),
+    const program = await bundleNodeProgram(
+      session,
+      env,
+      graph,
+      sourceRoot,
+      {
+        entryFile,
+        conditions: EXTENSION_CONDITIONS,
+        dependencyMode,
+        dedupeModules: normalizeManifestSpecList(
+          extractedManifest["dedupeModules"] as string[] | undefined
+        ),
       },
-      sourcemap: "inline",
-      metafile: true,
-      logLevel: "warning",
-      conditions: [...EXTENSION_CONDITIONS],
-      mainFields: ["module", "main"],
-      external: [...KNOWN_NATIVE_EXTERNALS, ...expandExternalSpecifiers(runtimeExternalDeps)],
-      plugins: preparedPlugins,
-      nodePaths,
-      tsconfigRaw: { compilerOptions: {} },
-    });
-
-    const runtimeDeps = await ensureExtensionRuntimeDeps(
-      session.processOwner.appRoot,
-      runtimeExternalDeps,
-      env.dependencyOverrides,
-      runtimeDependencyPatches,
       signal
     );
+    const { bundle, dependencyDiagnostics, runtimeExternalDeps, runtimeDependencyPatches } =
+      program;
+    const { classifiedDeps } = dependencyDiagnostics;
     try {
-      const bundlePath = path.join(outdir, "bundle.js");
-      const bundle = fs.readFileSync(bundlePath, "utf-8");
       const extensionArtifacts = bundleArtifacts(bundle);
       const iconArtifact = manifestIconArtifact(extractedManifest, extensionSourcePath);
       if (iconArtifact) extensionArtifacts.entries.push(iconArtifact);
@@ -4822,6 +4890,18 @@ async function buildExtension(
         })
       );
       fs.writeFileSync(path.join(outdir, "package.json"), '{"type":"module"}');
+      const details = {
+        kind: "extension" as const,
+        runtimeDepsKey: program.runtimeDeps.key,
+        runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
+        providerContracts,
+        methodAuthority,
+        dependencyMode,
+        externalDeps: runtimeExternalDeps,
+        dependencyOverrides: program.dependencyOverrides,
+        dependencyPatches: runtimeDependencyPatches,
+        classifiedDeps,
+      };
       const smokeResult: BuildResult = {
         dir: outdir,
         buildKey,
@@ -4835,25 +4915,14 @@ async function buildExtension(
           sourceStateHash,
           sourcemap: true,
           authority,
-          details: {
-            kind: "extension",
-            runtimeDepsKey: runtimeDeps.key,
-            runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
-            providerContracts,
-            methodAuthority,
-            dependencyMode,
-            externalDeps: runtimeExternalDeps,
-            dependencyOverrides: env.dependencyOverrides,
-            dependencyPatches: runtimeDependencyPatches,
-            classifiedDeps,
-          },
+          details,
           builtAt: new Date().toISOString(),
         },
         artifacts: smokeArtifacts,
       };
       await smokeTestExtensionBuild(session, smokeResult, node, {
         dependencyDiagnostics,
-        runtimeNodeModulesDir: runtimeDeps.nodeModulesDir,
+        runtimeNodeModulesDir: program.runtimeDeps.nodeModulesDir,
       });
 
       const result = await storeSimpleBuild(
@@ -4865,37 +4934,101 @@ async function buildExtension(
         true,
         sourceStateHash,
         authority,
-        {
-          details: {
-            kind: "extension",
-            runtimeDepsKey: runtimeDeps.key,
-            runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
-            providerContracts,
-            methodAuthority,
-            dependencyMode,
-            externalDeps: runtimeExternalDeps,
-            dependencyOverrides: env.dependencyOverrides,
-            dependencyPatches: runtimeDependencyPatches,
-            classifiedDeps,
-            smokeTest: { mode: "child-process", passed: true },
-          },
-        },
+        { details: { ...details, smokeTest: { mode: "child-process", passed: true } } },
         extensionArtifacts
       );
-      if (runtimeDeps.nodeModulesDir) {
-        await session.processOwner.projectExtensionRuntimeDeps(result.dir, () =>
-          materializeExtensionRuntimeDeps(
-            session,
-            result.dir,
-            runtimeDeps.nodeModulesDir,
-            node.name
-          )
-        );
-      }
-
+      await projectNodeProgramRuntimeDeps(session, result, program, node.name);
       return result;
     } finally {
-      runtimeDeps.release();
+      program.runtimeDeps.release();
+    }
+  } finally {
+    await env.cleanup();
+  }
+}
+
+/**
+ * Build a terminal app: a panel hosted by terminals, run as a Node program in
+ * a workspace PTY. It is bundled exactly like an extension (runtime
+ * dependencies projected next to the bundle so it runs from `builds/` inside
+ * the native runtime) and stored as a panel build.
+ */
+async function buildTerminalProgram(
+  session: BuilderSession,
+  node: GraphNode,
+  ev: string,
+  buildKey: string,
+  graph: PackageGraph,
+  workspaceRoot: string,
+  sourceRoot: string,
+  sourceStateHash: string,
+  authority: UnitAuthorityManifest,
+  signal: AbortSignal
+): Promise<StoredBuildResult> {
+  const env = await prepareBuildEnv(
+    session,
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root",
+    signal
+  );
+  try {
+    const entryFile = await resolveEntryPoint(node, env.sourcePath, {
+      conditions: NODE_CONDITIONS,
+    });
+    const sourcePath = path.join(sourceRoot, node.relativePath);
+    const manifest =
+      (
+        JSON.parse(fs.readFileSync(path.join(sourcePath, "package.json"), "utf-8")) as {
+          vibestudio?: Record<string, unknown>;
+        }
+      ).vibestudio ?? {};
+    const program = await bundleNodeProgram(
+      session,
+      env,
+      graph,
+      sourceRoot,
+      {
+        entryFile,
+        conditions: NODE_CONDITIONS,
+        dependencyMode: "auto",
+        dedupeModules: normalizeManifestSpecList(manifest["dedupeModules"] as string[] | undefined),
+      },
+      signal
+    );
+    try {
+      const artifacts = bundleArtifacts(program.bundle);
+      const result = await storeSimpleBuild(
+        session,
+        buildKey,
+        program.bundle,
+        node,
+        ev,
+        true,
+        sourceStateHash,
+        authority,
+        {
+          ...(manifest["stateArgs"]
+            ? { stateArgsSchema: manifest["stateArgs"] as BuildMetadata["stateArgsSchema"] }
+            : {}),
+          details: {
+            kind: "terminal",
+            runtimeDepsKey: program.runtimeDeps.key,
+            externalDeps: program.runtimeExternalDeps,
+            dependencyOverrides: program.dependencyOverrides,
+            dependencyPatches: program.runtimeDependencyPatches,
+            classifiedDeps: program.dependencyDiagnostics.classifiedDeps,
+          },
+        },
+        artifacts
+      );
+      await projectNodeProgramRuntimeDeps(session, result, program, node.name);
+      return result;
+    } finally {
+      program.runtimeDeps.release();
     }
   } finally {
     await env.cleanup();
@@ -4948,12 +5081,14 @@ async function smokeTestExtensionBuild(
   }
 }
 
-async function refreshCachedExtensionRuntimeDeps(
+/** A cached Node program (extension or terminal app) gets its runtime dependencies re-projected. */
+async function refreshCachedNodeProgramRuntimeDeps(
   session: BuilderSession,
   result: StoredBuildResult
 ): Promise<void> {
+  const details = result.metadata.details;
   const extensionDetails =
-    result.metadata.details.kind === "extension" ? result.metadata.details : null;
+    details.kind === "extension" || details.kind === "terminal" ? details : null;
   const deps = extensionDetails?.externalDeps ?? {};
   if (Object.keys(deps).length === 0) return;
   await session.processOwner.projectExtensionRuntimeDeps(result.dir, async () => {

@@ -228,6 +228,17 @@ export const buildMetadataDetailsSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      /** A terminal app: a panel hosted by terminals, built as a Node program. */
+      kind: z.literal("terminal"),
+      runtimeDepsKey: z.string().nullable(),
+      externalDeps: z.record(z.string()),
+      dependencyOverrides: z.record(z.string()),
+      dependencyPatches: z.array(extensionDependencyPatchSchema),
+      classifiedDeps: z.array(extensionClassifiedDependencySchema),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("app"),
       target: z.enum(["electron", "react-native", "terminal"]),
       platform: z.enum(["electron", "ios", "android", "terminal"]).optional(),
