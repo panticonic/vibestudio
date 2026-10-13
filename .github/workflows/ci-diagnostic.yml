@@ -13,6 +13,7 @@ on:
           - linux-installer-arm64
           - windows-installer-candidate
           - quality-desktop
+          - quality-linux
           - android-iroh-smoke
           - application-candidate-mac
         required: true
@@ -37,7 +38,7 @@ permissions: {}
 jobs:
   quality-inputs:
     name: Prepare exact Linux quality inputs
-    if: ${{ inputs.target == 'npm-server-preflight' || inputs.target == 'quality-desktop' }}
+    if: ${{ inputs.target == 'npm-server-preflight' || inputs.target == 'quality-desktop' || inputs.target == 'quality-linux' }}
     uses: ./.github/workflows/quality-inputs.yml
     with:
       base-ref: ${{ inputs.base-ref }}
@@ -91,6 +92,14 @@ jobs:
     if: ${{ inputs.target == 'quality-desktop' }}
     needs: quality-inputs
     uses: ./.github/workflows/quality-desktop.yml
+    permissions:
+      contents: read
+
+  quality-linux:
+    name: Remaining Linux quality checks
+    if: ${{ inputs.target == 'quality-linux' }}
+    needs: quality-inputs
+    uses: ./.github/workflows/quality-linux.yml
     permissions:
       contents: read
 

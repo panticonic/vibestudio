@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:ab2f0b1e8477f3212b2e3e4ba3bf046642d439075e8360200bbac6bb556997f7",
+  "censusDigest": "sha256:436f102fe334d260d97cee97b07de416f476d815c255275237864d65ce6e8fab",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -217,9 +217,61 @@
       "review": "exact-controller-owned-acquisition-withdrawal",
       "change": "Closes only the controller's pending acquisition matching its active runtime, canonical lifetime, and original binding digest. Joins that exact presentation, preserves previous decisions, and leaves sibling asks and the shared entity lifetime actionable."
     },
+    "host:blobstore.diffTrees": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.getBase64": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.getRange": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.getRangeBytes": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.getText": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.getTree": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.grep": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.has": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.listTree": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.putBase64": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
     "host:blobstore.putRetained": {
       "review": "caller-scoped-retained-content",
       "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
+    },
+    "host:blobstore.putText": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.putTree": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+    },
+    "host:blobstore.readFileAtTree": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.releaseRetention": {
       "review": "caller-scoped-retained-content",
@@ -228,6 +280,10 @@
     "host:blobstore.retain": {
       "review": "caller-scoped-retained-content",
       "change": "Records the existing retained-content operations under the blobstore authority policy. Retention belongs to the authenticated caller logical owner, release does not delete shared bytes, and direct website access remains closed."
+    },
+    "host:blobstore.stat": {
+      "review": "reachable-scoped-website-content-authority",
+      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:browserEnvironment.applyCookies": {
       "review": "authenticated-browser-host-cookie-application",
@@ -464,6 +520,10 @@
     "host:credentials.resolveCredential": {
       "review": "handler-owned-exact-credential-use-approval",
       "change": "Opens only the mediation entrypoint and removes its redundant generic credential.use dispatcher prompt. The handler still matches the concrete credential and requires the existing exact credential, caller, use, audience, workspace, and grant-scope authorization before returning any credential summary or material."
+    },
+    "host:credentials.resolveNativeModel": {
+      "review": "exact-native-model-account-resolution",
+      "change": "Adds the website-facing native model preparation method that resolves only the provider, model, endpoint, and account bound to the active canonical model operation. The server chooses the account and prepares exact model-use and credential-use authority; callers cannot request a credential id or retrieve secret material."
     },
     "host:credentials.storeCredential": {
       "review": "website-eligible-proxy-dispatch",
@@ -745,6 +805,14 @@
       "review": "receiver-prepared-website-file-envelope",
       "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
+    "host:fs.readdir": {
+      "review": "connected-website-scoped-file-authority",
+      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+    },
+    "host:fs.readdir#capability:filesystem.list": {
+      "review": "receiver-prepared-website-file-envelope",
+      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+    },
     "host:fs.readFile": {
       "review": "connected-website-scoped-file-authority",
       "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
@@ -758,14 +826,6 @@
       "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
     },
     "host:fs.readText#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
-    },
-    "host:fs.readdir": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
-    },
-    "host:fs.readdir#capability:filesystem.list": {
       "review": "receiver-prepared-website-file-envelope",
       "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
     },
@@ -908,6 +968,14 @@
     "host:hubControl.workspaceCreationReceipt": {
       "review": "durable-owner-scoped-workspace-creation",
       "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace."
+    },
+    "host:localModelRuntime.prepareNativeModel": {
+      "review": "exact-active-local-model-preparation",
+      "change": "Adds one website-eligible typed mediation operation for the exact active authenticated native local-model task. The host revalidates provider, model, original endpoint, owner, and liveness before using the ordinary ExtensionHost lifecycle to start that model, returns only its loopback endpoint, and retains all bearer material in host egress."
+    },
+    "host:localModelRuntime.prepareNativeModel#capability:model.use": {
+      "review": "exact-local-model-use-selection",
+      "change": "Selects one gated model.use leaf derived by the host from the active native task model id. Caller arguments must equal the retained task and cannot choose another model, endpoint, account, or runtime secret."
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
@@ -1153,13 +1221,29 @@
       "review": "scoped-website-public-workspace-rpc",
       "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
+    "host:runtime.dropSemanticContext": {
+      "review": "reachable-scoped-website-runtime-authority",
+      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+    },
     "host:runtime.faultAbortAgentVessel": {
       "review": "sealed-exact-vessel-system-test-abort",
       "change": "Adds a hidden code-only fault seam admitted only for the exact attested system-test runner and blessed conduit. It aborts one exact agent-vessel facet while preserving durable state so replay can be proven, and cannot target arbitrary Durable Objects or production callers."
     },
+    "host:runtime.forkSemanticContext": {
+      "review": "reachable-scoped-website-runtime-authority",
+      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+    },
     "host:runtime.listContexts": {
       "review": "bounded-context-id-discovery",
       "change": "Adds an open read of context identifiers optionally narrowed by a caller-supplied prefix. It exposes no context contents or mutation authority and lets userland discover its own durable operation journals without host-owned lifecycle state."
+    },
+    "host:runtime.listEntities": {
+      "review": "reachable-scoped-website-runtime-authority",
+      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+    },
+    "host:runtime.listOwnedContexts": {
+      "review": "reachable-scoped-website-runtime-authority",
+      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.rebindAgentChannel": {
       "review": "owner-scoped-cloned-agent-channel-binding",
@@ -1185,6 +1269,10 @@
       "review": "scoped-website-public-workspace-rpc",
       "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
+    "host:runtime.resolveContext": {
+      "review": "reachable-scoped-website-runtime-authority",
+      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+    },
     "host:runtime.retireEntity": {
       "review": "scoped-website-public-workspace-rpc",
       "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
@@ -1204,6 +1292,22 @@
     "host:runtime.supervision.appendLog": {
       "review": "scoped-website-public-workspace-rpc",
       "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+    },
+    "host:runtime.supervision.describe": {
+      "review": "reachable-scoped-website-runtime-authority",
+      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+    },
+    "host:runtime.supervision.health": {
+      "review": "reachable-scoped-website-runtime-authority",
+      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+    },
+    "host:runtime.supervision.list": {
+      "review": "reachable-scoped-website-runtime-authority",
+      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+    },
+    "host:runtime.supervision.logs": {
+      "review": "reachable-scoped-website-runtime-authority",
+      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.supervision.prepare": {
       "review": "compound-runtime-preparation-authority-target",
@@ -1236,6 +1340,10 @@
     "host:runtime.supervision.rollback": {
       "review": "compound-runtime-rollback-authority-target",
       "change": "Binds rollback authority to the exact operation, runtime kind, and release identity while presenting the human release name. Reusable authority no longer spans unrelated lifecycle actions or units."
+    },
+    "host:runtime.supervision.versions": {
+      "review": "reachable-scoped-website-runtime-authority",
+      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:shellApproval.getWorkspaceCreationReviewState": {
       "review": "bounded-workspace-review-readiness-read",
@@ -1657,9 +1765,21 @@
       "review": "scoped-website-public-workspace-rpc",
       "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
+    "host:workers.resolveDurableObject": {
+      "review": "reachable-cross-workspace-service-resolution",
+      "change": "Makes the declared website-eligible resolver reachable through its outer service authority while retaining authenticated source and destination policy, workspace membership, and receiver-selected authority for the exact resolved service. Discovery does not itself authorize invocation."
+    },
+    "host:workers.resolveDurableObject#capability-prefix:workspace-service:": {
+      "review": "website-aware-receiver-selected-service-authority",
+      "change": "Allows the prepared authority selector to preserve a website principal only when the exact resolved workspace service admits that principal. The receiver chooses the capability and requirement from the registered service contract; callers cannot widen the selected authority."
+    },
     "host:workers.resolveService": {
-      "review": "cross-workspace-service-metadata-discovery",
-      "change": "Records cross-workspace eligibility for the existing service metadata reads. Eligibility does not bypass authenticated source/destination policy, membership, or the selected receiver method authority, and does not authorize invocation of discovered methods."
+      "review": "reachable-cross-workspace-service-resolution",
+      "change": "Makes the declared website-eligible resolver reachable through its outer service authority while retaining authenticated source and destination policy, workspace membership, and receiver-selected authority for the exact resolved service. Discovery does not itself authorize invocation."
+    },
+    "host:workers.resolveService#capability-prefix:workspace-service:": {
+      "review": "website-aware-receiver-selected-service-authority",
+      "change": "Allows the prepared authority selector to preserve a website principal only when the exact resolved workspace service admits that principal. The receiver chooses the capability and requirement from the registered service contract; callers cannot widen the selected authority."
     },
     "host:workspace-state.alarmSourcePublish": {
       "review": "authenticated-native-source-schedule-relay",

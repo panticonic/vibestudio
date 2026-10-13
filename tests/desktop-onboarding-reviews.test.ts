@@ -105,6 +105,9 @@ function fixture() {
       purpose: "generation" as const,
       attempt: 1,
       cutoff: 35,
+      providerId: "openai",
+      modelId: "gpt-test",
+      endpoint: "https://api.example.test/v1",
       requestDigest: "b".repeat(64),
     },
   };

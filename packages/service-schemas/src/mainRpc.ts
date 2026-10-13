@@ -70,6 +70,7 @@ import type { browserDataMethods } from "./browserData.js";
 import type { browserVaultMethods } from "./browserData.js";
 import type { browserProductMethods } from "./browserData.js";
 import type { credentialsMethods } from "./credentials.js";
+import type { localModelRuntimeMethods } from "./localModelRuntime.js";
 import type { panelMethods } from "./panel.js";
 import type { fsMethods } from "./fs.js";
 import type { gitInteropMethods } from "./gitInterop.js";
@@ -146,6 +147,7 @@ export type MainRpcMethods = Methods<"governance", typeof governanceMethods> &
   Methods<"browserVault", typeof browserVaultMethods> &
   Methods<"browserProduct", typeof browserProductMethods> &
   Methods<"credentials", typeof credentialsMethods> &
+  Methods<"localModelRuntime", typeof localModelRuntimeMethods> &
   Methods<"panel", typeof panelMethods> &
   Methods<"fs", typeof fsMethods> &
   Methods<"gitInterop", typeof gitInteropMethods> &
@@ -237,6 +239,7 @@ const loaders = {
   browserVault: async () => (await import("./browserData.js")).browserVaultMethods,
   browserProduct: async () => (await import("./browserData.js")).browserProductMethods,
   credentials: async () => (await import("./credentials.js")).credentialsMethods,
+  localModelRuntime: async () => (await import("./localModelRuntime.js")).localModelRuntimeMethods,
   panel: async () => (await import("./panel.js")).panelMethods,
   fs: async () => (await import("./fs.js")).fsMethods,
   gitInterop: async () => (await import("./gitInterop.js")).gitInteropMethods,

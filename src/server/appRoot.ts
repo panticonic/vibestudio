@@ -1,7 +1,15 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPhysicalAppPath } from "@vibestudio/shared/runtimePaths";
 
 export const TYPESCRIPT_SERVER_PATH_ENV = "VIBESTUDIO_TYPESCRIPT_SERVER_PATH";
+
+export interface HostBuildFingerprint {
+  readonly version: 1;
+  readonly mode: "development" | "production";
+  readonly fingerprint: string;
+  readonly inputCount: number;
+}
 
 export function resolveRequiredAppRoot(
   input: {
@@ -26,6 +34,35 @@ export function resolveRequiredHostArtifactRoot(env: NodeJS.ProcessEnv = process
     );
   }
   return path.resolve(configured);
+}
+
+/** Read the completion receipt from the exact immutable generation this process executes. */
+export function readHostBuildFingerprint(hostArtifactRoot: string): HostBuildFingerprint {
+  const fingerprintPath = path.join(path.resolve(hostArtifactRoot), "host-build-fingerprint.json");
+  let record: unknown;
+  try {
+    record = JSON.parse(fs.readFileSync(fingerprintPath, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `Installed host build identity is unavailable at ${fingerprintPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+  if (
+    typeof record !== "object" ||
+    record === null ||
+    (record as Record<string, unknown>)["version"] !== 1 ||
+    !["development", "production"].includes(
+      String((record as Record<string, unknown>)["mode"] ?? "")
+    ) ||
+    !/^[0-9a-f]{64}$/u.test(String((record as Record<string, unknown>)["fingerprint"] ?? "")) ||
+    !Number.isSafeInteger((record as Record<string, unknown>)["inputCount"]) ||
+    Number((record as Record<string, unknown>)["inputCount"]) < 1
+  ) {
+    throw new Error(`Installed host build identity is malformed at ${fingerprintPath}`);
+  }
+  return record as HostBuildFingerprint;
 }
 
 export function resolveNativeTypeScriptServerPath(

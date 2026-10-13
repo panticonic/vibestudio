@@ -118,6 +118,11 @@ Implemented fixes:
   descendants; an agent does not become unrelated merely because its eval ended.
 - Align website eligibility with receiver principals in conversation and image
   APIs. An eligible declaration with no website principal was unusable.
+- Validate every website-eligible method against its effective method or
+  inherited service authority when schemas load and services register. Explicit
+  requirements and every prepared authority envelope must be able to carry a
+  website origin, so discovery cannot advertise a route that authorization will
+  reject before its receiver policy is reached.
 - Host-side closed-receiver errors now identify the source, class and method,
   and include the declared reason.
 
@@ -129,8 +134,6 @@ Further affordances worth improving:
   standalone runnable starter. It now explains launch, replay, observation versus
   cancellation, reconnect, approvals and file-backed embedded UI, and links the
   working invention studio.
-- Add a policy consistency diagnostic for eligible methods whose principal
-  requirements cannot admit a website.
 - Expose an explicit accepted-work state in the SDK so applications can distinguish
   page disconnection from task cancellation without inferring it from transcripts.
 

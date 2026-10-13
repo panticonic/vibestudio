@@ -748,7 +748,8 @@
       "principals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ]
     },
     "methods": {
@@ -786,7 +787,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -807,7 +809,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -828,7 +831,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -849,7 +853,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -870,7 +875,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -891,7 +897,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -912,7 +919,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -933,7 +941,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -974,7 +983,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -1024,7 +1034,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -1045,7 +1056,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -1066,7 +1078,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -1087,7 +1100,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -1108,7 +1122,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -1129,7 +1144,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -1150,7 +1166,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -1171,7 +1188,8 @@
           "principals": [
             "code",
             "user",
-            "host"
+            "host",
+            "website"
           ]
         },
         "access": {
@@ -3433,6 +3451,65 @@
           "rationale": "Credential mediation exposes no credential before the handler authorizes the exact matched credential and use context"
         },
         "capability": null,
+        "presentation": null
+      },
+      "resolveNativeModel": {
+        "authority": {
+          "requirement": {
+            "kind": "relationship",
+            "name": "workspace-member"
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "native-model"
+          },
+          "prepared": {
+            "resolver": "credentials.resolveNativeModel.modelAccount",
+            "leaves": [
+              {
+                "capability": "model.use",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": [
+                    "website",
+                    "user",
+                    "host",
+                    "code"
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read",
+          "approval": [
+            {
+              "when": "caller is not already granted use of the matched credential",
+              "capability": "credential.use",
+              "tier": "gated",
+              "operation": {
+                "kind": "credential",
+                "verb": "Use credential"
+              },
+              "grantScopes": [
+                "once",
+                "session",
+                "version"
+              ],
+              "reason": "Handing a stored credential to an agent for use requires the user to authorize it."
+            }
+          ]
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "secret",
+          "family": "credentials.read",
+          "rationale": "Credential selection stays host-side; one prepared exact model/account model.use decision precedes existing credential.use and destination checks"
+        },
+        "capability": "credentials.resolveNativeModel",
         "presentation": null
       },
       "revokeCredential": {
@@ -9030,6 +9107,126 @@
       }
     }
   },
+  "localModelRuntime": {
+    "service": {
+      "principals": [
+        "user",
+        "code",
+        "host",
+        "website"
+      ]
+    },
+    "methods": {
+      "prepareNativeModel": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "service:localModelRuntime.prepareNativeModel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:localModelRuntime.prepareNativeModel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:localModelRuntime.prepareNativeModel"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:localModelRuntime.prepareNativeModel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:localModelRuntime.prepareNativeModel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:localModelRuntime.prepareNativeModel"
+          },
+          "prepared": {
+            "resolver": "localModelRuntime.prepareNativeModel.model",
+            "leaves": [
+              {
+                "capability": "model.use",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": [
+                    "website",
+                    "user",
+                    "host",
+                    "code"
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": [
+                    "gated"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "secret",
+          "family": "credentials.read",
+          "rationale": "The host validates the retained native invocation and returns only its current secret-free endpoint."
+        },
+        "capability": "localModelRuntime.prepareNativeModel",
+        "presentation": null
+      }
+    }
+  },
   "mirror": {
     "service": {
       "principals": [
@@ -13882,7 +14079,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -13931,7 +14129,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -13961,7 +14160,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -13982,7 +14182,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -14003,7 +14204,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -14332,7 +14534,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -14651,7 +14854,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -14672,7 +14876,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -14693,7 +14898,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -14714,7 +14920,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -15261,7 +15468,8 @@
           "principals": [
             "code",
             "host",
-            "user"
+            "user",
+            "website"
           ]
         },
         "access": {
@@ -20711,6 +20919,20 @@
                     "name": "workspace-member"
                   }
                 ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "service:workers.resolveDurableObject"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
               }
             ]
           },
@@ -20730,6 +20952,7 @@
                     "host",
                     "user",
                     "code",
+                    "website",
                     "session",
                     "mission"
                   ]
@@ -20802,6 +21025,20 @@
                     "name": "workspace-member"
                   }
                 ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "service:workers.resolveService"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
               }
             ]
           },
@@ -20821,6 +21058,7 @@
                     "host",
                     "user",
                     "code",
+                    "website",
                     "session",
                     "mission"
                   ]

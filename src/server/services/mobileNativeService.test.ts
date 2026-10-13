@@ -71,7 +71,7 @@ describe("mobileNative service", () => {
   it("ignores earlier failures in indented Android epoch logs", () => {
     const log = [
       "         1788753600.000 1690 2064 I ReactNativeJS: phase=workspace-panel-activate-failed previous attempt",
-      "         1788753617.049 1690 2064 I ReactNativeJS: phase=workspace-connected",
+      "         1788753617.049 1690 2064 I ReactNativeJS: phase=workspace-iroh-connected",
       "         1788753618.358 1690 2064 I ReactNativeJS: phase=workspace-shell-ready",
       "         1788753619.861 1690 2064 I ReactNativeJS: phase=workspace-panel-ready",
     ].join("\n");
@@ -89,14 +89,19 @@ describe("mobileNative service", () => {
   });
 
   it("recognizes stable workspace readiness and failure markers", () => {
+    expect(workspaceReadinessFromLog("1 phase=workspace-iroh-connected")).toMatchObject({
+      ready: false,
+      workspaceConnected: true,
+      panelHostReady: false,
+    });
     expect(
       workspaceReadinessFromLog(
-        "1 phase=workspace-connected\n2 phase=workspace-shell-ready\n3 phase=workspace-panel-webview-loaded"
+        "1 phase=workspace-iroh-connected\n2 phase=workspace-shell-ready\n3 phase=workspace-panel-webview-loaded"
       )
     ).toMatchObject({ ready: true, workspaceConnected: true, panelHostReady: true });
     expect(
       workspaceReadinessFromLog(
-        "1 phase=workspace-connected\n2 phase=workspace-shell-ready\n3 phase=workspace-panel-webview-error bad"
+        "1 phase=workspace-iroh-connected\n2 phase=workspace-shell-ready\n3 phase=workspace-panel-webview-error bad"
       )
     ).toMatchObject({ ready: false, issues: [expect.stringContaining("panel-webview-error")] });
   });

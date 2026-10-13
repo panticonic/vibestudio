@@ -92,6 +92,94 @@ describe("qualified service methods", () => {
   });
 });
 
+describe("website authority reachability", () => {
+  it("rejects an eligible method whose own authority excludes website origins", () => {
+    expect(() =>
+      defineServiceMethods({
+        resolve: {
+          website: { kind: "eligible", rationale: "The receiver reviews website access." },
+          args: z.tuple([]),
+          authority: {
+            requirement: requirementForPrincipals(["host", "user", "code"], "service:resolve"),
+            resource: { kind: "literal", key: "service:resolve" },
+          },
+        },
+      })
+    ).toThrow(/cannot admit a website origin/);
+    expect(() =>
+      defineServiceMethods({
+        read: {
+          website: { kind: "eligible", rationale: "The receiver reviews website access." },
+          args: z.tuple([]),
+          authority: { principals: ["host", "user", "code"] },
+        },
+      })
+    ).toThrow(/cannot admit a website origin/);
+  });
+
+  it("rejects prepared authority envelopes that cannot carry a website selection", () => {
+    const method = (requirement: ReturnType<typeof selectedPreparedAuthorityRequirement>) => ({
+      website: { kind: "eligible" as const, rationale: "The receiver reviews website access." },
+      args: z.tuple([]),
+      authority: {
+        requirement: requirementForPrincipals(["code", "website"], "service:resolve"),
+        resource: { kind: "literal" as const, key: "service:resolve" },
+        prepared: {
+          resolver: "resolve.target",
+          leaves: [{ capabilityPrefix: "workspace-service:", requirement }],
+        },
+      },
+    });
+    expect(() =>
+      defineServiceMethods({ resolve: method(selectedPreparedAuthorityRequirement(["code"])) })
+    ).toThrow(/prepared authority leaf that cannot admit a website origin/);
+    expect(() =>
+      defineServiceMethods({
+        resolve: {
+          ...method(selectedPreparedAuthorityRequirement(["code", "website"])),
+          authority: {
+            ...method(selectedPreparedAuthorityRequirement(["code", "website"])).authority,
+            prepared: {
+              resolver: "resolve.target",
+              leaves: [
+                {
+                  capability: "workspace-service:fixed",
+                  requirement: fixedPreparedAuthorityRequirement(
+                    requirementForPrincipals(["code"], "workspace-service:fixed")
+                  ),
+                },
+              ],
+            },
+          },
+        },
+      })
+    ).toThrow(/prepared authority leaf that cannot admit a website origin/);
+  });
+
+  it("accepts website authority and leaves explicitly closed methods closed", () => {
+    expect(() =>
+      defineServiceMethods({
+        eligible: {
+          website: { kind: "eligible", rationale: "The receiver reviews website access." },
+          args: z.tuple([]),
+          authority: {
+            requirement: requirementForPrincipals(["code", "website"], "service:eligible"),
+            resource: { kind: "literal", key: "service:eligible" },
+          },
+        },
+        closed: {
+          website: { kind: "closed", reason: "This method is internal." },
+          args: z.tuple([]),
+          authority: {
+            requirement: requirementForPrincipals(["code"], "service:closed"),
+            resource: { kind: "literal", key: "service:closed" },
+          },
+        },
+      })
+    ).not.toThrow();
+  });
+});
+
 describe("createTypedServiceClient", () => {
   it("forwards flat and dotted methods with the full method name", async () => {
     const call = vi.fn(async (_s: string, method: string) => (method === "ping" ? "pong" : null));

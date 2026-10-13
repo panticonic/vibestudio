@@ -9,7 +9,7 @@ import { startEphemeralLinuxSecretService } from "../../scripts/lib/linux-secret
 
 let startupCommand;
 const execute = async (file, args, options, startup = true) => {
-  const { timeout, maxBuffer, ...rest } = options;
+  const { maxBuffer, ...rest } = options;
   const child = spawn(file, args, {
     ...rest,
     detached: process.platform !== "win32",
@@ -57,14 +57,12 @@ const execute = async (file, args, options, startup = true) => {
       }
     });
   }
-  const timer = setTimeout(terminate, timeout);
   try {
     return await command;
   } finally {
-    clearTimeout(timer);
     if (termination) {
       const result = await termination;
-      if (!result.gone) throw new Error("Timed-out command tree did not terminate");
+      if (!result.gone) throw new Error("Terminated command tree did not finish");
     }
     if (startupCommand?.pid === owned.pid) startupCommand = undefined;
   }
@@ -86,7 +84,6 @@ const managed = async (operation) => {
     process.execPath,
     ["--import", "tsx", "src/dev/runSystemTest.ts", "--instance", instance, operation],
     {
-      timeout: 240_000,
       maxBuffer: 8 * 1024 * 1024,
     },
     operation !== "stop"
@@ -111,7 +108,6 @@ const start = async () => {
       "--json",
     ],
     {
-      timeout: 180_000,
       maxBuffer: 8 * 1024 * 1024,
     }
   );

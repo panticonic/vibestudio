@@ -369,8 +369,11 @@ is otherwise validated.
     runtime regression rebuilds unnecessarily before this repair; afterward
     parallel warm requests reuse the artifact, and a changed provider identity
     produces a new artifact. All 48 app-builder, report, and build-service tests pass.
-    The Android retry passes onboarding, browser permissions, and workspace
-    isolation, but fails cold restart while waiting for `workspace-connected`.
+    The Android retry passed onboarding, browser permissions, and workspace
+    isolation. Its cold restart was recorded as failing while waiting for
+    `workspace-connected`; the later diagnostic shows that the current mobile
+    app emits `workspace-iroh-connected` and reaches shell readiness after
+    reload, while the harness waits for a marker the app does not emit.
     System information arrives about 121 seconds after authentication versus
     0.15 seconds for Personal; earlier System icon delivery also takes about
     129 seconds despite a 19 ms server handler. The stall is still unresolved.

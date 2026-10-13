@@ -80,7 +80,12 @@ beforeAll(() => {
   fs.mkdirSync(path.join(testProductAppRoot, "dist"));
   fs.writeFileSync(
     path.join(testProductAppRoot, "dist", "host-build-fingerprint.json"),
-    JSON.stringify({ fingerprint: "ab".repeat(32) })
+    JSON.stringify({
+      version: 1,
+      mode: "development",
+      fingerprint: "ab".repeat(32),
+      inputCount: 1,
+    })
   );
   process.env["VIBESTUDIO_APP_ROOT"] = testProductAppRoot;
   process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = path.join(testProductAppRoot, "dist");
@@ -7056,6 +7061,21 @@ describe("RpcServer native process sessions", () => {
 
   it("roundtrips concurrent large extension streams through the native process session", async () => {
     const { server } = createServer();
+    let markRuntimeReady!: () => void;
+    let failRuntimeReady!: (error: Error) => void;
+    const runtimeReady = new Promise<void>((resolve, reject) => {
+      markRuntimeReady = resolve;
+      failRuntimeReady = reject;
+    });
+    // This low-level fixture has no runtime supervision service. Model its
+    // successful ready report and resolve only after childRuntime has exposed
+    // every handler and dispatched that report.
+    testServer(server).dispatcher.dispatch.mockImplementation(
+      async (_ctx: ServiceContext, service: string, method: string) => {
+        if (service === "runtime" && method === "supervision.reportReady") markRuntimeReady();
+        return null;
+      }
+    );
     const extensionId = "@workspace-extensions/stream-roundtrip";
     const chunkBytes = 64 * 1024;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-process-stream-"));
@@ -7088,6 +7108,10 @@ describe("RpcServer native process sessions", () => {
       VIBESTUDIO_EXTENSION_BUNDLE_PATH: bundlePath,
       VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
     });
+    const onRuntimeExit = (code: number | null) => {
+      failRuntimeReady(new Error(`Child runtime exited before readiness (code ${code})`));
+    };
+    proc.on("exit", onRuntimeExit);
     const detach = server.attachNativeProcess(proc, {
       callerId: extensionId,
       callerKind: "extension",
@@ -7117,19 +7141,10 @@ describe("RpcServer native process sessions", () => {
       expect(response.status).toBe(200);
       return Buffer.from(await response.arrayBuffer());
     };
-    const connected = new Promise<void>((resolve) => {
-      if (server.getConnectionForPrincipal(extensionId)) {
-        resolve();
-        return;
-      }
-      const unsubscribe = server.onConnectionsChanged(() => {
-        if (!server.getConnectionForPrincipal(extensionId)) return;
-        unsubscribe();
-        resolve();
-      });
-    });
     try {
-      await connected;
+      // Authentication makes the process routable before activation completes.
+      // Wait for its authoritative ready report before issuing test traffic.
+      await runtimeReady;
       expect(firstExpected.subarray(0, chunkBytes)).not.toEqual(
         firstExpected.subarray(chunkBytes, chunkBytes * 2)
       );
@@ -7155,6 +7170,7 @@ describe("RpcServer native process sessions", () => {
       assertExact(first, firstExpected, "large-stream-a");
       assertExact(second, secondExpected, "large-stream-b");
     } finally {
+      proc.off("exit", onRuntimeExit);
       detach();
       await new Promise<void>((resolve) => {
         proc.on("exit", () => resolve());

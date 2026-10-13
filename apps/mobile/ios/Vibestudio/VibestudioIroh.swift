@@ -3,6 +3,19 @@ import IrohLib
 import React
 import Security
 
+private final class NativeStreamEntry<Stream> {
+  let stream: Stream
+  let connectionHandle: String
+  var activeOperations = 0
+  var retiring = false
+  var terminalClaimed = false
+
+  init(stream: Stream, connectionHandle: String) {
+    self.stream = stream
+    self.connectionHandle = connectionHandle
+  }
+}
+
 @objc(VibestudioIroh)
 final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   static func moduleName() -> String! { "VibestudioIroh" }
@@ -13,10 +26,8 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   private var endpoints: [String: Endpoint] = [:]
   private var endpointIdentities: [String: String] = [:]
   private var connections: [String: Connection] = [:]
-  private var sends: [String: SendStream] = [:]
-  private var receives: [String: RecvStream] = [:]
-  private var sendConnections: [String: String] = [:]
-  private var receiveConnections: [String: String] = [:]
+  private var sends: [String: NativeStreamEntry<SendStream>] = [:]
+  private var receives: [String: NativeStreamEntry<RecvStream>] = [:]
 
   @objc func invalidate() {
     lock.lock()
@@ -27,16 +38,20 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
     endpoints.removeAll()
     endpointIdentities.removeAll()
     connections.removeAll()
-    sends.removeAll()
-    receives.removeAll()
-    sendConnections.removeAll()
-    receiveConnections.removeAll()
+    sends.values.forEach { $0.retiring = true }
+    receives.values.forEach { $0.retiring = true }
     lock.unlock()
 
     for connection in ownedConnections {
       do { try connection.close(errorCode: 0, reason: Data()) }
       catch { NSLog("[VibestudioIroh] Runtime connection retirement failed: %@", error.localizedDescription) }
     }
+    // In-flight operations retain their entries and release them on completion.
+    // Remove idle entries now; active entries are removed by their final lease.
+    lock.lock()
+    sends = sends.filter { $0.value.activeOperations > 0 }
+    receives = receives.filter { $0.value.activeOperations > 0 }
+    lock.unlock()
     // React Native's invalidation hook is synchronous. Close the detached
     // endpoints without retaining this module, waking its pending native reads.
     Task {
@@ -158,16 +173,18 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
                    resolver resolve: @escaping RCTPromiseResolveBlock,
                    rejecter reject: @escaping RCTPromiseRejectBlock) {
     perform(resolve, reject) {
-      let send = try self.requireSend(handle)
-      try await send.writeAll(buf: try self.data(bytesBase64)); return nil
+      let entry = try self.acquireSend(handle)
+      defer { self.releaseSend(handle, entry) }
+      try await entry.stream.writeAll(buf: try self.data(bytesBase64)); return nil
     }
   }
 
   @objc func finish(_ handle: String, resolver resolve: @escaping RCTPromiseResolveBlock,
                     rejecter reject: @escaping RCTPromiseRejectBlock) {
     perform(resolve, reject) {
-      let send = try self.requireSend(handle)
-      try await send.finish(); self.removeSend(handle); return nil
+      guard let entry = try self.claimSendTerminal(handle) else { return nil }
+      defer { self.releaseSend(handle, entry) }
+      try await entry.stream.finish(); return nil
     }
   }
 
@@ -175,16 +192,18 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
                    resolver resolve: @escaping RCTPromiseResolveBlock,
                    rejecter reject: @escaping RCTPromiseRejectBlock) {
     perform(resolve, reject) {
-      let send = try self.requireSend(handle)
-      try await send.reset(errorCode: try self.code(errorCode)); self.removeSend(handle); return nil
+      guard let entry = try self.claimSendTerminal(handle) else { return nil }
+      defer { self.releaseSend(handle, entry) }
+      try await entry.stream.reset(errorCode: try self.code(errorCode)); return nil
     }
   }
 
   @objc func stopped(_ handle: String, resolver resolve: @escaping RCTPromiseResolveBlock,
                      rejecter reject: @escaping RCTPromiseRejectBlock) {
     perform(resolve, reject) {
-      let send = try self.requireSend(handle)
-      return try await send.stopped().map(String.init)
+      let entry = try self.acquireSend(handle)
+      defer { self.releaseSend(handle, entry) }
+      return try await entry.stream.stopped().map(String.init)
     }
   }
 
@@ -194,9 +213,10 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
     perform(resolve, reject) {
       let size = maximumBytes.intValue
       guard (1...1_048_576).contains(size) else { throw BridgeError.invalidRead }
-      let receive = try self.requireReceive(handle)
-      let bytes = try await receive.read(sizeLimit: UInt32(size))
-      if bytes.isEmpty { self.removeReceive(handle) }
+      let entry = try self.acquireReceive(handle)
+      defer { self.releaseReceive(handle, entry) }
+      let bytes = try await entry.stream.read(sizeLimit: UInt32(size))
+      if bytes.isEmpty { self.retireReceive(handle, entry) }
       return bytes.base64EncodedString()
     }
   }
@@ -207,8 +227,9 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
     perform(resolve, reject) {
       let size = length.intValue
       guard (0...1_048_576).contains(size) else { throw BridgeError.invalidRead }
-      let receive = try self.requireReceive(handle)
-      return try await receive.readExact(size: UInt32(size)).base64EncodedString()
+      let entry = try self.acquireReceive(handle)
+      defer { self.releaseReceive(handle, entry) }
+      return try await entry.stream.readExact(size: UInt32(size)).base64EncodedString()
     }
   }
 
@@ -216,8 +237,9 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
                   resolver resolve: @escaping RCTPromiseResolveBlock,
                   rejecter reject: @escaping RCTPromiseRejectBlock) {
     perform(resolve, reject) {
-      let receive = try self.requireReceive(handle)
-      try await receive.stop(errorCode: try self.code(errorCode)); self.removeReceive(handle); return nil
+      guard let entry = try self.claimReceiveTerminal(handle) else { return nil }
+      defer { self.releaseReceive(handle, entry) }
+      try await entry.stream.stop(errorCode: try self.code(errorCode)); return nil
     }
   }
 
@@ -225,18 +247,18 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
                            resolver resolve: @escaping RCTPromiseResolveBlock,
                            rejecter reject: @escaping RCTPromiseRejectBlock) {
     perform(resolve, reject) {
-      let receive = try self.requireReceive(handle)
-      let code = try await receive.receivedReset()
-      if code != nil { self.removeReceive(handle) }
+      let entry = try self.acquireReceive(handle)
+      defer { self.releaseReceive(handle, entry) }
+      let code = try await entry.stream.receivedReset()
+      if code != nil { self.retireReceive(handle, entry) }
       return code.map(String.init)
     }
   }
 
   @objc func closeConnection(_ handle: String, errorCode: String, reasonBase64: String) {
-    guard let connection = removeConnection(handle),
-          let code = Int64(errorCode),
-          let reason = Data(base64Encoded: reasonBase64) else { return }
-    removeStreams(connectionHandle: handle)
+    guard let code = Int64(errorCode), let reason = Data(base64Encoded: reasonBase64) else { return }
+    let connection = retireConnection(handle)
+    guard let connection else { return }
     do {
       try connection.close(errorCode: code, reason: reason)
     } catch {
@@ -278,10 +300,8 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
     guard active && connections[connectionHandle] != nil else { return nil }
     let sendHandle = UUID().uuidString
     let receiveHandle = UUID().uuidString
-    sends[sendHandle] = stream.send()
-    receives[receiveHandle] = stream.recv()
-    sendConnections[sendHandle] = connectionHandle
-    receiveConnections[receiveHandle] = connectionHandle
+    sends[sendHandle] = NativeStreamEntry(stream: stream.send(), connectionHandle: connectionHandle)
+    receives[receiveHandle] = NativeStreamEntry(stream: stream.recv(), connectionHandle: connectionHandle)
     return ["sendHandle": sendHandle, "receiveHandle": receiveHandle]
   }
 
@@ -317,24 +337,69 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   private func hasBoundEndpoint(identityId: String) -> Bool {
     lock.lock(); defer { lock.unlock() }; return endpointIdentities.values.contains(identityId)
   }
-  private func removeConnection(_ handle: String) -> Connection? {
-    lock.lock(); defer { lock.unlock() }; return connections.removeValue(forKey: handle)
-  }
-  private func removeSend(_ handle: String) {
+  private func retireConnection(_ handle: String) -> Connection? {
     lock.lock(); defer { lock.unlock() }
-    sends.removeValue(forKey: handle); sendConnections.removeValue(forKey: handle)
+    guard let connection = connections.removeValue(forKey: handle) else { return nil }
+    retireStreamsLocked(connectionHandle: handle)
+    return connection
   }
-  private func removeReceive(_ handle: String) {
+  private func acquireSend(_ handle: String) throws -> NativeStreamEntry<SendStream> {
     lock.lock(); defer { lock.unlock() }
-    receives.removeValue(forKey: handle); receiveConnections.removeValue(forKey: handle)
+    guard let entry = sends[handle] else { throw BridgeError.closedStream("send") }
+    guard active && !entry.retiring else { throw BridgeError.closedStream("send") }
+    entry.activeOperations += 1
+    return entry
   }
-  private func removeStreams(connectionHandle: String) {
+  private func acquireReceive(_ handle: String) throws -> NativeStreamEntry<RecvStream> {
     lock.lock(); defer { lock.unlock() }
-    for handle in sendConnections.filter({ $0.value == connectionHandle }).keys {
-      sends.removeValue(forKey: handle); sendConnections.removeValue(forKey: handle)
+    guard let entry = receives[handle] else { throw BridgeError.closedStream("receive") }
+    guard active && !entry.retiring else { throw BridgeError.closedStream("receive") }
+    entry.activeOperations += 1
+    return entry
+  }
+  private func claimSendTerminal(_ handle: String) throws -> NativeStreamEntry<SendStream>? {
+    lock.lock(); defer { lock.unlock() }
+    guard active else { throw BridgeError.runtimeInvalidated }
+    guard let entry = sends[handle] else { throw BridgeError.closedStream("send") }
+    if entry.terminalClaimed { return nil }
+    guard !entry.retiring else { throw BridgeError.closedStream("send") }
+    entry.retiring = true; entry.terminalClaimed = true; entry.activeOperations += 1
+    return entry
+  }
+  private func claimReceiveTerminal(_ handle: String) throws -> NativeStreamEntry<RecvStream>? {
+    lock.lock(); defer { lock.unlock() }
+    guard active else { throw BridgeError.runtimeInvalidated }
+    guard let entry = receives[handle] else { throw BridgeError.closedStream("receive") }
+    if entry.terminalClaimed { return nil }
+    guard !entry.retiring else { throw BridgeError.closedStream("receive") }
+    entry.retiring = true; entry.terminalClaimed = true; entry.activeOperations += 1
+    return entry
+  }
+  private func retireReceive(_ handle: String, _ entry: NativeStreamEntry<RecvStream>) {
+    lock.lock(); defer { lock.unlock() }
+    entry.retiring = true
+    if entry.activeOperations == 0 { receives.removeValue(forKey: handle) }
+  }
+  private func releaseSend(_ handle: String, _ entry: NativeStreamEntry<SendStream>) {
+    lock.lock(); defer { lock.unlock() }
+    entry.activeOperations -= 1
+    precondition(entry.activeOperations >= 0, "Iroh send stream operation lease underflow")
+    if entry.retiring && entry.activeOperations == 0 { sends.removeValue(forKey: handle) }
+  }
+  private func releaseReceive(_ handle: String, _ entry: NativeStreamEntry<RecvStream>) {
+    lock.lock(); defer { lock.unlock() }
+    entry.activeOperations -= 1
+    precondition(entry.activeOperations >= 0, "Iroh receive stream operation lease underflow")
+    if entry.retiring && entry.activeOperations == 0 { receives.removeValue(forKey: handle) }
+  }
+  private func retireStreamsLocked(connectionHandle: String) {
+    for (handle, entry) in Array(sends) where entry.connectionHandle == connectionHandle {
+      entry.retiring = true
+      if entry.activeOperations == 0 { sends.removeValue(forKey: handle) }
     }
-    for handle in receiveConnections.filter({ $0.value == connectionHandle }).keys {
-      receives.removeValue(forKey: handle); receiveConnections.removeValue(forKey: handle)
+    for (handle, entry) in Array(receives) where entry.connectionHandle == connectionHandle {
+      entry.retiring = true
+      if entry.activeOperations == 0 { receives.removeValue(forKey: handle) }
     }
   }
   private func requireEndpoint(_ handle: String) throws -> Endpoint {
@@ -345,15 +410,6 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
     lock.lock(); defer { lock.unlock() }
     guard let value = connections[handle] else { throw BridgeError.unknownHandle("connection") }; return value
   }
-  private func requireSend(_ handle: String) throws -> SendStream {
-    lock.lock(); defer { lock.unlock() }
-    guard let value = sends[handle] else { throw BridgeError.unknownHandle("send stream") }; return value
-  }
-  private func requireReceive(_ handle: String) throws -> RecvStream {
-    lock.lock(); defer { lock.unlock() }
-    guard let value = receives[handle] else { throw BridgeError.unknownHandle("receive stream") }; return value
-  }
-
   private func data(_ base64: String) throws -> Data {
     guard let value = Data(base64Encoded: base64) else { throw BridgeError.invalidBase64 }
     return value
@@ -399,10 +455,11 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   }
 
   private enum BridgeError: LocalizedError {
-    case unknownHandle(String), invalidBase64, invalidCode, invalidRead, boundIdentity, runtimeInvalidated, keychain(OSStatus)
+    case unknownHandle(String), closedStream(String), invalidBase64, invalidCode, invalidRead, boundIdentity, runtimeInvalidated, keychain(OSStatus)
     var errorDescription: String? {
       switch self {
       case .unknownHandle(let kind): return "Unknown Iroh \(kind) handle"
+      case .closedStream(let kind): return "Iroh \(kind) stream is closed"
       case .invalidBase64: return "Invalid base64 bridge payload"
       case .invalidCode: return "Invalid Iroh application error code"
       case .invalidRead: return "Invalid bounded stream read size"

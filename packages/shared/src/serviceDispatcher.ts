@@ -1,5 +1,9 @@
 import { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "@vibestudio/rpc";
-import { parseQualifiedServiceMethod, validateWebsiteMethodPolicy } from "./typedServiceClient.js";
+import {
+  parseQualifiedServiceMethod,
+  validateWebsiteAuthorityReachability,
+  validateWebsiteMethodPolicy,
+} from "./typedServiceClient.js";
 /**
  * ServiceDispatcher - Unified service dispatch for panels and shell.
  *
@@ -1119,6 +1123,7 @@ export class ServiceDispatcher {
       if (!schema.authority && !def.authority) {
         throw new Error(`Service method ${def.name}.${method} has no authority declaration`);
       }
+      validateWebsiteAuthorityReachability(qualifiedMethod, schema, def.authority);
       const declaration = schema.authority ?? def.authority;
       if ("requirement" in declaration && declaration.prepared) {
         const { resolver, leaves } = declaration.prepared;

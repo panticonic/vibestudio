@@ -138,6 +138,11 @@ uses its exported release artifacts and does not depend on the producer's cache.
 Cold verification and profiling select a private cache through the existing
 `VIBESTUDIO_SHARED_DERIVED_CACHE_DIR` input; their owner retires that cache after
 joining all work. Ordinary launch never deletes the inherited shared cache.
+The release orchestrator assigns its one exhaustive producer a bounded batch
+build budget from the runner's CPU and memory allocation. Interactive workspace
+owners keep their smaller independent budget. Consumers reuse the complete
+immutable release keyed by its exact host and template inputs instead of
+starting a second producer.
 
 The CI graph in `.github/workflows/ci.yml` expresses per-platform artifact
 dependencies, rather than broad verification barriers. Native producer jobs
@@ -162,10 +167,11 @@ Linux quality has its own source-input edge. `quality-inputs` checks out the
 selected Base ref and complete template catalog once, builds the infrastructure
 packages once, and uploads those outputs with a receipt for the host commit,
 infrastructure manifest, and every template commit and tree. The `quality`,
-`quality-followup`, and `quality-desktop` jobs verify that receipt after
+`quality-followup` CI caller of the `quality-linux` reusable workflow, and
+`quality-desktop` jobs verify that receipt after
 restoring the exact artifact. Template type-checking and the complete userland
 suite stay together in `quality`; the mobile, host-boundary, packaged host,
-lint, formatting, and unit checks run in `quality-followup`. Native remote
+lint, formatting, and unit checks run in `quality-linux`. Native remote
 transport and desktop pairing run in `quality-desktop` so they share one
 development host build. Each quality consumer owns its generated files on its
 own runner, while the infrastructure packages and template inputs come from the
@@ -271,8 +277,10 @@ gh workflow run ci-diagnostic.yml --ref my-fix-branch \
 ```
 
 Targets are `npm-server-preflight`, `linux-installer-x64`,
-`linux-installer-arm64`, `windows-installer-candidate`, `quality-desktop`, and
-`android-iroh-smoke`. `application-candidate-mac` also reruns the Darwin native
+`linux-installer-arm64`, `windows-installer-candidate`, `quality-desktop`,
+`quality-linux`, and `android-iroh-smoke`. `quality-linux` invokes the same
+reusable workflow as CI and prepares `quality-inputs` with the selected
+`base-ref`. `application-candidate-mac` also reruns the Darwin native
 input, production-host build, macOS application candidate, installed-app
 acceptance on macos-14 and macos-26, installer packaging, and installed release
 acceptance. It calls the same reusable installer and release-acceptance

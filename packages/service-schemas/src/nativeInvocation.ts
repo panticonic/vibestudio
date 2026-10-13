@@ -68,6 +68,9 @@ export const nativeInvocationSourceSchema = z
           purpose: z.enum(["generation", "compaction"]),
           attempt: z.number().int().nonnegative().safe(),
           cutoff: recordId,
+          providerId: identity,
+          modelId: identity,
+          endpoint: z.string().min(1).nullable(),
           requestDigest: digest,
         })
         .strict(),
@@ -104,6 +107,9 @@ export const nativeInvocationIdentitySchema = z
           purpose: z.enum(["generation", "compaction"]),
           attempt: z.number().int().nonnegative().safe(),
           cutoff: recordId,
+          providerId: identity,
+          modelId: identity,
+          endpoint: z.string().min(1).nullable(),
         })
         .strict(),
     ]),
@@ -143,6 +149,9 @@ export function nativeInvocationIdentity(source: NativeInvocationSource): Native
                 purpose: source.operation.purpose,
                 attempt: source.operation.attempt,
                 cutoff: source.operation.cutoff,
+                providerId: source.operation.providerId,
+                modelId: source.operation.modelId,
+                endpoint: source.operation.endpoint,
               },
   };
 }
@@ -201,6 +210,14 @@ export function nativeInvocationId(source: NativeInvocationIdentity): string {
         ? ["tool", source.operation.assistantEntryId, source.operation.callId]
         : source.operation.kind === "direct-tool"
           ? ["direct-tool", source.operation.directEntryId, source.operation.callId]
-          : ["model", source.operation.purpose, source.operation.attempt, source.operation.cutoff],
+          : [
+              "model",
+              source.operation.purpose,
+              source.operation.attempt,
+              source.operation.cutoff,
+              source.operation.providerId,
+              source.operation.modelId,
+              source.operation.endpoint,
+            ],
   ])}`;
 }

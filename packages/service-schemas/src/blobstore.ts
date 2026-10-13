@@ -21,7 +21,7 @@ export const PREFIX_RE = /^[0-9a-f]{0,64}$/;
 export const TREE_REF_RE = /^(manifest|state):[0-9a-f]{64}$/;
 
 export const BLOBSTORE_READ_POLICY: ServiceAuthorityPolicy = {
-  principals: ["code", "user", "host"],
+  principals: ["code", "user", "host", "website"],
 };
 export const BLOBSTORE_ADMIN_POLICY: ServiceAuthorityPolicy = { principals: ["user", "host"] };
 
@@ -215,7 +215,10 @@ export const DiffTreesResultSchema = z
 
 export const blobstoreMethods = defineServiceMethods({
   has: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -237,7 +240,10 @@ export const blobstoreMethods = defineServiceMethods({
     ],
   },
   stat: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -253,7 +259,10 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   putText: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -271,7 +280,10 @@ export const blobstoreMethods = defineServiceMethods({
     examples: [{ args: ["hello world"] }],
   },
   getText: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -287,7 +299,10 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getRange: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -304,7 +319,10 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getRangeBytes: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -321,7 +339,10 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   grep: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -357,7 +378,10 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   putBase64: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -375,7 +399,11 @@ export const blobstoreMethods = defineServiceMethods({
     examples: [{ args: ["iVBORw0KGgo="] }],
   },
   putRetained: {
-    website: {"kind":"closed","reason":"The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -391,7 +419,11 @@ export const blobstoreMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   retain: {
-    website: {"kind":"closed","reason":"The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -407,7 +439,11 @@ export const blobstoreMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   releaseRetention: {
-    website: {"kind":"closed","reason":"The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -423,7 +459,10 @@ export const blobstoreMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   getBase64: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -439,7 +478,10 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   putTree: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -457,7 +499,10 @@ export const blobstoreMethods = defineServiceMethods({
     examples: [{ args: [[], { root: true }] }],
   },
   getTree: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -474,7 +519,10 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listTree: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -491,7 +539,10 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   readFileAtTree: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -508,7 +559,10 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   diffTrees: {
-    website: {"kind":"eligible","rationale":"Content access requires the website’s ordinary scoped disclosure consent."} as const,
+    website: {
+      kind: "eligible",
+      rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -525,7 +579,11 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   materializeTree: {
-    website: {"kind":"closed","reason":"The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "workspace.storage.materialize",
     tier: {
       tier: "gated",
@@ -557,7 +615,11 @@ export const blobstoreMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   delete: {
-    website: {"kind":"closed","reason":"The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "workspace.storage.delete",
     tier: {
       tier: "gated",
@@ -584,7 +646,11 @@ export const blobstoreMethods = defineServiceMethods({
     access: ADMIN_DESTRUCTIVE_ACCESS,
   },
   list: {
-    website: {"kind":"closed","reason":"The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The blobstore receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

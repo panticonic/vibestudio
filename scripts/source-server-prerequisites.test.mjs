@@ -5,7 +5,10 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import { parse } from "@babel/parser";
-import { SOURCE_SERVER_PREREQUISITE_ARTIFACTS } from "./server-runtime-artifacts.mjs";
+import {
+  HOST_BRAND_RUNTIME_ARTIFACTS,
+  SOURCE_SERVER_PREREQUISITE_ARTIFACTS,
+} from "./server-runtime-artifacts.mjs";
 import { copySqlJsRuntimeAsset } from "./lib/sql-js-runtime-asset.mjs";
 
 const buildSource = fs.readFileSync(new URL("../build.mjs", import.meta.url), "utf8");
@@ -48,6 +51,28 @@ test("the SQL.js runtime payload is part of source host prerequisites", () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("direct host brand consumers are part of source host prerequisites", () => {
+  assert.deepEqual(HOST_BRAND_RUNTIME_ARTIFACTS, [
+    "dist/assets/brand/favicon.ico",
+    "dist/assets/brand/favicon-32.png",
+    "dist/assets/brand/favicon-64.png",
+    "dist/assets/brand/favicon-180.png",
+    "dist/assets/brand/favicon.svg",
+    "dist/assets/brand/vibestudio-symbol.svg",
+    "dist/assets/brand/vibestudio-symbol-dark.svg",
+    "dist/assets/brand/vibestudio-symbol-512.png",
+  ]);
+  for (const artifact of HOST_BRAND_RUNTIME_ARTIFACTS) {
+    assert.ok(SOURCE_SERVER_PREREQUISITE_ARTIFACTS.includes(artifact));
+  }
+
+  const sourceCalls = functionCalls("buildSourceServerPrerequisites");
+  assert.ok(
+    sourceCalls.indexOf("copyBrandAssets") < sourceCalls.indexOf("assertHostBuildPayloadComplete")
+  );
+  assert.ok(functionCalls("copyAssets").includes("copyBrandAssets"));
 });
 
 test("both host producers stage and validate payloads before stamping their completion receipt", () => {

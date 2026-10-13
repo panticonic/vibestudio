@@ -72,7 +72,7 @@ Authority principals: `code`, `host`, `mission`, `session`, `user`
 
 Per-workspace content-addressable blob storage
 
-Authority principals: `code`, `host`, `user`
+Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
@@ -347,6 +347,16 @@ Authority principals: `code`, `host`, `user`, `website`
 | `hubControl.createWorkspace` | Create and register a workspace from one exact external root template. |
 | `hubControl.workspaceCreationReceipt` | Reconcile one previously submitted workspace creation without creating or opening anything. |
 | `hubControl.observeDevices` | Observe changes to the caller-visible paired device set. Cancellation releases the observation. |
+
+## `localModelRuntime`
+
+Host-owned preparation and secret injection for native local-model inference
+
+Authority principals: `code`, `host`, `user`, `website`
+
+| Method | Description |
+|--------|-------------|
+| `localModelRuntime.prepareNativeModel` | Prepare the exact local model selected by an active native model invocation and return its current endpoint. The host injects loopback authorization at egress time. |
 
 ## `mirror`
 

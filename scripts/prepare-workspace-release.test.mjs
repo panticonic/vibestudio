@@ -5,7 +5,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { serializeRpcFailure } from "@vibestudio/rpc";
-import { isCancellationOnly, prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
+import {
+  isCancellationOnly,
+  prepareWorkspaceRelease,
+  resolveReleaseBuildConcurrency,
+} from "./prepare-workspace-release.mjs";
 
 async function withProducer(
   code,
@@ -61,6 +65,44 @@ void test("validates a declared release through the producer and preserves borro
         path.join(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT, "userland-builds", "release.json"),
         "{}"
       );
+    }
+  );
+});
+
+void test("budgets exhaustive build admission from CPU and memory", () => {
+  const gib = 1024 * 1024 * 1024;
+  assert.equal(
+    resolveReleaseBuildConcurrency({ availableParallelism: 16, totalMemoryBytes: 32 * gib }),
+    8
+  );
+  assert.equal(
+    resolveReleaseBuildConcurrency({ availableParallelism: 4, totalMemoryBytes: 8 * gib }),
+    3
+  );
+  assert.equal(
+    resolveReleaseBuildConcurrency({ availableParallelism: 2, totalMemoryBytes: 64 * gib }),
+    2
+  );
+  assert.equal(
+    resolveReleaseBuildConcurrency({
+      configured: "6",
+      availableParallelism: 2,
+      totalMemoryBytes: 4 * gib,
+    }),
+    6
+  );
+});
+
+void test("gives the producer its one operation-scoped build budget", async () => {
+  await withProducer(
+    `require("fs").writeFileSync("build-concurrency", process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing"); process.send({kind:"completed"},()=>process.disconnect());`,
+    async (owner, root) => {
+      await owner.completed;
+      assert.equal(await fs.readFile(path.join(root, "build-concurrency"), "utf8"), "6");
+    },
+    undefined,
+    async (env) => {
+      env.VIBESTUDIO_MAX_CONCURRENT_BUILDS = "6";
     }
   );
 });

@@ -22,6 +22,21 @@ const connectedRuntime = String.raw`
     for (const listener of listeners) listener();
   }
   export const contextId = "ctx-invention-test";
+  export const formatRpcFailure = error => {
+    const seen = new Set();
+    const visit = value => {
+      if (!value || typeof value !== "object") return String(value);
+      if (seen.has(value)) return "";
+      seen.add(value);
+      const message = typeof value.message === "string" ? value.message : String(value);
+      const details = [
+        ...(Array.isArray(value.errors) ? value.errors.map(visit) : []),
+        ...("cause" in value ? [visit(value.cause)] : []),
+      ].filter(Boolean);
+      return details.length ? message + ": " + details.join("; ") : message;
+    };
+    return visit(error);
+  };
   const files = new Map();
   let notify;
   window.emitInventionEvent = event => notify({kind:"message",payload:{message:{kind:"log",event:{payload:event}}}});
@@ -216,7 +231,6 @@ describe.skipIf(!existsSync(chromium.executablePath()))("apex connected experien
         (window as any).inventionCalls.find((call: any) => call.method === "launchAgentIntoChannel")
       );
       expect(launch.input.stateArgs.agentConfig).toEqual({
-        model: "openai-codex:gpt-6-astra",
         thinkingLevel: "medium",
       });
       await page.getByRole("button", { name: "Pause animation" }).click();
@@ -246,6 +260,64 @@ describe.skipIf(!existsSync(chromium.executablePath()))("apex connected experien
       await expect.poll(() => machine.isVisible()).toBe(true);
       await page.getByRole("button", { name: "Disconnect", exact: true }).click();
       await expect.poll(() => machine.isVisible()).toBe(false);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("shows the inventor's terminal failure and releases the working state", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${origin}/?hold`);
+      await page.getByRole("button", { name: "Connect to workspace", exact: true }).click();
+      await page.getByRole("button", { name: "Invent the impossible", exact: true }).click();
+      await expect.poll(() => page.locator("#lab-machine").isVisible()).toBe(true);
+      await page.evaluate(() =>
+        (window as any).emitInventionEvent({
+          kind: "turn.closed",
+          actor: { kind: "agent", id: "agent:other" },
+          turnId: "other-turn",
+          payload: { reason: "work_failed" },
+        })
+      );
+      expect(await page.locator("#lab-machine").isVisible()).toBe(true);
+      const failure = {
+        message: "Inventor tool chain failed",
+        errors: [
+          { message: "[credentials.resolveCredential] This operation is closed to websites" },
+          { message: "Workspace update subscription stopped" },
+        ],
+        cause: { message: "Provider disconnected" },
+      };
+      await page.evaluate((failure) => {
+        const emit = (window as any).emitInventionEvent;
+        emit({
+          kind: "invocation.failed",
+          actor: { kind: "agent", id: "agent:inventor" },
+          turnId: "turn-1",
+          payload: { failure },
+        });
+      }, failure);
+      // An individual tool failure can still be recovered within its turn.
+      expect(await page.locator("#lab-machine").isVisible()).toBe(true);
+      await page.evaluate(() =>
+        (window as any).emitInventionEvent({
+          kind: "turn.closed",
+          actor: { kind: "agent", id: "agent:inventor" },
+          turnId: "turn-1",
+          payload: { reason: "work_failed" },
+        })
+      );
+      await expect.poll(() => page.locator("#lab-machine").isVisible()).toBe(false);
+      const renderedFailure = await page.locator("#lab-status").textContent();
+      expect(renderedFailure).toContain(failure.message);
+      expect(renderedFailure).toContain(failure.errors[0]!.message);
+      expect(renderedFailure).toContain(failure.errors[1]!.message);
+      expect(renderedFailure).toContain(failure.cause.message);
+      expect(await page.locator("#lab-status").getAttribute("data-error")).toBe("true");
+      expect(
+        await page.getByRole("button", { name: "Invent the impossible", exact: true }).isEnabled()
+      ).toBe(true);
     } finally {
       await page.close();
     }

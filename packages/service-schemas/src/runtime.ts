@@ -119,10 +119,10 @@ const TITLE_ACCESS: MethodAccessDescriptor = {
 // retireEntity, cloneContext, destroyContext, …) stay agent-denied — so the
 // agent grant is opted into per read method here (still a subset of `do`).
 const RUNTIME_AGENT_READ_POLICY: ServiceAuthorityPolicy = {
-  principals: ["code", "host", "user"],
+  principals: ["code", "host", "user", "website"],
 };
 const RUNTIME_AGENT_WRITE_POLICY: ServiceAuthorityPolicy = {
-  principals: ["code", "host", "user"],
+  principals: ["code", "host", "user", "website"],
 };
 
 const runtimeContextBoundaryAuthority = (method: string, tier: "gated" | "critical" = "gated") => {
@@ -175,7 +175,10 @@ export const RuntimeEntityHandleSchema = z
       .describe(
         "Runtime target handle: the workerd target for do/worker; the canonical id otherwise."
       ),
-    agentInitialization: z.object({ ok: z.boolean(), participantId: z.string().min(1) }).strict().optional(),
+    agentInitialization: z
+      .object({ ok: z.boolean(), participantId: z.string().min(1) })
+      .strict()
+      .optional(),
     created: z
       .boolean()
       .optional()
@@ -567,11 +570,14 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
         .describe(
           "Target context; omit/null to inherit the verified caller's context, or derive it from agentBinding. Root callers mint a fresh context."
         ),
-      agentInitialization: z.object({
-        channelId: z.string().min(1).max(200),
-        config: z.record(z.unknown()).optional(),
-        replay: z.boolean().optional(),
-      }).strict().optional(),
+      agentInitialization: z
+        .object({
+          channelId: z.string().min(1).max(200),
+          config: z.record(z.unknown()).optional(),
+          replay: z.boolean().optional(),
+        })
+        .strict()
+        .optional(),
       stateArgs: z.unknown().optional().describe("Opaque initial state passed to the DO runtime."),
       agentBinding: RuntimeAgentBindingSchema.optional(),
       agentChannelId: z

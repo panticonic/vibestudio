@@ -630,12 +630,16 @@ const bootstrapConfig = {
   plugins: [bootstrapExternalsPlugin],
 };
 
+function copyBrandAssets() {
+  copyDirectoryRecursive("build-resources/brand", "dist/assets/brand");
+}
+
 function copyAssets() {
   fs.copyFileSync("src/bootstrap/index.html", "dist/index.html");
   fs.copyFileSync("src/main/browserPrivacy.html", "dist/browserPrivacy.html");
   fs.copyFileSync("src/main/displayCapture.html", "dist/displayCapture.html");
   copySqlJsRuntimeAsset("dist");
-  copyDirectoryRecursive("build-resources/brand", "dist/assets/brand");
+  copyBrandAssets();
   fs.mkdirSync("dist/baked-app", { recursive: true });
   // Bundled agent skill consumed by `vibestudio agent skill install|print`
   // (resolved as a sibling of dist/cli/client.mjs).
@@ -965,6 +969,7 @@ async function buildSourceServerPrerequisites() {
     ]);
     await buildServerArtifacts(["standalone"], programs);
     copySqlJsRuntimeAsset("dist");
+    copyBrandAssets();
     assertHostBuildPayloadComplete(process.cwd(), "source");
 
     // Authority startup identifies the installed host by the exact source

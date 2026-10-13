@@ -2724,6 +2724,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "credentials.resolveNativeModel": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale:
+        "Credential selection stays host-side; one prepared exact model/account model.use decision precedes existing credential.use and destination checks",
+    },
+    capability: "credentials.resolveNativeModel",
+    presentation: null,
+  },
   "credentials.revokeCredential": {
     tier: {
       tier: "critical",
@@ -4817,6 +4829,18 @@ export const HOST_AUTHORITY_METHODS = {
         verb: "see",
       },
     },
+  },
+  "localModelRuntime.prepareNativeModel": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale:
+        "The host validates the retained native invocation and returns only its current secret-free endpoint.",
+    },
+    capability: "localModelRuntime.prepareNativeModel",
+    presentation: null,
   },
   "menu.showContext": {
     tier: {
@@ -9517,9 +9541,11 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "credentials.proxyGitHttp": ["credential.use"],
   "credentials.publishFetch": ["credential.use"],
   "credentials.resolveCredential": ["credential.use"],
+  "credentials.resolveNativeModel": ["credential.use", "model.use"],
   "externalOpen.openExternal": ["external.open"],
   "hostTerminal.open": ["host-terminal.open"],
   "hubControl.createWorkspace": ["workspaces.create"],
+  "localModelRuntime.prepareNativeModel": ["model.use"],
   "panelCdp.browserOperation": ["context.boundary"],
   "panelCdp.consoleHistory": ["context.boundary"],
   "panelCdp.evaluate": ["context.boundary"],

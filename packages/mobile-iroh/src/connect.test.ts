@@ -9,6 +9,7 @@ const fixture = vi.hoisted(() => ({
   removeLifecycle: vi.fn(),
   deleteIdentity: vi.fn(async () => {}),
   reset: vi.fn(async () => true),
+  connectionIds: [] as string[],
 }));
 vi.mock("react-native", () => ({
   AppState: {
@@ -47,7 +48,11 @@ vi.mock("@vibestudio/rpc/transports/reconnectingIrohClient", () => ({
           );
           if (failures.length) throw new AggregateError(failures, "Reconnect owner cleanup failed");
         })()),
-      openSession: (options: { onTerminalClose: (error: Error) => void }) => {
+      openSession: (options: {
+        connectionId: string;
+        onTerminalClose: (error: Error) => void;
+      }) => {
+        fixture.connectionIds.push(options.connectionId);
         fixture.terminal = options.onTerminalClose;
         return {
           ready: fixture.ready,
@@ -79,6 +84,7 @@ beforeEach(() => {
   fixture.reset.mockResolvedValue(true);
   fixture.sessionClose.mockResolvedValue(undefined);
   fixture.ready.mockResolvedValue(undefined);
+  fixture.connectionIds.length = 0;
 });
 
 describe("MobileEndpointPool relay configuration", () => {
@@ -92,6 +98,57 @@ describe("MobileEndpointPool relay configuration", () => {
     );
     await pool.release();
     await pool.release();
+  });
+});
+
+describe("mobile reach connection identity", () => {
+  it("replaces a cold process incarnation for the same endpoint and reach", async () => {
+    const first = await establishIrohConnection(
+      pairing,
+      makeReturningShellTokenProvider(credential),
+      "installed-endpoint",
+      "app-scheme"
+    );
+    await first.close();
+    const replacement = await establishIrohConnection(
+      pairing,
+      makeReturningShellTokenProvider(credential),
+      "installed-endpoint",
+      "app-scheme"
+    );
+    await replacement.close();
+
+    expect(fixture.connectionIds).toEqual([
+      `mobile-shell:18:installed-endpoint:${pairing.endpointId}`,
+      `mobile-shell:18:installed-endpoint:${pairing.endpointId}`,
+    ]);
+  });
+
+  it("keeps different native endpoints and server reaches distinct", async () => {
+    const otherReach = { ...pairing, endpointId: "bb".repeat(32) };
+    const connections = await Promise.all([
+      establishIrohConnection(
+        pairing,
+        makeReturningShellTokenProvider(credential),
+        "installed-endpoint",
+        "app-scheme"
+      ),
+      establishIrohConnection(
+        otherReach,
+        makeReturningShellTokenProvider(credential),
+        "installed-endpoint",
+        "app-scheme"
+      ),
+      establishIrohConnection(
+        pairing,
+        makeReturningShellTokenProvider(credential),
+        "other-endpoint",
+        "app-scheme"
+      ),
+    ]);
+    await Promise.all(connections.map((connection) => connection.close()));
+
+    expect(new Set(fixture.connectionIds).size).toBe(3);
   });
 });
 

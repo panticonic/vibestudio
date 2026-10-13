@@ -324,7 +324,7 @@ export function workspaceReadinessFromLog(log: string, sinceMs = 0) {
     })
     .join("\n");
   const panelHostReady = relevant.includes("phase=workspace-shell-ready");
-  const workspaceConnected = relevant.includes("phase=workspace-connected");
+  const workspaceConnected = relevant.includes("phase=workspace-iroh-connected");
   const panelWebViewLoaded = relevant.includes("phase=workspace-panel-webview-loaded");
   const failure = relevant.match(
     /invalid distance code|phase=workspace-(?:login-error|panel-webview-error|panel-webview-http-error|panel-activate-failed)[^\r\n]*/iu

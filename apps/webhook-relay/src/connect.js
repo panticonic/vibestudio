@@ -9,6 +9,7 @@ import {
   contextId,
   createConversationClient,
   launchAgentIntoChannel,
+  formatRpcFailure,
 } from "/runtime.js";
 
 // Embedded inventions share this page's authenticated SDK instance. This is
@@ -30,6 +31,7 @@ let busy = false;
 let progressTimer;
 let progressStarted;
 const activeTools = new Map();
+const turnFailures = new Map();
 function showActivity(text) {
   $("lab-activity").textContent = text;
 }
@@ -168,6 +170,27 @@ async function record(value) {
     : value?.payload;
   if (!event) return;
   trackActivity(event);
+  const fromInventor =
+    Boolean(invention?.participantId) &&
+    (event.actor?.participantId === invention.participantId ||
+      event.actor?.id === invention.participantId);
+  if (fromInventor && event.turnId && event.kind === "invocation.failed") {
+    turnFailures.set(event.turnId, event.payload?.failure ?? event.payload?.reason);
+  }
+  if (event.kind === "turn.closed") {
+    const failure = turnFailures.get(event.turnId);
+    turnFailures.delete(event.turnId);
+    if (fromInventor && event.payload?.reason === "work_failed") {
+      setBusy(false);
+      message(
+        failure
+          ? formatRpcFailure(failure)
+          : "The inventor's turn failed before completing the invention.",
+        true
+      );
+    }
+    return;
+  }
   if (event.kind !== "message.completed") return;
   const id = event.causality?.messageId;
   if (id && seen.has(id)) return;
@@ -204,8 +227,10 @@ async function observe(expected) {
       { signal: controller.signal }
     )
     .catch((error) => {
-      if (!controller.signal.aborted)
-        message(`Live updates stopped: ${error.message}. Reconnect to resume.`, true);
+      if (!controller.signal.aborted) {
+        setBusy(false);
+        message(`Live updates stopped: ${formatRpcFailure(error)}. Reconnect to resume.`, true);
+      }
     });
   const history = await conversation.history(expected.channelTarget);
   if (expected !== invention || controller.signal.aborted) return;
@@ -226,11 +251,12 @@ async function restore() {
   setBusy(false);
   message("Reopening your saved invention…");
   await observe(candidate);
-  message(
-    artifact
-      ? "Your invention is back. Keep exploring."
-      : "Conversation restored. Accepted work can continue while this page is away."
-  );
+  if (status.dataset.error !== "true")
+    message(
+      artifact
+        ? "Your invention is back. Keep exploring."
+        : "Conversation restored. Accepted work can continue while this page is away."
+    );
 }
 function renderConnection() {
   const connection = workspaceConnection;
@@ -264,7 +290,7 @@ workspaceConnection.subscribe(() => {
   renderConnection();
   const connected = workspaceConnection.connected;
   if (connected && !observedConnection)
-    void restore().catch((error) => message(error.message, true));
+    void restore().catch((error) => message(formatRpcFailure(error), true));
   observedConnection = connected;
 });
 connectionButton.addEventListener("click", async () => {
@@ -275,7 +301,7 @@ connectionButton.addEventListener("click", async () => {
       studio.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   } catch (error) {
-    connectionStatus.textContent = error.message;
+    connectionStatus.textContent = formatRpcFailure(error);
   }
 });
 for (const idea of document.querySelectorAll("[data-idea]")) {
@@ -311,6 +337,7 @@ make.addEventListener("click", async () => {
       save();
       artifact = "";
       seen.clear();
+      turnFailures.clear();
       $("lab-transcript").replaceChildren();
       preview.hidden = true;
       preview.srcdoc = "";
@@ -331,7 +358,7 @@ make.addEventListener("click", async () => {
       source: "workers/agent-worker",
       className: "AiChatWorker",
       key: work.id,
-      stateArgs: { agentConfig: { model: "openai-codex:gpt-6-astra", thinkingLevel: "medium" } },
+      stateArgs: { agentConfig: { thinkingLevel: "medium" } },
       contextId,
       channelId: work.channelId,
       replay: true,
@@ -345,7 +372,7 @@ make.addEventListener("click", async () => {
     append(idea, "You");
     await conversation.send(
       work.channelTarget,
-      `Invent something that shouldn't exist from this collision: ${idea}\n\nUse the workspace project-creation workflow to create projects/impossible-inventions if it does not exist. Build a delightful, polished, surprising AI-powered invention as HTML at ${work.directory}/index.html in this conversation's workspace context. It is embedded INSIDE the connected website as an unsandboxed same-origin document. Its JavaScript accesses the actual connected SDK using: const workspace = window.parent.inventionWorkspace; (do not import or initialize a second runtime, and do not navigate the parent page). The SDK exposes rpc, fs, contextId, images, services, createConversationClient and launchAgentIntoChannel. These are real workspace capabilities with normal approvals, not mocks.
+      `Invent something that shouldn't exist from this collision: ${idea}\n\nUse the workspace project-creation workflow to create projects/impossible-inventions if it does not exist. Build a delightful, polished, surprising AI-powered invention as HTML at ${work.directory}/index.html in this conversation's workspace context. It is embedded INSIDE the connected website as an unsandboxed same-origin document. Its JavaScript accesses the actual connected SDK using: const workspace = window.parent.inventionWorkspace; (do not import or initialize a second runtime, and do not navigate the parent page). The SDK exposes runtime, rpc, fs, contextId, images, services, createConversationClient and launchAgentIntoChannel. These are real workspace capabilities with normal approvals, not mocks.
 
 The invention MUST use a real AI or agent action triggered by its own UI: for example an agentic oracle tending an evolving world, an illustrated cabinet that invents new creatures, or a committee of agents debating an impossible decision. Build a small, polished first version with one exceptional live interaction, honest loading/approval/error states, persistent workspace data under ${work.directory}/data, keyboard-accessible controls and a mobile layout. No canned AI results. Managed workspace directories are implicit: save data files directly with fs.writeFile; fs.mkdir is only for scratch directories. Consult the workspace runtime and agent-launch source for exact contracts. To launch an agent, create a PubSubChannel via runtime.createEntity, then use launchAgentIntoChannel(workspace.rpc, {source:"workers/agent-worker", className:"AiChatWorker", key, contextId:workspace.contextId, channelId, replay:true}); use createConversationClient(workspace.rpc) to subscribe and send messages addressed to the returned subscription.participantId. Keep channel IDs and request IDs stable in persisted state so repeated clicks/reloads don't duplicate work.
 
@@ -357,11 +384,12 @@ Verification: this deliverable is a static HTML document embedded by the website
         to: [{ kind: "participant", participantId: work.participantId }],
       }
     );
-    message(
-      "The inventor is at work. You can leave this page; accepted work keeps its scoped permissions."
-    );
+    if (busy)
+      message(
+        "The inventor is at work. You can leave this page; accepted work keeps its scoped permissions."
+      );
   } catch (error) {
-    message(error.message, true);
+    message(formatRpcFailure(error), true);
     setBusy(false);
   }
 });
@@ -386,7 +414,7 @@ async function revise(text) {
     $("lab-revision").value = "";
     message("The inventor is reshaping your invention…");
   } catch (error) {
-    message(error.message, true);
+    message(formatRpcFailure(error), true);
     setBusy(false);
   }
 }
@@ -403,7 +431,7 @@ $("lab-weirder").addEventListener(
 );
 $("lab-refresh").addEventListener(
   "click",
-  () => void refreshArtifact().catch((error) => message(error.message, true))
+  () => void refreshArtifact().catch((error) => message(formatRpcFailure(error), true))
 );
 window.addEventListener("pagehide", () => {
   subscription?.abort();
@@ -411,4 +439,5 @@ window.addEventListener("pagehide", () => {
   if (downloadUrl) URL.revokeObjectURL(downloadUrl);
 });
 renderConnection();
-if (workspaceConnection.connected) void restore().catch((error) => message(error.message, true));
+if (workspaceConnection.connected)
+  void restore().catch((error) => message(formatRpcFailure(error), true));

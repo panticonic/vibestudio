@@ -58,7 +58,7 @@ function fixture(
     handler,
     methods: {
       inspect: {
-        website: { kind: "eligible", rationale: "Explicit fixture policy" },
+        website: { kind: "closed", reason: "This authority-plan fixture is code-only." },
         args: z.tuple([z.object({ contextId: z.string(), path: z.string() })]),
         tier: { tier: "open", session: "family", rationale: "Context-local discovery" },
         authority: {
@@ -84,6 +84,24 @@ function fixture(
 }
 
 describe("receiver authority plan compilation", () => {
+  it("rejects an eligible method excluded by its inherited service authority", () => {
+    const dispatcher = new ServiceDispatcher();
+    expect(() =>
+      dispatcher.registerService({
+        name: "inherited",
+        authority: { principals: ["code"] },
+        methods: {
+          inspect: {
+            website: { kind: "eligible", rationale: "Explicit fixture exposure." },
+            args: z.tuple([]),
+            tier: { tier: "open", session: "family", rationale: "Fixture discovery" },
+          },
+        },
+        handler: vi.fn(),
+      })
+    ).toThrow(/cannot admit a website origin/);
+  });
+
   it("runs the bounded preparer for an open method even when it selects no extra authority", async () => {
     const f = fixture();
     const result = await f.dispatcher.compileAuthorityPlanOperation(ctx, operation);

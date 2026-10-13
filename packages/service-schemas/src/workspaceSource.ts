@@ -62,10 +62,17 @@ export const SemanticContextResultSchema = z
   })
   .strict();
 
-export { JsonValueSchema as GadJsonValueSchema, JsonObjectSchema as GadJsonRecordSchema } from "@vibestudio/shared/wireValues";
+export {
+  JsonValueSchema as GadJsonValueSchema,
+  JsonObjectSchema as GadJsonRecordSchema,
+} from "@vibestudio/shared/wireValues";
 export type { JsonValue as GadJsonValue } from "@vibestudio/shared/wireValues";
 export type GadJsonRecord = Record<string, import("@vibestudio/shared/wireValues").JsonValue>;
-import { JsonValueSchema as GadJsonValueSchema, JsonObjectSchema as GadJsonRecordSchema, type JsonValue as GadJsonValue } from "@vibestudio/shared/wireValues";
+import {
+  JsonValueSchema as GadJsonValueSchema,
+  JsonObjectSchema as GadJsonRecordSchema,
+  type JsonValue as GadJsonValue,
+} from "@vibestudio/shared/wireValues";
 // Event and envelope payloads are deliberately polymorphic at this narrow
 // host/workspace ABI. They are still recursively validated as JSON here; the
 // workspace-owned agentic protocol performs the event-kind-specific parse.
@@ -700,8 +707,14 @@ export const AgentHealthInspectionSchema = z
   .strict();
 export type AgentHealthInspection = z.infer<typeof AgentHealthInspectionSchema>;
 
-export { StoredChannelMessageTypeDefinitionSchema, StoredRegistryMutationInputSchema } from "./agenticMessageTypes.js";
-export type { StoredChannelMessageTypeDefinition, StoredRegistryMutationInput } from "./agenticMessageTypes.js";
+export {
+  StoredChannelMessageTypeDefinitionSchema,
+  StoredRegistryMutationInputSchema,
+} from "./agenticMessageTypes.js";
+export type {
+  StoredChannelMessageTypeDefinition,
+  StoredRegistryMutationInput,
+} from "./agenticMessageTypes.js";
 import { StoredChannelMessageTypeDefinitionSchema } from "./agenticMessageTypes.js";
 const ChannelEnvelopeAppendInputSchema = channelEnvelopeSchema
   .omit({
@@ -1580,7 +1593,16 @@ function semanticWireMethod<M extends (typeof vcsMethods)[keyof typeof vcsMethod
   };
 }
 
-const semanticWireMethods = {
+type SemanticWireMethod<M extends (typeof vcsMethods)[keyof typeof vcsMethods]> = ReturnType<
+  typeof semanticWireMethod<M>
+>;
+type SemanticWireMethods = {
+  [K in keyof typeof vcsMethods as `vcs${Capitalize<string & K>}`]: SemanticWireMethod<
+    (typeof vcsMethods)[K]
+  >;
+};
+
+const semanticWireMethods: SemanticWireMethods = {
   vcsEdit: semanticWireMethod(vcsMethods.edit, "edit"),
   vcsMove: semanticWireMethod(vcsMethods.move, "move"),
   vcsCopy: semanticWireMethod(vcsMethods.copy, "copy"),
@@ -1618,7 +1640,7 @@ const semanticWireMethods = {
   vcsReadFiles: semanticWireMethod(vcsMethods.readFiles, "read files"),
   vcsListDirectory: semanticWireMethod(vcsMethods.listDirectory, "list directory"),
   vcsListFiles: semanticWireMethod(vcsMethods.listFiles, "list files"),
-} satisfies ServiceMethodSchemas;
+};
 
 const semanticMutationWireMethodNames = Object.keys(semanticWireMethods).filter(
   (method) =>
@@ -2279,9 +2301,14 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   initializeLogHead: {
-    website: { kind: "closed", reason: "Raw workspace log ownership requires a reviewed public receiver." } as const,
+    website: {
+      kind: "closed",
+      reason: "Raw workspace log ownership requires a reviewed public receiver.",
+    } as const,
     description: "Commit an exact empty root log without fabricating an event.",
-    args: z.tuple([z.object({ logId: nonemptyText, head: nonemptyText, logKind: nonemptyText }).strict()]),
+    args: z.tuple([
+      z.object({ logId: nonemptyText, head: nonemptyText, logKind: nonemptyText }).strict(),
+    ]),
     returns: z.object({ seq: z.literal(0), hash: z.string() }).strict(),
     agentFacing: false,
   },
@@ -2594,10 +2621,7 @@ const gadInternalWireMethods = defineServiceMethods({
 
 /** Actual GadWorkspaceDO RPC shapes. Keeping this explicit makes adapter
  * transforms reviewable and runtime-validatable instead of relying on casts. */
-const rawGadWireMethods = defineServiceMethods({
-  ...gadInternalWireMethods,
-  ...semanticWireMethods,
-  ...directGadWireMethods,
+const gadWireMethodOverrides = {
   getStatus: {
     ...publicStatus,
     agentFacing: false,
@@ -2619,6 +2643,22 @@ const rawGadWireMethods = defineServiceMethods({
     args: z.tuple([z.object({ userId: z.string(), id: z.string() }).strict()]),
     returns: z.object({ deleted: z.boolean() }).strict(),
   },
+};
+
+type MergeServiceMethods<A, B> = Omit<A, keyof B> & B;
+type RawGadWireMethods = MergeServiceMethods<
+  MergeServiceMethods<
+    MergeServiceMethods<typeof gadInternalWireMethods, typeof semanticWireMethods>,
+    typeof directGadWireMethods
+  >,
+  typeof gadWireMethodOverrides
+>;
+
+const rawGadWireMethods: RawGadWireMethods = defineServiceMethods({
+  ...gadInternalWireMethods,
+  ...semanticWireMethods,
+  ...directGadWireMethods,
+  ...gadWireMethodOverrides,
 });
 
 type GadAuthorityGroup = {
@@ -2831,7 +2871,7 @@ type GadAuthorizedMethods<T extends ServiceMethodSchemas> = {
 };
 
 function applyGadAuthority<const T extends ServiceMethodSchemas>(
-  methods: T,
+  methods: T
 ): GadAuthorizedMethods<T> {
   const policies = new Map(
     GAD_AUTHORITY_GROUPS.flatMap((group) => group.methods.map((method) => [method, group] as const))
@@ -2870,4 +2910,7 @@ function applyGadAuthority<const T extends ServiceMethodSchemas>(
   ) as GadAuthorizedMethods<T>;
 }
 
-export const gadWireMethods = applyGadAuthority(rawGadWireMethods);
+/** Named receiver type keeps declaration consumers from expanding the full
+ * schema table at every import site. */
+export type GadWireMethods = GadAuthorizedMethods<typeof rawGadWireMethods>;
+export const gadWireMethods: GadWireMethods = applyGadAuthority(rawGadWireMethods);

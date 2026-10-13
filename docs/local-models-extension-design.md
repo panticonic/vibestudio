@@ -375,7 +375,7 @@ interface LocalModelsApi {
   status(): Promise<LocalModelsStatus>; // servers, engine, hardware, fallback readiness
   listModels(): Promise<LocalModelEntry[]>; // → catalog entries (§6.1)
   ensureLoaded(modelId: string): Promise<{ baseUrl: string }>; // request-path start/load (§6.3)
-  getLoopbackAuth(): Promise<{ apiKey: string; origins: string[] }>; // do-kind callers only (§6.3); never in catalog/journal
+  attestRuntime(modelId: string): Promise<{ baseUrl: string; apiKey: string }>; // host-only, model-scoped (§6.3)
   // library management (panel)
   searchCatalog(q): Promise<CatalogHit[]>;
   downloadModel(req): Response; // streaming progress
@@ -483,8 +483,8 @@ interface ModelCatalogEntry {
 ```
 
 `modelSpec` is **secret-free by construction** — it is journaled with every request
-and shipped to panels inside catalog snapshots, so the loopback api-key never rides
-in it; the executor injects auth at call time (§6.3).
+and shipped to panels inside catalog snapshots. The loopback key remains in the
+extension and host egress boundaries and never enters userland execution (§6.3).
 
 The worker subscribes to the extension's `models.changed` event and invalidates its
 snapshot, so the picker updates live when a download finishes or a server dies.
@@ -524,33 +524,14 @@ turn when none exists (`agent-vessel.ts:866-910`, `model-call.ts:610-635`). That
 implicit assumption becomes an explicit property of the model: the catalog entry —
 and therefore the journaled `modelSpec` — carries `auth: "url-bound" | "loopback"`.
 
-- `auth: "loopback"` (all `local:*` models): the credential _system_ is skipped — no
-  stored credential, no audience matching, no suspended turns. But pi-ai still
-  requires a non-empty `options.apiKey` (its handler throws `No API key for
-provider` otherwise, `openai-completions.js:72-74`), so the executor resolves the
-  loopback api-key **at call time** through a new executor dep backed by the
-  extension's `getLoopbackAuth()` and passes it as `apiKey`. The owning
-  supervisor also returns its currently running endpoint origins. Credentials
-  stay in the trusted DO execution plane: the extension reads the canonical
-  invocation identity and refuses panel, app, worker, and user callers. Agent
-  class names do not grant authority. The host admits outbound inference only
-  when the exact sealed caller requests `internal-model-runtime.use` for
-  `local-models`, and the request's origin and bearer match the provider's live
-  attestation. The complete service binding and review identity is sealed from
-  the exact source state alongside each executable. Admission checks compare
-  that identity against the decision recorded at installation or publication.
-  Request-time authorization reads the sealed image and ledger synchronously;
-  it never calls the workspace-source service to authorize its own source RPC.
-  Cache hydration and source-state rebinding reseal the receiving workspace's
-  service environment, and retained executions preserve their original facts.
-  It asks the provider on each request, so a restart or key rotation
-  cannot leave stale authority behind. Host paths and host PIDs do not attest a
-  provider running in an isolated filesystem or process namespace.
-  The key stays in the provider's private root and in-flight request headers;
-  it never enters the model catalog, journal, or panel state.
-- Before streaming a `local:*` ref, the executor calls the extension's
-  `ensureLoaded(modelId)`. This is what gives `startable` models a real invocation
-  path: it starts the main-server process if the supervisor isn't running it,
+- `auth: "loopback"` (all `local:*` models): the stored credential system is
+  skipped. The executor calls the typed host operation
+  `localModelRuntime.prepareNativeModel` with the exact provider, model, and
+  journaled endpoint. The host revalidates the canonical active native model
+  invocation, admits its exact `model.use` resource, and calls the extension's
+  website-closed `ensureLoaded(modelId)` through ExtensionHost's ordinary
+  activation and lifecycle path. This gives `startable` models a real invocation
+  path: it starts the main-server process if the supervisor is not running it,
   triggers the router load, and returns the live `baseUrl`; for the utility server
   it is a no-op health check. Cold-start latency is bounded by the router load (§3)
   and rides the normal streaming lifecycle as a "model starting" phase. The
@@ -559,10 +540,13 @@ provider` otherwise, `openai-completions.js:72-74`), so the executor resolves th
   journaled `modelSpec.baseUrl` can never go stale across owner takeover or port
   reallocation. Ports are also allocated once and persisted in `config.json`,
   reused across restarts and takeovers — staleness is the exception, and it is
-  still handled.
-- The fetch proxy needs **no change**: a non-sentinel bearer falls through to the
-  runtime's original `fetch` (`model-fetch-proxy.ts:212`), and localhost was never
-  routable anyway (`:93`).
+  still handled. The host revalidates that same active invocation on every
+  loopback request, asks the extension's host-only `attestRuntime(modelId)` for
+  the model's current endpoint and bearer, verifies the exact origin, strips any
+  caller-supplied authorization, and injects the attested bearer only into the
+  forwarded request. A terminal task, changed port, or replaced supervisor
+  therefore fails without a lease, timeout, or retained secret. The key never
+  enters the model catalog, journal, panel state, or agent DO.
 - `providerConnect.ts` gets **no `local` preset** — loopback providers are simply
   not "connectable"; their availability comes from health (§7).
 

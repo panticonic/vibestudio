@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
+  HOST_BRAND_RUNTIME_ARTIFACTS,
   NATIVE_WORKSPACE_ENTRIES,
   SOURCE_SERVER_PREREQUISITE_ARTIFACTS,
 } from "./server-runtime-artifacts.mjs";
@@ -31,7 +32,7 @@ const REQUIRED = {
     "host-build-fingerprint.json",
     "headless-host",
     "workerd-programs",
-    "assets",
+    ...HOST_BRAND_RUNTIME_ARTIFACTS.map((entry) => entry.slice("dist/".length)),
   ],
 };
 const COMPLETION_RECEIPT = "host-build-fingerprint.json";

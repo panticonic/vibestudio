@@ -44,6 +44,7 @@ import * as fs from "fs";
 import {
   resolveNativeTypeScriptServerPath,
   resolveRequiredAppRoot,
+  resolveRequiredHostArtifactRoot,
   TYPESCRIPT_SERVER_PATH_ENV,
 } from "./appRoot.js";
 import { createServerLogStore } from "./services/serverLogStore.js";
@@ -81,6 +82,7 @@ import { eventWatchOwner } from "@vibestudio/service-schemas/bindings/eventsServ
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
+import { HostTargetStaging } from "./hostTargetStaging.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { stateLayout } from "./stateLayout.js";
 import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
@@ -392,6 +394,7 @@ async function main() {
   // Electron and hub-managed child runtimes after a workspace has been selected.
 
   const appRoot = process.env["VIBESTUDIO_APP_ROOT"]!;
+  const hostArtifactRoot = resolveRequiredHostArtifactRoot();
   const processRole = process.env["VIBESTUDIO_PROCESS_ROLE"] ?? "hub";
   if (processRole !== "hub" && processRole !== "workspace-child") {
     throw new Error(
@@ -1307,15 +1310,44 @@ async function main() {
     credentialStore,
     clientConfigStore,
   });
+  const resolveNativeInvocation = async (
+    caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller
+  ) => {
+    const parent = caller.causalParent;
+    if (!parent || !caller.nativeInvocation) return null;
+    const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+    const { resolveExactCausalInvocation } = await import("./workspaceSourceProvider.js");
+    const fact = await resolveExactCausalInvocation(parent, {
+      binding: caller.agentBinding ?? null,
+      entities: entityCache,
+      inspect: (locator, invocationId) => {
+        const owner = entityCache.resolveActive(locator.owner.runtimeId);
+        if (!owner?.className) throw new Error("Native task owner is not active");
+        return doDispatch.dispatch(
+          {
+            source: owner.source.repoPath,
+            className: owner.className,
+            objectKey: owner.key,
+          },
+          "inspectNativeInvocationSource",
+          { taskId: locator.task.taskId, invocationId }
+        );
+      },
+      getEnvelope: (ref, envelopeId) => doDispatch.dispatch(ref, "getEnvelope", envelopeId),
+    });
+    if (!fact) return null;
+    return { nativeInvocation: fact.nativeInvocation, active: fact.active };
+  };
   const { LocalModelLoopbackAuthority } = await import("./services/localModelLoopbackAuthority.js");
   const localModelLoopbackAuthority = new LocalModelLoopbackAuthority({
-    readRuntimeAuth: async (caller) => {
+    resolveNativeInvocation,
+    readRuntimeAuth: async (_caller, modelId) => {
       const host = assertPresent(extensionHostForGateway);
       return await host.invoke(
-        { caller },
+        { caller: createHostCaller("server") },
         "@workspace-extensions/local-models",
-        "getLoopbackAuth",
-        []
+        "attestRuntime",
+        [modelId]
       );
     },
   });
@@ -1330,7 +1362,8 @@ async function main() {
     credentialUseGrantStore,
     credentialLifecycle,
     authorizeInternalRequest: async (input) => {
-      if (await localModelLoopbackAuthority.authorize(input)) return {};
+      const localModelAuthorization = await localModelLoopbackAuthority.authorize(input);
+      if (localModelAuthorization) return localModelAuthorization;
       let gatewayOrigin: string;
       try {
         gatewayOrigin = new URL(getLocalGatewayUrl("CDP transport")).origin;
@@ -1922,7 +1955,15 @@ async function main() {
   ]);
   const runtimeExtensionDeclarations = (config: typeof workspaceConfig) =>
     resolveExtensionsForHostTargets(config, [...demandedHostTargets]);
-  const hostTargetStaging = new Map<string, Promise<void>>();
+  const hostTargetStaging = new HostTargetStaging(demandedHostTargets, async () => {
+    const host = extensionHostForGateway;
+    if (!host) throw new Error("Extension host is not available");
+    const staging = host.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig), {
+      trigger: "startup",
+      waitFor: "staged",
+    });
+    await staging;
+  });
   const prepareHostTarget = async (
     target: import("@vibestudio/shared/hostTargets").HostTarget
   ): Promise<void> => {
@@ -1944,23 +1985,7 @@ async function main() {
         )
       );
     }
-    const pending = hostTargetStaging.get(target);
-    if (pending) return pending;
-    if (demandedHostTargets.has(target)) return extensionHost.whenDeclarationsStaged();
-    demandedHostTargets.add(target);
-    const staging = extensionHost.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig), {
-      trigger: "startup",
-      waitFor: "staged",
-    });
-    hostTargetStaging.set(target, staging);
-    try {
-      await staging;
-    } catch (error) {
-      demandedHostTargets.delete(target);
-      throw error;
-    } finally {
-      hostTargetStaging.delete(target);
-    }
+    await hostTargetStaging.ensure(target);
   };
   // Optional artifact warming shares the explicit activation owner.
   let startupExtensionWarming: Promise<void> | null = null;
@@ -3537,6 +3562,7 @@ async function main() {
       panelRuntimeCoordinator.getHostHeldLease(principalId) !== null,
     hasAppCapability: (callerId, capability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+    resolveNativeInvocation,
   });
 
   // Durable and session permission grants are owned by the workspace server.
@@ -5249,6 +5275,7 @@ async function main() {
   const { wireDevelopmentNative } = await import("./bootstrap/developmentNative.js");
   const closeDevelopmentNative = await wireDevelopmentNative({
     appRoot,
+    hostArtifactRoot,
     container,
     workspaceId,
     getBuildSystem: () => assertPresent(buildSystemInstance),
@@ -6368,6 +6395,38 @@ async function main() {
           container.get<import("@vibestudio/extension-host").ExtensionHost>("extensionHost");
       }
       return instance.createServiceDefinition();
+    },
+  });
+
+  container.registerManaged({
+    name: "localModelRuntime",
+    dependencies: ["extensionHost"],
+    async start(resolve) {
+      const extensionHost = assertPresent(
+        resolve<import("@vibestudio/extension-host").ExtensionHost>("extensionHost")
+      );
+      const { createLocalModelRuntimeService } =
+        await import("./services/localModelRuntimeService.js");
+      return createLocalModelRuntimeService({
+        resolveNativeInvocation,
+        ensureLoaded: (modelId, signal) =>
+          extensionHost.invoke(
+            { caller: createHostCaller("server"), signal },
+            "@workspace-extensions/local-models",
+            "ensureLoaded",
+            [modelId]
+          ),
+      });
+    },
+    getServiceDefinition(
+      instance?: import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+    ) {
+      return (
+        instance ??
+        container.get<import("@vibestudio/shared/serviceDefinition").ServiceDefinition>(
+          "localModelRuntime"
+        )
+      );
     },
   });
 

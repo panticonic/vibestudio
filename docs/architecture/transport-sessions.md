@@ -30,10 +30,14 @@ every streamed RPC uses a fresh bidirectional QUIC stream prefixed with its
 session ID. Response streaming is one bounded response head followed by raw
 body bytes and QUIC EOF. Cancellation maps to QUIC reset/stop.
 
-`callerId` is durable application identity. `connectionId` and the Iroh session
-ID identify one live authenticated session and are never durable user state.
-One physical connection can carry the shell, app, panel, and control sessions
-without weakening their separate admission or lease checks.
+`callerId` is durable application identity. `connectionId` identifies the live
+owner for one application reach; mobile derives it from the installed native
+Endpoint identity and the authenticated server Endpoint ID. A cold app process
+therefore supersedes its dead incarnation during admission instead of remaining
+beside it until QUIC detects loss. The Iroh session ID belongs to one reconnect
+owner. Neither identity is persisted as independent user state. One physical
+connection can carry the shell, app, panel, and control sessions without
+weakening their separate admission or lease checks.
 
 ## Recovery
 
@@ -47,6 +51,8 @@ resume binds a new generation from the same durable secret.
 - `cold-recover` additionally rejects state tied to a prior server boot and
   rebuilds it from durable intent.
 - a terminal session close is never reopened automatically.
+- a cold client process reuses its derived reach connection ID, atomically
+  replacing the prior process before unpinned server-to-shell work is routed.
 
 ### Workspace availability
 

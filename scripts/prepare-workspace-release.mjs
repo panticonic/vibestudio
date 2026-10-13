@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import os from "node:os";
 import { statSync } from "node:fs";
 import {
   deserializeRpcFailure,
@@ -45,6 +46,26 @@ function joinedFailure(failures, message) {
   return new AggregateError(failures, message, { cause: failures[0] });
 }
 
+const GIB = 1024 * 1024 * 1024;
+const BATCH_BUILD_LANE_BYTES = 1.5 * GIB;
+const MAX_BATCH_BUILD_LANES = 8;
+
+/** Select the capacity for this one exhaustive producer, without increasing
+ * the independent admission budgets owned by live interactive workspaces. */
+export function resolveReleaseBuildConcurrency({
+  configured,
+  availableParallelism = os.availableParallelism(),
+  totalMemoryBytes = os.totalmem(),
+}) {
+  const explicit = Number.parseInt(configured ?? "", 10);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const processors = Math.max(1, Math.floor(availableParallelism));
+  const memory = Math.max(0, totalMemoryBytes);
+  const reserve = Math.min(4 * GIB, memory / 3);
+  const memoryLanes = Math.max(1, Math.floor((memory - reserve) / BATCH_BUILD_LANE_BYTES));
+  return Math.min(MAX_BATCH_BUILD_LANES, processors, memoryLanes);
+}
+
 /** One producer owns exhaustive compilation and final output publication. Consumers
  * start only after completed so they observe one immutable, complete artifact
  * set. Every caller must stop and join the producer before retiring its source
@@ -65,6 +86,9 @@ export function prepareWorkspaceRelease(input) {
       throw new Error(`Workspace release manifest is not a file: ${output}`);
     }
   }
+  const buildConcurrency = resolveReleaseBuildConcurrency({
+    configured: input.env["VIBESTUDIO_MAX_CONCURRENT_BUILDS"],
+  });
   const child = spawn(
     input.executable,
     [
@@ -80,7 +104,11 @@ export function prepareWorkspaceRelease(input) {
     ],
     {
       cwd: path.dirname(input.entry),
-      env: { ...input.env, VIBESTUDIO_WORKSPACE_RELEASE_ROOT: output },
+      env: {
+        ...input.env,
+        VIBESTUDIO_WORKSPACE_RELEASE_ROOT: output,
+        VIBESTUDIO_MAX_CONCURRENT_BUILDS: String(buildConcurrency),
+      },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     }
   );

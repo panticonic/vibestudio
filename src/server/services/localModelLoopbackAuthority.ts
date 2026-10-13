@@ -1,12 +1,15 @@
 import { RpcBoundaryError } from "@vibestudio/rpc";
-import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  exactActiveLocalModel,
+  type ResolveActiveNativeInvocation,
+} from "./localModelRuntimeService.js";
 
 const LOCAL_MODEL_USE_CAPABILITY = "internal-model-runtime.use";
 const LOCAL_MODEL_RESOURCE = "local-models";
 export interface LocalModelRuntimeAuth {
+  baseUrl: string;
   apiKey: string;
-  origins: string[];
 }
 
 export interface InternalRequestAuthorizationInput {
@@ -17,7 +20,8 @@ export interface InternalRequestAuthorizationInput {
 }
 
 export interface LocalModelLoopbackAuthorityDeps {
-  readRuntimeAuth(caller: VerifiedCaller): Promise<unknown>;
+  resolveNativeInvocation: ResolveActiveNativeInvocation;
+  readRuntimeAuth(caller: VerifiedCaller, modelId: string): Promise<unknown>;
 }
 
 export class LocalModelRuntimeAuthorityError extends RpcBoundaryError {
@@ -28,14 +32,16 @@ export class LocalModelRuntimeAuthorityError extends RpcBoundaryError {
 }
 
 /**
- * Verifies the dynamic bearer capability minted by the local-model supervisor.
- * Nothing here grants general loopback access: the exact reviewed caller,
- * live endpoint, and in-flight destination credential must all agree.
+ * Revalidates the exact active native model task and asks the owning supervisor
+ * for a model-scoped live endpoint attestation. The bearer is injected only
+ * after validation and never accepted from or returned to userland code.
  */
 export class LocalModelLoopbackAuthority {
   constructor(private readonly deps: LocalModelLoopbackAuthorityDeps) {}
 
-  async authorize(input: InternalRequestAuthorizationInput): Promise<boolean> {
+  async authorize(
+    input: InternalRequestAuthorizationInput
+  ): Promise<{ trustedForwardHeaders: Record<string, string> } | false> {
     if (input.targetUrl.protocol !== "http:" || !isLoopback(input.targetUrl.hostname)) return false;
     if (!input.targetUrl.pathname.startsWith("/v1/")) return false;
     if (!isApprovedAgentModelRuntime(input.caller)) {
@@ -53,25 +59,18 @@ export class LocalModelLoopbackAuthority {
       return false;
     }
 
-    const authorization = readHeader(input.headers, "authorization");
-    if (!authorization?.startsWith("Bearer ")) {
-      console.warn("[local-model-authority] denied", {
-        callerId: input.caller.runtime.id,
-        reason: "bearer-missing",
-      });
-      return false;
-    }
-    const presentedKey = authorization.slice("Bearer ".length);
-    if (!presentedKey) return false;
-
     try {
       // The owning extension attests its live endpoints in its own process
       // namespace. Host paths and PIDs cannot describe an isolated runtime.
-      const auth = parseRuntimeAuth(await this.deps.readRuntimeAuth(input.caller));
+      const model = exactActiveLocalModel(
+        input.caller,
+        await this.deps.resolveNativeInvocation(input.caller)
+      );
+      const auth = parseRuntimeAuth(await this.deps.readRuntimeAuth(input.caller, model.modelId));
       if (!auth || !auth.apiKey) {
         throw new Error("Local model provider returned an invalid runtime authority attestation");
       }
-      if (!auth.origins.includes(input.targetUrl.origin)) {
+      if (new URL(auth.baseUrl).origin !== input.targetUrl.origin) {
         console.warn("[local-model-authority] denied", {
           callerId: input.caller.runtime.id,
           reason: "endpoint-not-live",
@@ -79,15 +78,11 @@ export class LocalModelLoopbackAuthority {
         });
         return false;
       }
-      if (!constantTimeStringEqual(presentedKey, auth.apiKey)) {
-        console.warn("[local-model-authority] denied", {
-          callerId: input.caller.runtime.id,
-          reason: "bearer-mismatch",
-          origin: input.targetUrl.origin,
-        });
-        return false;
-      }
-      return true;
+      return {
+        trustedForwardHeaders: {
+          authorization: `Bearer ${auth.apiKey}`,
+        },
+      };
     } catch (cause) {
       // Provider failure is an execution error, not a request for broader
       // network permission. Preserve its cause and keep credentials private.
@@ -105,13 +100,13 @@ export class LocalModelLoopbackAuthority {
 function parseRuntimeAuth(value: unknown): LocalModelRuntimeAuth | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  if (
-    typeof record["apiKey"] !== "string" ||
-    !Array.isArray(record["origins"]) ||
-    !record["origins"].every((origin) => typeof origin === "string")
-  )
+  if (typeof record["apiKey"] !== "string" || typeof record["baseUrl"] !== "string") return null;
+  try {
+    new URL(record["baseUrl"]);
+  } catch {
     return null;
-  return { apiKey: record["apiKey"], origins: record["origins"] as string[] };
+  }
+  return { apiKey: record["apiKey"], baseUrl: record["baseUrl"] };
 }
 
 function isApprovedAgentModelRuntime(caller: VerifiedCaller): boolean {
@@ -143,16 +138,4 @@ function hasModelRuntimeRequest(caller: VerifiedCaller): boolean {
 function isLoopback(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1";
-}
-
-function readHeader(
-  headers: InternalRequestAuthorizationInput["headers"],
-  name: string
-): string | null {
-  if (headers instanceof Headers) return headers.get(name);
-  const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name);
-  const value = entry?.[1];
-  if (typeof value === "string") return value.trim() || null;
-  if (Array.isArray(value)) return value.find((item) => item.trim())?.trim() ?? null;
-  return null;
 }

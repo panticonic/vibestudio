@@ -31,6 +31,20 @@ export const NATIVE_WORKSPACE_ENTRIES = Object.freeze({
   extensionChild: "extension-child.mjs",
 });
 
+/** Brand files read directly by a host runtime rather than bundled by esbuild. */
+export const HOST_BRAND_RUNTIME_ARTIFACTS = Object.freeze(
+  [
+    "favicon.ico",
+    "favicon-32.png",
+    "favicon-64.png",
+    "favicon-180.png",
+    "favicon.svg",
+    "vibestudio-symbol.svg",
+    "vibestudio-symbol-dark.svg",
+    "vibestudio-symbol-512.png",
+  ].map((filename) => `dist/assets/brand/${filename}`)
+);
+
 export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/server.mjs",
   "dist/prepare-workspace-templates.mjs",
@@ -47,6 +61,7 @@ export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
 /** Complete compiled closure consumed by checkout server launches. */
 export const SOURCE_SERVER_PREREQUISITE_ARTIFACTS = Object.freeze([
   ...STANDALONE_SERVER_RUNTIME_ARTIFACTS,
+  ...HOST_BRAND_RUNTIME_ARTIFACTS,
   "dist/headless-host",
   "dist/workerd-programs",
 ]);

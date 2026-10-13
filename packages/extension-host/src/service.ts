@@ -2371,6 +2371,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
             : null;
         return {
           ...base,
+          status: this.processes.isRunning(entry.name) ? "running" : base.status,
           lastBuiltAt,
           pendingApproval,
           availableUpdate,

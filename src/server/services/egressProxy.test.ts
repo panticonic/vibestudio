@@ -1600,14 +1600,20 @@ describe("EgressProxy", () => {
     }
   });
 
-  it("does not duplicate approval for an exactly attested internal request", async () => {
+  it("injects only host-attested authority without duplicating approval", async () => {
     const approvalQueue = createApprovalQueueMock("deny");
-    const authorizeInternalRequest = vi.fn(async () => ({}));
+    const authorizeInternalRequest = vi.fn(async () => ({
+      trustedForwardHeaders: {
+        authorization: "Bearer host-attested-key",
+      },
+    }));
     const proxy = createProxy(createCredential({ bindings: [] }), new MemoryAuditLog(), {
       approvalQueue,
       authorizeInternalRequest,
     });
-    const target = createServer((_req: IncomingMessage, res: ServerResponse) => {
+    let observedAuthorization: string | undefined;
+    const target = createServer((req: IncomingMessage, res: ServerResponse) => {
+      observedAuthorization = req.headers.authorization;
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("internal-ok");
     });
@@ -1624,15 +1630,16 @@ describe("EgressProxy", () => {
       const res = await requestThroughHttpProxy({
         proxyPort,
         targetUrl: `http://127.0.0.1:${targetPort}/internal`,
-        headers: { Authorization: "Bearer exact-internal-key" },
+        headers: { Authorization: "Bearer caller-controlled-key" },
       });
       expect(res.status).toBe(200);
       expect(authorizeInternalRequest).toHaveBeenCalledWith(
         expect.objectContaining({
           targetUrl: expect.objectContaining({ port: String(targetPort) }),
-          headers: expect.objectContaining({ authorization: "Bearer exact-internal-key" }),
+          headers: expect.objectContaining({ authorization: "Bearer caller-controlled-key" }),
         })
       );
+      expect(observedAuthorization).toBe("Bearer host-attested-key");
       expect(approvalQueue.request).not.toHaveBeenCalled();
     } finally {
       await proxy.stop();

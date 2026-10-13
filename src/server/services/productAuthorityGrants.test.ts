@@ -15,7 +15,12 @@ beforeAll(() => {
   mkdirSync(join(appRoot, "dist"));
   writeFileSync(
     join(appRoot, "dist", "host-build-fingerprint.json"),
-    JSON.stringify({ fingerprint: "a".repeat(64) })
+    JSON.stringify({
+      version: 1,
+      mode: "development",
+      fingerprint: "a".repeat(64),
+      inputCount: 1,
+    })
   );
   process.env["VIBESTUDIO_APP_ROOT"] = appRoot;
   process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = join(appRoot, "dist");

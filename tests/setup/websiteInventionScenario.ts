@@ -14,24 +14,215 @@ import { launchManagedServerApp } from "../setup/managedServerApp";
 import {
   approvePendingStartupUnits,
   approvePendingWorkspaceCreationReview,
+  clickPanelSelector,
+  clickPanelText,
   createBrowserPanel,
+  ensureHostedShellReady,
+  executePanelScript,
   getFocusedPanelId,
   reloadPanel,
   type TestApp,
 } from "../setup/electronSetup";
-import { findWorkspaceShellPage } from "../e2e/support/workspaceCreation";
+import { declineFirstRunReporting, findWorkspaceShellPage } from "../e2e/support/workspaceCreation";
 import { clickNativeApproval } from "../e2e/support/nativeApproval";
 import { hasOwnedX11Display } from "../setup/ownedXvfb";
 import { getChannelRpcReadBundle } from "../e2e/support/channelRpcReadBundle";
 import type { readChannelReplay } from "../e2e/support/channelRpcReads";
 import type { RpcCaller } from "@vibestudio/rpc";
 
+interface WebsiteInventionFixture {
+  app: TestApp;
+  environment: Record<string, string>;
+}
+
+interface WebsiteInventionFixtures {
+  websiteInvention: WebsiteInventionFixture;
+  websiteInventionEnvironment: Record<string, string>;
+}
+
+/**
+ * Provisioning a fresh managed account can include template materialization and
+ * host builds. Give that lifecycle its own fixture budget so behavior timing
+ * starts only after the managed desktop is ready. The fixture is also the sole
+ * owner of app/server cleanup, including when the scenario fails.
+ */
+export const websiteInventionTest = test.extend<WebsiteInventionFixtures>({
+  websiteInventionEnvironment: [{}, { option: true }],
+  websiteInvention: [
+    async ({ websiteInventionEnvironment }, use) => {
+      const app = await launchManagedServerApp(websiteInventionEnvironment);
+      try {
+        await use({ app, environment: websiteInventionEnvironment });
+      } finally {
+        await app.cleanup();
+      }
+    },
+    { timeout: 1_200_000 },
+  ],
+});
+
 const CHANNEL_READS_SYMBOL = "vibestudio.e2e.channelRpcReads.v1";
+const TEST_MODEL_REF = "vibestudio-test:deterministic";
+
+async function settleWorkspaceCreationReviews(app: TestApp) {
+  const workspaces = await app.app.evaluate(() => globalThis.__testApi!.listWorkspaces());
+  for (const workspace of workspaces) {
+    await approvePendingWorkspaceCreationReview({
+      app: app.app,
+      workspaceId: workspace.workspaceId,
+    });
+  }
+}
+
+async function selectDeterministicTestModel(app: TestApp, workspaceId: string) {
+  const launcherPanelId = (await ensureHostedShellReady(app, { panelSource: "about/new" })).panelId;
+  let launcherRow = "";
+  await expect
+    .poll(async () => {
+      launcherRow = await executePanelScript<string>(
+        app,
+        launcherPanelId,
+        `Array.from(document.querySelectorAll('[role="option"]')).map((item) => item.innerText.trim()).find((text) => text.includes("Agentic Chat") && text.includes("panels/chat")) ?? ""`
+      );
+      return launcherRow;
+    })
+    .not.toBe("");
+  if (!(await clickPanelText(app, launcherPanelId, '[role="option"]', launcherRow))) {
+    throw new Error("Could not open Agentic Chat from the System New Panel launcher");
+  }
+  const chatReadiness = await ensureHostedShellReady(app, { panelSource: "panels/chat" });
+  if (chatReadiness.panelId !== launcherPanelId) {
+    throw new Error("Agentic Chat replaced the launcher with a different panel identity");
+  }
+  await expect
+    .poll(() =>
+      executePanelScript<boolean>(
+        app,
+        launcherPanelId,
+        `!!document.querySelector('.agent-setup-card [aria-label="Provider"]')`
+      )
+    )
+    .toBe(true);
+  const chatPanelId = launcherPanelId;
+  const clickText = async (selector: string, text: string) => {
+    if (!(await clickPanelText(app, chatPanelId, selector, text))) {
+      throw new Error("Could not click " + JSON.stringify(text) + " in the System chat panel");
+    }
+  };
+  const clickSelector = async (selector: string) => {
+    if (!(await clickPanelSelector(app, chatPanelId, selector))) {
+      throw new Error("Could not click " + JSON.stringify(selector) + " in the System chat panel");
+    }
+  };
+  const selectedText = (label: "Provider" | "Model") =>
+    executePanelScript<string>(
+      app,
+      chatPanelId,
+      `document.querySelector('.agent-setup-card [aria-label="${label}"]')?.textContent?.trim() ?? ""`
+    );
+  const selectOptionIfNeeded = async (
+    label: "Provider" | "Model",
+    expected: string
+  ): Promise<string> => {
+    const current = await selectedText(label);
+    if (current.includes(expected)) return current;
+    await clickSelector(`[aria-label="${label}"]`);
+    const option = await executePanelScript<string>(
+      app,
+      chatPanelId,
+      `Array.from(document.querySelectorAll('[role="option"]')).map((item) => item.textContent?.trim() ?? "").find((text) => text.includes(${JSON.stringify(expected)})) ?? ""`
+    );
+    if (!option)
+      throw new Error(`${expected} is not available in the ${label.toLowerCase()} picker`);
+    await clickText('[role="option"]', option);
+    return option;
+  };
+  const provider = await selectOptionIfNeeded("Provider", "Deterministic test provider");
+  const model = await selectOptionIfNeeded("Model", "Deterministic test model");
+  await clickText("button", "Save defaults");
+  await expect
+    .poll(() =>
+      executePanelScript<boolean>(
+        app,
+        chatPanelId,
+        `(() => {
+          const setup = document.querySelector(".agent-setup-card");
+          if (!setup) return false;
+          const saved = Array.from(setup.querySelectorAll("*")).some((item) => item.textContent?.trim() === "Workspace defaults");
+          const saveButton = Array.from(setup.querySelectorAll("button")).some((button) => button.innerText.trim() === "Save defaults");
+          return saved && !saveButton;
+        })()`
+      )
+    )
+    .toBe(true);
+  const selection = { workspaceId, model: TEST_MODEL_REF, provider, pickerModel: model };
+  await test.info().attach("test-model-routing.json", {
+    body: JSON.stringify(selection, null, 2),
+    contentType: "application/json",
+  });
+}
+
+async function captureAgentRoutingEvidence(page: Page, app: TestApp, workspaceId: string) {
+  const entities = await app.app.evaluate(async (_electron, id) => {
+    const api = await globalThis.__testApi!.forWorkspace(id);
+    return (await api.rpcCall("runtime", "listEntities", [{ kind: "do" }])) as Array<{
+      id: string;
+      source: string;
+    }>;
+  }, workspaceId);
+  const channels = entities
+    .filter((entity) => entity.source === "workers/pubsub-channel")
+    .map((entity) => entity.id)
+    .slice(-20);
+  await page.addScriptTag({ content: await getChannelRpcReadBundle() });
+  const evidence = await page.evaluate(
+    async ({ channelIds, readerSymbol }) => {
+      type Runtime = typeof globalThis & { inventionWorkspace?: { rpc: RpcCaller } };
+      const reader = (globalThis as unknown as Record<PropertyKey, unknown>)[
+        Symbol.for(readerSymbol)
+      ];
+      if (!reader || typeof reader !== "object")
+        throw new Error("Channel replay reader is unavailable");
+      const readReplay = (reader as { readChannelReplay: typeof readChannelReplay })
+        .readChannelReplay;
+      const rpc = (globalThis as Runtime).inventionWorkspace?.rpc;
+      if (!rpc) throw new Error("Connected website workspace RPC is unavailable");
+      const evidence = [];
+      for (const channel of channelIds) {
+        const replay = await readReplay(rpc, channel, 0);
+        const entries =
+          replay &&
+          typeof replay === "object" &&
+          Array.isArray((replay as { logEvents?: unknown }).logEvents)
+            ? (replay as { logEvents: Array<{ payload?: unknown }> }).logEvents
+            : [];
+        const events = entries.slice(-20).map(({ payload: event }) => {
+          if (!event || typeof event !== "object") return { malformed: true };
+          const record = event as { kind?: unknown; payload?: unknown; failure?: unknown };
+          const payload = record.payload as
+            | { role?: unknown; model?: { ref?: unknown }; failure?: unknown }
+            | undefined;
+          return {
+            kind: record.kind ?? null,
+            role: payload?.role ?? null,
+            modelRef: payload?.model?.ref ?? null,
+            failure: payload?.failure ?? record.failure ?? null,
+          };
+        });
+        evidence.push({ channel, events });
+      }
+      return evidence;
+    },
+    { channelIds: channels, readerSymbol: CHANNEL_READS_SYMBOL }
+  );
+  return evidence;
+}
 
 /** Shared native acceptance flow. By default inference uses the configured provider;
  * smoke coverage supplies host-only scripted inference through the environment. */
-export async function websiteInventionScenario(environment: Record<string, string> = {}) {
+export async function websiteInventionScenario({ app, environment }: WebsiteInventionFixture) {
   test.setTimeout(1_200_000);
+  const expectsDeterministicModel = typeof environment["VIBESTUDIO_TEST_MODEL_SCRIPT"] === "string";
   test.skip(!hasOwnedX11Display(), "Requires the E2E-owned native display for approval input");
   const assets = path.join(process.env["VIBESTUDIO_E2E_TEMP_ROOT"]!, "website-assets");
   await runWithOwnedCleanup(
@@ -71,20 +262,14 @@ export async function websiteInventionScenario(environment: Record<string, strin
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No local website listener");
   const url = `http://127.0.0.1:${address.port}/`;
-  let app: TestApp | undefined;
   let website: Page | undefined;
   const approvals: unknown[] = [];
-  const browserErrors: string[] = [];
+  const browserErrors: Error[] = [];
   try {
-    app = await launchManagedServerApp(environment);
+    await declineFirstRunReporting(app);
     await approvePendingStartupUnits(app);
+    await settleWorkspaceCreationReviews(app);
     const workspaces = await app.app.evaluate(() => globalThis.__testApi!.listWorkspaces());
-    for (const workspace of workspaces) {
-      await approvePendingWorkspaceCreationReview({
-        app: app.app,
-        workspaceId: workspace.workspaceId,
-      });
-    }
     const shell = await findWorkspaceShellPage(app);
     await shell.getByRole("button", { name: "Open System", exact: true }).click();
     await expect(shell.getByRole("button", { name: "Open System", exact: true })).toHaveAttribute(
@@ -92,6 +277,21 @@ export async function websiteInventionScenario(environment: Record<string, strin
       "location"
     );
     await expect.poll(() => getFocusedPanelId(app!)).toBeTruthy();
+    if (expectsDeterministicModel) {
+      // Personal's extension review can arrive after the initial workspace pass.
+      await settleWorkspaceCreationReviews(app);
+      await selectDeterministicTestModel(app, app.workspaceId);
+    }
+    const observedPages = new WeakSet<Page>();
+    const observePageErrors = (candidate: Page) => {
+      if (observedPages.has(candidate)) return;
+      observedPages.add(candidate);
+      candidate.on("pageerror", (error) => {
+        if (candidate.url() === url) browserErrors.push(error);
+      });
+    };
+    for (const candidate of app.app.context().pages()) observePageErrors(candidate);
+    app.app.context().on("page", observePageErrors);
     const parentId = await getFocusedPanelId(app);
     const panel = await createBrowserPanel(app, parentId!, url, { focus: true });
     await expect
@@ -103,7 +303,6 @@ export async function websiteInventionScenario(environment: Record<string, strin
         return Boolean(website);
       })
       .toBe(true);
-    website!.on("pageerror", (error) => browserErrors.push(error.message));
     const page = website!;
 
     // Follow the visible native queue. Only this run's System requests are
@@ -147,6 +346,13 @@ export async function websiteInventionScenario(environment: Record<string, strin
         { ids: workspaces.map((workspace) => workspace.workspaceId), approvalId: target.id }
       );
       if (!item) return; // A resolved card can remain visible during its exit animation.
+      if (item.kind === "unit-install-review") {
+        await approvePendingWorkspaceCreationReview(
+          { app: app!.app, workspaceId: item.workspaceId },
+          [item.approvalId]
+        );
+        return;
+      }
       const surface = app!.app
         .context()
         .pages()
@@ -195,7 +401,9 @@ export async function websiteInventionScenario(environment: Record<string, strin
       const end = Date.now() + timeout;
       while (Date.now() < end) {
         await approvePending();
-        if (browserErrors.length) throw new Error(browserErrors.join("\n"));
+        if (browserErrors.length) {
+          throw new AggregateError(browserErrors, `${label}: connected website script failed`);
+        }
         const error = await page
           .locator("#lab-status")
           .evaluate((element) =>
@@ -205,9 +413,20 @@ export async function websiteInventionScenario(environment: Record<string, strin
         if (await condition()) return;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
-      throw new Error(
-        `${label} timed out. ${await page.locator("#lab-status").textContent()}\n${await page.locator("#lab-transcript").innerText()}`
-      );
+      const failure = `${label} timed out. ${await page.locator("#lab-status").textContent()}\n${await page.locator("#lab-transcript").innerText()}`;
+      try {
+        const evidence = await captureAgentRoutingEvidence(page, app!, app!.workspaceId);
+        await test.info().attach("channel-model-routing-at-timeout.json", {
+          body: JSON.stringify(evidence, null, 2),
+          contentType: "application/json",
+        });
+      } catch (error) {
+        await test.info().attach("channel-model-routing-diagnostic-error.txt", {
+          body: error instanceof Error ? (error.stack ?? error.message) : String(error),
+          contentType: "text/plain",
+        });
+      }
+      throw new Error(failure);
     }
     await expect(page.locator("#workspace-connect-button")).toBeEnabled();
     await page.locator("#workspace-connect-button").click();
@@ -233,11 +452,19 @@ export async function websiteInventionScenario(environment: Record<string, strin
     const request = `Permit to teach clouds to whisper ${randomUUID()}`;
     await frame.getByRole("textbox", { name: "Request", exact: true }).fill(request);
     await frame.getByRole("button", { name: "Petition the moon", exact: true }).click();
-    await untilReady("live embedded agent reply", async () =>
-      (await frame.getByRole("region", { name: "Moon verdict", exact: true }).innerText()).includes(
-        request
-      )
-    );
+    await untilReady("live embedded agent reply", async () => {
+      const verdict = await frame
+        .getByRole("region", { name: "Moon verdict", exact: true })
+        .innerText();
+      if (verdict.includes(request)) return true;
+      const embeddedStatus = frame.locator("#status");
+      const state = await embeddedStatus.getAttribute("data-state");
+      if (state === "failed")
+        throw new Error(`live embedded agent reply: ${await embeddedStatus.innerText()}`);
+      if (state === "complete")
+        throw new Error(`live embedded agent reply did not include the request: ${verdict}`);
+      return false;
+    });
     const verdict = await frame
       .getByRole("region", { name: "Moon verdict", exact: true })
       .innerText();
@@ -312,6 +539,11 @@ export async function websiteInventionScenario(environment: Record<string, strin
       modelReply,
       "The verdict must exist in the agent conversation, not just in the DOM"
     ).not.toBeNull();
+    if (expectsDeterministicModel) {
+      expect(modelReply?.model, "The reply must come from the scripted test provider").toBe(
+        TEST_MODEL_REF
+      );
+    }
     await test.info().attach("channel-agent-reply.json", {
       body: JSON.stringify(modelReply, null, 2),
       contentType: "application/json",
@@ -372,11 +604,7 @@ export async function websiteInventionScenario(environment: Record<string, strin
       body: JSON.stringify(approvals, null, 2),
       contentType: "application/json",
     });
-    try {
-      await app?.cleanup();
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }

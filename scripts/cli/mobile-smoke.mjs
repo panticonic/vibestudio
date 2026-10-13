@@ -39,6 +39,8 @@ import {
   waitForAndroidBoot,
 } from "./lib/android-avd.mjs";
 import { flagValue } from "./lib/args.mjs";
+import { visibleAgentTurnState } from "./lib/mobile-agent-turn-state.mjs";
+import { mobileApprovalSurfaceState } from "./lib/mobile-approval-surface.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
@@ -162,7 +164,7 @@ Runner options:
   --no-reset          Do not clear app data before pairing.
   --no-tap            Do not automate the Pair button tap.
   --real-model        Use the real model provider/credential path instead of
-                       the deterministic E2E model stub.
+                       test-mode model availability.
   --production-templates
                        Use the canonical pinned templates instead of development checkouts.
   --template-checkouts <dir>
@@ -726,10 +728,10 @@ async function waitForOnboardingChatRendered(device, packageName, deadlineMs) {
         `(() => { const text = document.body?.innerText?.trim() ?? ""; ` +
           `return { rendered: text.includes(${JSON.stringify(initialOnboardingPrompt)}), ` +
           `text: text.slice(0, 500), workspaceId: globalThis.__vibestudioGatewayConfig?.workspace, ` +
-          `initialPrompt: globalThis.__vibestudioStateArgs?.initialPrompt }; })()`
+          `openingRequest: globalThis.__vibestudioStateArgs?.seed?.openingRequest }; })()`
       );
       if (state?.rendered === true) {
-        if (state.initialPrompt !== initialOnboardingPrompt) {
+        if (state.openingRequest !== initialOnboardingPrompt) {
           throw new Error(
             "The mounted chat did not receive the shipped automatic onboarding prompt"
           );
@@ -1189,8 +1191,42 @@ async function openWaitingWorkspaceApprovals(device, xml) {
   return label ? tapVisibleNode(device, xml, label) : false;
 }
 
+async function advanceWorkspaceApproval(device, xml, requestedRemaining) {
+  if (await openWaitingWorkspaceApprovals(device, xml)) {
+    return { acted: true, submitted: false, surface: { visible: false } };
+  }
+  const surface = mobileApprovalSurfaceState(xml);
+  if (
+    surface.loadRemainingKey &&
+    !requestedRemaining.has(surface.loadRemainingKey) &&
+    (await tapVisibleNode(device, xml, "Load remaining reviews"))
+  ) {
+    requestedRemaining.add(surface.loadRemainingKey);
+    console.log("[mobile-smoke] Requested every workspace approval owner");
+    return { acted: true, submitted: false, surface };
+  }
+  if (await tapVisibleNode(device, xml, "Approve all")) {
+    console.log("[mobile-smoke] Approved workspace capabilities");
+    return { acted: true, submitted: true, surface };
+  }
+  if (await tapVisibleNodeByResourceId(device, xml, "approval-action-accept-install-review")) {
+    console.log("[mobile-smoke] Approved cold-start workspace units");
+    return { acted: true, submitted: true, surface };
+  }
+  if (await tapVisibleNode(device, xml, "Use once", { labelPrefix: true })) {
+    console.log("[mobile-smoke] Approved one-use workspace capability");
+    return { acted: true, submitted: true, surface };
+  }
+  if (await tapVisibleNodeByResourceId(device, xml, "launch-gate-accept")) {
+    console.log("[mobile-smoke] Approved mobile workspace app launch gate");
+    return { acted: true, submitted: true, surface };
+  }
+  return { acted: false, submitted: false, surface };
+}
+
 async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
   let lastApprovalTap = 0;
+  const requestedRemaining = new Set();
   while (Date.now() < deadlineMs) {
     if (logcat.hasPhase(phase)) return;
     // React Native owns the transition after it receives the press. Android can
@@ -1211,17 +1247,8 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
     if (Date.now() - lastApprovalTap > 2_000) {
       lastApprovalTap = Date.now();
       const xml = await dumpWindowXml(device);
-      if (await openWaitingWorkspaceApprovals(device, xml)) continue;
-      const reviewedUnits = await tapVisibleNodeByResourceId(
-        device,
-        xml,
-        "approval-action-accept-install-review"
-      );
-      if (reviewedUnits) console.log("[mobile-smoke] Approved cold-start workspace units");
-      const approvedLaunch = reviewedUnits
-        ? false
-        : await tapVisibleNodeByResourceId(device, xml, "launch-gate-accept");
-      if (approvedLaunch) console.log("[mobile-smoke] Approved mobile workspace app launch gate");
+      const approval = await advanceWorkspaceApproval(device, xml, requestedRemaining);
+      if (approval.acted) continue;
     }
     await sleep(250);
   }
@@ -1234,34 +1261,27 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
   }
 }
 
-async function settleWorkspaceStartupApprovals(device, deadlineMs) {
-  const discoveryDeadlineMs = Math.min(deadlineMs, Date.now() + 8_000);
+async function settleWorkspaceStartupApprovals(device, deadlineMs, options = {}) {
+  const discoveryDeadlineMs = options.waitForDiscovery === false
+    ? Date.now()
+    : Math.min(deadlineMs, Date.now() + 8_000);
   let resolved = 0;
+  const requestedRemaining = new Set();
   while (Date.now() < deadlineMs) {
     const xml = await dumpWindowXml(device);
-    if (await openWaitingWorkspaceApprovals(device, xml)) continue;
-    // Address the action itself, not its enabled-looking text child. React
-    // Native leaves that child enabled while the parent button is disabled and
-    // marked busy during installation; tapping/logging the child repeatedly
-    // falsely claimed that the review had been accepted again.
-    const added = await tapVisibleNodeByResourceId(
-      device,
-      xml,
-      "approval-action-accept-install-review"
-    );
-    const allowed = added
-      ? false
-      : await tapVisibleNode(device, xml, "Use once", { labelPrefix: true });
-    if (added || allowed) {
-      resolved += 1;
-      console.log("[mobile-smoke] Approved cold-start workspace units");
+    const approval = await advanceWorkspaceApproval(device, xml, requestedRemaining);
+    if (approval.acted) {
+      if (approval.submitted) resolved += 1;
       await sleep(750);
       continue;
     }
     const labels = collectWindowLabels(xml);
-    if (hasVisibleApprovalPrompt(labels)) {
+    if (approval.surface.visible || hasVisibleApprovalPrompt(labels)) {
       // Landing one review may require a second queued review. Browse the
-      // existing queue while that action is pending; do not retap its busy button.
+      // existing queue while that action is pending; do not retap its busy
+      // button. The surface itself is the completion contract: a disabled
+      // decision remains owned until its RPC and landing work settle and the
+      // surface advances or retires.
       const advanced = await tapVisibleNodeByResourceId(device, xml, "approval-queue-next");
       if (!advanced) await tapVisibleNodeByResourceId(device, xml, "approval-queue-prev");
       await sleep(250);
@@ -1682,27 +1702,22 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
   let nextProbeAt = 0;
   let stableVisualAgentFingerprint = "";
   let stableVisualAgentPolls = 0;
+  const requestedRemaining = new Set();
   while (Date.now() < deadlineMs) {
     const xml = await dumpWindowXml(device);
     const labels = collectWindowLabels(xml);
     const text = labels.join("\n");
     lastLabels = labels;
 
-    if (await openWaitingWorkspaceApprovals(device, xml)) continue;
-    if (await tapVisibleNode(device, xml, "Approve all")) {
+    const approval = await advanceWorkspaceApproval(device, xml, requestedRemaining);
+    if (approval.acted) {
       await sleep(1_000);
       continue;
     }
-    if (await tapVisibleNodeByResourceId(device, xml, "approval-action-accept-install-review")) {
-      await sleep(1_000);
-      continue;
-    }
-    if (await tapVisibleNode(device, xml, "Use once", { labelPrefix: true })) {
-      await sleep(2_000);
-      continue;
-    }
-    if (await tapVisibleNodeByResourceId(device, xml, "launch-gate-accept")) {
-      await sleep(1_000);
+    if (approval.surface.visible) {
+      // A submitted decision can remain busy while its install landing runs.
+      // Durable agent completion does not supersede that live UI owner.
+      await sleep(250);
       continue;
     }
 
@@ -1720,15 +1735,10 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
     }
 
     const visualAgentTurn = visibleAgentTurnState(labels);
-    if (options.rejectTestModelResponse && visualAgentTurn.hasTestModelStub) {
+    if (visualAgentTurn.hasCredentialSetupPrompt) {
+      const mode = options.realModel ? "Real-model" : "Deterministic-mode";
       throw new Error(
-        "Real-model smoke saw the deterministic E2E model response; " +
-          "VIBESTUDIO_TEST_MODE is still reaching the model worker"
-      );
-    }
-    if (options.failOnCredentialSetup && visualAgentTurn.hasCredentialSetupPrompt) {
-      throw new Error(
-        `Real-model smoke reached the model credential setup UI instead of an agent response. ` +
+        `${mode} smoke reached model credential setup instead of an agent response. ` +
           `Visible labels: ${summarizeLabels(labels)}`
       );
     }
@@ -1801,34 +1811,6 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
   );
 }
 
-function visibleAgentTurnState(labels) {
-  const text = labels.join("\n");
-  const isTyping = /\b(?:AI Chat|Agent) typing\b/i.test(text);
-  const agentIndex = labels.findLastIndex((label) => isAgentAttributionLabel(label));
-  const agentLabels = agentIndex >= 0 ? labels.slice(agentIndex + 1, agentIndex + 12) : [];
-  const agentText = agentLabels.join("\n");
-  const hasAgentAttribution =
-    agentIndex >= 0 || /(?:^|\n)AI Chat(?:\s*|\n)@[a-z0-9][a-z0-9_-]*(?:\s|\n|$)/i.test(text);
-  const hasTestModelStub = /E2E model response:\s*initial agent turn completed/i.test(text);
-  const hasCredentialSetupPrompt =
-    /Credential (?:required|needs refresh) for/i.test(agentText) ||
-    /Connect a URL-bound model credential for/i.test(agentText) ||
-    /No built-in setup is available for this model provider/i.test(agentText) ||
-    /No provider details available/i.test(agentText);
-  const hasUnresolvedApproval = hasVisibleApprovalPrompt(labels);
-  const hasSubstantialContent = agentLabels.some(isSubstantialAgentContent);
-  const hasAgentOutput = hasAgentAttribution && hasSubstantialContent && !hasCredentialSetupPrompt;
-  return {
-    hasAgentOutput,
-    hasFinalVisibleOutput: hasAgentOutput && !isTyping && !hasUnresolvedApproval,
-    hasCredentialSetupPrompt,
-    hasTestModelStub,
-    hasUnresolvedApproval,
-    isTyping,
-    fingerprint: (agentLabels.length ? agentLabels : labels).filter(Boolean).slice(0, 60).join("|"),
-  };
-}
-
 function hasVisibleApprovalPrompt(labels) {
   return labels.some((label) => {
     const normalized = label.replace(/\s+/g, " ").trim();
@@ -1840,29 +1822,6 @@ function hasVisibleApprovalPrompt(labels) {
   });
 }
 
-function isAgentAttributionLabel(label) {
-  const normalized = label.replace(/\s+/g, " ").trim();
-  return (
-    /^(?:AI Chat\s*)?@[a-z0-9][a-z0-9_-]*$/i.test(normalized) ||
-    /^AI Chat\s*@[a-z0-9][a-z0-9_-]*(?:\s|$)/i.test(normalized)
-  );
-}
-
-function isSubstantialAgentContent(label) {
-  const normalized = label.replace(/\s+/g, " ").trim();
-  if (normalized.length < 8) return false;
-  if (/^(?:AI Chat|AI Chat typing|Agent typing)$/i.test(normalized)) return false;
-  if (isAgentAttributionLabel(normalized)) return false;
-  if (
-    /^(?:Approve all|Use once|Reply|Copy message|Enter API Key|Internal Browser|External Browser)$/i.test(
-      normalized
-    )
-  ) {
-    return false;
-  }
-  return true;
-}
-
 function summarizeLabels(labels) {
   const compact = labels.filter(Boolean).slice(0, 40).join(" | ");
   return compact || "(none)";
@@ -1872,25 +1831,21 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
   const agentProbe = createAgentTurnProbe(readyInfo);
   await ensureDeviceInteractive(device);
   await sleep(2_000);
-  if (await tapOptionalButtonByText(device, "Approve all", 2_000)) {
-    await sleep(2_000);
-  }
-  if (await tapOptionalButtonByLabelPrefix(device, "Use once", 2_000)) {
-    await sleep(3_000);
-  }
   let agentTurnCompleted = false;
   if (options.checkAgentTurn !== false) {
     const waitOptions = options.realModel
-      ? {
-          requireVisibleAgentOutput: true,
-          rejectTestModelResponse: true,
-          failOnCredentialSetup: true,
-          requireNoUnresolvedApproval: true,
-        }
+      ? { requireVisibleAgentOutput: true, requireNoUnresolvedApproval: true }
       : {};
     await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, waitOptions);
     agentTurnCompleted = true;
   }
+  // Agent completion and approval completion are independent. A review that
+  // was submitted during the turn can still own the shared modal while its
+  // install landing runs, so join that owner before inspecting panel content.
+  // With discovery disabled an already-clear surface returns immediately.
+  await settleWorkspaceStartupApprovals(device, Date.now() + agentTimeoutMs, {
+    waitForDiscovery: false,
+  });
   await ensureDeviceInteractive(device);
   const healthyDeadlineMs = Date.now() + Math.min(agentTimeoutMs, 30_000);
   await waitForOnboardingOverview(device, options.packageName ?? defaultPackage, healthyDeadlineMs);
@@ -2442,7 +2397,7 @@ async function runSmoke(
       "embedded-host-target-preparing",
       "embedded-bundle-activate-start",
       "embedded-bundle-activate-complete",
-      "workspace-connected",
+      "workspace-iroh-connected",
       "workspace-recovery-complete",
       "workspace-panel-activate-start",
       "workspace-panel-materialized",
@@ -2502,7 +2457,7 @@ async function runSmoke(
     await waitForPhaseTappingApprovals(
       options.device,
       logcat,
-      "workspace-connected",
+      "workspace-iroh-connected",
       managedConnectionDeadlineMs
     );
     if (!options.noTap) {
@@ -2564,7 +2519,7 @@ async function runSmoke(
     // invite, then survive a server restart using the persisted device room and
     // server identity. Count phase occurrences so an earlier successful launch
     // cannot satisfy either recovery assertion.
-    const appRestartWorkspaceCount = logcat.phaseCount("workspace-connected");
+    const appRestartWorkspaceCount = logcat.phaseCount("workspace-iroh-connected");
     const appRestartPanelCount = logcat.phaseCount("workspace-panel-webview-loaded");
     const appRestartPanelReadyCount = logcat.phaseCount("workspace-panel-ready");
     logcat.releaseAppProcess();
@@ -2586,7 +2541,7 @@ async function runSmoke(
       "1"
     );
     await logcat.waitForPhaseAfter(
-      "workspace-connected",
+      "workspace-iroh-connected",
       appRestartWorkspaceCount,
       options.pairingTimeoutMs
     );

@@ -74,6 +74,7 @@ describe("Iroh product E2E entry points", () => {
     const mobile = source("scripts/cli/mobile-smoke.mjs");
     for (const marker of [
       "embedded-host-target-approval-required",
+      "workspace-iroh-connected",
       "workspace-panel-materialized",
       "workspace-panel-webview-loaded",
       "workspace-panel-ready",
@@ -90,6 +91,8 @@ describe("Iroh product E2E entry points", () => {
     expect(mobile).toContain("approval-action-accept-install-review");
     expect(mobile).toContain("launch-gate-accept");
     expect(mobile).toContain("embedded-host-target-approval-submitted");
+    expect(mobile).toContain("mobileApprovalSurfaceState");
+    expect(mobile).toContain("Load remaining reviews");
     expect(source("apps/mobile/index.js")).toContain("embedded-host-target-approval-resolved");
     expect(mobile).toContain('readXmlAttribute(node, "enabled") === "false"');
     expect(mobile).toContain("managedConnectionDeadlineMs");
@@ -122,23 +125,42 @@ describe("Iroh product E2E entry points", () => {
   });
 
   it("keeps the Android emulator preflight compatible with the action's POSIX shell", () => {
-    const nightly = source(".github/workflows/iroh-e2e-nightly.yml");
-    const preflight = nightly.match(/pre-emulator-launch-script:\s*\|\n([\s\S]*?)\n\s*script:/)?.[1];
+    const androidSmoke = source(".github/workflows/android-iroh-smoke.yml");
+    const preflight = androidSmoke.match(
+      /pre-emulator-launch-script:\s*\|\n([\s\S]*?)\n\s*script:/
+    )?.[1];
     expect(preflight).toBeDefined();
     expect(preflight).toContain("set -eu");
     expect(preflight).not.toContain("pipefail");
   });
 
-  it("admits exact host extension builds before a target stages them for activation", () => {
+  it("admits exact host-target builds before the target staging owner activates them", () => {
     const server = source("src/server/index.ts");
-    const demandStart = server.indexOf("const ensureHostTargetExtensions = async (");
-    const demandEnd = server.indexOf("// Optional artifact warming", demandStart);
+    const demandStart = server.indexOf("const prepareHostTarget = async (");
+    const demandEnd = server.indexOf(
+      "const reconcileDeclaredWorkspaceUnits = async (",
+      demandStart
+    );
     const demand = server.slice(demandStart, demandEnd);
-    const admission = demand.indexOf("extensionHost.seedTrustedDeclared(");
-    const staging = demand.indexOf("extensionHost.reconcileDeclared(");
+    const admission = demand.indexOf(
+      "admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(requiredExtensions))"
+    );
+    const appAdmission = demand.indexOf("await appHostForGateway.seedTrustedDeclared(");
+    const staging = demand.indexOf("await hostTargetStaging.ensure(target)");
+    const stagingOwnerStart = server.indexOf("const hostTargetStaging = new HostTargetStaging(");
+    const stagingOwnerEnd = server.indexOf(
+      "const prepareHostTarget = async (",
+      stagingOwnerStart
+    );
+    const stagingOwner = server.slice(stagingOwnerStart, stagingOwnerEnd);
     expect(demandStart).toBeGreaterThan(0);
     expect(admission).toBeGreaterThan(0);
-    expect(staging).toBeGreaterThan(admission);
-    expect(demand).toContain("admitSeedTrustedUnits(");
+    expect(appAdmission).toBeGreaterThan(admission);
+    expect(staging).toBeGreaterThan(appAdmission);
+    expect(stagingOwnerStart).toBeGreaterThan(0);
+    expect(stagingOwner).toContain(
+      "host.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig)"
+    );
+    expect(stagingOwner).toContain('waitFor: "staged"');
   });
 });

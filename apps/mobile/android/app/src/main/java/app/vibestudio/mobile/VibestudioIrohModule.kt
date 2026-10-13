@@ -31,6 +31,17 @@ import javax.crypto.spec.GCMParameterSpec
 
 class VibestudioIrohModule(context: ReactApplicationContext) :
     ReactContextBaseJavaModule(context) {
+    private class SendEntry(val stream: SendStream, val connectionHandle: String) {
+        var activeOperations = 0
+        var retiring = false
+        var terminalClaimed = false
+    }
+    private class ReceiveEntry(val stream: RecvStream, val connectionHandle: String) {
+        var activeOperations = 0
+        var retiring = false
+        var terminalClaimed = false
+    }
+
     private val owner = SupervisorJob()
     private val scope = CoroutineScope(owner + Dispatchers.IO)
     private val lifecycleLock = Any()
@@ -38,10 +49,8 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     private val endpoints = ConcurrentHashMap<String, Endpoint>()
     private val endpointIdentities = ConcurrentHashMap<String, String>()
     private val connections = ConcurrentHashMap<String, Connection>()
-    private val sends = ConcurrentHashMap<String, SendStream>()
-    private val receives = ConcurrentHashMap<String, RecvStream>()
-    private val sendConnections = ConcurrentHashMap<String, String>()
-    private val receiveConnections = ConcurrentHashMap<String, String>()
+    private val sends = ConcurrentHashMap<String, SendEntry>()
+    private val receives = ConcurrentHashMap<String, ReceiveEntry>()
     private val preferences = context.getSharedPreferences("vibestudio-iroh-identities", Context.MODE_PRIVATE)
 
     override fun getName() = "VibestudioIroh"
@@ -52,10 +61,8 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
             active = false
             val owned = connections.values.toList()
             connections.clear()
-            sends.clear()
-            receives.clear()
-            sendConnections.clear()
-            receiveConnections.clear()
+            sends.values.forEach { it.retiring = true }
+            receives.values.forEach { it.retiring = true }
             owned
         }
         // Invalidation is the authoritative end of this React Native runtime.
@@ -66,6 +73,10 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
                 catch (error: Throwable) { Log.e(TAG, "Runtime connection retirement failed", error) }
             }
             owner.cancelAndJoin()
+            synchronized(lifecycleLock) {
+                sends.clear()
+                receives.clear()
+            }
             val ownedEndpoints = synchronized(lifecycleLock) {
                 endpoints.values.toList().also {
                     endpoints.clear()
@@ -178,38 +189,56 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
         streamResult(requireConnection(handle).acceptBi(), handle)
     }
     @ReactMethod fun write(handle: String, value: String, promise: Promise) = launch(promise) {
-        requireSend(handle).writeAll(Base64.decode(value, Base64.NO_WRAP)); null
+        val entry = acquireSend(handle)
+        try { entry.stream.writeAll(Base64.decode(value, Base64.NO_WRAP)); null }
+        finally { releaseSend(handle, entry) }
     }
     @ReactMethod fun finish(handle: String, promise: Promise) = launch(promise) {
-        requireSend(handle).finish(); removeSend(handle); null
+        val entry = claimSendTerminal(handle) ?: return@launch null
+        try { entry.stream.finish(); null }
+        finally { releaseSend(handle, entry) }
     }
     @ReactMethod fun reset(handle: String, code: String, promise: Promise) = launch(promise) {
-        requireSend(handle).reset(code.toULong()); removeSend(handle); null
+        val entry = claimSendTerminal(handle) ?: return@launch null
+        try { entry.stream.reset(code.toULong()); null }
+        finally { releaseSend(handle, entry) }
     }
     @ReactMethod fun stopped(handle: String, promise: Promise) = launch(promise) {
-        requireSend(handle).stopped()?.toString()
+        val entry = acquireSend(handle)
+        try { entry.stream.stopped()?.toString() }
+        finally { releaseSend(handle, entry) }
     }
     @ReactMethod fun read(handle: String, maximum: Int, promise: Promise) = launch(promise) {
         if (maximum !in 1..1_048_576) throw IllegalArgumentException("Invalid bounded read size")
-        val bytes = requireReceive(handle).read(maximum.toUInt())
-        if (bytes.isEmpty()) removeReceive(handle)
-        Base64.encodeToString(bytes, Base64.NO_WRAP)
+        val entry = acquireReceive(handle)
+        try {
+            val bytes = entry.stream.read(maximum.toUInt())
+            if (bytes.isEmpty()) retireReceive(handle, entry)
+            Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } finally { releaseReceive(handle, entry) }
     }
     @ReactMethod fun readExact(handle: String, length: Int, promise: Promise) = launch(promise) {
         if (length !in 0..1_048_576) throw IllegalArgumentException("Invalid exact read size")
-        Base64.encodeToString(requireReceive(handle).readExact(length.toUInt()), Base64.NO_WRAP)
+        val entry = acquireReceive(handle)
+        try { Base64.encodeToString(entry.stream.readExact(length.toUInt()), Base64.NO_WRAP) }
+        finally { releaseReceive(handle, entry) }
     }
     @ReactMethod fun stop(handle: String, code: String, promise: Promise) = launch(promise) {
-        requireReceive(handle).stop(code.toULong()); removeReceive(handle); null
+        val entry = claimReceiveTerminal(handle) ?: return@launch null
+        try { entry.stream.stop(code.toULong()); null }
+        finally { releaseReceive(handle, entry) }
     }
     @ReactMethod fun receivedReset(handle: String, promise: Promise) = launch(promise) {
-        requireReceive(handle).receivedReset()?.also { removeReceive(handle) }?.toString()
+        val entry = acquireReceive(handle)
+        try {
+            entry.stream.receivedReset()?.also { retireReceive(handle, entry) }?.toString()
+        } finally { releaseReceive(handle, entry) }
     }
 
     @ReactMethod
     fun closeConnection(handle: String, code: String, reason: String) {
         val connection = synchronized(lifecycleLock) {
-            connections.remove(handle)?.also { removeStreams(handle) }
+            connections.remove(handle)?.also { retireStreams(handle) }
         }
         connection?.close(code.toLong(), Base64.decode(reason, Base64.NO_WRAP))
     }
@@ -243,10 +272,8 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
                 Arguments.createMap().apply {
                     val sendHandle = UUID.randomUUID().toString()
                     val receiveHandle = UUID.randomUUID().toString()
-                    sends[sendHandle] = stream.send()
-                    receives[receiveHandle] = stream.recv()
-                    sendConnections[sendHandle] = connectionHandle
-                    receiveConnections[receiveHandle] = connectionHandle
+                    sends[sendHandle] = SendEntry(stream.send(), connectionHandle)
+                    receives[receiveHandle] = ReceiveEntry(stream.recv(), connectionHandle)
                     putString("sendHandle", sendHandle)
                     putString("receiveHandle", receiveHandle)
                 }
@@ -264,26 +291,64 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
         ?: throw IllegalStateException("Unknown Iroh endpoint handle")
     private fun requireConnection(handle: String) = connections[handle]
         ?: throw IllegalStateException("Unknown Iroh connection handle")
-    private fun requireSend(handle: String) = sends[handle]
-        ?: throw IllegalStateException("Unknown Iroh send-stream handle")
-    private fun requireReceive(handle: String) = receives[handle]
-        ?: throw IllegalStateException("Unknown Iroh receive-stream handle")
-    private fun removeSend(handle: String) {
-        sends.remove(handle)
-        sendConnections.remove(handle)
+    private fun acquireSend(handle: String): SendEntry = synchronized(lifecycleLock) {
+        val entry = sends[handle] ?: throw IllegalStateException("Iroh send stream is closed or unknown")
+        check(active && !entry.retiring) { "Iroh send stream is closed" }
+        entry.activeOperations++
+        entry
     }
-    private fun removeReceive(handle: String) {
-        receives.remove(handle)
-        receiveConnections.remove(handle)
+    private fun acquireReceive(handle: String): ReceiveEntry = synchronized(lifecycleLock) {
+        val entry = receives[handle] ?: throw IllegalStateException("Iroh receive stream is closed or unknown")
+        check(active && !entry.retiring) { "Iroh receive stream is closed" }
+        entry.activeOperations++
+        entry
     }
-    private fun removeStreams(connectionHandle: String) {
-        sendConnections.entries.removeIf { (handle, owner) ->
-            if (owner == connectionHandle) sends.remove(handle)
-            owner == connectionHandle
+    private fun claimSendTerminal(handle: String): SendEntry? = synchronized(lifecycleLock) {
+        val entry = sends[handle] ?: throw IllegalStateException("Iroh send stream is closed")
+        check(active) { "Iroh runtime has been invalidated" }
+        if (entry.terminalClaimed) return@synchronized null
+        check(!entry.retiring) { "Iroh send stream is closed" }
+        entry.retiring = true
+        entry.terminalClaimed = true
+        entry.activeOperations++
+        entry
+    }
+    private fun claimReceiveTerminal(handle: String): ReceiveEntry? = synchronized(lifecycleLock) {
+        val entry = receives[handle] ?: throw IllegalStateException("Iroh receive stream is closed")
+        check(active) { "Iroh runtime has been invalidated" }
+        if (entry.terminalClaimed) return@synchronized null
+        check(!entry.retiring) { "Iroh receive stream is closed" }
+        entry.retiring = true
+        entry.terminalClaimed = true
+        entry.activeOperations++
+        entry
+    }
+    private fun retireReceive(handle: String, entry: ReceiveEntry) = synchronized(lifecycleLock) {
+        entry.retiring = true
+        if (entry.activeOperations == 0) receives.remove(handle, entry)
+    }
+    private fun releaseSend(handle: String, entry: SendEntry) = synchronized(lifecycleLock) {
+        entry.activeOperations--
+        check(entry.activeOperations >= 0) { "Iroh send stream operation lease underflow" }
+        if (entry.retiring && entry.activeOperations == 0) sends.remove(handle, entry)
+    }
+    private fun releaseReceive(handle: String, entry: ReceiveEntry) = synchronized(lifecycleLock) {
+        entry.activeOperations--
+        check(entry.activeOperations >= 0) { "Iroh receive stream operation lease underflow" }
+        if (entry.retiring && entry.activeOperations == 0) receives.remove(handle, entry)
+    }
+    private fun retireStreams(connectionHandle: String) {
+        sends.entries.forEach { (handle, entry) ->
+            if (entry.connectionHandle == connectionHandle) {
+                entry.retiring = true
+                if (entry.activeOperations == 0) sends.remove(handle, entry)
+            }
         }
-        receiveConnections.entries.removeIf { (handle, owner) ->
-            if (owner == connectionHandle) receives.remove(handle)
-            owner == connectionHandle
+        receives.entries.forEach { (handle, entry) ->
+            if (entry.connectionHandle == connectionHandle) {
+                entry.retiring = true
+                if (entry.activeOperations == 0) receives.remove(handle, entry)
+            }
         }
     }
 

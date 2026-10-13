@@ -306,13 +306,65 @@ export interface MethodSchema {
 
 export type ServiceMethodSchemas = Record<string, MethodSchema>;
 
+function requirementCanAdmitPrincipal(
+  requirement: AuthorityRequirement,
+  principal: PrincipalKind
+): boolean {
+  if (requirement.kind === "capability") return requirement.principal === principal;
+  if (requirement.kind === "any") {
+    return requirement.requirements.some((child) => requirementCanAdmitPrincipal(child, principal));
+  }
+  if (requirement.kind === "all") {
+    return requirement.requirements.every(
+      (child) =>
+        child.kind === "relationship" ||
+        child.kind === "session" ||
+        requirementCanAdmitPrincipal(child, principal)
+    );
+  }
+  return true;
+}
+
+export function validateWebsiteAuthorityReachability(
+  name: string,
+  method: MethodSchema,
+  inheritedAuthority?: ServiceAuthorityPolicy
+): void {
+  const authority = method.authority ?? inheritedAuthority;
+  if (method.website.kind !== "eligible" || !authority) return;
+  const admitsWebsite =
+    "principals" in authority
+      ? authority.principals.includes("website")
+      : requirementCanAdmitPrincipal(authority.requirement, "website");
+  if (!admitsWebsite) {
+    throw new Error(
+      `Website-eligible method ${name} has an authority requirement that cannot admit a website origin`
+    );
+  }
+  if (!("requirement" in authority) || !authority.prepared) return;
+  for (const leaf of authority.prepared.leaves) {
+    const requirement = leaf.requirement;
+    const leafAdmitsWebsite =
+      requirement.kind === "selected"
+        ? requirement.principals.includes("website")
+        : requirementCanAdmitPrincipal(requirement, "website");
+    if (!leafAdmitsWebsite) {
+      throw new Error(
+        `Website-eligible method ${name} has a prepared authority leaf that cannot admit a website origin`
+      );
+    }
+  }
+}
+
 /**
  * Identity helper that preserves the literal key/schema types of a method
  * table for client derivation while checking the table's shape.
  */
 export function defineServiceMethods<const M extends ServiceMethodSchemas>(methods: M): M {
-  for (const [name, method] of Object.entries(methods))
+  for (const [name, method] of Object.entries(methods)) {
     validateWebsiteMethodPolicy(method.website, name);
+    validateWebsiteAuthorityReachability(name, method);
+  }
   return methods;
 }
 
@@ -326,6 +378,7 @@ export function defineReceiverServiceMethods<const M extends ServiceMethodSchema
   return Object.fromEntries(
     Object.entries(methods).map(([name, method]) => {
       validateWebsiteMethodPolicy(method.website, name);
+      validateWebsiteAuthorityReachability(name, method);
       if (method.directEffect) return [name, method];
       if (method.tier?.tier === "open") {
         return [name, { ...method, directEffect: { kind: "open" as const } }];

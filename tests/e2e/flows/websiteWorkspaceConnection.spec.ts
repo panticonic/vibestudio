@@ -56,12 +56,12 @@ test("website SDK requires explicit connection and retires access on document re
     <button id="eval">Run scoped eval</button><button id="launch">Launch agent</button><button id="inspect">Inspect template</button><button id="create">Create workspace</button><button id="receipt">Read receipt</button>
     <button id="tree">List workspace</button><button id="read">Read settings</button><button id="write">Change settings</button>
     <p id="status">Loading SDK</p><script type="module">
-    import { connectWorkspace, workspaceConnection, callMain, templates, workspaces, rpc, contextId, launchAgentIntoChannel } from '/runtime.js';
+    import { connectWorkspace, workspaceConnection, callMain, templates, workspaces, runtime, rpc, contextId, launchAgentIntoChannel, formatRpcFailure } from '/runtime.js';
     const output = value => document.querySelector('#status').textContent = value;
     const templatePin = ${JSON.stringify(templatePin)};
     const operationId = sessionStorage.getItem('operationId') || crypto.randomUUID();
     sessionStorage.setItem('operationId', operationId);
-    const attempt = async operation => { try { output(await operation()); } catch (error) { output('error:' + (error.code || '') + ':' + error.message); } };
+    const attempt = async operation => { try { output(await operation()); } catch (error) { output('error:' + formatRpcFailure(error)); } };
     document.querySelector('#connect').onclick = () => attempt(async () => { await connectWorkspace(); return 'connected:' + workspaceConnection.connected; });
     document.querySelector('#tree').onclick = () => attempt(async () => 'tree:' + JSON.stringify(await callMain('fs.readdir', '/')));
     document.querySelector('#read').onclick = () => attempt(async () => 'read:' + typeof await callMain('fs.readFile', 'meta/vibestudio.yml', 'utf8'));
@@ -70,7 +70,7 @@ test("website SDK requires explicit connection and retires access on document re
     document.querySelector('#closed').onclick = () => attempt(async () => { await callMain('websiteHosting.list'); return 'unexpected inventory access'; });
     document.querySelector('#launch').onclick = () => attempt(async () => {
       const key = 'website-agent-' + operationId;
-      await callMain('runtime.createEntity', { kind: 'do', execution: { surface: 'code', source: 'workers/pubsub-channel' }, className: 'PubSubChannel', key, contextId });
+      await runtime.createEntity({ kind: 'do', execution: { surface: 'code', source: 'workers/pubsub-channel' }, className: 'PubSubChannel', key, contextId });
       const launched = await launchAgentIntoChannel(rpc, { source: 'workers/agent-worker', className: 'AiChatWorker', key, contextId, channelId: key, replay: true });
       return 'launched:' + launched.subscription.ok;
     });

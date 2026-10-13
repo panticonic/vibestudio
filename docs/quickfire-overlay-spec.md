@@ -373,7 +373,9 @@ created_at, promoted_at)`. The host stores no quickfire schema or session
 - **Agent**: `QuickfireSessionsDO.sessionFor` creates a channel and a standard
   **`AiChatWorker`** vessel. Ordinary agent subscription configuration selects
   its prompt, low thinking level, participant identity, named panel resource,
-  per-turn context providers, and exact tool set. There is no mode, profile,
+  per-turn context providers, and exact tool set. The shared launch path resolves
+  canonical workspace model defaults; Quickfire does not merge a second copy of
+  those defaults into subscription configuration. There is no mode, profile,
   subclass, alternate credential path, or quickfire-specific state inside
   `AiChatWorker`.
 - **Streaming to the overlay**: `QuickfireOwner` (chrome) subscribes to the
@@ -933,9 +935,10 @@ Design — standard code identity + per-conversation panel grants:
    ingestion, so a quickfire conversation that has looked at page content
    carries the latch like any agent session — no exemption.
 5. **Agent configuration**: ordinary subscription config selects the focused
-   prompt, per-turn panel snapshot, low thinking level, and §5.3 tools.
-   Promotion preserves the same channel and vessel; changing UI surfaces never
-   changes execution identity.
+   prompt, per-turn panel snapshot, low thinking level, and §5.3 tools. The
+   shared launch path supplies canonical workspace model defaults, with explicit
+   model configuration taking precedence. Promotion preserves the same channel
+   and vessel; changing UI surfaces never changes execution identity.
 
 What we explicitly do **not** do: no mission wrapper, no second durable class,
 no standing broad panel grant, no TTL'd grants, and no bypass of the ingestion

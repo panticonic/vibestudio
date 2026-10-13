@@ -128,6 +128,12 @@ Location: `workspace/packages/agentic-do/src/agent-vessel.ts`
 | `buildTurnInput(event)`        | Concatenated text blocks                                                                | Transform to turn input                                                                   |
 | `getParticipantInfo()`         | abstract                                                                                | Channel identity + advertised methods                                                     |
 
+The shared agent-launch path supplies canonical workspace model settings as
+inherited launch configuration. An explicit launch value takes precedence;
+`DEFAULT_AGENT_MODEL_REF` is the worker default when neither launch nor live
+agent settings provide a model. Product surfaces use the shared resolver
+instead of copying workspace model defaults into separate merge logic.
+
 The final prompt is composed from the Vibestudio base prompt,
 `workspace/meta/AGENTS.md`, the generated skill index, and optional
 subscription prompt config. Workspace skills are discovered from top-level

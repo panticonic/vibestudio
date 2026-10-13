@@ -7971,7 +7971,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -7994,8 +7995,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.diffTrees),allOf(capability(user,service:blobstore.diffTrees),workspace-member),allOf(capability(code,service:blobstore.diffTrees),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.diffTrees",
       "parityAssertion": "generated-census:host-authority"
@@ -8017,7 +8018,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -8040,8 +8042,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.getBase64),allOf(capability(user,service:blobstore.getBase64),workspace-member),allOf(capability(code,service:blobstore.getBase64),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.getBase64",
       "parityAssertion": "generated-census:host-authority"
@@ -8063,7 +8065,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -8086,8 +8089,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.getRange),allOf(capability(user,service:blobstore.getRange),workspace-member),allOf(capability(code,service:blobstore.getRange),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.getRange",
       "parityAssertion": "generated-census:host-authority"
@@ -8109,7 +8112,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -8132,8 +8136,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.getRangeBytes),allOf(capability(user,service:blobstore.getRangeBytes),workspace-member),allOf(capability(code,service:blobstore.getRangeBytes),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.getRangeBytes",
       "parityAssertion": "generated-census:host-authority"
@@ -8155,7 +8159,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -8178,8 +8183,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.getText),allOf(capability(user,service:blobstore.getText),workspace-member),allOf(capability(code,service:blobstore.getText),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.getText",
       "parityAssertion": "generated-census:host-authority"
@@ -8201,7 +8206,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -8224,8 +8230,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.getTree),allOf(capability(user,service:blobstore.getTree),workspace-member),allOf(capability(code,service:blobstore.getTree),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.getTree",
       "parityAssertion": "generated-census:host-authority"
@@ -8247,7 +8253,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -8270,8 +8277,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.grep),allOf(capability(user,service:blobstore.grep),workspace-member),allOf(capability(code,service:blobstore.grep),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.grep",
       "parityAssertion": "generated-census:host-authority"
@@ -8293,7 +8300,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -8316,8 +8324,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.has),allOf(capability(user,service:blobstore.has),workspace-member),allOf(capability(code,service:blobstore.has),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.has",
       "parityAssertion": "generated-census:host-authority"
@@ -8384,7 +8392,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -8407,8 +8416,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.listTree),allOf(capability(user,service:blobstore.listTree),workspace-member),allOf(capability(code,service:blobstore.listTree),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.listTree",
       "parityAssertion": "generated-census:host-authority"
@@ -8475,7 +8484,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -8498,8 +8508,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.putBase64),allOf(capability(user,service:blobstore.putBase64),workspace-member),allOf(capability(code,service:blobstore.putBase64),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.putBase64",
       "parityAssertion": "generated-census:host-authority"
@@ -8521,7 +8531,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -8567,7 +8578,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -8590,8 +8602,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.putText),allOf(capability(user,service:blobstore.putText),workspace-member),allOf(capability(code,service:blobstore.putText),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.putText",
       "parityAssertion": "generated-census:host-authority"
@@ -8613,7 +8625,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -8636,8 +8649,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.putTree),allOf(capability(user,service:blobstore.putTree),workspace-member),allOf(capability(code,service:blobstore.putTree),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.putTree",
       "parityAssertion": "generated-census:host-authority"
@@ -8659,7 +8672,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -8682,8 +8696,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.readFileAtTree),allOf(capability(user,service:blobstore.readFileAtTree),workspace-member),allOf(capability(code,service:blobstore.readFileAtTree),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.readFileAtTree",
       "parityAssertion": "generated-census:host-authority"
@@ -8705,7 +8719,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -8751,7 +8766,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -8797,7 +8813,8 @@
       "authorityPrincipals": [
         "code",
         "user",
-        "host"
+        "host",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -8820,8 +8837,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:blobstore.stat),allOf(capability(user,service:blobstore.stat),workspace-member),allOf(capability(code,service:blobstore.stat),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-content-authority",
+        "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
       },
       "capability": "service:blobstore.stat",
       "parityAssertion": "generated-census:host-authority"
@@ -14461,6 +14478,93 @@
         "change": "Opens only the mediation entrypoint and removes its redundant generic credential.use dispatcher prompt. The handler still matches the concrete credential and requires the existing exact credential, caller, use, audience, workspace, and grant-scope authorization before returning any credential summary or material."
       },
       "capability": "service:credentials.resolveCredential",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:credentials.resolveNativeModel",
+      "rpcPlane": "host-service",
+      "owner": "credentials",
+      "method": "resolveNativeModel",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "secret",
+      "mechanismFamily": "credentials.read",
+      "reviewRationale": "Credential selection stays host-side; one prepared exact model/account model.use decision precedes existing credential.use and destination checks",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native-model"
+      },
+      "authorityPrincipals": [],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"relationship\",\"name\":\"workspace-member\"}",
+      "r3b": {
+        "review": "exact-native-model-account-resolution",
+        "change": "Adds the website-facing native model preparation method that resolves only the provider, model, endpoint, and account bound to the active canonical model operation. The server chooses the account and prepares exact model-use and credential-use authority; callers cannot request a credential id or retrieve secret material."
+      },
+      "capability": "service:credentials.resolveNativeModel",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:credentials.resolveNativeModel#capability:model.use",
+      "rpcPlane": "host-service",
+      "owner": "credentials",
+      "method": "resolveNativeModel",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "secret",
+      "mechanismFamily": "credentials.read",
+      "reviewRationale": "Credential selection stays host-side; one prepared exact model/account model.use decision precedes existing credential.use and destination checks",
+      "capability": "model.use",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "credentials.resolveNativeModel.modelAccount"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"website\",\"user\",\"host\",\"code\"]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -21760,6 +21864,99 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:localModelRuntime.prepareNativeModel",
+      "rpcPlane": "host-service",
+      "owner": "localModelRuntime",
+      "method": "prepareNativeModel",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "secret",
+      "mechanismFamily": "credentials.read",
+      "reviewRationale": "The host validates the retained native invocation and returns only its current secret-free endpoint.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:localModelRuntime.prepareNativeModel"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:localModelRuntime.prepareNativeModel\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:localModelRuntime.prepareNativeModel\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:localModelRuntime.prepareNativeModel\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:localModelRuntime.prepareNativeModel\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:localModelRuntime.prepareNativeModel\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "exact-active-local-model-preparation",
+        "change": "Adds one website-eligible typed mediation operation for the exact active authenticated native local-model task. The host revalidates provider, model, original endpoint, owner, and liveness before using the ordinary ExtensionHost lifecycle to start that model, returns only its loopback endpoint, and retains all bearer material in host egress."
+      },
+      "capability": "service:localModelRuntime.prepareNativeModel",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:localModelRuntime.prepareNativeModel#capability:model.use",
+      "rpcPlane": "host-service",
+      "owner": "localModelRuntime",
+      "method": "prepareNativeModel",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "secret",
+      "mechanismFamily": "credentials.read",
+      "reviewRationale": "The host validates the retained native invocation and returns only its current secret-free endpoint.",
+      "capability": "model.use",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "localModelRuntime.prepareNativeModel.model"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"website\",\"user\",\"host\",\"code\"]}",
+      "r3b": {
+        "review": "exact-local-model-use-selection",
+        "change": "Selects one gated model.use leaf derived by the host from the active native task model id. Caller arguments must equal the retained task and cannot choose another model, endpoint, account, or runtime secret."
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:menu.showContext",
       "rpcPlane": "host-service",
       "owner": "menu",
@@ -27483,7 +27680,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -27506,8 +27704,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.dropSemanticContext),allOf(capability(user,service:runtime.dropSemanticContext),workspace-member),allOf(capability(code,service:runtime.dropSemanticContext),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-runtime-authority",
+        "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.dropSemanticContext",
       "parityAssertion": "generated-census:host-authority"
@@ -27573,7 +27771,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -27596,8 +27795,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.forkSemanticContext),allOf(capability(user,service:runtime.forkSemanticContext),workspace-member),allOf(capability(code,service:runtime.forkSemanticContext),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-runtime-authority",
+        "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.forkSemanticContext",
       "parityAssertion": "generated-census:host-authority"
@@ -27619,7 +27818,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -27665,7 +27865,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -27688,8 +27889,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.listEntities),allOf(capability(user,service:runtime.listEntities),workspace-member),allOf(capability(code,service:runtime.listEntities),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-runtime-authority",
+        "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.listEntities",
       "parityAssertion": "generated-census:host-authority"
@@ -27711,7 +27912,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -27734,8 +27936,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.listOwnedContexts),allOf(capability(user,service:runtime.listOwnedContexts),workspace-member),allOf(capability(code,service:runtime.listOwnedContexts),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-runtime-authority",
+        "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.listOwnedContexts",
       "parityAssertion": "generated-census:host-authority"
@@ -28123,7 +28325,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28146,8 +28349,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.resolveContext),allOf(capability(user,service:runtime.resolveContext),workspace-member),allOf(capability(code,service:runtime.resolveContext),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-runtime-authority",
+        "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.resolveContext",
       "parityAssertion": "generated-census:host-authority"
@@ -28409,7 +28612,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28432,8 +28636,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.supervision.describe),allOf(capability(user,service:runtime.supervision.describe),workspace-member),allOf(capability(code,service:runtime.supervision.describe),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-runtime-authority",
+        "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.supervision.describe",
       "parityAssertion": "generated-census:host-authority"
@@ -28455,7 +28659,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28478,8 +28683,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.supervision.health),allOf(capability(user,service:runtime.supervision.health),workspace-member),allOf(capability(code,service:runtime.supervision.health),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-runtime-authority",
+        "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.supervision.health",
       "parityAssertion": "generated-census:host-authority"
@@ -28501,7 +28706,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28524,8 +28730,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.supervision.list),allOf(capability(user,service:runtime.supervision.list),workspace-member),allOf(capability(code,service:runtime.supervision.list),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-runtime-authority",
+        "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.supervision.list",
       "parityAssertion": "generated-census:host-authority"
@@ -28547,7 +28753,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -28570,8 +28777,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.supervision.logs),allOf(capability(user,service:runtime.supervision.logs),workspace-member),allOf(capability(code,service:runtime.supervision.logs),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-runtime-authority",
+        "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.supervision.logs",
       "parityAssertion": "generated-census:host-authority"
@@ -29001,7 +29208,8 @@
       "authorityPrincipals": [
         "code",
         "host",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -29024,8 +29232,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.supervision.versions),allOf(capability(user,service:runtime.supervision.versions),workspace-member),allOf(capability(code,service:runtime.supervision.versions),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-scoped-website-runtime-authority",
+        "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.supervision.versions",
       "parityAssertion": "generated-census:host-authority"
@@ -36240,7 +36448,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -36261,10 +36470,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:workers.resolveDurableObject\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:workers.resolveDurableObject\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:workers.resolveDurableObject\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:workers.resolveDurableObject\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:workers.resolveDurableObject\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:workers.resolveDurableObject\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:workers.resolveDurableObject\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:workers.resolveDurableObject\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:workers.resolveDurableObject\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reachable-cross-workspace-service-resolution",
+        "change": "Makes the declared website-eligible resolver reachable through its outer service authority while retaining authenticated source and destination policy, workspace membership, and receiver-selected authority for the exact resolved service. Discovery does not itself authorize invocation."
       },
       "capability": "service:workers.resolveDurableObject",
       "parityAssertion": "generated-census:host-authority"
@@ -36292,7 +36501,8 @@
         "host",
         "mission",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -36311,10 +36521,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"host\",\"user\",\"code\",\"session\",\"mission\"]}",
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"host\",\"user\",\"code\",\"website\",\"session\",\"mission\"]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "website-aware-receiver-selected-service-authority",
+        "change": "Allows the prepared authority selector to preserve a website principal only when the exact resolved workspace service admits that principal. The receiver chooses the capability and requirement from the registered service contract; callers cannot widen the selected authority."
       },
       "parityAssertion": "generated-census:host-authority"
     },
@@ -36336,7 +36546,8 @@
         "code",
         "host",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -36357,10 +36568,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:workers.resolveService\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "cross-workspace-service-metadata-discovery",
-        "change": "Records cross-workspace eligibility for the existing service metadata reads. Eligibility does not bypass authenticated source/destination policy, membership, or the selected receiver method authority, and does not authorize invocation of discovered methods."
+        "review": "reachable-cross-workspace-service-resolution",
+        "change": "Makes the declared website-eligible resolver reachable through its outer service authority while retaining authenticated source and destination policy, workspace membership, and receiver-selected authority for the exact resolved service. Discovery does not itself authorize invocation."
       },
       "capability": "service:workers.resolveService",
       "parityAssertion": "generated-census:host-authority"
@@ -36388,7 +36599,8 @@
         "host",
         "mission",
         "session",
-        "user"
+        "user",
+        "website"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -36407,10 +36619,10 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"host\",\"user\",\"code\",\"session\",\"mission\"]}",
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"host\",\"user\",\"code\",\"website\",\"session\",\"mission\"]}",
       "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
+        "review": "website-aware-receiver-selected-service-authority",
+        "change": "Allows the prepared authority selector to preserve a website principal only when the exact resolved workspace service admits that principal. The receiver chooses the capability and requirement from the registered service contract; callers cannot widen the selected authority."
       },
       "parityAssertion": "generated-census:host-authority"
     },

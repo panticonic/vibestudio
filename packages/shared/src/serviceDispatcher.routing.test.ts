@@ -44,7 +44,7 @@ describe("ServiceDispatcher ownership", () => {
           access: {
             args: z.tuple([z.string()]),
             capability,
-            website: { kind: "eligible", rationale: "Reviewed file access" },
+            website: { kind: "closed", reason: "This file-authority fixture is code-only." },
             tier: { tier: "open", session: "family", rationale: "Context-local access" },
             authority: {
               requirement,
@@ -242,8 +242,8 @@ describe("ServiceDispatcher ownership", () => {
       methods: {
         activate: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This lifecycle-authority fixture is code-only.",
           } as const,
           args: z.tuple([z.object({ kind: z.string(), releaseId: z.string() })]),
           capability: "runtime.supervision.manage",
@@ -318,8 +318,8 @@ describe("ServiceDispatcher ownership", () => {
       methods: {
         activate: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This lifecycle-authority fixture is code-only.",
           } as const,
           args: z.tuple([z.object({ kind: z.string(), releaseId: z.string() })]),
           capability,
@@ -393,8 +393,8 @@ describe("ServiceDispatcher ownership", () => {
       methods: {
         send: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This mail-authority fixture is code-only.",
           } as const,
           args: z.tuple([z.string()]),
           capability: "workspace-service:mail",
