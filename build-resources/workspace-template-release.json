@@ -3,8 +3,8 @@
   "workspaceTemplates": {
     "base": {
       "url": "git+https://github.com/panticonic/vibestudio-base.git",
-      "ref": "refs/tags/v0.3.87",
-      "commit": "daf815ca4b739e5fcb5b4fe5ac0c45c649c021bb"
+      "ref": "refs/tags/v0.3.88",
+      "commit": "06860b5dd245e158e2f2d4f9cf6deab3f74bdf0a"
     },
     "personal": {
       "url": "git+https://github.com/panticonic/vibestudio-personal.git",
