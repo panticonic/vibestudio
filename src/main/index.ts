@@ -1,3 +1,4 @@
+import { workspaceLabel } from "../node/workspaceLabel.js";
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import { schemaRpcStream } from "@vibestudio/rpc/internal";
 import { RpcBoundaryError } from "@vibestudio/rpc/errors";
@@ -2244,12 +2245,7 @@ app.on("ready", async () => {
             return [
               runtime.serverClient.call("shellApproval", "listPending", []).then((pending) => ({
                 workspaceId: member.workspaceId,
-                workspaceLabel:
-                  member.privateRole === "personal"
-                    ? "Personal"
-                    : member.privateRole === "system"
-                      ? "System"
-                      : member.name,
+                workspaceLabel: workspaceLabel(member),
                 pending: pending as PendingApproval[],
               })),
             ];
@@ -2330,7 +2326,7 @@ app.on("ready", async () => {
           onApprovalPendingChanged: (pending) =>
             approvalAttention?.handlePendingChanged({
               workspaceId: id,
-              workspaceLabel: membership.privateRole === "personal" ? "Personal" : membership.name,
+              workspaceLabel: workspaceLabel(membership),
               pending,
             }),
         },
