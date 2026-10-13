@@ -1963,7 +1963,11 @@ describe("ExtensionHost activation", () => {
             contentType: "application/javascript",
             encoding: "utf8",
             platform: "android",
-            stream: { method: "buildArtifact", args: ["artifact-1"] },
+            stream: {
+              method: "buildArtifact",
+              args: ["artifact-1"],
+              integrity: `sha256-${createHash("sha256").update("bundle").digest("hex")}`,
+            },
           },
         ],
         metadata: { rnHostAbi: "rn-host-2" },

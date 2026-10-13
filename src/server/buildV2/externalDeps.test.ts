@@ -88,6 +88,7 @@ import {
   acquireExternalDeps,
   drainExternalDependencyPruning,
   ensureExtensionRuntimeDeps,
+  extensionRuntimeDependencyKey,
   mergeExternalDependencySpecs,
   resolveHostDependencyProjection,
   type ExternalDependencyPatch,
@@ -159,6 +160,11 @@ describe("extension runtime dependency publication", () => {
       "extension-runtime-background-test": "1.0.0",
     });
     try {
+      expect(borrowed.key).toBe(
+        extensionRuntimeDependencyKey(process.cwd(), {
+          "extension-runtime-background-test": "1.0.0",
+        })
+      );
       expect(prepareDependencyContent).toHaveBeenCalledWith(
         expect.stringMatching(/\.tmp\.[a-f0-9]{32}$/u),
         path.dirname(borrowed.nodeModulesDir),

@@ -73,7 +73,15 @@ export async function prepareBuildProviderResources(options: {
       dispose: () => rm(directory, { recursive: true, force: true }),
     };
   } catch (error) {
-    await rm(directory, { recursive: true, force: true });
+    try {
+      await rm(directory, { recursive: true, force: true });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Build provider input projection and cleanup failed",
+        { cause: error }
+      );
+    }
     throw error;
   }
 }

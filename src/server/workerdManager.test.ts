@@ -1178,6 +1178,58 @@ describe("WorkerdManager", () => {
       expect(code?.env["NON_SECRET_PROBE"]).toBe("configured");
     });
 
+    it("keeps a leased old executable exact and rejects it after the dispatch releases", async () => {
+      const deps = createMockDeps();
+      const mgr = new WorkerdManager(deps);
+      await mgr.startWorker(startArgs({ env: { FEATURE: "old" } }));
+
+      const old = (await mgr.getWorkerAdmission("hello"))!;
+      const oldCode = await mgr.getWorkerCode("hello", old.version);
+      await mgr.updateInstance("hello", { env: { FEATURE: "new" } });
+      expect(await mgr.getWorkerCode("hello", old.version)).toBe(oldCode);
+      expect((await mgr.getWorkerCode("hello", old.version))?.env["FEATURE"]).toBe("old");
+
+      const next = (await mgr.getWorkerAdmission("hello"))!;
+      expect((await mgr.getWorkerCode("hello", next.version))?.env["FEATURE"]).toBe("new");
+      old.release?.();
+      await expect(mgr.getWorkerCode("hello", old.version)).rejects.toMatchObject({
+        code: "WORKER_ADMISSION_CHANGED",
+      });
+      next.release?.();
+    });
+
+    it("captures a cold selection before an update even when code reading finishes later", async () => {
+      let entered!: () => void;
+      let releaseRead!: () => void;
+      const reading = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const deps = createMockDeps();
+      const read = deps.readBuildArtifactContent;
+      deps.readBuildArtifactContent = async (build, artifact) => {
+        entered();
+        await gate;
+        return read(build, artifact);
+      };
+      const mgr = new WorkerdManager(deps);
+      await mgr.startWorker(startArgs({ env: { FEATURE: "old" } }));
+
+      const selecting = mgr.getWorkerAdmission("hello");
+      await reading;
+      const updating = mgr.updateInstance("hello", { env: { FEATURE: "new" } });
+      releaseRead();
+      const old = (await selecting)!;
+      expect((await mgr.getWorkerCode("hello", old.version))?.env["FEATURE"]).toBe("old");
+      await updating;
+      old.release?.();
+      await expect(mgr.getWorkerCode("hello", old.version)).rejects.toMatchObject({
+        code: "WORKER_ADMISSION_CHANGED",
+      });
+    });
+
     it("is idempotent for a live duplicate of the same identity (no-op re-attach)", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
@@ -2183,11 +2235,11 @@ describe("WorkerdManager", () => {
 
       await mgr.startWorker(startArgs());
 
-      await expect(mgr.getWorkerCode("hello", "selected-version")).rejects.toMatchObject({
+      await expect(mgr.getWorkerAdmission("hello")).rejects.toMatchObject({
         code: "RUNTIME_IMAGE_WARMING",
       });
       await vi.waitFor(() => expect(bindRuntimeImage).toHaveBeenCalledTimes(2));
-      await expect(mgr.getWorkerCode("hello", "selected-version")).rejects.toMatchObject({
+      await expect(mgr.getWorkerAdmission("hello")).rejects.toMatchObject({
         code: "RUNTIME_IMAGE_UNAVAILABLE",
         message: expect.stringContaining("Unknown vcs ref: ctx:deleted"),
       });

@@ -112,6 +112,17 @@ describe("materializeImmutableTree", () => {
       fs.promises.readFile(path.join(target, "package", "nested", "value.txt"), "utf8")
     ).resolves.toBe("value\n");
   });
+
+  it("rejects links that would point back into the mutable source after publication", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "immutable-tree-escape-"));
+    roots.push(root);
+    const source = path.join(root, "source");
+    const target = path.join(root, "target");
+    await fs.promises.mkdir(source);
+    await fs.promises.writeFile(path.join(source, "entry.js"), "source");
+    await fs.promises.symlink(path.join(source, "entry.js"), path.join(source, "absolute"));
+    await expect(materializeImmutableTree(source, target)).rejects.toThrow(/link is absolute/);
+  });
 });
 
 it("publishes independent native files while resolving only contained dependency links", async () => {

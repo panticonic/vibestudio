@@ -36,14 +36,6 @@ export class EgressGateway extends WorkerEntrypoint<WorkerHostEnv, EgressProps> 
   }
 }
 
-interface ActiveSelection {
-  requests: number;
-  failure?: import("@vibestudio/rpc").RpcFailure;
-}
-
-// Own only concurrent selections. WorkerLoader remains the sole immutable-code cache.
-const activeSelections = new Map<string, ActiveSelection>();
-
 const workerHost: ExportedHandler<WorkerHostEnv> = {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
@@ -58,40 +50,31 @@ const workerHost: ExportedHandler<WorkerHostEnv> = {
     const loaderHeaders = { "X-Vibestudio-Loader-Secret": env.WORKERD_LOADER_SECRET };
 
     const identity = `${name}@${version}`;
-    const selection: ActiveSelection = activeSelections.get(identity) ?? { requests: 0 };
-    activeSelections.set(identity, selection);
-    selection.requests++;
     try {
       const stub = env.LOADER.get(identity, async () => {
-        try {
-          const codeResponse = await env.GATEWAY.fetch(
-            new Request(
-              `http://gateway/_workercode/${encodeURIComponent(name)}?version=${encodeURIComponent(version)}`,
-              {
-                headers: loaderHeaders,
-              }
-            )
-          );
-          if (!codeResponse.ok) {
-            const failure = (await codeResponse.json()) as {
-              error: import("@vibestudio/rpc").RpcFailure;
-            };
-            selection.failure = failure.error;
-            throw deserializeRpcFailure(failure.error);
-          }
-          const code = (await codeResponse.json()) as WorkerCodePayload;
-          return {
-            compatibilityDate: code.compatibilityDate,
-            compatibilityFlags: code.compatibilityFlags,
-            mainModule: code.mainModule,
-            modules: code.modules,
-            env: code.env,
-            globalOutbound: egressBinding(ctx, code.callerId),
+        const codeResponse = await env.GATEWAY.fetch(
+          new Request(
+            `http://gateway/_workercode/${encodeURIComponent(name)}?version=${encodeURIComponent(version)}`,
+            {
+              headers: loaderHeaders,
+            }
+          )
+        );
+        if (!codeResponse.ok) {
+          const failure = (await codeResponse.json()) as {
+            error: import("@vibestudio/rpc").RpcFailure;
           };
-        } catch (error) {
-          selection.failure ??= serializeRpcFailure(error);
-          throw error;
+          throw deserializeRpcFailure(failure.error);
         }
+        const code = (await codeResponse.json()) as WorkerCodePayload;
+        return {
+          compatibilityDate: code.compatibilityDate,
+          compatibilityFlags: code.compatibilityFlags,
+          mainModule: code.mainModule,
+          modules: code.modules,
+          env: code.env,
+          globalOutbound: egressBinding(ctx, code.callerId),
+        };
       });
 
       // Strip the instance-name prefix so the loaded worker sees /__rpc etc.
@@ -100,12 +83,7 @@ const workerHost: ExportedHandler<WorkerHostEnv> = {
       forwardUrl.search = url.search;
       return await stub.getEntrypoint().fetch(new Request(forwardUrl, request));
     } catch (error) {
-      return Response.json(
-        { error: selection.failure ?? serializeRpcFailure(error) },
-        { status: 500 }
-      );
-    } finally {
-      if (--selection.requests === 0) activeSelections.delete(identity);
+      return Response.json({ error: serializeRpcFailure(error) }, { status: 500 });
     }
   },
 };

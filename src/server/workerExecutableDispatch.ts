@@ -2,6 +2,8 @@
 export interface WorkerExecutableAdmission {
   name: string;
   version: string;
+  /** Retains this exact selection until its dispatch reaches a terminal event. */
+  release?: () => void;
 }
 
 export const WORKER_EXECUTABLE_VERSION_HEADER = "X-Vibestudio-Worker-Version";

@@ -59,6 +59,18 @@ that transaction; the journal lookup must not grow a second hydration path.
 Fresh publication must admit the promoted descriptor to this same cache after
 verification and before returning it, just as a verified cache read does.
 
+An extension with external runtime dependencies publishes its bundle and a
+complete `node_modules` projection in the same temporary build directory before
+the build-store rename exposes either. The projection receipt records the
+platform-specific dependency key only after all copies have joined and the
+declared packages resolve inside that tree. The shared build cache carries
+compiler artifacts only; each local owner projects the runtime closure for its
+host after hydration. A cached projection from an earlier host runtime is
+repaired in a private staging directory, then promoted by the process owner
+before any BuildSystem runtime accessor returns the extension. Extension
+activation uses those accessors; directory existence alone is never a
+readiness check.
+
 Async state watches register the subscriber before hydrating their initial
 snapshot at a captured sequence watermark. Snapshot records and intervening
 live events share one byte budget; snapshots precede newer buffered events.
@@ -149,14 +161,18 @@ current workflow revision.
 Linux quality has its own source-input edge. `quality-inputs` checks out the
 selected Base ref and complete template catalog once, builds the infrastructure
 packages once, and uploads those outputs with a receipt for the host commit,
-infrastructure manifest, and every template commit and tree. The `quality` and
-`quality-desktop` jobs both verify that receipt after restoring the exact
-artifact. Userland, mobile, unit, and static checks run in `quality`; native
-remote transport and desktop pairing run in `quality-desktop` so they share one
-development host build. Both jobs are required by reusable CI before a release
-tag can be created. The producer edge preserves the test input identity while
-letting these independent suites overlap; measure artifact transfer and job
-durations on the first run before claiming a wall-clock saving.
+infrastructure manifest, and every template commit and tree. The `quality`,
+`quality-followup`, and `quality-desktop` jobs verify that receipt after
+restoring the exact artifact. Template type-checking and the complete userland
+suite stay together in `quality`; the mobile, host-boundary, packaged host,
+lint, formatting, and unit checks run in `quality-followup`. Native remote
+transport and desktop pairing run in `quality-desktop` so they share one
+development host build. Each quality consumer owns its generated files on its
+own runner, while the infrastructure packages and template inputs come from the
+single `quality-inputs` producer. All three jobs are required by reusable CI
+before a release tag can be created. This lets the follow-up checks overlap the
+long userland suite; artifact transfer and job durations determine the actual
+wall-clock saving.
 
 Darwin packaging and source integration use two host modes with distinct
 fingerprints. One macOS-14 production-host job installs the exact native and
@@ -224,18 +240,102 @@ separate named jobs when consumers need different subsets of its outputs;
 otherwise a slow unrelated producer serializes those consumers. Keep platform
 variation in shared reusable workflows rather than copying build recipes.
 
-Release preparation is a manual dispatch from `main` with an exact version tag
-and full source SHA. The workflow checks that SHA against the checked-out commit
-and stable package version, then runs the reusable CI graph before creating an
-annotated tag and draft release. Prerelease and build-metadata versions are not
-accepted in this `--latest` release lane. The tag is never moved or overwritten.
-Every
-enabled desktop installer candidate and its required acceptance must succeed
-before that tag exists; publication consumes those same run-scoped artifacts
-and does not rebuild them. Candidate artifacts are SHA-qualified and immutable
-within the workflow run. After a pre-tag failure, start a fresh dispatch; after
-a post-tag publisher failure, use **Re-run failed jobs** so successful candidate
-producers and their artifacts remain untouched. The final publication job
+The protected-main push CI run is the authoritative release candidate run for
+its exact source SHA. It resolves the stable committed version, runs every
+quality and native check, produces each enabled signed installer candidate,
+and installs and launches each required candidate. Its final candidate gate
+requires every applicable result to succeed and emits a receipt binding the
+source SHA, version, enabled platforms, canonical Windows runner, and the exact
+commit and tree of every official template consumed by the quality checks.
+The Darwin development source and npm preflight consume the quality producer's
+manifest and pin every official template to its recorded commit and tree before
+building. Independent producers still start when their own inputs are ready;
+the final gate joins them without serializing their builds. PR and ordinary
+manually dispatched diagnostic CI runs cannot
+supply a release candidate. If a push candidate fails for an external reason,
+manually dispatch the same CI workflow at the same `main` commit with
+`release-candidate=true`; it executes the same complete graph and creates a
+new authoritative run ID without requiring a no-op source commit. Candidate
+retries must use the canonical `base-ref=main` and `windows-runner=windows-2025`
+inputs; diagnostics can still select alternatives but cannot publish. The
+release dispatcher verifies the receipt's complete template identities and
+runner before tagging.
+
+Once the diagnostic workflow is present on the default branch, run a focused
+check against the branch with a fix by selecting that branch with `--ref` and
+choosing the failing expensive job:
+
+```sh
+gh workflow run ci-diagnostic.yml --ref my-fix-branch \
+  -f target=linux-installer-x64
+```
+
+Targets are `npm-server-preflight`, `linux-installer-x64`,
+`linux-installer-arm64`, `windows-installer-candidate`, `quality-desktop`, and
+`android-iroh-smoke`. `application-candidate-mac` also reruns the Darwin native
+input, production-host build, macOS application candidate, installed-app
+acceptance on macos-14 and macos-26, installer packaging, and installed release
+acceptance. It calls the same reusable installer and release-acceptance
+workflows as protected CI. That target requires `release-tag` set to the exact
+`vX.Y.Z` version in `package.json`, so
+the reusable candidate workflow exercises its release-candidate validation
+path. It passes Apple signing secrets only on `main` when `RELEASE_MAC=true`;
+feature-branch runs therefore exercise the empty-secret path without exposing
+signing credentials to branch code. The reusable application workflow applies the same
+all-five-or-none credential handling. On a feature branch, the diagnostic
+installer follows the candidate's ad-hoc signing mode and still verifies the
+DMG checksum, app signature, installation, and launch path.
+For example:
+
+```sh
+gh workflow run ci-diagnostic.yml --ref my-fix-branch \
+  -f target=application-candidate-mac \
+  -f release-tag=v1.2.3
+```
+
+The workflow runs the selected job's declared
+prerequisites and calls the same reusable workflows as CI or the Iroh nightly
+workflow. The Android target runs only the Android Iroh emulator job; dispatching
+`iroh-e2e-nightly.yml` directly still runs its desktop and Android jobs together.
+The diagnostic workflow does not call release metadata or the release
+candidate gate. Its macOS target alone sets the reusable app job's
+`release-candidate=true` to reproduce that packaging path. The top-level
+workflow does not offer a full-candidate switch, and its run and artifacts are
+separate from the protected-main `CI` workflow run that release publication
+requires.
+
+While a version tag does not yet exist, any protected-main push could become
+the requested release SHA, so enabled candidate packages are produced in that
+CI run. Once the version is tagged, subsequent same-version pushes skip only
+release-candidate packaging and signing; normal quality and application checks
+continue. The next version bump admits candidate production again. This keeps
+the release source selectable by exact SHA without rebuilding its full CI
+graph at publication time.
+
+Release publication is a manual dispatch from `main` with that CI run ID, the
+exact version tag, and full source SHA. Before creating an annotated tag, the
+workflow checks the tag against the checked-out commit and stable package
+version, verifies the run belongs to this repository's CI workflow and a
+successful protected-main push or explicit candidate retry at the exact SHA,
+checks its required unexpired artifacts, and reads the final gate receipt. It
+rejects a changed platform configuration. Prerelease and build-metadata versions
+are not accepted in this
+`--latest` release lane. The tag is never moved or overwritten. Publication
+pins the verified run's exact successful attempt and each required artifact ID
+and archive SHA-256 digest. Tag creation and publishers recheck that specific
+attempt through GitHub's attempt API, download by artifact ID, verify the
+archive digest, and then check installer checksums. A later rerun of the CI run
+does not change the accepted attempt or substitute same-name artifacts;
+publication fails if one of the pinned artifacts is deleted or expires.
+Publication does not rebuild the
+application or re-run CI. If the candidate CI run fails, repair it before
+dispatching Release. After a pre-tag dispatch failure, rerun
+the dispatch against the same successful CI run while its artifacts are
+retained; after a post-tag publisher failure, use **Re-run failed jobs** on the
+Release workflow. Do not rerun candidate CI to repair publication: once the
+version is tagged, that CI workflow skips candidate packaging, while the
+original successful attempt remains the publication authority. The final
+publication job
 serializes only the shared latest-release promotion and compares stable semantic
 versions, so an older release cannot demote a newer latest release. GitHub keeps
 one running and one pending job per concurrency group; a third concurrent
@@ -246,7 +346,7 @@ Mobile and nightly workflows remain separate checks.
 Keep the workflow name `Release`: the Linux repository publisher is triggered
 by its successful `workflow_run` completion.
 
-The release CI graph keeps quality checks and native-input production
+The CI graph keeps quality checks and native-input production
 independent. On configured Windows releases, the installer candidate consumes
 the exact `packaged-app-win32-x64` layout produced by the Windows
 application-candidate job. The artifact name includes the exact workflow SHA.
@@ -265,8 +365,8 @@ their matching native inputs. After both architectures pass, a pre-tag signer
 validates their original checksums, signs the RPMs with the repository key,
 verifies those signatures, and uploads one immutable candidate with canonical
 final checksums. The post-tag publisher only verifies those checksums and
-attaches the candidate. The final release job joins every enabled publisher
-and the full quality workflow.
+attaches the candidate. The final release job joins every enabled publisher;
+the exact successful CI candidate gate is checked before tagging.
 The prepackaged installer job runs `pnpm build:infrastructure` before invoking
 electron-builder: it eagerly imports configured hooks even when `--prepackaged`
 skips their execution, and the hook import closure needs the built RPC package.
@@ -286,9 +386,9 @@ so the copies are required to keep format jobs independent. The candidate job
 joins all three format results and uploads checksum-protected installers bound
 to the exact source SHA. Neither architecture waits for the other, native
 verification, or the quality suite. These candidates run for configured Linux
-release preparations before the workflow creates its tag.
-All post-tag publishers wait for the complete reusable CI workflow and its
-validated draft. Keep `needs` edges tied to a consumed artifact or another
+protected-main push runs before the release workflow creates its tag.
+All post-tag publishers wait for the validated draft and consume artifacts from
+the previously verified CI run. Keep `needs` edges tied to a consumed artifact or another
 concrete prerequisite, and record that reason beside the edge. Independent
 checks should overlap, without rebuilding the same candidate or weakening its
 installed acceptance tests.

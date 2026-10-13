@@ -14,6 +14,7 @@ export async function createBuilderTestSession(input: {
   appNodeModules?: string | readonly string[];
   runNativeJob: RunNativeWorkspaceJob;
   workspaceId?: string;
+  signal?: AbortSignal;
   ensureBuildProvider?: (target: "react-native") => Promise<void>;
   source?: BuildSourceProvider;
 }): Promise<{
@@ -54,6 +55,7 @@ export async function createBuilderTestSession(input: {
       processOwner,
       runNativeJob: input.runNativeJob,
       ensureBuildProvider: input.ensureBuildProvider,
+      signal: input.signal,
       source: {
         ...(input.source ?? workingTreeSourceProvider()),
         workspaceId: input.workspaceId ?? "workspace:test",

@@ -422,3 +422,23 @@ The revision is implemented. See:
 
 The workerd terminal stack, the Ink-in-workerd builder support and
 `workers/terminal-sessions` are gone.
+
+### Upstream sync status (2026-10-13)
+
+`terminal/native` merges host `main` (3f404a951) in full. Upstream template
+`origin/main` is ahead of host `main`: its later commits need the host change
+99e0a0497 ("Mediate local model runtime authority in the host"), which lives on
+`fix/release-105-repair` and is not in host `main` yet. The template merges
+therefore stop at these cut points (each verified with `type-check:userland`
+and `check:runtime-docs` on the merged result):
+
+- Base: through `dc69e1d` ("Keep deterministic Pi sessions stable across tool
+  rounds"). Not merged yet: `1e4f7ce` (inherit workspace model settings across
+  agent launches; the chat host controller here must stop passing
+  `workspaceDefaultAgentConfig` when it is merged), `da5f7f9`, `d4c44f8`,
+  `daf815c`, `06860b5`.
+- System: through `730a960`. Not merged yet: `2e9c3ad` (confine local model
+  runtime secrets to the host) and `2fc93d6`.
+
+When host `main` contains 99e0a0497, merge the rest of each template's
+`origin/main`.

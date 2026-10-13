@@ -1566,7 +1566,8 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
   async function putStored(
     key: string,
     artifacts: BuildArtifacts,
-    metadata: BuildMetadata
+    metadata: BuildMetadata,
+    prepareDirectory?: (temporaryDirectory: string) => Promise<void>
   ): Promise<StoredBuildResult> {
     if (metadata.execution !== undefined) {
       throw new Error("Build execution identity is derived by the store and cannot be supplied");
@@ -1625,13 +1626,24 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     };
 
     await fs.promises.mkdir(tmpDir, { recursive: true });
-    await runBounded(entries, 8, async (entry) => {
-      const targetPath = path.join(tmpDir, entry.path);
-      await writeArtifactFile(targetPath, entry, artifactPoolDir);
-    });
-
-    // Write the complete records, including the metadata sentinel, before promotion.
-    await writeBuildRecords(tmpDir, storedMetadata, artifactManifest);
+    try {
+      await runBounded(entries, 8, async (entry) => {
+        const targetPath = path.join(tmpDir, entry.path);
+        await writeArtifactFile(targetPath, entry, artifactPoolDir);
+      });
+      await prepareDirectory?.(tmpDir);
+      // Write the complete records, including the metadata sentinel, before promotion.
+      await writeBuildRecords(tmpDir, storedMetadata, artifactManifest);
+    } catch (error) {
+      try {
+        await fs.promises.rm(tmpDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "Build preparation and cleanup failed", {
+          cause: error,
+        });
+      }
+      throw error;
+    }
 
     // Race-safe promotion: try rename, handle concurrent winner
     try {

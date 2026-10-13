@@ -628,6 +628,37 @@ export class WorkerdManager {
   }
 
   private instances = new Map<string, WorkerInstance>();
+  /** Exact executable selections admitted to this workerd process generation. */
+  private readonly workerAdmissions = new Map<
+    string,
+    {
+      code: NonNullable<Awaited<ReturnType<WorkerdManager["getWorkerCode"]>>>;
+      leases: number;
+      retired: boolean;
+    }
+  >();
+  private readonly preparingWorkerAdmissions = new Map<
+    string,
+    Promise<NonNullable<Awaited<ReturnType<WorkerdManager["getWorkerCode"]>>>>
+  >();
+  private workerAdmissionEpoch = 0;
+  private readonly workerSelectionTails = new Map<string, Promise<void>>();
+
+  private async withWorkerSelection<T>(name: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.workerSelectionTails.get(name);
+    let release!: () => void;
+    const tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.workerSelectionTails.set(name, tail);
+    if (previous) await previous;
+    try {
+      return await operation();
+    } finally {
+      if (this.workerSelectionTails.get(name) === tail) this.workerSelectionTails.delete(name);
+      release();
+    }
+  }
   // Most recent startup/update failure per worker source. Survives the
   // instance row (which is deleted on failed start) so `units.list` can
   // report lastError for workers that never came up.
@@ -969,7 +1000,8 @@ export class WorkerdManager {
   /** Resolve a mutable selector. Missing CAS content schedules a rebuild from its tracked scope. */
   private async getMutableRuntimeImageBuild(
     imageId: string,
-    onRebound?: (record: RuntimeImageRecord) => void
+    onRebound?: (record: RuntimeImageRecord) => void,
+    workerName?: string
   ): Promise<{ image: RuntimeImageRecord; build: StoredBuildResult }> {
     const image = this.runtimeImages.get(imageId);
     if (!image) {
@@ -985,7 +1017,7 @@ export class WorkerdManager {
       );
     }
 
-    this.scheduleRuntimeImageRebind(image, onRebound);
+    this.scheduleRuntimeImageRebind(image, onRebound, workerName);
     throw new RuntimeImageWarmingError(
       `Runtime image ${imageId} points at missing artifact ${image.artifact.buildKey}; warming`
     );
@@ -1015,14 +1047,26 @@ export class WorkerdManager {
 
   private scheduleRuntimeImageRebind(
     image: RuntimeImageRecord,
-    onRebound?: (record: RuntimeImageRecord) => void
+    onRebound?: (record: RuntimeImageRecord) => void,
+    workerName?: string
   ): void {
     if (this.runtimeImageRebinds.has(image.id)) return;
-    const flight = this.bindRuntimeImage(image.id, image.source, image.scopeRef)
+    const bind = async () => {
+      const record = await this.bindRuntimeImage(image.id, image.source, image.scopeRef);
+      onRebound?.(record);
+      if (workerName) {
+        const instance = this.instances.get(workerName);
+        if (instance) {
+          this.retireWorkerAdmissions(
+            workerName,
+            `${instance.admissionLifetime}:${instance.codeVersion}`
+          );
+        }
+      }
+    };
+    const flight = (workerName ? this.withWorkerSelection(workerName, bind) : bind())
       .then(
-        (record) => {
-          onRebound?.(record);
-        },
+        () => {},
         (error) => {
           const message = errorMessage(error);
           this.runtimeImages.markError(image.id, {
@@ -1581,6 +1625,7 @@ export class WorkerdManager {
       foundInstance.status = "stopped";
       this.instances.delete(foundName);
       this.runtimeImages.delete(foundInstance.runtimeImageId);
+      this.retireWorkerAdmissions(foundName);
 
       // No restart: the worker host is static and loads code on demand, so a
       // destroyed worker simply stops being addressable (its exact loader admission
@@ -1796,6 +1841,17 @@ export class WorkerdManager {
     updates: Partial<WorkerCreateOptions>
   ): Promise<WorkerInstance> {
     const resolvedName = this.resolveInstanceName(name);
+    if (!resolvedName) throw new Error(`Worker instance "${name}" not found`);
+    return this.withWorkerSelection(resolvedName, () =>
+      this.updateInstanceSelected(resolvedName, updates)
+    );
+  }
+
+  private async updateInstanceSelected(
+    name: string,
+    updates: Partial<WorkerCreateOptions>
+  ): Promise<WorkerInstance> {
+    const resolvedName = name;
     const instance = resolvedName ? this.instances.get(resolvedName) : undefined;
     if (!instance) {
       throw new Error(`Worker instance "${name}" not found`);
@@ -1821,6 +1877,10 @@ export class WorkerdManager {
     // Bump the loader-cache version so the host reloads fresh code+env on the
     // next request. No workerd restart — the host is static.
     if (updates.ref === undefined) this.advanceWorkerCodeVersion(instance);
+    this.retireWorkerAdmissions(
+      instance.name,
+      `${instance.admissionLifetime}:${instance.codeVersion}`
+    );
 
     this.deps.recordLifecycleEvent?.({
       source: instance.source,
@@ -1967,20 +2027,121 @@ export class WorkerdManager {
 
   /** Resolve authoritative mutable code before selecting an immutable lifetime/configuration. */
   async getWorkerAdmission(name: string): Promise<WorkerExecutableAdmission | null> {
+    return this.withWorkerSelection(name, () => this.getWorkerAdmissionSelected(name));
+  }
+
+  private async getWorkerAdmissionSelected(
+    name: string
+  ): Promise<WorkerExecutableAdmission | null> {
     const instance = this.instances.get(name);
     if (!instance) return null;
-    await this.selectWorkerImage(instance);
-    return { name, version: `${instance.admissionLifetime}:${instance.codeVersion}` };
+    const { image, build } = await this.selectWorkerImage(instance);
+    if (
+      this.instances.get(name) !== instance ||
+      this.runtimeImages.get(instance.runtimeImageId) !== image
+    ) {
+      throw Object.assign(new Error("Worker admission changed before code selection"), {
+        code: "WORKER_ADMISSION_CHANGED",
+      });
+    }
+    const version = `${instance.admissionLifetime}:${instance.codeVersion}`;
+    const identity = `${name}@${version}`;
+    if (!this.workerAdmissions.has(identity)) {
+      const epoch = this.workerAdmissionEpoch;
+      let preparation = this.preparingWorkerAdmissions.get(identity);
+      if (!preparation) {
+        // Capture mutable instance configuration before reading any code bytes.
+        // A concurrent update may then publish a new version without changing
+        // this admission's exact image and environment.
+        const env: Record<string, unknown> = {
+          RPC_AUTH_TOKEN: instance.token,
+          WORKER_ID: instance.name,
+          WORKER_SOURCE: instance.source,
+          WORKER_EFFECTIVE_VERSION: image.artifact.sourceState.effectiveVersion,
+          WORKER_SOURCE_REF: workerSourceRef(image, instance.source),
+          CONTEXT_ID: instance.contextId,
+          WORKSPACE_ID: this.deps.workspaceId,
+          GATEWAY_URL: this.deps.getServerUrl(),
+          WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
+        };
+        addSharedRuntimeEnv(env, this.deps.getServerAliasUrls?.() ?? []);
+        if (instance.parentId) env["PARENT_ID"] = instance.parentId;
+        if (instance.parentEntityId) env["PARENT_ENTITY_ID"] = instance.parentEntityId;
+        if (instance.parentKind) env["PARENT_KIND"] = instance.parentKind;
+        if (instance.stateArgs && Object.keys(instance.stateArgs).length > 0) {
+          env["STATE_ARGS"] = structuredClone(instance.stateArgs);
+        }
+        Object.assign(env, instance.env);
+        for (const [key, binding] of Object.entries(instance.bindings)) {
+          env[key] = structuredClone(binding.value);
+        }
+        const callerId = instance.callerId;
+        const provider = this.requireWorkspaceProvider("worker code loading");
+        preparation = workerJavaScriptModules(build, provider.readBuildArtifactContent).then(
+          (modules) =>
+            freezeAdmissionValue({
+              ...USER_CODE_COMPATIBILITY,
+              compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
+              modules,
+              env,
+              callerId,
+            })
+        );
+        this.preparingWorkerAdmissions.set(identity, preparation);
+      }
+      try {
+        const code = await preparation;
+        if (epoch !== this.workerAdmissionEpoch) {
+          throw new Error("Worker process generation ended during code selection");
+        }
+        if (!this.workerAdmissions.has(identity)) {
+          this.workerAdmissions.set(identity, { code, leases: 0, retired: false });
+        }
+      } finally {
+        if (this.preparingWorkerAdmissions.get(identity) === preparation) {
+          this.preparingWorkerAdmissions.delete(identity);
+        }
+      }
+    }
+    const admitted = this.workerAdmissions.get(identity)!;
+    admitted.leases++;
+    if (
+      this.instances.get(name) !== instance ||
+      `${instance.admissionLifetime}:${instance.codeVersion}` !== version
+    ) {
+      this.retireWorkerAdmissions(name);
+    }
+    let released = false;
+    return {
+      name,
+      version,
+      release: () => {
+        if (released) return;
+        released = true;
+        admitted.leases--;
+        if (
+          admitted.retired &&
+          admitted.leases === 0 &&
+          this.workerAdmissions.get(identity) === admitted
+        ) {
+          this.workerAdmissions.delete(identity);
+        }
+      },
+    };
   }
 
   private selectWorkerImage(instance: WorkerInstance) {
-    return this.getMutableRuntimeImageBuild(instance.runtimeImageId, (record) => {
-      instance.buildKey = record.artifact.buildKey;
-      instance.executionDigest = record.artifact.executionDigest;
-      instance.effectiveVersion = record.artifact.sourceState.effectiveVersion;
-      this.advanceWorkerCodeVersion(instance, record.generation);
-      this.registerEgressCaller(instance);
-    });
+    return this.getMutableRuntimeImageBuild(
+      instance.runtimeImageId,
+      (record) => {
+        instance.buildKey = record.artifact.buildKey;
+        instance.executionDigest = record.artifact.executionDigest;
+        instance.effectiveVersion = record.artifact.sourceState.effectiveVersion;
+        this.advanceWorkerCodeVersion(instance, record.generation);
+        this.registerEgressCaller(instance);
+      },
+      instance.name
+    );
   }
 
   /**
@@ -1999,62 +2160,20 @@ export class WorkerdManager {
     env: Record<string, unknown>;
     callerId: string;
   } | null> {
-    const instance = this.instances.get(name);
-    if (!instance) return null;
+    const code = this.workerAdmissions.get(`${name}@${version}`);
+    if (code) return code.code;
+    if (!this.instances.has(name)) return null;
+    throw Object.assign(new Error("Worker admission changed before code selection"), {
+      code: "WORKER_ADMISSION_CHANGED",
+    });
+  }
 
-    const { image, build: buildResult } = await this.selectWorkerImage(instance);
-    if (`${instance.admissionLifetime}:${instance.codeVersion}` !== version)
-      throw Object.assign(new Error("Worker admission changed before code selection"), {
-        code: "WORKER_ADMISSION_CHANGED",
-      });
-    instance.buildKey = image.artifact.buildKey;
-    instance.executionDigest = image.artifact.executionDigest;
-    instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
-    const workspaceProvider = this.requireWorkspaceProvider("worker code loading");
-    const modules = await workerJavaScriptModules(
-      buildResult,
-      workspaceProvider.readBuildArtifactContent
-    );
-
-    // WorkerCode `env` (unlike the old capnp config) supports non-string values
-    // natively — so `json` bindings / STATE_ARGS / aliases keep their PARSED
-    // (object/array) shape, exactly as the old workerd `json` bindings exposed
-    // them. The /_workercode JSON round-trips them losslessly.
-    const env: Record<string, unknown> = {
-      RPC_AUTH_TOKEN: instance.token,
-      WORKER_ID: instance.name,
-      WORKER_SOURCE: instance.source,
-      WORKER_EFFECTIVE_VERSION: instance.effectiveVersion,
-      WORKER_SOURCE_REF: workerSourceRef(image, instance.source),
-      CONTEXT_ID: instance.contextId,
-      WORKSPACE_ID: this.deps.workspaceId,
-      GATEWAY_URL: this.deps.getServerUrl(),
-      WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
-    };
-    addSharedRuntimeEnv(env, this.deps.getServerAliasUrls?.() ?? []);
-    if (instance.parentId) env["PARENT_ID"] = instance.parentId;
-    if (instance.parentEntityId) env["PARENT_ENTITY_ID"] = instance.parentEntityId;
-    if (instance.parentKind) env["PARENT_KIND"] = instance.parentKind;
-    if (instance.stateArgs && Object.keys(instance.stateArgs).length > 0) {
-      env["STATE_ARGS"] = instance.stateArgs;
+  private retireWorkerAdmissions(name: string, currentVersion?: string): void {
+    for (const [identity, admission] of this.workerAdmissions) {
+      if (!identity.startsWith(`${name}@`) || identity === `${name}@${currentVersion}`) continue;
+      admission.retired = true;
+      if (admission.leases === 0) this.workerAdmissions.delete(identity);
     }
-    // User-defined env (text only).
-    for (const [key, value] of Object.entries(instance.env)) {
-      env[key] = value;
-    }
-    // Typed bindings are serializable data only — `text` is a string, `json`
-    // keeps its parsed object value; both pass through as-is.
-    for (const [key, binding] of Object.entries(instance.bindings)) {
-      env[key] = binding.value;
-    }
-
-    return {
-      ...USER_CODE_COMPATIBILITY,
-      compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
-      modules,
-      env,
-      callerId: instance.callerId,
-    };
   }
 
   getDoCodeIdentity(
@@ -3316,6 +3435,9 @@ export class WorkerdManager {
   }
 
   private clearRetiredDynamicIsolatePressure(): void {
+    this.workerAdmissionEpoch++;
+    this.workerAdmissions.clear();
+    this.preparingWorkerAdmissions.clear();
     this.retiredDynamicIsolateGeneration = null;
     this.retiredDynamicIsolateIds.clear();
     this.loadedDoCodeUnits.clear();
@@ -5138,14 +5260,20 @@ export class WorkerdManager {
     // Workers tracking this head reload on their next request.
     for (const instance of this.instances.values()) {
       if (instance.source === source && scopeTracksProtectedMain(instance.scopeRef)) {
-        const image = updateImageFromCompleted(instance.runtimeImageId, instance.scopeRef);
-        if (image) {
+        await this.withWorkerSelection(instance.name, async () => {
+          if (this.instances.get(instance.name) !== instance) return;
+          const image = updateImageFromCompleted(instance.runtimeImageId, instance.scopeRef);
+          if (!image) return;
           instance.buildKey = image.artifact.buildKey;
           instance.executionDigest = image.artifact.executionDigest;
           instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
           this.advanceWorkerCodeVersion(instance, image.generation);
           this.registerEgressCaller(instance);
-        }
+          this.retireWorkerAdmissions(
+            instance.name,
+            `${instance.admissionLifetime}:${instance.codeVersion}`
+          );
+        });
       }
     }
 

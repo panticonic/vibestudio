@@ -19,6 +19,8 @@ export interface BuildProviderArtifact {
   stream?: {
     method: string;
     args?: unknown[];
+    /** SHA-256 of the producer's source bytes, before crossing the stream transport. */
+    integrity: string;
   };
 }
 

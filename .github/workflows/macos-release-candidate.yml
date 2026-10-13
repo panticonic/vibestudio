@@ -1,0 +1,124 @@
+name: macOS release candidate installer
+
+on:
+  workflow_call:
+    inputs:
+      release-tag:
+        type: string
+        required: true
+
+jobs:
+  macos-release-candidate:
+    name: Package macOS release installers from the accepted app candidate
+    runs-on: macos-14
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install packaging dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify release version and source commit
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: node scripts/check-release-version.mjs "$RELEASE_TAG" --source-sha "$SOURCE_SHA"
+      - name: Download the canonical tested macOS application
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: packaged-app-darwin-arm64-${{ github.sha }}
+          path: candidate-app
+      - name: Download macOS release signing mode
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vibestudio-macos-signing-${{ github.sha }}
+          path: candidate-signing
+      - name: Download macOS application provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vibestudio-macos-provenance-${{ github.sha }}
+          path: candidate-provenance
+      - name: Verify exact macOS app archive provenance
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: >-
+          node scripts/release-app-candidate.mjs verify
+          candidate-app/packaged-app.zip
+          candidate-provenance/macos-release-provenance.json
+          "$RELEASE_TAG" "$SOURCE_SHA"
+      - name: Restore and verify the exact tested application
+        shell: bash
+        run: |
+          mkdir -p release
+          ditto -x -k candidate-app/packaged-app.zip release
+          cp candidate-signing/macos-signing.txt release/macos-signing.txt
+          test -d release/Vibestudio.app
+          codesign --verify --deep --strict --verbose=2 release/Vibestudio.app
+          provenance_mode="$(node -p 'JSON.parse(require("fs").readFileSync("candidate-provenance/macos-release-provenance.json", "utf8")).signingMode')"
+          test "$(cat release/macos-signing.txt)" = "$provenance_mode"
+          case "$(cat release/macos-signing.txt)" in
+            developer-id)
+              xcrun stapler validate release/Vibestudio.app
+              spctl --assess --type execute --verbose=2 release/Vibestudio.app
+              ;;
+            ad-hoc)
+              echo "Packaging the deliberately ad-hoc signed application candidate."
+              ;;
+            *)
+              echo "Unknown macOS signing mode." >&2
+              exit 1
+              ;;
+          esac
+      - name: Build DMG and updater ZIP from the accepted application
+        shell: bash
+        run: >-
+          CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac
+          --prepackaged release/Vibestudio.app --publish never
+      - name: Generate DMG checksums
+        run: |
+          cd release
+          test -f latest-mac.yml
+          ls ./*.zip >/dev/null
+          shasum -a 256 ./*.dmg ./*.zip > SHA256SUMS-macos
+          test -s SHA256SUMS-macos
+      - name: Download source-attested Darwin process observers
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: darwin-process-observers-ci-${{ github.sha }}
+          path: dist/native-process-observer
+      - name: Archive source-attested Darwin process observers
+        run: |
+          tar -czf release/darwin-process-observers.tar.gz -C dist native-process-observer
+          (cd release && shasum -a 256 darwin-process-observers.tar.gz > SHA256SUMS-darwin-process-observers)
+      - name: Upload immutable macOS release candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibestudio-macos-${{ github.sha }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/latest-mac.yml
+            release/macos-signing.txt
+            release/SHA256SUMS-macos
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload immutable Darwin process observer candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: darwin-process-observers-release-${{ github.sha }}
+          path: |
+            release/darwin-process-observers.tar.gz
+            release/SHA256SUMS-darwin-process-observers
+          if-no-files-found: error
+          retention-days: 30

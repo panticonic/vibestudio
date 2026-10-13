@@ -13,8 +13,8 @@
     },
     "system": {
       "url": "git+https://github.com/panticonic/vibestudio-system.git",
-      "ref": "refs/tags/v0.3.87",
-      "commit": "85a4d417815b8d39fc6d07f0acd9cd70a4a1721f"
+      "ref": "refs/tags/v0.3.88",
+      "commit": "680d165d01dcabfb4c2e0e2d0a4dec69e6e6b3ae"
     }
   }
 }

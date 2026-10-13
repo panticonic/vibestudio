@@ -2905,9 +2905,12 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!entry.activeBundleKey || !entry.activeRuntimeDepsKey) return false;
     const build = await this.readCurrentActiveBuild(entry);
     if (!build) return false;
-    const externalDeps = extensionMetadataDetails(build.metadata)?.externalDeps ?? {};
+    const details = extensionMetadataDetails(build.metadata);
+    const externalDeps = details?.externalDeps ?? {};
     if (Object.keys(externalDeps).length === 0) return true;
-    return fs.existsSync(path.join(build.dir, "node_modules"));
+    // getBuildByKey joins the build system's current-runtime projection before
+    // returning. A directory's mere existence says nothing about completion.
+    return details?.runtimeDepsKey === entry.activeRuntimeDepsKey;
   }
 
   private findExtensionNode(nameOrRepo: string) {
@@ -3310,12 +3313,14 @@ function extensionWorkspaceStatusFallback(
 
 function isBuildProviderArtifactStream(
   value: unknown
-): value is { method: string; args?: unknown[] } {
+): value is { method: string; args?: unknown[]; integrity: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const stream = value as { method?: unknown; args?: unknown };
+  const stream = value as { method?: unknown; args?: unknown; integrity?: unknown };
   return (
     typeof stream.method === "string" &&
     stream.method.trim().length > 0 &&
+    typeof stream.integrity === "string" &&
+    /^sha256-[0-9a-f]{64}$/.test(stream.integrity) &&
     (stream.args === undefined || Array.isArray(stream.args))
   );
 }

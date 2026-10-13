@@ -1,4 +1,4 @@
-import { schemaRpcClient, wireClientFor } from "./schemaClient.js";
+import { schemaRpcClient, schemaRpcStream, wireClientFor } from "./schemaClient.js";
 import { dispatchRpcCall } from "@vibestudio/rpc/internal";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { defineContract, withCausalParent, withRpcAbortSignal, withRpcContext } from "./client.js";
@@ -13,6 +13,7 @@ import type { EnvelopeRpcTransport, RpcConnectionStatus, RpcEnvelope } from "./t
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 import { RpcBoundaryError, rpcCallerAbortedError } from "./errors.js";
 import { responseEnvelopeFor } from "./envelope.js";
+import { FRAME_END, FRAME_HEAD } from "./protocol/streamCodec.js";
 
 /**
  * A fake transport whose status + recovery signals can be driven by the test,
@@ -1660,6 +1661,93 @@ describe("createRpcClient", () => {
     await expect(response.text()).resolves.toBe("hello");
   });
 
+  it("rejects a streaming END whose byte count differs from decoded DATA", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "caller",
+      transport: inProcessTransport("caller", network),
+    });
+    const serverTransport = inProcessTransport("server", network);
+    const server = createRpcClient({
+      selfId: "server",
+      transport: {
+        ...serverTransport,
+        send(envelope) {
+          if (
+            envelope.message.type === "stream-frame" &&
+            envelope.message.frameType === FRAME_END
+          ) {
+            const payload = JSON.stringify({ bytesIn: 4 });
+            return serverTransport.send({
+              ...envelope,
+              message: { ...envelope.message, payload },
+            });
+          }
+          return serverTransport.send(envelope);
+        },
+      },
+    });
+    server.exposeStreaming(
+      "download",
+      async (_request, sink) => {
+        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        await sink({ kind: "chunk", bytes: new TextEncoder().encode("hello") });
+        await sink({ kind: "end", bytesIn: 5 });
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
+
+    const response = await caller.stream("server", "download", []);
+    await expect(response.text()).rejects.toMatchObject({
+      errorKind: "protocol",
+      code: "EPROTOCOL",
+    });
+  });
+
+  it("rejects a streaming END received before HEAD through the stream promise", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "caller",
+      transport: inProcessTransport("caller", network),
+    });
+    const serverTransport = inProcessTransport("server", network);
+    const server = createRpcClient({
+      selfId: "server",
+      transport: {
+        ...serverTransport,
+        send(envelope) {
+          if (
+            envelope.message.type === "stream-frame" &&
+            envelope.message.frameType === FRAME_HEAD
+          ) {
+            return serverTransport.send({
+              ...envelope,
+              message: {
+                ...envelope.message,
+                frameType: FRAME_END,
+                payload: JSON.stringify({ bytesIn: 0 }),
+              },
+            });
+          }
+          return serverTransport.send(envelope);
+        },
+      },
+    });
+    server.exposeStreaming(
+      "download",
+      async (_request, sink) => {
+        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        await sink({ kind: "end", bytesIn: 0 });
+      },
+      { kind: "eligible", rationale: "This test explicitly permits website receiver entry." }
+    );
+
+    await expect(caller.stream("server", "download", [])).rejects.toMatchObject({
+      errorKind: "protocol",
+      code: "EPROTOCOL",
+    });
+  });
+
   it("unwraps the ordinary Response path when raw transport streaming is unavailable", async () => {
     const network = createInProcessNetwork();
     const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
@@ -2759,6 +2847,23 @@ it.each(["call", "peer", "stream", "readable"] as const)(
     expect(fake.sent).toHaveLength(0);
   }
 );
+
+it("runs schema stream lifecycle checks with Hermes AbortSignals", async () => {
+  const wireStream = vi.fn(async () => new Response(null));
+  const stream = schemaRpcStream(wireStream);
+  const method = {
+    name: "portable",
+    parseArgs: async (args: unknown[]) => args,
+    invoke: async (args: unknown[], dispatch: (args: unknown[]) => Promise<unknown>) =>
+      dispatch(args),
+  };
+  // Hermes exposes aborted/reason on its signals but does not implement
+  // AbortSignal.throwIfAborted().
+  const signal = { aborted: false } as AbortSignal;
+
+  await expect(stream("server", method, [], { signal })).resolves.toBeInstanceOf(Response);
+  expect(wireStream).toHaveBeenCalledWith("server", "portable", [], { signal });
+});
 
 describe("schema client transport identity", () => {
   const method = {

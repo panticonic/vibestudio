@@ -437,6 +437,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       rejectHead: (err: unknown) => void;
       headEmitted: boolean;
       bodyClosed: boolean;
+      bodyBytesReceived: number;
       bodyIdleTimeoutMs: number | null;
       idleTimer: ReturnType<typeof setTimeout> | null;
       cancel: () => void;
@@ -803,8 +804,20 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     const entry = pendingStreams.get(frame.requestId);
     if (!entry || entry.bodyClosed) return;
     if (!rpcDestinationMatchesCaller(entry.destination, envelope.delivery.caller)) return;
+    const failProtocol = (message: string, cause?: unknown): void => {
+      const error = new RpcBoundaryError(message, "protocol", "EPROTOCOL", cause);
+      entry.bodyClosed = true;
+      if (entry.headEmitted) entry.controller.error(error);
+      else entry.rejectHead(error);
+      entry.cancel();
+      clearPendingStream(frame.requestId);
+    };
     if (frame.frameType === FRAME_HEAD) {
       try {
+        if (entry.headEmitted) {
+          failProtocol("Received duplicate streaming RPC HEAD frame");
+          return;
+        }
         if (entry.idleTimer) {
           clearTimeout(entry.idleTimer);
           entry.idleTimer = null;
@@ -819,11 +832,53 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       return;
     }
     if (frame.frameType === FRAME_DATA) {
-      entry.controller.enqueue(base64ToBytes(frame.payload));
+      if (!entry.headEmitted) {
+        failProtocol("Received streaming RPC DATA before HEAD");
+        return;
+      }
+      let bytes: Uint8Array;
+      try {
+        bytes = base64ToBytes(frame.payload);
+      } catch (cause) {
+        failProtocol("Malformed streaming RPC DATA frame", cause);
+        return;
+      }
+      const received = entry.bodyBytesReceived + bytes.byteLength;
+      if (!Number.isSafeInteger(received)) {
+        failProtocol("Streaming RPC body byte count exceeded the safe integer range");
+        return;
+      }
+      entry.bodyBytesReceived = received;
+      entry.controller.enqueue(bytes);
       armStreamBodyIdleTimer(frame.requestId);
       return;
     }
     if (frame.frameType === FRAME_END) {
+      let bytesIn: unknown;
+      try {
+        const parsed: unknown = JSON.parse(frame.payload);
+        bytesIn =
+          parsed && typeof parsed === "object"
+            ? (parsed as { bytesIn?: unknown }).bytesIn
+            : undefined;
+      } catch (cause) {
+        failProtocol("Malformed streaming RPC END frame", cause);
+        return;
+      }
+      if (
+        !entry.headEmitted ||
+        typeof bytesIn !== "number" ||
+        !Number.isSafeInteger(bytesIn) ||
+        bytesIn < 0 ||
+        bytesIn !== entry.bodyBytesReceived
+      ) {
+        failProtocol(
+          !entry.headEmitted
+            ? "Received streaming RPC END before HEAD"
+            : `Streaming RPC body length mismatch: expected ${String(bytesIn)} bytes, received ${entry.bodyBytesReceived}`
+        );
+        return;
+      }
       entry.bodyClosed = true;
       entry.controller.close();
       clearPendingStream(frame.requestId);
@@ -1449,6 +1504,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       rejectHead,
       headEmitted: false,
       bodyClosed: false,
+      bodyBytesReceived: 0,
       bodyIdleTimeoutMs:
         options?.bodyIdleTimeoutMs === null
           ? null

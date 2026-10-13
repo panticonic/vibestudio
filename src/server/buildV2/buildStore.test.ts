@@ -146,6 +146,65 @@ function expectedArtifactSetIntegrity(
 }
 
 describe("build artifact helpers", () => {
+  it("publishes prepared resources only with the complete immutable build", async () => {
+    const buildKey = "f".repeat(64);
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    let complete!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    const publication = store.putStored(
+      buildKey,
+      { entries: build().artifacts },
+      { ...build().metadata, buildKey },
+      async (temporaryDirectory) => {
+        const dependency = path.join(temporaryDirectory, "node_modules", "fixture");
+        await fs.promises.mkdir(dependency, { recursive: true });
+        await fs.promises.writeFile(path.join(dependency, "index.js"), "complete");
+        ready();
+        await gate;
+      }
+    );
+    try {
+      await started;
+      expect(await store.get(buildKey)).toBeNull();
+      complete();
+      const published = await publication;
+      await expect(
+        fs.promises.readFile(
+          path.join(published.dir, "node_modules", "fixture", "index.js"),
+          "utf8"
+        )
+      ).resolves.toBe("complete");
+    } finally {
+      complete();
+      await publication;
+    }
+  });
+
+  it("does not publish or retain a failed resource preparation", async () => {
+    const buildKey = "e".repeat(64);
+    const failure = new Error("dependency projection failed");
+    await expect(
+      store.putStored(
+        buildKey,
+        { entries: build().artifacts },
+        { ...build().metadata, buildKey },
+        async (temporaryDirectory) => {
+          await fs.promises.writeFile(
+            path.join(temporaryDirectory, "partial-dependency"),
+            "partial"
+          );
+          throw failure;
+        }
+      )
+    ).rejects.toBe(failure);
+    expect(await store.get(buildKey)).toBeNull();
+  });
+
   it("resolves shared roots from explicit managed-workspace inputs and overrides", () => {
     expect(
       resolveBuildStoreRoots({
@@ -281,6 +340,74 @@ describe("build artifact helpers", () => {
       expect(sharedArtifactReads()).toBe(afterVerification);
     } finally {
       readSpy.mockRestore();
+      await owner.drain();
+      await cleanupRoot(root);
+    }
+  });
+
+  it("shares extension compiler artifacts without exporting host-specific runtime dependencies", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-shared-build-"));
+    const sharedRoot = path.join(root, "shared");
+    const makeRoleStore = (role: string) =>
+      createBuildStore(
+        {
+          stateRoot: path.join(root, role, "state"),
+          sharedArtifactPoolRoot: null,
+          sharedBuildResultCacheRoot: sharedRoot,
+          releaseBuildRoot: null,
+          executionIdentity: null,
+        },
+        owner
+      );
+    const producer = makeRoleStore("producer");
+    const consumer = makeRoleStore("consumer");
+    const key = "9".repeat(64);
+    const metadata = {
+      ...build().metadata,
+      kind: "extension" as const,
+      name: "@workspace-extensions/fixture",
+      buildKey: key,
+      details: {
+        kind: "extension" as const,
+        runtimeDepsKey: "fixture-runtime",
+        runtimeAbi: null,
+        providerContracts: {},
+        methodAuthority: {},
+        externalDeps: { fixture: "1.0.0" },
+      },
+    };
+    try {
+      const stored = await producer.putStored(
+        key,
+        { entries: build().artifacts },
+        metadata,
+        async (temporaryDirectory) => {
+          const dependency = path.join(temporaryDirectory, "node_modules", "fixture");
+          await fs.promises.mkdir(dependency, { recursive: true });
+          await fs.promises.writeFile(path.join(dependency, "package.json"), '{"main":"index.js"}');
+          await fs.promises.writeFile(path.join(dependency, "index.js"), "module.exports = true;");
+          await fs.promises.writeFile(
+            path.join(temporaryDirectory, "node_modules", ".vibestudio-runtime-projection.json"),
+            JSON.stringify({ version: 1, runtimeDepsKey: "fixture-runtime" })
+          );
+        }
+      );
+      const hydrated = await consumer.getOrHydrate(key);
+      expect(hydrated).not.toBeNull();
+      expect(fs.existsSync(path.join(stored.dir, "node_modules", "fixture", "index.js"))).toBe(
+        true
+      );
+      expect(fs.existsSync(path.join(sharedRoot, key, "node_modules"))).toBe(false);
+      expect(fs.existsSync(path.join(hydrated!.dir, "node_modules"))).toBe(false);
+      // A pre-fix or interrupted local projection is still a valid compiler
+      // cache source. Runtime repair belongs to the BuildSystem reader.
+      fs.rmSync(path.join(stored.dir, "node_modules"), { recursive: true });
+      fs.rmSync(path.join(sharedRoot, key), { recursive: true });
+      expect(await producer.get(key)).not.toBeNull();
+      expect(fs.existsSync(path.join(sharedRoot, key, "worker.js"))).toBe(true);
+      const third = makeRoleStore("third");
+      expect(await third.getOrHydrate(key)).not.toBeNull();
+    } finally {
       await owner.drain();
       await cleanupRoot(root);
     }
