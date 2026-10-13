@@ -34,13 +34,19 @@ function makeDispatcher(): ServiceDispatcher {
     authority: { principals: ["code", "host"] },
     methods: {
       put: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+        website: {
+          kind: "closed",
+          reason: "This fixture is not exposed to website origins.",
+        } as const,
         description: "Store a value.",
         args: z.tuple([z.string()]),
         examples: [{ args: ["hello"] }],
       },
       restricted: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+        website: {
+          kind: "closed",
+          reason: "This fixture is not exposed to website origins.",
+        } as const,
         description: "Restricted op.",
         args: z.tuple([]),
         authority: { principals: ["host"] },
@@ -56,13 +62,19 @@ function makeDispatcher(): ServiceDispatcher {
         },
       },
       workerOnly: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+        website: {
+          kind: "closed",
+          reason: "This fixture is not exposed to website origins.",
+        } as const,
         description: "Worker only.",
         args: z.tuple([]),
         authority: { principals: ["code"] },
       },
       peek: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+        website: {
+          kind: "closed",
+          reason: "This fixture is not exposed to website origins.",
+        } as const,
         description: "Read-only peek.",
         args: z.tuple([]),
         access: { sensitivity: "read" },
@@ -161,7 +173,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         write: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
           description: "Write a thing",
           args: z.tuple([z.string()]),
           access: {
@@ -218,7 +233,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code", "session"] },
       methods: {
         preflight: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
           args: z.tuple([
             z.object({
               service: z.string(),
@@ -239,7 +257,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         write: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
           args: z.tuple([]),
           access: { sensitivity: "write" },
         },
@@ -312,7 +333,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         resolve: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
           args: z.tuple([z.string()]),
           authority: {
             requirement: requirementForPrincipals(["code"], methodCapability),
@@ -417,7 +441,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         resolve: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
           args: z.tuple([]),
           authority: {
             requirement: requirementForPrincipals(["code"], methodCapability),
@@ -473,7 +500,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         use: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
           args: z.tuple([z.string()]),
           authority: {
             requirement: requirementForPrincipals(["code"], "service:payload.use"),
@@ -550,7 +580,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         use: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
           args: z.tuple([]),
           authority: {
             requirement: requirementForPrincipals(["code"], "service:deniedPayload.use"),
@@ -631,14 +664,27 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     d.registerService({
       name: "acquisition",
       authority: { principals: ["code", "user"] },
-      methods: { act: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([]), access: { sensitivity: "write" } } },
+      methods: {
+        act: {
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
+          args: z.tuple([]),
+          access: { sensitivity: "write" },
+        },
+      },
       handler: vi.fn(async () => "effect"),
     });
     d.markInitialized();
 
     const nativeCtx = ctx("worker");
-    const source = { kind: "trajectory-invocation" as const, logId: "trajectory:channel:one", head: "main", invocationId: "native:actual" };
+    const source = {
+      kind: "trajectory-invocation" as const,
+      logId: "trajectory:channel:one",
+      head: "main",
+      invocationId: "native:actual",
+    };
     nativeCtx.caller.causalParent = source;
     nativeCtx.causalParent = { ...source, invocationId: "raw:metadata" };
     await expect(d.dispatch(nativeCtx, "acquisition", "act", [])).rejects.toMatchObject({
@@ -646,7 +692,9 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       errorData: { acquisition: { pending: true } },
     });
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ snapshot: expect.objectContaining({ causalParent: source }) }));
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({ snapshot: expect.objectContaining({ causalParent: source }) })
+    );
     expect(invalidate).toHaveBeenCalledTimes(1);
     expect(acquire).not.toHaveBeenCalled();
 
@@ -715,8 +763,16 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     d.registerService({
       name: "preauthorized",
       authority: { principals: ["code"] },
-      methods: { act: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([]), access: { sensitivity: "write" } } },
+      methods: {
+        act: {
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
+          args: z.tuple([]),
+          access: { sensitivity: "write" },
+        },
+      },
       handler,
     });
     d.markInitialized();
@@ -757,9 +813,21 @@ describe("a part waiting on a review that is already open", () => {
       authority: { principals: ["code"] },
       methods: {
         write: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, description: "Write", args: z.tuple([z.string()]) },
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
+          description: "Write",
+          args: z.tuple([z.string()]),
+        },
         read: {
- website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, description: "Read", args: z.tuple([]) },
+          website: {
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
+          } as const,
+          description: "Read",
+          args: z.tuple([]),
+        },
       },
       handler: vi.fn(async () => "effect"),
     });

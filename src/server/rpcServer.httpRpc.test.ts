@@ -163,8 +163,8 @@ function registerRpcTestService(
       method,
       {
         website: {
-          kind: "eligible",
-          rationale: "Explicit receiver policy for this test fixture.",
+          kind: "closed",
+          reason: "This fixture is not exposed to website origins.",
         } as const,
         args: z.tuple([]).rest(z.unknown()),
         access: { sensitivity },

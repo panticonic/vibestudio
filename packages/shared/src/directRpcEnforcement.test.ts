@@ -182,8 +182,8 @@ describe("directRpcInvocationResourceKey", () => {
         audience: "do:workers/browser-data:BrowserDataDO:key",
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "gated",
           sensitivity: "write",
@@ -202,8 +202,8 @@ describe("directRpcInvocationResourceKey", () => {
         audience: "do:workers/example:ExampleDO:key",
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "open",
           sensitivity: "read",
@@ -226,8 +226,8 @@ describe("directRpcDenial", () => {
       attestation: attestation(),
       declaration: {
         website: {
-          kind: "eligible",
-          rationale: "Explicit website receiver policy for this fixture.",
+          kind: "closed",
+          reason: "This fixture is not exposed to website origins.",
         } as const,
         tier: "open" as const,
         principals: ["code" as const],
@@ -279,8 +279,8 @@ describe("directRpcDenial", () => {
         attestation: attestation(),
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "open",
           principals: ["code"],
@@ -342,8 +342,8 @@ describe("directRpcDenial", () => {
         attestation: authorization,
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "gated",
           requires: anyOf(
@@ -374,8 +374,8 @@ describe("directRpcDenial", () => {
         attestation: attestation({ issuedAt: 200, expiresAt: 50 }),
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "open",
           principals: ["code"],
@@ -471,8 +471,8 @@ describe("directRpcDenial", () => {
         }),
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "open",
           principals: ["code"],
@@ -496,8 +496,8 @@ describe("directRpcDenial", () => {
         attestation: attestation({ [field]: "other" }),
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "open",
           principals: ["code"],
@@ -521,8 +521,8 @@ describe("directRpcDenial", () => {
         attestation: attestation({ readOnly: true }),
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "open",
           principals: ["code"],
@@ -579,8 +579,8 @@ describe("directRpcDenial", () => {
         attestation: dynamic,
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "open",
           principals: ["code", "user"],
@@ -604,8 +604,8 @@ describe("directRpcDenial", () => {
         },
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "open",
           principals: ["code", "user"],
@@ -647,8 +647,8 @@ describe("directRpcDenial", () => {
         }),
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "open",
           principals: ["code"],
@@ -703,8 +703,8 @@ describe("directRpcDenial", () => {
         attestation: dynamic,
         declaration: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           tier: "open",
           principals: ["code"],
@@ -759,8 +759,8 @@ describe("directRpcDenial", () => {
       attestation: critical,
       declaration: {
         website: {
-          kind: "eligible",
-          rationale: "Explicit website receiver policy for this fixture.",
+          kind: "closed",
+          reason: "This fixture is not exposed to website origins.",
         } as const,
         tier: "critical" as const,
         principals: ["code" as const],
@@ -794,8 +794,8 @@ describe("directRpcDenial", () => {
     };
     const declaration = {
       website: {
-        kind: "eligible",
-        rationale: "Explicit website receiver policy for this fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       tier: "gated" as const,
       principals: ["session" as const],
@@ -883,8 +883,8 @@ describe("event intake", () => {
       static eventIntake = [
         {
           website: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           topicPrefix: "channel:",
           tier: "open",
@@ -910,8 +910,8 @@ describe("event intake", () => {
         eventIntake: [
           {
             website: {
-              kind: "eligible",
-              rationale: "Explicit website receiver policy for this fixture.",
+              kind: "closed",
+              reason: "This fixture is not exposed to website origins.",
             } as const,
             topicPrefix: "*",
             tier: "open",
@@ -927,8 +927,8 @@ describe("event intake", () => {
         eventIntake: [
           {
             website: {
-              kind: "eligible",
-              rationale: "Explicit website receiver policy for this fixture.",
+              kind: "closed",
+              reason: "This fixture is not exposed to website origins.",
             } as const,
             topicPrefix: "channel:",
             tier: "open",

@@ -25,8 +25,8 @@ describe("desktop host-service publication", () => {
       methods: {
         inspect: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           description: "test",
           args: z.tuple([z.string()]),

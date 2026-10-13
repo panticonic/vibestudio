@@ -12,8 +12,12 @@ import { createTestDO, createTestDirectAuthority, successfulTestRpcFetch } from 
 
 class AlarmProbeDO extends DurableObjectBase {
   admissionOpen = true;
-  protected override beginLifecycleRelease(): void { this.admissionOpen = false; }
-  protected override async cancelLifecyclePreparation(): Promise<void> { this.admissionOpen = true; }
+  protected override beginLifecycleRelease(): void {
+    this.admissionOpen = false;
+  }
+  protected override async cancelLifecyclePreparation(): Promise<void> {
+    this.admissionOpen = true;
+  }
   nextAlarm: AlarmSchedule | null = null;
   releaseDeferred!: () => void;
   deferredOutbound: Promise<unknown> | null = null;
@@ -38,7 +42,7 @@ class AlarmProbeDO extends DurableObjectBase {
   }
 
   @rpc({
-    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
+    website: { kind: "closed", reason: "This fixture is not exposed to website origins." },
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -66,7 +70,7 @@ class AlarmProbeDO extends DurableObjectBase {
   }
 
   @rpc({
-    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
+    website: { kind: "closed", reason: "This fixture is not exposed to website origins." },
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -84,7 +88,7 @@ class AlarmProbeDO extends DurableObjectBase {
   }
 
   @rpc({
-    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
+    website: { kind: "closed", reason: "This fixture is not exposed to website origins." },
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -97,7 +101,7 @@ class AlarmProbeDO extends DurableObjectBase {
   }
 
   @rpc({
-    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
+    website: { kind: "closed", reason: "This fixture is not exposed to website origins." },
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -123,8 +127,8 @@ class OpenSchemaProbeDO extends DurableObjectBase {
   static override rpcMethods = defineReceiverServiceMethods({
     inspect: {
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver policy for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       args: z.tuple([]),
       returns: z.string(),
@@ -504,25 +508,42 @@ describe("DurableObjectBase alarm dispatch", () => {
 
   it("reopens admission only for cancellation of the exact unreleased lifecycle epoch", async () => {
     const { instance, call, db } = await createTestDO(AlarmProbeDO);
-    const input = { epoch: "owned", mode: "suspend" as const, reason: "replacement", deadlineMs: 0 };
+    const input = {
+      epoch: "owned",
+      mode: "suspend" as const,
+      reason: "replacement",
+      deadlineMs: 0,
+    };
     try {
       await call("__lifecycle/prepare", { ...input, phase: "quiesce" });
       expect(instance.admissionOpen).toBe(false);
-      await expect(call("__lifecycle/prepare", { ...input, epoch: "foreign", phase: "cancel" })).rejects.toThrow("active preparation epoch");
+      await expect(
+        call("__lifecycle/prepare", { ...input, epoch: "foreign", phase: "cancel" })
+      ).rejects.toThrow("active preparation epoch");
       expect(instance.admissionOpen).toBe(false);
       await call("__lifecycle/prepare", { ...input, phase: "cancel" });
       expect(instance.admissionOpen).toBe(true);
       await call("__lifecycle/prepare", { ...input, phase: "cancel" });
       await call("__lifecycle/prepare", { ...input, epoch: "next", phase: "quiesce" });
       await call("__lifecycle/prepare", { ...input, epoch: "next", phase: "release" });
-      await expect(call("__lifecycle/prepare", { ...input, epoch: "next", phase: "cancel" })).rejects.toThrow("released resources");
+      await expect(
+        call("__lifecycle/prepare", { ...input, epoch: "next", phase: "cancel" })
+      ).rejects.toThrow("released resources");
       expect(instance.admissionOpen).toBe(false);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it("maps an original lifecycle release rejection through the request error boundary", async () => {
     const { instance, call, db } = await createTestDO(AlarmProbeDO);
-    await call("__lifecycle/prepare", { epoch: "test", phase: "quiesce", mode: "suspend", reason: "shutdown", deadlineMs: 0 });
+    await call("__lifecycle/prepare", {
+      epoch: "test",
+      phase: "quiesce",
+      mode: "suspend",
+      reason: "shutdown",
+      deadlineMs: 0,
+    });
     const original = new Error("Original activation release failed");
     instance.releaseForLifecycle = async () => {
       throw original;
@@ -533,7 +554,15 @@ describe("DurableObjectBase alarm dispatch", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            args: [{ epoch: "test", phase: "peer-obligations", mode: "suspend", reason: "shutdown", deadlineMs: 0 }],
+            args: [
+              {
+                epoch: "test",
+                phase: "peer-obligations",
+                mode: "suspend",
+                reason: "shutdown",
+                deadlineMs: 0,
+              },
+            ],
             __instanceToken: "token",
             __instanceId: "do:internal/WorkspaceDO:test-key",
             __caller: {
@@ -577,7 +606,7 @@ describe("DurableObjectBase alarm dispatch", () => {
               }),
             },
           }),
-        }),
+        })
       );
       expect(response.status).toBe(500);
       await expect(response.json()).resolves.toMatchObject({
@@ -664,11 +693,23 @@ describe("DurableObjectBase alarm dispatch", () => {
       },
     ]);
 
-    await expect(callAs({ callerId: "do:workers/pubsub-channel:PubSubChannel:channel-1", callerKind: "do" },
-      "acceptChannelDelivery", input)).resolves.toMatchObject({ processed: true });
-    await expect(callAs({ callerId: "do:workers/other:OtherDO:channel-1", callerKind: "do" },
-      "acceptChannelDelivery", { ...input, channelRef: { ...input.channelRef, source: "workers/other", className: "OtherDO" } }))
-      .rejects.toThrow("exact admitted channel owner");
+    await expect(
+      callAs(
+        { callerId: "do:workers/pubsub-channel:PubSubChannel:channel-1", callerKind: "do" },
+        "acceptChannelDelivery",
+        input
+      )
+    ).resolves.toMatchObject({ processed: true });
+    await expect(
+      callAs(
+        { callerId: "do:workers/other:OtherDO:channel-1", callerKind: "do" },
+        "acceptChannelDelivery",
+        {
+          ...input,
+          channelRef: { ...input.channelRef, source: "workers/other", className: "OtherDO" },
+        }
+      )
+    ).rejects.toThrow("exact admitted channel owner");
     close();
     await expect(call("acceptChannelDelivery", input)).rejects.toMatchObject({
       code: "ResidentSessionUnavailable",

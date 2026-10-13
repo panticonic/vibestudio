@@ -54,15 +54,15 @@ function makeService(name: string, handler: ServiceHandler): ServiceDefinition {
     methods: {
       hello: {
         website: {
-          kind: "eligible",
-          rationale: "Explicit receiver policy for this test fixture.",
+          kind: "closed",
+          reason: "This fixture is not exposed to website origins.",
         } as const,
         args: z.array(z.unknown()),
       },
       run: {
         website: {
-          kind: "eligible",
-          rationale: "Explicit receiver policy for this test fixture.",
+          kind: "closed",
+          reason: "This fixture is not exposed to website origins.",
         } as const,
         args: z.array(z.unknown()),
       },
@@ -172,8 +172,8 @@ describe("ServiceDispatcher", () => {
       methods: {
         run: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([]),
           access: { sensitivity: "read" },
@@ -372,8 +372,8 @@ describe("ServiceDispatcher", () => {
       methods: {
         greet: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([z.string()]),
         },
@@ -398,16 +398,16 @@ describe("ServiceDispatcher", () => {
       methods: {
         ok: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           },
           args: z.tuple([]),
           returns: z.object({ count: z.number() }),
         } as const,
         bad: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           },
           args: z.tuple([]),
           returns: z.object({ count: z.number() }),
@@ -431,24 +431,24 @@ describe("ServiceDispatcher", () => {
       methods: {
         okNull: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           },
           args: z.tuple([]),
           returns: z.void(),
         } as const,
         okUndefined: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           },
           args: z.tuple([]),
           returns: z.void(),
         } as const,
         badObject: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           },
           args: z.tuple([]),
           returns: z.object({ count: z.number() }),
@@ -476,8 +476,8 @@ describe("ServiceDispatcher", () => {
       methods: {
         logs: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([z.string(), z.object({ limit: z.number() })]),
         },
@@ -509,8 +509,8 @@ describe("ServiceDispatcher", () => {
       methods: {
         logs: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([z.string(), z.object({ limit: z.number() })]),
           argumentNames: ["unit", "options"],
@@ -558,8 +558,8 @@ describe("ServiceDispatcher", () => {
       methods: {
         m: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([z.string(), z.number().optional(), z.boolean().optional()]),
         },
@@ -591,8 +591,8 @@ describe("ServiceDispatcher", () => {
       methods: {
         readFile: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.union([
             z.tuple([z.string(), z.string().optional()]),
@@ -669,8 +669,8 @@ describe("ServiceDispatcher", () => {
       methods: {
         doStuff: {
           website: {
-            kind: "eligible",
-            rationale: "Explicit receiver policy for this test fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           args: z.tuple([z.string()]),
           description: "does stuff",

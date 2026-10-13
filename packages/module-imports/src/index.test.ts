@@ -176,7 +176,7 @@ describe("analyzeModuleImports", () => {
     const source = [
       'import { rpc } from "@workspace/runtime/worker";',
       "export class Service {",
-      '  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" } })',
+      '  @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."}, principals: ["code"], effect: { kind: "open" } })',
       "  async inspect(): Promise<void> {}",
       "}",
     ].join("\n");

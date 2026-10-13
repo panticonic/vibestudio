@@ -2151,8 +2151,8 @@ describe("RpcServer relay behavior", () => {
         resolveWorkspaceDirectAuthority: async () => [
           {
             methodWebsite: {
-              kind: "eligible",
-              rationale: "Explicit website receiver policy for this fixture.",
+              kind: "closed",
+              reason: "This fixture is not exposed to website origins.",
             } as const,
             capability,
             serviceBinding: "consent",
@@ -2549,8 +2549,8 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           methodWebsite: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           capability: "workspace-service:channel",
           methodEffect: { kind: "open" },
@@ -3391,8 +3391,8 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           methodWebsite: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           capability: "workspace-service:channel",
           methodEffect: {
@@ -3597,8 +3597,8 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           methodWebsite: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           capability: "workspace-service:channel",
           methodEffect: { kind: "open" },
@@ -3710,8 +3710,8 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           methodWebsite: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           capability: "workspace-service:probe",
           methodEffect: { kind: "open" },
@@ -3770,8 +3770,8 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           methodWebsite: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           capability: "workspace-service:channel",
           methodEffect: { kind: "open" },
@@ -3836,8 +3836,8 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           methodWebsite: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           capability: "workspace-service:gad.workspace",
           serviceBinding: "declared",
@@ -3918,8 +3918,8 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           methodWebsite: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           capability: "workspace-service:flowboard-store",
           serviceBinding: { declaredFor: ["panels/flowboard"] },
@@ -3995,8 +3995,8 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           methodWebsite: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           capability: "workspace-service:models",
           methodEffect: { kind: "open" },
@@ -4123,8 +4123,8 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           methodWebsite: {
-            kind: "eligible",
-            rationale: "Explicit website receiver policy for this fixture.",
+            kind: "closed",
+            reason: "This fixture is not exposed to website origins.",
           } as const,
           capability: "workspace-service:gad.workspace",
           methodEffect: { kind: "open" },
@@ -4246,8 +4246,8 @@ describe("RpcServer relay behavior", () => {
 
     const workspaceAuthority = {
       methodWebsite: {
-        kind: "eligible",
-        rationale: "Explicit website receiver policy for this fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       capability: "workspace-service:development",
       serviceBinding: "declared" as const,
@@ -7562,7 +7562,10 @@ describe("delegated Durable Object authority lifetime", () => {
       const { server, entityCache } = createServer({
         resolveWorkspaceDirectAuthority: async () => [
           {
-            methodWebsite: { kind: "eligible", rationale: "Reviewed fixture" } as const,
+            methodWebsite: {
+              kind: "closed",
+              reason: "This fixture is not exposed to website origins.",
+            } as const,
             capability: "workspace-service:probe",
             methodEffect: { kind: "open" },
             methodCapability: "workspace-service:probe",

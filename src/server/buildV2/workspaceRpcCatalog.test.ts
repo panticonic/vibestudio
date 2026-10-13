@@ -164,7 +164,7 @@ export class NotesDO extends DurableObjectBase {}`
         declare const root: any;
         const generated = ${generatedExpression};
         class NotesDO {
-          @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+          @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
           async getNote(): Promise<void> {}
         }
       `
@@ -183,9 +183,9 @@ export class NotesDO extends DurableObjectBase {}`
     writeFileSync(
       join(root, "provider.ts"),
       `class NotesDO {
-      @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+      @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
       async local(): Promise<void> {}
-      @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read", crossWorkspace: true })
+      @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read", crossWorkspace: true })
       async shared(): Promise<void> {}
     }`
     );
@@ -207,7 +207,7 @@ export class NotesDO extends DurableObjectBase {}`
       `
         class NotesDO {
           /** Return one note without changing it. */
-          @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code", "user"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+          @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."}, principals: ["code", "user"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
           async getNote(id: string): Promise<{ id: string }> { return { id }; }
 
           private helper(): void {}
@@ -216,7 +216,7 @@ export class NotesDO extends DurableObjectBase {}`
     );
     writeFileSync(
       join(root, "provider.test.ts"),
-      `class Fake { @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], tier: "open", sensitivity: "read" }) nope() {} }`
+      `class Fake { @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."}, principals: ["code"], tier: "open", sensitivity: "read" }) nope() {} }`
     );
 
     expect(
@@ -227,8 +227,8 @@ export class NotesDO extends DurableObjectBase {}`
     ).toEqual([
       expect.objectContaining({
         website: {
-          kind: "eligible",
-          rationale: "Explicit receiver exposure for this test fixture.",
+          kind: "closed",
+          reason: "This fixture is not exposed to website origins.",
         } as const,
         className: "NotesDO",
         name: "getNote",
@@ -325,7 +325,7 @@ export class NotesDO extends DurableObjectBase {}`
     writeFileSync(
       join(root, "provider.ts"),
       `class NotesDO {
-        @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
+        @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."},
           principals: ["code", "user"],
           effect: {
             kind: "userland-capability",
@@ -399,8 +399,8 @@ export class NotesDO extends DurableObjectBase {}`
           defineServiceMethods({
             deleteNote: {
               website: {
-                kind: "eligible",
-                rationale: "Explicit receiver policy for this test fixture.",
+                kind: "closed",
+                reason: "This fixture is not exposed to website origins.",
               } as const,
               crossWorkspace: true,
               args: z.tuple([z.string()]),
@@ -443,7 +443,7 @@ export class NotesDO extends DurableObjectBase {}`
     writeFileSync(
       join(root, "index.ts"),
       `class Notes {
-        @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
+        @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."},
           principals: ["code"],
           effect: { kind: "open" },
           produces: { kind: "opaque-handle", capability: "notes.read" },
@@ -452,7 +452,7 @@ export class NotesDO extends DurableObjectBase {}`
         })
         async prepareNote(id: string): Promise<unknown> {}
 
-        @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
+        @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."},
           principals: ["code"],
           effect: {
             kind: "userland-capability",

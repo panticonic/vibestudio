@@ -27,8 +27,8 @@ const blobstore: ServiceDefinition = {
   methods: {
     putText: {
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver policy for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       description: "Store a UTF-8 string and return its digest",
       args: z.tuple([z.string()]),
@@ -37,8 +37,8 @@ const blobstore: ServiceDefinition = {
     },
     "admin.wipe": {
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver policy for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       description: "Delete everything",
       args: z.tuple([]),
@@ -47,8 +47,8 @@ const blobstore: ServiceDefinition = {
     },
     internalTransport: {
       website: {
-        kind: "eligible",
-        rationale: "Explicit receiver policy for this test fixture.",
+        kind: "closed",
+        reason: "This fixture is not exposed to website origins.",
       } as const,
       description: "Internal transport that has a higher-level runtime API",
       args: z.tuple([]),

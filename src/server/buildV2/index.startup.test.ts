@@ -253,7 +253,7 @@ describe("BuildSystemV2 startup", () => {
       path.join(workerDir, "provider.ts"),
       `class NotesDO {
         /** Return one note without changing it. */
-        @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+        @rpc({ website: {"kind":"closed","reason":"This fixture is not exposed to website origins."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
         async getNote(id: string): Promise<{ id: string }> { return { id }; }
       }`
     );
