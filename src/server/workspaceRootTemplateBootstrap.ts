@@ -1,4 +1,5 @@
 import { logVerbose } from "@vibestudio/dev-log";
+import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
 import { intrinsicContentDescriptor, type ContentDescriptor } from "@vibestudio/content-addressing";
 import type { PreparedWorkspaceTemplate } from "./preparedWorkspaceTemplate.js";
 import * as fs from "node:fs";
@@ -84,6 +85,39 @@ export interface ComposeDeclaredTemplateLayersInput {
   }): Promise<{ ref: string; commit: string }>;
 }
 
+/** An exact admitted Git tree can resolve composition from its manifest and
+ * path inventory without loading every source blob. Full snapshots implement
+ * this same boundary; indexed Git trees may read the manifest asynchronously. */
+export interface TemplateLayerMetadata {
+  readonly commit: string;
+  readonly files: readonly { readonly path: string }[];
+  readFile(filePath: string): Uint8Array | null | Promise<Uint8Array | null>;
+}
+
+export interface ResolvedTemplateLayerPlan {
+  readonly pin: WorkspaceTemplatePin;
+  readonly purpose: "use" | "author";
+  readonly expectedSystemEpoch: number;
+  /** Exact dependency-first order, with the requested root last. */
+  readonly layers: readonly {
+    readonly pin: WorkspaceTemplatePin;
+    readonly manifestText: string;
+    readonly repositories: readonly string[];
+    readonly dependencies: ParsedTemplateManifest["dependencies"];
+  }[];
+  readonly dependencies: readonly ResolvedTemplateDependency[];
+  readonly document: Record<string, unknown>;
+  readonly repositoryOwners: readonly { readonly repoPath: string; readonly source: string }[];
+}
+
+export interface ResolveDeclaredTemplateLayerPlanInput extends Omit<
+  ComposeDeclaredTemplateLayersInput,
+  "root" | "acquire"
+> {
+  root: TemplateLayerMetadata;
+  acquire(pin: WorkspaceTemplatePin): Promise<TemplateLayerMetadata>;
+}
+
 /**
  * Lay any templates one template is built on underneath it, and merge what they
  * declare into the one manifest the composed workspace runs on.
@@ -96,22 +130,27 @@ export interface ComposeDeclaredTemplateLayersInput {
  * product trust decisions about its units — resolves the same tree rather than
  * a bare snapshot whose dependency closure is missing.
  */
-export async function composeDeclaredTemplateLayers(
-  input: ComposeDeclaredTemplateLayersInput
-): Promise<{
-  snapshot: ExactGitSnapshot;
-  layers: ComposedTemplateLayer[];
-  installation: WorkspaceTemplateInstallation;
-}> {
+export async function resolveDeclaredTemplateLayerPlan(
+  input: ResolveDeclaredTemplateLayerPlanInput
+): Promise<ResolvedTemplateLayerPlan> {
   const { pin, root, purpose = "use" } = input;
-  const readManifestOf = (snapshot: ExactGitSnapshot): ParsedTemplateManifest => {
+  const readLayer = async (layerPin: WorkspaceTemplatePin, metadata: TemplateLayerMetadata) => {
+    if (metadata.commit !== layerPin.commit)
+      throw new Error(`Template ${layerPin.url} acquired a different commit`);
+    const bytes = await metadata.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
     const manifest = readTemplateManifest({
-      readFile: (filePath) => snapshot.readFile(filePath),
+      readFile: (filePath) => (filePath === TEMPLATE_SOURCE_MANIFEST_PATH ? bytes : null),
       expectedSystemEpoch: input.expectedSystemEpoch,
     });
-    return manifest;
+    if (!bytes) throw new Error(`Template ${layerPin.url} has no manifest bytes`);
+    return {
+      pin: layerPin,
+      manifest,
+      manifestText: new TextDecoder().decode(bytes),
+      repositories: templateRepositories(metadata.files.map((file) => file.path)),
+    };
   };
-  const rootManifest = readManifestOf(root);
+  const rootLayer = await readLayer(pin, root);
   const resolveTrack =
     input.resolveTrack ??
     (async () => {
@@ -119,17 +158,8 @@ export async function composeDeclaredTemplateLayers(
         `Root template ${pin.url} declares dependencies, but this host cannot resolve their tracks`
       );
     });
-  const acquired = new Map<
-    string,
-    { pin: WorkspaceTemplatePin; snapshot: ExactGitSnapshot; manifest: ParsedTemplateManifest }
-  >();
-  const acquireLayer = async (
-    layer: ResolvedTemplateDependency
-  ): Promise<{
-    pin: WorkspaceTemplatePin;
-    snapshot: ExactGitSnapshot;
-    manifest: ParsedTemplateManifest;
-  }> => {
+  const acquired = new Map<string, Awaited<ReturnType<typeof readLayer>>>();
+  const acquireLayer = async (layer: ResolvedTemplateDependency) => {
     const existing = acquired.get(layer.url);
     if (existing) return existing;
     const layerPin = {
@@ -138,16 +168,12 @@ export async function composeDeclaredTemplateLayers(
       commit: layer.commit,
       ...(layer.credential ? { credential: layer.credential } : {}),
     } as WorkspaceTemplatePin;
-    const snapshot = await input.acquire(layerPin);
-    if (snapshot.commit !== layer.commit) {
-      throw new Error(`Template dependency ${layer.url} acquired a different commit`);
-    }
-    const entry = { pin: layerPin, snapshot, manifest: readManifestOf(snapshot) };
+    const entry = await readLayer(layerPin, await input.acquire(layerPin));
     acquired.set(layer.url, entry);
     return entry;
   };
   const resolved = await resolveTemplateDependencies({
-    root: { label: pin.url, dependencies: rootManifest.dependencies },
+    root: { label: pin.url, dependencies: rootLayer.manifest.dependencies },
     sourcePins:
       purpose === "use" &&
       input.releaseTemplates?.some((source) => sameWorkspaceTemplatePin(source, pin))
@@ -158,18 +184,21 @@ export async function composeDeclaredTemplateLayers(
   });
   // Dependency-first, with this template last: it is the one being installed.
   const stack = [
-    ...resolved.layers.map((layer) => acquired.get(layer.url)!),
-    { pin, snapshot: root, manifest: rootManifest },
+    ...resolved.layers.map((layer) => {
+      const entry = acquired.get(layer.url);
+      if (!entry) throw new Error(`Resolved template ${layer.url} has no metadata`);
+      return entry;
+    }),
+    rootLayer,
   ];
   const sourceLayers = stack.map((entry) => ({
     label: entry.pin.url,
     manifest: entry.manifest,
-    repositories: templateRepositories(entry.snapshot.files.map((file) => file.path)),
+    repositories: entry.repositories,
   }));
   // Validate overrides before selecting whole-unit trees, including deleted files.
   const merged = mergeTemplateManifests(sourceLayers);
   const owners = templateRepositoryOwners(sourceLayers);
-  const layers = stack.map((entry) => ({ ...entry.pin }));
   const document = {
     ...merged.document,
     template:
@@ -179,24 +208,73 @@ export async function composeDeclaredTemplateLayers(
               { url: pin.url, ...(pin.credential ? { credential: pin.credential } : {}) },
             ],
           }
-        : templateManifestDocument(rootManifest)["template"],
+        : templateManifestDocument(rootLayer.manifest)["template"],
   };
+  return {
+    pin,
+    purpose,
+    expectedSystemEpoch: input.expectedSystemEpoch,
+    layers: stack.map(({ pin, manifestText, repositories, manifest }) => ({
+      pin,
+      manifestText,
+      repositories,
+      dependencies: manifest.dependencies,
+    })),
+    dependencies: resolved.layers,
+    document,
+    repositoryOwners: [...owners].map(([repoPath, owner]) => ({ repoPath, source: owner.label })),
+  };
+}
+
+/** Hydrate the already-resolved exact plan. No floating track is consulted
+ * here, so cache lookup and source production refer to one captured closure. */
+export async function composeResolvedTemplateLayerPlan(input: {
+  plan: ResolvedTemplateLayerPlan;
+  acquire(pin: WorkspaceTemplatePin): Promise<ExactGitSnapshot>;
+}): Promise<{
+  snapshot: ExactGitSnapshot;
+  layers: ComposedTemplateLayer[];
+  installation: WorkspaceTemplateInstallation;
+}> {
+  const { plan } = input;
+  const { pin, purpose } = plan;
+  const stack: Array<ResolvedTemplateLayerPlan["layers"][number] & { snapshot: ExactGitSnapshot }> =
+    [];
+  // Exact layers are independent immutable inputs. Bound full-snapshot
+  // hydration to four layers because each retains all admitted source bytes.
+  await forEachOwnedConcurrent(
+    plan.layers.map((layer, index) => ({ layer, index })),
+    4,
+    async ({ layer, index }) => {
+      const snapshot = await input.acquire(layer.pin);
+      const manifestBytes = snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
+      if (
+        snapshot.commit !== layer.pin.commit ||
+        !manifestBytes ||
+        new TextDecoder().decode(manifestBytes) !== layer.manifestText ||
+        JSON.stringify(templateRepositories(snapshot.files.map((file) => file.path))) !==
+          JSON.stringify(layer.repositories)
+      )
+        throw new Error(`Template ${layer.pin.url} does not match its resolved layer plan`);
+      stack[index] = { ...layer, snapshot };
+    }
+  );
+  const layers = stack.map((entry) => ({ ...entry.pin }));
   const installation: WorkspaceTemplateInstallation = {
     sources: stack.map((entry) => ({
       pin: entry.pin,
-      manifest: new TextDecoder().decode(entry.snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH)!),
+      manifest: entry.manifestText,
     })),
     ...(purpose === "use" ? {} : { upstream: pin }),
   };
-  const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(document));
+  const manifestBytes = new TextEncoder().encode(canonicalTemplateYaml(plan.document));
   const composed = composeTemplateLayers({
     layers: stack.map((entry) => ({
       label: entry.pin.url,
       files: entry.snapshot.files.filter((file) => {
         if (file.path.startsWith("meta/")) return purpose !== "use" && entry.pin.url === pin.url;
-        return [...owners].some(
-          ([repoPath, owner]) =>
-            owner.label === entry.pin.url && file.path.startsWith(`${repoPath}/`)
+        return plan.repositoryOwners.some(
+          ({ repoPath, source }) => source === entry.pin.url && file.path.startsWith(`${repoPath}/`)
         );
       }),
       readFile: (filePath) => entry.snapshot.readFile(filePath),
@@ -231,6 +309,32 @@ export async function composeDeclaredTemplateLayers(
         : composed.readFile(filePath),
   };
   return { snapshot, layers, installation };
+}
+
+/** Full-snapshot callers use the same metadata resolution, retaining each
+ * acquisition for hydration rather than fetching or resolving it twice. */
+export async function composeDeclaredTemplateLayers(
+  input: ComposeDeclaredTemplateLayersInput
+): ReturnType<typeof composeResolvedTemplateLayerPlan> {
+  const snapshots = new Map<string, ExactGitSnapshot>();
+  const key = (pin: WorkspaceTemplatePin) => `${pin.url}\0${pin.commit}`;
+  snapshots.set(key(input.pin), input.root);
+  const plan = await resolveDeclaredTemplateLayerPlan({
+    ...input,
+    acquire: async (pin) => {
+      const snapshot = await input.acquire(pin);
+      snapshots.set(key(pin), snapshot);
+      return snapshot;
+    },
+  });
+  return composeResolvedTemplateLayerPlan({
+    plan,
+    acquire: async (pin) => {
+      const snapshot = snapshots.get(key(pin));
+      if (!snapshot) throw new Error(`Resolved template ${pin.url} has no acquired snapshot`);
+      return snapshot;
+    },
+  });
 }
 
 /** One layer of a materialized workspace, in the order it was laid down. */
@@ -300,6 +404,8 @@ export interface WorkspaceRootTemplateBootstrapDeps {
    * any of its units ship with Vibestudio.
    */
   releaseTemplates?: readonly WorkspaceTemplatePin[];
+  /** Captured metadata closure owned by this preparation operation. */
+  layerPlan?: ResolvedTemplateLayerPlan;
   designation?(pin: WorkspaceTemplatePin): { vouchesWholeTree: boolean } | null;
   /**
    * Resolve what a dependency's track selects right now. Required only once a
@@ -524,27 +630,36 @@ export class WorkspaceRootTemplateBootstrap {
    */
   private async composeDeclaredLayers(
     pin: WorkspaceTemplatePin,
-    root: ExactGitSnapshot
+    root?: ExactGitSnapshot
   ): Promise<ExactGitSnapshot> {
-    const composed = await composeDeclaredTemplateLayers({
-      pin,
-      root,
-      purpose: this.readDescriptor().purpose ?? "use",
-      releaseTemplates: this.deps.releaseTemplates,
-      expectedSystemEpoch: this.deps.expectedSystemEpoch,
-      acquire: (layerPin) => this.deps.acquire(layerPin),
-      resolveTrack: async (address) => {
-        const recorded = this.acquiredLayers.find(
-          (layer) => normalizeTemplateGitUrl(layer.url) === normalizeTemplateGitUrl(address.url)
-        );
-        if (recorded) return { ref: recorded.ref, commit: recorded.commit };
-        if (!this.deps.resolveTrack)
-          throw new Error(
-            `Root template ${pin.url} declares dependencies, but this host cannot resolve their tracks (${address.url})`
-          );
-        return this.deps.resolveTrack(address);
-      },
-    });
+    const composed = this.deps.layerPlan
+      ? await composeResolvedTemplateLayerPlan({
+          plan: this.deps.layerPlan,
+          acquire: (layerPin) => this.deps.acquire(layerPin),
+        })
+      : await composeDeclaredTemplateLayers({
+          pin,
+          root:
+            root ??
+            (() => {
+              throw new Error("Root template acquisition produced no snapshot");
+            })(),
+          purpose: this.readDescriptor().purpose ?? "use",
+          releaseTemplates: this.deps.releaseTemplates,
+          expectedSystemEpoch: this.deps.expectedSystemEpoch,
+          acquire: (layerPin) => this.deps.acquire(layerPin),
+          resolveTrack: async (address) => {
+            const recorded = this.acquiredLayers.find(
+              (layer) => normalizeTemplateGitUrl(layer.url) === normalizeTemplateGitUrl(address.url)
+            );
+            if (recorded) return { ref: recorded.ref, commit: recorded.commit };
+            if (!this.deps.resolveTrack)
+              throw new Error(
+                `Root template ${pin.url} declares dependencies, but this host cannot resolve their tracks (${address.url})`
+              );
+            return this.deps.resolveTrack(address);
+          },
+        });
     this.acquiredLayers = composed.layers;
     this.acquiredInstallation = composed.installation;
     return composed.snapshot;
@@ -556,8 +671,25 @@ export class WorkspaceRootTemplateBootstrap {
       pin,
       this.readDescriptor().purpose ?? "use"
     );
+    const plan = this.deps.layerPlan;
+    if (
+      plan &&
+      (!sameWorkspaceTemplatePin(plan.pin, pin) ||
+        plan.purpose !== (this.readDescriptor().purpose ?? "use") ||
+        plan.expectedSystemEpoch !== this.deps.expectedSystemEpoch)
+    )
+      throw new Error("Resolved template layer plan does not match the creation coordinate");
     if (prepared) {
       const record = prepared.record;
+      if (
+        plan &&
+        (record.layers.length !== plan.layers.length ||
+          record.layers.some((layer, index) => {
+            const expected = plan.layers[index];
+            return !expected || !sameWorkspaceTemplatePin(layer, expected.pin);
+          }))
+      )
+        throw new Error("Prepared template does not match its resolved layer plan");
       this.installedPackage = record;
       this.acquiredSnapshot = {
         commit: pin.commit,
@@ -578,8 +710,8 @@ export class WorkspaceRootTemplateBootstrap {
         })),
       };
     }
-    const acquired = await this.deps.acquire(pin);
-    if (acquired.commit !== pin.commit) {
+    const acquired = plan ? undefined : await this.deps.acquire(pin);
+    if (acquired && acquired.commit !== pin.commit) {
       throw new Error(
         `Root template acquisition returned coordinates different from the creation descriptor`
       );
