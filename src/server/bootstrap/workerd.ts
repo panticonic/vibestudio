@@ -64,6 +64,8 @@ export interface WorkerdBootstrapDeps {
   /** Restore the exact active entity incarnation before any userland DO call. */
   ensureUserlandDoReady(ref: DORef): Promise<void>;
   ensureUserlandDoPrepared(ref: DORef, witness: LifecycleCloneInput): Promise<void>;
+  /** Withdraw the person-decision waits of the object a lifecycle release is quiescing. */
+  withdrawDecisionWaits(callerId: string): void;
   republishStorageOwner?: (ref: DORef) => Promise<void>;
   onManagerStarted(manager: WorkerdManager): void;
   /** Sole owner of source-build publication into durable and derived runtime state. */
@@ -376,6 +378,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       const rpcServer = assertPresent(resolve<{ server: RpcServer }>("rpcServer")).server;
       const dispatch = new DODispatch(deps.ensureUserlandDoReady);
       dispatch.setPreparingTargetReady(deps.ensureUserlandDoPrepared);
+      dispatch.setDecisionWaitWithdrawal(deps.withdrawDecisionWaits);
       dispatch.setTokenManager(deps.tokenManager);
       dispatch.setGetWorkerdGatewayToken(() => deps.gatewayToken);
       dispatch.setGetWorkerdUrl(() => {

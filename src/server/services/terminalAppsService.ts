@@ -266,6 +266,20 @@ export function createTerminalAppsService(
     );
   }
 
+  /**
+   * The caller that creates a session's context. It acts as the server for the
+   * person, and a launch made under a system-test policy keeps that policy: the
+   * context it creates, and every agent the app starts in it, are then decided
+   * by the same test authority rules as any other test context.
+   */
+  function contextCreator(ctx: ServiceContext, subject: UserSubject) {
+    const testPolicy = ctx.caller.testPolicy ?? ctx.caller.executionSession?.testPolicy;
+    return {
+      ...createHostCaller(HOST_CALLER_ID, "server", subject),
+      ...(testPolicy ? { testPolicy } : {}),
+    };
+  }
+
   /** Retire the latest incarnation (idempotent); its record keeps the stateArgs. */
   async function retireIncarnation(session: StoredSession): Promise<void> {
     if (session.entityId) await deps.retireEntity(session.entityId);
@@ -332,6 +346,12 @@ export function createTerminalAppsService(
     let args: string[] = [];
     let env: Record<string, string> = { COLORTERM: "truecolor" };
     let launchFile: string | null = null;
+    // The session's context is created once, by this call, so it is the call's
+    // test policy (if any) that the context, and so everything the app or
+    // shell runs in it, is decided under. An app incarnation is then created
+    // into that context; a context a runtime creates for itself would carry
+    // no policy.
+    session.contextId ??= await deps.createContext(contextCreator(ctx, subject));
     if (session.kind === "app") {
       const source = session.source!;
       const previousState = session.entityId ? await deps.entityStateArgs(session.entityId) : null;
@@ -340,7 +360,7 @@ export function createTerminalAppsService(
         kind: "panel",
         execution: { surface: "code", source },
         key: `nav-term-${randomUUID()}`,
-        ...(session.contextId ? { contextId: session.contextId } : {}),
+        contextId: session.contextId,
         ...(previousState ? { stateArgs: previousState } : {}),
       });
       session.entityId = handle.id;
@@ -371,9 +391,6 @@ export function createTerminalAppsService(
       args = [await deps.primaryArtifactPath(handle.buildKey)];
       env = { ...env, [TERMINAL_LAUNCH_ENV]: launchFile };
     } else {
-      session.contextId ??= await deps.createContext(
-        createHostCaller(HOST_CALLER_ID, "server", subject)
-      );
       if (session.program) {
         command = session.program.command;
         args = session.program.args;

@@ -821,9 +821,19 @@ export class EvalDO extends DurableObjectBase {
     const ownerId = base.selfId;
     const ownerGeneration = this.kernelIncarnationId;
     const mergeOptions = <T extends RpcCallOptions | RpcStreamOptions>(value?: T): T => {
+      // The execution's cancellation and the caller's own both end the call: a
+      // caller that passes a signal (to stop a watch, say) must not lose it to
+      // the execution's.
+      const executionSignal =
+        signal && (cleanupPhase?.active !== true || cleanupPhase.revoked) ? signal : undefined;
+      const callerSignal = value?.signal ?? undefined;
+      const combinedSignal =
+        callerSignal && executionSignal
+          ? AbortSignal.any([callerSignal, executionSignal])
+          : (callerSignal ?? executionSignal);
       const options = {
         ...(value ?? {}),
-        ...(signal && (cleanupPhase?.active !== true || cleanupPhase.revoked) ? { signal } : {}),
+        ...(combinedSignal ? { signal: combinedSignal } : {}),
         ...(readOnly ? { readOnly: true } : {}),
       };
       if (causalParent) options.causalParent = causalParent;

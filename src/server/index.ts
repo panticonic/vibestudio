@@ -6718,6 +6718,7 @@ async function main() {
     },
     ensureUserlandDoPrepared: (ref, witness) =>
       durableObjectExecutionReadiness.ensurePrepared(ref, witness),
+    withdrawDecisionWaits: (callerId) => approvalQueue.cancelForCaller(callerId),
     republishStorageOwner: async (ref) => {
       const id = canonicalEntityId({
         kind: "do",
