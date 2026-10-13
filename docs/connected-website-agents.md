@@ -117,16 +117,20 @@ methods; documentation discovery is not an authorization decision.
 
 Run `pnpm test:invention-smoke`. It runs the same native website scenario as the
 provider-backed acceptance test, but substitutes scripted output at the model
-inference boundary. The real agent loop executes read, eval, project creation,
+inference boundary. With `VIBESTUDIO_TEST_MODE=1`, the host registers the
+test-only `vibestudio-test:deterministic` model backed by Pi's faux provider;
+`VIBESTUDIO_TEST_MODEL_SCRIPT` supplies its JSON script. The real Pi generation
+and tool loop executes read, eval, project creation,
 publication, and file-write tools. The iframe then starts another real agent
 whose inference is also scripted. Approvals, conversation delivery, saved HTML,
 revision, and reconnect are all real. No provider inference or credentials are
 needed for the scripted turns.
 
-The reusable script format lives in the agent harness: rules match the current
-user request, named captures fill tool arguments and reply text, and each step
-advances only after its actual tool result succeeds. Host test mode is required;
-websites cannot enable it. The fixture is in `tests/fixtures/inventorModelScript.ts`.
+The JSON format is `rules: [{ match, steps: [{ tool, arguments }], reply }]`.
+Rules match the current user request; named captures fill tool arguments and
+reply text, and each step advances only after its actual tool result succeeds.
+Only the host enables test mode and forwards the script; websites cannot enable
+it. The fixture is in `tests/fixtures/inventorModelScript.ts`.
 The first successful full native smoke run took 4.9 minutes including website
 build, fresh server provisioning, desktop pairing, and cleanup.
 

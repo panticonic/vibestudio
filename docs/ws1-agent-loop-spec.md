@@ -973,13 +973,13 @@ Per consumer:
    custom hooks. Migrate: `getExpectedChannelToolNames` (`["eval"]`),
    `getParticipantInfo`. Verify default model `openai-codex:gpt-6-sol`,
    approval level 2, system prompt from `meta/AGENTS.md`.
-2. **`workspace/workers/test-agent`** — re-base; `getDefaultModel`
-   (`anthropic:claude-sonnet-4-6`), `getParticipantInfo`. Its
-   `processChannelEvent` deterministic mode (publishes synthetic
-   turn/invocation/message events) re-implements as a `deterministic` step
-   policy OR direct `appendLogEvent` calls in the `onChannelEnvelope` hook —
-   the synthetic event payloads must keep their exact shapes (panel test
-   fixtures depend on them). `maybeWriteVaultSwitchMarker` unchanged.
+2. **`workspace/workers/test-agent`** — re-base; `getDefaultModel`,
+   `getParticipantInfo`. The former `processChannelEvent` deterministic mode
+   published synthetic turn/invocation/message events; that bypass is historical
+   and must not be carried into Pi. Test inference uses the host-only
+   `vibestudio-test:deterministic` model backed by Pi's faux provider, so the
+   ordinary generation, tool, authority and publication path remains under test.
+   Preserve `maybeWriteVaultSwitchMarker`.
 3. **`workspace/workers/gmail-agent`** — re-base; `getRunnerTools` →
    `getLoopTools` mapping `GMAIL_TOOLS` (each tool wraps
    `spec.run(this.handlers, channelId, args)` — now executed inside the
