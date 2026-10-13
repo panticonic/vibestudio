@@ -16,7 +16,9 @@ it.each([
   {
     source: "panels/chat",
     stateArgs: {
-      initialPrompt: "I just opened this workspace for the first time, help me get onboarded.",
+      seed: {
+        openingRequest: "I just opened this workspace for the first time, help me get onboarded.",
+      },
       systemPrompt: "Read skills/onboarding/SKILL.md and render onboarding-setup-overview inline.",
     },
   },

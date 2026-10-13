@@ -726,10 +726,10 @@ async function waitForOnboardingChatRendered(device, packageName, deadlineMs) {
         `(() => { const text = document.body?.innerText?.trim() ?? ""; ` +
           `return { rendered: text.includes(${JSON.stringify(initialOnboardingPrompt)}), ` +
           `text: text.slice(0, 500), workspaceId: globalThis.__vibestudioGatewayConfig?.workspace, ` +
-          `initialPrompt: globalThis.__vibestudioStateArgs?.initialPrompt }; })()`
+          `openingRequest: globalThis.__vibestudioStateArgs?.seed?.openingRequest }; })()`
       );
       if (state?.rendered === true) {
-        if (state.initialPrompt !== initialOnboardingPrompt) {
+        if (state.openingRequest !== initialOnboardingPrompt) {
           throw new Error(
             "The mounted chat did not receive the shipped automatic onboarding prompt"
           );
