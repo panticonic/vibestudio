@@ -1,4 +1,3 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
@@ -17,19 +16,11 @@ import type {
   ExecutionPublicationPort,
   ExecutionRootProvider,
 } from "@vibestudio/shared/execution/retention";
-
-function readHostExecutionDigest(repoRoot: string): string {
-  const record = JSON.parse(
-    fs.readFileSync(path.join(repoRoot, "dist", "host-build-fingerprint.json"), "utf8")
-  ) as { version?: unknown; fingerprint?: unknown };
-  if (record.version !== 1 || !/^[0-9a-f]{64}$/u.test(String(record.fingerprint ?? ""))) {
-    throw new Error("The trusted host build fingerprint is missing or invalid");
-  }
-  return String(record.fingerprint);
-}
+import { readHostBuildFingerprint } from "../appRoot.js";
 
 export interface DevelopmentNativeBootstrapDeps {
   appRoot: string;
+  hostArtifactRoot: string;
   container: Pick<ServiceContainer, "registerManaged">;
   workspaceId: string;
   getBuildSystem(): Pick<
@@ -121,7 +112,7 @@ export async function wireDevelopmentNative(
     name: "developmentNative",
     dependencies: ["developmentClientExecutor", "attachedHosts", "buildSystem"],
     async start() {
-      const hostExecutionDigest = readHostExecutionDigest(deps.appRoot);
+      const hostExecutionDigest = readHostBuildFingerprint(deps.hostArtifactRoot).fingerprint;
       const semantic = createNativeDevelopmentSemanticAdapter(deps.workspaceVcs);
       const appendLog = (runId: string, stream: "stdout" | "stderr", line: string, origin = "") => {
         const current = logs.get(runId) ?? [];

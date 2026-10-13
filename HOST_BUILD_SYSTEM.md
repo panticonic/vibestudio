@@ -22,6 +22,13 @@ The CLI's live-server launcher runs `--source-server-prereqs` automatically so
 source host code does not run with stale RPC, headless-host, or internal-DO
 artifacts.
 
+At runtime, `VIBESTUDIO_APP_ROOT` identifies source and installed package
+content, while `VIBESTUDIO_HOST_ARTIFACT_ROOT` identifies the exact immutable
+host generation executing the process. Runtime consumers read the host build
+receipt only from the artifact root. The mutable checkout's `dist/` directory
+may be invalidated or replaced as another generation builds and is never an
+execution-identity fallback.
+
 ## Build graph and outputs
 
 The host build performs these dependency-ordered stages:

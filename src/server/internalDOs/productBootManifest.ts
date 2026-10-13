@@ -1,6 +1,4 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
+import { readHostBuildFingerprint, resolveRequiredHostArtifactRoot } from "../appRoot.js";
 
 /**
  * Stable identity of the installed Vibestudio host. Userland runtime labels
@@ -16,25 +14,7 @@ let cached: ProductBootManifest | undefined;
 
 export function getProductBootManifest(): ProductBootManifest {
   if (cached) return cached;
-  const fingerprintPath = path.join(
-    resolveRequiredHostArtifactRoot(),
-    "host-build-fingerprint.json"
-  );
-  let fingerprint: unknown;
-  try {
-    fingerprint = (JSON.parse(fs.readFileSync(fingerprintPath, "utf8")) as Record<string, unknown>)[
-      "fingerprint"
-    ];
-  } catch (error) {
-    throw new Error(
-      `Installed host build identity is unavailable at ${fingerprintPath}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-  if (typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(fingerprint)) {
-    throw new Error(`Installed host build identity is malformed at ${fingerprintPath}`);
-  }
+  const fingerprint = readHostBuildFingerprint(resolveRequiredHostArtifactRoot()).fingerprint;
   cached = Object.freeze({
     version: 1,
     hostPrincipal: `host:${fingerprint}`,

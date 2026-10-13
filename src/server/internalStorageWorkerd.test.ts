@@ -587,7 +587,12 @@ describe("internal storage DOs under workerd", () => {
       mkdirSync(join(appRoot, "dist"), { recursive: true });
       writeFileSync(
         join(appRoot, "dist", "host-build-fingerprint.json"),
-        JSON.stringify({ fingerprint: "ab".repeat(32) })
+        JSON.stringify({
+          version: 1,
+          mode: "development",
+          fingerprint: "ab".repeat(32),
+          inputCount: 1,
+        })
       );
       process.env["VIBESTUDIO_APP_ROOT"] = appRoot;
     }

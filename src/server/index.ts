@@ -44,6 +44,7 @@ import * as fs from "fs";
 import {
   resolveNativeTypeScriptServerPath,
   resolveRequiredAppRoot,
+  resolveRequiredHostArtifactRoot,
   TYPESCRIPT_SERVER_PATH_ENV,
 } from "./appRoot.js";
 import { createServerLogStore } from "./services/serverLogStore.js";
@@ -393,6 +394,7 @@ async function main() {
   // Electron and hub-managed child runtimes after a workspace has been selected.
 
   const appRoot = process.env["VIBESTUDIO_APP_ROOT"]!;
+  const hostArtifactRoot = resolveRequiredHostArtifactRoot();
   const processRole = process.env["VIBESTUDIO_PROCESS_ROLE"] ?? "hub";
   if (processRole !== "hub" && processRole !== "workspace-child") {
     throw new Error(
@@ -5193,6 +5195,7 @@ async function main() {
   const { wireDevelopmentNative } = await import("./bootstrap/developmentNative.js");
   const closeDevelopmentNative = await wireDevelopmentNative({
     appRoot,
+    hostArtifactRoot,
     container,
     workspaceId,
     getBuildSystem: () => assertPresent(buildSystemInstance),

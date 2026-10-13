@@ -16,6 +16,7 @@ import {
 } from "./preparedWorkspaceTemplate.js";
 import { blobCasPath } from "./storage/blobCas.js";
 import { verifyReleaseBuildDirectory } from "../../scripts/prebuild-release-userland.mjs";
+import { readHostBuildFingerprint, resolveRequiredHostArtifactRoot } from "./appRoot.js";
 
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/u);
 const hostBuildFingerprintSchema = z
@@ -77,12 +78,8 @@ export interface PreparedWorkspaceReleaseInput {
 
 export async function workspaceReleaseIdentity(appRoot: string) {
   const rootFingerprint = await prepareBuildRootConfig({ appRoot });
-  const hostArtifactRoot =
-    process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] ?? path.join(appRoot, "dist");
   const hostBuild = hostBuildFingerprintSchema.parse(
-    JSON.parse(
-      await fs.readFile(path.join(hostArtifactRoot, "host-build-fingerprint.json"), "utf8")
-    )
+    readHostBuildFingerprint(resolveRequiredHostArtifactRoot())
   );
   return {
     appDependencyFingerprint: rootFingerprint.value,
