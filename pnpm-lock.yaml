@@ -42,7 +42,7 @@ patchedDependencies:
     hash: 00d3bba30f4a50b3602f19c8943a4cf28687ae08d5cfe37beaa8325e0f0163a8
     path: patches/isomorphic-git@1.36.3.patch
   react-native-tcp-socket@6.4.1:
-    hash: 3419de9bf5c49768f1b92d3c596bf9c1fa202f60cd5bcc029f157b93b17ce131
+    hash: 33f38bb1290dece758f41e599e2c01c8510c831bc4db13eea59373de812a1e7a
     path: patches/react-native-tcp-socket.patch
   react-native-webview@13.16.1:
     hash: 09299f2bbaa678d74a242e5055579b3e97aff34d5a6efd5f3c93cff22c68ee73
@@ -606,7 +606,7 @@ importers:
         version: 15.15.4(react-native@0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0)
       react-native-tcp-socket:
         specifier: 6.4.1
-        version: 6.4.1(patch_hash=3419de9bf5c49768f1b92d3c596bf9c1fa202f60cd5bcc029f157b93b17ce131)(react-native@0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))
+        version: 6.4.1(patch_hash=33f38bb1290dece758f41e599e2c01c8510c831bc4db13eea59373de812a1e7a)(react-native@0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))
       react-native-url-polyfill:
         specifier: ^3.0.0
         version: 3.0.0(react-native@0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))
@@ -11395,7 +11395,9 @@ snapshots:
       protobufjs: 7.6.6
       ws: 8.21.1
     transitivePeerDependencies:
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@grpc/grpc-js@1.14.4':
     dependencies:
@@ -18353,7 +18355,7 @@ snapshots:
       react-native: 0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0)
       warn-once: 0.1.1
 
-  react-native-tcp-socket@6.4.1(patch_hash=3419de9bf5c49768f1b92d3c596bf9c1fa202f60cd5bcc029f157b93b17ce131)(react-native@0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0)):
+  react-native-tcp-socket@6.4.1(patch_hash=33f38bb1290dece758f41e599e2c01c8510c831bc4db13eea59373de812a1e7a)(react-native@0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0)):
     dependencies:
       buffer: 5.7.1
       eventemitter3: 4.0.7
