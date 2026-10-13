@@ -1,8 +1,5 @@
 import { EventEmitter } from "node:events";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RpcConnectionStatus, RpcEnvelope } from "@vibestudio/rpc";
 import type { TerminalBrowserHost } from "@vibestudio/shell-core/terminal/terminalBrowserHost";
 import type { AppPrincipalGrantResponse } from "@vibestudio/service-schemas/auth";
@@ -10,14 +7,8 @@ import type { PrincipalTransportOptions, RpcClient } from "../rpcClient.js";
 import {
   TerminalConnectionState,
   loadTerminalBrowserModule,
-  readLocalFile,
   runTerminalBrowser,
 } from "./terminalHost.js";
-
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-});
 
 function grant(buildKey = "build-1", token = "grant-1"): AppPrincipalGrantResponse {
   return {
@@ -262,21 +253,5 @@ describe("loadTerminalBrowserModule", () => {
     await expect(loadTerminalBrowserModule(device as never, grant().app)).rejects.toThrow(
       "does not export run(host)"
     );
-  });
-});
-
-describe("readLocalFile", () => {
-  it("reads a chosen file with its name and media type", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-read-local-"));
-    roots.push(root);
-    const file = path.join(root, "notes.md");
-    fs.writeFileSync(file, "# hi");
-    await expect(readLocalFile(file)).resolves.toEqual({
-      name: "notes.md",
-      bytes: new Uint8Array(Buffer.from("# hi")),
-      mimeType: "text/markdown",
-    });
-    await expect(readLocalFile(root)).rejects.toThrow("Not a regular file");
-    await expect(readLocalFile(path.join(root, "missing"))).rejects.toThrow("No such file");
   });
 });

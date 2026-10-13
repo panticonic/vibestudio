@@ -251,7 +251,6 @@ export async function runTerminalBrowser(
       onConnectionState: (listener) => state.subscribe(listener),
       listWorkspaces: () => options.listWorkspaces(),
       openExternal: (url) => options.openExternal(url),
-      readLocalFile,
     };
     releaseTerminal = guardTerminal(options.stdin, options.stdout);
     const exit = await options.module.run(host);
@@ -286,41 +285,4 @@ export async function runTerminalBrowser(
 function describeLost(state: TerminalConnectionState): string {
   const current = state.current();
   return current.phase === "lost" ? current.cause : current.phase;
-}
-
-const MIME_BY_EXTENSION: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".pdf": "application/pdf",
-  ".txt": "text/plain",
-  ".md": "text/markdown",
-  ".json": "application/json",
-  ".csv": "text/csv",
-  ".html": "text/html",
-};
-
-/** Read a local file the user chose in the browser (`~` expands to the home directory). */
-export async function readLocalFile(
-  requested: string
-): Promise<{ name: string; bytes: Uint8Array; mimeType?: string }> {
-  const expanded =
-    requested === "~" || requested.startsWith("~/")
-      ? path.join(os.homedir(), requested.slice(1))
-      : requested;
-  const resolved = path.resolve(expanded);
-  const stat = await fs.promises.stat(resolved).catch((error: NodeJS.ErrnoException) => {
-    throw new CliError(
-      error.code === "ENOENT"
-        ? `No such file: ${resolved}`
-        : `Cannot read ${resolved}: ${error.message}`
-    );
-  });
-  if (!stat.isFile()) throw new CliError(`Not a regular file: ${resolved}`);
-  const bytes = new Uint8Array(await fs.promises.readFile(resolved));
-  const mimeType = MIME_BY_EXTENSION[path.extname(resolved).toLowerCase()];
-  return { name: path.basename(resolved), bytes, ...(mimeType ? { mimeType } : {}) };
 }
