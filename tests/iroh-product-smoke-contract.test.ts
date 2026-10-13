@@ -131,16 +131,31 @@ describe("Iroh product E2E entry points", () => {
     expect(preflight).not.toContain("pipefail");
   });
 
-  it("admits exact host extension builds before a target stages them for activation", () => {
+  it("admits exact host extension builds before the target staging owner activates them", () => {
     const server = source("src/server/index.ts");
     const demandStart = server.indexOf("const ensureHostTargetExtensions = async (");
-    const demandEnd = server.indexOf("// Optional artifact warming", demandStart);
+    const demandEnd = server.indexOf(
+      "const reconcileDeclaredWorkspaceUnits = async (",
+      demandStart
+    );
     const demand = server.slice(demandStart, demandEnd);
-    const admission = demand.indexOf("extensionHost.seedTrustedDeclared(");
-    const staging = demand.indexOf("extensionHost.reconcileDeclared(");
+    const admission = demand.indexOf(
+      "admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(requiredExtensions))"
+    );
+    const staging = demand.indexOf("await hostTargetStaging.ensure(target)");
+    const stagingOwnerStart = server.indexOf("const hostTargetStaging = new HostTargetStaging(");
+    const stagingOwnerEnd = server.indexOf(
+      "const ensureHostTargetExtensions = async (",
+      stagingOwnerStart
+    );
+    const stagingOwner = server.slice(stagingOwnerStart, stagingOwnerEnd);
     expect(demandStart).toBeGreaterThan(0);
     expect(admission).toBeGreaterThan(0);
     expect(staging).toBeGreaterThan(admission);
-    expect(demand).toContain("admitSeedTrustedUnits(");
+    expect(stagingOwnerStart).toBeGreaterThan(0);
+    expect(stagingOwner).toContain(
+      "host.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig)"
+    );
+    expect(stagingOwner).toContain('waitFor: "staged"');
   });
 });
