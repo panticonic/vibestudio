@@ -275,11 +275,7 @@ export interface UnitRuntimeApplyOptions<
   node: Node;
   decl: Decl;
   validateBeforeApply?: (node: Node, decl: Decl) => void;
-  validateBeforeActivateCurrent?: (
-    entry: Entry,
-    node: Node,
-    decl: Decl
-  ) => void | Promise<void>;
+  validateBeforeActivateCurrent?: (entry: Entry, node: Node, decl: Decl) => void | Promise<void>;
   needsBuildRefresh: (entry: Entry, node: Node, decl: Decl) => boolean | Promise<boolean>;
   /**
    * Leave a trusted declaration unbuilt until its owning runtime operation
@@ -749,6 +745,7 @@ export class UnitHost<
 
   async applyRuntimeDeclaration(opts: UnitRuntimeApplyOptions<Entry, Decl, Node>): Promise<void> {
     const { node, decl } = opts;
+    let adopting = false;
     try {
       opts.validateBeforeApply?.(node, decl);
       const entry = this.opts.registry.get(node.name);
@@ -756,7 +753,7 @@ export class UnitHost<
       if (
         !entry ||
         trust.decision !== "user-approved" ||
-        await opts.needsBuildRefresh(entry, node, decl)
+        (await opts.needsBuildRefresh(entry, node, decl))
       ) {
         if (!entry) {
           this.opts.registry.upsert(this.opts.makePendingEntry(node, decl, true));
@@ -768,6 +765,7 @@ export class UnitHost<
           } as Partial<Entry>);
           return;
         }
+        adopting = true;
         await opts.buildAndActivate(node, decl);
         return;
       }
@@ -777,7 +775,10 @@ export class UnitHost<
     } catch (err) {
       const message = formatRpcFailure(err);
       try {
-        this.markError(node.name, message);
+        // A failed candidate never demotes the build that is already adopted;
+        // a current build that itself cannot be validated or activated does.
+        if (adopting) this.markUpdateRejected(node.name, message);
+        else this.markError(node.name, message);
         opts.onError?.(node, decl, message);
       } catch (reconciliationError) {
         throw new AggregateError(
@@ -835,11 +836,47 @@ export class UnitHost<
     } as Partial<Entry>);
   }
 
-  markError(name: string, message: string): Entry | null {
+  markError(name: string, message: string, extra?: Partial<Entry>): Entry | null {
     if (!this.opts.registry.has(name)) return null;
     return this.opts.registry.patch(name, {
       status: "error",
       lastError: message,
+      ...extra,
+    } as Partial<Entry>);
+  }
+
+  /**
+   * Record that an update was not adopted. A working build is never demoted by
+   * a candidate that failed: when the unit already runs (or is ready to run) an
+   * adopted build, only `lastError` is recorded and the status stays, so its
+   * capabilities and principals survive. A unit with nothing adopted has
+   * nothing to protect and becomes "error".
+   */
+  markUpdateRejected(name: string, message: string, extra?: Partial<Entry>): Entry | null {
+    const entry = this.opts.registry.get(name);
+    if (!entry) return null;
+    const adopted =
+      !!entry.activeBundleKey && (entry.status === "running" || entry.status === "available");
+    if (!adopted) return this.markError(name, message, extra);
+    return this.opts.registry.patch(name, { lastError: message, ...extra } as Partial<Entry>);
+  }
+
+  /**
+   * A candidate failed after it began replacing `previous`. Put the previous
+   * adopted build back exactly as it was and record why the update was not
+   * adopted; without a previous build there is nothing to restore.
+   */
+  rejectUpdate(
+    name: string,
+    previous: Entry | null,
+    message: string,
+    extra?: Partial<Entry>
+  ): Entry | null {
+    if (!previous?.activeBundleKey) return this.markError(name, message, extra);
+    return this.opts.registry.patch(name, {
+      ...previous,
+      lastError: message,
+      ...extra,
     } as Partial<Entry>);
   }
 

@@ -1185,6 +1185,43 @@ describe("UnitHost", () => {
     expect(errors).toEqual(["activation failed"]);
   });
 
+  it("records a failed update without demoting the adopted build", async () => {
+    const { host, registry, node } = makeHarness({ active: true });
+    const original = new Error("candidate does not build");
+
+    await expect(
+      host.applyRuntimeDeclaration({
+        node,
+        decl: { source: node.relativePath, ref: "main" },
+        needsBuildRefresh: () => true,
+        buildAndActivate: async () => {
+          throw original;
+        },
+        activateCurrent: async () => undefined,
+      })
+    ).rejects.toBe(original);
+
+    expect(registry.get(node.name)).toMatchObject({
+      activeBundleKey: "bundle",
+      status: "running",
+      lastError: "candidate does not build",
+    });
+  });
+
+  it("restores the previous build when an update fails after replacing it", () => {
+    const { host, registry, node } = makeHarness({ active: true });
+    const previous = registry.get(node.name)!;
+    registry.patch(node.name, { activeBundleKey: "candidate", status: "building" });
+
+    host.rejectUpdate(node.name, previous, "activation failed");
+
+    expect(registry.get(node.name)).toMatchObject({
+      activeBundleKey: "bundle",
+      status: previous.status,
+      lastError: "activation failed",
+    });
+  });
+
   it("compares active build state with shared source, EV, dependency, and runtime keys", () => {
     const { host } = makeHarness({ active: true });
     const active = entry({

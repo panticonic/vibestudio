@@ -93,6 +93,7 @@ import { RUNTIME_MODULE, WORKER_RUNTIME_COMPANION_MODULES } from "./platformModu
 import { resolveExportSubpath } from "@vibestudio/typecheck/workspace";
 import { assertPresent } from "../../lintHelpers";
 import { resolveBuildProvider } from "./buildProviderRegistry.js";
+import { validateAppBuildContract } from "./appBuildContract.js";
 import { peerConflictRefusal, unownedPeerRefusal } from "./dependencyAudit.js";
 import { createBuildScratchDir } from "./buildScratch.js";
 import { prepareBuildProviderResources } from "./buildProviderResources.js";
@@ -2306,6 +2307,34 @@ export async function buildUnitStored(
   stateRef: string,
   options?: BuildUnitOptions
 ): Promise<StoredBuildResult> {
+  const stored = await buildUnitStoredUnchecked(
+    session,
+    node,
+    ev,
+    graph,
+    workspaceRoot,
+    stateRef,
+    options
+  );
+  // An app target's artifact contract is part of its build, whether the bytes
+  // were just produced, found in the store or installed with a release: a
+  // candidate that could never be activated fails the protected-main build gate
+  // instead of landing and failing at activation.
+  if (node.kind === "app" && !options?.library && !options?.test && !options?.website) {
+    validateAppBuildContract(node.name, appTargetOf(node), stored);
+  }
+  return stored;
+}
+
+async function buildUnitStoredUnchecked(
+  session: BuilderSession,
+  node: GraphNode,
+  ev: string,
+  graph: PackageGraph,
+  workspaceRoot: string,
+  stateRef: string,
+  options?: BuildUnitOptions
+): Promise<StoredBuildResult> {
   const capturedOptions = captureBuildUnitOptions(options);
   const sourcemap = buildSourcemapForNode(node, capturedOptions);
   let provider: BuildProvider | null = null;
@@ -2323,8 +2352,16 @@ export async function buildUnitStored(
   ) {
     // The provider is an input to the artifact, so resolve it before cache
     // lookup, coalescing, or taking a compilation slot.
-    await session.ensureBuildProvider?.("react-native");
-    provider = resolveBuildProvider("react-native");
+    try {
+      await session.ensureBuildProvider?.("react-native");
+      provider = resolveBuildProvider("react-native");
+    } catch (error) {
+      throw new Error(
+        `React Native app ${node.name} cannot be built because its build provider is unavailable: ${error instanceof Error ? error.message : String(error)}. ` +
+          "Install and enable the extension that contributes the react-native build target, then push again.",
+        { cause: error }
+      );
+    }
     buildKey = computeBuildKey(
       session.rootFingerprint,
       node.name,
@@ -4249,6 +4286,12 @@ async function buildWorker(
 // ---------------------------------------------------------------------------
 // App Build
 // ---------------------------------------------------------------------------
+
+function appTargetOf(node: GraphNode): "electron" | "react-native" | "terminal" {
+  const target = node.manifest.app?.target;
+  if (!target) throw new Error(`App ${node.name} manifest must declare vibestudio.app.target`);
+  return target;
+}
 
 async function buildApp(
   session: BuilderSession,

@@ -1093,7 +1093,7 @@ describe("AppHost", () => {
     await flushAsyncWork();
 
     expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
-      status: "error",
+      status: "running",
       lastError: "broken app code",
       lastErrorDetails: expect.objectContaining({ phase: "build", source: "apps/shell" }),
       activeBundleKey: "app-key",
@@ -1103,7 +1103,7 @@ describe("AppHost", () => {
       "apps:status",
       expect.objectContaining({
         name: "@workspace-apps/shell",
-        status: "error",
+        status: "running",
         error: "broken app code",
         errorDetails: expect.objectContaining({ phase: "build", source: "apps/shell" }),
         buildKey: "app-key",
@@ -1113,7 +1113,7 @@ describe("AppHost", () => {
     expect(diagnostics.history("@workspace-apps/shell").errors[0]).toMatchObject({
       message: "broken app code",
       fields: {
-        status: "error",
+        status: "running",
         errorDetails: { phase: "build", source: "apps/shell" },
       },
     });
@@ -1129,7 +1129,7 @@ describe("AppHost", () => {
     expect(notificationService.show).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
-        title: "App update failed",
+        title: "Update not adopted",
       })
     );
   });
@@ -4083,17 +4083,15 @@ describe("AppHost", () => {
     await host.shutdown();
   });
 
-  it("opens a fresh app while its permission review remains unresolved", async () => {
-    const { host, graphNode, buildSystem, approvalQueue } = await makeHarness({
-      isAdmitted: () => false,
-    });
+  it("refuses to open an unadmitted app until its review is accepted, without resolving it", async () => {
+    const { host, graphNode, approvalQueue } = await makeHarness({ isAdmitted: () => false });
     host.setDeclared([{ source: "apps/shell", ref: "main" }]);
-    const review = await host.reviewDeclared();
-    expect(review.units).toHaveLength(1);
-    await expect(host.ensureActivated(graphNode.name)).resolves.toBe("ready");
-    expect(buildSystem.getStoredBuild).toHaveBeenCalledTimes(1);
+    expect((await host.reviewDeclared()).units).toHaveLength(1);
+    await expect(host.ensureActivated(graphNode.name)).rejects.toMatchObject({
+      code: "EACCES",
+      message: expect.stringContaining("has not been accepted to run"),
+    });
     expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(host.registry.get(graphNode.name)?.status).toBe("running");
     expect((await host.reviewDeclared()).units).toHaveLength(1);
     await host.shutdown();
   });

@@ -85,11 +85,11 @@ import {
 } from "./services/capabilityAuthorizer.js";
 import { DeviceAppPrincipals, type DeviceAppPrincipal } from "./deviceAppPrincipals.js";
 import type { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
+import { ReactNativeAppAdapter } from "./reactNativeAppAdapter.js";
 import {
-  ReactNativeAppAdapter,
-  isBuildProviderDetailsLike,
+  validateAppBuildContract,
   type AppBuildProviderDetails,
-} from "./reactNativeAppAdapter.js";
+} from "./buildV2/appBuildContract.js";
 import {
   requireActiveExecutionIdentity,
   type ActiveExecutionIdentity,
@@ -1055,20 +1055,15 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.assertHostTargetMatchesManifest(node, target);
     const build = await this.deps.buildSystem.getStoredBuild(candidate.name, ref);
     this.validateBuildForTarget(candidate.name, target, build);
-    if (
-      isAppBuildDetailsLike(build.metadata.details) &&
-      build.metadata.details.target === "terminal"
-    ) {
-      // Building and inspecting an exact candidate remains available while
-      // its launch review is pending; only promotion requires acceptance.
-      if (this.deps.isAdmitted && !this.deps.isAdmitted(node.relativePath, build.metadata.ev)) {
-        return {
-          buildKey: path.basename(build.dir),
-          effectiveVersion: build.metadata.ev,
-          appId: candidate.name,
-          source: candidate.source,
-        };
-      }
+    // Building and inspecting an exact candidate remains available while
+    // its launch review is pending; only promotion requires acceptance.
+    if (this.deps.isAdmitted && !this.deps.isAdmitted(node.relativePath, build.metadata.ev)) {
+      return {
+        buildKey: path.basename(build.dir),
+        effectiveVersion: build.metadata.ev,
+        appId: candidate.name,
+        source: candidate.source,
+      };
     }
     const activeSourceHash = requireBuildSourceStateHash(node.name, build);
     const externalDeps = this.externalDepsForBuild(node, build.metadata, decl);
@@ -1269,22 +1264,10 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!prepared?.activeBundleKey) throw new Error(`App ${sourceOrName} has no active build`);
     if (!build) throw new Error(`Active app build is missing: ${prepared.activeBundleKey}`);
     this.validateBuildForTarget(prepared.name, prepared.target, build);
-    if (
-      isAppBuildDetailsLike(build.metadata.details) &&
-      build.metadata.details.target === "terminal"
-    ) {
-      requireExactUnitAdmission({
-        service: "runtime.supervision",
-        operation: "activate",
-        unitLabel: "terminal app",
-        name: prepared.name,
-        repoPath: prepared.source.repo,
-        effectiveVersion: build.metadata.ev,
-        isAdmitted: this.deps.isAdmitted,
-        openReviewFor: this.deps.openUnitReviewFor,
-      });
-    }
-    const entry = this.registry.patch(prepared.name, { status: "running", lastError: null });
+    this.requireAdmission(prepared.name, prepared.source.repo, build.metadata.ev);
+    // A recorded update that was not adopted describes the candidate, not this
+    // build, so activating the adopted build leaves it in place.
+    const entry = this.registry.patch(prepared.name, { status: "running" });
     await this.activateAppEntity(entry, build);
     await this.emitAvailable(entry, { lifecycleType: "available" }, build);
   }
@@ -1853,21 +1836,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       const target = this.appTarget(node, decl);
       diagnostic.target = target;
       this.validateBuildForTarget(node.name, target, build);
-      if (
-        isAppBuildDetailsLike(build.metadata.details) &&
-        build.metadata.details.target === "terminal"
-      ) {
-        requireExactUnitAdmission({
-          service: "runtime.supervision",
-          operation: "activate",
-          unitLabel: "terminal app",
-          name: node.name,
-          repoPath: node.relativePath,
-          effectiveVersion: build.metadata.ev,
-          isAdmitted: this.deps.isAdmitted,
-          openReviewFor: this.deps.openUnitReviewFor,
-        });
-      }
+      this.requireAdmission(node.name, node.relativePath, build.metadata.ev);
       const activeSourceHash = requireBuildSourceStateHash(node.name, build);
       diagnostic.phase = "activation";
       const capabilities = this.appCapabilities(node);
@@ -1912,11 +1881,12 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         (err as { appUpdateDiagnostic?: AppUpdateErrorDiagnostic }).appUpdateDiagnostic =
           diagnostic;
       }
-      this.restorePreviousBuildAfterActivationError(
+      // The running build stays; the failed update is recorded, never promoted.
+      this.unitHost.rejectUpdate(
         node.name,
         previous,
         err instanceof Error ? err.message : String(err),
-        diagnostic
+        { lastErrorDetails: diagnostic }
       );
       throw err;
     }
@@ -2028,76 +1998,27 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.validateBuildForTarget(entry.name, entry.target, build);
   }
 
+  /** Every app target runs only an exact build the user has accepted to run. */
+  private requireAdmission(name: string, repoPath: string, effectiveVersion: string): void {
+    requireExactUnitAdmission({
+      service: "runtime.supervision",
+      operation: "activate",
+      unitLabel: "app",
+      name,
+      repoPath,
+      effectiveVersion,
+      isAdmitted: this.deps.isAdmitted,
+      openReviewFor: this.deps.openUnitReviewFor,
+    });
+  }
+
   private validateBuildForTarget(
     appName: string,
     target: WorkspaceAppTarget,
     build: AppBuildResultLike
   ): void {
     this.assertAppHosting();
-    if (
-      typeof build.metadata.execution?.executionDigest !== "string" ||
-      !/^[0-9a-f]{64}$/u.test(build.metadata.execution.executionDigest)
-    ) {
-      throw new Error(`App ${appName} build is missing a sealed execution identity`);
-    }
-    if (target === "terminal") {
-      const details = build.metadata.details;
-      if (!isAppBuildDetailsLike(details) || details.target !== "terminal") {
-        throw new Error(`Terminal app ${appName} build is missing terminal app metadata`);
-      }
-      const primaryArtifacts = (build.artifacts ?? []).filter(
-        (artifact) => artifact.role === "primary"
-      );
-      if (primaryArtifacts.length !== 1) {
-        throw new Error(
-          `Terminal app ${appName} build must include exactly one primary entry artifact`
-        );
-      }
-      if (!primaryArtifacts[0]?.path.endsWith(".mjs")) {
-        throw new Error(`Terminal app ${appName} primary artifact must be an ESM .mjs entry`);
-      }
-      return;
-    }
-    if (target !== "react-native") return;
-    const details = build.metadata.details;
-    if (
-      !isAppBuildDetailsLike(details) ||
-      details.target !== "react-native" ||
-      typeof details.rnHostAbi !== "string" ||
-      details.rnHostAbi.length === 0 ||
-      typeof details.integrity !== "string" ||
-      details.integrity.length === 0 ||
-      !isBuildProviderDetailsLike(details.provider)
-    ) {
-      throw new Error(
-        `React Native app ${appName} build is missing signed RN metadata or provider identity`
-      );
-    }
-    const primaryArtifacts = (build.artifacts ?? []).filter(
-      (artifact) => artifact.role === "primary"
-    );
-    if (primaryArtifacts.length === 0) {
-      throw new Error(`React Native app ${appName} build has no primary mobile artifact`);
-    }
-    const seenPlatforms = new Set<"android" | "ios">();
-    for (const artifact of primaryArtifacts) {
-      if (artifact.platform !== "android" && artifact.platform !== "ios") {
-        throw new Error(
-          `React Native app ${appName} primary artifact ${artifact.path} is missing a mobile platform`
-        );
-      }
-      if (seenPlatforms.has(artifact.platform)) {
-        throw new Error(
-          `React Native app ${appName} has multiple primary artifacts for ${artifact.platform}`
-        );
-      }
-      if (typeof artifact.integrity !== "string" || artifact.integrity.length === 0) {
-        throw new Error(
-          `React Native app ${appName} primary artifact ${artifact.path} is missing integrity`
-        );
-      }
-      seenPlatforms.add(artifact.platform);
-    }
+    validateAppBuildContract(appName, target, build);
   }
 
   private emitStatus(
@@ -2111,7 +2032,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       workspaceId: this.deps.workspaceId,
       entityId: name,
       kind: "app",
-      level: status === "error" ? "error" : "info",
+      level: status === "error" || error ? "error" : "info",
       message: error ?? `App ${name} is ${status}`,
       source: "lifecycle",
       fields: {
@@ -2197,10 +2118,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const detail = diagnostic
       ? ` (${diagnostic.phase}${diagnostic.target ? `, ${diagnostic.target}` : ""})`
       : "";
+    const kept = entry.activeEv ? " The previous version keeps running." : "";
     this.deps.notificationService?.show({
       type: "error",
-      title: "App update failed",
-      message: `${entry.name}: ${message}${detail}`,
+      title: "Update not adopted",
+      message: `${entry.name}: ${message}${detail}.${kept}`,
       ttl: 0,
       actions:
         entry.previousVersions.length > 0
@@ -2216,34 +2138,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
               },
             ]
           : undefined,
-    });
-  }
-
-  private restorePreviousBuildAfterActivationError(
-    name: string,
-    previous: AppRegistryEntry | null,
-    message: string,
-    diagnostic: AppUpdateErrorDiagnostic
-  ): void {
-    if (!previous?.activeBundleKey) {
-      this.unitHost.markError(name, message);
-      this.registry.patch(name, { lastErrorDetails: diagnostic });
-      return;
-    }
-    this.registry.patch(name, {
-      activeEv: previous.activeEv,
-      activeSourceHash: previous.activeSourceHash,
-      activeBundleKey: previous.activeBundleKey,
-      activeDependencyEvs: previous.activeDependencyEvs ?? {},
-      activeExternalDeps: previous.activeExternalDeps ?? {},
-      activeRuntimeDepsKey: previous.activeRuntimeDepsKey ?? null,
-      target: previous.target,
-      capabilities: previous.capabilities,
-      previousVersions: previous.previousVersions ?? [],
-      status: "error",
-      lastError: message,
-      lastErrorDetails: diagnostic,
-      activationTrust: previous.activationTrust ?? null,
     });
   }
 
@@ -2274,29 +2168,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const activeBuild = entry?.activeBundleKey
       ? await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey)
       : null;
-    if (target === "react-native" && activeBuild) {
-      const details = activeBuild.metadata.details;
-      if (
-        !isAppBuildDetailsLike(details) ||
-        details.target !== "react-native" ||
-        typeof details.rnHostAbi !== "string" ||
-        !details.rnHostAbi ||
-        typeof details.integrity !== "string" ||
-        !details.integrity ||
-        !isBuildProviderDetailsLike(details.provider)
-      ) {
-        reasons.push("Active React Native build is missing signed native metadata");
-      }
-    }
-    if (target === "terminal" && activeBuild) {
-      const details = activeBuild.metadata.details;
-      const primaryArtifacts = (activeBuild.artifacts ?? []).filter(
-        (artifact) => artifact.role === "primary"
-      );
-      if (!isAppBuildDetailsLike(details) || details.target !== "terminal") {
-        reasons.push("Active terminal build is missing terminal metadata");
-      } else if (primaryArtifacts.length !== 1 || !primaryArtifacts[0]?.path.endsWith(".mjs")) {
-        reasons.push("Terminal builds need exactly one primary .mjs artifact");
+    if (activeBuild && target !== "electron") {
+      try {
+        validateAppBuildContract(node.name, target, activeBuild);
+      } catch (error) {
+        reasons.push(error instanceof Error ? error.message : String(error));
       }
     }
     return {
@@ -2697,7 +2573,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
             null)
           : null;
       const updated = this.registry.get(entry.name) ?? entry;
-      this.emitStatus(entry.name, "error", message, diagnostic);
+      this.emitStatus(entry.name, updated.status, message, diagnostic);
       this.emitAppLifecycle({
         type: "update-error",
         appId: entry.name,

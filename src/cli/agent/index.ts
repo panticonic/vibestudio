@@ -532,7 +532,16 @@ async function diag(inv: ParsedInvocation): Promise<number> {
     console.log(
       `${result.entity.identity.entityId} (${result.entity.identity.kind}) — status: ${result.entity.status}`
     );
-    if (result.entity.lastError) console.log(`last error: ${result.entity.lastError}`);
+    if (result.entity.lastError) {
+      // A running unit with a recorded error is still on its previous build: the
+      // error belongs to the newer version that could not be adopted.
+      const keptRunning = result.entity.status === "running";
+      console.log(
+        keptRunning
+          ? `update not adopted: ${result.entity.lastError}\nThe previous version keeps running. Fix the error, then push the change again.`
+          : `last error: ${result.entity.lastError}`
+      );
+    }
     if (result.errors.length > 0) {
       console.log("\nrecent errors:");
       for (const entry of result.errors.slice(-20)) {

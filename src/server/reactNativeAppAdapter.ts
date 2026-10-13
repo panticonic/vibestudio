@@ -4,14 +4,11 @@ import type { ReviewedUnit } from "@vibestudio/shared/approvals";
 import type { HostTargetCandidate } from "@vibestudio/shared/hostTargets";
 import { appArtifactRoute, appArtifactUrl } from "@vibestudio/shared/appArtifacts";
 import type { ActiveExecutionIdentity } from "./runtimeExecutionIdentity.js";
+import {
+  isBuildProviderDetailsLike,
+  type AppBuildProviderDetails,
+} from "./buildV2/appBuildContract.js";
 import type { AppBuildResultLike, AppRegistryEntry, WorkspaceAppDeclaration } from "./appHost.js";
-
-export interface AppBuildProviderDetails {
-  name: string;
-  activeEv: string | null;
-  activeBuildKey: string | null;
-  contractVersion: string;
-}
 
 interface ReactNativeRegistry {
   get(name: string): AppRegistryEntry | null;
@@ -368,19 +365,6 @@ export class ReactNativeAppAdapter {
     if (approval.identityKeys.length > 0) this.deps.acceptPreapprovedTrust(approval.identityKeys);
     this.approvedLaunchPreflights.delete(sourceKey);
   }
-}
-
-export function isBuildProviderDetailsLike(value: unknown): value is AppBuildProviderDetails {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<AppBuildProviderDetails>;
-  return (
-    typeof candidate.name === "string" &&
-    candidate.name.length > 0 &&
-    (typeof candidate.activeEv === "string" || candidate.activeEv === null) &&
-    (typeof candidate.activeBuildKey === "string" || candidate.activeBuildKey === null) &&
-    typeof candidate.contractVersion === "string" &&
-    candidate.contractVersion.length > 0
-  );
 }
 
 function sameBuildProvider(

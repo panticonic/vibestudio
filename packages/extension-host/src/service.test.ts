@@ -1589,6 +1589,30 @@ describe("ExtensionHost reconcileDeclared", () => {
     });
   });
 
+  it("keeps the previous build running and records an update that failed to activate", async () => {
+    const { host, extensionNode } = await makeHost();
+    const approved = host.registry.get(extensionNode.name)!;
+    host.registry.patch(extensionNode.name, { status: "running" });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    vi.spyOn(host.processes, "start")
+      .mockRejectedValueOnce(new Error("candidate failed to become ready"))
+      .mockImplementation(async (input: { name: string }) => {
+        // The process manager's status callback marks the restarted image ready.
+        host.registry.patch(input.name, { status: "running", lastError: null });
+      });
+
+    await expect(host["buildAndActivate"](extensionNode.name)).rejects.toThrow(
+      "candidate failed to become ready"
+    );
+
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      activeBundleKey: approved.activeBundleKey,
+      activeEv: approved.activeEv,
+      status: "running",
+      lastError: "candidate failed to become ready",
+    });
+  });
+
   it("rebuilds a declared ref change and persists the trusted ref", async () => {
     const { host, approvalQueue, buildSystem, extensionNode } = await makeHost();
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);

@@ -228,7 +228,10 @@ interface ExtensionReadyState {
 
 interface ExtensionTransportLike {
   /** Attach a launched extension process's IPC channel as extension `name`'s RPC session. */
-  attachProcess(proc: import("@vibestudio/process-adapter").ProcessAdapter, name: string): () => void;
+  attachProcess(
+    proc: import("@vibestudio/process-adapter").ProcessAdapter,
+    name: string
+  ): () => void;
   call(
     name: string,
     method: string,
@@ -2646,10 +2649,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           if (this.activatesEagerly(node)) return;
         } catch (error) {
           if (error instanceof ServiceAccessError) throw error;
-          this.registry.patch(name, {
-            status: "error",
-            lastError: error instanceof Error ? error.message : String(error),
-          });
+          this.unitHost.markUpdateRejected(
+            name,
+            error instanceof Error ? error.message : String(error)
+          );
           throw error;
         }
       }
@@ -2747,19 +2750,12 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (previous?.activeBundleKey) {
-        this.registry.patch(node.name, {
-          activeEv: previous.activeEv,
-          activeSourceHash: previous.activeSourceHash,
-          activeBundleKey: previous.activeBundleKey,
-          activeExecutionDigest: previous.activeExecutionDigest,
-          activeDependencyEvs: previous.activeDependencyEvs,
-          activeExternalDeps: previous.activeExternalDeps ?? {},
-          activeRuntimeDepsKey: previous.activeRuntimeDepsKey,
-          status: "error",
-          lastError: message,
-        });
+        this.unitHost.rejectUpdate(node.name, previous, message);
         try {
           await this.activateOnce(node.name);
+          // The previous build runs again; the status callback cleared the
+          // error, so record that the update was not adopted.
+          this.unitHost.markUpdateRejected(node.name, message);
         } catch (rollbackErr) {
           this.registry.patch(node.name, {
             status: "error",
@@ -2842,10 +2838,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     try {
       await this.buildAndActivate(installed.entry.name, installed.entry.source.ref);
     } catch (err) {
-      this.registry.patch(installed.entry.name, {
-        status: "error",
-        lastError: err instanceof Error ? err.message : String(err),
-      });
+      this.unitHost.markUpdateRejected(
+        installed.entry.name,
+        err instanceof Error ? err.message : String(err)
+      );
       this.deps.eventService.emit("extensions:error", {
         name: installed.entry.name,
         error: err instanceof Error ? err.message : String(err),
