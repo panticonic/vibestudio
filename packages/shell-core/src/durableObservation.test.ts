@@ -116,6 +116,26 @@ describe("observeDurableProjection", () => {
     expect(retired).toBe(true);
   });
 
+  it("ignores a captured listener after retirement", async () => {
+    let changed!: () => void;
+    const read = vi.fn(async () => "current");
+    const observation = observeDurableProjection({
+      listen: (listener) => {
+        changed = listener;
+        return () => undefined;
+      },
+      read,
+      apply: vi.fn(),
+      error: vi.fn(),
+    });
+    await observation.ready;
+    await observation.stop();
+
+    changed();
+    await Promise.resolve();
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves exactly once when stopped before admission completes", async () => {
     const admitted = deferred<void>();
     const leave = vi.fn().mockResolvedValue(undefined);

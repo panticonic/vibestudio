@@ -94,7 +94,7 @@ export function observeDurableProjection<T>(input: {
   };
 
   const unlisten = input.listen(() => {
-    void refresh();
+    if (active) void refresh();
   });
   const admission = input.admit ? input.admit() : Promise.resolve();
   const ready = admission.then(
