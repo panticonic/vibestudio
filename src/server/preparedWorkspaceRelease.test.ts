@@ -8,18 +8,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { preparedWorkspaceTemplatePath } from "./preparedWorkspaceTemplate.js";
 import {
   preparedWorkspaceReleaseManifestSchema,
-  type WorkspaceReleaseIdentity,
+  type WorkspaceReleaseOperation,
 } from "./preparedWorkspaceRelease.js";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
-import { prepareBuildRootConfig } from "./buildV2/effectiveVersion.js";
+import {
+  prepareBuildRootConfig,
+  computeRootDependencyFingerprint,
+  type RootDependencyFingerprintInfo,
+} from "./buildV2/effectiveVersion.js";
 import { blobCasPath } from "./storage/blobCas.js";
 
-vi.mock("./buildV2/effectiveVersion.js", () => ({
+const { capturedHostRoots } = vi.hoisted(() => ({
+  capturedHostRoots: new Map<string, RootDependencyFingerprintInfo>(),
+}));
+vi.mock("./buildV2/effectiveVersion.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./buildV2/effectiveVersion.js")>()),
   buildCompilerProtocolIdentity: () => ({
     cacheVersion: "test-cache",
     panelEntryProtocolFingerprint: "b".repeat(64),
   }),
-  prepareBuildRootConfig: vi.fn(async () => ({ value: "a".repeat(64) })),
+  prepareBuildRootConfig: vi.fn(async ({ appRoot }: { appRoot: string }) => {
+    const captured = capturedHostRoots.get(appRoot);
+    if (!captured) throw new Error(`No canonical fixture host capture for ${appRoot}`);
+    return captured;
+  }),
 }));
 const roots: string[] = [];
 const basePin = {
@@ -45,6 +57,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  capturedHostRoots.clear();
 });
 
 async function fixture() {
@@ -58,6 +71,12 @@ async function fixture() {
     JSON.stringify(hostBuild)
   );
   vi.stubEnv("VIBESTUDIO_HOST_ARTIFACT_ROOT", path.join(root, "dist"));
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "release-fixture", private: true })
+  );
+  const rootFingerprint = await computeRootDependencyFingerprint(root);
+  capturedHostRoots.set(root, rootFingerprint);
   const builds = [];
   for (const workspace of ["base", "personal", "system"] as const) {
     const buildKey = createHash("sha256").update(workspace).digest("hex");
@@ -120,14 +139,14 @@ async function fixture() {
   }
   const { publishPreparedWorkspaceRelease } = await import("./preparedWorkspaceRelease.js");
   await publishPreparedWorkspaceRelease({ appRoot: root, output, templates }, builds, {
-    appDependencyFingerprint: "a".repeat(64),
+    appDependencyFingerprint: rootFingerprint.value,
     hostBuild,
     compilerProtocol: {
       cacheVersion: "test-cache",
       panelEntryProtocolFingerprint: "b".repeat(64),
     },
   });
-  return { root, output, builds };
+  return { root, output, builds, rootFingerprint };
 }
 
 describe("prepared workspace release admission", () => {
@@ -162,27 +181,39 @@ describe("prepared workspace release admission", () => {
   });
 
   it("captures one identity per cold publication or trusted warm admission", async () => {
-    const { root, output, builds } = await fixture();
+    const { root, output, builds, rootFingerprint } = await fixture();
     vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
     const { prepareCachedWorkspaceRelease } = await import("./preparedWorkspaceReleaseCache.js");
     const { publishPreparedWorkspaceRelease } = await import("./preparedWorkspaceRelease.js");
     const cold = path.join(root, "cold", "release");
-    const producer = vi.fn(async (identity: WorkspaceReleaseIdentity) => {
+    const producer = vi.fn(async (operation: WorkspaceReleaseOperation) => {
       await fs.cp(output, cold, { recursive: true });
       await fs.rm(path.join(cold, "userland-builds/release.json"));
       // Publication uses the same operation capture; it does not re-fingerprint.
       await publishPreparedWorkspaceRelease(
         { appRoot: root, output: cold, templates },
         builds,
-        identity
+        operation.identity
       );
     });
     await prepareCachedWorkspaceRelease({ appRoot: root, output: cold, templates }, producer);
     expect(prepareBuildRootConfig).toHaveBeenCalledTimes(1);
     expect(producer).toHaveBeenCalledWith(
-      expect.objectContaining({ appDependencyFingerprint: "a".repeat(64) })
+      expect.objectContaining({
+        identity: expect.objectContaining({ appDependencyFingerprint: rootFingerprint.value }),
+        rootFingerprint,
+      })
     );
     const warm = path.join(root, "warm", "release");
+    // Diagnostic paths may change without changing the logical input identity.
+    // They must not enter the release cache key or its completion manifest.
+    capturedHostRoots.set(root, {
+      ...rootFingerprint,
+      files: rootFingerprint.files.map((file) => ({
+        ...file,
+        path: path.join(root, "relocated-inputs", file.file),
+      })),
+    });
     const reads = vi.spyOn(fs, "readFile");
     const streams = vi.spyOn(fsNative, "createReadStream");
     await prepareCachedWorkspaceRelease({ appRoot: root, output: warm, templates }, producer);
@@ -196,6 +227,12 @@ describe("prepared workspace release admission", () => {
       )
     ).toBe(true);
     expect(streams).not.toHaveBeenCalled();
+    const publishedManifest = JSON.parse(
+      await fs.readFile(path.join(warm, "userland-builds/release.json"), "utf8")
+    );
+    expect(publishedManifest).not.toHaveProperty("rootFingerprint");
+    expect(JSON.stringify(publishedManifest)).not.toContain("relocated-inputs");
+    expect(JSON.stringify(publishedManifest)).not.toContain(root);
   });
 
   it("captures an identity once when the requested complete release is already present", async () => {

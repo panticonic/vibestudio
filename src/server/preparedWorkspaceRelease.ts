@@ -88,13 +88,17 @@ export async function workspaceReleaseIdentity(appRoot: string) {
     readHostBuildFingerprint(resolveRequiredHostArtifactRoot())
   );
   return {
-    appDependencyFingerprint: rootFingerprint.value,
-    hostBuild,
-    compilerProtocol: buildCompilerProtocolIdentity(),
+    identity: {
+      appDependencyFingerprint: rootFingerprint.value,
+      hostBuild,
+      compilerProtocol: buildCompilerProtocolIdentity(),
+    },
+    rootFingerprint,
   };
 }
 
-export type WorkspaceReleaseIdentity = Awaited<ReturnType<typeof workspaceReleaseIdentity>>;
+export type WorkspaceReleaseOperation = Awaited<ReturnType<typeof workspaceReleaseIdentity>>;
+export type WorkspaceReleaseIdentity = WorkspaceReleaseOperation["identity"];
 
 export function workspaceReleaseManifestPath(output: string): string {
   return path.join(output, "userland-builds/release.json");
@@ -103,7 +107,7 @@ export function workspaceReleaseManifestPath(output: string): string {
 export async function createPreparedWorkspaceReleaseManifest(
   input: PreparedWorkspaceReleaseInput,
   builds: readonly PreparedWorkspaceReleaseBuild[],
-  identity?: Awaited<ReturnType<typeof workspaceReleaseIdentity>>
+  identity?: WorkspaceReleaseIdentity
 ): Promise<PreparedWorkspaceReleaseManifest> {
   const preparedTemplates: PreparedWorkspaceReleaseManifest["preparedTemplates"] = [];
   for (const workspace of ["base", "personal", "system"] as const) {
@@ -119,7 +123,7 @@ export async function createPreparedWorkspaceReleaseManifest(
       recordDigest: sha256(recordBytes),
     });
   }
-  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot));
+  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot)).identity;
   return preparedWorkspaceReleaseManifestSchema.parse({
     format: "vibestudio-workspace-runtime-release/2",
     version: 2,
@@ -181,7 +185,7 @@ export async function validateExistingPreparedWorkspaceRelease(
   } catch (error) {
     throw new Error("Prepared workspace release manifest is invalid", { cause: error });
   }
-  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot));
+  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot)).identity;
   const inventory = await inspectPreparedWorkspaceRelease(input, manifest, resolvedIdentity);
   await verifyExactDirectoryEntries(
     path.join(input.output, "userland-builds"),
@@ -306,14 +310,14 @@ async function inspectPreparedWorkspaceRelease(
 export async function publishPreparedWorkspaceRelease(
   input: PreparedWorkspaceReleaseInput,
   builds: readonly PreparedWorkspaceReleaseBuild[],
-  identity?: Awaited<ReturnType<typeof workspaceReleaseIdentity>>
+  identity?: WorkspaceReleaseIdentity
 ): Promise<void> {
   const manifestPath = workspaceReleaseManifestPath(input.output);
   const temporaryPath = `${manifestPath}.publishing`;
   if (await lstatOrNull(manifestPath))
     throw new Error("A completed immutable workspace release cannot be republished");
   await fs.mkdir(path.dirname(manifestPath), { recursive: true });
-  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot));
+  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot)).identity;
   const manifest = await createPreparedWorkspaceReleaseManifest(input, builds, resolvedIdentity);
   const inventory = await inspectPreparedWorkspaceRelease(input, manifest, resolvedIdentity);
   await verifyExactDirectoryEntries(

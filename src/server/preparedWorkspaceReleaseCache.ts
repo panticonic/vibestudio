@@ -19,7 +19,7 @@ import {
   workspaceReleaseManifestPath,
   workspaceReleaseIdentity,
   type PreparedWorkspaceReleaseInput,
-  type WorkspaceReleaseIdentity,
+  type WorkspaceReleaseOperation,
 } from "./preparedWorkspaceRelease.js";
 
 /** Complete release resources are immutable derived data. A consumer owns a
@@ -69,12 +69,13 @@ export async function prepareCachedWorkspaceRelease(
     signal?: AbortSignal;
     onSourcesPrepared?: (root: string) => void | Promise<void>;
   },
-  produce: (identity: WorkspaceReleaseIdentity) => Promise<void>
+  produce: (operation: WorkspaceReleaseOperation) => Promise<void>
 ): Promise<void> {
   input.signal?.throwIfAborted();
   // The exact host/dependency inputs belong to this operation, not to each
   // validation or publication boundary. Never retain this capture globally.
-  const identity = await workspaceReleaseIdentity(input.appRoot);
+  const operation = await workspaceReleaseIdentity(input.appRoot);
+  const identity = operation.identity;
   if (await validateExistingPreparedWorkspaceRelease(input, identity)) {
     await input.onSourcesPrepared?.(input.output);
     return;
@@ -134,7 +135,7 @@ export async function prepareCachedWorkspaceRelease(
             await reuse();
             return;
           }
-          await produce(identity);
+          await produce(operation);
           input.signal?.throwIfAborted();
           if (!(await validateExistingPreparedWorkspaceRelease(input, identity)))
             throw new Error("Workspace release producer returned without a completed publication");
