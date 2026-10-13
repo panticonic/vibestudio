@@ -218,6 +218,27 @@ describe("approvalState", () => {
     expect(unsubscribePendingChanged).toHaveBeenCalledTimes(1);
   });
 
+  it("does not publish a read as ready after event admission failed", async () => {
+    const admissionFailure = new Error("Subscription response lost");
+    const listPending = vi.fn(async () => [approval("late")]);
+    const onChange = vi.fn();
+    const controller = createApprovalStateController({
+      listPending,
+      subscribePendingChanged: async () => {
+        throw admissionFailure;
+      },
+      unsubscribePendingChanged: vi.fn(async () => undefined),
+      onPendingChanged: () => () => {},
+      onChange,
+    });
+
+    await expect(controller.start()).rejects.toBe(admissionFailure);
+    await expect(controller.refresh("manual")).rejects.toBe(admissionFailure);
+    expect(listPending).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+    await expect(controller.stop()).rejects.toBe(admissionFailure);
+  });
+
   it("preserves admission and retirement failures in one causal aggregate", async () => {
     const admissionFailure = new Error("Subscription response lost");
     const retirementFailure = new Error("Subscription retirement failed");

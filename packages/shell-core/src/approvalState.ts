@@ -45,6 +45,7 @@ export function createApprovalStateController(
   let refreshSeq = 0;
   let unsubscribe: (() => void) | null = null;
   let admission: Promise<void> | null = null;
+  let admissionFailure: unknown;
   let starting: Promise<PendingApproval[]> | null = null;
   let stopping: Promise<void> | null = null;
   let current: PendingApproval[] = [];
@@ -60,6 +61,7 @@ export function createApprovalStateController(
 
   const refresh = (reason: ApprovalStateRefreshReason = "manual"): Promise<PendingApproval[]> => {
     if (disposed) return Promise.reject(new Error("Approval state controller is stopped"));
+    if (admissionFailure !== undefined) return Promise.reject(admissionFailure);
     const seq = ++refreshSeq;
     let read!: Promise<PendingApproval[]>;
     read = (async () => {
@@ -98,6 +100,7 @@ export function createApprovalStateController(
       admission = deps.subscribePendingChanged().then(
         () => undefined,
         (error: unknown) => {
+          admissionFailure = error;
           if (!disposed) deps.onError?.(error, "subscribe");
           throw error;
         }
