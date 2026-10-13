@@ -910,6 +910,14 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "credentials",
   },
   {
+    prefix: "model.use",
+    authorityCategory: { domain: "automation", verb: "act" },
+    title: "Use an AI model",
+    action: "send prompts to an approved AI model",
+    description: "Use an approved AI model for this task",
+    group: "runtime",
+  },
+  {
     prefix: "panel.navigate",
     authorityCategory: { domain: "automation", verb: "act" },
     title: "Open or switch panels",

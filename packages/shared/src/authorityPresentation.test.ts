@@ -153,6 +153,26 @@ describe("authority request presentation", () => {
     ]);
   });
 
+  it("presents native model use declared by agent workers", () => {
+    expect(
+      summarizeAuthorityRequests([
+        {
+          capability: "model.use",
+          resource: { kind: "prefix", prefix: "" },
+          tier: "gated",
+          evidence: "intentional-broad",
+        },
+      ]).rows
+    ).toEqual([
+      expect.objectContaining({
+        capability: "model.use",
+        domain: "automation",
+        verb: "act",
+        action: "send prompts to an approved AI model",
+      }),
+    ]);
+  });
+
   it("rejects a native app authority request without reviewed presentation", () => {
     expect(() =>
       assertReviewedNativeAppAuthorityRequests([
