@@ -3,7 +3,12 @@ import {
   type WorkerExecutableAdmission,
 } from "./workerExecutableDispatch.js";
 import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
-import { formatRpcFailure, rpcCallerAbortedError, serializeRpcFailure } from "@vibestudio/rpc";
+import {
+  formatRpcFailure,
+  isRpcConnectionLost,
+  rpcCallerAbortedError,
+  serializeRpcFailure,
+} from "@vibestudio/rpc";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { attachRpcDiagnosticId, decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
@@ -5995,12 +6000,12 @@ export class RpcServer {
         activated = true;
         controlTask = controlLoop().catch((error) => {
           if (stopped) return;
-          loopFailures.push(error);
+          if (!isRpcConnectionLost(error)) loopFailures.push(error);
           fail(error);
         });
         streamTask = streamLoop().catch((error) => {
           if (stopped) return;
-          loopFailures.push(error);
+          if (!isRpcConnectionLost(error)) loopFailures.push(error);
           fail(error);
         });
       },

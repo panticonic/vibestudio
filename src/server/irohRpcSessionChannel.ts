@@ -62,24 +62,6 @@ function envelopeOperation(envelope: RpcEnvelope): string {
   }
 }
 
-/** True only when every failure in a retirement graph is the lost connection. */
-function isConnectionRetirement(error: unknown, visiting = new Set<object>()): boolean {
-  if (isRpcConnectionLost(error)) return true;
-  if (!error || typeof error !== "object" || visiting.has(error)) return false;
-  const nested = (error as { errors?: unknown }).errors;
-  if (!Array.isArray(nested) || nested.length === 0) return false;
-  visiting.add(error);
-  try {
-    const cause = (error as { cause?: unknown }).cause;
-    return (
-      nested.every((failure) => isConnectionRetirement(failure, visiting)) &&
-      (cause === undefined || isConnectionRetirement(cause, visiting))
-    );
-  } finally {
-    visiting.delete(error);
-  }
-}
-
 export interface IrohRpcSessionChannelOptions {
   sid: string;
   connection: IrohPhysicalConnection;
@@ -173,7 +155,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     });
     const joinedNotification = notification.catch((error) => {
       this.logControlFailure("close notification", error);
-      if (!isConnectionRetirement(error)) throw error;
+      if (!isRpcConnectionLost(error)) throw error;
     });
     return this.fireClosed(code, reason, [joinedNotification]);
   }
@@ -189,7 +171,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     });
     const joinedNotification = notification.catch((error) => {
       this.logControlFailure("termination notification", error);
-      if (!isConnectionRetirement(error)) throw error;
+      if (!isRpcConnectionLost(error)) throw error;
     });
     return this.fireClosed(1006, "terminated", [joinedNotification]);
   }
@@ -574,7 +556,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     let owned!: Promise<void>;
     owned = operation
       .catch((error) => {
-        const connectionRetirement = isConnectionRetirement(error);
+        const connectionRetirement = isRpcConnectionLost(error);
         if (!connectionRetirement) this.ownedFailures.push(error);
         // An operation that observes connection loss before the session's
         // terminal event still has to notify the live RPC owner. Once the
@@ -614,9 +596,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       const failures = [
         ...this.ownedFailures,
         ...terminalResults.flatMap((result) =>
-          result.status === "rejected" && !isConnectionRetirement(result.reason)
-            ? [result.reason]
-            : []
+          result.status === "rejected" && !isRpcConnectionLost(result.reason) ? [result.reason] : []
         ),
       ];
       if (failures.length > 0) {
