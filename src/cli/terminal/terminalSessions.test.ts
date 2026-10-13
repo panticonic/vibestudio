@@ -1,3 +1,4 @@
+import { createLaunchProgress } from "./launchProgress.js";
 import { describe, expect, it, vi } from "vitest";
 import type { TerminalBrowserExit } from "@vibestudio/shell-core/terminal/terminalBrowserHost";
 import type { AppPrincipalGrantResponse } from "@vibestudio/service-schemas/auth";
@@ -129,7 +130,7 @@ const options = (deps: Partial<TerminalSessionDependencies>, progress: string[])
   yes: false,
   stdin: process.stdin,
   stdout: process.stdout,
-  progress: (line: string) => progress.push(line),
+  progress: createLaunchProgress({ write: (line) => progress.push(line) }),
   dependencies: deps,
 });
 
@@ -158,6 +159,7 @@ describe("runTerminalSessions", () => {
     expect(devices[0]!.release).toHaveBeenCalled();
     expect(devices[0]!.close).toHaveBeenCalled();
     expect(progress).toContain("Preparing the terminal browser in System…");
+    expect(progress).toContain("Loading the terminal browser…");
     expect(progress.join("\n")).not.toMatch(/-ws_/);
     await expect(vi.mocked(deps.runBrowser).mock.calls[0]![0].listWorkspaces()).resolves.toEqual([
       { id: "ws_system", name: "System" },

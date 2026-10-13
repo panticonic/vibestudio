@@ -6718,6 +6718,7 @@ async function main() {
     },
     ensureUserlandDoPrepared: (ref, witness) =>
       durableObjectExecutionReadiness.ensurePrepared(ref, witness),
+    withdrawDecisionWaits: (callerId) => approvalQueue.cancelForCaller(callerId),
     republishStorageOwner: async (ref) => {
       const id = canonicalEntityId({
         kind: "do",
@@ -8303,6 +8304,10 @@ async function main() {
     } catch (error) {
       console.error("[Server] Identity DB shutdown error:", error);
     }
+    await runtimeDiagnostics.flush().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] Runtime diagnostics could not be persisted:", error);
+    });
     console.log(
       shutdownErrors.length
         ? "[Server] Shutdown completed with errors"

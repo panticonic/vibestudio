@@ -47,14 +47,34 @@ import {
   type PreparedWorkspaceReleaseInput,
 } from "./preparedWorkspaceRelease.js";
 
-/** Prepare the same immutable release for a source supervisor or a packager.
- * Source publication and compilation are phases of the same owned producer.
- * The output contains source and artifacts, never producer state or grants. */
+/**
+ * What a producer publishes.
+ *   - "sources": the sealed template sources a workspace is created from. A
+ *     source supervisor needs nothing else to start: the server compiles the
+ *     runtimes it is asked for on demand, in its own scheduler, with interactive
+ *     work ahead of background preparation, and reuses the shared derived cache.
+ *   - "release": the sources plus every runtime built and sealed under one
+ *     manifest. A packager ships this so an installed host never compiles.
+ */
+export type WorkspacePreparationScope = "sources" | "release";
+
+/** A fact the producer learned about its own progress, reported as it happens. */
+export type WorkspacePreparationProgress =
+  | { phase: "sources"; done: number; total: number; item: string }
+  /** `total` is null until every template has listed the runtimes it will build. */
+  | { phase: "runtimes"; done: number; total: number | null; item: string };
+
+/** Prepare an immutable workspace release for a source supervisor or a packager.
+ * Source publication and, for the full release, compilation are phases of the
+ * same owned producer. The output contains source and artifacts, never
+ * producer state or grants. */
 export async function prepareWorkspaceTemplates(input: {
   appRoot: string;
   output: string;
   scratch: string;
+  scope: WorkspacePreparationScope;
   signal?: AbortSignal;
+  onProgress?: (progress: WorkspacePreparationProgress) => void;
 }): Promise<void> {
   const pins = readDefaultWorkspaceTemplates(input.appRoot);
   const releaseInput: PreparedWorkspaceReleaseInput = {
@@ -63,11 +83,12 @@ export async function prepareWorkspaceTemplates(input: {
     templates: pins,
   };
   input.signal?.throwIfAborted();
-  if (await validateExistingPreparedWorkspaceRelease(releaseInput)) {
+  if (input.scope === "release" && (await validateExistingPreparedWorkspaceRelease(releaseInput))) {
     input.signal?.throwIfAborted();
     return;
   }
-  const releaseIdentity = await workspaceReleaseIdentity(input.appRoot);
+  const releaseIdentity =
+    input.scope === "release" ? await workspaceReleaseIdentity(input.appRoot) : undefined;
   const sources = JSON.parse(process.env["VIBESTUDIO_WORKSPACE_SOURCES"] ?? "[]") as Array<{
     pin: WorkspaceTemplatePin;
     checkout: string;
@@ -100,6 +121,9 @@ export async function prepareWorkspaceTemplates(input: {
     directory: string;
     record: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate;
   }> = [];
+  let plannedRoles = 0;
+  let plannedRuntimes = 0;
+  let completedRuntimes = 0;
   let operationFailure: unknown;
   let operationFailed = false;
   try {
@@ -206,6 +230,12 @@ export async function prepareWorkspaceTemplates(input: {
       }
       const record = preparedWorkspaceTemplateSchema.parse(bootstrap.preparedRecord(blobs, []));
       fs.writeFileSync(path.join(directory, "template.json"), JSON.stringify(record));
+      input.onProgress?.({
+        phase: "sources",
+        done: prepared.length + 1,
+        total: 3,
+        item: role,
+      });
       prepared.push({
         role,
         statePath,
@@ -219,7 +249,7 @@ export async function prepareWorkspaceTemplates(input: {
     }
     input.signal?.throwIfAborted();
     const roleOutcomes = await Promise.allSettled(
-      prepared.map(
+      (input.scope === "release" ? prepared : []).map(
         async ({
           role,
           statePath,
@@ -324,6 +354,7 @@ export async function prepareWorkspaceTemplates(input: {
             const preparedAt = performance.now();
             console.log(`[workspace-release] Preparing runtimes for ${role}`);
             const owner = builds;
+
             const runtimeBuilds = await processOwner.withWorkers(() =>
               prepareWorkspaceRuntimeBuilds(
                 owner.getGraph().allNodes(),
@@ -336,12 +367,22 @@ export async function prepareWorkspaceTemplates(input: {
                   ),
                 input.signal,
                 (event) => {
-                  if (event.type === "started") {
+                  if (event.type === "planned") {
+                    plannedRoles += 1;
+                    plannedRuntimes += event.count;
+                  } else if (event.type === "started") {
                     console.log(`[workspace-release] Runtime ${role}/${event.source}: started`);
                   } else if (event.type === "completed") {
                     console.log(
                       `[workspace-release] Runtime ${role}/${event.source}: completed in ${Math.round(event.durationMs)}ms`
                     );
+                    completedRuntimes += 1;
+                    input.onProgress?.({
+                      phase: "runtimes",
+                      done: completedRuntimes,
+                      total: plannedRoles === 3 ? plannedRuntimes : null,
+                      item: `${role}/${event.source}`,
+                    });
                   } else {
                     const detail =
                       event.error instanceof Error ? event.error.message : String(event.error);
@@ -436,5 +477,6 @@ export async function prepareWorkspaceTemplates(input: {
     });
   }
   input.signal?.throwIfAborted();
-  await publishPreparedWorkspaceRelease(releaseInput, releaseBuilds, releaseIdentity);
+  if (input.scope === "release")
+    await publishPreparedWorkspaceRelease(releaseInput, releaseBuilds, releaseIdentity);
 }

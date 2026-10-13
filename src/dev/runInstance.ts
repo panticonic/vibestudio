@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {
   prepareWorkspaceRelease,
+  type WorkspacePreparationProgress,
   type WorkspaceReleasePreparation,
 } from "../../scripts/prepare-workspace-release.mjs";
 import * as fs from "node:fs";
@@ -11,6 +12,12 @@ import { CLI_WORKSPACE_ENV, isCliWorkspaceSelection } from "./cliWorkspaceSelect
 import type { StdioOptions } from "node:child_process";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
 import { LaunchTermination, joinProducer, runOwnedChild } from "./launchTermination.js";
+import {
+  createLaunchProgress,
+  runStep,
+  type LaunchProgress,
+  type LaunchStep,
+} from "../cli/terminal/launchProgress.js";
 import { routeProcessWarnings, tolerateTerminalHangup } from "../cli/terminal/ttyRestore.js";
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import {
@@ -42,7 +49,11 @@ type LaunchMode = Mode | "terminal";
  * `pnpm terminal` keeps the terminal for the browser: build, template and
  * server output go to `<instanceRoot>/logs/server.log` instead.
  */
+/** Steps `pnpm terminal` runs before the browser owns the screen. */
+const TERMINAL_LAUNCH_STEPS = 7;
+
 interface TerminalLaunch {
+  progress: LaunchProgress;
   logFile: string;
   logFd: number;
   log: fs.WriteStream;
@@ -194,7 +205,9 @@ function prepareLaunchTemplates(
   env: NodeJS.ProcessEnv,
   root: string,
   generationId: string,
-  log?: NodeJS.WritableStream
+  scope: "sources" | "release",
+  log?: NodeJS.WritableStream,
+  onProgress?: (progress: WorkspacePreparationProgress) => void
 ): WorkspaceReleasePreparation {
   const output = path.join(root, "workspace-release", generationId);
   return prepareWorkspaceRelease({
@@ -204,7 +217,9 @@ function prepareLaunchTemplates(
     output,
     scratch: path.join(root, "template-preparation", generationId),
     env,
+    scope,
     ...(log ? { log } : {}),
+    ...(onProgress ? { onProgress } : {}),
   });
 }
 
@@ -262,28 +277,55 @@ async function runServer(
   // ordinary CLI credential for its own.
   const { pairLocalCli } = await import("../cli/localPairing.js");
   const stdio: StdioOptions = terminal ? ["ignore", terminal.logFd, terminal.logFd] : "inherit";
-  if (terminal) console.log("Building Vibestudio from this checkout…");
-  await runOwnedChild(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], {
-    env,
-    stdio,
-    termination,
-  });
-  await runOwnedChild(process.execPath, ["build.mjs", "--source-server-prereqs"], {
-    env,
-    stdio,
-    termination,
-  });
+  const hostBuild = async () => {
+    await runOwnedChild(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], {
+      env,
+      stdio,
+      termination,
+    });
+    await runOwnedChild(process.execPath, ["build.mjs", "--source-server-prereqs"], {
+      env,
+      stdio,
+      termination,
+    });
+  };
+  if (terminal)
+    await runStep(terminal.progress, "Building Vibestudio from this checkout", hostBuild);
+  else await hostBuild();
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
-  if (terminal) console.log("Preparing workspace templates…");
-  await prepareOwnedTemplates(termination, resources, () =>
-    prepareLaunchTemplates(env, instance.root, instance.generationId, terminal?.log)
-  );
-  if (terminal) console.log("Starting the server…");
+  const prepareTemplates = (
+    scope: "sources" | "release",
+    report?: (progress: WorkspacePreparationProgress) => void
+  ) =>
+    prepareOwnedTemplates(termination, resources, () =>
+      prepareLaunchTemplates(
+        env,
+        instance.root,
+        instance.generationId,
+        scope,
+        terminal?.log,
+        report
+      )
+    );
+  if (terminal) {
+    // The terminal browser needs only its sources to start; the server compiles
+    // the runtimes the person opens, in the order they are needed.
+    await runStep(terminal.progress, "Preparing workspace templates", (step) =>
+      prepareTemplates("sources", (progress) => {
+        if (progress.phase === "sources")
+          step.note(`${progress.item} prepared (${progress.done}/${progress.total})`);
+      })
+    );
+  } else {
+    await prepareTemplates("release");
+  }
   const configuredReadyFile = optionValue(forwarded, "--ready-file");
   const readyFile =
     configuredReadyFile ?? path.join(instance.root, "server-auth", "hub-ready.json");
   fs.rmSync(readyFile, { force: true });
   const serverArgs = configuredReadyFile ? forwarded : [...forwarded, "--ready-file", readyFile];
+  const serverStep = terminal?.progress.step("Starting the server");
+  let pairStep: LaunchStep | undefined;
   const supervisor = new DevInstanceSupervisor({
     sourceRoot: fs.realpathSync(process.cwd()),
     command: process.execPath,
@@ -312,11 +354,13 @@ async function runServer(
         const selectedWorkspace = isCliWorkspaceSelection(configuredWorkspace)
           ? configuredWorkspace
           : undefined;
-        if (terminal) console.log("Pairing this terminal…");
+        serverStep?.done();
+        pairStep = terminal?.progress.step("Pairing this terminal");
         const bootstrap = await pairLocalCli(ready, {
           ...(selectedWorkspace ? { workspace: selectedWorkspace } : {}),
         });
         publishDevInstanceReady(instance, bootstrap);
+        pairStep?.done();
         if (bootstrap.status === "invite-required") {
           console.warn(
             `[instance:${instance.id}] CLI is not paired. Create a device invite, then run ` +
@@ -330,7 +374,12 @@ async function runServer(
       },
     },
   });
-  return await startOwnedSupervisor(termination, resources, supervisor);
+  try {
+    return await startOwnedSupervisor(termination, resources, supervisor);
+  } catch (error) {
+    (pairStep ?? serverStep)?.fail();
+    throw error;
+  }
 }
 
 async function runDesktop(
@@ -351,7 +400,7 @@ async function runDesktop(
   await runOwnedChild(process.execPath, ["scripts/ensure-host-build.mjs"], { env, termination });
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "desktop");
   await prepareOwnedTemplates(termination, resources, () =>
-    prepareLaunchTemplates(env, instance.root, instance.generationId)
+    prepareLaunchTemplates(env, instance.root, instance.generationId, "release")
   );
   return await startOwnedSupervisor(
     termination,
@@ -440,7 +489,8 @@ async function attachTerminal(
 /** Run the browser against the server this supervisor owns; returns the exit status. */
 async function runOwnedTerminal(
   terminal: TerminalLaunch,
-  supervisor: DevInstanceSupervisor
+  supervisor: DevInstanceSupervisor,
+  termination: LaunchTermination
 ): Promise<number> {
   const [{ runTerminalSessions }, { loadCliCredentials, requireDeviceCliCredentials }, command] =
     await Promise.all([
@@ -467,12 +517,18 @@ async function runOwnedTerminal(
       },
       serverExited: supervisor.wait().then((code) => `the server exited (code ${code})`),
       yes: terminal.yes,
+      signal: termination.signal,
       stdin: process.stdin,
       stdout: process.stdout,
-      progress: (line) => console.log(line),
+      progress: terminal.progress,
     });
     return command.reportTerminalExit(exit, terminal.logFile);
   } catch (error) {
+    // A requested stop is the person's own doing, not a failure to explain.
+    if (termination.requested) {
+      console.error("Interrupted.");
+      return signalExitCode(termination.requested);
+    }
     return command.printTerminalError(error, terminal.logFile);
   }
 }
@@ -485,6 +541,10 @@ function openTerminalLog(
   fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
   const logFd = fs.openSync(logFile, "w", 0o600);
   return {
+    progress: createLaunchProgress({
+      write: (line) => console.log(line),
+      total: TERMINAL_LAUNCH_STEPS,
+    }),
     logFile,
     logFd,
     log: fs.createWriteStream("", { fd: logFd, autoClose: false }),
@@ -612,13 +672,17 @@ async function main(): Promise<void> {
   let supervisor: DevInstanceSupervisor | undefined;
   const resources: LaunchResources = {};
   try {
-    const defaultTemplates =
-      (await resolveDevelopmentTemplateSet({
+    const resolveTemplates = () =>
+      resolveDevelopmentTemplateSet({
         repoRoot,
         checkpointRoot: checkpointTarget,
         ...(parsed.templateCheckouts ? { explicitRoot: parsed.templateCheckouts } : {}),
         productionTemplates: parsed.productionTemplates,
-      })) ?? undefined;
+      });
+    const defaultTemplates =
+      (terminal
+        ? await runStep(terminal.progress, "Reading the template checkouts", resolveTemplates)
+        : await resolveTemplates()) ?? undefined;
     if (!parsed.productionTemplates && !defaultTemplates) {
       throw new Error(
         "No development template checkouts are configured. Run `pnpm dev:templates setup`, " +
@@ -728,7 +792,7 @@ async function main(): Promise<void> {
     }
     if (terminal) {
       supervisor = await runServer(launchArgs, env, instance, resources, termination, terminal);
-      const browser = runOwnedTerminal(terminal, supervisor);
+      const browser = runOwnedTerminal(terminal, supervisor, termination);
       process.exitCode = await Promise.race([
         browser,
         resources.preparation!.completed.then(() => browser),

@@ -55,7 +55,7 @@ async function harness(registryPath?: string) {
     retireEntity: vi.fn(async (id: string) => {
       retired.push(id);
     }),
-    createContext: vi.fn(async () => "ctx-shell"),
+    createContext: vi.fn(async () => `ctx-${++entity}`),
     entityStateArgs: vi.fn(async () => ({ channelName: "kept" })),
     primaryArtifactPath: async () => "/builds/chat/bundle.js",
     grantConnection: vi.fn(() => "grant-token"),
@@ -159,6 +159,38 @@ describe("terminalApps launch service", () => {
     };
     expect(spec.contextId).toBe("ctx-1");
     expect(spec.stateArgs).toEqual({ channelName: "kept" });
+    await h.service.stop();
+  });
+
+  it("creates the session's context under the launching call's test policy", async () => {
+    const h = await harness();
+    const testPolicy = { policyId: "orchestrator-1", kind: "orchestrator" } as never;
+    const testCtx = (source?: string): ServiceContext => {
+      const ctx = personCtx(source);
+      return { ...ctx, caller: { ...ctx.caller, testPolicy } };
+    };
+    const launched = (await call(h, "launch", testCtx("terminal-apps/chat"), {
+      source: "terminal-apps/chat",
+      cols: 80,
+      rows: 24,
+    })) as { principalId: string };
+    expect(vi.mocked(h.deps.createContext).mock.calls.at(-1)![0]).toMatchObject({
+      runtime: { id: "terminal-apps", kind: "server" },
+      testPolicy,
+    });
+    // The app runs in that context, not in one it would create for itself.
+    expect(vi.mocked(h.deps.createEntity).mock.calls.at(-1)![1]).toMatchObject({
+      contextId: "ctx-1",
+    });
+    expect(launched.principalId).toMatch(/^panel:nav-term-/);
+    await call(h, "launch", testCtx(), { command: "/bin/sh", cols: 80, rows: 24 });
+    expect(vi.mocked(h.deps.createContext).mock.calls.at(-1)![0]).toMatchObject({ testPolicy });
+    await call(h, "launch", personCtx("terminal-apps/chat"), {
+      source: "terminal-apps/chat",
+      cols: 80,
+      rows: 24,
+    });
+    expect(vi.mocked(h.deps.createContext).mock.calls.at(-1)![0]).not.toHaveProperty("testPolicy");
     await h.service.stop();
   });
 

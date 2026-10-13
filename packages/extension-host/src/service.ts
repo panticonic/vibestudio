@@ -1,3 +1,4 @@
+import { traceInvocation } from "./invocationTrace.js";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
@@ -1183,7 +1184,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     operation: "invoke" | "invokeProvider",
     call: (entry: RegistryEntry, invocation: ExtensionInvocation) => Promise<unknown>
   ): Promise<unknown> {
-    console.info("[ExtensionHost] invocation requested", {
+    traceInvocation("[ExtensionHost] invocation requested", {
       extension: name,
       method: invocationMethod,
     });
@@ -1193,13 +1194,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     // extension approval, which in turn can wedge eval/tool callers that are just awaiting an
     // extension-backed helper.
     const entry = await this.requireInvocationEntry(name, operation, ctx.signal);
-    console.info("[ExtensionHost] invocation target resolved", {
+    traceInvocation("[ExtensionHost] invocation target resolved", {
       extension: entry.name,
       method: invocationMethod,
     });
     await this.assertWebsiteMethod(ctx, entry, invocationMethod);
     await this.ensureTargetRunning(entry, ctx.signal, operation);
-    console.info("[ExtensionHost] invocation target ready", {
+    traceInvocation("[ExtensionHost] invocation target ready", {
       extension: entry.name,
       method: invocationMethod,
     });
@@ -1207,13 +1208,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     await this.assertWebsiteMethod(ctx, entry, invocationMethod);
     await this.assertAdmittedMethod(ctx, entry, invocationMethod);
     const invocation = this.createTrackedInvocation(ctx, entry.name, invocationMethod);
-    console.info("[ExtensionHost] invocation admitted", {
+    traceInvocation("[ExtensionHost] invocation admitted", {
       extension: entry.name,
       method: invocationMethod,
     });
     try {
       const result = await call(entry, invocation);
-      console.info("[ExtensionHost] invocation completed", {
+      traceInvocation("[ExtensionHost] invocation completed", {
         extension: entry.name,
         method: invocationMethod,
       });
@@ -1595,9 +1596,24 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.assertWebsiteMethodPolicy(ctx, method, build);
   }
 
+  /**
+   * The stored build an extension's active bundle key names. A build is
+   * content-addressed, so what is verified for a key stays true for that key; an
+   * invocation consults it half a dozen times (availability, website policy,
+   * admitted authority), and re-verifying the whole stored build for each is
+   * most of what a call costs. One build per extension is kept, replaced when
+   * its active key changes.
+   */
+  private readonly activeBuilds = new Map<string, StoredBuildResult>();
+
   private async readCurrentActiveBuild(entry: RegistryEntry): Promise<StoredBuildResult | null> {
     if (!entry.activeBundleKey || !entry.activeExecutionDigest) return null;
-    const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
+    let build: StoredBuildResult | null | undefined = this.activeBuilds.get(entry.name);
+    if (build?.buildKey !== entry.activeBundleKey) {
+      build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
+      if (build) this.activeBuilds.set(entry.name, build);
+      else this.activeBuilds.delete(entry.name);
+    }
     if (
       !build ||
       build.buildKey !== entry.activeBundleKey ||

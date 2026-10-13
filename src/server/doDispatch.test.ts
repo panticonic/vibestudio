@@ -186,6 +186,30 @@ describe("DODispatch", () => {
     });
   });
 
+  describe("decision waits", () => {
+    it("withdraws the object's waits for a person when a release begins to quiesce it, and only then", async () => {
+      const withdraw = vi.fn();
+      dispatch.setDecisionWaitWithdrawal(withdraw);
+      const ref = makeRef();
+      const prepare = (phase: "quiesce" | "release") =>
+        dispatch
+          .dispatchLifecycle(ref, "prepare", {
+            epoch: "test",
+            phase,
+            mode: "suspend",
+            reason: "test",
+            deadlineMs: 1,
+          })
+          .catch(() => undefined);
+      await prepare("release");
+      expect(withdraw).not.toHaveBeenCalled();
+      await prepare("quiesce");
+      expect(withdraw).toHaveBeenCalledExactlyOnceWith(
+        `do:${ref.source}:${ref.className}:${ref.objectKey}`
+      );
+    });
+  });
+
   describe("dispatch with token-backed workerd URL", () => {
     it("uses exact preparing admission and normal host attestation for clone initialization", async () => {
       const ordinary = vi.fn(async () => {});

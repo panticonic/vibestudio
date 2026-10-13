@@ -1,3 +1,4 @@
+import { traceInvocation } from "./invocationTrace.js";
 import { createCredentialClient } from "@vibestudio/service-schemas/clients/credentialClient";
 import {
   createMainRpcCaller,
@@ -66,7 +67,7 @@ function runOwnedLifecycle<T>(
 ): Promise<T> {
   const extension = process.env["VIBESTUDIO_EXTENSION_NAME"] ?? "unknown";
   const flight = lifecycle.run(signal, async (ownedSignal) => {
-    console.info("[ExtensionRuntime] invocation started", {
+    traceInvocation("[ExtensionRuntime] invocation started", {
       extension,
       owner,
     });
@@ -74,7 +75,7 @@ function runOwnedLifecycle<T>(
   });
   return flight.then(
     (value) => {
-      console.info("[ExtensionRuntime] invocation completed", {
+      traceInvocation("[ExtensionRuntime] invocation completed", {
         extension,
         owner,
       });

@@ -129,6 +129,37 @@ describe("execution-owned native operation evidence", () => {
     expect(JSON.stringify(journal)).not.toContain("PRIVATE");
   });
 
+  it("ends a stream when either the caller's or the execution's cancellation fires", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const nativeRpc = wireClientFor(
+      (instance as unknown as { rpc: { call: (...args: unknown[]) => Promise<unknown> } })
+        .rpc as import("@vibestudio/rpc").RpcClient
+    );
+    const open = vi.spyOn(nativeRpc, "streamReadable").mockResolvedValue({} as never);
+    const createExecutionContext = (
+      instance as unknown as {
+        createExecutionContext: (
+          input: { contextId: string },
+          signal?: AbortSignal
+        ) => { rpc: typeof nativeRpc };
+      }
+    ).createExecutionContext;
+    const execution = new AbortController();
+    const owner = createExecutionContext.call(instance, { contextId: "owner" }, execution.signal);
+
+    const caller = new AbortController();
+    await owner.rpc.streamReadable("main", "events.watch", [], { signal: caller.signal });
+    const merged = open.mock.calls[0]![3]!.signal!;
+    expect(merged.aborted).toBe(false);
+    caller.abort(new Error("caller done"));
+    expect(merged.aborted).toBe(true);
+
+    await owner.rpc.streamReadable("main", "events.watch", [], { signal: new AbortController().signal });
+    const second = open.mock.calls[1]![3]!.signal!;
+    execution.abort(new Error("execution cancelled"));
+    expect(second.aborted).toBe(true);
+  });
+
   it("records receiver results in settlement order before guest mutation and retains rejection receipts", async () => {
     const { instance } = await createTestDO(EvalDO);
     const nativeRpc = wireClientFor(

@@ -10,20 +10,47 @@ type ResolveContext = { [RESOLVE_CONTEXT]: "request" | "skip"; pluginData: unkno
 const OWNED_FILE_NAMESPACE = "vibestudio-prepared-file";
 const OWNED_NAMESPACE_PREFIX = "vibestudio-prepared-plugin:";
 
-function canonical(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
-  }
-}
+/**
+ * Physical-path identity for one prepared build. A build resolves thousands of
+ * requests, each asking whether a directory lies inside every known root, and
+ * the answer needs the physical path of both sides. A prepared build's source,
+ * output and dependency trees do not change shape while it runs, so a
+ * successful `realpath` is remembered for the composition's lifetime; a path
+ * that does not exist yet is never remembered, because it may be created later.
+ */
+class PathCanonicalizer {
+  private readonly physical = new Map<string, string>();
 
-function within(root: string, candidate: string): boolean {
-  const relative = path.relative(canonical(root), canonical(candidate));
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-  );
+  readonly canonical = (value: string): string => {
+    const known = this.physical.get(value);
+    if (known !== undefined) return known;
+    try {
+      const resolved = fs.realpathSync(value);
+      this.physical.set(value, resolved);
+      return resolved;
+    } catch {
+      return path.resolve(value);
+    }
+  };
+
+  /** Whether `candidate` is, or lies under, any directory of `roots` (physical paths). */
+  readonly insideAny = (roots: ReadonlySet<string>, candidate: string): boolean => {
+    let current = this.canonical(candidate);
+    for (;;) {
+      if (roots.has(current)) return true;
+      const parent = path.dirname(current);
+      if (parent === current) return false;
+      current = parent;
+    }
+  };
+
+  readonly within = (root: string, candidate: string): boolean => {
+    const relative = path.relative(this.canonical(root), this.canonical(candidate));
+    return (
+      relative === "" ||
+      (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+    );
+  };
 }
 
 function packageName(specifier: string): string {
@@ -92,6 +119,7 @@ export function composePreparedDependencyPlugins(
   ownedRoots: readonly string[],
   externals: readonly string[] = []
 ): esbuild.Plugin[] {
+  const { canonical, within, insideAny } = new PathCanonicalizer();
   const rootIdentities = [
     ...nodePaths.map((root, index) =>
       root
@@ -113,9 +141,11 @@ export function composePreparedDependencyPlugins(
     ),
   ].filter((root): root is NonNullable<typeof root> => root !== null);
   const roots = rootIdentities.map(({ root }) => root);
+  const rootSet: ReadonlySet<string> = new Set(roots);
   const workspaceRoots = ownedRoots
     .filter((root) => !nodePaths.includes(root))
     .map((root) => path.resolve(root));
+  const workspaceRootSet: ReadonlySet<string> = new Set(workspaceRoots.map(canonical));
   const packageRoots = new Set<string>();
   const packageRootIdentities = new Map<string, string>();
   const dependencySearchRoots = new Set<string>();
@@ -123,25 +153,24 @@ export function composePreparedDependencyPlugins(
   const metadataPaths = new Map<string, string>();
   const namespaceKey = (namespace: string, file: string) => `${namespace}\0${file}`;
 
+  const rootIdentityByPath = new Map<string, string>();
+  for (const { root, identity } of rootIdentities) {
+    if (!rootIdentityByPath.has(root)) rootIdentityByPath.set(root, identity);
+  }
   const virtualInputPath = (physicalPath: string): string => {
     const canonicalPath = canonical(physicalPath);
-    const ownedPackageRoots = [...packageRootIdentities].map(([root, identity]) => ({
-      root,
-      identity,
-    }));
-    const matches = [...rootIdentities, ...ownedPackageRoots]
-      .filter(({ root }) => {
-        const relative = path.relative(root, canonicalPath);
-        return (
-          relative === "" ||
-          (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-        );
-      })
-      .sort((left, right) => right.root.length - left.root.length);
-    const match = matches[0];
-    if (!match) throw new Error(`Prepared input has no stable owned root: ${physicalPath}`);
-    const relative = path.relative(match.root, canonicalPath).replaceAll("\\", "/");
-    return relative ? `${match.identity}/${relative}` : match.identity;
+    // The deepest owned root containing the file names it: walk up from the file.
+    for (let current = canonicalPath; ; ) {
+      const identity = rootIdentityByPath.get(current) ?? packageRootIdentities.get(current);
+      if (identity !== undefined) {
+        const relative = path.relative(current, canonicalPath).replaceAll("\\", "/");
+        return relative ? `${identity}/${relative}` : identity;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    throw new Error(`Prepared input has no stable owned root: ${physicalPath}`);
   };
 
   const rememberLocation = (namespace: string, file: string, location: Location): void => {
@@ -249,17 +278,13 @@ export function composePreparedDependencyPlugins(
   };
 
   const allowedPath = (candidate: string): boolean =>
-    roots.some((root) => within(root, candidate)) ||
-    [...packageRoots].some((root) => within(root, candidate));
+    insideAny(rootSet, candidate) || insideAny(packageRoots, candidate);
 
   const packageSearchRoots = (resolveDir: string | undefined): string[] => {
     const localRoots: string[] = [];
     if (resolveDir) {
       let directory = path.resolve(resolveDir);
-      while (
-        roots.some((root) => within(root, directory)) ||
-        [...packageRoots].some((root) => within(root, directory))
-      ) {
+      while (insideAny(rootSet, directory) || insideAny(packageRoots, directory)) {
         if (fs.existsSync(path.join(directory, "package.json"))) {
           localRoots.push(path.join(directory, "node_modules"));
         }
@@ -323,10 +348,7 @@ export function composePreparedDependencyPlugins(
   const workspaceDependencyDeclared = (resolveDir: string | undefined, name: string): boolean => {
     if (!resolveDir) return false;
     let directory = path.resolve(resolveDir);
-    while (
-      workspaceRoots.some((root) => within(root, directory)) ||
-      [...packageRoots].some((root) => within(root, directory))
-    ) {
+    while (insideAny(workspaceRootSet, directory) || insideAny(packageRoots, directory)) {
       const manifestPath = path.join(directory, "package.json");
       if (fs.existsSync(manifestPath)) {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
@@ -346,10 +368,7 @@ export function composePreparedDependencyPlugins(
   const isOptionalPeer = (resolveDir: string | undefined, name: string): boolean => {
     if (!resolveDir || !name) return false;
     let directory = path.resolve(resolveDir);
-    while (
-      roots.some((root) => within(root, directory)) ||
-      [...packageRoots].some((root) => within(root, directory))
-    ) {
+    while (insideAny(rootSet, directory) || insideAny(packageRoots, directory)) {
       const manifestPath = path.join(directory, "package.json");
       if (fs.existsSync(manifestPath)) {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
@@ -565,8 +584,8 @@ export function composePreparedDependencyPlugins(
         const owned =
           isOwnedNamespace(args.namespace) ||
           marked?.[RESOLVE_CONTEXT] === "request" ||
-          Boolean(knownResolveDir && roots.some((root) => within(root, knownResolveDir))) ||
-          Boolean(sourcePath && roots.some((root) => within(root, sourcePath)));
+          Boolean(knownResolveDir && insideAny(rootSet, knownResolveDir)) ||
+          Boolean(sourcePath && insideAny(rootSet, sourcePath));
         const importerLocation =
           owned && sourcePath
             ? locationFor(args.namespace, sourcePath, knownResolveDir)
@@ -588,11 +607,9 @@ export function composePreparedDependencyPlugins(
               const physical = canonical(candidate);
               const linkedOutsidePreparedRoots =
                 physical !== path.resolve(candidate) &&
-                !roots.some((root) => within(root, physical)) &&
-                ![...packageRoots].some((root) => within(root, physical));
-              return (
-                workspaceRoots.some((root) => within(root, physical)) || linkedOutsidePreparedRoots
-              );
+                !insideAny(rootSet, physical) &&
+                !insideAny(packageRoots, physical);
+              return insideAny(workspaceRootSet, physical) || linkedOutsidePreparedRoots;
             });
           const declaredWorkspaceDependency = workspaceDependencyDeclared(resolveDir, name);
           if (workspaceTarget && !declaredWorkspaceDependency) return null;

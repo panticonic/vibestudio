@@ -7,6 +7,9 @@ const option = (name: string) => {
   if (!process.argv.includes(name) || !value) throw new Error(`${name} is required`);
   return path.resolve(value);
 };
+const scope = process.argv[process.argv.indexOf("--scope") + 1];
+if (scope !== "sources" && scope !== "release")
+  throw new Error(`--scope must be "sources" or "release", not ${scope}`);
 const cancellation = new AbortController();
 function containsErrorIdentity(error: unknown, target: unknown, seen = new Set<object>()): boolean {
   if (error === target) return true;
@@ -48,6 +51,13 @@ void (async () => {
       appRoot: option("--app-root"),
       output: option("--output"),
       scratch: option("--scratch"),
+      scope,
+      onProgress: (progress) => {
+        // Progress is a courtesy to a launcher that is showing it; a closed
+        // channel must never fail the preparation it describes.
+        if (typeof process.send === "function" && process.connected)
+          process.send({ kind: "progress", progress }, () => {});
+      },
       signal: cancellation.signal,
     });
   } catch (caught) {
