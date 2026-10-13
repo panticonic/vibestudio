@@ -90,7 +90,7 @@ describe("development template selection", () => {
       sources: [fx.checkout].map(workspaceSourceFromCheckout),
       checkpointRoot: fx.checkpointRoot,
     });
-    expect(selection!.review.repositories).toEqual(["meta", "panels/example"]);
+    expect(selection?.review?.repositories).toEqual(["meta", "panels/example"]);
     expect(paths).toEqual(["meta/vibestudio.yml"]);
     expect(fullRead).not.toHaveBeenCalled();
   });
