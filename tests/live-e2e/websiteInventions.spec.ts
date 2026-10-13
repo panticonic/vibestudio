@@ -1,6 +1,10 @@
-import { test } from "@playwright/test";
-import { websiteInventionScenario } from "../setup/websiteInventionScenario";
+import {
+  websiteInventionScenario,
+  websiteInventionTest as test,
+} from "../setup/websiteInventionScenario";
 
-test("local invention website builds, operates and revises a real embedded agentic app", async () => {
-  await websiteInventionScenario();
+test("local invention website builds, operates and revises a real embedded agentic app", async ({
+  websiteInvention,
+}) => {
+  await websiteInventionScenario(websiteInvention);
 });

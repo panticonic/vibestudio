@@ -30,6 +30,37 @@ import { getChannelRpcReadBundle } from "../e2e/support/channelRpcReadBundle";
 import type { readChannelReplay } from "../e2e/support/channelRpcReads";
 import type { RpcCaller } from "@vibestudio/rpc";
 
+interface WebsiteInventionFixture {
+  app: TestApp;
+  environment: Record<string, string>;
+}
+
+interface WebsiteInventionFixtures {
+  websiteInvention: WebsiteInventionFixture;
+  websiteInventionEnvironment: Record<string, string>;
+}
+
+/**
+ * Provisioning a fresh managed account can include template materialization and
+ * host builds. Give that lifecycle its own fixture budget so behavior timing
+ * starts only after the managed desktop is ready. The fixture is also the sole
+ * owner of app/server cleanup, including when the scenario fails.
+ */
+export const websiteInventionTest = test.extend<WebsiteInventionFixtures>({
+  websiteInventionEnvironment: [{}, { option: true }],
+  websiteInvention: [
+    async ({ websiteInventionEnvironment }, use) => {
+      const app = await launchManagedServerApp(websiteInventionEnvironment);
+      try {
+        await use({ app, environment: websiteInventionEnvironment });
+      } finally {
+        await app.cleanup();
+      }
+    },
+    { timeout: 1_200_000 },
+  ],
+});
+
 const CHANNEL_READS_SYMBOL = "vibestudio.e2e.channelRpcReads.v1";
 const TEST_MODEL_REF = "vibestudio-test:deterministic";
 
@@ -189,7 +220,7 @@ async function captureAgentRoutingEvidence(page: Page, app: TestApp, workspaceId
 
 /** Shared native acceptance flow. By default inference uses the configured provider;
  * smoke coverage supplies host-only scripted inference through the environment. */
-export async function websiteInventionScenario(environment: Record<string, string> = {}) {
+export async function websiteInventionScenario({ app, environment }: WebsiteInventionFixture) {
   test.setTimeout(1_200_000);
   const expectsDeterministicModel = typeof environment["VIBESTUDIO_TEST_MODEL_SCRIPT"] === "string";
   test.skip(!hasOwnedX11Display(), "Requires the E2E-owned native display for approval input");
@@ -231,12 +262,10 @@ export async function websiteInventionScenario(environment: Record<string, strin
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No local website listener");
   const url = `http://127.0.0.1:${address.port}/`;
-  let app: TestApp | undefined;
   let website: Page | undefined;
   const approvals: unknown[] = [];
   const browserErrors: Error[] = [];
   try {
-    app = await launchManagedServerApp(environment);
     await declineFirstRunReporting(app);
     await approvePendingStartupUnits(app);
     await settleWorkspaceCreationReviews(app);
@@ -575,11 +604,7 @@ export async function websiteInventionScenario(environment: Record<string, strin
       body: JSON.stringify(approvals, null, 2),
       contentType: "application/json",
     });
-    try {
-      await app?.cleanup();
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
