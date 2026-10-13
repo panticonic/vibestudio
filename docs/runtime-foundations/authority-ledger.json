@@ -30910,6 +30910,96 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:terminalApps.restart",
+      "rpcPlane": "host-service",
+      "owner": "terminalApps",
+      "method": "restart",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "terminal-apps.run",
+      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "terminal-apps.run"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:terminalApps.restart",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:terminalApps.restart#capability:terminal-apps.run",
+      "rpcPlane": "host-service",
+      "owner": "terminalApps",
+      "method": "restart",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "terminal-apps.run",
+      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "capability": "terminal-apps.run",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "terminalApps.run"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:terminalApps.resume",
       "rpcPlane": "host-service",
       "owner": "terminalApps",
