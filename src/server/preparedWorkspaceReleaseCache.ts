@@ -1,4 +1,4 @@
-import * as fs from "node:fs/promises";
+import fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
@@ -14,6 +14,9 @@ import { runWithOwnedCleanup, runOwnedCleanupSteps } from "../../scripts/lib/own
 import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
 import {
   validateExistingPreparedWorkspaceRelease,
+  publishPreparedWorkspaceRelease,
+  preparedWorkspaceReleaseManifestSchema,
+  workspaceReleaseManifestPath,
   workspaceReleaseIdentity,
   type PreparedWorkspaceReleaseInput,
   type WorkspaceReleaseIdentity,
@@ -38,8 +41,10 @@ async function projectRelease(source: string, destination: string): Promise<void
       const from = path.join(directory.from, entry.name);
       const to = path.join(directory.to, entry.name);
       if (entry.isDirectory()) directories.push({ from, to });
-      else if (entry.isFile()) files.push({ from, to });
-      else throw new Error(`Prepared release contains a non-immutable resource: ${from}`);
+      else if (entry.isFile()) {
+        // The completion marker is never part of concurrent payload copying.
+        if (from !== workspaceReleaseManifestPath(source)) files.push({ from, to });
+      } else throw new Error(`Prepared release contains a non-immutable resource: ${from}`);
     }
   }
   // Independent files share a bounded I/O budget. Directory discovery finishes
@@ -93,6 +98,26 @@ export async function prepareCachedWorkspaceRelease(
   let coordinator: SharedBuildCoordinator | undefined;
   const reuse = async () => {
     await projectRelease(cached, input.output);
+    // Reconstruction inherits the already-proved immutable inventory only
+    // after every payload link/copy joins. It is not a new compiler publication.
+    const marker = workspaceReleaseManifestPath(input.output);
+    const temporary = `${marker}.publishing`;
+    let ownsTemporary = false;
+    await runWithOwnedCleanup(
+      async () => {
+        await fs.copyFile(
+          workspaceReleaseManifestPath(cached),
+          temporary,
+          fs.constants.COPYFILE_EXCL
+        );
+        ownsTemporary = true;
+        await fs.rename(temporary, marker);
+      },
+      async () => {
+        if (ownsTemporary) await fs.rm(temporary, { force: true });
+      },
+      "Release projection completion and retirement failed"
+    );
     console.log(`[workspace-release] Reusing verified complete release ${key.slice(0, 12)}`);
     await input.onSourcesPrepared?.(input.output);
   };
@@ -111,12 +136,18 @@ export async function prepareCachedWorkspaceRelease(
           }
           await produce(identity);
           input.signal?.throwIfAborted();
+          if (!(await validateExistingPreparedWorkspaceRelease(input, identity)))
+            throw new Error("Workspace release producer returned without a completed publication");
+          const producedManifest = preparedWorkspaceReleaseManifestSchema.parse(
+            JSON.parse(await fs.readFile(workspaceReleaseManifestPath(input.output), "utf8"))
+          );
           const staging = `${cached}.tmp.${randomUUID()}`;
           await runWithOwnedCleanup(
             async () => {
               await projectRelease(input.output, staging);
-              await validateExistingPreparedWorkspaceRelease(
+              await publishPreparedWorkspaceRelease(
                 { ...cachedInput, output: staging },
+                producedManifest.builds,
                 identity
               );
               await fs.rename(staging, cached);

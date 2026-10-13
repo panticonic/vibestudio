@@ -1,5 +1,5 @@
-import * as fs from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import fs from "node:fs/promises";
+import fsNative from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
@@ -15,9 +15,14 @@ import {
   preparedWorkspaceTemplatePath,
 } from "./preparedWorkspaceTemplate.js";
 import { blobCasPath } from "./storage/blobCas.js";
-import { verifyReleaseBuildDirectory } from "../../scripts/prebuild-release-userland.mjs";
+import {
+  readReleaseBuildDescriptor,
+  assertExactReleaseBuildFiles,
+  verifyReleaseBuildDirectory,
+} from "../../scripts/prebuild-release-userland.mjs";
 import { readHostBuildFingerprint, resolveRequiredHostArtifactRoot } from "./appRoot.js";
 import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
+import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
 
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/u);
 const hostBuildFingerprintSchema = z
@@ -128,7 +133,10 @@ export async function createPreparedWorkspaceReleaseManifest(
 }
 
 /**
- * Reuse only a completely sealed release. A missing manifest in a genuinely
+ * Admit only a completed release from its trusted immutable installation.
+ * Publication proves payloads before sealing this record; reuse checks identity,
+ * provenance and the complete descriptor inventory without re-reading payloads.
+ * A missing manifest in a genuinely
  * empty artifact area means this call owns first production; any partial
  * artifact area or any mismatch is an error and must not fall through to build.
  */
@@ -174,6 +182,20 @@ export async function validateExistingPreparedWorkspaceRelease(
     throw new Error("Prepared workspace release manifest is invalid", { cause: error });
   }
   const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot));
+  const inventory = await inspectPreparedWorkspaceRelease(input, manifest, resolvedIdentity);
+  await verifyExactDirectoryEntries(
+    path.join(input.output, "userland-builds"),
+    new Set(["release.json", ...inventory.artifactKeys])
+  );
+  return true;
+}
+
+/** One descriptor/provenance boundary shared by admission and publication. */
+async function inspectPreparedWorkspaceRelease(
+  input: PreparedWorkspaceReleaseInput,
+  manifest: PreparedWorkspaceReleaseManifest,
+  resolvedIdentity: WorkspaceReleaseIdentity
+) {
   if (
     manifest.platform !== process.platform ||
     manifest.arch !== process.arch ||
@@ -205,6 +227,16 @@ export async function validateExistingPreparedWorkspaceRelease(
   }
 
   const artifactKeys = new Set<string>();
+  const preparedTemplates: Array<{
+    directory: string;
+    record: z.infer<typeof preparedWorkspaceTemplateSchema>;
+  }> = [];
+  const descriptors = new Map<string, Awaited<ReturnType<typeof readReleaseBuildDescriptor>>>();
+  const provenance: Array<{
+    workspace: "base" | "personal" | "system";
+    build: PreparedWorkspaceReleaseBuild;
+    effectiveVersion: string;
+  }> = [];
   for (const workspace of ["base", "personal", "system"] as const) {
     const pin = input.templates[workspace];
     const directory = preparedWorkspaceTemplatePath(input.output, pin, "use");
@@ -234,7 +266,8 @@ export async function validateExistingPreparedWorkspaceRelease(
     ) {
       throw new Error(`Prepared ${workspace} template record does not match its release inventory`);
     }
-    await verifyPreparedTemplateFiles(directory, record);
+    await inspectPreparedTemplateFiles(directory, record);
+    preparedTemplates.push({ directory, record });
     if (roleBuildInventory.length === 0) {
       throw new Error(`Prepared workspace release has no runtime builds for ${workspace}`);
     }
@@ -244,35 +277,30 @@ export async function validateExistingPreparedWorkspaceRelease(
       if (!templateBuild) {
         throw new Error(`Prepared ${workspace} runtime record is missing ${build.source}`);
       }
-      const buildDirectory = path.join(input.output, "userland-builds", build.buildKey);
-      const metadata = JSON.parse(
-        await fs.readFile(path.join(buildDirectory, "metadata.json"), "utf8")
-      );
-      if (
-        metadata.buildKey !== build.buildKey ||
-        metadata.sourcePath !== build.source ||
-        metadata.ev !== templateBuild.effectiveVersion ||
-        metadata.builtAt !== build.builtAt
-      ) {
-        throw new Error(`Prepared ${workspace} runtime metadata does not match its source record`);
-      }
+      provenance.push({ workspace, build, effectiveVersion: templateBuild.effectiveVersion });
     }
   }
 
-  // Each build has its own sealed directory. Four concurrent validators bound
-  // open files and hashing memory without serializing unrelated runtimes.
+  // Role inventories establish the exact unique descriptor inputs. Independent
+  // runtime headers, presence checks and directory censuses then share one
+  // four-way budget, joining every admitted failure before provenance checking.
   await forEachOwnedConcurrent([...artifactKeys], 4, async (buildKey) => {
-    await verifyReleaseBuildDirectory(
-      path.join(input.output, "userland-builds", buildKey),
-      buildKey,
-      true
-    );
+    const directory = path.join(input.output, "userland-builds", buildKey);
+    const descriptor = await readReleaseBuildDescriptor(directory, buildKey);
+    await assertExactReleaseBuildFiles(directory, descriptor.files);
+    descriptors.set(buildKey, descriptor);
   });
-  await verifyExactDirectoryEntries(
-    path.join(input.output, "userland-builds"),
-    new Set(["release.json", ...artifactKeys])
-  );
-  return true;
+  for (const { workspace, build, effectiveVersion } of provenance) {
+    const metadata = descriptors.get(build.buildKey)!.metadata;
+    if (
+      metadata.buildKey !== build.buildKey ||
+      metadata.sourcePath !== build.source ||
+      metadata.ev !== effectiveVersion ||
+      metadata.builtAt !== build.builtAt
+    )
+      throw new Error(`Prepared ${workspace} runtime metadata does not match its source record`);
+  }
+  return { artifactKeys, preparedTemplates };
 }
 
 export async function publishPreparedWorkspaceRelease(
@@ -282,14 +310,53 @@ export async function publishPreparedWorkspaceRelease(
 ): Promise<void> {
   const manifestPath = workspaceReleaseManifestPath(input.output);
   const temporaryPath = `${manifestPath}.publishing`;
+  if (await lstatOrNull(manifestPath))
+    throw new Error("A completed immutable workspace release cannot be republished");
   await fs.mkdir(path.dirname(manifestPath), { recursive: true });
-  const manifest = await createPreparedWorkspaceReleaseManifest(input, builds, identity);
+  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot));
+  const manifest = await createPreparedWorkspaceReleaseManifest(input, builds, resolvedIdentity);
+  const inventory = await inspectPreparedWorkspaceRelease(input, manifest, resolvedIdentity);
+  await verifyExactDirectoryEntries(
+    path.join(input.output, "userland-builds"),
+    inventory.artifactKeys
+  );
+  for (const { directory, record } of inventory.preparedTemplates) {
+    await forEachOwnedConcurrent(record.blobs, 8, async (blob) => {
+      const actual = await streamedFileDigest(
+        blobCasPath(path.join(directory, "blobs"), blob.digest)
+      );
+      if (actual.size !== blob.size || actual.digest !== blob.digest)
+        throw new Error(`Prepared template blob ${blob.digest} failed integrity verification`);
+    });
+  }
+  await forEachOwnedConcurrent([...inventory.artifactKeys], 4, async (buildKey) => {
+    await verifyReleaseBuildDirectory(
+      path.join(input.output, "userland-builds", buildKey),
+      buildKey,
+      true
+    );
+  });
   const bytes = `${JSON.stringify(manifest)}\n`;
-  await fs.writeFile(temporaryPath, bytes, { flag: "wx", mode: 0o600 });
-  await fs.rename(temporaryPath, manifestPath);
+  let ownsTemporary = false;
+  await runWithOwnedCleanup(
+    async () => {
+      const handle = await fs.open(temporaryPath, "wx", 0o600);
+      ownsTemporary = true;
+      await runWithOwnedCleanup(
+        () => handle.writeFile(bytes),
+        () => handle.close(),
+        "Release manifest write and close failed"
+      );
+      await fs.rename(temporaryPath, manifestPath);
+    },
+    async () => {
+      if (ownsTemporary) await fs.rm(temporaryPath, { force: true });
+    },
+    "Release manifest publication and retirement failed"
+  );
 }
 
-async function verifyPreparedTemplateFiles(
+async function inspectPreparedTemplateFiles(
   directory: string,
   record: z.infer<typeof preparedWorkspaceTemplateSchema>
 ): Promise<void> {
@@ -305,10 +372,8 @@ async function verifyPreparedTemplateFiles(
     if (!stat.isFile() || stat.isSymbolicLink()) {
       throw new Error(`Prepared template blob ${blob.digest} is not a regular file`);
     }
-    const actual = await streamedFileDigest(blobPath);
-    if (actual.size !== blob.size || actual.digest !== blob.digest) {
-      throw new Error(`Prepared template blob ${blob.digest} failed integrity verification`);
-    }
+    if (stat.size !== blob.size)
+      throw new Error(`Prepared template blob ${blob.digest} has a different sealed length`);
   });
   const actualFiles = new Set<string>();
   await collectRegularFiles(directory, directory, actualFiles);
@@ -372,7 +437,7 @@ function sha256(bytes: Uint8Array): string {
 async function streamedFileDigest(filePath: string): Promise<{ digest: string; size: number }> {
   const hash = createHash("sha256");
   let size = 0;
-  for await (const chunk of createReadStream(filePath)) {
+  for await (const chunk of fsNative.createReadStream(filePath)) {
     size += chunk.byteLength;
     hash.update(chunk);
   }
