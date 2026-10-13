@@ -410,3 +410,15 @@ moving and refactoring whatever is needed and ripping out all legacy infrastruct
 - `requireContextAttachApproval` in the shell extension is a no-op — fix or delete.
 - Sessions die with the extension/runtime; the browser must show that clearly and
   offer relaunch (state survives via (5)).
+
+## Implementation status (2026-10-13)
+
+The revision is implemented. See:
+
+- [terminal-app-units-design.md](terminal-app-units-design.md) for how terminal
+  apps reuse the panel model. The user chose option B (a slotless panel runtime
+  whose lease is held by its PTY host).
+- [terminal-apps.md](terminal-apps.md) for the user and developer guide.
+
+The workerd terminal stack, the Ink-in-workerd builder support and
+`workers/terminal-sessions` are gone.
