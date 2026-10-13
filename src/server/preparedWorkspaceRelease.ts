@@ -13,6 +13,7 @@ import {
 import {
   preparedWorkspaceTemplateSchema,
   preparedWorkspaceTemplatePath,
+  validatePreparedCompilationInput,
 } from "./preparedWorkspaceTemplate.js";
 import { blobCasPath } from "./storage/blobCas.js";
 import {
@@ -109,6 +110,7 @@ export async function createPreparedWorkspaceReleaseManifest(
   builds: readonly PreparedWorkspaceReleaseBuild[],
   identity?: WorkspaceReleaseIdentity
 ): Promise<PreparedWorkspaceReleaseManifest> {
+  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot)).identity;
   const preparedTemplates: PreparedWorkspaceReleaseManifest["preparedTemplates"] = [];
   for (const workspace of ["base", "personal", "system"] as const) {
     const directory = preparedWorkspaceTemplatePath(
@@ -118,12 +120,13 @@ export async function createPreparedWorkspaceReleaseManifest(
     );
     const recordPath = path.join(directory, "template.json");
     const recordBytes = await fs.readFile(recordPath);
+    const record = preparedWorkspaceTemplateSchema.parse(JSON.parse(recordBytes.toString("utf8")));
+    validatePreparedCompilationInput(record.compilationInput, resolvedIdentity);
     preparedTemplates.push({
       workspace,
       recordDigest: sha256(recordBytes),
     });
   }
-  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot)).identity;
   return preparedWorkspaceReleaseManifestSchema.parse({
     format: "vibestudio-workspace-runtime-release/2",
     version: 2,
@@ -250,6 +253,7 @@ async function inspectPreparedWorkspaceRelease(
       throw new Error(`Prepared ${workspace} template record digest mismatch`);
     }
     const record = preparedWorkspaceTemplateSchema.parse(JSON.parse(recordBytes.toString("utf8")));
+    validatePreparedCompilationInput(record.compilationInput, resolvedIdentity);
     const roleBuildInventory = buildsByRole.get(workspace);
     if (!roleBuildInventory) throw new Error(`Prepared workspace release is missing ${workspace}`);
     const roleBuilds = buildsByRole

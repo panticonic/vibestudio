@@ -31,6 +31,7 @@ import { logVerbose } from "@vibestudio/dev-log";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { z } from "zod";
 import type { PackageGraph } from "./packageGraph.js";
 import {
   getPhysicalAppPath,
@@ -312,6 +313,145 @@ export interface RootDependencyFingerprintInfo {
   readonly files: readonly RootDependencyFingerprintFile[];
 }
 
+export const rootDependencyFingerprintCaptureSchema = z
+  .object({
+    encoding: z.literal("root-deps-v8"),
+    policy: z.enum(["shared-host", "prepared"]),
+    value: z.string().regex(/^[0-9a-f]{64}$/),
+    files: z.array(
+      z
+        .object({
+          scope: z.literal("host"),
+          file: z.string().min(1),
+          relativePath: z
+            .string()
+            .min(1)
+            .refine(
+              (value) =>
+                !path.posix.isAbsolute(value) &&
+                !path.win32.isAbsolute(value) &&
+                !value.includes("\\"),
+              "Captured diagnostic paths must remain relative"
+            ),
+          present: z.boolean(),
+          contentHash: z
+            .string()
+            .regex(/^[0-9a-f]{64}$/)
+            .nullable(),
+        })
+        .strict()
+        .refine((file) => file.present === (file.contentHash !== null), {
+          message: "Captured presence and content hash must agree",
+        })
+    ),
+  })
+  .strict();
+export type RootDependencyFingerprintCapture = z.infer<
+  typeof rootDependencyFingerprintCaptureSchema
+>;
+
+/** The same canonical v8 fold owns fresh capture and persisted input traces. */
+function rootDependencyFingerprintValue(
+  files: readonly Pick<RootDependencyFingerprintFile, "file" | "present" | "contentHash">[],
+  policy: ReturnType<typeof dependencyInstallationPolicy>
+): string {
+  const hash = crypto.createHash("sha256");
+  hash.update("root-deps-v8\0");
+  hash.update(`dependency-installation:${policy}\0`);
+  for (const input of files) {
+    hash.update(input.file);
+    if (input.file.endsWith("/**")) {
+      hash.update("\0tree\0");
+      hash.update(input.contentHash ?? "absent");
+      hash.update("\0");
+    } else if (input.file.startsWith("installed-node-modules:")) {
+      hash.update("\0installed-tree\0");
+      hash.update(input.contentHash ?? "absent");
+      hash.update("\0");
+    } else {
+      hash.update("\0");
+      if (input.present) {
+        hash.update("present\0");
+        hash.update(input.contentHash!);
+        hash.update("\0");
+      } else hash.update("absent\0");
+    }
+  }
+  return hash.digest("hex");
+}
+
+export function captureRootDependencyFingerprint(
+  info: RootDependencyFingerprintInfo
+): RootDependencyFingerprintCapture {
+  const policy = dependencyInstallationPolicy();
+  if (info.workspaceRoot !== null)
+    throw new Error("Host dependency capture cannot include workspace inputs");
+  if (rootDependencyFingerprintValue(info.files, policy) !== info.value)
+    throw new Error("Dependency fingerprint trace does not reproduce its value");
+  const physicalRoot = getPhysicalAppPath(info.root, "");
+  return rootDependencyFingerprintCaptureSchema.parse({
+    encoding: "root-deps-v8",
+    policy,
+    value: info.value,
+    files: info.files.map((file) => {
+      return {
+        scope: "host",
+        file: file.file,
+        relativePath: path.relative(physicalRoot, file.path).split(path.sep).join("/"),
+        present: file.present,
+        contentHash: file.contentHash,
+      };
+    }),
+  });
+}
+
+export function validateRootDependencyFingerprintCapture(
+  capture: RootDependencyFingerprintCapture
+): RootDependencyFingerprintCapture {
+  capture = rootDependencyFingerprintCaptureSchema.parse(capture);
+  if (capture.policy !== dependencyInstallationPolicy())
+    throw new Error("Captured dependency installation policy does not match this host");
+  if (
+    ROOT_DEPENDENCY_FINGERPRINT_FILES.some((file, index) => capture.files[index]?.file !== file) ||
+    capture.files.some((file) => file.file.startsWith("workspace:"))
+  )
+    throw new Error("Captured dependency fingerprint trace is not a host input trace");
+  if (rootDependencyFingerprintValue(capture.files, capture.policy) !== capture.value)
+    throw new Error("Captured dependency fingerprint trace does not reproduce its value");
+  return capture;
+}
+
+/** Capture the workspace component afresh and fold it at its original v8
+ * position in the sealed host trace. Producer and consumer use this same fold. */
+export async function composeWorkspaceDependencyFingerprint(
+  capture: RootDependencyFingerprintCapture,
+  appRoot: string,
+  workspaceRoot: string
+): Promise<RootDependencyFingerprintInfo> {
+  capture = validateRootDependencyFingerprintCapture(capture);
+  const expected = dependencyFingerprintInputs(
+    getPhysicalAppPath(appRoot, ""),
+    workspaceRoot
+  ).slice(ROOT_DEPENDENCY_FINGERPRINT_FILES.length);
+  const observed = await readDependencyFingerprintFiles(expected);
+  const hostFiles = capture.files.map(({ scope: _scope, relativePath, ...file }) => ({
+    ...file,
+    path: path.resolve(getPhysicalAppPath(appRoot, ""), ...relativePath.split("/")),
+  }));
+  const files = [
+    ...hostFiles.slice(0, ROOT_DEPENDENCY_FINGERPRINT_FILES.length),
+    ...observed,
+    ...hostFiles.slice(ROOT_DEPENDENCY_FINGERPRINT_FILES.length),
+  ];
+  return {
+    root: appRoot,
+    workspaceRoot: path.resolve(workspaceRoot),
+    rootSource: "injected",
+    value: rootDependencyFingerprintValue(files, capture.policy),
+    files,
+  };
+}
+
 /** Prepare the dependency identity owned by one build session. */
 export async function prepareBuildRootConfig(config: {
   appRoot: string;
@@ -578,16 +718,28 @@ function dependencyFingerprintInputs(
   return inputs;
 }
 
+async function readDependencyFingerprintFiles(
+  inputs: readonly { file: string; path: string }[]
+): Promise<RootDependencyFingerprintFile[]> {
+  return joinFingerprintWork(
+    inputs.map(async (input) => {
+      let contentHash: string | null = null;
+      try {
+        contentHash = await fullHash(await fs.promises.readFile(input.path));
+      } catch {
+        /* Absent/unreadable remains the existing v8 input policy. */
+      }
+      return { ...input, present: contentHash !== null, contentHash };
+    })
+  );
+}
+
 export async function computeRootDependencyFingerprint(
   root: string,
   workspaceRoot?: string
 ): Promise<RootDependencyFingerprintInfo> {
   const source = "injected" as const;
-
-  const hash = crypto.createHash("sha256");
-  // Domain tag; bumped when the input set/encoding changes.
-  hash.update("root-deps-v8\0");
-  hash.update(`dependency-installation:${dependencyInstallationPolicy()}\0`);
+  const policy = dependencyInstallationPolicy();
 
   const physicalRoot = getPhysicalAppPath(root, "");
   const localPackagesWork = localPackageFingerprintInputs(physicalRoot);
@@ -595,48 +747,19 @@ export async function computeRootDependencyFingerprint(
   await joinFingerprintWork([localPackagesWork, installedDependenciesWork]);
   const localPackages = await localPackagesWork;
   const installedDependencies = await installedDependenciesWork;
-  const files: RootDependencyFingerprintFile[] = [];
-  for (const input of dependencyFingerprintInputs(physicalRoot, workspaceRoot)) {
-    const file = input.file;
-    const filePath = input.path;
-    hash.update(file);
-    hash.update("\0");
-    let present = false;
-    let contentHash: string | null = null;
-    try {
-      const contents = await fs.promises.readFile(filePath);
-      present = true;
-      contentHash = await fullHash(contents);
-      // Explicit presence marker so an absent file and a present-empty file
-      // never collide, and so the file set stays positionally unambiguous.
-      hash.update("present\0");
-      hash.update(contentHash);
-      hash.update("\0");
-    } catch {
-      hash.update("absent\0");
-    }
-    files.push({ file, path: filePath, present, contentHash });
-  }
-  for (const input of localPackages) {
-    hash.update(input.file);
-    hash.update("\0tree\0");
-    hash.update(input.contentHash ?? "absent");
-    hash.update("\0");
-    files.push(input);
-  }
-  for (const input of installedDependencies) {
-    hash.update(input.file);
-    hash.update("\0installed-tree\0");
-    hash.update(input.contentHash ?? "absent");
-    hash.update("\0");
-    files.push(input);
-  }
+  const files = [
+    ...(await readDependencyFingerprintFiles(
+      dependencyFingerprintInputs(physicalRoot, workspaceRoot)
+    )),
+    ...localPackages,
+    ...installedDependencies,
+  ];
 
   const info: RootDependencyFingerprintInfo = {
     root,
     workspaceRoot: workspaceRoot ? path.resolve(workspaceRoot) : null,
     rootSource: source,
-    value: hash.digest("hex"),
+    value: rootDependencyFingerprintValue(files, policy),
     files,
   };
 

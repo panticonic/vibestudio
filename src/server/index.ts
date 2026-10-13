@@ -2536,10 +2536,26 @@ async function main() {
     },
   });
 
-  const { computeRootDependencyFingerprint } = await import("./buildV2/effectiveVersion.js");
-  const dependencyFingerprint = await computeRootDependencyFingerprint(
+  const dependencyFingerprintStartedAt = performance.now();
+  const { readPreparedWorkspaceTemplate, prepareWorkspaceCompilationFingerprint } =
+    await import("./preparedWorkspaceTemplate.js");
+  // Host SDK evidence belongs to the installation, not this workspace's
+  // creation pin. Every supported launch carries its designated Base record.
+  const installationPin = readDefaultWorkspaceTemplates(appRoot).base;
+  const preparedInput = readPreparedWorkspaceTemplate(
+    preparedWorkspaceTemplatePath(releaseResourceRoot, installationPin, "use"),
+    installationPin,
+    "use"
+  ).compilationInput;
+  if (!preparedInput)
+    throw new Error("Prepared host installation has no compilation input capture");
+  const dependencyFingerprint = await prepareWorkspaceCompilationFingerprint(
+    preparedInput,
     appRoot,
     buildDependencyWorkspaceRoot
+  );
+  console.log(
+    `[Perf] workspace dependency identity prepared in ${Math.round(performance.now() - dependencyFingerprintStartedAt)}ms at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
   console.log(
     `[Perf] workspace bootstrap publication recovered at ${Math.round(process.uptime() * 1000)}ms uptime`

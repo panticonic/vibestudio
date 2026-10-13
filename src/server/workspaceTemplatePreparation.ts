@@ -29,6 +29,11 @@ import { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
 import { createProtectedRefStore } from "./services/protectedRefStore.js";
 import { initBuildSystemV2 } from "./buildV2/index.js";
 import { createBuildProcessOwner } from "./buildV2/builder.js";
+import {
+  composeWorkspaceDependencyFingerprint,
+  captureRootDependencyFingerprint,
+  type RootDependencyFingerprintInfo,
+} from "./buildV2/effectiveVersion.js";
 import { resolveBuildStoreRoots } from "./buildV2/buildStore.js";
 import { prepareWorkspaceRuntimeBuilds } from "./workspaceTemplateBuilds.js";
 import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
@@ -67,7 +72,7 @@ export async function prepareWorkspaceTemplates(input: {
       signal: input.signal,
       onSourcesPrepared: input.onSourcesPrepared,
     },
-    (identity) => produceWorkspaceTemplates(input, identity)
+    (operation) => produceWorkspaceTemplates(input, operation.identity, operation.rootFingerprint)
   );
 }
 
@@ -80,7 +85,8 @@ async function produceWorkspaceTemplates(
     signal?: AbortSignal;
     onSourcesPrepared?: (root: string) => void | Promise<void>;
   },
-  releaseIdentity: WorkspaceReleaseIdentity
+  releaseIdentity: WorkspaceReleaseIdentity,
+  hostRootFingerprint: RootDependencyFingerprintInfo
 ): Promise<void> {
   const pins = readDefaultWorkspaceTemplates(input.appRoot);
   const releaseInput: PreparedWorkspaceReleaseInput = {
@@ -89,6 +95,7 @@ async function produceWorkspaceTemplates(
     templates: pins,
   };
   input.signal?.throwIfAborted();
+  const hostDependencyCapture = captureRootDependencyFingerprint(hostRootFingerprint);
   if (await validateExistingPreparedWorkspaceRelease(releaseInput, releaseIdentity)) {
     input.signal?.throwIfAborted();
     await input.onSourcesPrepared?.(input.output);
@@ -125,6 +132,7 @@ async function produceWorkspaceTemplates(
     blobsDir: string;
     directory: string;
     record: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate;
+    dependencyFingerprint: RootDependencyFingerprintInfo;
   }> = [];
   let operationFailure: unknown;
   let operationFailed = false;
@@ -230,7 +238,19 @@ async function produceWorkspaceTemplates(
         fs.mkdirSync(path.dirname(destination), { recursive: true });
         fs.copyFileSync(blobPath(blobsDir, blob.digest), destination);
       }
-      const record = preparedWorkspaceTemplateSchema.parse(bootstrap.preparedRecord(blobs, []));
+      const dependencyFingerprint = await composeWorkspaceDependencyFingerprint(
+        hostDependencyCapture,
+        input.appRoot,
+        sourcePath
+      );
+      const record = preparedWorkspaceTemplateSchema.parse({
+        ...bootstrap.preparedRecord(blobs, []),
+        compilationInput: {
+          hostBuild: releaseIdentity.hostBuild,
+          compilerProtocol: releaseIdentity.compilerProtocol,
+          fingerprint: hostDependencyCapture,
+        },
+      });
       fs.writeFileSync(path.join(directory, "template.json"), JSON.stringify(record));
       prepared.push({
         role,
@@ -241,6 +261,7 @@ async function produceWorkspaceTemplates(
         blobsDir,
         directory,
         record,
+        dependencyFingerprint,
       });
     }
     input.signal?.throwIfAborted();
@@ -274,6 +295,7 @@ async function produceWorkspaceTemplates(
           blobsDir,
           directory,
           record,
+          dependencyFingerprint,
         }) => {
           input.signal?.throwIfAborted();
           const preparedBuilds: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate["builds"] =
@@ -363,6 +385,7 @@ async function produceWorkspaceTemplates(
               ),
               signal: input.signal,
               dependencyWorkspaceRoot: sourcePath,
+              dependencyFingerprint,
               runNativeJob: (job) => native.runJob(job),
               admitNativeDependencies: (deps) => native.admitDependencies(deps),
             });

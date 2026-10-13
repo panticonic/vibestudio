@@ -14,6 +14,7 @@ import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import {
   prepareBuildRootConfig,
   computeRootDependencyFingerprint,
+  captureRootDependencyFingerprint,
   type RootDependencyFingerprintInfo,
 } from "./buildV2/effectiveVersion.js";
 import { blobCasPath } from "./storage/blobCas.js";
@@ -97,6 +98,14 @@ async function fixture() {
       stateHash: `state:${"e".repeat(64)}`,
       builds: [{ source: "panels/chat", buildKey, effectiveVersion: "f".repeat(64) }],
       blobs: [{ digest: sourceDigest, size: sourceBytes.length }],
+      compilationInput: {
+        hostBuild,
+        compilerProtocol: {
+          cacheVersion: "test-cache",
+          panelEntryProtocolFingerprint: "b".repeat(64),
+        },
+        fingerprint: captureRootDependencyFingerprint(rootFingerprint),
+      },
     };
     const buildDirectory = path.join(output, "userland-builds", buildKey);
     await fs.mkdir(buildDirectory, { recursive: true });
@@ -150,6 +159,43 @@ async function fixture() {
 }
 
 describe("prepared workspace release admission", () => {
+  it.each(["missing", "host", "compiler", "digest", "policy"] as const)(
+    "rejects a %s compilation capture at publication and completed-release admission",
+    async (mismatch) => {
+      const { root, output, builds } = await fixture();
+      const recordPath = path.join(
+        preparedWorkspaceTemplatePath(output, basePin, "use"),
+        "template.json"
+      );
+      const record = JSON.parse(await fs.readFile(recordPath, "utf8"));
+      if (mismatch === "missing") delete record.compilationInput;
+      else if (mismatch === "host") record.compilationInput.hostBuild.fingerprint = "0".repeat(64);
+      else if (mismatch === "compiler")
+        record.compilationInput.compilerProtocol.cacheVersion = "other";
+      else if (mismatch === "digest") record.compilationInput.fingerprint.value = "0".repeat(64);
+      else
+        record.compilationInput.fingerprint.policy =
+          record.compilationInput.fingerprint.policy === "shared-host" ? "prepared" : "shared-host";
+      const recordBytes = Buffer.from(JSON.stringify(record));
+      await fs.writeFile(recordPath, recordBytes);
+      const manifestPath = path.join(output, "userland-builds/release.json");
+      const manifest = preparedWorkspaceReleaseManifestSchema.parse(
+        JSON.parse(await fs.readFile(manifestPath, "utf8"))
+      );
+      const entry = manifest.preparedTemplates.find((entry) => entry.workspace === "base");
+      if (!entry) throw new Error("Fixture has no Base record digest");
+      entry.recordDigest = createHash("sha256").update(recordBytes).digest("hex");
+      await fs.writeFile(manifestPath, JSON.stringify(manifest));
+      const { createPreparedWorkspaceReleaseManifest, validateExistingPreparedWorkspaceRelease } =
+        await import("./preparedWorkspaceRelease.js");
+      await expect(
+        createPreparedWorkspaceReleaseManifest({ appRoot: root, output, templates }, builds)
+      ).rejects.toThrow(/compilation input|dependency fingerprint|installation policy/);
+      await expect(
+        validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates })
+      ).rejects.toThrow(/compilation input|dependency fingerprint|installation policy/);
+    }
+  );
   it("projects only owned release resources from a packaged application's resource root", async () => {
     const { root, output } = await fixture();
     vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
