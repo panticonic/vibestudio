@@ -3,14 +3,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalSnapshotDigest, sha256Hex } from "@vibestudio/content-addressing";
-import type { GitClient } from "@vibestudio/git";
+import { GitClient, materializeExactGitSnapshot } from "@vibestudio/git";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { canonicalTemplateNodeId } from "@vibestudio/workspace/templateCoordinates";
 import {
   acquireRootTemplateSnapshot,
+  acquireRootTemplateSnapshotIndex,
   discoverAndSeedRootTemplateSnapshotFromCheckout,
   seedRootTemplateSnapshotFromCheckout,
 } from "./acquireRootTemplateSnapshot.js";
+import {
+  derivedCacheCoordinator,
+  closeDerivedCacheCoordinators,
+} from "@vibestudio/shared/derivedCache";
 
 const roots: string[] = [];
 let previousSharedCache: string | undefined;
@@ -20,18 +25,138 @@ let previousSharedCache: string | undefined;
 // profile is, or it writes into the developer's own.
 beforeEach(async () => {
   previousSharedCache = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
-  const derived = await fsp.mkdtemp(path.join(os.tmpdir(), "root-template-derived-"));
+  await fsp.mkdir(path.resolve(".cache"), { recursive: true });
+  const derived = await fsp.mkdtemp(path.resolve(".cache/root-template-derived-"));
   roots.push(derived);
   process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = derived;
 });
 
 afterEach(async () => {
+  await closeDerivedCacheCoordinators();
   if (previousSharedCache === undefined) delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
   else process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = previousSharedCache;
   await Promise.all(roots.splice(0).map((root) => fsp.rm(root, { recursive: true, force: true })));
 });
 
 describe("acquireRootTemplateSnapshot", () => {
+  it("holds a lease through metadata review and full hydration at the final published path", async () => {
+    const derived = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"]!;
+    const checkout = path.join(derived, "fixture");
+    const git = new GitClient();
+    await git.init(checkout, "main");
+    await fsp.mkdir(path.join(checkout, "meta"));
+    await fsp.writeFile(path.join(checkout, "meta/vibestudio.yml"), "manifest\n");
+    await fsp.writeFile(path.join(checkout, "unit.ts"), "unit\n");
+    await git.add(checkout, ".");
+    const commit = await git.commit({
+      dir: checkout,
+      message: "fixture",
+      author: { name: "Test", email: "test@example.com" },
+    });
+    const pin: WorkspaceTemplatePin = {
+      url: "git+https://example.test/template.git",
+      ref: "refs/heads/main",
+      commit,
+    };
+    const clone = vi.spyOn(git, "clone").mockImplementation(async ({ dir }) => {
+      await fsp.cp(checkout, dir, { recursive: true });
+    });
+    const tree = vi.spyOn(git, "readCommitTreeIndex");
+    const root = path.join(derived, "root-templates");
+    const target = path.join(root, canonicalTemplateNodeId(pin.url, pin.commit));
+    const owned = await acquireRootTemplateSnapshotIndex({ pin, git });
+    try {
+      expect(tree).toHaveBeenCalledExactlyOnceWith(target, commit);
+      const nativeIndex = await tree.mock.results[0]!.value;
+      const read = vi.spyOn(nativeIndex, "readFile");
+      expect(read).not.toHaveBeenCalled();
+      expect((await derivedCacheCoordinator(root).status(root)).leasedEntries).toBe(1);
+      await derivedCacheCoordinator(root).prune(root, { maxBytes: 0, freeFloorBytes: 0 });
+      expect(await fsp.stat(target)).toBeDefined();
+      expect(new TextDecoder().decode((await owned.index.readFile("meta/vibestudio.yml"))!)).toBe(
+        "manifest\n"
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+      const snapshot = await materializeExactGitSnapshot(owned.index, {
+        label: "fixture",
+        sink: { put: async (bytes) => ({ digest: sha256Hex(bytes), size: bytes.byteLength }) },
+      });
+      expect(new TextDecoder().decode(snapshot.readFile("unit.ts")!)).toBe("unit\n");
+      expect(clone).toHaveBeenCalledTimes(1);
+      expect(tree).toHaveBeenCalledTimes(1);
+    } finally {
+      owned.close();
+    }
+    owned.close();
+    expect((await derivedCacheCoordinator(root).status(root)).leasedEntries).toBe(0);
+    await derivedCacheCoordinator(root).prune(root, { maxBytes: 0, freeFloorBytes: 0 });
+    await expect(fsp.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("retires the lease and atomic attempt on the original acquisition failure", async () => {
+    const failure = new Error("remote acquisition failed");
+    const pin: WorkspaceTemplatePin = {
+      url: "git+https://example.test/template.git",
+      ref: "refs/heads/main",
+      commit: "a".repeat(40),
+    };
+    const git = {
+      resolveUrl: vi.fn(),
+      clone: vi.fn(async () => {
+        throw failure;
+      }),
+    } as unknown as GitClient;
+    await expect(acquireRootTemplateSnapshotIndex({ pin, git })).rejects.toBe(failure);
+    const root = path.join(process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"]!, "root-templates");
+    expect((await derivedCacheCoordinator(root).status(root)).leasedEntries).toBe(0);
+    expect((await fsp.readdir(root)).filter((name) => name !== ".storage")).toEqual([]);
+  });
+
+  it("rejects cancellation before acquisition without retaining a lease", async () => {
+    const failure = new Error("cancelled");
+    const abort = new AbortController();
+    abort.abort(failure);
+    const pin: WorkspaceTemplatePin = {
+      url: "git+https://example.test/template.git",
+      ref: "refs/heads/main",
+      commit: "a".repeat(40),
+    };
+    const git = { clone: vi.fn() } as unknown as GitClient;
+    await expect(acquireRootTemplateSnapshotIndex({ pin, git, signal: abort.signal })).rejects.toBe(
+      failure
+    );
+    expect(git.clone).not.toHaveBeenCalled();
+    expect(await fsp.readdir(process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"]!)).toEqual([]);
+  });
+
+  it("releases the lease when full snapshot materialization fails", async () => {
+    const pin: WorkspaceTemplatePin = {
+      url: "git+https://example.test/template.git",
+      ref: "refs/heads/main",
+      commit: "a".repeat(40),
+    };
+    const failure = new Error("blob read failed");
+    const git = {
+      resolveUrl: vi.fn(),
+      clone: vi.fn(async () => undefined),
+      resolveCommit: vi.fn(async () => pin.commit),
+      getCurrentCommit: vi.fn(async () => pin.commit),
+      readCommitTreeIndex: vi.fn(async () => ({
+        entries: [
+          { path: "meta/vibestudio.yml", type: "blob", mode: 0o100644, oid: "b".repeat(40) },
+        ],
+        readFile: vi.fn(async () => {
+          throw failure;
+        }),
+      })),
+    } as unknown as GitClient;
+    await expect(acquireRootTemplateSnapshot({ pin, git, sink: { put: vi.fn() } })).rejects.toBe(
+      failure
+    );
+    const root = path.join(process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"]!, "root-templates");
+    expect((await derivedCacheCoordinator(root).status(root)).leasedEntries).toBe(0);
+  });
+
   it("clones one template once for every workspace built on it", async () => {
     const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "root-template-cache-"));
     roots.push(statePath);
@@ -49,15 +174,12 @@ describe("acquireRootTemplateSnapshot", () => {
       resolveCommit: vi.fn(async () => commit),
       getCurrentCommit: vi.fn(async () => commit),
       statusMatrix: vi.fn(async () => [["meta/vibestudio.yml", 1, 1, 1]]),
-      readCommitTree: vi.fn(async () => [
-        {
-          path: "meta/vibestudio.yml",
-          mode: 0o100644,
-          type: "blob",
-          oid: "b".repeat(40),
-          bytes,
-        },
-      ]),
+      readCommitTreeIndex: vi.fn(async () => ({
+        entries: [
+          { path: "meta/vibestudio.yml", mode: 0o100644, type: "blob", oid: "b".repeat(40) },
+        ],
+        readFile: vi.fn(async () => bytes),
+      })),
       checkout: vi.fn(),
     } as unknown as GitClient;
     const sink = {
@@ -117,15 +239,12 @@ describe("acquireRootTemplateSnapshot", () => {
       resolveCommit: vi.fn(async () => commit),
       getCurrentCommit: vi.fn(async () => commit),
       statusMatrix: vi.fn(async () => [["meta/vibestudio.yml", 1, 1, 1]]),
-      readCommitTree: vi.fn(async () => [
-        {
-          path: "meta/vibestudio.yml",
-          mode: 0o100644,
-          type: "blob",
-          oid: "d".repeat(40),
-          bytes,
-        },
-      ]),
+      readCommitTreeIndex: vi.fn(async () => ({
+        entries: [
+          { path: "meta/vibestudio.yml", mode: 0o100644, type: "blob", oid: "d".repeat(40) },
+        ],
+        readFile: vi.fn(async () => bytes),
+      })),
       checkout: vi.fn(),
     } as unknown as GitClient;
     const sink = {
@@ -172,15 +291,12 @@ describe("acquireRootTemplateSnapshot", () => {
     const git = {
       status,
       getCurrentCommit: vi.fn(async () => commit),
-      readCommitTree: vi.fn(async () => [
-        {
-          path: "meta/vibestudio.yml",
-          mode: 0o100644,
-          type: "blob",
-          oid: "f".repeat(40),
-          bytes,
-        },
-      ]),
+      readCommitTreeIndex: vi.fn(async () => ({
+        entries: [
+          { path: "meta/vibestudio.yml", mode: 0o100644, type: "blob", oid: "f".repeat(40) },
+        ],
+        readFile: vi.fn(async () => bytes),
+      })),
     } as unknown as GitClient;
     const sink = {
       put: vi.fn(async (value: Uint8Array) => ({
