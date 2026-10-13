@@ -36,7 +36,10 @@ export function isRpcConnectionLost(error: unknown): boolean {
     active.add(value);
     let result: boolean;
     if (value instanceof AggregateError) {
-      result = value.errors.length > 0 && value.errors.every(visit);
+      result =
+        value.errors.length > 0 &&
+        value.errors.every(visit) &&
+        (!("cause" in value) || value.cause === undefined || visit(value.cause));
     } else if (
       "code" in value &&
       value.code === SESSION_CONNECTION_LOST_CODE &&

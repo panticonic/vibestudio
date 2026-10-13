@@ -103,6 +103,19 @@ describe("isRpcConnectionLost", () => {
     expect(
       isRpcConnectionLost(new AggregateError([repeated, repeated], "admission and retirement")),
     ).toBe(true);
+
+    expect(
+      isRpcConnectionLost(
+        new AggregateError([lost()], "retirement failed", { cause: lost() }),
+      ),
+    ).toBe(true);
+    expect(
+      isRpcConnectionLost(
+        new AggregateError([lost()], "retirement failed", {
+          cause: new Error("original invariant failed"),
+        }),
+      ),
+    ).toBe(false);
   });
 });
 
