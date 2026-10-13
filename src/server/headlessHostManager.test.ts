@@ -204,6 +204,41 @@ describe("HeadlessHostManager keep-alive", () => {
     await manager.stop();
   });
 
+  it("does not let an exited child's idle deadline terminate its leased replacement", async () => {
+    const { manager, spawnFn } = makeManager({ connect: true });
+
+    await expect(manager.ensureHeadlessHost()).resolves.toMatchObject({
+      clientSessionId: "headless-1",
+    });
+    const first = children[0];
+    if (!first) throw new Error("expected the first spawned child");
+
+    coordinator.unregisterClient("headless-1");
+    first.exitCode = 1;
+    first.emit("exit", 1);
+
+    await expect(manager.ensureHeadlessHost()).resolves.toMatchObject({
+      clientSessionId: "headless-2",
+    });
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    const replacement = children[1];
+    if (!replacement) throw new Error("expected the replacement child");
+    coordinator.acquire("panel:nav-replacement", {
+      slotId: "panel:tree/replacement",
+      clientSessionId: "headless-2",
+      connectionId: "route-replacement",
+    });
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    expect(replacement.kill).not.toHaveBeenCalled();
+    expect(coordinator.getLease("panel:nav-replacement")).toMatchObject({
+      clientSessionId: "headless-2",
+      connectionId: "route-replacement",
+    });
+    await manager.stop();
+  });
+
   it("does not re-spawn after stop()", async () => {
     const { manager, spawnFn } = makeManager({ connect: true });
     manager.startKeepAlive();
