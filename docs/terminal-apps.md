@@ -163,7 +163,8 @@ Two complete examples:
 ### Launch: the `terminalApps` service
 
 The workspace server's `terminalApps` service hosts terminal apps, as the
-desktop shell hosts panels. `launch({source?, cols, rows})` does the following:
+desktop shell hosts panels. `launch({source?, cols, rows})` does the following
+for a terminal app (a shell takes the shorter path described below):
 
 1. Asks for approval: "Run Chat 1a2b3c4d5e6f in Personal?"
    - Scopes are once, session and version.
@@ -187,8 +188,18 @@ desktop shell hosts panels. `launch({source?, cols, rows})` does the following:
    `terminal-apps:sessions-changed`.
 
 It then waits on the shell extension for the PTY's exit. When the PTY exits it
-retires the entity, which ends the lease and the program's authority. A plain
-login shell is a session of the same registry, with no entity or grant.
+retires the entity, which ends the lease and the program's authority.
+
+**Shells.** Without a `source`, `launch` starts a plain shell: the login shell,
+or `command` with `args`, in `cwd`, with `label` as its title, in `contextId`
+(default: a fresh context for the session). A shell is a session of the same
+registry with no entity, grant or lease. The desktop terminal panel opens,
+relaunches (`resume`, `restart`) and ends (`close`) every pane through this
+service, so the panel and the terminal browser list the same sessions: a pane
+opened in the desktop appears in the browser's launcher, and a session started
+in the browser appears in the desktop panel as a pane. Only sessions the shell
+extension spawns itself (`snug split` from inside a shell) are outside the
+registry.
 
 Processes inside one native runtime share its user and sandbox. They are not
 separate security domains (see [isolation-plan.md](isolation-plan.md)). The

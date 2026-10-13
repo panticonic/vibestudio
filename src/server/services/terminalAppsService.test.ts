@@ -179,6 +179,65 @@ describe("terminalApps launch service", () => {
     await h.service.stop();
   });
 
+  it("launches a command shell in a chosen context and folder, with no entity or grant, and relaunches it as it was", async () => {
+    const h = await harness();
+    const entry = (await call(h, "launch", personCtx(), {
+      command: "/bin/sh",
+      args: ["-c", "make test"],
+      cwd: "/ctx/pkg",
+      label: "make test",
+      contextId: "ctx-chosen",
+      cols: 80,
+      rows: 24,
+    })) as { sessionId: string; kind: string; title: string; principalId?: string };
+    expect(entry).toMatchObject({ kind: "shell", title: "make test", shellSessionId: "pty-1" });
+    expect(entry.principalId).toBeUndefined();
+    expect(h.deps.createEntity).not.toHaveBeenCalled();
+    expect(h.deps.grantConnection).not.toHaveBeenCalled();
+    expect(h.deps.createContext).not.toHaveBeenCalled();
+    const open = h.shellCalls.find((c) => c.method === "open")!;
+    expect(open.args[0]).toMatchObject({
+      command: "/bin/sh",
+      args: ["-c", "make test"],
+      cwd: "/ctx/pkg",
+      label: "make test",
+      contextId: "ctx-chosen",
+    });
+    expect(await call(h, "list", personCtx())).toEqual([
+      expect.objectContaining({ title: "make test" }),
+    ]);
+
+    h.exits.get("pty-1")!({ exitCode: 0 });
+    await vi.waitFor(async () =>
+      expect(await call(h, "list", personCtx())).toEqual([
+        expect.objectContaining({ running: false }),
+      ])
+    );
+    await call(h, "resume", personCtx(), { sessionId: entry.sessionId, cols: 80, rows: 24 });
+    const reopen = h.shellCalls.filter((c) => c.method === "open")[1]!;
+    expect(reopen.args[0]).toMatchObject({
+      command: "/bin/sh",
+      cwd: "/ctx/pkg",
+      contextId: "ctx-chosen",
+    });
+    const restarted = (await call(h, "restart", personCtx(), {
+      sessionId: entry.sessionId,
+      cols: 80,
+      rows: 24,
+    })) as { sessionId: string; shellSessionId: string };
+    expect(restarted).toMatchObject({ sessionId: entry.sessionId, shellSessionId: "pty-3" });
+    expect(h.shellCalls.some((c) => c.method === "dispose" && c.args[0] === "pty-2")).toBe(true);
+    await expect(
+      call(h, "launch", personCtx("terminal-apps/chat"), {
+        source: "terminal-apps/chat",
+        command: "/bin/sh",
+        cols: 80,
+        rows: 24,
+      })
+    ).rejects.toThrow("takes no command");
+    await h.service.stop();
+  });
+
   it("keeps sessions per person and ends them for good on close", async () => {
     const h = await harness();
     const shell = (await call(h, "launch", personCtx(), { cols: 80, rows: 24 })) as {

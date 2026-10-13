@@ -133,10 +133,13 @@ jobs:
           TARGET: ${{ inputs.target }}
           RELEASE_CANDIDATE: ${{ inputs.release-candidate }}
         run: |
+          # electron-builder treats an empty CSC_LINK as a path and resolves it
+          # to the repository directory. With no signing secret, leave it unset.
+          if [ -z "${CSC_LINK:-}" ]; then unset CSC_LINK; fi
           if [ "$TARGET" = "darwin-arm64" ] && [ "$RELEASE_CANDIDATE" = "true" ]; then
             missing=0
             for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-              eval "value=\${$name}"
+              value="${!name}"
               if [ -z "$value" ]; then missing=$((missing + 1)); fi
             done
             if [ "$missing" -eq 0 ]; then

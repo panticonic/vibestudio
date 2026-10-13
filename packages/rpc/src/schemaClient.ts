@@ -1,6 +1,7 @@
 import type { RpcClient, RpcCaller } from "./types.js";
 import type { RpcWireCaller, RpcWireClient } from "./internal-types.js";
 import { assertRpcMethodDescriptor } from "./methodDescriptor.js";
+import { throwIfAborted } from "./abort.js";
 
 type WireDispatcher = {
   call(
@@ -70,10 +71,10 @@ export function schemaRpcCaller(wire: WireDispatcher): RpcCaller {
   const caller: RpcCaller = {
     call: (target, method, args, options) =>
       ownRpcOperation(wire, async () => {
-        options?.signal?.throwIfAborted();
+        throwIfAborted(options?.signal);
         assertRpcMethodDescriptor(method, "call");
         return method.invoke(args, (parsedArgs) => {
-          options?.signal?.throwIfAborted();
+          throwIfAborted(options?.signal);
           return wire.call(target, method.name, parsedArgs, options);
         });
       }),
@@ -97,10 +98,10 @@ export function schemaRpcClient(wire: RpcWireClient): RpcClient {
     ...schemaRpcCaller(wire),
     streamReadable: (target, method, args, options) =>
       ownRpcOperation(wire, async () => {
-        options?.signal?.throwIfAborted();
+        throwIfAborted(options?.signal);
         assertRpcMethodDescriptor(method, "streamReadable");
         const parsedArgs = await method.parseArgs(args);
-        options?.signal?.throwIfAborted();
+        throwIfAborted(options?.signal);
         return wire.streamReadable(target, method.name, parsedArgs, options);
       }),
   };
@@ -119,10 +120,10 @@ export function schemaRpcStream(
 ): RpcCaller["stream"] {
   return (target, method, args, options) =>
     ownRpcOperation(owner, async () => {
-      options?.signal?.throwIfAborted();
+      throwIfAborted(options?.signal);
       assertRpcMethodDescriptor(method, "stream");
       const parsedArgs = await method.parseArgs(args);
-      options?.signal?.throwIfAborted();
+      throwIfAborted(options?.signal);
       return stream(target, method.name, parsedArgs, options);
     });
 }

@@ -120,13 +120,22 @@ export const terminalAppsMethods = defineServiceMethods({
     capability: TERMINAL_APPS_RUN_CAPABILITY,
     presentation: runPresentation,
     description:
-      "Start a terminal app (`source` = terminal-apps/<name>) or, without a source, a login shell, in a new terminal session sized cols×rows. Returns the session; attach to its shellSessionId.",
+      "Start a terminal app (`source` = terminal-apps/<name>) or, without a source, a shell, in a new terminal session sized cols×rows. A shell runs the person's login shell, or `command` with `args`, in `cwd` (inside its context's folder) and `contextId` (default: a fresh context for the session). Returns the session; attach to its shellSessionId.",
     tier: { ...controlTier, tier: "gated" as const, family: "terminal-apps.run" },
     authority: runAuthority,
     args: z.tuple([
       z
         .object({
           source: z.string().min(1).max(256).optional(),
+          /** Shells only: the program to run instead of the login shell. */
+          command: z.string().min(1).max(4096).optional(),
+          args: z.array(z.string().max(65536)).max(1024).optional(),
+          /** Shells only: working directory, relative to or inside the context's folder. */
+          cwd: z.string().min(1).max(4096).optional(),
+          /** Shells only: the session's title. */
+          label: z.string().min(1).max(256).optional(),
+          /** Shells only: the existing context whose folder the shell works in. */
+          contextId: z.string().min(1).max(256).optional(),
           ...size,
           /** How the launching terminal opens approvals, shown by apps. */
           approvalsKey: z.string().max(40).optional(),
@@ -142,6 +151,20 @@ export const terminalAppsMethods = defineServiceMethods({
     presentation: runPresentation,
     description:
       "Return a session; when its program is no longer running, start it again in the same session (an app keeps its state and context).",
+    tier: { ...controlTier, tier: "gated" as const, family: "terminal-apps.run" },
+    authority: runAuthority,
+    args: z.tuple([
+      z.object({ sessionId, ...size, approvalsKey: z.string().max(40).optional() }).strict(),
+    ]),
+    returns: TerminalSessionEntrySchema,
+    access: runAccess,
+  },
+  restart: {
+    website: WEBSITE,
+    capability: TERMINAL_APPS_RUN_CAPABILITY,
+    presentation: runPresentation,
+    description:
+      "Stop a session's running program (if any) and start it again in a new PTY of the same session: same program, context and folder (an app keeps its state).",
     tier: { ...controlTier, tier: "gated" as const, family: "terminal-apps.run" },
     authority: runAuthority,
     args: z.tuple([

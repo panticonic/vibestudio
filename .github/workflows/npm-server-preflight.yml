@@ -1,0 +1,137 @@
+name: Staged headless server npm candidate
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  preflight:
+    name: Staged headless server npm candidate
+    runs-on: ubuntu-24.04
+    env:
+      VIBESTUDIO_TEMPLATE_CHECKOUTS: ${{ github.workspace }}/vibestudio-templates
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Prepare private npm candidate scratch
+        run: |
+          owned_tmpdir="$RUNNER_TEMP/vibestudio-npm-server-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -m 0700 -p "$owned_tmpdir"
+          printf 'TMPDIR=%s\n' "$owned_tmpdir" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Linux npm-candidate sandbox runtime
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
+
+      - name: Allow installed npm candidate MXC user namespace under AppArmor
+        run: |
+          profile="$RUNNER_TEMP/vibestudio-server-npm-mxc.apparmor"
+          source_executable="$GITHUB_WORKSPACE/dist/mxc/linux-x64/lxc-exec"
+          staged_executable="$GITHUB_WORKSPACE/dist-packages/server/dist/mxc/linux-x64/lxc-exec"
+          executable="$TMPDIR/vibestudio-npm-server-check-*/install/lib/node_modules/@panticonic/vibestudio-server/dist/mxc/linux-x64/lxc-exec"
+          cat > "$profile" <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile vibestudio_server_npm_mxc_source "$source_executable" flags=(unconfined) {
+            userns,
+          }
+
+          profile vibestudio_server_npm_mxc_staged "$staged_executable" flags=(unconfined) {
+            userns,
+          }
+
+          profile vibestudio_server_npm_mxc_installed "$executable" flags=(unconfined) {
+            userns,
+          }
+          EOF
+          sudo install -m 0644 "$profile" /etc/apparmor.d/vibestudio-server-npm-mxc
+          sudo apparmor_parser -r /etc/apparmor.d/vibestudio-server-npm-mxc
+
+      - name: Acquire complete template source set
+        run: pnpm dev:templates setup "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
+
+      - name: Download exact official template input manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vibestudio-quality-manifest-${{ github.sha }}
+          path: .cache/ci-template-inputs
+
+      - name: Pin every official template to the tested input
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: node scripts/pin-ci-template-inputs.mjs "$SOURCE_SHA" "$GITHUB_WORKSPACE/.cache/ci-template-inputs/release-quality-inputs.json" "$VIBESTUDIO_TEMPLATE_CHECKOUTS"
+
+      - name: Check declared template runtime dependencies
+        run: pnpm check:userland-dependencies
+
+      - name: Download prepared Linux x64 native isolation input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-isolation-linux-x64-${{ github.sha }}
+          path: native/isolation/artifacts/native-isolation-linux-x64
+
+      - name: Download prepared Linux arm64 native isolation input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-isolation-linux-arm64-${{ github.sha }}
+          path: native/isolation/artifacts/native-isolation-linux-arm64
+
+      - name: Download prepared Darwin arm64 native isolation input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-isolation-darwin-arm64-${{ github.sha }}
+          path: native/isolation/artifacts/native-isolation-darwin-arm64
+
+      - name: Download source-attested Darwin observers
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: darwin-process-observers-ci-${{ github.sha }}
+          path: dist/native-process-observer
+
+      - name: Build npm preflight helpers and their RPC dependencies
+        run: pnpm build:infrastructure
+
+      - name: Test npm package and publication helpers
+        run: node --test scripts/build-server-npm-package.test.mjs scripts/build-artifact-contracts.test.mjs scripts/publish-npm.test.mjs
+
+      - name: Generate pinned template release metadata
+        run: pnpm generate:workspace-template-release
+
+      - name: Build, stage, verify, and retain the npm candidate
+        run: >-
+          pnpm publish:server-npm -- --dry-run-only
+          --candidate-output "$TMPDIR/npm-candidate"
+
+      - name: Upload verified npm candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibestudio-server-npm-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.TMPDIR }}/npm-candidate/*.tgz
+            ${{ env.TMPDIR }}/npm-candidate/candidate-receipt.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Retire npm candidate smoke scratch
+        if: ${{ always() }}
+        run: rm -rf -- "$RUNNER_TEMP/vibestudio-npm-server-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

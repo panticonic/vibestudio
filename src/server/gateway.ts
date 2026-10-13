@@ -826,7 +826,8 @@ function proxyRequest(
   targetPath: string,
   upstreamToken: string,
   hostHeader?: string,
-  extraHeaders: Record<string, string> = {}
+  extraHeaders: Record<string, string> = {},
+  onTerminal?: () => void
 ): void {
   // Strip inbound auth/cookie/X-Vibestudio-* before forwarding (audit #32).
   // Workerd-served code is untrusted-by-design; it must never see the
@@ -838,6 +839,7 @@ function proxyRequest(
   if (hostHeader) safeHeaders["host"] = hostHeader;
   Object.assign(safeHeaders, extraHeaders);
 
+  let proxyRes: IncomingMessage | null = null;
   const proxyReq = request(
     {
       hostname: "127.0.0.1",
@@ -846,9 +848,11 @@ function proxyRequest(
       method: req.method,
       headers: safeHeaders,
     },
-    (proxyRes) => {
-      res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
-      proxyRes.on("error", (err) => {
+    (response) => {
+      proxyRes = response;
+      response.once("close", () => onTerminal?.());
+      res.writeHead(response.statusCode ?? 502, response.headers);
+      response.on("error", (err) => {
         log.warn(`Proxy response stream error: ${err.message}`);
         try {
           res.end();
@@ -856,7 +860,7 @@ function proxyRequest(
           /* already closed */
         }
       });
-      proxyRes.pipe(res);
+      response.pipe(res);
     }
   );
 
@@ -866,10 +870,18 @@ function proxyRequest(
     }
     res.end(`Gateway proxy error: ${err.message}`);
   });
+  proxyReq.once("close", () => {
+    if (!proxyRes) onTerminal?.();
+  });
   req.on("error", (err) => {
     proxyReq.destroy(err);
   });
   res.on("error", () => {
+    proxyReq.destroy();
+  });
+  res.once("close", () => {
+    if (res.writableFinished) return;
+    proxyRes?.destroy();
     proxyReq.destroy();
   });
 
@@ -882,7 +894,8 @@ function proxyUpgrade(
   head: Buffer,
   targetPort: number,
   upstreamToken: string,
-  extraHeaders: Record<string, string> = {}
+  extraHeaders: Record<string, string> = {},
+  onTerminal?: () => void
 ): void {
   // Strip inbound auth/cookie/X-Vibestudio-* (audit #32). See proxyRequest.
   // After stripping, stamp the per-upstream gateway bearer.
@@ -936,6 +949,7 @@ function proxyUpgrade(
   });
 
   targetSocket.on("error", onTargetConnectError);
+  targetSocket.once("close", () => onTerminal?.());
   socket.on("error", onClientConnectError);
   socket.on("close", onClientConnectClose);
 }
@@ -1175,6 +1189,7 @@ async function handleRouteRequest(
 
   // worker-do / worker-regular → reverse proxy to workerd with rewritten path.
   let extraHeaders: Record<string, string>;
+  let workerAdmission: WorkerExecutableAdmission | null = null;
   if (result.kind === "worker-do") {
     if (!workerdDispatchSecret) {
       res.writeHead(503, { "Content-Type": "text/plain" });
@@ -1195,9 +1210,11 @@ async function handleRouteRequest(
     };
   } else {
     try {
-      extraHeaders = workerExecutableHeaders(
-        await requireWorkerAdmission(result.targetInstanceName, resolveWorkerAdmission)
+      workerAdmission = await requireWorkerAdmission(
+        result.targetInstanceName,
+        resolveWorkerAdmission
       );
+      extraHeaders = workerExecutableHeaders(workerAdmission);
     } catch (error) {
       res.writeHead(workerAdmissionFailureStatus(error), { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: serializeRpcFailure(error) }));
@@ -1205,13 +1222,20 @@ async function handleRouteRequest(
     }
   }
   const workerdPort = getWorkerdPort();
+  if (res.destroyed) {
+    workerAdmission?.release?.();
+    return true;
+  }
   if (!workerdPort) {
+    workerAdmission?.release?.();
     res.writeHead(503, { "Content-Type": "text/plain" });
     res.end("workerd not running");
     return true;
   }
   const targetPath = buildWorkerTargetPath(result, url);
-  proxyRequest(req, res, workerdPort, targetPath, workerdToken, undefined, extraHeaders);
+  proxyRequest(req, res, workerdPort, targetPath, workerdToken, undefined, extraHeaders, () =>
+    workerAdmission?.release?.()
+  );
   return true;
 }
 
@@ -1265,6 +1289,7 @@ async function handleRouteUpgrade(
   }
 
   let extraHeaders: Record<string, string>;
+  let workerAdmission: WorkerExecutableAdmission | null = null;
   if (result.kind === "worker-do") {
     if (!workerdDispatchSecret) {
       socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
@@ -1285,9 +1310,11 @@ async function handleRouteUpgrade(
     };
   } else {
     try {
-      extraHeaders = workerExecutableHeaders(
-        await requireWorkerAdmission(result.targetInstanceName, resolveWorkerAdmission)
+      workerAdmission = await requireWorkerAdmission(
+        result.targetInstanceName,
+        resolveWorkerAdmission
       );
+      extraHeaders = workerExecutableHeaders(workerAdmission);
     } catch (error) {
       const status = workerAdmissionFailureStatus(error);
       const body = JSON.stringify({ error: serializeRpcFailure(error) });
@@ -1298,13 +1325,20 @@ async function handleRouteUpgrade(
     }
   }
   const workerdPort = getWorkerdPort();
+  if (socket.destroyed) {
+    workerAdmission?.release?.();
+    return true;
+  }
   if (!workerdPort) {
+    workerAdmission?.release?.();
     socket.destroy();
     return true;
   }
   // Rewrite req.url so the upstream (workerd) sees the rewritten path.
   req.url = buildWorkerTargetPath(result, url);
-  proxyUpgrade(req, socket, head, workerdPort, workerdToken, extraHeaders);
+  proxyUpgrade(req, socket, head, workerdPort, workerdToken, extraHeaders, () =>
+    workerAdmission?.release?.()
+  );
   return true;
 }
 

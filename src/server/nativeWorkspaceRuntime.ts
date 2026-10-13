@@ -331,6 +331,8 @@ export async function startNativeWorkspaceRuntime(input: {
       async runJob(input: NativeWorkspaceJob): Promise<void> {
         const directory = path.join(runtimeRoot, "jobs", randomUUID());
         await mkdir(directory, { recursive: true });
+        let failure: unknown;
+        let failed = false;
         try {
           await writeFile(path.join(directory, "package.json"), '{"type":"module"}');
           await writeFile(path.join(directory, "bundle.js"), input.bundle);
@@ -345,9 +347,20 @@ export async function startNativeWorkspaceRuntime(input: {
             VIBESTUDIO_EXTENSION_SMOKE_BUNDLE: path.join(directory, "bundle.js"),
           });
           await waitForNativeJob(child);
-        } finally {
-          await rm(directory, { recursive: true, force: true });
+        } catch (error) {
+          failure = error;
+          failed = true;
         }
+        try {
+          await rm(directory, { recursive: true, force: true });
+        } catch (cleanupError) {
+          if (failed)
+            throw new AggregateError([failure, cleanupError], "Native job and cleanup failed", {
+              cause: failure,
+            });
+          throw cleanupError;
+        }
+        if (failed) throw failure;
       },
       async stop() {
         return stopOwnedRuntime();

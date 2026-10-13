@@ -589,8 +589,9 @@ Authority principals: `code`, `user`
 | Method | Description |
 |--------|-------------|
 | `terminalApps.list` | The calling person's terminal sessions in this workspace (apps and shells), most recently active first. |
-| `terminalApps.launch` | Start a terminal app (`source` = terminal-apps/<name>) or, without a source, a login shell, in a new terminal session sized cols×rows. Returns the session; attach to its shellSessionId. |
+| `terminalApps.launch` | Start a terminal app (`source` = terminal-apps/<name>) or, without a source, a shell, in a new terminal session sized cols×rows. A shell runs the person's login shell, or `command` with `args`, in `cwd` (inside its context's folder) and `contextId` (default: a fresh context for the session). Returns the session; attach to its shellSessionId. |
 | `terminalApps.resume` | Return a session; when its program is no longer running, start it again in the same session (an app keeps its state and context). |
+| `terminalApps.restart` | Stop a session's running program (if any) and start it again in a new PTY of the same session: same program, context and folder (an app keeps its state). |
 | `terminalApps.close` | End a terminal session for good: its program is terminated and the session is forgotten. |
 | `terminalApps.getSettings` | The calling person's terminal settings (prefix key, bell, mouse, …). |
 | `terminalApps.setSettings` | Replace the calling person's terminal settings (at most 4 KB of JSON). |

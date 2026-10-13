@@ -68,8 +68,6 @@ export interface TerminalBrowserHost {
   listWorkspaces(): Promise<TerminalBrowserWorkspace[]>;
   /** Opens a URL on the user's machine (CLI-side, after browser-side confirmation). */
   openExternal(url: string): Promise<void>;
-  /** Reads a local file the user explicitly chose. */
-  readLocalFile(path: string): Promise<{ name: string; bytes: Uint8Array; mimeType?: string }>;
 }
 
 export type TerminalBrowserExit =

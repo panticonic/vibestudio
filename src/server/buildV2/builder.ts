@@ -32,7 +32,7 @@ import * as esbuild from "esbuild";
 import { ASSET_URL_EXTENSIONS } from "@vibestudio/shared/assetModules";
 import * as fs from "fs";
 import * as path from "path";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { builtinModules, createRequire } from "module";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import { resolveNativeTypeScriptServerPath } from "../appRoot.js";
@@ -79,6 +79,7 @@ import {
   dependencyPatchesForExternalRoots,
   acquireExternalDeps,
   ensureExtensionRuntimeDeps,
+  extensionRuntimeDependencyKey,
   prepareExternalDependencyEnvironment,
   type ExternalDependencyPatch,
 } from "./externalDeps.js";
@@ -115,6 +116,13 @@ import { generatePanelEntry } from "./panelEntryProtocol.js";
 import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
 import { LibraryLoweringWorkerClient } from "./libraryLoweringWorkerClient.js";
 import { ImmutableTreeWorkerClient } from "./immutableTreeWorkerClient.js";
+import {
+  EXTENSION_RUNTIME_PROJECTION_RECEIPT,
+  assertRuntimeDependencyProjectionComplete,
+  extensionRuntimeDepsProjected,
+  runtimeDependencyProjectionComplete,
+} from "./extensionRuntimeProjection.js";
+export { extensionRuntimeDepsProjected } from "./extensionRuntimeProjection.js";
 import {
   discoverHostWorkspacePackageManifests,
   resolveHostWorkspacePackageManifest,
@@ -249,10 +257,13 @@ export class BuildProcessOwner {
   /** A stored build can be read before its dependency tree is ready. Share the
    * entire completeness check and projection for that build destination so a
    * cached reader cannot remove files while the producer is publishing them. */
-  async projectExtensionRuntimeDeps(target: string, operation: () => Promise<void>): Promise<void> {
+  async projectExtensionRuntimeDeps(
+    target: string,
+    operation: (ownerSignal: AbortSignal) => Promise<void>
+  ): Promise<void> {
     const existing = this.extensionRuntimeProjections.get(target);
     if (existing) return existing;
-    const projection = this.withWorkers(operation);
+    const projection = this.withWorkers(() => operation(this.lifetime.signal));
     this.extensionRuntimeProjections.set(target, projection);
     try {
       await projection;
@@ -522,6 +533,7 @@ function admitSessionBuild(
           `Shared build ${buildKey} completed without a hydratable result in this role store`
         );
       }
+      await ensureNodeProgramBuildReady(session, hydrated);
       return hydrated;
     } finally {
       adopter.clearQueuedPromotion();
@@ -2383,7 +2395,7 @@ async function buildUnitStoredUnchecked(
     cached = await session.store.rebindSourceState(cached, stateRef);
   }
   if (cached) {
-    await refreshCachedNodeProgramRuntimeDeps(session, cached);
+    await ensureNodeProgramBuildReady(session, cached);
     return cached;
   }
 
@@ -2933,7 +2945,7 @@ async function prepareBuildEnv(
 }
 
 /**
- * Store a simple bundle-only build result (used by worker builds).
+ * Store a bundle and its owned resources in one publication transaction.
  */
 async function storeSimpleBuild(
   session: BuilderSession,
@@ -2945,7 +2957,8 @@ async function storeSimpleBuild(
   sourceStateHash: string | null,
   authority: UnitAuthorityManifest,
   extraMetadata: Partial<BuildMetadata> = {},
-  artifacts: BuildArtifacts = bundleArtifacts(bundle)
+  artifacts: BuildArtifacts = bundleArtifacts(bundle),
+  prepareDirectory?: (temporaryDirectory: string) => Promise<void>
 ): Promise<StoredBuildResult> {
   const metadata: BuildMetadata = {
     kind: node.kind as BuildMetadata["kind"],
@@ -2960,7 +2973,7 @@ async function storeSimpleBuild(
     ...extraMetadata,
     builtAt: new Date().toISOString(),
   };
-  return session.store.putStored(buildKey, artifacts, metadata);
+  return session.store.putStored(buildKey, artifacts, metadata, prepareDirectory);
 }
 
 function bundleArtifacts(bundle: string): BuildArtifacts {
@@ -4674,6 +4687,12 @@ async function materializeBuildProviderArtifacts(
           );
         }
         const bytes = new Uint8Array(await response.arrayBuffer());
+        const actualIntegrity = `sha256-${createHash("sha256").update(bytes).digest("hex")}`;
+        if (actualIntegrity !== artifact.stream.integrity) {
+          throw new Error(
+            `Build provider ${provider.name} streamed artifact ${artifact.path} with integrity ${actualIntegrity}, expected ${artifact.stream.integrity}`
+          );
+        }
         content =
           encoding === "base64"
             ? Buffer.from(bytes).toString("base64")
@@ -4893,18 +4912,27 @@ async function bundleNodeProgram(
   };
 }
 
-/** Project a stored Node program's runtime dependencies next to its bundle. */
-async function projectNodeProgramRuntimeDeps(
+/**
+ * Stage a Node program's runtime dependencies inside its build directory
+ * before the build is published, so a stored program is complete from the
+ * moment it exists.
+ */
+function nodeProgramRuntimePopulation(
   session: BuilderSession,
-  result: StoredBuildResult,
   program: NodeProgramBundle,
   name: string
-): Promise<void> {
+): ((temporaryDirectory: string) => Promise<void>) | undefined {
   const nodeModulesDir = program.runtimeDeps.nodeModulesDir;
-  if (!nodeModulesDir) return;
-  await session.processOwner.projectExtensionRuntimeDeps(result.dir, () =>
-    materializeExtensionRuntimeDeps(session, result.dir, nodeModulesDir, name)
-  );
+  if (!nodeModulesDir) return undefined;
+  return (temporaryDirectory) =>
+    populateExtensionRuntimeDeps(
+      session,
+      path.join(temporaryDirectory, "node_modules"),
+      nodeModulesDir,
+      name,
+      program.runtimeExternalDeps,
+      program.runtimeDeps.key
+    );
 }
 
 async function buildExtension(
@@ -5025,9 +5053,12 @@ async function buildExtension(
         sourceStateHash,
         authority,
         { details: { ...details, smokeTest: { mode: "child-process", passed: true } } },
-        extensionArtifacts
+        extensionArtifacts,
+        nodeProgramRuntimePopulation(session, program, node.name)
       );
-      await projectNodeProgramRuntimeDeps(session, result, program, node.name);
+      // A concurrent writer can win the immutable build key. Verify the
+      // returned directory too; older published builds may need repair.
+      await refreshCachedNodeProgramRuntimeDeps(session, result);
       return result;
     } finally {
       program.runtimeDeps.release();
@@ -5113,9 +5144,10 @@ async function buildTerminalProgram(
             classifiedDeps: program.dependencyDiagnostics.classifiedDeps,
           },
         },
-        artifacts
+        artifacts,
+        nodeProgramRuntimePopulation(session, program, node.name)
       );
-      await projectNodeProgramRuntimeDeps(session, result, program, node.name);
+      await refreshCachedNodeProgramRuntimeDeps(session, result);
       return result;
     } finally {
       program.runtimeDeps.release();
@@ -5171,8 +5203,19 @@ async function smokeTestExtensionBuild(
   }
 }
 
-/** A cached Node program (extension or terminal app) gets its runtime dependencies re-projected. */
-async function refreshCachedNodeProgramRuntimeDeps(
+/** A cached Node program (extension or terminal app) gets its runtime dependencies verified or re-projected. */
+export async function ensureNodeProgramBuildReady(
+  session: BuilderSession,
+  result: StoredBuildResult
+): Promise<void> {
+  const kind = result.metadata.details.kind;
+  if (kind !== "extension" && kind !== "terminal") return;
+  // The process owns an admitted shared projection, while this session keeps
+  // its store alive until any metadata repair it initiated has settled.
+  await session.lifetime.run(() => refreshCachedNodeProgramRuntimeDeps(session, result));
+}
+
+export async function refreshCachedNodeProgramRuntimeDeps(
   session: BuilderSession,
   result: StoredBuildResult
 ): Promise<void> {
@@ -5181,88 +5224,207 @@ async function refreshCachedNodeProgramRuntimeDeps(
     details.kind === "extension" || details.kind === "terminal" ? details : null;
   const deps = extensionDetails?.externalDeps ?? {};
   if (Object.keys(deps).length === 0) return;
-  await session.processOwner.projectExtensionRuntimeDeps(result.dir, async () => {
+  const currentKey = extensionRuntimeDependencyKey(
+    session.processOwner.appRoot,
+    deps,
+    extensionDetails?.dependencyOverrides ?? {},
+    extensionDetails?.dependencyPatches ?? []
+  );
+  if (!currentKey)
+    throw new Error(`Extension runtime dependency key is missing: ${result.metadata.name}`);
+  const recordRuntimeKey = async (key: string): Promise<void> => {
+    // A retained execution has its own source state and execution digest. Only
+    // the canonical build record owns the mutable host-runtime projection key.
+    const canonical = await session.store.readBuildMetadata(result.dir);
+    if (
+      canonical.buildKey !== result.buildKey ||
+      (canonical.details.kind !== "extension" && canonical.details.kind !== "terminal")
+    )
+      throw new Error(
+        `Extension build metadata changed during runtime projection: ${result.buildKey}`
+      );
+    if (canonical.details.runtimeDepsKey === key) return;
+    canonical.details.runtimeDepsKey = key;
+    await session.store.writeBuildMetadata(result.dir, canonical);
+  };
+  await session.processOwner.projectExtensionRuntimeDeps(result.dir, async (ownerSignal) => {
     if (
       extensionRuntimeDepsProjected(
         session.store.primaryArtifactFilePath(result),
-        Object.keys(deps)
+        Object.keys(deps),
+        currentKey
       )
-    )
+    ) {
+      await recordRuntimeKey(currentKey);
       return;
+    }
 
     const runtimeDeps = await ensureExtensionRuntimeDeps(
       session.processOwner.appRoot,
       deps,
       extensionDetails?.dependencyOverrides ?? {},
       extensionDetails?.dependencyPatches ?? [],
-      session.signal
+      ownerSignal
     );
     try {
-      if (runtimeDeps.nodeModulesDir) {
+      if (runtimeDeps.key !== currentKey)
+        throw new Error(
+          `Extension runtime changed during dependency projection: ${result.metadata.name}`
+        );
+      if (
+        runtimeDeps.nodeModulesDir &&
+        !runtimeDependencyProjectionComplete(
+          path.join(result.dir, "node_modules"),
+          Object.keys(deps),
+          runtimeDeps.key
+        )
+      ) {
         await materializeExtensionRuntimeDeps(
           session,
           result.dir,
           runtimeDeps.nodeModulesDir,
-          result.metadata.name
+          result.metadata.name,
+          deps,
+          runtimeDeps.key
         );
       }
-      if (extensionDetails && extensionDetails.runtimeDepsKey !== runtimeDeps.key) {
-        extensionDetails.runtimeDepsKey = runtimeDeps.key;
-        await session.store.writeBuildMetadata(result.dir, result.metadata);
-      }
+      await recordRuntimeKey(runtimeDeps.key);
     } finally {
       runtimeDeps.release();
     }
   });
+  // A role may have joined another role's target flight with its own stale
+  // descriptor. Reconcile only runtime readiness; retained execution identity
+  // must remain the exact variant requested by this caller.
+  const canonical = await session.store.readBuildMetadata(result.dir);
+  if (
+    canonical.buildKey !== result.buildKey ||
+    (canonical.details.kind !== "extension" && canonical.details.kind !== "terminal")
+  )
+    throw new Error(
+      `Extension build metadata changed during runtime projection: ${result.buildKey}`
+    );
+  if (extensionDetails) extensionDetails.runtimeDepsKey = canonical.details.runtimeDepsKey;
+  if (
+    !extensionRuntimeDepsProjected(
+      session.store.primaryArtifactFilePath(result),
+      Object.keys(deps),
+      currentKey
+    )
+  )
+    throw new Error(`Extension runtime projection did not complete: ${result.metadata.name}`);
 }
 
-export function extensionRuntimeDepsProjected(bundlePath: string, deps: string[]): boolean {
-  if (deps.length === 0) return true;
-  const nodeModulesDir = path.join(path.dirname(bundlePath), "node_modules");
-  // Keep this resolver's lookup paths distinct from the bundle's. Node caches
-  // path resolution process-wide, so an earlier host-ancestor lookup from the
-  // bundle can otherwise mask a newly materialized local projection.
-  const runtimeRequire = createRequire(
-    path.join(nodeModulesDir, ".vibestudio-resolver", "resolve.cjs")
-  );
-  try {
-    for (const dep of deps) {
-      const packageEntry = path.join(nodeModulesDir, ...dep.split("/"));
-      const packageRoot = fs.realpathSync(packageEntry);
-      const resolvedPath = fs.realpathSync(runtimeRequire.resolve(dep));
-      const relative = path.relative(packageRoot, resolvedPath);
-      if (!fs.statSync(packageRoot).isDirectory()) return false;
-      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
-        return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function materializeExtensionRuntimeDeps(
+export async function populateExtensionRuntimeDeps(
   session: BuilderSession,
-  buildDir: string,
+  destination: string,
   nodeModulesDir: string,
-  extensionName: string
+  extensionName: string,
+  deps: Record<string, string>,
+  runtimeDepsKey: string | null
 ): Promise<void> {
   if (!fs.existsSync(nodeModulesDir)) {
     throw new Error(
       `Extension runtime dependencies for ${extensionName} are missing: ${nodeModulesDir}`
     );
   }
-  const link = path.join(buildDir, "node_modules");
+  if (!runtimeDepsKey)
+    throw new Error(`Extension runtime dependency key is missing: ${extensionName}`);
   try {
-    await fs.promises.rm(link, { recursive: true, force: true });
-    const worker = session.processOwner.immutableTreeWorker;
-    await worker.materialize(nodeModulesDir, link);
-  } catch (err) {
+    await session.processOwner.immutableTreeWorker.materialize(nodeModulesDir, destination);
+    await fs.promises.writeFile(
+      path.join(destination, EXTENSION_RUNTIME_PROJECTION_RECEIPT),
+      JSON.stringify({ version: 1, runtimeDepsKey })
+    );
+    assertRuntimeDependencyProjectionComplete(destination, Object.keys(deps), runtimeDepsKey);
+  } catch (error) {
     throw new Error(
       `Failed to materialize extension runtime dependencies for ${extensionName}: ${
-        err instanceof Error ? err.message : String(err)
+        error instanceof Error ? error.message : String(error)
       }`,
-      { cause: err }
+      { cause: error }
+    );
+  }
+}
+
+export async function materializeExtensionRuntimeDeps(
+  session: BuilderSession,
+  buildDir: string,
+  nodeModulesDir: string,
+  extensionName: string,
+  deps: Record<string, string>,
+  runtimeDepsKey: string | null
+): Promise<void> {
+  const link = path.join(buildDir, "node_modules");
+  let stagingParent: string | undefined;
+  let previous: string | undefined;
+  let failure: unknown;
+  let failed = false;
+  try {
+    stagingParent = await fs.promises.mkdtemp(path.join(buildDir, ".node_modules-staging-"));
+    const staging = path.join(stagingParent, "node_modules");
+    await populateExtensionRuntimeDeps(
+      session,
+      staging,
+      nodeModulesDir,
+      extensionName,
+      deps,
+      runtimeDepsKey
+    );
+    // The selected Node version is fixed for this host process. A completed
+    // closure with a different key belongs to a prior process. Retain its
+    // tree until the new one is promoted, and restore it if promotion fails.
+    if (fs.existsSync(link)) {
+      previous = `${link}.previous.${randomBytes(12).toString("hex")}`;
+      await fs.promises.rename(link, previous);
+    }
+    try {
+      await fs.promises.rename(staging, link);
+    } catch (promotionError) {
+      if (previous) {
+        try {
+          await fs.promises.rename(previous, link);
+          previous = undefined;
+        } catch (restoreError) {
+          throw new AggregateError(
+            [promotionError, restoreError],
+            `Projection promotion and previous-tree restoration failed: ${extensionName}`,
+            { cause: promotionError }
+          );
+        }
+      }
+      throw promotionError;
+    }
+  } catch (err) {
+    failed = true;
+    failure = err;
+  }
+  if (stagingParent) {
+    try {
+      await fs.promises.rm(stagingParent, { recursive: true, force: true });
+    } catch (cleanupError) {
+      failure = failed
+        ? new AggregateError([failure, cleanupError], "Projection and staging cleanup failed", {
+            cause: failure,
+          })
+        : cleanupError;
+      failed = true;
+    }
+  }
+  if (previous && !failed) {
+    try {
+      await fs.promises.rm(previous, { recursive: true, force: true });
+    } catch (cleanupError) {
+      failure = cleanupError;
+      failed = true;
+    }
+  }
+  if (failed) {
+    throw new Error(
+      `Failed to materialize extension runtime dependencies for ${extensionName}: ${
+        failure instanceof Error ? failure.message : String(failure)
+      }`,
+      { cause: failure }
     );
   }
 }

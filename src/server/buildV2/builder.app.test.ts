@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildUnit, type BuilderSession } from "./builder.js";
@@ -391,6 +392,7 @@ describe("buildUnit app builds", () => {
     let providerInput: BuildProviderInput | null = null;
     let providerBuilds = 0;
     let providerEv = "ev-provider";
+    let corruptStream = false;
     let projectedPlatformSource = "";
     const testNodeModules = path.join(root, "node_modules");
     const platformPackage = path.join(testNodeModules, "@platform", "fake");
@@ -469,7 +471,11 @@ describe("buildUnit app builds", () => {
                   contentType: "application/octet-stream",
                   encoding: "base64",
                   platform: "ios",
-                  stream: { method: "buildArtifact", args: ["ios-main"] },
+                  stream: {
+                    method: "buildArtifact",
+                    args: ["ios-main"],
+                    integrity: `sha256-${createHash("sha256").update(`bundle:${input.unitName}:${input.effectiveVersion}`).digest("hex")}`,
+                  },
                 },
               ],
               metadata: {
@@ -481,7 +487,11 @@ describe("buildUnit app builds", () => {
           streamArtifact: async (_artifact, input) => {
             // Provider inputs remain admitted until every lazy artifact is consumed.
             expect(fs.existsSync(path.join(input.sourcePath, "index.tsx"))).toBe(true);
-            return new Response(`bundle:${input.unitName}:${input.effectiveVersion}`);
+            return new Response(
+              corruptStream
+                ? "corrupt bundle"
+                : `bundle:${input.unitName}:${input.effectiveVersion}`
+            );
           },
         });
       },
@@ -574,6 +584,18 @@ describe("buildUnit app builds", () => {
         content: Buffer.from(`bundle:@workspace-apps/mobile:${"c".repeat(64)}`).toString("base64"),
       }),
     ]);
+    corruptStream = true;
+    providerEv = "ev-provider-corrupt-stream";
+    await expect(
+      buildUnit(
+        session,
+        graph.get("@workspace-apps/mobile"),
+        "c".repeat(64),
+        graph,
+        workspaceRoot,
+        SOURCE_STATE_HASH
+      )
+    ).rejects.toThrow(/streamed artifact ios\/main\.hbc with integrity .* expected/);
   });
 
   describe("app artifact contract at build time", () => {

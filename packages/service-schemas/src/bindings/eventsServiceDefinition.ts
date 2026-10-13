@@ -6,6 +6,7 @@ import { verifiedInitiator, type ServiceContext } from "@vibestudio/shared/servi
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { eventsMethods } from "../events.js";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
+import { throwIfAborted } from "@vibestudio/rpc";
 
 /** Each topic may replay zero or more held payloads, including one per addressed panel. */
 export type EventSnapshotProviders = {
@@ -63,7 +64,7 @@ export function createEventsServiceDefinition(
         const release = await opts.onWatchOpened?.(events, ctx);
         if (ctx.signal?.aborted) {
           release?.();
-          ctx.signal.throwIfAborted();
+          throwIfAborted(ctx.signal);
         }
         return eventService.openWatch({
           ...eventWatchOwner(ctx),

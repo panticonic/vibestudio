@@ -9,7 +9,8 @@ import {
   saveCliCredentials,
   type CliCredentials,
 } from "../credentialStore.js";
-import { pairRemoteServer, selectRemoteWorkspace } from "../remoteClient.js";
+import { workspaceLabel } from "../../node/workspaceLabel.js";
+import { listRemoteWorkspaces, pairRemoteServer, selectRemoteWorkspace } from "../remoteClient.js";
 import { RpcClient } from "../rpcClient.js";
 import {
   deleteAgentSession,
@@ -223,13 +224,22 @@ async function status(inv: ParsedInvocation): Promise<number> {
         `session ${name} is stale: entity ${session.entityId} no longer exists`
       );
     }
+    // Only a paired device may list workspaces; an agent profile is bound to a
+    // single workspace and has only its internal name.
+    const entry =
+      creds.kind === "device"
+        ? (await listRemoteWorkspaces(creds)).find(
+            (candidate) => candidate.workspaceId === session.workspaceId
+          )
+        : undefined;
+    const workspace = entry ? workspaceLabel(entry) : session.workspaceName;
     printResult(
       { ...session, live },
       {
         json,
         human: () => {
           console.log(`session: ${session.name}`);
-          console.log(`server: ${session.serverId}/${session.workspaceName}`);
+          console.log(`server: ${session.serverId}/${workspace}`);
           console.log(`entity: ${session.entityId}`);
           console.log(`context: ${session.contextId}`);
           console.log("status: live");
