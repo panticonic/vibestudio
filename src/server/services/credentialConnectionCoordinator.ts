@@ -89,7 +89,8 @@ import { getRelayOrigin } from "./relayBackhaulClient.js";
 
 const log = createDevLogger("CredentialConnectionCoordinator");
 type BrowserHandoffCallerKind = "app" | "panel" | "shell";
-type BrowserDeliveryCallerKind = "app" | "shell";
+/** Who presents a browser handoff: a view host (shell), an app, or a terminal-hosted panel. */
+type BrowserDeliveryCallerKind = "app" | "shell" | "panel";
 type BrowserHandoffOwnerLookupStatus =
   | "not-required"
   | "not-configured"
@@ -302,6 +303,12 @@ export interface CredentialConnectionCoordinatorDeps {
       clientPlatform?: "desktop" | "headless" | "mobile";
       oauthCallbackMode?: OAuthCallbackMode;
     } | null;
+    /**
+     * A panel runtime hosted by a trusted server-side host rather than a view
+     * (a terminal app in a workspace PTY) presents its browser handoffs itself:
+     * the URL goes to its own connection, not to a view host.
+     */
+    presentsOwnBrowserHandoff?(principalId: string): boolean;
   };
   sessionCredentialCapture?: SessionCredentialCapture;
   runtimeInspector?: CredentialRuntimeInspector;
@@ -704,11 +711,15 @@ export function createCredentialConnectionCoordinator(
         "not-required"
       );
     }
-    if (targetCallerKind === "app") {
+    if (
+      targetCallerKind === "app" ||
+      (targetCallerKind === "panel" &&
+        connectionLookup?.presentsOwnBrowserHandoff?.(targetCallerId))
+    ) {
       return resolved(
         {
           deliveryCallerId: targetCallerId,
-          deliveryCallerKind: "app",
+          deliveryCallerKind: targetCallerKind,
           deliveryConnectionId:
             targetCallerId === ctx.caller.runtime.id ? ctx.connectionId : undefined,
           clientPlatform:

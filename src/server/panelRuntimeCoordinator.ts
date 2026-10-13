@@ -1106,6 +1106,17 @@ export class PanelRuntimeCoordinator {
     return lease;
   }
 
+  /**
+   * The panel identity a panel runtime acts under toward Durable Objects
+   * (`callerPanelId`): the slot presenting it, or — for a host-held runtime,
+   * which has no slot — the runtime itself.
+   */
+  panelIdentityForRuntime(runtimeEntityId: string): string | undefined {
+    if (!isPanelEntityId(runtimeEntityId)) return undefined;
+    if (this.hostHeldEntityLeases.has(runtimeEntityId)) return runtimeEntityId;
+    return this.leases.get(runtimeEntityId)?.slotId ?? undefined;
+  }
+
   getHostHeldLease(runtimeEntityId: string): HostHeldEntityLease | null {
     if (!isPanelEntityId(runtimeEntityId)) return null;
     return this.hostHeldEntityLeases.get(runtimeEntityId) ?? null;

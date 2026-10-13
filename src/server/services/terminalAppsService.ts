@@ -66,6 +66,8 @@ export interface TerminalAppLaunchMaterial {
   sessionId: string;
   contextId: string;
   state: Record<string, unknown>;
+  /** The app's display title; the program names its runtime with it. */
+  title: string;
   approvalsKey?: string;
 }
 
@@ -83,7 +85,7 @@ interface StoredSession {
   source?: string;
   title: string;
   icon?: string;
-  /** App sessions: the session's own context (kept across relaunches). */
+  /** The session's own context (kept across relaunches); its folder is the cwd. */
   contextId?: string;
   /**
    * App sessions: the latest runtime incarnation. It is active while the
@@ -104,6 +106,8 @@ interface RegistryFile {
 }
 
 export interface TerminalAppsServiceDeps {
+  /** The person-facing workspace label for approvals ("Personal", "System", or its name). */
+  workspaceLabel(): string;
   /** Registry file (inside the workspace's protected state). */
   registryPath: string;
   /** Launch-file directory inside the native runtime's writable home. */
@@ -119,6 +123,8 @@ export interface TerminalAppsServiceDeps {
     spec: RuntimeEntityCreateSpec
   ): Promise<RuntimeEntityHandle>;
   retireEntity(id: string): Promise<void>;
+  /** A fresh workspace context for a login shell session (its working folder). */
+  createContext(caller: ReturnType<typeof createHostCaller>): Promise<string>;
   /** The stateArgs an incarnation last held (retired or active). */
   entityStateArgs(id: string): Promise<Record<string, unknown> | null>;
   /** Absolute path of a build's primary artifact. */
@@ -214,6 +220,8 @@ export function createTerminalAppsService(
     return registry;
   };
   let stopped = false;
+  // Cancels the service's own pending shell calls (exit watches) when it stops.
+  const lifetime = new AbortController();
   const exitWatches = new Set<Promise<void>>();
 
   function saveRegistry(): void {
@@ -247,7 +255,7 @@ export function createTerminalAppsService(
   /** The shell extension, as the person (host-originated: this service already gated the run). */
   function shellAs(subject: UserSubject, method: string, args: unknown[]): Promise<unknown> {
     return deps.dispatch(
-      { caller: createHostCaller(HOST_CALLER_ID, "server", subject) },
+      { caller: createHostCaller(HOST_CALLER_ID, "server", subject), signal: lifetime.signal },
       "extensions",
       "invoke",
       [SHELL_EXTENSION, method, args]
@@ -338,6 +346,7 @@ export function createTerminalAppsService(
         sessionId: session.sessionId,
         contextId: handle.contextId,
         state: previousState ?? {},
+        title: session.title,
         ...(approvalsKey ? { approvalsKey } : {}),
       };
       await mkdir(deps.launchDirectory, { recursive: true, mode: 0o700 });
@@ -346,6 +355,10 @@ export function createTerminalAppsService(
       command = deps.nodeExecutable();
       args = [await deps.primaryArtifactPath(handle.buildKey)];
       env = { ...env, [TERMINAL_LAUNCH_ENV]: launchFile };
+    } else {
+      session.contextId ??= await deps.createContext(
+        createHostCaller(HOST_CALLER_ID, "server", subject)
+      );
     }
     try {
       const opened = (await shellAs(subject, "open", [
@@ -394,9 +407,7 @@ export function createTerminalAppsService(
           capability: TERMINAL_APPS_RUN_CAPABILITY,
           resourceKey: resource.value,
           challenge: {
-            // The approval surface shows which workspace asks; a private
-            // workspace's stored name is not a person-facing label.
-            title: `Run ${what} in this workspace?`,
+            title: `Run ${what} in ${deps.workspaceLabel()}?`,
             description: unit
               ? `${unit.title} runs as you in this workspace's native runtime, with its own connection to the workspace. It can do what its declared authority allows; anything further asks you first.`
               : "A login shell runs as you in this workspace's native runtime.",
@@ -502,6 +513,7 @@ export function createTerminalAppsService(
     }),
     async stop() {
       stopped = true;
+      lifetime.abort(new Error("The terminal launch service stopped"));
       await Promise.allSettled([...exitWatches]);
     },
   };

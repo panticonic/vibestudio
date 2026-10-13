@@ -3545,6 +3545,8 @@ async function main() {
     },
     getAuthorizingShell: (principalId) =>
       rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
+    presentsOwnBrowserHandoff: (principalId) =>
+      panelRuntimeCoordinator.getHostHeldLease(principalId) !== null,
     hasAppCapability: (callerId, capability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
   });
@@ -5129,6 +5131,11 @@ async function main() {
         return runtimeServiceInternal;
       };
       return createTerminalAppsService({
+        workspaceLabel: () => {
+          // The account's private pair is named by role; stored names are ids.
+          const role = identityDb.getPrivateWorkspaceOwner(workspaceId)?.role;
+          return role === "personal" ? "Personal" : role === "system" ? "System" : workspaceName;
+        },
         registryPath: path.join(statePath, "terminal-sessions.json"),
         launchDirectory: path.join(nativeWorkspace.home, ".vibestudio", "terminal-launch"),
         nodeExecutable: () => nativeWorkspace.nodeExecutable,
@@ -5150,6 +5157,7 @@ async function main() {
         },
         createEntity: (caller, spec) => runtime().createEntity(caller, spec),
         retireEntity: (id) => runtime().retireEntity(id),
+        createContext: async (caller) => (await runtime().createContext({ caller }, {})).contextId,
         entityStateArgs: async (id) => {
           const record = await entityStoreInstance?.resolveRecord(id);
           const stateArgs = record?.stateArgs;

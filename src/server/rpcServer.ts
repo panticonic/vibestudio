@@ -4868,7 +4868,7 @@ export class RpcServer {
       const workerdDispatchSecret = this.workerdDispatchSecret;
       const callerPanelId =
         callerKind === "panel"
-          ? (this.deps.runtimeCoordinator?.getLease(callerId)?.slotId ?? undefined)
+          ? this.deps.runtimeCoordinator?.panelIdentityForRuntime(callerId)
           : undefined;
       const transportCaller = this.withLiveRuntimeRelationships(
         relayCallerScope?.authenticatedCaller ??
@@ -5028,7 +5028,7 @@ export class RpcServer {
     const authenticatedCaller = authenticatedCallerOf(caller);
     const callerPanelId =
       caller.runtime.kind === "panel"
-        ? (this.deps.runtimeCoordinator?.getLease(caller.runtime.id)?.slotId ?? undefined)
+        ? this.deps.runtimeCoordinator?.panelIdentityForRuntime(caller.runtime.id)
         : undefined;
     const authorization = await this.directDOAuthorization({
       caller: invocationCaller,

@@ -37,6 +37,9 @@ export interface CredentialBootstrapDeps {
   getAuthorizingShell: NonNullable<
     CredentialServiceDeps["connectionLookup"]
   >["getAuthorizingShell"];
+  presentsOwnBrowserHandoff: NonNullable<
+    NonNullable<CredentialServiceDeps["connectionLookup"]>["presentsOwnBrowserHandoff"]
+  >;
   hasAppCapability: NonNullable<CredentialServiceDeps["hasAppCapability"]>;
 }
 
@@ -93,7 +96,10 @@ export function wireCredentialService(
     auditLog: deps.auditLog,
     eventService: deps.eventService,
     relayOAuthRegistrar: deps.relayOAuthRegistrar,
-    connectionLookup: { getAuthorizingShell: deps.getAuthorizingShell },
+    connectionLookup: {
+      getAuthorizingShell: deps.getAuthorizingShell,
+      presentsOwnBrowserHandoff: deps.presentsOwnBrowserHandoff,
+    },
     egressProxy: deps.egressProxy,
     ...(localGitMirrors ? { localGitMirrors } : {}),
     workspaceId: deps.workspaceId,

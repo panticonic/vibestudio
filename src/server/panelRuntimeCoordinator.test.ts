@@ -765,6 +765,8 @@ describe("host-held panel runtimes (terminal apps in workspace PTYs)", () => {
       coordinator.authorizePanelConnection("panel:nav-term-1", "pty-route-1", "shell:intruder")
     ).toMatchObject({ ok: false });
     expect(coordinator.resolveAuthorizerForRuntime("panel:nav-term-1")).toBe("shell:laptop");
+    // Toward Durable Objects it acts as itself (it has no slot).
+    expect(coordinator.panelIdentityForRuntime("panel:nav-term-1")).toBe("panel:nav-term-1");
     expect(coordinator.resolvePresentationCallerForRuntime("panel:nav-term-1")).toBeNull();
   });
 
