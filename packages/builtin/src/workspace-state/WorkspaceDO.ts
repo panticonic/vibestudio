@@ -1,3 +1,4 @@
+import { isTerminalAppLocation } from "@vibestudio/workspace-contracts/sourceDirs";
 import type {
   ContextCloneDefinition,
   ContextCloneCompletion,
@@ -172,6 +173,22 @@ export interface LifecycleOp extends LifecycleKey {
 }
 
 export type EntityActivateInput = EntityActivationCommand;
+
+/**
+ * Slots present panels in views. A terminal app is a panel hosted by
+ * terminals (`terminal-apps/<name>`, a Node program in a workspace PTY), so it
+ * is opened by a terminal, never placed in a slot.
+ */
+function assertViewHostedSource(source: string): void {
+  if (isTerminalAppLocation(source)) {
+    throw Object.assign(
+      new Error(
+        `${source} is a terminal app: open it from a terminal (vibestudio terminal) or the terminal panel, not as a panel`
+      ),
+      { code: "ETERMINALAPP" }
+    );
+  }
+}
 
 export interface SlotCreateInput {
   slotId: string;
@@ -2784,6 +2801,7 @@ export class WorkspaceDO extends DurableObjectBase {
 
   @schemaRpc()
   slotCreate(input: SlotCreateInput): void {
+    if (input.initialEntry) assertViewHostedSource(input.initialEntry.source);
     this.ctx.storage.transactionSync(() => {
       const existing = this.sql
         .exec(
@@ -2947,6 +2965,7 @@ export class WorkspaceDO extends DurableObjectBase {
   slotCommitPreparedNavigation(
     input: SlotCommitPreparedNavigationInput
   ): SlotCommitPreparedNavigationResult {
+    if (input.mutation.kind !== "select") assertViewHostedSource(input.mutation.entry.source);
     return this.ctx.storage.transactionSync(() => {
       const slot = this.requireSlot(input.slotId);
       if (slot.closed_at !== null) {

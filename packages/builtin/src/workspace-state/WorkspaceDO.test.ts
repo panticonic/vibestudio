@@ -137,6 +137,22 @@ describe("workspace template panel initialization", () => {
     expect(sharedSeed[0]?.entity.ownerUserId).toBeUndefined();
   });
 
+  it("never places a terminal app in a panel slot", async () => {
+    const { instance } = await createTestDO(WorkspaceDOTestable);
+    expect(() =>
+      instance.slotCreate({
+        slotId: "terminal-root",
+        parentSlotId: null,
+        initialEntry: {
+          entryKey: "nav-1",
+          entityId: "panel:nav-1",
+          source: "terminal-apps/chat",
+          contextId: "ctx-1",
+        },
+      })
+    ).toThrow(/is a terminal app/);
+  });
+
   it("seeds and migrates a private workspace into one durable owner tree", async () => {
     const { instance } = await createTestDO(WorkspaceDOTestable);
     instance.slotCreate({ slotId: "seeded-root", parentSlotId: null });
