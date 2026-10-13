@@ -63,10 +63,10 @@ Nothing is merged into main or pushed. The integration branch is
 
 | Repo | Worktree | Tip | Ahead of main |
 |---|---|---|---|
-| host | `/home/werg/vibestudio-worktrees/apps/vibestudio` | `f428bf010` + this doc | 64 commits, 291 files, +13.6k/−10.0k |
-| base | `…/apps/templates/base` | `51ec145` | 41 |
-| system | `…/apps/templates/system` | `e554b9a` | 34 |
-| system-testing | `…/apps/templates/system-testing` | `049582f` | 12 |
+| host | `/home/werg/vibestudio-worktrees/apps/vibestudio` | `af1f4ccd2` + this doc | 70 commits |
+| base | `…/apps/templates/base` | `cb68db2` | 44 |
+| system | `…/apps/templates/system` | `a7b2121` | 35 |
+| system-testing | `…/apps/templates/system-testing` | `c741f03` | 14 |
 | personal | `…/apps/templates/personal` | `eee6625` | 2 |
 
 The other template worktrees (examples, google-workspace, news, spectrolite)
@@ -228,11 +228,13 @@ belongs to someone else.
 
 | Check | Result |
 |---|---|
-| Full commit hook on `f428bf010` | Passed, including type-check, lint, format and the unit authority audit |
-| `type-check:userland` | Base, System, System-testing and Personal passed, each run on its own |
-| System test `terminal-chat-approval-fork-resume` | Passed: run `st_5c337951097e4d40b33fc96ab1c036dc`, 36 s, fresh instance `term-final-1`, then stopped |
+| Full commit hooks | Passed on host `a52e2fb42` and `af1f4ccd2`, including type-check, lint, format and the unit authority audit |
+| `type-check:userland` | Base, System, System-testing and Personal passed, each run on its own; Base and System-testing were rerun after the latest changes |
+| System test `eval-cancel-run` | Passed in run `st_d9d4ff370ac8466bb55d3a5f322dc7e0` |
+| System test `terminal-chat-approval-fork-resume` | Extended through fork reply and switch-back, but currently errors at `fork-agent-reply`; latest run `st_0090e03ceb4f4dad84116c1c4ac3cbfb`. The managed instance was stopped. See §5. |
 | Host focused suites | Passed, latest 4314 of 4316 (the 2 were fixed after) |
-| Base chat tests | 744 passed |
+| Base terminal/core focused tests | 28 passed after the latest input/join lifecycle fixes |
+| System-testing terminal scenario tests | 12 passed |
 | Terminal browser tests | 108 passed |
 | Live `pnpm terminal` checks | Launcher, Chat streaming, detach/resume, kill/relaunch with transcript, shell cwd, quit with a live PTY (~10 s, clean). Fork plus fork-agent reply checked only before the upstream merge |
 | Cold start to launcher | Before: about 26 min to template-preparation done. After: ~70 s on a quiet host; ~27.5 s with a warm derived cache |
@@ -252,13 +254,25 @@ belongs to someone else.
      (`AbortSignal.any`).
 
    Run at least one agent-driven test and one eval-lifecycle test.
-2. **Withdrawn approvals are labelled as denials.** An approval withdrawn at
-   quiesce resolves as a denial, so the blocked turn ends with
-   `credential-caller-not-granted`. Propagate it as a cancellation, with the
-   original cause, through every boundary.
-3. **Exercise forks end to end on the merged code.** Run a fork, the fork's
-   agent replying, and a switch back; extend the system test to cover it. The
-   fork fixes have unit tests only (`85a6145` in Base).
+2. **Finish the fork-agent delivery defect exposed by the extended system
+   test.** The test now proves these boundaries separately:
+   - the fork and cloned agent initialize successfully;
+   - the terminal accepts the fork-only prompt;
+   - Enter submits and clears the composer;
+   - the fork channel processes subsequent observations;
+   - the cloned agent never produces the requested reply, so the test reaches
+     its explicit 900 s orchestration ceiling in `fork-agent-reply`.
+
+   Base `cb68db2` removed two real losses found on the way: React conversation
+   synchronization now settles in the layout phase before Ink publishes a
+   frame, and `ChatSession.sendMessage` owns a draft submitted during its
+   initial join instead of silently returning without a client. System-testing
+   `c741f03` records compose, submit and reply as distinct phases. The next
+   investigation should start at cloned-agent live delivery after
+   `importChannelKnowledge`; do not add a delay or retry to the terminal test.
+3. **Approval withdrawal cancellation is complete.** Host `a52e2fb42`
+   propagates a typed cancellation with the original lifecycle cause through
+   approval waiters, DO dispatch and EvalDO. `eval-cancel-run` passed.
 4. **Test the first-launch review end to end.** An unreviewed Electron app
    should open its review, start once accepted, and show a plain message when
    declined. Only unit tests and code paths cover this today. The blocker was
