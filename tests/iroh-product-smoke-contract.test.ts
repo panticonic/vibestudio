@@ -122,8 +122,10 @@ describe("Iroh product E2E entry points", () => {
   });
 
   it("keeps the Android emulator preflight compatible with the action's POSIX shell", () => {
-    const nightly = source(".github/workflows/iroh-e2e-nightly.yml");
-    const preflight = nightly.match(/pre-emulator-launch-script:\s*\|\n([\s\S]*?)\n\s*script:/)?.[1];
+    const androidSmoke = source(".github/workflows/android-iroh-smoke.yml");
+    const preflight = androidSmoke.match(
+      /pre-emulator-launch-script:\s*\|\n([\s\S]*?)\n\s*script:/
+    )?.[1];
     expect(preflight).toBeDefined();
     expect(preflight).toContain("set -eu");
     expect(preflight).not.toContain("pipefail");
