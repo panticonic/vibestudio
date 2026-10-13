@@ -121,14 +121,16 @@ and build identity. Workspace-specific semantic history and protected publicatio
 remain runtime responsibilities. Moving a proof to a producer requires preserving
 its authority and binding the proof to the exact installed input.
 
-Source launch uses the same completed preparation boundary before starting its
-consumer. Publishing source-only records and loading them before builds finish
-leaves the consumer with an immutable empty build list, causing duplicate demand
-compilation alongside the producer. Preparation owns the full output and exposes
-one completion result; producer failure prevents consumer admission. Keep cold
-source artifact production distinct from a cold installed launch with completed
-prepared artifacts. Neither increasing a smoke deadline nor serving an unproven
-workspace establishes fast startup.
+Development launch can start its consumer once exact template sources and their
+captured compiler inputs are materialized. The same owned producer continues
+building every runtime in the background. Demand compilation joins the exact-key
+shared build coordinator; it does not start a second compiler for the same build.
+A source-ready notification is not a completed runtime release. Only joined
+production and full publication proof may seal `userland-builds/release.json`.
+Installed launches consume that complete release. Keep cold source artifact
+production distinct from a cold installed launch with completed prepared
+artifacts. Neither increasing a smoke deadline nor serving an unproven workspace
+establishes fast startup.
 
 Source preparation uses the canonical shared derived build cache. Each hit must
 pass the existing build identity, manifest, payload, and workspace-authority
@@ -143,6 +145,23 @@ build budget from the runner's CPU and memory allocation. Interactive workspace
 owners keep their smaller independent budget. Consumers reuse the complete
 immutable release keyed by its exact host and template inputs instead of
 starting a second producer.
+
+Publication checks source and executable payload integrity, including compressed
+inventories, before atomically exposing its completion record. Ordinary reuse
+admits the sealed identity, role inventories, descriptors, and file census; it
+does not reload and hash every payload. Artifact serving likewise reads the
+admitted immutable file without another content hash. Cache projection joins all
+payload links or copies before exposing the inherited completion record. These
+are phases of one publication contract, not a switch that disables validation.
+
+The release operation captures host dependency inputs once. Its exact v8 hash
+trace is carried by the prepared template record, bound to the host generation,
+compiler protocol, and dependency installation policy. A workspace composes its
+five current tooling inputs with that trace through the same hash encoding used
+by fresh compilation. SDK trees and installed package manifests are not scanned
+again by each workspace server. Ordinary development still captures current host
+inputs when selecting its release cache; packaged production captures its final
+installed dependency realm during preparation.
 
 The CI graph in `.github/workflows/ci.yml` expresses per-platform artifact
 dependencies, rather than broad verification barriers. Native producer jobs

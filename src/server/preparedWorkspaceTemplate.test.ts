@@ -118,7 +118,9 @@ describe("prepared workspace installation", () => {
       .spyOn(blobCas, "linkReconstructableBlobFile")
       .mockImplementation((_root, digest) => {
         if (digest === blobs[0]!.digest) return Promise.reject(failures[0]);
-        return new Promise<void>((resolve, reject) => pending.set(digest, { resolve, reject }));
+        return new Promise<string>((resolve, reject) =>
+          pending.set(digest, { resolve: () => resolve(path.join(destination, digest)), reject })
+        );
       });
     let settled = false;
     const installation = installPreparedWorkspaceTemplate(release, destination, pin, "use").catch(
