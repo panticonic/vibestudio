@@ -74,6 +74,7 @@ describe("Iroh product E2E entry points", () => {
     const mobile = source("scripts/cli/mobile-smoke.mjs");
     for (const marker of [
       "embedded-host-target-approval-required",
+      "workspace-iroh-connected",
       "workspace-panel-materialized",
       "workspace-panel-webview-loaded",
       "workspace-panel-ready",

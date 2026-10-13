@@ -2382,7 +2382,7 @@ async function runSmoke(
       "embedded-host-target-preparing",
       "embedded-bundle-activate-start",
       "embedded-bundle-activate-complete",
-      "workspace-connected",
+      "workspace-iroh-connected",
       "workspace-recovery-complete",
       "workspace-panel-activate-start",
       "workspace-panel-materialized",
@@ -2442,7 +2442,7 @@ async function runSmoke(
     await waitForPhaseTappingApprovals(
       options.device,
       logcat,
-      "workspace-connected",
+      "workspace-iroh-connected",
       managedConnectionDeadlineMs
     );
     if (!options.noTap) {
@@ -2504,7 +2504,7 @@ async function runSmoke(
     // invite, then survive a server restart using the persisted device room and
     // server identity. Count phase occurrences so an earlier successful launch
     // cannot satisfy either recovery assertion.
-    const appRestartWorkspaceCount = logcat.phaseCount("workspace-connected");
+    const appRestartWorkspaceCount = logcat.phaseCount("workspace-iroh-connected");
     const appRestartPanelCount = logcat.phaseCount("workspace-panel-webview-loaded");
     const appRestartPanelReadyCount = logcat.phaseCount("workspace-panel-ready");
     logcat.releaseAppProcess();
@@ -2526,7 +2526,7 @@ async function runSmoke(
       "1"
     );
     await logcat.waitForPhaseAfter(
-      "workspace-connected",
+      "workspace-iroh-connected",
       appRestartWorkspaceCount,
       options.pairingTimeoutMs
     );
