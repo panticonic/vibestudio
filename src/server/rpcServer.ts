@@ -1878,9 +1878,8 @@ export class RpcServer {
     const authenticated = await this.resolveConnectionGrantIdentity(token, remoteEndpointId);
     if (
       authenticated?.caller.runtime.kind === "panel" &&
-      this.deps.runtimeCoordinator?.resolvePresentationCallerForRuntime(
-        authenticated.caller.runtime.id
-      ) !== authenticated.authorizedBy
+      this.deps.runtimeCoordinator?.resolveAuthorizerForRuntime(authenticated.caller.runtime.id) !==
+        authenticated.authorizedBy
     )
       return null;
     return authenticated;

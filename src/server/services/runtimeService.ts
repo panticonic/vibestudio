@@ -348,6 +348,8 @@ export interface RuntimeServiceDeps {
     title: string | undefined,
     options?: { explicit?: boolean }
   ) => void | Promise<void>;
+  /** The stateArgs schema a build declares (panel builds), for per-instance state writes. */
+  stateArgsSchemaForBuild?: (buildKey: string) => Promise<Record<string, unknown> | undefined>;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   /**
    * Hidden system-test fault seam. The host callback must authenticate the
@@ -2852,6 +2854,25 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         await recordContextEdge(ctx.caller, edgeArgs);
       },
       createSubagentContext: (ctx, [subArgs]) => createSubagentContext(ctx.caller, subArgs),
+      patchEntityStateArgs: async (ctx, [patch]) => {
+        // A panel runtime presented in a slot keeps its stateArgs on the
+        // slot's history entry (slot.patchCurrentStateArgs); this is the
+        // same per-instance state for a panel runtime with no slot.
+        const id = ctx.caller.runtime.id;
+        const record = await store.resolveActiveRecord(id);
+        if (!record || record.kind !== "panel" || !record.activeBuildKey) {
+          throw new Error(`${id} is not an active panel runtime`);
+        }
+        if (await store.resolveSlotByEntity(id)) {
+          throw new Error(`${id} is shown in a panel slot; patch its slot's stateArgs instead`);
+        }
+        const schema = await deps.stateArgsSchemaForBuild?.(record.activeBuildKey);
+        const updated = await store.patchStateArgs(id, patch, {
+          activeBuildKey: record.activeBuildKey,
+          ...(schema ? { schema } : {}),
+        });
+        return (updated.stateArgs ?? {}) as Record<string, unknown>;
+      },
       setTitle: async (ctx, [title, options]) => {
         // The method's code-principal authority declaration is the single gate:
         // view/worker code may title its own runtime, while host callers cannot.

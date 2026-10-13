@@ -3447,6 +3447,48 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityPatchStateArgs",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "entityPatchStateArgs",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityPrepareExecution",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
@@ -27699,6 +27741,50 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:runtime.patchEntityStateArgs",
+      "rpcPlane": "host-service",
+      "owner": "runtime",
+      "method": "patchEntityStateArgs",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "supervision",
+      "mechanismFamily": "runtime.mutate",
+      "reviewRationale": "Open bias: a panel runtime writes only its own per-instance state; §2 durable code identity",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:runtime.patchEntityStateArgs"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:runtime.patchEntityStateArgs),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:runtime.patchEntityStateArgs",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:runtime.rebindAgentChannel",
       "rpcPlane": "host-service",
       "owner": "runtime",
@@ -30596,6 +30682,366 @@
         "change": null
       },
       "capability": "service:shellPresence.heartbeat",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:terminalApps.close",
+      "rpcPlane": "host-service",
+      "owner": "terminalApps",
+      "method": "close",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "terminal-apps.control",
+      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:terminalApps.close"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:terminalApps.close),workspace-member),allOf(capability(code,service:terminalApps.close),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:terminalApps.close",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:terminalApps.getSettings",
+      "rpcPlane": "host-service",
+      "owner": "terminalApps",
+      "method": "getSettings",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "terminal-apps.control",
+      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:terminalApps.getSettings"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:terminalApps.getSettings),workspace-member),allOf(capability(code,service:terminalApps.getSettings),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:terminalApps.getSettings",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:terminalApps.launch",
+      "rpcPlane": "host-service",
+      "owner": "terminalApps",
+      "method": "launch",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "terminal-apps.run",
+      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "terminal-apps.run"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:terminalApps.launch",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:terminalApps.launch#capability:terminal-apps.run",
+      "rpcPlane": "host-service",
+      "owner": "terminalApps",
+      "method": "launch",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "terminal-apps.run",
+      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "capability": "terminal-apps.run",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "terminalApps.run"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:terminalApps.list",
+      "rpcPlane": "host-service",
+      "owner": "terminalApps",
+      "method": "list",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "terminal-apps.control",
+      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:terminalApps.list"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:terminalApps.list),workspace-member),allOf(capability(code,service:terminalApps.list),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:terminalApps.list",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:terminalApps.resume",
+      "rpcPlane": "host-service",
+      "owner": "terminalApps",
+      "method": "resume",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "terminal-apps.run",
+      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "terminal-apps.run"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:terminalApps.resume",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:terminalApps.resume#capability:terminal-apps.run",
+      "rpcPlane": "host-service",
+      "owner": "terminalApps",
+      "method": "resume",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "terminal-apps.run",
+      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "capability": "terminal-apps.run",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "terminalApps.run"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"terminal-apps.run\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:terminalApps.setSettings",
+      "rpcPlane": "host-service",
+      "owner": "terminalApps",
+      "method": "setSettings",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "terminal-apps.control",
+      "reviewRationale": "Controls only the calling person's own terminal sessions",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:terminalApps.setSettings"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:terminalApps.setSettings),workspace-member),allOf(capability(code,service:terminalApps.setSettings),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:terminalApps.setSettings",
       "parityAssertion": "generated-census:host-authority"
     },
     {

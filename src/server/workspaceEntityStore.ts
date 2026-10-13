@@ -329,6 +329,19 @@ export class WorkspaceEntityStore {
     return record;
   }
 
+  /** Durably patch a slotless panel entity's stateArgs and refresh the cache. */
+  patchStateArgs(
+    id: string,
+    patch: Record<string, unknown>,
+    expected: { activeBuildKey: string; schema?: Record<string, unknown> }
+  ): Promise<EntityRecord> {
+    return this.mutate([id], async () => {
+      const record = await this.receiver.entityPatchStateArgs(id, patch, expected);
+      this.publishRecord(record, id);
+      return record;
+    });
+  }
+
   /** Retire a WorkspaceDO entity and mirror the retirement. Null if already gone. */
   private async retireCommitted(id: string): Promise<EntityRecord | null> {
     const record = await this.receiver.entityRetire(id);

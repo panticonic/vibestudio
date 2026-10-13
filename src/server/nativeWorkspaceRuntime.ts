@@ -160,7 +160,7 @@ export async function startNativeWorkspaceRuntime(input: {
         workspaceEntry,
       }
     );
-    return { sandbox, workerEntry, ripgrep, extensionEntry };
+    return { sandbox, workerEntry, ripgrep, extensionEntry, executable };
   };
 
   let runtimeSetup: Awaited<ReturnType<typeof runtimeRootSetup>>;
@@ -183,7 +183,7 @@ export async function startNativeWorkspaceRuntime(input: {
     throw operationFailure;
   }
 
-  const { sandbox, workerEntry, ripgrep, extensionEntry } = runtimeSetup;
+  const { sandbox, workerEntry, ripgrep, extensionEntry, executable } = runtimeSetup;
   const dependencyRoot = path.join(runtimeRoot, "dependencies");
   const dependencyWorker = new ImmutableTreeWorkerClient();
   const dependencyAdmissions = new Map<string, Promise<NativeDependencyResources>>();
@@ -262,6 +262,10 @@ export async function startNativeWorkspaceRuntime(input: {
     return {
       disk,
       extensionEntry,
+      /** The runtime's Node executable (the same path inside the sandbox). */
+      nodeExecutable: executable,
+      /** The runtime's writable home (the same path inside the sandbox). */
+      home,
       admitDependencies(input: NativeDependencyAdmission): Promise<NativeDependencyResources> {
         const { key, nodeModulesDir, workspacePackages, workspacePackageNodeModules } = input;
         if (retiring) return Promise.reject(new Error("Native workspace is retiring"));

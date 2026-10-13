@@ -35,12 +35,11 @@ import {
 } from "@vibestudio/shared/authorityManifest";
 import { mintHistoryEntryKey } from "@vibestudio/shared/panel/idValues";
 import {
-  applyStateArgsMergePatch,
   decodePanelStateArgs,
+  mergeValidateStateArgs,
   PanelStateArgsConflictError,
 } from "@vibestudio/shared/panelStateArgs";
 import type { StateArgsSchema } from "@vibestudio/shared/stateArgs";
-import { validateStateArgs } from "@vibestudio/shared/stateArgsValidator";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { computePanelId, SlotIdentityCollisionError } from "@vibestudio/shared/panelIdUtils";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
@@ -1024,6 +1023,41 @@ export class WorkspaceDO extends DurableObjectBase {
       }
       const updated = this.readEntityRow(id);
       if (!updated) throw new Error(`entityRebindAgentChannel: failed to read ${id} after update`);
+      return this.rowToEntity(updated);
+    });
+  }
+
+  /**
+   * Patch the stateArgs of a slotless panel entity (a terminal app hosted in a
+   * workspace PTY): the per-instance state a slot's history entry holds for a
+   * panel presented in a view. Read, merge, validate and write happen in one
+   * transaction, so concurrent patches compose.
+   */
+  @schemaRpc()
+  entityPatchStateArgs(
+    id: string,
+    patch: Record<string, unknown>,
+    expected: { activeBuildKey: string; schema?: StateArgsSchema }
+  ): EntityRecord {
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.readEntityRow(id);
+      if (!row || row.status !== "active") throw new Error(`Entity is not active: ${id}`);
+      if (row.kind !== "panel") throw new Error(`Entity ${id} is not a panel`);
+      if (row.active_build_key !== expected.activeBuildKey) {
+        throw new PanelStateArgsConflictError(id, {
+          field: "activeBuildKey",
+          expected: expected.activeBuildKey,
+          actual: row.active_build_key,
+        });
+      }
+      const next = mergeValidateStateArgs(
+        decodePanelStateArgs(row.state_args),
+        patch,
+        expected.schema
+      );
+      this.sql.exec(`UPDATE entities SET state_args = ? WHERE id = ?`, JSON.stringify(next), id);
+      const updated = this.readEntityRow(id);
+      if (!updated) throw new Error(`entityPatchStateArgs: failed to read ${id} after update`);
       return this.rowToEntity(updated);
     });
   }
@@ -3044,10 +3078,11 @@ export class WorkspaceDO extends DurableObjectBase {
         )
         .toArray()[0] as Pick<DbSlotHistoryRow, "state_args"> | undefined;
       if (!history) throw new Error(`Slot ${slotId} current history entry is missing`);
-      const merged = applyStateArgsMergePatch(decodePanelStateArgs(history.state_args), patch);
-      const validation = validateStateArgs(merged, expected.schema);
-      if (!validation.success) throw new Error(`Invalid stateArgs: ${validation.error}`);
-      const next = validation.data as Record<string, unknown>;
+      const next = mergeValidateStateArgs(
+        decodePanelStateArgs(history.state_args),
+        patch,
+        expected.schema
+      );
       const serialized = JSON.stringify(next);
       this.sql.exec(
         `UPDATE slot_history SET state_args = ? WHERE slot_id = ? AND entry_key = ?`,

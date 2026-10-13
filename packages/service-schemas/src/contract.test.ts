@@ -51,6 +51,7 @@ import { hostPerformanceMethods } from "./hostPerformance.js";
 import { hubControlMethods } from "./hubControl.js";
 import { serverLogMethods } from "./serverLog.js";
 import { hostTerminalMethods } from "./hostTerminal.js";
+import { terminalAppsMethods } from "./terminalApps.js";
 import { menuMethods } from "./menu.js";
 import { mirrorMethods } from "./mirror.js";
 import { missionsMethods } from "./missions.js";
@@ -170,6 +171,7 @@ const serviceTables: ServiceTable[] = [
   { service: "serverLog", file: "serverLog.ts", methods: serverLogMethods },
   { service: "problemReports", file: "problemReports.ts", methods: problemReportsMethods },
   { service: "hostTerminal", file: "hostTerminal.ts", methods: hostTerminalMethods },
+  { service: "terminalApps", file: "terminalApps.ts", methods: terminalAppsMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "mirror", file: "mirror.ts", methods: mirrorMethods },
   { service: "missions", file: "missions.ts", methods: missionsMethods },

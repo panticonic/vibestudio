@@ -6582,6 +6582,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "runtime.patchEntityStateArgs": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "supervision",
+      family: "runtime.mutate",
+      rationale:
+        "Open bias: a panel runtime writes only its own per-instance state; §2 durable code identity",
+    },
+    capability: null,
+    presentation: null,
+  },
   "runtime.rebindAgentChannel": {
     tier: {
       tier: "open",
@@ -7343,6 +7355,92 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "supervision",
       family: "shellPresence.control",
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "terminalApps.close": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "terminal-apps.control",
+      rationale: "Controls only the calling person's own terminal sessions",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "terminalApps.getSettings": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "terminal-apps.control",
+      rationale: "Controls only the calling person's own terminal sessions",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "terminalApps.launch": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "native-effect",
+      family: "terminal-apps.run",
+      rationale: "Controls only the calling person's own terminal sessions",
+    },
+    capability: "terminal-apps.run",
+    presentation: {
+      title: "Run a terminal app",
+      action: "run a terminal app or shell in this workspace",
+      description:
+        "Start a program in a terminal session inside this workspace's native runtime, as you.",
+      group: "computer",
+      authorityCategory: {
+        domain: "computer",
+        verb: "act",
+      },
+    },
+  },
+  "terminalApps.list": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "terminal-apps.control",
+      rationale: "Controls only the calling person's own terminal sessions",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "terminalApps.resume": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "native-effect",
+      family: "terminal-apps.run",
+      rationale: "Controls only the calling person's own terminal sessions",
+    },
+    capability: "terminal-apps.run",
+    presentation: {
+      title: "Run a terminal app",
+      action: "run a terminal app or shell in this workspace",
+      description:
+        "Start a program in a terminal session inside this workspace's native runtime, as you.",
+      group: "computer",
+      authorityCategory: {
+        domain: "computer",
+        verb: "act",
+      },
+    },
+  },
+  "terminalApps.setSettings": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "terminal-apps.control",
+      rationale: "Controls only the calling person's own terminal sessions",
     },
     capability: null,
     presentation: null,
@@ -9430,6 +9528,8 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "shellApproval.submitClientConfig": ["protected-input.submit"],
   "shellApproval.submitCredentialInput": ["protected-input.submit"],
   "shellApproval.submitSecretInput": ["protected-input.submit"],
+  "terminalApps.launch": ["terminal-apps.run"],
+  "terminalApps.resume": ["terminal-apps.run"],
   "workerdInspector.getEndpoint": ["runtime.inspect"],
   "workspace-state.panel.updateTitle": ["context.boundary"],
   "workspace-state.slot.close": ["context.boundary"],
@@ -9731,6 +9831,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
   },
   "subagents.create": {
     domain: "automation",
+    verb: "act",
+  },
+  "terminal-apps.run": {
+    domain: "computer",
     verb: "act",
   },
   "users.revoke": {
@@ -10562,6 +10666,17 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     group: "automation",
     authorityCategory: {
       domain: "automation",
+      verb: "act",
+    },
+  },
+  "terminal-apps.run": {
+    title: "Run a terminal app",
+    action: "run a terminal app or shell in this workspace",
+    description:
+      "Start a program in a terminal session inside this workspace's native runtime, as you.",
+    group: "computer",
+    authorityCategory: {
+      domain: "computer",
       verb: "act",
     },
   },

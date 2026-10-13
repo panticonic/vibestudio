@@ -4828,6 +4828,14 @@ async function main() {
           contextBoundary: contextBoundaryDeps,
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+          stateArgsSchemaForBuild: async (buildKey) => {
+            const build = await container
+              .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+              ?.getBuildByKey(buildKey);
+            if (!build)
+              throw new Error(`Build ${buildKey} is unavailable; cannot validate stateArgs`);
+            return build.metadata.stateArgsSchema;
+          },
           setEntityTitle: async (entityId, title, options) => {
             const slotId = (await dispatcher.dispatch(
               { caller: createHostCaller("server") },
@@ -5100,6 +5108,79 @@ async function main() {
       );
     },
   });
+  // ── Terminal apps: panels hosted by terminals, run in workspace PTYs ──
+  container.registerManaged({
+    name: "terminalApps",
+    dependencies: ["buildSystem", "nativeWorkspace"],
+    async start(resolve) {
+      const { createTerminalAppsService } = await import("./services/terminalAppsService.js");
+      const buildSystem = assertPresent(
+        resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+      );
+      const nativeWorkspace = assertPresent(
+        resolve<
+          Awaited<
+            ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
+          >
+        >("nativeWorkspace")
+      );
+      const runtime = () => {
+        if (!runtimeServiceInternal) throw new Error("Runtime service is not available");
+        return runtimeServiceInternal;
+      };
+      return createTerminalAppsService({
+        registryPath: path.join(statePath, "terminal-sessions.json"),
+        launchDirectory: path.join(nativeWorkspace.home, ".vibestudio", "terminal-launch"),
+        nodeExecutable: () => nativeWorkspace.nodeExecutable,
+        gatewayUrl: () => getLocalGatewayUrl("terminal app launch"),
+        resolveUnit: async (source) => {
+          const units = await buildSystem.listBuildUnits(undefined, ["panel"]);
+          const unit = units.find((candidate) => candidate.unitPath === source);
+          if (!unit) return null;
+          const manifest = unit.manifest as { title?: unknown; icon?: unknown } | undefined;
+          const icon = typeof manifest?.icon === "string" ? manifest.icon : undefined;
+          return {
+            source,
+            title: typeof manifest?.title === "string" ? manifest.title : unit.unitName,
+            ...(icon && (await import("@vibestudio/shared/panel/icon")).isSemanticEmoji(icon)
+              ? { icon }
+              : {}),
+            effectiveVersion: unit.effectiveVersion,
+          };
+        },
+        createEntity: (caller, spec) => runtime().createEntity(caller, spec),
+        retireEntity: (id) => runtime().retireEntity(id),
+        entityStateArgs: async (id) => {
+          const record = await entityStoreInstance?.resolveRecord(id);
+          const stateArgs = record?.stateArgs;
+          return stateArgs && typeof stateArgs === "object" && !Array.isArray(stateArgs)
+            ? (stateArgs as Record<string, unknown>)
+            : null;
+        },
+        primaryArtifactPath: async (buildKey) => {
+          const build = await buildSystem.getBuildByKey(buildKey);
+          const primary = build?.artifacts.find(
+            (artifact) => artifact.role === "primary" && !artifact.platform
+          );
+          if (!build || !primary) throw new Error(`Build ${buildKey} has no primary program`);
+          return buildSystem.getBuildArtifactPath(build, primary);
+        },
+        grantConnection: (principalId, issuedBy, subject) =>
+          connectionGrants.grant(principalId, issuedBy, { subject }).token,
+        holdLease: (input) => panelRuntimeCoordinator.holdEntityForHost(input),
+        dispatch: (ctx, service, method, args) => dispatcher.dispatch(ctx, service, method, args),
+        emitToUser: (userId, event, payload) => eventService.emitToUser(userId, event, payload),
+        log: (level, message, fields) => console[level](`[TerminalApps] ${message}`, fields ?? ""),
+      });
+    },
+    stop: (service: { stop(): Promise<void> }) => service.stop(),
+    getServiceDefinition(
+      instance?: import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+    ) {
+      return instance ?? container.get("terminalApps");
+    },
+  });
+
   const { reconcilePanelPresentationChange } = await import("./panelPresentationReconciler.js");
   const { PanelExecutionReconciler } = await import("./panelExecutionReconciler.js");
   const panelLifecycleCaller = createHostCaller("server");

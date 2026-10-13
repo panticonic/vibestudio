@@ -79,11 +79,30 @@ export type RuntimeLeaseClose = (
   reason: string
 ) => void;
 
+/**
+ * A panel runtime hosted by a trusted server-side host rather than presented
+ * in a view: a terminal app running in a workspace PTY. The host fixed the
+ * connection id the program authenticates with, and the person whose caller
+ * launched it authorized the program's connection grant. Host-held leases
+ * have no slot, presentation, attempt, boot supervision or CDP; they last
+ * until the host retires them (the session ends or is closed), not on a
+ * timer, because the program's own lifecycle is authoritative.
+ */
+export interface HostHeldEntityLease {
+  runtimeEntityId: PanelEntityId;
+  connectionId: string;
+  /** The launching person's caller id: the issuer of the program's connection grant. */
+  authorizedBy: string;
+  /** Who hosts it, for refusal messages ("terminal session"). */
+  holderLabel: string;
+}
+
 export class PanelRuntimeCoordinator {
   private readonly epoch = randomUUID();
   private counter = 0;
   private slotObservationCounters = new Map<PanelSlotId, number>();
   private leases = new Map<PanelEntityId, PanelRuntimeLease>();
+  private hostHeldEntityLeases = new Map<PanelEntityId, HostHeldEntityLease>();
   private clients = new Map<string, ClientSession>();
   private expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private defaultCdpLeaseConnections = new Set<string>();
@@ -1039,6 +1058,11 @@ export class PanelRuntimeCoordinator {
     // entities can hold a panel lease, so a non-panel id has nothing to retire here — return, don't throw.
     if (!isPanelEntityId(runtimeEntityId)) return;
     const entityId = runtimeEntityId;
+    const hostHeld = this.hostHeldEntityLeases.get(entityId);
+    if (hostHeld) {
+      this.hostHeldEntityLeases.delete(entityId);
+      this.routeReachability.delete(hostHeld.connectionId);
+    }
     const existing = this.leases.get(entityId);
     if (existing) {
       this.clearExpiry(entityId);
@@ -1053,11 +1077,66 @@ export class PanelRuntimeCoordinator {
     }
   }
 
+  /**
+   * Hold a slotless panel runtime for a server-side host (a terminal app in a
+   * workspace PTY). Re-holding the same entity with the same connection is
+   * idempotent; a different connection id replaces the route.
+   */
+  holdEntityForHost(input: {
+    runtimeEntityId: string;
+    connectionId: string;
+    authorizedBy: string;
+    holderLabel: string;
+  }): HostHeldEntityLease {
+    const runtimeEntityId = asPanelEntityId(input.runtimeEntityId);
+    if (this.leases.has(runtimeEntityId)) {
+      throw new Error(`Panel runtime ${runtimeEntityId} is presented by a view host`);
+    }
+    const previous = this.hostHeldEntityLeases.get(runtimeEntityId);
+    if (previous && previous.connectionId !== input.connectionId) {
+      this.routeReachability.delete(previous.connectionId);
+    }
+    const lease: HostHeldEntityLease = {
+      runtimeEntityId,
+      connectionId: input.connectionId,
+      authorizedBy: input.authorizedBy,
+      holderLabel: input.holderLabel,
+    };
+    this.hostHeldEntityLeases.set(runtimeEntityId, lease);
+    return lease;
+  }
+
+  getHostHeldLease(runtimeEntityId: string): HostHeldEntityLease | null {
+    if (!isPanelEntityId(runtimeEntityId)) return null;
+    return this.hostHeldEntityLeases.get(runtimeEntityId) ?? null;
+  }
+
+  /**
+   * The caller that authorized a panel runtime's connection grant: the host
+   * presenting it in a view, or the person who launched a host-held runtime.
+   */
+  resolveAuthorizerForRuntime(runtimeEntityId: string): string | null {
+    if (!isPanelEntityId(runtimeEntityId)) return null;
+    const hostHeld = this.hostHeldEntityLeases.get(runtimeEntityId);
+    if (hostHeld) return hostHeld.authorizedBy;
+    return this.resolvePresentationCallerForRuntime(runtimeEntityId);
+  }
+
   authorizePanelConnection(
     runtimeEntityId: string,
     connectionId: string,
     authorizedBy?: string
   ): { ok: true } | { ok: false; reason: string } {
+    const hostHeld = this.hostHeldEntityLeases.get(asPanelEntityId(runtimeEntityId));
+    if (hostHeld) {
+      if (hostHeld.connectionId !== connectionId) {
+        return { ok: false, reason: `Panel runtime is held by its ${hostHeld.holderLabel}` };
+      }
+      if (authorizedBy !== undefined && hostHeld.authorizedBy !== authorizedBy) {
+        return { ok: false, reason: "Panel runtime was launched by another caller" };
+      }
+      return { ok: true };
+    }
     const lease = this.leases.get(asPanelEntityId(runtimeEntityId));
     if (!lease) return { ok: false, reason: "Panel runtime has no active lease" };
     if (lease.connectionId !== connectionId) {
@@ -1074,6 +1153,11 @@ export class PanelRuntimeCoordinator {
 
   markConnected(runtimeEntityId: string, connectionId: string): void {
     const entityId = asPanelEntityId(runtimeEntityId);
+    const hostHeld = this.hostHeldEntityLeases.get(entityId);
+    if (hostHeld) {
+      if (hostHeld.connectionId === connectionId) this.routeReachability.set(connectionId, true);
+      return;
+    }
     const lease = this.leases.get(entityId);
     if (!lease || lease.connectionId !== connectionId) return;
     this.clearExpiry(entityId);
@@ -1103,6 +1187,13 @@ export class PanelRuntimeCoordinator {
 
   markDisconnected(runtimeEntityId: string, connectionId: string): void {
     const entityId = asPanelEntityId(runtimeEntityId);
+    const hostHeld = this.hostHeldEntityLeases.get(entityId);
+    if (hostHeld) {
+      // No reconnect grace timer: the lease lives as long as its host keeps
+      // the program (its PTY) alive, and the host retires it when it ends.
+      if (hostHeld.connectionId === connectionId) this.routeReachability.set(connectionId, false);
+      return;
+    }
     const lease = this.leases.get(entityId);
     if (!lease || lease.connectionId !== connectionId) return;
     this.clearExpiry(entityId);
@@ -1136,10 +1227,15 @@ export class PanelRuntimeCoordinator {
   }
 
   resolveRouteConnection(targetId: string): string | null {
+    if (isPanelEntityId(targetId)) {
+      const hostHeld = this.hostHeldEntityLeases.get(targetId);
+      if (hostHeld) return hostHeld.connectionId;
+    }
     return this.resolveRouteLease(targetId)?.connectionId ?? null;
   }
 
   resolveRouteRuntimeEntityId(targetId: string): string | null {
+    if (isPanelEntityId(targetId) && this.hostHeldEntityLeases.has(targetId)) return targetId;
     return this.resolveRouteLease(targetId)?.runtimeEntityId ?? null;
   }
 

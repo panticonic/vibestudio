@@ -580,6 +580,21 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `shellPresence.heartbeat` | Mark the calling shell active and return the current active-shell count. |
 
+## `terminalApps`
+
+Terminal apps in workspace PTYs and each person's terminal sessions
+
+Authority principals: `code`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `terminalApps.list` | The calling person's terminal sessions in this workspace (apps and shells), most recently active first. |
+| `terminalApps.launch` | Start a terminal app (`source` = terminal-apps/<name>) or, without a source, a login shell, in a new terminal session sized cols×rows. Returns the session; attach to its shellSessionId. |
+| `terminalApps.resume` | Return a session; when its program is no longer running, start it again in the same session (an app keeps its state and context). |
+| `terminalApps.close` | End a terminal session for good: its program is terminated and the session is forgotten. |
+| `terminalApps.getSettings` | The calling person's terminal settings (prefix key, bell, mouse, …). |
+| `terminalApps.setSettings` | Replace the calling person's terminal settings (at most 4 KB of JSON). |
+
 ## `vcs`
 
 One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.

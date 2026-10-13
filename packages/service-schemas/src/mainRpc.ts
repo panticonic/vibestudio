@@ -22,6 +22,7 @@ import type { externalOpenMethods } from "./externalOpen.js";
 import type { durableWorkMethods } from "./durableWork.js";
 import type { eventsMethods } from "./events.js";
 import type { hostTerminalMethods } from "./hostTerminal.js";
+import type { terminalAppsMethods } from "./terminalApps.js";
 import type { serverLogMethods } from "./serverLog.js";
 import type { webhookEngineMethods } from "./webhookEngine.js";
 import type { docsMethods } from "./docs.js";
@@ -97,6 +98,7 @@ export type MainRpcMethods = Methods<"governance", typeof governanceMethods> &
   Methods<"durableWork", typeof durableWorkMethods> &
   Methods<"events", typeof eventsMethods> &
   Methods<"hostTerminal", typeof hostTerminalMethods> &
+  Methods<"terminalApps", typeof terminalAppsMethods> &
   Methods<"serverLog", typeof serverLogMethods> &
   Methods<"webhookEngine", typeof webhookEngineMethods> &
   Methods<"docs", typeof docsMethods> &
@@ -177,6 +179,7 @@ const loaders = {
   durableWork: async () => (await import("./durableWork.js")).durableWorkMethods,
   events: async () => (await import("./events.js")).eventsMethods,
   hostTerminal: async () => (await import("./hostTerminal.js")).hostTerminalMethods,
+  terminalApps: async () => (await import("./terminalApps.js")).terminalAppsMethods,
   serverLog: async () => (await import("./serverLog.js")).serverLogMethods,
   webhookEngine: async () => (await import("./webhookEngine.js")).webhookEngineMethods,
   docs: async () => (await import("./docs.js")).docsMethods,

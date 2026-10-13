@@ -84,6 +84,7 @@ export type EventName =
   | "panel-created"
   | "navigate-to-panel"
   | "external-open:open"
+  | "terminal-apps:sessions-changed"
   | "browser-panel:open"
   | "browser-import-progress"
   | "browser-data-changed"
@@ -382,6 +383,10 @@ export interface EventPayloads {
     hint?: PanelPlacementHint;
     intentId?: string;
   };
+  /** A person's terminal sessions changed (delivered to that person's connections). */
+  "terminal-apps:sessions-changed": {
+    sessions: import("./terminalSessions.js").TerminalSessionEntry[];
+  };
   "external-open:open": {
     url: string;
     callerId: string;
@@ -597,6 +602,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel-created",
   "navigate-to-panel",
   "external-open:open",
+  "terminal-apps:sessions-changed",
   "browser-panel:open",
   "browser-import-progress",
   "browser-data-changed",

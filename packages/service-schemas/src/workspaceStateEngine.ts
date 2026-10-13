@@ -392,6 +392,24 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     args: z.tuple([z.string().min(1), z.string().min(1).max(200)]),
     returns: entityRecordSchema,
   },
+  entityPatchStateArgs: {
+    website: {
+      kind: "closed",
+      reason: "Storage and lifecycle engine entry points are internal implementation authority.",
+    } as const,
+    ...internal("write"),
+    args: z.tuple([
+      z.string().min(1),
+      z.record(z.string(), z.unknown()),
+      z
+        .object({
+          activeBuildKey: z.string().min(1),
+          schema: z.record(z.string(), z.unknown()).optional(),
+        })
+        .strict(),
+    ]),
+    returns: entityRecordSchema,
+  },
   entityRetire: {
     website: {
       kind: "closed",
