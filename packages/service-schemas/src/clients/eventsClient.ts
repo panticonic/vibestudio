@@ -47,7 +47,7 @@ function createWatchId(): string {
 export class EventsClient {
   private readonly rpc: EventsRpc;
   private readonly serviceName: EventsServiceName;
-  private readonly subscriptions = new Set<EventName>();
+  private readonly subscriptions = new Map<EventName, number>();
   private readonly listeners = new Map<EventName, Set<(payload: unknown) => void>>();
   private active: ActiveWatch | null = null;
   private pending: ActiveWatch | null = null;
@@ -95,24 +95,33 @@ export class EventsClient {
 
   async subscribeAll(events: Iterable<EventName>): Promise<void> {
     let changed = false;
-    for (const event of events) {
-      if (this.subscriptions.has(event)) continue;
-      this.subscriptions.add(event);
-      changed = true;
+    for (const event of new Set(events)) {
+      const owners = this.subscriptions.get(event) ?? 0;
+      this.subscriptions.set(event, owners + 1);
+      changed = owners === 0 || changed;
     }
     if (changed) await this.queueRefresh();
     else await this.watchAdmission;
   }
 
   async unsubscribe(event: EventName): Promise<void> {
-    if (!this.subscriptions.delete(event)) return;
-    await this.queueRefresh();
+    await this.unsubscribeMany([event]);
   }
 
   async unsubscribeMany(events: Iterable<EventName>): Promise<void> {
     let changed = false;
-    for (const event of events) changed = this.subscriptions.delete(event) || changed;
+    for (const event of new Set(events)) {
+      const owners = this.subscriptions.get(event);
+      if (owners === undefined) continue;
+      if (owners === 1) {
+        this.subscriptions.delete(event);
+        changed = true;
+      } else {
+        this.subscriptions.set(event, owners - 1);
+      }
+    }
     if (changed) await this.queueRefresh();
+    else await this.watchAdmission;
   }
 
   async unsubscribeAll(): Promise<void> {
@@ -190,7 +199,7 @@ export class EventsClient {
       try {
         const response = await EventsClient.openWatch(
           this.rpc,
-          [...this.subscriptions].sort(),
+          [...this.subscriptions.keys()].sort(),
           this.watchId,
           { signal: controller.signal, bodyIdleTimeoutMs: null },
           this.serviceName

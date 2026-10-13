@@ -23,7 +23,7 @@ export interface DurableObservation {
  * the current read, and the matching remote leave have all settled.
  */
 export function observeDurableProjection<T>(input: {
-  listen(changed: () => void): () => void;
+  listen(changed: () => Promise<void>): () => void;
   admit?(): Promise<void>;
   leave?(): Promise<void>;
   read(): Promise<T>;
@@ -93,14 +93,14 @@ export function observeDurableProjection<T>(input: {
     return receipt;
   };
 
-  const unlisten = input.listen(() => {
-    if (active) void refresh();
-  });
+  const unlisten = input.listen(() =>
+    active ? refresh() : Promise.resolve(),
+  );
   const admission = input.admit ? input.admit() : Promise.resolve();
   const ready = admission.then(
     async () => {
       admitted = true;
-      if (!active) return;
+      if (!active) throw new DurableObservationStoppedError();
       await refresh();
     },
     (error: unknown) => {

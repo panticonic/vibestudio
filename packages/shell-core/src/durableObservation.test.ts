@@ -19,7 +19,7 @@ describe("observeDurableProjection", () => {
     const admitted = deferred<void>();
     const first = deferred<string>();
     const second = deferred<string>();
-    let changed!: () => void;
+    let changed!: () => Promise<void>;
     const apply = vi.fn();
     const read = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     const observation = observeDurableProjection({
@@ -117,7 +117,7 @@ describe("observeDurableProjection", () => {
   });
 
   it("ignores a captured listener after retirement", async () => {
-    let changed!: () => void;
+    let changed!: () => Promise<void>;
     const read = vi.fn(async () => "current");
     const observation = observeDurableProjection({
       listen: (listener) => {
@@ -131,8 +131,7 @@ describe("observeDurableProjection", () => {
     await observation.ready;
     await observation.stop();
 
-    changed();
-    await Promise.resolve();
+    await changed();
     expect(read).toHaveBeenCalledTimes(1);
   });
 
@@ -150,8 +149,12 @@ describe("observeDurableProjection", () => {
     const first = observation.stop();
     const second = observation.stop();
     expect(first).toBe(second);
+    const stoppedReady = expect(observation.ready).rejects.toBeInstanceOf(
+      DurableObservationStoppedError,
+    );
     admitted.resolve();
     await first;
+    await stoppedReady;
     expect(leave).toHaveBeenCalledTimes(1);
   });
 });
