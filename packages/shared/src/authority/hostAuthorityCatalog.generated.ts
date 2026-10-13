@@ -7393,8 +7393,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Run a terminal app",
       action: "run a terminal app or shell in this workspace",
-      description:
-        "Start a program in a terminal session inside this workspace's native runtime, as you.",
+      description: "Start a program in a terminal in this workspace, as you.",
       group: "computer",
       authorityCategory: {
         domain: "computer",
@@ -7425,8 +7424,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Run a terminal app",
       action: "run a terminal app or shell in this workspace",
-      description:
-        "Start a program in a terminal session inside this workspace's native runtime, as you.",
+      description: "Start a program in a terminal in this workspace, as you.",
       group: "computer",
       authorityCategory: {
         domain: "computer",
@@ -10672,8 +10670,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "terminal-apps.run": {
     title: "Run a terminal app",
     action: "run a terminal app or shell in this workspace",
-    description:
-      "Start a program in a terminal session inside this workspace's native runtime, as you.",
+    description: "Start a program in a terminal in this workspace, as you.",
     group: "computer",
     authorityCategory: {
       domain: "computer",

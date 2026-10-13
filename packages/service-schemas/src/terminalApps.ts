@@ -86,8 +86,7 @@ const runAuthority = {
 const runPresentation = {
   title: "Run a terminal app",
   action: "run a terminal app or shell in this workspace",
-  description:
-    "Start a program in a terminal session inside this workspace's native runtime, as you.",
+  description: "Start a program in a terminal in this workspace, as you.",
   group: "computer",
   authorityCategory: { domain: "computer" as const, verb: "act" as const },
 };

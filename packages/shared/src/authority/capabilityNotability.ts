@@ -150,6 +150,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "mobile.provision", notability: "headline" },
   { key: "mobile.devices.read", notability: "everyday" },
   { key: "native.mobile.execute", notability: "headline" },
+  { key: "terminal-apps.run", notability: "headline" },
   { key: "connections.approve", notability: "headline" },
   { key: "remote-client.connect", notability: "headline" },
   { key: "remote-client.clear", notability: "everyday" },
