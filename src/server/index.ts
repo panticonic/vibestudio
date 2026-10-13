@@ -7139,7 +7139,8 @@ async function main() {
         }
         await extensionHostForGateway?.whenDeclarationsStaged();
       },
-      runtimeDiagnostics
+      runtimeDiagnostics,
+      workspaceName
     )
   );
   unitSupervisor.register(

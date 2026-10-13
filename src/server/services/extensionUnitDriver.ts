@@ -10,7 +10,8 @@ import { runtimeDiagnosticHistory } from "./runtimeDiagnosticProjection.js";
 export function createExtensionUnitDriver(
   getHost: () => ExtensionHost | null,
   ensureDeclaration: (releaseId: string) => Promise<void>,
-  diagnostics: Pick<RuntimeDiagnosticsStore, "history">
+  diagnostics: Pick<RuntimeDiagnosticsStore, "history">,
+  workspaceLabel = "unknown"
 ): UnitDriver {
   const host = () => {
     const value = getHost();
@@ -98,16 +99,69 @@ export function createExtensionUnitDriver(
       host().appendRuntimeLog(ctx, report.level, report.message, report.fields),
     activation: {
       activate: async (_ctx, releaseId) => {
+        console.info("[RuntimeSupervision] Extension activation", {
+          phase: "start",
+          workspace: workspaceLabel,
+          releaseId,
+        });
         // A declared host prerequisite may be dormant until its first launch.
         // Stage that declaration before consulting the runtime registry.
-        await ensureDeclaration(releaseId);
-        const row = (await host().listWorkspaceUnits()).find(
-          (candidate) => candidate.name === releaseId || candidate.source === releaseId
-        );
-        if (!row) return { status: "unavailable", reason: `Unknown extension: ${releaseId}` };
-        await host().ensureActivated(row.name);
-        const entity = describeRow(await requireRow(row.name));
-        return { status: "ready", entity };
+        const runtimeHost = host();
+        let phase = "ensure-declaration";
+        try {
+          await ensureDeclaration(releaseId);
+          const rows = await runtimeHost.listWorkspaceUnits();
+          console.info("[RuntimeSupervision] Extension activation", {
+            phase: "declaration-staged",
+            workspace: workspaceLabel,
+            releaseId,
+            units: rows
+              .filter((candidate) => candidate.name === releaseId || candidate.source === releaseId)
+              .map(({ name, source, status }) => ({ name, source, status })),
+          });
+          const row = rows.find(
+            (candidate) => candidate.name === releaseId || candidate.source === releaseId
+          );
+          if (!row) return { status: "unavailable", reason: `Unknown extension: ${releaseId}` };
+          phase = "ensure-activation";
+          await runtimeHost.ensureActivated(row.name);
+          const processRunningAtActivationSettlement = runtimeHost.processes.isRunning(row.name);
+          const afterActivation = await runtimeHost.listWorkspaceUnits();
+          console.info("[RuntimeSupervision] Extension activation", {
+            phase: "activation-settled",
+            workspace: workspaceLabel,
+            releaseId,
+            units: afterActivation
+              .filter((candidate) => candidate.name === row.name)
+              .map(({ name, source, status }) => ({ name, source, status })),
+            processRunningAtActivationSettlement,
+            processRunningAfterProjection: runtimeHost.processes.isRunning(row.name),
+          });
+          phase = "require-running-row";
+          const entity = describeRow(await requireRow(row.name));
+          return { status: "ready", entity };
+        } catch (error) {
+          const candidate = (
+            await runtimeHost
+              .listWorkspaceUnits()
+              .catch(() => [] as Awaited<ReturnType<typeof runtimeHost.listWorkspaceUnits>>)
+          ).find((item) => item.name === releaseId || item.source === releaseId);
+          console.error("[RuntimeSupervision] Extension activation failed", {
+            phase,
+            workspace: workspaceLabel,
+            releaseId,
+            unit: candidate
+              ? { name: candidate.name, source: candidate.source, status: candidate.status }
+              : null,
+            processRunning: candidate ? runtimeHost.processes.isRunning(candidate.name) : null,
+            errorType: error instanceof Error ? error.name : typeof error,
+            errorCode:
+              error && typeof error === "object" && "code" in error
+                ? String((error as { code: unknown }).code)
+                : null,
+          });
+          throw error;
+        }
       },
     },
   };
