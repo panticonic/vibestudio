@@ -5,6 +5,12 @@ server Endpoint ID is authenticated during the QUIC handshake; the client keeps
 one durable native endpoint identity across reconnects. Loopback clients use the
 existing WebSocket transport and never expose a remote network surface.
 
+The server indexes admitted physical connections by that authenticated client
+Endpoint ID. Admitting a successor closes the previous physical connection
+immediately and retains its terminal receipt through shutdown. A force-killed
+client process therefore cannot leave an old control loop or request stream
+eligible beside the replacement while QUIC waits to detect loss.
+
 ## Hub control and workspace reaches
 
 A paired device keeps two logical reaches:

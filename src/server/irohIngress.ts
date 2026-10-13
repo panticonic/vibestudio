@@ -8,6 +8,7 @@ import { formatRpcFailure } from "@vibestudio/rpc";
 const ADMISSION_REJECTED = 0x210n;
 const SERVER_STOPPED = 0x211n;
 const CONNECTION_LIMIT = 0x212n;
+const PEER_REPLACED = 0x213n;
 const DEFAULT_CATASTROPHIC_CONNECTION_CEILING = 65_536;
 const REBIND_BACKOFF_MAX_MS = 5_000;
 
@@ -50,7 +51,17 @@ export function startIrohIngress<
   if (!Number.isSafeInteger(maximum) || maximum < 1) {
     throw new Error("Iroh ingress maxConnections must be a positive safe integer");
   }
+  // `live` owns every accepted physical connection through its terminal
+  // receipt, including rejected peers and predecessors asked to retire. The peer
+  // index contains only the generation eligible to carry newly opened logical
+  // sessions. A durable client Endpoint identity has one physical owner per
+  // server reach; admitting its successor fences a force-killed process before
+  // QUIC loss detection eventually notices the abandoned predecessor.
   const live = new Set<Connection>();
+  const activeByPeer = new Map<string, Connection>();
+  const candidateByPeer = new Map<string, Connection>();
+  const liveClosures = new Set<Promise<void>>();
+  const attachments = new Set<Promise<void>>();
   const endpointClosures = new WeakMap<object, Promise<void>>();
   let endpoint: Endpoint | null = null;
   type EndpointGeneration = {
@@ -95,50 +106,13 @@ export function startIrohIngress<
   async function acceptLoop(owner: Endpoint): Promise<void> {
     while (!stopped) {
       const connection = await owner.accept();
-      if (stopped) break;
-      if (!connection) throw new Error("Iroh endpoint accept loop ended unexpectedly");
-      if (live.size >= maximum) {
-        connection.close(CONNECTION_LIMIT, new TextEncoder().encode("connection limit"));
-        continue;
-      }
-      let admitted = false;
-      try {
-        admitted = await options.admitPeer(connection.peerEndpointId);
-      } catch (error) {
-        options.log?.(`Iroh peer admission failed: ${String(error)}`);
-      }
-      if (stopped) {
-        connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
-        break;
-      }
-      if (!admitted) {
-        connection.close(ADMISSION_REJECTED, new TextEncoder().encode("peer not admitted"));
-        continue;
+      if (!connection) {
+        if (stopped) break;
+        throw new Error("Iroh endpoint accept loop ended unexpectedly");
       }
       live.add(connection);
-      const selectedPath = connection.diagnostics?.().paths.find((path) => path.selected);
-      options.log?.(
-        `Iroh peer admitted endpoint=${connection.peerEndpointId.slice(0, 12)} path=${
-          selectedPath?.kind ?? "unknown"
-        }${selectedPath?.remoteAddress ? ` remote=${selectedPath.remoteAddress}` : ""}`
-      );
-      let lastPath = selectedPath
-        ? `${selectedPath.kind}\x00${selectedPath.remoteAddress}`
-        : "unknown";
-      const unsubscribeDiagnostics = connection.onDiagnosticsChange?.((diagnostics) => {
-        const selected = diagnostics.paths.find((path) => path.selected);
-        const nextPath = selected ? `${selected.kind}\x00${selected.remoteAddress}` : "unknown";
-        if (nextPath === lastPath) return;
-        lastPath = nextPath;
-        options.log?.(
-          `Iroh peer path changed endpoint=${connection.peerEndpointId.slice(0, 12)} path=${
-            selected?.kind ?? "unknown"
-          }${selected?.remoteAddress ? ` remote=${selected.remoteAddress}` : ""}${
-            selected?.rttMs === undefined ? "" : ` rttMs=${selected.rttMs}`
-          }`
-        );
-      });
-      void connection
+      let unsubscribeDiagnostics = () => {};
+      const closure = connection
         .closed()
         .then(
           (reason) =>
@@ -153,15 +127,106 @@ export function startIrohIngress<
             )
         )
         .finally(() => {
-          unsubscribeDiagnostics?.();
+          unsubscribeDiagnostics();
           live.delete(connection);
+          if (activeByPeer.get(connection.peerEndpointId) === connection) {
+            activeByPeer.delete(connection.peerEndpointId);
+          }
+          if (candidateByPeer.get(connection.peerEndpointId) === connection) {
+            candidateByPeer.delete(connection.peerEndpointId);
+          }
+          liveClosures.delete(closure);
         });
-      void options.attach(connection).catch((error) => {
-        live.delete(connection);
-        const reason = error instanceof Error ? error.message : String(error);
-        connection.close(ADMISSION_REJECTED, new TextEncoder().encode(reason));
-        options.log?.(`Iroh connection setup failed: ${reason}`);
-      });
+      liveClosures.add(closure);
+      if (stopped) {
+        connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
+        await closure;
+        break;
+      }
+      if (live.size > maximum) {
+        connection.close(CONNECTION_LIMIT, new TextEncoder().encode("connection limit"));
+        // The native accept already acquired this one excess resource. Do not
+        // accept another until its exact terminal receipt returns capacity;
+        // otherwise a peer that ignores close could grow `live` without bound.
+        await closure;
+        continue;
+      }
+      let admitted = false;
+      try {
+        admitted = await options.admitPeer(connection.peerEndpointId);
+      } catch (error) {
+        options.log?.(`Iroh peer admission failed: ${String(error)}`);
+      }
+      if (stopped) {
+        connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
+        await closure;
+        break;
+      }
+      if (!admitted) {
+        connection.close(ADMISSION_REJECTED, new TextEncoder().encode("peer not admitted"));
+        continue;
+      }
+      candidateByPeer.set(connection.peerEndpointId, connection);
+      const selectedPath = connection.diagnostics?.().paths.find((path) => path.selected);
+      options.log?.(
+        `Iroh peer admitted endpoint=${connection.peerEndpointId.slice(0, 12)} path=${
+          selectedPath?.kind ?? "unknown"
+        }${selectedPath?.remoteAddress ? ` remote=${selectedPath.remoteAddress}` : ""}`
+      );
+      let lastPath = selectedPath
+        ? `${selectedPath.kind}\x00${selectedPath.remoteAddress}`
+        : "unknown";
+      unsubscribeDiagnostics =
+        connection.onDiagnosticsChange?.((diagnostics) => {
+          const selected = diagnostics.paths.find((path) => path.selected);
+          const nextPath = selected ? `${selected.kind}\x00${selected.remoteAddress}` : "unknown";
+          if (nextPath === lastPath) return;
+          lastPath = nextPath;
+          options.log?.(
+            `Iroh peer path changed endpoint=${connection.peerEndpointId.slice(0, 12)} path=${
+              selected?.kind ?? "unknown"
+            }${selected?.remoteAddress ? ` remote=${selected.remoteAddress}` : ""}${
+              selected?.rttMs === undefined ? "" : ` rttMs=${selected.rttMs}`
+            }`
+          );
+        }) ?? unsubscribeDiagnostics;
+      // attachIrohConnection resolves after the bounded control handshake and
+      // launches its connection-owned loops; it is not a lifetime wait. Fence
+      // the predecessor only after that handshake proves the successor usable.
+      const attachment = options
+        .attach(connection)
+        .then(() => {
+          if (stopped) {
+            connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
+            return;
+          }
+          if (candidateByPeer.get(connection.peerEndpointId) !== connection) {
+            connection.close(
+              PEER_REPLACED,
+              new TextEncoder().encode("replaced by newer peer connection")
+            );
+            return;
+          }
+          candidateByPeer.delete(connection.peerEndpointId);
+          const replaced = activeByPeer.get(connection.peerEndpointId);
+          activeByPeer.set(connection.peerEndpointId, connection);
+          if (replaced && replaced !== connection) {
+            replaced.close(
+              PEER_REPLACED,
+              new TextEncoder().encode("replaced by newer peer connection")
+            );
+          }
+        })
+        .catch((error) => {
+          if (candidateByPeer.get(connection.peerEndpointId) === connection) {
+            candidateByPeer.delete(connection.peerEndpointId);
+          }
+          const reason = error instanceof Error ? error.message : String(error);
+          connection.close(ADMISSION_REJECTED, new TextEncoder().encode(reason));
+          options.log?.(`Iroh connection setup failed: ${reason}`);
+        });
+      attachments.add(attachment);
+      void attachment.finally(() => attachments.delete(attachment));
     }
   }
 
@@ -402,8 +467,14 @@ export function startIrohIngress<
       for (const connection of live) {
         connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
       }
-      live.clear();
-      const settled = await Promise.allSettled([closeEndpoint(endpoint), supervisor]);
+      const admittedClosures = [...liveClosures];
+      const pendingAttachments = [...attachments];
+      const settled = await Promise.allSettled([
+        closeEndpoint(endpoint),
+        supervisor,
+        ...pendingAttachments,
+        ...admittedClosures,
+      ]);
       const errors = settled
         .filter((result): result is PromiseRejectedResult => result.status === "rejected")
         .map((result) => result.reason);

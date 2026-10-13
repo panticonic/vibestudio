@@ -16,18 +16,221 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function connection(peerEndpointId: string) {
+function connection(peerEndpointId: string, settleOnClose = true) {
   const closed = deferred<string>();
   return {
     peerEndpointId,
     openBi: vi.fn(),
     acceptBi: vi.fn(),
-    close: vi.fn(() => closed.resolve("closed")),
+    close: vi.fn(() => {
+      if (settleOnClose) closed.resolve("closed");
+    }),
     closed: () => closed.promise,
-  } as unknown as IrohPhysicalConnection;
+    settleClosed: (reason = "closed") => closed.resolve(reason),
+  } as unknown as IrohPhysicalConnection & { settleClosed(reason?: string): void };
 }
 
 describe("Iroh server ingress", () => {
+  it("atomically replaces an admitted physical peer and ignores its late closure", async () => {
+    const peerId = "a".repeat(64);
+    const first = connection(peerId, false);
+    const second = connection(peerId, false);
+    const third = connection(peerId, false);
+    const thirdAdmission = deferred<IrohPhysicalConnection | null>();
+    const waiting = deferred<IrohPhysicalConnection | null>();
+    const endpoint = {
+      endpointId: "c".repeat(64),
+      accept: vi
+        .fn()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second)
+        .mockImplementationOnce(() => thirdAdmission.promise)
+        .mockImplementation(() => waiting.promise),
+      close: vi.fn(async () => waiting.resolve(null)),
+    } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
+    const ingress = startIrohIngress({
+      binding: { bind: async () => endpoint },
+      admitPeer: () => true,
+      attach: async () => undefined,
+    });
+    try {
+      await ingress.ready;
+      await vi.waitFor(() => expect(first.close).toHaveBeenCalledOnce());
+      expect(first.close).toHaveBeenCalledWith(0x213n, expect.any(Uint8Array));
+
+      // The predecessor can report closure after its successor is active. That
+      // receipt must retire only the exact old generation.
+      first.settleClosed("late predecessor close");
+      thirdAdmission.resolve(third);
+      await vi.waitFor(() => expect(second.close).toHaveBeenCalledOnce());
+      expect(second.close).toHaveBeenCalledWith(0x213n, expect.any(Uint8Array));
+    } finally {
+      thirdAdmission.resolve(null);
+      first.settleClosed();
+      second.settleClosed();
+      third.settleClosed();
+      await ingress.stop();
+    }
+  });
+
+  it("keeps distinct physical peers active until ingress shutdown", async () => {
+    const first = connection("a".repeat(64));
+    const second = connection("b".repeat(64));
+    const waiting = deferred<IrohPhysicalConnection | null>();
+    const endpoint = {
+      endpointId: "c".repeat(64),
+      accept: vi
+        .fn()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second)
+        .mockImplementation(() => waiting.promise),
+      close: vi.fn(async () => waiting.resolve(null)),
+    } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
+    const ingress = startIrohIngress({
+      binding: { bind: async () => endpoint },
+      admitPeer: () => true,
+      attach: async () => undefined,
+    });
+    await ingress.ready;
+    await vi.waitFor(() => expect(endpoint.accept).toHaveBeenCalledTimes(3));
+    expect(first.close).not.toHaveBeenCalled();
+    expect(second.close).not.toHaveBeenCalled();
+    await ingress.stop();
+    expect(first.close).toHaveBeenCalledWith(0x211n, expect.any(Uint8Array));
+    expect(second.close).toHaveBeenCalledWith(0x211n, expect.any(Uint8Array));
+  });
+
+  it("joins a replaced physical peer through its terminal receipt during shutdown", async () => {
+    const peerId = "a".repeat(64);
+    const first = connection(peerId, false);
+    const second = connection(peerId, false);
+    const waiting = deferred<IrohPhysicalConnection | null>();
+    const endpoint = {
+      endpointId: "c".repeat(64),
+      accept: vi
+        .fn()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second)
+        .mockImplementation(() => waiting.promise),
+      close: vi.fn(async () => waiting.resolve(null)),
+    } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
+    const ingress = startIrohIngress({
+      binding: { bind: async () => endpoint },
+      admitPeer: () => true,
+      attach: async () => undefined,
+    });
+    let stopping: Promise<void> | undefined;
+    try {
+      await ingress.ready;
+      await vi.waitFor(() => expect(first.close).toHaveBeenCalledOnce());
+
+      let stopped = false;
+      stopping = ingress.stop().then(() => {
+        stopped = true;
+      });
+      await vi.waitFor(() =>
+        expect(second.close).toHaveBeenCalledWith(0x211n, expect.any(Uint8Array))
+      );
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      first.settleClosed();
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      second.settleClosed();
+      await stopping;
+      expect(stopped).toBe(true);
+    } finally {
+      first.settleClosed();
+      second.settleClosed();
+      await (stopping ?? ingress.stop());
+    }
+  });
+
+  it("proves a successor control handshake before fencing the active peer", async () => {
+    const peerId = "a".repeat(64);
+    const first = connection(peerId, false);
+    const second = connection(peerId, false);
+    const secondHandshake = deferred<void>();
+    const waiting = deferred<IrohPhysicalConnection | null>();
+    const endpoint = {
+      endpointId: "c".repeat(64),
+      accept: vi
+        .fn()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second)
+        .mockImplementation(() => waiting.promise),
+      close: vi.fn(async () => waiting.resolve(null)),
+    } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
+    const attach = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => secondHandshake.promise);
+    const ingress = startIrohIngress({
+      binding: { bind: async () => endpoint },
+      admitPeer: () => true,
+      attach,
+    });
+    try {
+      await ingress.ready;
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(2));
+      expect(first.close).not.toHaveBeenCalled();
+      secondHandshake.resolve();
+      await vi.waitFor(() =>
+        expect(first.close).toHaveBeenCalledWith(0x213n, expect.any(Uint8Array))
+      );
+    } finally {
+      secondHandshake.resolve();
+      first.settleClosed();
+      second.settleClosed();
+      await ingress.stop();
+    }
+  });
+
+  it("keeps same-peer replacement overlap inside the total physical ceiling", async () => {
+    const peerId = "a".repeat(64);
+    const first = connection(peerId, false);
+    const second = connection(peerId, false);
+    const excess = connection(peerId, false);
+    const nextExcess = connection(peerId);
+    const waiting = deferred<IrohPhysicalConnection | null>();
+    const endpoint = {
+      endpointId: "c".repeat(64),
+      accept: vi
+        .fn()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second)
+        .mockResolvedValueOnce(excess)
+        .mockResolvedValueOnce(nextExcess)
+        .mockImplementation(() => waiting.promise),
+      close: vi.fn(async () => waiting.resolve(null)),
+    } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
+    const attach = vi.fn(async () => undefined);
+    const ingress = startIrohIngress({
+      binding: { bind: async () => endpoint },
+      maxConnections: 2,
+      admitPeer: () => true,
+      attach,
+    });
+    try {
+      await ingress.ready;
+      await vi.waitFor(() => expect(excess.close).toHaveBeenCalledOnce());
+      expect(first.close).toHaveBeenCalledWith(0x213n, expect.any(Uint8Array));
+      expect(excess.close).toHaveBeenCalledWith(0x212n, expect.any(Uint8Array));
+      expect(attach).toHaveBeenCalledTimes(2);
+      expect(second.close).not.toHaveBeenCalled();
+      expect(endpoint.accept).toHaveBeenCalledTimes(3);
+
+      excess.settleClosed();
+      await vi.waitFor(() => expect(nextExcess.close).toHaveBeenCalledOnce());
+      expect(nextExcess.close).toHaveBeenCalledWith(0x212n, expect.any(Uint8Array));
+    } finally {
+      excess.settleClosed();
+      first.settleClosed();
+      second.settleClosed();
+      await ingress.stop();
+    }
+  });
+
   it("waits for asynchronous startup admission and checks current membership before attachment", async () => {
     const peer = connection("a".repeat(64));
     const startup = deferred<boolean>();
