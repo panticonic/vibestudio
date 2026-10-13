@@ -37,6 +37,7 @@ function pack(objects: Buffer[]): Buffer {
   return Buffer.concat([content, hash(content)]);
 }
 async function withPack(objects: Buffer[], run: (dir: string, filepath: string) => Promise<void>) {
+  await fsp.mkdir(path.resolve(".cache"), { recursive: true });
   const dir = await fsp.mkdtemp(path.resolve(".cache/git-pack-test-"));
   try {
     await git.init({ fs, dir });

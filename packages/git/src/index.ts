@@ -45,9 +45,13 @@ export {
 export { initAndPush, type InitAndPushOptions } from "./convenience.js";
 export {
   acquireExactGitSnapshot,
+  acquireExactGitSnapshotIndex,
   discoverDefaultGitSnapshot,
   discoverExactGitSnapshot,
+  discoverExactGitSnapshotIndex,
   discoverTrackedGitSnapshot,
+  discoverTrackedGitSnapshotIndex,
+  materializeExactGitSnapshot,
   readExactGitSnapshot,
   readExactGitSnapshotIndex,
   type SnapshotContentSink,
@@ -56,6 +60,9 @@ export {
   type ExactGitSnapshotIndex,
   type ReservedPathPolicy,
   type AcquireExactGitSnapshotOptions,
+  type AcquireExactGitSnapshotIndexOptions,
+  type DiscoverExactGitSnapshotIndexOptions,
+  type DiscoverTrackedGitSnapshotIndexOptions,
   type DiscoverDefaultGitSnapshotOptions,
   type DiscoverExactGitSnapshotOptions,
   type DiscoverTrackedGitSnapshotOptions,

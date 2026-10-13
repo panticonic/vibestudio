@@ -3,8 +3,11 @@ import { sha256Hex } from "@vibestudio/content-addressing";
 import type { GitClient, GitCommitTreeEntry } from "./client.js";
 import {
   acquireExactGitSnapshot,
+  acquireExactGitSnapshotIndex,
   discoverExactGitSnapshot,
   discoverTrackedGitSnapshot,
+  discoverTrackedGitSnapshotIndex,
+  materializeExactGitSnapshot,
   readExactGitSnapshot,
   readExactGitSnapshotIndex,
 } from "./exact-snapshot.js";
@@ -18,7 +21,10 @@ const blob = (path: string, text: string, mode = 0o100644): GitCommitTreeEntry =
   bytes: new TextEncoder().encode(text),
 });
 
-function fakeGit(entries: GitCommitTreeEntry[], matrix?: Array<[string, number, number, number]>) {
+function fakeGitFixture(
+  entries: GitCommitTreeEntry[],
+  matrix?: Array<[string, number, number, number]>
+) {
   return {
     getCurrentCommit: vi.fn(async () => COMMIT),
     statusMatrix: vi.fn(
@@ -38,7 +44,11 @@ function fakeGit(entries: GitCommitTreeEntry[], matrix?: Array<[string, number, 
         return entry?.type === "blob" ? entry.bytes : null;
       }),
     })),
-  } as unknown as GitClient;
+  };
+}
+
+function fakeGit(entries: GitCommitTreeEntry[], matrix?: Array<[string, number, number, number]>) {
+  return fakeGitFixture(entries, matrix) as unknown as GitClient;
 }
 
 describe("readExactGitSnapshot", () => {
@@ -209,6 +219,167 @@ describe("readExactGitSnapshotIndex", () => {
   });
 });
 
+describe("metadata acquisition and continuation", () => {
+  const sink = {
+    put: vi.fn(async (bytes: Uint8Array) => ({ digest: sha256Hex(bytes), size: bytes.byteLength })),
+  };
+  function acquisitionGit() {
+    return {
+      ...fakeGitFixture([
+        blob("selected/meta/vibestudio.yml", "manifest"),
+        blob("selected/unit.ts", "code"),
+        blob("outside.ts", "outside"),
+      ]),
+      clone: vi.fn(async () => undefined),
+      resolveUrl: vi.fn(),
+      resolveCommit: vi.fn(async () => COMMIT),
+      listTags: vi.fn(async () => ["v2", "v10"]),
+      checkout: vi.fn(async () => undefined),
+    } as unknown as GitClient;
+  }
+
+  it("freezes a tracked index without loading payloads, then imports that same tree", async () => {
+    const git = acquisitionGit();
+    const index = await discoverTrackedGitSnapshotIndex({
+      git,
+      dir: "/checkout",
+      url: "https://example.test/template.git",
+      track: "refs/tags/v*",
+      label: "template",
+      subdir: "selected",
+    });
+    const tree = await vi.mocked(git.readCommitTreeIndex).mock.results[0]!.value;
+    expect(tree.readFile).not.toHaveBeenCalled();
+    expect(index.ref).toBe("refs/tags/v10");
+    expect(new TextDecoder().decode((await index.readFile("meta/vibestudio.yml"))!)).toBe(
+      "manifest"
+    );
+    expect(tree.readFile).toHaveBeenCalledTimes(1);
+    vi.mocked(git.getCurrentCommit).mockResolvedValue("b".repeat(40));
+    const snapshot = await materializeExactGitSnapshot(index, { label: "template", sink });
+    expect(snapshot.commit).toBe(COMMIT);
+    expect(snapshot.files.map(({ path }) => path)).toEqual(["meta/vibestudio.yml", "unit.ts"]);
+    expect(git.clone).toHaveBeenCalledTimes(1);
+    expect(git.listTags).toHaveBeenCalledTimes(1);
+    expect(git.readCommitTreeIndex).toHaveBeenCalledTimes(1);
+    expect(git.readCommitTree).not.toHaveBeenCalled();
+    const direct = await readExactGitSnapshot({
+      git: acquisitionGit(),
+      dir: "/checkout",
+      commit: COMMIT,
+      label: "template",
+      subdir: "selected",
+      sink,
+    });
+    expect(snapshot.snapshot).toBe(direct.snapshot);
+  });
+
+  it("retains exact ref mismatch and invalid OID admission before payload reading", async () => {
+    const git = acquisitionGit();
+    const options = {
+      git,
+      dir: "/checkout",
+      url: "https://example.test/template.git",
+      ref: "refs/heads/main",
+      expectedCommit: COMMIT,
+      label: "template",
+    };
+    await expect(
+      acquireExactGitSnapshotIndex({ ...options, expectedCommit: "short" })
+    ).rejects.toThrow("full 40-character object id");
+    expect(git.clone).not.toHaveBeenCalled();
+    vi.mocked(git.resolveCommit).mockResolvedValue("b".repeat(40));
+    await expect(acquireExactGitSnapshotIndex(options)).rejects.toThrow("expected " + COMMIT);
+    expect(git.readCommitTreeIndex).not.toHaveBeenCalled();
+  });
+
+  it("rejects irregular acquired trees before exposing even their manifest", async () => {
+    const git = acquisitionGit();
+    const badTree = await fakeGitFixture([
+      blob("meta/vibestudio.yml", "manifest"),
+      blob("link", "target", 0o120000),
+    ]).readCommitTreeIndex();
+    vi.mocked(git.readCommitTreeIndex).mockResolvedValue(badTree);
+    await expect(
+      acquireExactGitSnapshotIndex({
+        git,
+        dir: "/checkout",
+        url: "https://example.test/template.git",
+        ref: "refs/heads/main",
+        expectedCommit: COMMIT,
+        label: "template",
+      })
+    ).rejects.toThrow("entries the semantic workspace cannot represent");
+    expect(badTree.readFile).not.toHaveBeenCalled();
+  });
+
+  it("joins admitted sink writes before reporting their original failure", async () => {
+    const failure = new Error("sink failed");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const index = await readExactGitSnapshotIndex({
+      git: acquisitionGit(),
+      dir: "/checkout",
+      commit: COMMIT,
+      label: "template",
+      subdir: "selected",
+    });
+    const put = vi.fn(async (bytes: Uint8Array) => {
+      if (new TextDecoder().decode(bytes) === "manifest") throw failure;
+      await held;
+      return { digest: sha256Hex(bytes), size: bytes.byteLength };
+    });
+    const pending = materializeExactGitSnapshot(index, { label: "template", sink: { put } });
+    let settled = false;
+    void pending.catch(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    expect(settled).toBe(false);
+    release();
+    await expect(pending).rejects.toBe(failure);
+  });
+
+  it("joins admitted reads and retains their original failures", async () => {
+    const first = new Error("first blob failed");
+    const second = new Error("second blob failed");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const git = acquisitionGit();
+    const index = await readExactGitSnapshotIndex({
+      git,
+      dir: "/checkout",
+      commit: COMMIT,
+      label: "template",
+      subdir: "selected",
+    });
+    const pending = materializeExactGitSnapshot(
+      {
+        ...index,
+        readFile: async (path) => {
+          if (path === "meta/vibestudio.yml") throw first;
+          await held;
+          throw second;
+        },
+      },
+      { label: "template", sink }
+    );
+    let settled = false;
+    void pending.catch(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release();
+    await expect(pending).rejects.toMatchObject({ errors: [first, second], cause: first });
+  });
+});
+
 describe("reserved path policy", () => {
   const sink = {
     put: async (bytes: Uint8Array) => ({ digest: sha256Hex(bytes), size: bytes.byteLength }),
@@ -265,7 +436,7 @@ describe("discoverTrackedGitSnapshot", () => {
       checkout: vi.fn(async () => undefined),
       getCurrentCommit: vi.fn(async () => COMMIT),
       statusMatrix: vi.fn(async () => [["index.ts", 1, 1, 1]]),
-      readCommitTree: vi.fn(async () => [blob("index.ts", "tracked")]),
+      ...fakeGitFixture([blob("index.ts", "tracked")]),
     } as unknown as GitClient;
 
     const discovered = await discoverTrackedGitSnapshot({
@@ -291,7 +462,7 @@ describe("discoverTrackedGitSnapshot", () => {
       checkout: vi.fn(async () => undefined),
       getCurrentCommit: vi.fn(async () => COMMIT),
       statusMatrix: vi.fn(async () => [["index.ts", 1, 1, 1]]),
-      readCommitTree: vi.fn(async () => [blob("index.ts", "tracked")]),
+      ...fakeGitFixture([blob("index.ts", "tracked")]),
     } as unknown as GitClient;
 
     const discovered = await discoverTrackedGitSnapshot({
@@ -316,7 +487,7 @@ describe("discoverTrackedGitSnapshot", () => {
       checkout: vi.fn(async () => undefined),
       getCurrentCommit: vi.fn(async () => COMMIT),
       statusMatrix: vi.fn(async () => [["index.ts", 1, 1, 1]]),
-      readCommitTree: vi.fn(async () => [blob("index.ts", "tracked")]),
+      ...fakeGitFixture([blob("index.ts", "tracked")]),
     } as unknown as GitClient;
 
     const discovered = await discoverTrackedGitSnapshot({
@@ -337,7 +508,7 @@ describe("discoverTrackedGitSnapshot", () => {
       resolveCommit: vi.fn(async () => COMMIT),
       getCurrentCommit: vi.fn(async () => COMMIT),
       statusMatrix: vi.fn(async () => [["index.ts", 1, 1, 1]]),
-      readCommitTree: vi.fn(async () => [blob("index.ts", "tracked")]),
+      ...fakeGitFixture([blob("index.ts", "tracked")]),
       listTags: vi.fn(),
       resolveUrl: vi.fn(),
     } as unknown as GitClient;
@@ -367,13 +538,13 @@ describe("exact ref commit coordinates", () => {
 
   function exactGit(observedCommit = COMMIT) {
     return {
+      ...fakeGitFixture([blob("index.ts", "tracked")]),
       resolveUrl: vi.fn(),
       clone: vi.fn(async () => undefined),
       resolveCommit: vi.fn(async () => observedCommit),
       getCurrentCommit: vi.fn(async () => observedCommit),
       checkout: vi.fn(async () => undefined),
       statusMatrix: vi.fn(async () => [["index.ts", 1, 1, 1]]),
-      readCommitTree: vi.fn(async () => [blob("index.ts", "tracked")]),
     } as unknown as GitClient;
   }
 
