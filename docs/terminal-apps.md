@@ -207,6 +207,14 @@ app's own principal, grant and stateArgs give **attribution**: what the app
 does is recorded and approved as the app. They do not isolate the app from
 other code in the runtime.
 
+### Closing a session
+
+Closing a terminal session behaves like closing a desktop chat panel. Only the
+running program and its panel entity end. The conversation, its agents, the
+session context and its folder, and any fork contexts persist, and the
+conversation can be resumed from anywhere. Deleting them is a separate,
+explicit action; closing never does it.
+
 ### Attach: the shell extension's framed stream
 
 `@workspace-extensions/shell` owns every PTY. Sessions belong to the person the
