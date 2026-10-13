@@ -7412,6 +7412,26 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "terminalApps.restart": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "native-effect",
+      family: "terminal-apps.run",
+      rationale: "Controls only the calling person's own terminal sessions",
+    },
+    capability: "terminal-apps.run",
+    presentation: {
+      title: "Run a terminal app",
+      action: "run a terminal app or shell in this workspace",
+      description: "Start a program in a terminal in this workspace, as you.",
+      group: "computer",
+      authorityCategory: {
+        domain: "computer",
+        verb: "act",
+      },
+    },
+  },
   "terminalApps.resume": {
     tier: {
       tier: "gated",
@@ -9527,6 +9547,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "shellApproval.submitCredentialInput": ["protected-input.submit"],
   "shellApproval.submitSecretInput": ["protected-input.submit"],
   "terminalApps.launch": ["terminal-apps.run"],
+  "terminalApps.restart": ["terminal-apps.run"],
   "terminalApps.resume": ["terminal-apps.run"],
   "workerdInspector.getEndpoint": ["runtime.inspect"],
   "workspace-state.panel.updateTitle": ["context.boundary"],

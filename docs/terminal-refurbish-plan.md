@@ -442,3 +442,16 @@ and `check:runtime-docs` on the merged result):
 
 When host `main` contains 99e0a0497, merge the rest of each template's
 `origin/main`.
+
+### System test `terminal-chat-approval-fork-resume` (status 2026-10-13)
+
+Not passing. The scenario reaches its agent turn (launch, attach, `/model`,
+`/approval ask`, the question), then stalls: it answers the person's approval
+queue with `shellApproval.resolve` from test code, and that surface requires a
+durable code identity, which test code running in the eval sandbox does not
+have (`The reviewed shellApproval.resolve surface requires a durable code
+identity`). The agent's model-credential request (kind `credential`, no
+capability, so no rule matches) then waits for a decision nobody can give. The
+fix is a harness-level design change: answer approvals from the system-test
+runner Durable Object (which declares `approvals.decide`), exposed to the
+scenario as a runner method, and extend the rule table to credential approvals.
