@@ -358,6 +358,27 @@ function weakReturnRootPaths(
 }
 
 describe("service schema contracts", () => {
+  it("keeps website service discovery reachable through both prepared authority layers", () => {
+    const authority = workersMethods.resolveService.authority;
+    expect(authority && "requirement" in authority ? authority.requirement : null).toEqual(
+      expect.objectContaining({
+        kind: "any",
+        requirements: expect.arrayContaining([
+          expect.objectContaining({
+            requirements: expect.arrayContaining([
+              expect.objectContaining({ kind: "capability", principal: "website" }),
+            ]),
+          }),
+        ]),
+      })
+    );
+    const leaf = authority && "requirement" in authority ? authority.prepared?.leaves[0] : null;
+    expect(leaf?.requirement).toMatchObject({
+      kind: "selected",
+      principals: expect.arrayContaining(["website"]),
+    });
+  });
+
   it("distinguishes live Response contracts from weak custom return roots", () => {
     expect(weakReturnRootPaths(StreamResponseSchema)).toEqual([]);
     expect(weakReturnRootPaths(StreamResponseSchema.optional())).toEqual([]);

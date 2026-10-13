@@ -71,7 +71,7 @@ Authority principals: `code`, `host`, `mission`, `session`, `user`
 
 Per-workspace content-addressable blob storage
 
-Authority principals: `code`, `host`, `user`
+Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|

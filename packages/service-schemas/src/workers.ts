@@ -74,7 +74,14 @@ export const resolvedDurableObjectTargetSchema = z.object({
 const dynamicWorkspaceServiceLeaf = {
   capabilityPrefix: "workspace-service:",
   tier: "gated" as const,
-  requirement: selectedPreparedAuthorityRequirement(["host", "user", "code", "session", "mission"]),
+  requirement: selectedPreparedAuthorityRequirement([
+    "host",
+    "user",
+    "code",
+    "website",
+    "session",
+    "mission",
+  ]),
 };
 const preparedResolutionAuthority = (method: "resolveService" | "resolveDurableObject") => {
   const capability = `service:workers.${method}`;
@@ -83,7 +90,7 @@ const preparedResolutionAuthority = (method: "resolveService" | "resolveDurableO
     // service. Entity-bound agents/DOs must be able to reach this preparer;
     // the selected service leaf below still enforces whether that exact
     // service admits the entity principal.
-    requirement: requirementForPrincipals(["user", "host", "code"], capability),
+    requirement: requirementForPrincipals(["user", "host", "code", "website"], capability),
     resource: { kind: "literal" as const, key: capability },
     prepared: {
       resolver:

@@ -2712,6 +2712,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "credentials.resolveNativeModel": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale:
+        "Credential selection stays host-side; one prepared exact model/account model.use decision precedes existing credential.use and destination checks",
+    },
+    capability: "credentials.resolveNativeModel",
+    presentation: null,
+  },
   "credentials.revokeCredential": {
     tier: {
       tier: "critical",
@@ -9389,6 +9401,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "credentials.proxyGitHttp": ["credential.use"],
   "credentials.publishFetch": ["credential.use"],
   "credentials.resolveCredential": ["credential.use"],
+  "credentials.resolveNativeModel": ["credential.use", "model.use"],
   "externalOpen.openExternal": ["external.open"],
   "hostTerminal.open": ["host-terminal.open"],
   "hubControl.createWorkspace": ["workspaces.create"],
