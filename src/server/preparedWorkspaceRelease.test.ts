@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { preparedWorkspaceTemplatePath } from "./preparedWorkspaceTemplate.js";
 import { preparedWorkspaceReleaseManifestSchema } from "./preparedWorkspaceRelease.js";
+import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 
 vi.mock("./buildV2/effectiveVersion.js", () => ({
   buildCompilerProtocolIdentity: () => ({
@@ -32,6 +33,7 @@ const hostBuild = {
 } as const;
 
 afterEach(async () => {
+  await closeDerivedCacheCoordinators();
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
   vi.unstubAllEnvs();
 });
@@ -117,6 +119,33 @@ async function fixture() {
 }
 
 describe("prepared workspace release admission", () => {
+  it("reuses a validated complete release after the first ephemeral projection is discarded", async () => {
+    const { root, output } = await fixture();
+    vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
+    const { prepareCachedWorkspaceRelease } = await import("./preparedWorkspaceReleaseCache.js");
+    const first = path.join(root, "first-ephemeral", "release");
+    await prepareCachedWorkspaceRelease({ appRoot: root, output: first, templates }, async () => {
+      await fs.cp(output, first, { recursive: true });
+    });
+    await fs.rm(path.dirname(first), { recursive: true });
+    const second = path.join(root, "second-ephemeral", "release");
+    const producer = vi.fn(async () => {
+      throw new Error("An unchanged warm launch must not compile");
+    });
+    const sourcesReady = vi.fn();
+    await prepareCachedWorkspaceRelease(
+      { appRoot: root, output: second, templates, onSourcesPrepared: sourcesReady },
+      producer
+    );
+    expect(producer).not.toHaveBeenCalled();
+    expect(sourcesReady).toHaveBeenCalledWith(second);
+    const { validateExistingPreparedWorkspaceRelease } =
+      await import("./preparedWorkspaceRelease.js");
+    expect(
+      await validateExistingPreparedWorkspaceRelease({ appRoot: root, output: second, templates })
+    ).toBe(true);
+    expect(await fs.readdir(path.join(root, "derived", "workspace-releases"))).toHaveLength(2);
+  });
   it("reuses only a matching complete release and verifies every unique build artifact", async () => {
     const { output } = await fixture();
     const { validateExistingPreparedWorkspaceRelease } =

@@ -12,6 +12,7 @@ const DERIVED_CACHE_MAX_BYTES_BY_ROOT: Readonly<Record<string, number>> = {
   "extension-runtime-deps": 1 * GIB,
   "build-results": 1 * GIB,
   "root-templates": 512 * MIB,
+  "workspace-releases": 1 * GIB,
 };
 const AUTOMATIC_PRUNE_INTERVAL_MS = 15 * 60_000;
 
@@ -139,7 +140,7 @@ async function cacheDirectories(root: string): Promise<string[]> {
   }
 }
 
-function processIdentity(pid: number): string | undefined {
+export function cacheProcessIdentity(pid: number): string | undefined {
   if (process.platform !== "linux") return undefined;
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -151,7 +152,7 @@ function processIdentity(pid: number): string | undefined {
   }
 }
 
-function ownerIsAlive(owner: string): boolean {
+export function cacheOwnerIsAlive(owner: string): boolean {
   const [pidText, , identity] = owner.split(":");
   const pid = Number(pidText);
   // Unknown identities remain protected: inability to inspect is not death.
@@ -162,7 +163,7 @@ function ownerIsAlive(owner: string): boolean {
     if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
     return true;
   }
-  const current = identity ? processIdentity(pid) : undefined;
+  const current = identity ? cacheProcessIdentity(pid) : undefined;
   return !current || !identity || current === identity;
 }
 
@@ -175,7 +176,7 @@ function ownerIsAlive(owner: string): boolean {
  */
 export class DerivedCacheCoordinator {
   private readonly db: DatabaseSync;
-  private readonly ownerId = `${process.pid}:${crypto.randomBytes(16).toString("hex")}:${processIdentity(process.pid) ?? ""}`;
+  private readonly ownerId = `${process.pid}:${crypto.randomBytes(16).toString("hex")}:${cacheProcessIdentity(process.pid) ?? ""}`;
   private readonly leases = new Set<string>();
 
   constructor(filePath: string) {
@@ -427,7 +428,7 @@ export class DerivedCacheCoordinator {
       .prepare("SELECT owner_id FROM cache_maintenance WHERE root = ?")
       .get(root) as { owner_id: string | null } | undefined;
     const observedDeadOwner =
-      observed?.owner_id && !ownerIsAlive(observed.owner_id) ? observed.owner_id : null;
+      observed?.owner_id && !cacheOwnerIsAlive(observed.owner_id) ? observed.owner_id : null;
     const claimed = this.transaction(() => {
       const current = this.db
         .prepare("SELECT owner_id, last_pruned_at FROM cache_maintenance WHERE root = ?")
@@ -562,7 +563,9 @@ export class DerivedCacheCoordinator {
     const owners = this.db.prepare("SELECT DISTINCT owner_id FROM cache_leases").all() as Array<{
       owner_id: string;
     }>;
-    const deadOwners = owners.map((row) => row.owner_id).filter((owner) => !ownerIsAlive(owner));
+    const deadOwners = owners
+      .map((row) => row.owner_id)
+      .filter((owner) => !cacheOwnerIsAlive(owner));
     if (deadOwners.length === 0) return;
 
     const placeholders = deadOwners.map(() => "?").join(", ");

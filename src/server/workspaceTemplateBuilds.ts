@@ -1,7 +1,7 @@
 import type { BuildSystemV2 } from "./buildV2/index.js";
 import type { GraphNode } from "./buildV2/packageGraph.js";
 
-type RuntimeBuild = Awaited<ReturnType<BuildSystemV2["getBuild"]>>;
+type RuntimeBuild = Awaited<ReturnType<BuildSystemV2["getStoredBuild"]>>;
 
 export type WorkspaceRuntimeProgressEvent =
   | { type: "started"; source: string }

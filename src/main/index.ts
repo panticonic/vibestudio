@@ -245,6 +245,7 @@ import { recordMainProcessError } from "./mainProcessErrorLedger.js";
 import {
   clearPanelInitializationFailure,
   recordPanelInitializationFailure,
+  readPanelInitializationFailure,
 } from "./panelInitializationFailure.js";
 
 // Native ownership receipts resolve their installed observer from this
@@ -1477,8 +1478,7 @@ type ElectronHostTargetSyncResult =
   | "adopted"
   | "blocked-by-approval"
   | "preparing"
-  | "waiting-for-change"
-  | "retry";
+  | "waiting-for-change";
 
 function rememberElectronHostLaunchStatus(
   status: string,
@@ -1502,6 +1502,11 @@ function rememberElectronHostLaunchStatus(
 async function syncElectronHostTarget(
   serverClient: Pick<ServerClient, "call">
 ): Promise<ElectronHostTargetSyncResult> {
+  if (readPanelInitializationFailure()?.phase === "host-launch" && !appliedElectronHostTargetKey) {
+    bootstrapStartupError = null;
+    clearPanelInitializationFailure("host-launch");
+    pushBootstrapConnectionState();
+  }
   try {
     const result = await new HostLaunchClient((service, method, args) =>
       serverClient.call(service, method, args)
@@ -1544,7 +1549,19 @@ async function syncElectronHostTarget(
         error instanceof Error ? error.message : String(error)
       }`
     );
-    return "retry";
+    if (!appliedElectronHostTargetKey) {
+      bootstrapWorkspaceRpcReady = false;
+      bootstrapStartupError = {
+        message: "Could not prepare the desktop app",
+        detail: "Review the error details, then retry startup or choose another workspace.",
+        diagnostics: formatUnknownError(error),
+      };
+      pushBootstrapConnectionState();
+    }
+    // A failed build/permission resolution is a terminal attempt. New app,
+    // permission, or connection lifecycle events may request another attempt;
+    // polling the same failure hides it behind an endless startup spinner.
+    return "waiting-for-change";
   }
 }
 
@@ -1554,7 +1571,7 @@ function startElectronHostTargetLaunchLoop(serverClient: Pick<ServerClient, "cal
   electronHostLaunchLastStatusKey = null;
   electronHostTargetSyncLoop = new AsyncStateConvergenceLoop(
     () => syncElectronHostTarget(serverClient),
-    (result) => result === "preparing" || result === "retry",
+    (result) => result === "preparing",
     1_000
   );
   electronHostTargetSyncLoop.start();

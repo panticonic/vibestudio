@@ -38,12 +38,15 @@ import { resolveNativeTypeScriptServerPath } from "../appRoot.js";
 import {
   BuildFlight,
   BuildSlotQueue,
+  BuildPriorityOwner,
+  hasBuildSlotCapacity,
   BuilderLifetime,
   joinedFailure,
   type BuildPriority,
-  type BuildPriorityOwner,
 } from "./builderLifetime.js";
 import { profileEsbuildBuild } from "./compilerProfile.js";
+import { SharedBuildCoordinator } from "./sharedBuildCoordinator.js";
+import { derivedCacheCoordinator } from "@vibestudio/shared/derivedCache";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { BuildDiagnosticsError, BuildRequestError, diagnosticsFromError } from "./diagnostics.js";
 import type { LibraryBuildTarget, WorkspaceTestRuntime } from "@vibestudio/service-schemas/build";
@@ -182,6 +185,7 @@ export class BuildProcessOwner {
 
   private workerBatches = 0;
   private readonly sharedBuildFlights = new Map<string, SharedBuildFlightEntry>();
+  private readonly sharedCoordinators = new Map<string, SharedBuildCoordinator>();
   private readonly extensionRuntimeProjections = new Map<string, Promise<void>>();
   private runningBuilds = 0;
   private runningNonInteractiveBuilds = 0;
@@ -304,6 +308,14 @@ export class BuildProcessOwner {
           outcome.status === "rejected" ? [outcome.reason] : []
         ),
       ];
+      for (const coordinator of this.sharedCoordinators.values()) {
+        try {
+          coordinator.close();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      this.sharedCoordinators.clear();
       const failure = joinedFailure(failures, "Build process owner shutdown failed");
       if (failure !== undefined || failures.length > 0) throw failure;
     })();
@@ -312,6 +324,16 @@ export class BuildProcessOwner {
 
   get activeBuilds(): number {
     return this.runningBuilds;
+  }
+
+  sharedCoordinator(root: string): SharedBuildCoordinator {
+    this.lifetime.assertOpen();
+    let coordinator = this.sharedCoordinators.get(root);
+    if (!coordinator) {
+      coordinator = new SharedBuildCoordinator(root, MAX_CONCURRENT_BUILDS);
+      this.sharedCoordinators.set(root, coordinator);
+    }
+    return coordinator;
   }
 
   /**
@@ -405,6 +427,26 @@ export class BuildProcessOwner {
   ): Promise<T> {
     this.lifetime.assertOpen();
     if (buildSlotHeld.getStore()) return run();
+    const coordinator = sharedBuildContext.getStore();
+    if (coordinator) {
+      // The shared queue is the compiler budget for this cache. Nested
+      // dependencies run under their parent's permit, just as in the local
+      // queue; a cross-process result waiter never takes a compiler permit.
+      const demand = priorityOwner ?? new BuildPriorityOwner(priority);
+      return coordinator.withSlot(demand, signal, async () => {
+        const admittedPriority = demand.priority;
+        this.runningBuilds++;
+        if (admittedPriority !== "interactive") this.runningNonInteractiveBuilds++;
+        if (admittedPriority === "speculative") this.runningSpeculativeBuilds++;
+        try {
+          return await buildSlotHeld.run(true, run);
+        } finally {
+          this.runningBuilds--;
+          if (admittedPriority !== "interactive") this.runningNonInteractiveBuilds--;
+          if (admittedPriority === "speculative") this.runningSpeculativeBuilds--;
+        }
+      });
+    }
     let lease: Awaited<ReturnType<BuildSlotQueue["acquire"]>>;
     try {
       lease = await this.buildSlotQueue.acquire(
@@ -525,9 +567,53 @@ function admitSessionBuild(
   const cacheRoot = session.sharedBuildResultCacheRoot;
   if (!cacheRoot) return create(session.signal);
   const sharedKey = `${cacheRoot}\0${buildKey}`;
-  const admitted = session.processOwner.admitSharedBuild(sharedKey, create);
+  const coordinator = session.processOwner.sharedCoordinator(cacheRoot);
+  const admitted = session.processOwner.admitSharedBuild(
+    sharedKey,
+    (signal) =>
+      new BuildFlight(priority, async (demand) => {
+        const lease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, buildKey);
+        try {
+          const outcome = await coordinator.run(
+            buildKey,
+            demand,
+            signal,
+            async (compilerDemand) => {
+              // Another process may have published between the initial lookup and
+              // ownership admission. Validate and bind that result before compiling.
+              const cached = await session.store.getOrHydrate(buildKey, sourceStateHash);
+              if (cached) {
+                await ensureExtensionBuildReady(session, cached);
+                return cached;
+              }
+              return sharedBuildContext.run(coordinator, async () => {
+                const flight = create(signal);
+                compilerDemand.bindQueuedPromotion((next) => flight.priority.promote(next));
+                try {
+                  return await flight.promise;
+                } finally {
+                  compilerDemand.clearQueuedPromotion();
+                }
+              });
+            }
+          );
+          if (outcome.produced) return outcome.value;
+          const hydrated = await session.store.getOrHydrate(buildKey, sourceStateHash);
+          if (!hydrated)
+            throw new Error(`Shared build ${buildKey} completed without a validated cache result`);
+          await ensureExtensionBuildReady(session, hydrated);
+          return hydrated;
+        } finally {
+          lease.release();
+        }
+      })
+  );
 
   return new BuildFlight(priority, async (adopter) => {
+    // Every borrowing role pins the reconstruction result through its own
+    // provenance hydration, not merely until the compiler owner's promise
+    // settles. Collection may run in another process at either boundary.
+    const roleLease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, buildKey);
     adopter.bindQueuedPromotion((promoted) => admitted.entry.flight.priority.promote(promoted));
     try {
       const result = await withBuilderWorkers(session, () =>
@@ -544,6 +630,7 @@ function admitSessionBuild(
       return hydrated;
     } finally {
       adopter.clearQueuedPromotion();
+      roleLease.release();
     }
   });
 }
@@ -705,21 +792,7 @@ function sourcePathForNode(node: GraphNode, sourceRoot: string): string {
  * Neither can be preempted once npm, TypeScript, or esbuild is running, so
  * queue ordering alone is insufficient to protect required work.
  */
-export function hasBuildSlotCapacity(
-  priority: BuildPriority,
-  activeBuilds: number,
-  activeNonInteractiveBuilds: number,
-  activeSpeculativeBuilds: number,
-  maxConcurrentBuilds: number
-): boolean {
-  if (activeBuilds >= maxConcurrentBuilds) return false;
-  if (priority === "interactive") return true;
-  const nonInteractiveLimit = Math.max(1, maxConcurrentBuilds - 1);
-  if (activeNonInteractiveBuilds >= nonInteractiveLimit) return false;
-  if (priority === "background") return true;
-  const speculativeLimit = Math.max(1, maxConcurrentBuilds - 2);
-  return activeSpeculativeBuilds < speculativeLimit;
-}
+export { hasBuildSlotCapacity } from "./builderLifetime.js";
 
 /**
  * Narrate where a build actually is.
@@ -772,6 +845,7 @@ function traceBuildStages(
 }
 
 const buildSlotHeld = new AsyncLocalStorage<true>();
+const sharedBuildContext = new AsyncLocalStorage<SharedBuildCoordinator>();
 
 // Build coalescing is scoped to the build session because a stored descriptor
 // belongs to that session's state root even when artifact bytes are shared.

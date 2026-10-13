@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as esbuild from "esbuild";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { composePreparedDependencyPlugins } from "./preparedDependencyPlugins.js";
 import { createTsExtensionPlugin } from "./builder.js";
 
@@ -20,6 +20,38 @@ function writePackage(nodeModules: string, name: string, marker: string): void {
 }
 
 describe("dependency-environment resolver", () => {
+  it("bounds filesystem identity reads independently of the number of imports and refreshes them for each compile", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-resolver-identities-"));
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    try {
+      const entry = path.join(root, "entry.js");
+      const imports: string[] = [];
+      for (let index = 0; index < 32; index++) {
+        fs.writeFileSync(path.join(root, `module-${index}.js`), `export const value = ${index};`);
+        imports.push(`export { value as value${index} } from "./module-${index}.js";`);
+      }
+      fs.writeFileSync(entry, imports.join("\n"));
+      const options: esbuild.BuildOptions = {
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        write: false,
+        logLevel: "silent",
+        plugins: composePreparedDependencyPlugins([], [], [root]),
+      };
+      const first = await esbuild.build(options);
+      expect(first.outputFiles![0]!.text).toContain("value31");
+      const rootReads = () =>
+        realpath.mock.calls.filter(([candidate]) => candidate === root).length;
+      expect(rootReads()).toBeLessThanOrEqual(2);
+      const before = rootReads();
+      await esbuild.build(options);
+      expect(rootReads()).toBeGreaterThan(before);
+    } finally {
+      realpath.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("shares module identity between rewritten and default-resolved source imports", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-source-identity-"));
     try {

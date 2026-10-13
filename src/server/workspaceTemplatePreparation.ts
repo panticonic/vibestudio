@@ -46,11 +46,32 @@ import {
   type PreparedWorkspaceReleaseBuild,
   type PreparedWorkspaceReleaseInput,
 } from "./preparedWorkspaceRelease.js";
+import { prepareCachedWorkspaceRelease } from "./preparedWorkspaceReleaseCache.js";
 
 /** Prepare the same immutable release for a source supervisor or a packager.
  * Source publication and compilation are phases of the same owned producer.
  * The output contains source and artifacts, never producer state or grants. */
 export async function prepareWorkspaceTemplates(input: {
+  appRoot: string;
+  output: string;
+  sourceOutput?: string;
+  scratch: string;
+  signal?: AbortSignal;
+  onSourcesPrepared?: (root: string) => void | Promise<void>;
+}): Promise<void> {
+  await prepareCachedWorkspaceRelease(
+    {
+      appRoot: input.appRoot,
+      output: input.output,
+      templates: readDefaultWorkspaceTemplates(input.appRoot),
+      signal: input.signal,
+      onSourcesPrepared: input.onSourcesPrepared,
+    },
+    () => produceWorkspaceTemplates(input)
+  );
+}
+
+async function produceWorkspaceTemplates(input: {
   appRoot: string;
   output: string;
   sourceOutput?: string;
@@ -349,7 +370,7 @@ export async function prepareWorkspaceTemplates(input: {
             const runtimeBuilds = await processOwner.withWorkers(() =>
               prepareWorkspaceRuntimeBuilds(
                 owner.getGraph().allNodes(),
-                (source) => owner.getBuild(source, stateHash),
+                (source) => owner.getStoredBuild(source, stateHash, { priority: "speculative" }),
                 (binding) =>
                   exportReleaseBuild(
                     path.join(statePath, "builds", binding.buildKey),
@@ -359,7 +380,7 @@ export async function prepareWorkspaceTemplates(input: {
                 input.signal,
                 (event) => {
                   if (event.type === "started") {
-                    console.log(`[workspace-release] Runtime ${role}/${event.source}: started`);
+                    console.log(`[workspace-release] Runtime ${role}/${event.source}: queued`);
                   } else if (event.type === "completed") {
                     console.log(
                       `[workspace-release] Runtime ${role}/${event.source}: completed in ${Math.round(event.durationMs)}ms`

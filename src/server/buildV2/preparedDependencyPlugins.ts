@@ -10,19 +10,20 @@ type ResolveContext = { [RESOLVE_CONTEXT]: "request" | "skip"; pluginData: unkno
 const OWNED_FILE_NAMESPACE = "vibestudio-prepared-file";
 const OWNED_NAMESPACE_PREFIX = "vibestudio-prepared-plugin:";
 
-function canonical(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
+function withinCanonical(root: string, candidate: string): boolean {
+  if (process.platform === "win32") {
+    const relative = path.relative(root, candidate);
+    return (
+      relative === "" ||
+      (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+    );
   }
-}
-
-function within(root: string, candidate: string): boolean {
-  const relative = path.relative(canonical(root), canonical(candidate));
+  // Both operands are absolute canonical paths. A separator-aware prefix is
+  // the POSIX ancestry relation; resolving and splitting both paths for each
+  // root in the package census adds no information to the ownership check.
   return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+    candidate === root ||
+    candidate.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`)
   );
 }
 
@@ -92,6 +93,32 @@ export function composePreparedDependencyPlugins(
   ownedRoots: readonly string[],
   externals: readonly string[] = []
 ): esbuild.Plugin[] {
+  // Prepared source/dependency inputs are immutable for one compilation.
+  // Admission checks revisit the same roots and importer directories for
+  // every import; resolve each existing path once in this compile rather
+  // than walking all of its filesystem ancestors on every ownership check.
+  const canonicalPaths = new Map<string, string>();
+  const canonical = (value: string): string => {
+    const captured = canonicalPaths.get(value);
+    if (captured !== undefined) return captured;
+    const absolute = path.resolve(value);
+    const known = canonicalPaths.get(absolute);
+    if (known !== undefined) return known;
+    try {
+      const resolved = fs.realpathSync.native(absolute);
+      canonicalPaths.set(absolute, resolved);
+      canonicalPaths.set(value, resolved);
+      canonicalPaths.set(resolved, resolved);
+      return resolved;
+    } catch {
+      // Outputs may be generated later in the same build. Do not memoize a
+      // missing path as though it were already a sealed filesystem input.
+      return absolute;
+    }
+  };
+  const within = (root: string, candidate: string): boolean => {
+    return withinCanonical(canonical(root), canonical(candidate));
+  };
   const rootIdentities = [
     ...nodePaths.map((root, index) =>
       root
@@ -130,13 +157,7 @@ export function composePreparedDependencyPlugins(
       identity,
     }));
     const matches = [...rootIdentities, ...ownedPackageRoots]
-      .filter(({ root }) => {
-        const relative = path.relative(root, canonicalPath);
-        return (
-          relative === "" ||
-          (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-        );
-      })
+      .filter(({ root }) => withinCanonical(root, canonicalPath))
       .sort((left, right) => right.root.length - left.root.length);
     const match = matches[0];
     if (!match) throw new Error(`Prepared input has no stable owned root: ${physicalPath}`);
@@ -551,6 +572,9 @@ export function composePreparedDependencyPlugins(
   const resolver: esbuild.Plugin = {
     name: "prepared-dependency-authority",
     setup(build) {
+      build.onStart(() => {
+        canonicalPaths.clear();
+      });
       const resolveRequest = async (
         args: esbuild.OnResolveArgs
       ): Promise<esbuild.OnResolveResult | null | undefined> => {

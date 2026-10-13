@@ -68,6 +68,24 @@ export interface BuildSlotLease {
 export type BuildPriority = "interactive" | "background" | "speculative";
 export type BuildPriorityPromotion = (priority: BuildPriority) => void;
 
+/** Required work keeps a lane available beside background work; speculative
+ * work occupies at most the remaining capacity. Used by local and shared
+ * compiler admission so both enforce the same priority contract. */
+export function hasBuildSlotCapacity(
+  priority: BuildPriority,
+  activeBuilds: number,
+  activeNonInteractiveBuilds: number,
+  activeSpeculativeBuilds: number,
+  maxConcurrentBuilds: number
+): boolean {
+  if (activeBuilds >= maxConcurrentBuilds) return false;
+  if (priority === "interactive") return true;
+  if (activeNonInteractiveBuilds >= Math.max(1, maxConcurrentBuilds - 1)) return false;
+  return (
+    priority === "background" || activeSpeculativeBuilds < Math.max(1, maxConcurrentBuilds - 2)
+  );
+}
+
 /** Keeps the strongest demand attached to one shared build flight. */
 export class BuildPriorityOwner {
   private queuedPromotion?: BuildPriorityPromotion;

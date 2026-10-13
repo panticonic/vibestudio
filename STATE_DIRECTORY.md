@@ -14,6 +14,13 @@ These paths are determined by `getUserDataPath()` from `@vibestudio/env-paths`.
 
 ## Contents
 
+### `build-scratch/`
+
+Compiler projections belong to the instance or preparation producer that owns
+their lifetime. Ordinary build cleanup removes each invocation's unique scratch
+directory; ephemeral-instance retirement also removes any projections left by
+an interrupted compiler. These files are not a reusable cache.
+
 ### `build-cache/`
 
 Complete immutable build results shared by managed workspaces and addressed by
@@ -89,6 +96,11 @@ OS-user-shared, regenerable data reused by independent Vibestudio instances.
 The default location is beneath the profile data directory; tests and tools may
 select an isolated root with `VIBESTUDIO_SHARED_DERIVED_CACHE_DIR`.
 
+Ordinary `pnpm dev` keeps mutable workspace state ephemeral while sharing this
+validated derived data and the user's profile configuration. `pnpm dev:clean-room`
+uses a disposable private profile and derived-cache root, including provider
+credentials, model configuration, and prepared releases.
+
 Cache entries have cross-process active-use leases and coarsely recorded access
 times. Automatic collection removes only unleased entries, uses atomic
 rename-to-trash as its commit point, and targets both a byte ceiling and a
@@ -115,9 +127,28 @@ from collection.
 
 ### `derived-cache/build-results/`
 
+Processes sharing this cache coordinate in-flight builds by exact build key and
+use one compiler admission queue. Interactive requests promote queued builds;
+exhaustive source-release preparation is speculative and leaves capacity for the
+required desktop app. Consumers wait without holding compiler permits and bind
+completed artifact bytes to their own workspace provenance. Failures are shared
+with waiting consumers; cancellation and confirmed producer-process death settle
+the owning operation without lease expiries or compilation retries.
+
 Stores shared reconstruction results. Executable source inventories are gzip
 compressed beside the compact metadata and loaded transparently when a build is
 read. Older inline inventories are migrated when their build is next read.
+
+### `derived-cache/workspace-releases/`
+
+Stores complete immutable source-and-runtime releases keyed by the exact host
+build fingerprint, dependency/compiler identities, platform, and template pins.
+Reuse passes the canonical release validator. Each instance owns a private
+hardlink projection, so discarding ephemeral workspace state preserves reusable
+release bytes, and cache collection cannot invalidate a live instance's files.
+Cold preparation publishes sources before exhaustively compiling runtimes; warm
+launches reuse the complete release. Compilation, verification, and final
+publication all remain part of the producer's owned lifetime.
 
 ### `derived-cache/extension-runtime-deps/`
 

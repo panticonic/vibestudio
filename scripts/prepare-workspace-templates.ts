@@ -57,7 +57,7 @@ void (async () => {
       scratch: option("--scratch"),
       signal: cancellation.signal,
       onSourcesPrepared: async (root) => {
-        console.log(`[workspace-release] Template sources ready at ${root}; builds continue`);
+        console.log(`[workspace-release] Template sources ready at ${root}`);
         const sendError = await sendMessage({ kind: "sources-ready", root });
         if (sendError) throw sendError;
       },

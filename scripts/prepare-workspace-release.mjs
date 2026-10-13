@@ -103,7 +103,10 @@ export function prepareWorkspaceRelease(input) {
       env: {
         ...input.env,
         VIBESTUDIO_WORKSPACE_RELEASE_ROOT: output,
-        VIBESTUDIO_MAX_CONCURRENT_BUILDS: String(buildConcurrency),
+        // Interactive source launches share the canonical host admission
+        // budget with live workspaces. A standalone packager owns its batch
+        // allowance and has no competing application-startup consumer.
+        ...(!sourceOutput ? { VIBESTUDIO_MAX_CONCURRENT_BUILDS: String(buildConcurrency) } : {}),
       },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     }
