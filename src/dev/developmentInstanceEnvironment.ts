@@ -23,6 +23,8 @@ export function developmentInstanceEnvironment(input: {
   sourceCoupled: boolean;
   /** True when the instance root is a temporary directory removed on exit. */
   disposable: boolean;
+  /** Isolate profile-owned configuration, credentials, and derived data. */
+  cleanRoom?: boolean;
   defaultTemplates?: DevelopmentTemplateEnvironmentSelection;
   initialWorkspaceTemplate?: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin;
   templates?: ReadonlyArray<import("@vibestudio/workspace/workspaceSources").WorkspaceSource>;
@@ -56,6 +58,12 @@ export function developmentInstanceEnvironment(input: {
     // A disposable instance root is deleted when the supervisor exits, so
     // nothing it started may be left running behind an interactive prompt.
     VIBESTUDIO_INSTANCE_LIFECYCLE: input.disposable ? "ephemeral" : "persistent",
+    ...(input.cleanRoom
+      ? {
+          VIBESTUDIO_PROFILE_ROOT: path.join(input.instanceRoot, "profile"),
+          VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: path.join(input.instanceRoot, "derived-cache"),
+        }
+      : {}),
     ...(selectedTemplates || input.templates?.length
       ? {
           [WORKSPACE_SOURCES_ENV]: JSON.stringify(

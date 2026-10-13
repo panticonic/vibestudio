@@ -7,6 +7,12 @@ const option = (name: string) => {
   if (!process.argv.includes(name) || !value) throw new Error(`${name} is required`);
   return path.resolve(value);
 };
+const optionalOption = (name: string) => {
+  if (!process.argv.includes(name)) return undefined;
+  const value = process.argv[process.argv.indexOf(name) + 1];
+  if (!value) throw new Error(`${name} requires a value`);
+  return path.resolve(value);
+};
 const cancellation = new AbortController();
 function containsErrorIdentity(error: unknown, target: unknown, seen = new Set<object>()): boolean {
   if (error === target) return true;
@@ -47,8 +53,14 @@ void (async () => {
     await prepareWorkspaceTemplates({
       appRoot: option("--app-root"),
       output: option("--output"),
+      sourceOutput: optionalOption("--source-output"),
       scratch: option("--scratch"),
       signal: cancellation.signal,
+      onSourcesPrepared: async (root) => {
+        console.log(`[workspace-release] Template sources ready at ${root}; builds continue`);
+        const sendError = await sendMessage({ kind: "sources-ready", root });
+        if (sendError) throw sendError;
+      },
     });
   } catch (caught) {
     let failure = caught;

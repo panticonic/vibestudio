@@ -18,6 +18,7 @@
     "bootstrap:frozen": "pnpm install --frozen-lockfile",
     "check:lockfile": "pnpm install --frozen-lockfile --lockfile-only --ignore-scripts",
     "dev": "node --import tsx src/dev/runInstance.ts desktop --ephemeral",
+    "dev:clean-room": "node --import tsx src/dev/runInstance.ts desktop --clean-room",
     "dev:production": "node --import tsx src/dev/runInstance.ts desktop --production-templates --ephemeral",
     "dev:templates": "tsx scripts/dev-templates.ts",
     "dev:apparmor": "sh scripts/install-dev-apparmor-profile.sh",

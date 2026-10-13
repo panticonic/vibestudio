@@ -16,6 +16,8 @@ export interface DevInstanceRecord {
   supervisorPid: number;
   kind: "desktop" | "server";
   lifecycle: "ephemeral" | "persistent";
+  /** Private profile root for a clean-room instance. */
+  profileRoot?: string;
   generationId: string;
   startedAt: number;
 }
@@ -173,11 +175,17 @@ export function registerDevInstance(
   }
 ): DevInstanceRecord {
   assertInstanceId(input.id);
+  const root = path.resolve(input.root);
+  const profileRoot = input.profileRoot ? path.resolve(input.profileRoot) : undefined;
+  if (profileRoot && (input.lifecycle !== "ephemeral" || profileRoot !== path.join(root, "profile"))) {
+    throw new Error("A private developer profile must be the ephemeral instance's profile root");
+  }
   const record: DevInstanceRecord = {
     schemaVersion: 1,
     ...input,
     generationId: randomBytes(16).toString("hex"),
-    root: path.resolve(input.root),
+    root,
+    ...(profileRoot ? { profileRoot } : {}),
     repoRoot: canonicalRepoRoot(input.repoRoot),
   };
   const lockPath = registryLockPath(record.repoRoot, record.id);
@@ -267,6 +275,11 @@ export function readDevInstanceRecord(repoRoot: string, id: string): DevInstance
     record.supervisorPid <= 0 ||
     (record.kind !== "desktop" && record.kind !== "server") ||
     (record.lifecycle !== "ephemeral" && record.lifecycle !== "persistent") ||
+    (record.profileRoot !== undefined &&
+      (typeof record.profileRoot !== "string" ||
+        !path.isAbsolute(record.profileRoot) ||
+        record.lifecycle !== "ephemeral" ||
+        record.profileRoot !== path.join(record.root, "profile"))) ||
     typeof record.generationId !== "string" ||
     !/^[a-f0-9]{32}$/u.test(record.generationId) ||
     typeof record.startedAt !== "number" ||

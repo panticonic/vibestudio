@@ -3,6 +3,7 @@ import * as os from "os";
 
 let _userDataPath: string | null = null;
 const INSTANCE_ROOT_ENV = "VIBESTUDIO_INSTANCE_ROOT";
+const PROFILE_ROOT_ENV = "VIBESTUDIO_PROFILE_ROOT";
 const SHARED_DERIVED_CACHE_ENV = "VIBESTUDIO_SHARED_DERIVED_CACHE_DIR";
 
 /** Explicitly set the user-data directory (for headless/test use). */
@@ -54,7 +55,8 @@ export function getCentralDataPath(): string {
  * narrower getSharedDerivedDataPath() API below.
  */
 export function getProfileDataPath(): string {
-  return platformDefault();
+  const override = process.env[PROFILE_ROOT_ENV]?.trim();
+  return override ? path.resolve(override) : platformDefault();
 }
 
 /**
