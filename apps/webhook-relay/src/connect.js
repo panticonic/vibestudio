@@ -331,7 +331,7 @@ make.addEventListener("click", async () => {
       source: "workers/agent-worker",
       className: "AiChatWorker",
       key: work.id,
-      stateArgs: { agentConfig: { model: "openai-codex:gpt-6-astra", thinkingLevel: "medium" } },
+      stateArgs: { agentConfig: { thinkingLevel: "medium" } },
       contextId,
       channelId: work.channelId,
       replay: true,

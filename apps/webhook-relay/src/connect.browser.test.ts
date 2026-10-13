@@ -216,7 +216,6 @@ describe.skipIf(!existsSync(chromium.executablePath()))("apex connected experien
         (window as any).inventionCalls.find((call: any) => call.method === "launchAgentIntoChannel")
       );
       expect(launch.input.stateArgs.agentConfig).toEqual({
-        model: "openai-codex:gpt-6-astra",
         thinkingLevel: "medium",
       });
       await page.getByRole("button", { name: "Pause animation" }).click();

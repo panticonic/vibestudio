@@ -19,10 +19,7 @@ import {
   reloadPanel,
   type TestApp,
 } from "../setup/electronSetup";
-import {
-  declineFirstRunReporting,
-  findWorkspaceShellPage,
-} from "../e2e/support/workspaceCreation";
+import { declineFirstRunReporting, findWorkspaceShellPage } from "../e2e/support/workspaceCreation";
 import { clickNativeApproval } from "../e2e/support/nativeApproval";
 import { hasOwnedX11Display } from "../setup/ownedXvfb";
 import { getChannelRpcReadBundle } from "../e2e/support/channelRpcReadBundle";
@@ -30,11 +27,108 @@ import type { readChannelReplay } from "../e2e/support/channelRpcReads";
 import type { RpcCaller } from "@vibestudio/rpc";
 
 const CHANNEL_READS_SYMBOL = "vibestudio.e2e.channelRpcReads.v1";
+const TEST_MODEL_REF = "vibestudio-test:deterministic";
+
+async function selectDeterministicTestModel(app: TestApp, workspaceId: string) {
+  const selection = await app.app.evaluate(async (_electron, id) => {
+    const api = await globalThis.__testApi!.forWorkspace(id);
+    const service = (await api.rpcCall("main", "workers.resolveService", [
+      "vibestudio.models.v1",
+    ])) as { kind?: unknown; targetId?: unknown };
+    if (service.kind !== "durable-object" || typeof service.targetId !== "string") {
+      throw new Error("Workspace model-settings service did not resolve to a durable object");
+    }
+    const settings = (await api.rpcCall(service.targetId, "getSettings")) as {
+      defaultAgentConfig?: Record<string, unknown>;
+      catalog?: { models?: Array<{ ref?: string; availability?: { state?: string } }> };
+    };
+    const model = settings.catalog?.models?.find(
+      (entry) => entry.ref === "vibestudio-test:deterministic"
+    );
+    if (model?.availability?.state !== "ready") {
+      throw new Error("The deterministic test model is unavailable in this workspace");
+    }
+    const updated = (await api.rpcCall(service.targetId, "setDefaultAgentConfig", [
+      { ...settings.defaultAgentConfig, model: "vibestudio-test:deterministic" },
+    ])) as { defaultModel?: unknown; defaultAgentConfig?: { model?: unknown } };
+    return {
+      before: settings.defaultAgentConfig?.["model"] ?? null,
+      selected: updated.defaultModel ?? updated.defaultAgentConfig?.model ?? null,
+      targetId: service.targetId,
+    };
+  }, workspaceId);
+  if (selection.selected !== TEST_MODEL_REF) {
+    throw new Error(
+      `Model settings selected ${String(selection.selected)}, expected ${TEST_MODEL_REF}`
+    );
+  }
+  await test.info().attach("test-model-routing.json", {
+    body: JSON.stringify(selection, null, 2),
+    contentType: "application/json",
+  });
+}
+
+async function captureAgentRoutingEvidence(page: Page, app: TestApp, workspaceId: string) {
+  const entities = await app.app.evaluate(async (_electron, id) => {
+    const api = await globalThis.__testApi!.forWorkspace(id);
+    return (await api.rpcCall("runtime", "listEntities", [{ kind: "do" }])) as Array<{
+      id: string;
+      source: string;
+    }>;
+  }, workspaceId);
+  const channels = entities
+    .filter((entity) => entity.source === "workers/pubsub-channel")
+    .map((entity) => entity.id)
+    .slice(-20);
+  await page.addScriptTag({ content: await getChannelRpcReadBundle() });
+  const evidence = await page.evaluate(
+    async ({ channelIds, readerSymbol }) => {
+      type Runtime = typeof globalThis & { inventionWorkspace?: { rpc: RpcCaller } };
+      const reader = (globalThis as unknown as Record<PropertyKey, unknown>)[
+        Symbol.for(readerSymbol)
+      ];
+      if (!reader || typeof reader !== "object")
+        throw new Error("Channel replay reader is unavailable");
+      const readReplay = (reader as { readChannelReplay: typeof readChannelReplay })
+        .readChannelReplay;
+      const rpc = (globalThis as Runtime).inventionWorkspace?.rpc;
+      if (!rpc) throw new Error("Connected website workspace RPC is unavailable");
+      const evidence = [];
+      for (const channel of channelIds) {
+        const replay = await readReplay(rpc, channel, 0);
+        const entries =
+          replay &&
+          typeof replay === "object" &&
+          Array.isArray((replay as { logEvents?: unknown }).logEvents)
+            ? (replay as { logEvents: Array<{ payload?: unknown }> }).logEvents
+            : [];
+        const events = entries.slice(-20).map(({ payload: event }) => {
+          if (!event || typeof event !== "object") return { malformed: true };
+          const record = event as { kind?: unknown; payload?: unknown; failure?: unknown };
+          const payload = record.payload as
+            | { role?: unknown; model?: { ref?: unknown } }
+            | undefined;
+          return {
+            kind: record.kind ?? null,
+            role: payload?.role ?? null,
+            modelRef: payload?.model?.ref ?? null,
+            failure: record.failure ?? null,
+          };
+        });
+        evidence.push({ channel, events });
+      }
+      return evidence;
+    },
+    { channelIds: channels, readerSymbol: CHANNEL_READS_SYMBOL }
+  );
+  return evidence;
+}
 
 /** Shared native acceptance flow. By default inference uses the configured provider;
  * smoke coverage supplies host-only scripted inference through the environment. */
 export async function websiteInventionScenario(environment: Record<string, string> = {}) {
   test.setTimeout(1_200_000);
+  const expectsDeterministicModel = typeof environment["VIBESTUDIO_TEST_MODEL_SCRIPT"] === "string";
   test.skip(!hasOwnedX11Display(), "Requires the E2E-owned native display for approval input");
   const assets = path.join(process.env["VIBESTUDIO_E2E_TEMP_ROOT"]!, "website-assets");
   await runWithOwnedCleanup(
@@ -216,13 +310,27 @@ export async function websiteInventionScenario(environment: Record<string, strin
         if (await condition()) return;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
-      throw new Error(
-        `${label} timed out. ${await page.locator("#lab-status").textContent()}\n${await page.locator("#lab-transcript").innerText()}`
-      );
+      const failure = `${label} timed out. ${await page.locator("#lab-status").textContent()}\n${await page.locator("#lab-transcript").innerText()}`;
+      try {
+        const evidence = await captureAgentRoutingEvidence(page, app!, app!.workspaceId);
+        await test.info().attach("channel-model-routing-at-timeout.json", {
+          body: JSON.stringify(evidence, null, 2),
+          contentType: "application/json",
+        });
+      } catch (error) {
+        await test.info().attach("channel-model-routing-diagnostic-error.txt", {
+          body: error instanceof Error ? (error.stack ?? error.message) : String(error),
+          contentType: "text/plain",
+        });
+      }
+      throw new Error(failure);
     }
     await expect(page.locator("#workspace-connect-button")).toBeEnabled();
     await page.locator("#workspace-connect-button").click();
     await untilReady("connection", () => page.locator("#image-lab").isVisible(), 60_000);
+    if (expectsDeterministicModel) {
+      await selectDeterministicTestModel(app, app.workspaceId);
+    }
     await page
       .locator("#lab-prompt")
       .fill(
@@ -323,6 +431,11 @@ export async function websiteInventionScenario(environment: Record<string, strin
       modelReply,
       "The verdict must exist in the agent conversation, not just in the DOM"
     ).not.toBeNull();
+    if (expectsDeterministicModel) {
+      expect(modelReply?.model, "The reply must come from the scripted test provider").toBe(
+        TEST_MODEL_REF
+      );
+    }
     await test.info().attach("channel-agent-reply.json", {
       body: JSON.stringify(modelReply, null, 2),
       contentType: "application/json",
