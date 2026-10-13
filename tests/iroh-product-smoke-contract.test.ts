@@ -91,6 +91,8 @@ describe("Iroh product E2E entry points", () => {
     expect(mobile).toContain("approval-action-accept-install-review");
     expect(mobile).toContain("launch-gate-accept");
     expect(mobile).toContain("embedded-host-target-approval-submitted");
+    expect(mobile).toContain("mobileApprovalSurfaceState");
+    expect(mobile).toContain("Load remaining reviews");
     expect(source("apps/mobile/index.js")).toContain("embedded-host-target-approval-resolved");
     expect(mobile).toContain('readXmlAttribute(node, "enabled") === "false"');
     expect(mobile).toContain("managedConnectionDeadlineMs");

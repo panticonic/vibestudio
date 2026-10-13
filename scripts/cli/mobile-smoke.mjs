@@ -40,6 +40,7 @@ import {
 } from "./lib/android-avd.mjs";
 import { flagValue } from "./lib/args.mjs";
 import { visibleAgentTurnState } from "./lib/mobile-agent-turn-state.mjs";
+import { mobileApprovalSurfaceState } from "./lib/mobile-approval-surface.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
@@ -1190,8 +1191,42 @@ async function openWaitingWorkspaceApprovals(device, xml) {
   return label ? tapVisibleNode(device, xml, label) : false;
 }
 
+async function advanceWorkspaceApproval(device, xml, requestedRemaining) {
+  if (await openWaitingWorkspaceApprovals(device, xml)) {
+    return { acted: true, submitted: false, surface: { visible: false } };
+  }
+  const surface = mobileApprovalSurfaceState(xml);
+  if (
+    surface.loadRemainingKey &&
+    !requestedRemaining.has(surface.loadRemainingKey) &&
+    (await tapVisibleNode(device, xml, "Load remaining reviews"))
+  ) {
+    requestedRemaining.add(surface.loadRemainingKey);
+    console.log("[mobile-smoke] Requested every workspace approval owner");
+    return { acted: true, submitted: false, surface };
+  }
+  if (await tapVisibleNode(device, xml, "Approve all")) {
+    console.log("[mobile-smoke] Approved workspace capabilities");
+    return { acted: true, submitted: true, surface };
+  }
+  if (await tapVisibleNodeByResourceId(device, xml, "approval-action-accept-install-review")) {
+    console.log("[mobile-smoke] Approved cold-start workspace units");
+    return { acted: true, submitted: true, surface };
+  }
+  if (await tapVisibleNode(device, xml, "Use once", { labelPrefix: true })) {
+    console.log("[mobile-smoke] Approved one-use workspace capability");
+    return { acted: true, submitted: true, surface };
+  }
+  if (await tapVisibleNodeByResourceId(device, xml, "launch-gate-accept")) {
+    console.log("[mobile-smoke] Approved mobile workspace app launch gate");
+    return { acted: true, submitted: true, surface };
+  }
+  return { acted: false, submitted: false, surface };
+}
+
 async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
   let lastApprovalTap = 0;
+  const requestedRemaining = new Set();
   while (Date.now() < deadlineMs) {
     if (logcat.hasPhase(phase)) return;
     // React Native owns the transition after it receives the press. Android can
@@ -1212,17 +1247,8 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
     if (Date.now() - lastApprovalTap > 2_000) {
       lastApprovalTap = Date.now();
       const xml = await dumpWindowXml(device);
-      if (await openWaitingWorkspaceApprovals(device, xml)) continue;
-      const reviewedUnits = await tapVisibleNodeByResourceId(
-        device,
-        xml,
-        "approval-action-accept-install-review"
-      );
-      if (reviewedUnits) console.log("[mobile-smoke] Approved cold-start workspace units");
-      const approvedLaunch = reviewedUnits
-        ? false
-        : await tapVisibleNodeByResourceId(device, xml, "launch-gate-accept");
-      if (approvedLaunch) console.log("[mobile-smoke] Approved mobile workspace app launch gate");
+      const approval = await advanceWorkspaceApproval(device, xml, requestedRemaining);
+      if (approval.acted) continue;
     }
     await sleep(250);
   }
@@ -1235,34 +1261,27 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
   }
 }
 
-async function settleWorkspaceStartupApprovals(device, deadlineMs) {
-  const discoveryDeadlineMs = Math.min(deadlineMs, Date.now() + 8_000);
+async function settleWorkspaceStartupApprovals(device, deadlineMs, options = {}) {
+  const discoveryDeadlineMs = options.waitForDiscovery === false
+    ? Date.now()
+    : Math.min(deadlineMs, Date.now() + 8_000);
   let resolved = 0;
+  const requestedRemaining = new Set();
   while (Date.now() < deadlineMs) {
     const xml = await dumpWindowXml(device);
-    if (await openWaitingWorkspaceApprovals(device, xml)) continue;
-    // Address the action itself, not its enabled-looking text child. React
-    // Native leaves that child enabled while the parent button is disabled and
-    // marked busy during installation; tapping/logging the child repeatedly
-    // falsely claimed that the review had been accepted again.
-    const added = await tapVisibleNodeByResourceId(
-      device,
-      xml,
-      "approval-action-accept-install-review"
-    );
-    const allowed = added
-      ? false
-      : await tapVisibleNode(device, xml, "Use once", { labelPrefix: true });
-    if (added || allowed) {
-      resolved += 1;
-      console.log("[mobile-smoke] Approved cold-start workspace units");
+    const approval = await advanceWorkspaceApproval(device, xml, requestedRemaining);
+    if (approval.acted) {
+      if (approval.submitted) resolved += 1;
       await sleep(750);
       continue;
     }
     const labels = collectWindowLabels(xml);
-    if (hasVisibleApprovalPrompt(labels)) {
+    if (approval.surface.visible || hasVisibleApprovalPrompt(labels)) {
       // Landing one review may require a second queued review. Browse the
-      // existing queue while that action is pending; do not retap its busy button.
+      // existing queue while that action is pending; do not retap its busy
+      // button. The surface itself is the completion contract: a disabled
+      // decision remains owned until its RPC and landing work settle and the
+      // surface advances or retires.
       const advanced = await tapVisibleNodeByResourceId(device, xml, "approval-queue-next");
       if (!advanced) await tapVisibleNodeByResourceId(device, xml, "approval-queue-prev");
       await sleep(250);
@@ -1683,27 +1702,22 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
   let nextProbeAt = 0;
   let stableVisualAgentFingerprint = "";
   let stableVisualAgentPolls = 0;
+  const requestedRemaining = new Set();
   while (Date.now() < deadlineMs) {
     const xml = await dumpWindowXml(device);
     const labels = collectWindowLabels(xml);
     const text = labels.join("\n");
     lastLabels = labels;
 
-    if (await openWaitingWorkspaceApprovals(device, xml)) continue;
-    if (await tapVisibleNode(device, xml, "Approve all")) {
+    const approval = await advanceWorkspaceApproval(device, xml, requestedRemaining);
+    if (approval.acted) {
       await sleep(1_000);
       continue;
     }
-    if (await tapVisibleNodeByResourceId(device, xml, "approval-action-accept-install-review")) {
-      await sleep(1_000);
-      continue;
-    }
-    if (await tapVisibleNode(device, xml, "Use once", { labelPrefix: true })) {
-      await sleep(2_000);
-      continue;
-    }
-    if (await tapVisibleNodeByResourceId(device, xml, "launch-gate-accept")) {
-      await sleep(1_000);
+    if (approval.surface.visible) {
+      // A submitted decision can remain busy while its install landing runs.
+      // Durable agent completion does not supersede that live UI owner.
+      await sleep(250);
       continue;
     }
 
@@ -1817,12 +1831,6 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
   const agentProbe = createAgentTurnProbe(readyInfo);
   await ensureDeviceInteractive(device);
   await sleep(2_000);
-  if (await tapOptionalButtonByText(device, "Approve all", 2_000)) {
-    await sleep(2_000);
-  }
-  if (await tapOptionalButtonByLabelPrefix(device, "Use once", 2_000)) {
-    await sleep(3_000);
-  }
   let agentTurnCompleted = false;
   if (options.checkAgentTurn !== false) {
     const waitOptions = options.realModel
@@ -1831,6 +1839,13 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
     await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, waitOptions);
     agentTurnCompleted = true;
   }
+  // Agent completion and approval completion are independent. A review that
+  // was submitted during the turn can still own the shared modal while its
+  // install landing runs, so join that owner before inspecting panel content.
+  // With discovery disabled an already-clear surface returns immediately.
+  await settleWorkspaceStartupApprovals(device, Date.now() + agentTimeoutMs, {
+    waitForDiscovery: false,
+  });
   await ensureDeviceInteractive(device);
   const healthyDeadlineMs = Date.now() + Math.min(agentTimeoutMs, 30_000);
   await waitForOnboardingOverview(device, options.packageName ?? defaultPackage, healthyDeadlineMs);
