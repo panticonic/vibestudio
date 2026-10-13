@@ -124,6 +124,36 @@ async function fixture() {
 }
 
 describe("prepared workspace release admission", () => {
+  it("projects only owned release resources from a packaged application's resource root", async () => {
+    const { root, output } = await fixture();
+    vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
+    const host = path.join(output, "app.asar.unpacked", "dist", "node");
+    await fs.mkdir(host, { recursive: true });
+    await fs.writeFile(path.join(host, "corepack.cjs"), "host-owned executable");
+    await fs.symlink("corepack.cjs", path.join(host, "corepack"));
+    await fs.writeFile(path.join(output, "app.asar"), "host-owned archive");
+    const { prepareCachedWorkspaceRelease } = await import("./preparedWorkspaceReleaseCache.js");
+    const cold = path.join(root, "packaged", "resources");
+    const producer = vi.fn(async () => {
+      await fs.cp(output, cold, { recursive: true });
+    });
+    await prepareCachedWorkspaceRelease({ appRoot: root, output: cold, templates }, producer);
+    expect(
+      await fs.readlink(path.join(cold, "app.asar.unpacked", "dist", "node", "corepack"))
+    ).toContain("corepack.cjs");
+    const cached = path.join(root, "derived", "workspace-releases");
+    const keys = (await fs.readdir(cached)).filter((entry) => /^[a-f0-9]{64}$/u.test(entry));
+    expect(keys).toHaveLength(1);
+    expect(await fs.readdir(path.join(cached, keys[0]!))).toEqual([
+      "userland-builds",
+      "workspace-templates",
+    ]);
+    const warm = path.join(root, "consumer", "resources");
+    await prepareCachedWorkspaceRelease({ appRoot: root, output: warm, templates }, producer);
+    expect(producer).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(warm)).toEqual(["userland-builds", "workspace-templates"]);
+  });
+
   it("captures one identity per cold or warm operation without skipping integrity validation", async () => {
     const { root, output, builds } = await fixture();
     vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));

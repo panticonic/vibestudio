@@ -23,7 +23,13 @@ import {
  * private hardlink projection, so deleting instance state never deletes the
  * shared cache, and collecting the cache cannot invalidate a live instance. */
 async function projectRelease(source: string, destination: string): Promise<void> {
-  const directories = [{ from: source, to: destination }];
+  // A packager's resource root also contains its ASAR, native tools and other
+  // host-owned resources. This operation owns only the two release subtrees;
+  // neither cache publication nor consumer projection may capture the host.
+  const directories = ["workspace-templates", "userland-builds"].map((name) => ({
+    from: path.join(source, name),
+    to: path.join(destination, name),
+  }));
   const files: Array<{ from: string; to: string }> = [];
   while (directories.length) {
     const directory = directories.pop()!;
