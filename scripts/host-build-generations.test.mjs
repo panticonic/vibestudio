@@ -11,6 +11,7 @@ import {
   releaseHostBuildGeneration,
 } from "./host-build-generations.mjs";
 import {
+  HOST_BRAND_RUNTIME_ARTIFACTS,
   NATIVE_WORKSPACE_ENTRIES,
   SERVER_WORKER_ENTRIES,
   SOURCE_SERVER_PREREQUISITE_ARTIFACTS,
@@ -22,6 +23,14 @@ function writeSourcePrerequisites(root, prefix) {
     const file = path.join(root, artifact);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     if (!fs.existsSync(file)) fs.writeFileSync(file, `${prefix}:${path.basename(file)}`);
+  }
+}
+
+function writeHostBrandRuntimeArtifacts(root, prefix) {
+  for (const artifact of HOST_BRAND_RUNTIME_ARTIFACTS) {
+    const file = path.join(root, artifact);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${prefix}:${path.basename(file)}`);
   }
 }
 
@@ -43,6 +52,13 @@ test("validates host payload before its completion receipt is written", () => {
     fs.writeFileSync(wasm, "wasm payload");
     assert.doesNotThrow(() => assertHostBuildPayloadComplete(root, "source"));
     assert.equal(fs.existsSync(receipt), false);
+
+    const favicon = path.join(root, HOST_BRAND_RUNTIME_ARTIFACTS[0]);
+    fs.rmSync(favicon);
+    assert.throws(
+      () => assertHostBuildPayloadComplete(root, "source"),
+      /Cannot publish incomplete source host generation: missing assets\/brand\/favicon\.ico/u
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -97,6 +113,10 @@ test("publishes immutable complete generations and leaves the prior one readable
     assert.equal(readCurrentHostBuildGeneration(root, "desktop"), first);
     assert.equal(readCurrentHostBuildGeneration(root, "source"), source);
     assert.equal(fs.existsSync(path.join(source, "main.cjs")), false);
+    for (const artifact of HOST_BRAND_RUNTIME_ARTIFACTS) {
+      const relative = artifact.slice("dist/".length);
+      assert.equal(fs.existsSync(path.join(source, relative)), true);
+    }
     assert.equal(
       fs.readFileSync(path.join(source, "dependency-content-maintenance.cjs"), "utf8"),
       "dependency-content-maintenance.cjs"
@@ -123,6 +143,7 @@ test("publishes immutable complete generations and leaves the prior one readable
     ])
       fs.writeFileSync(path.join(root, "dist", entry), entry);
     for (const entry of ["headless-host", "assets"]) fs.mkdirSync(path.join(root, "dist", entry));
+    writeHostBrandRuntimeArtifacts(root, "b");
     fs.writeFileSync(path.join(root, "dist/main.cjs"), "main-b");
     fs.writeFileSync(path.join(root, "dist/panelPreload.cjs"), "preload-b");
     fs.writeFileSync(path.join(root, "dist/workerd-programs/router.mjs"), "router-b");
