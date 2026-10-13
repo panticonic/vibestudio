@@ -117,6 +117,8 @@ let emptyLaunchText = "Connecting to your workspace...";
 const decidingApprovalIds = new Set<string>();
 const openReviewApprovalIds = new Set<string>();
 let decisionError: string | null = null;
+/** The person declined the review: a decision to report calmly, not a failure. */
+let startupDeclined = false;
 let startupWaitBeganAt = 0;
 
 function scheduleRefresh(): void {
@@ -135,6 +137,7 @@ function setPending(next: PendingUnitInstallReviewApproval[]): boolean {
 
 function setLaunchResult(next: HostLaunchResult): boolean {
   const previous = launchResult;
+  startupDeclined = false;
   launchResult = next;
   const pendingChanged = setPending(next.status === "approval-required" ? next.approvals : []);
   const text = launchResultText(next);
@@ -161,10 +164,11 @@ async function decide(
   try {
     await getHostLaunchClient().resolveApprovals(pending, decision);
     if (decision === "deny") {
+      startupDeclined = true;
       launchResult = {
         status: "unavailable",
         target: hostTarget,
-        reason: "Workspace startup was denied.",
+        reason: "You chose not to start this workspace. Nothing from it was run.",
       };
       setPending([]);
       render();
@@ -292,6 +296,13 @@ function launchResultHeader(result: HostLaunchResult): {
       title: "Do you trust the code in this workspace?",
       copy:
         decisionError ?? "Review the workspace code that wants to run before Vibestudio starts.",
+    };
+  }
+  if (result.status === "unavailable" && startupDeclined) {
+    return {
+      eyebrow: "Not started",
+      title: "You chose not to start this workspace",
+      copy: "Nothing from this workspace was run. Restart Vibestudio to review it again.",
     };
   }
   if (result.status === "unavailable") {

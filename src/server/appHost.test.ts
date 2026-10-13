@@ -2274,7 +2274,7 @@ describe("AppHost", () => {
       activeBundleKey: "terminal-old",
       activeEv: "ev-terminal-old",
       status: "error",
-      lastError: expect.stringContaining("has not been accepted to run"),
+      lastError: expect.stringContaining("needs your review before it can run"),
     });
     expect(entityCache.resolveActive(graphNode.name)).toMatchObject({
       activeBuildKey: "terminal-old",
@@ -3925,16 +3925,44 @@ describe("AppHost", () => {
     await host.shutdown();
   });
 
-  it("refuses to open an unadmitted app until its review is accepted, without resolving it", async () => {
-    const { host, graphNode, approvalQueue } = await makeHarness({ isAdmitted: () => false });
-    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
-    expect((await host.reviewDeclared()).units).toHaveLength(1);
-    await expect(host.ensureActivated(graphNode.name)).rejects.toMatchObject({
-      code: "EACCES",
-      message: expect.stringContaining("has not been accepted to run"),
+  it("opens the review of an unreviewed app and runs it once the review is accepted", async () => {
+    const admitted = new Set<string>();
+    const { host, graphNode, approvalQueue } = await makeHarness({
+      isAdmitted: (_repo, ev) => admitted.has(ev),
     });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect((await host.reviewDeclared()).units).toHaveLength(1);
+    approvalQueue.request.mockImplementationOnce(async () => {
+      admitted.add("ev-app");
+      return "accepted";
+    });
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+
+    // Opening asks; it neither fails nor runs unreviewed code.
+    await expect(host.ensureActivated(graphNode.name)).resolves.toBe("approval-required");
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+
+    // The review's resolution applied the accepted build, so opening again runs it.
+    await host.whenSettled();
+    await expect(host.ensureActivated(graphNode.name)).resolves.toBe("ready");
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(host.registry.get(graphNode.name)?.status).toBe("running");
+    await host.shutdown();
+  });
+
+  it("does not run a declined app and offers its review again only when it is opened again", async () => {
+    const { host, graphNode, approvalQueue, buildSystem } = await makeHarness({
+      isAdmitted: () => false,
+      approvalDecision: "deny",
+    });
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+
+    await expect(host.ensureActivated(graphNode.name)).resolves.toBe("approval-required");
+    await host.whenSettled();
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
+    expect(host.registry.get(graphNode.name)?.status).not.toBe("running");
+
+    await expect(host.ensureActivated(graphNode.name)).resolves.toBe("approval-required");
+    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
     await host.shutdown();
   });
 });

@@ -123,6 +123,7 @@ export function createDesktopWorkspaceRuntime(deps: {
     ServerEventBridgeDeps,
     | "onSupervisionChanged"
     | "onApprovalPendingChanged"
+    | "onApprovalResolved"
     | "onAttentionRequired"
     | "onNotificationAction"
   >;
@@ -957,6 +958,7 @@ export function createDesktopWorkspaceRuntime(deps: {
           "panel:executionActivated",
           "panel:executionFailed",
           "shell-approval:pending-changed",
+          ...(deps.events?.onApprovalResolved ? (["shell-approval:resolved"] as const) : []),
           "external-open:open",
           "browser-panel:open",
           ...(deps.events?.onSupervisionChanged ? (["supervision:changed"] as const) : []),

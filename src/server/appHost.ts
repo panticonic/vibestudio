@@ -355,7 +355,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private readonly loggedUnauthorizedPanelHostingSources = new Set<string>();
   private lastDeclared: WorkspaceAppDeclaration[] = [];
   private lastDevStatusDiagnosticKey: string | null = null;
-  private readonly activationFlights = new Map<string, Promise<"ready">>();
+  private readonly activationFlights = new Map<string, Promise<"ready" | "approval-required">>();
   private readonly eventFlights = new Set<Promise<void>>();
   private eventFailures: unknown[] = [];
   private initialization: Promise<void> | null = null;
@@ -1058,7 +1058,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
 
   /** Ensure the declared release has an owned preparation and activation.
    * Registry status survives process death; it never proves a flight exists. */
-  ensureActivated(sourceOrName: string): Promise<"ready"> {
+  ensureActivated(sourceOrName: string): Promise<"ready" | "approval-required"> {
     if (this.retiring) return Promise.reject(new Error("App host is retiring"));
     this.assertAppHosting();
     const node = this.findAppNode(sourceOrName);
@@ -1084,6 +1084,12 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           (item) => normalizeRepoPath(item.source) === normalizeRepoPath(node.relativePath)
         );
         if (!declared) throw new Error(`App is not declared: ${node.relativePath}`);
+        // An app the person has not reviewed does not run. Opening it brings up
+        // its review (or joins the one already open); the review's resolution
+        // applies an accepted build, and opening again then finds it admitted.
+        if ((await this.unitHost.requestReview(node, declared)) === "reviewing") {
+          return "approval-required" as const;
+        }
         // A ready immutable release (including an explicitly selected rollback)
         // can be activated directly. Interrupted preparation must be reproduced
         // through the ordinary build owner, regardless of saved status.

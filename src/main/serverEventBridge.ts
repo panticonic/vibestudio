@@ -3,6 +3,7 @@ import type { EventName, SupervisionChange } from "@vibestudio/shared/events";
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
+import type { ApprovalResolvedEvent } from "@vibestudio/shared/governance/types";
 import {
   credentialsMethods,
   type CredentialCaptureCompletion,
@@ -26,6 +27,8 @@ export interface ServerEventBridgeDeps {
   onAttentionRequired?(title: string, message: string): void;
   /** OS-level attention (badge/flash/notification) for pending approvals. */
   onApprovalPendingChanged?(pending: PendingApproval[]): void;
+  /** A review was answered. Launches that waited on it continue or stand down. */
+  onApprovalResolved?(resolved: ApprovalResolvedEvent): void;
   /**
    * A supervised unit changed. The desktop host adopts Electron apps through its
    * single launch coordinator and retries host-target launch from this.
@@ -363,6 +366,11 @@ export function createServerEventBridge(
       deps.onPanelTreeInvalidated?.(payload as PanelTreeInvalidation);
       emitNormalized(bareEvent, payload);
       return;
+    }
+
+    if (bareEvent === "shell-approval:resolved") {
+      deps.onApprovalResolved?.(payload as ApprovalResolvedEvent);
+      // Fall through - the approval bar renders the same event.
     }
 
     if (bareEvent === "shell-approval:pending-changed") {

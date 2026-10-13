@@ -10,6 +10,7 @@ import {
 function createHarness(
   opts: {
     onSupervisionChanged?: (change: never) => Promise<void> | void;
+    onApprovalResolved?: (resolved: never) => void;
     onCredentialCaptureRequest?: (
       payload: Record<string, unknown>
     ) => Promise<Record<string, unknown>>;
@@ -39,6 +40,7 @@ function createHarness(
     getServerClient: () => serverClient as never,
     openExternal: vi.fn(async () => {}),
     onSupervisionChanged: opts.onSupervisionChanged ?? onSupervisionChanged,
+    onApprovalResolved: opts.onApprovalResolved,
     onCredentialCaptureRequest: opts.onCredentialCaptureRequest,
     onNotificationAction: opts.onNotificationAction,
     onPanelTreeInvalidated: opts.onPanelTreeInvalidated,
@@ -352,6 +354,17 @@ describe("createServerEventBridge", () => {
 
     expect(onSupervisionChanged).toHaveBeenCalledWith(change);
     expect(eventService.emit).toHaveBeenCalledWith("supervision:changed", change);
+  });
+
+  it("tells the host when a review was answered and still forwards it to shell UI", () => {
+    const onApprovalResolved = vi.fn();
+    const { handle, eventService } = createHarness({ onApprovalResolved });
+    const resolved = { approvalKind: "unit-install-review", granted: false };
+
+    handle("shell-approval:resolved", resolved);
+
+    expect(onApprovalResolved).toHaveBeenCalledWith(resolved);
+    expect(eventService.emit).toHaveBeenCalledWith("shell-approval:resolved", resolved);
   });
 
   it("reports a host failure to adopt a change without dropping the shell event", async () => {

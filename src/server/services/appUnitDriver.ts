@@ -117,7 +117,11 @@ export function createAppUnitDriver(input: {
     },
     activation: {
       activate: async (_ctx, releaseId) => {
-        await host().ensureActivated(releaseId);
+        // An unreviewed app has its review open by now; the client shows it
+        // and activates again once it resolves.
+        if ((await host().ensureActivated(releaseId)) === "approval-required") {
+          return { status: "approval-required" };
+        }
         return { status: "ready", entity: requireDescription(releaseId) };
       },
       prepare: async (_ctx, releaseId, ref) => {

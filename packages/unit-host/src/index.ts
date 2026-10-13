@@ -408,6 +408,8 @@ export interface UnitReconcileOptions {
 }
 
 export interface UnitApprovalCoordinator<ApprovalEntry> {
+  /** Open every request waiting on `trigger` now rather than at its own pace. */
+  publishPending?(trigger: UnitReconcileTrigger): Promise<void>;
   enqueue(request: {
     entries: ApprovalEntry[];
     trigger: UnitReconcileTrigger;
@@ -1114,23 +1116,7 @@ export class UnitHost<
     }
 
     if (needsApproval.length > 0) {
-      for (const item of needsApproval) {
-        this.pendingApprovalIdentityKeys.add(item.identityKey);
-      }
-      const startApproval = () =>
-        this.promptAndApply(needsApproval, opts.trigger, opts.maxConcurrentApplies);
-      const flow = this.backgroundFlow ? this.backgroundFlow.then(startApproval) : startApproval();
-      const tracked = flow
-        .catch((err) => this.opts.onBackgroundError(err))
-        .finally(() => {
-          for (const item of needsApproval) {
-            this.pendingApprovalIdentityKeys.delete(item.identityKey);
-          }
-          if (this.backgroundFlow === tracked) {
-            this.backgroundFlow = null;
-          }
-        });
-      this.backgroundFlow = tracked;
+      this.beginReview(needsApproval, opts.trigger, opts.maxConcurrentApplies);
     }
 
     const applyTrusted = this.prepareTrustedApplications(trusted, opts.maxConcurrentApplies);
@@ -1144,17 +1130,83 @@ export class UnitHost<
     await applyTrusted();
   }
 
+  /**
+   * Put a review in front of the person for these units, chained after any
+   * review already in flight. Its identities stay "pending" until the review
+   * resolves, so the same build is never offered twice at once.
+   */
+  private beginReview(
+    items: Array<ResolvedUnitDeclaration<Decl, Node> & { identityKey: string }>,
+    trigger: UnitReconcileTrigger,
+    maxConcurrentApplies?: number,
+    publishNow = false
+  ): Promise<void> {
+    for (const item of items) this.pendingApprovalIdentityKeys.add(item.identityKey);
+    let staged!: { resolve(): void; reject(error: unknown): void };
+    const whenStaged = new Promise<void>((resolve, reject) => {
+      staged = { resolve, reject };
+    });
+    const startApproval = () =>
+      this.promptAndApply(items, trigger, maxConcurrentApplies, () => {
+        if (publishNow) {
+          void this.opts.approvalCoordinator?.publishPending?.(trigger).catch(() => undefined);
+        }
+        staged.resolve();
+      });
+    const flow = this.backgroundFlow ? this.backgroundFlow.then(startApproval) : startApproval();
+    const tracked = flow
+      .catch((err) => {
+        staged.reject(err);
+        this.opts.onBackgroundError(err);
+      })
+      .finally(() => {
+        for (const item of items) this.pendingApprovalIdentityKeys.delete(item.identityKey);
+        if (this.backgroundFlow === tracked) {
+          this.backgroundFlow = null;
+        }
+      });
+    this.backgroundFlow = tracked;
+    return whenStaged;
+  }
+
+  /**
+   * Make sure the person has been asked about this exact declaration: a unit
+   * that needs review and has none open gets one now. Returns whether the
+   * build still waits on a review. The review's resolution, not the caller,
+   * applies an accepted build, so a caller that asked only needs to run again
+   * once the review resolves.
+   */
+  async requestReview(node: Node, decl: Decl): Promise<"reviewing" | "reviewed"> {
+    const trust = this.trustForCandidate(node, decl, this.opts.registry.get(node.name));
+    if (trust.decision !== "needs-approval") return "reviewed";
+    if (!this.pendingApprovalIdentityKeys.has(trust.identityKey)) {
+      if (!this.opts.registry.has(node.name)) {
+        this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
+      }
+      // Returns once the review is in front of the person, so the caller can
+      // report it as open rather than racing its publication.
+      await this.beginReview(
+        [{ node, decl, identityKey: trust.identityKey }],
+        "meta-change",
+        undefined,
+        true
+      );
+    }
+    return "reviewing";
+  }
+
   private async promptAndApply(
     items: Array<ResolvedUnitDeclaration<Decl, Node>>,
     trigger: UnitReconcileTrigger,
-    maxConcurrentApplies?: number
+    maxConcurrentApplies?: number,
+    onStaged?: () => void
   ): Promise<void> {
     if (this.opts.approvalCoordinator) {
       const entries = await Promise.all(
         items.map(({ node, decl }) => this.opts.approvalEntry(node, decl))
       );
       const origins = await this.opts.approvalOrigins?.(entries);
-      await this.opts.approvalCoordinator.enqueue({
+      const resolved = this.opts.approvalCoordinator.enqueue({
         entries,
         trigger,
         ...(origins ? { origins } : {}),
@@ -1168,8 +1220,11 @@ export class UnitHost<
         },
         applyDenied: () => this.opts.onApprovalDenied?.(items),
       });
+      onStaged?.();
+      await resolved;
       return;
     }
+    onStaged?.();
     const entries = await Promise.all(
       items.map(({ node, decl }) => this.opts.approvalEntry(node, decl))
     );

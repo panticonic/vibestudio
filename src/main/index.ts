@@ -36,6 +36,7 @@ import { randomUUID } from "node:crypto";
 process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = __dirname;
 import { EventService } from "@vibestudio/shared/eventsService";
 import type { SupervisionChange } from "@vibestudio/shared/events";
+import type { ApprovalResolvedEvent } from "@vibestudio/shared/governance/types";
 import { SHELL_SURFACE_KINDS, type ShellSurfaceDescriptor } from "@vibestudio/shared/shellSurface";
 // Silence Electron security warnings in dev; panels run in isolated webviews.
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
@@ -227,7 +228,6 @@ import type { ServerClient } from "./serverClient.js";
 import { resolveGatewayRouteUrl } from "@vibestudio/shared/appArtifacts";
 import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
-import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
 
 import {
   createHostCaller,
@@ -1544,9 +1544,19 @@ function startElectronHostTargetLaunchLoop(serverClient: Pick<ServerClient, "cal
   electronHostTargetSyncLoop.start();
 }
 
-function retryElectronHostTargetLaunchAfterApprovalChange(pending: PendingApproval[]): void {
+/**
+ * A launch that stopped for a review continues when that review is accepted and
+ * stands down when it is declined: reopening a declined review is the person's
+ * next explicit open, not this loop's next turn.
+ */
+function continueElectronHostTargetLaunchAfterReview(resolved: ApprovalResolvedEvent): void {
   if (!electronHostLaunchBlockedByApproval) return;
-  if (filterBootstrapApprovalsForTarget(pending, "electron").length > 0) return;
+  if (resolved.approvalKind !== "unit-install-review") return;
+  if (!resolved.granted) {
+    electronHostLaunchBlockedByApproval = false;
+    log.info("[apps] The Electron host target review was declined; the app was not started");
+    return;
+  }
   electronHostTargetSyncLoop?.request();
 }
 
@@ -2376,8 +2386,8 @@ app.on("ready", async () => {
         workspaceLabel: "System",
         pending,
       });
-      retryElectronHostTargetLaunchAfterApprovalChange(pending);
     },
+    onApprovalResolved: continueElectronHostTargetLaunchAfterReview,
   };
 
   try {
