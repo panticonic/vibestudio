@@ -8303,6 +8303,10 @@ async function main() {
     } catch (error) {
       console.error("[Server] Identity DB shutdown error:", error);
     }
+    await runtimeDiagnostics.flush().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] Runtime diagnostics could not be persisted:", error);
+    });
     console.log(
       shutdownErrors.length
         ? "[Server] Shutdown completed with errors"

@@ -75,8 +75,34 @@ const LEVEL_RANK: Record<RuntimeDiagnosticLevel, number> = {
   error: 40,
 };
 
+/**
+ * Records within this window are persisted by one write. A sustained log stream
+ * would otherwise serialise and rewrite an entity's whole retained history for
+ * every line, on the event loop that is also serving the calls producing them.
+ * The window is a batching interval, not a deadline: nothing waits on it, and
+ * `flush()` (server shutdown, process exit) persists immediately.
+ */
+const PERSIST_WINDOW_MS = 250;
+
+// Whatever way the process ends, the last window of diagnostics is the one a
+// failure investigation needs most. Only stores holding unpersisted history are
+// retained here.
+const storesWithPendingHistory = new Set<RuntimeDiagnosticsStore>();
+let exitHookInstalled = false;
+function persistPendingStoresOnExit(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.once("exit", () => {
+    for (const store of storesWithPendingHistory) store.persistSync();
+  });
+}
+
 export class RuntimeDiagnosticsStore {
   private readonly rootDir: string;
+  /** Entities whose cached history is newer than the file. */
+  private readonly unpersisted = new Set<string>();
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private persisting: Promise<void> = Promise.resolve();
   private readonly entryCapacity: number;
   private readonly errorCapacity: number;
   private readonly observers = new Set<(record: RuntimeDiagnosticRecord) => void>();
@@ -116,7 +142,10 @@ export class RuntimeDiagnosticsStore {
         history.droppedErrors += 1;
       }
     }
-    this.write(record.entityId, history);
+    this.unpersisted.add(record.entityId);
+    storesWithPendingHistory.add(this);
+    persistPendingStoresOnExit();
+    this.schedulePersist();
     for (const observer of this.observers)
       try {
         observer(record);
@@ -196,12 +225,74 @@ export class RuntimeDiagnosticsStore {
     }
   }
 
-  private write(entityId: string, history: PersistedRuntimeDiagnostics): void {
+  /** Persist every pending history now; settles when the files are written. */
+  flush(): Promise<void> {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    return this.persistPending();
+  }
+
+  private schedulePersist(): void {
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      this.persistPending().catch((error: unknown) => {
+        console.warn("[RuntimeDiagnostics] Could not persist diagnostics:", error);
+      });
+    }, PERSIST_WINDOW_MS);
+    // A pending window never keeps a process alive; the exit hook persists it.
+    this.persistTimer.unref();
+  }
+
+  private persistPending(): Promise<void> {
+    const entities = [...this.unpersisted];
+    this.unpersisted.clear();
+    storesWithPendingHistory.delete(this);
+    const written = this.persisting.then(async () => {
+      const failures: unknown[] = [];
+      for (const entityId of entities) {
+        try {
+          await this.write(entityId, this.historyFor(entityId));
+        } catch (error) {
+          // Keep the history for the next window rather than dropping it.
+          this.unpersisted.add(entityId);
+          storesWithPendingHistory.add(this);
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(failures, "Could not persist runtime diagnostics");
+    });
+    this.persisting = written.catch(() => {});
+    return written;
+  }
+
+  /** Persist pending history synchronously; for the process's last moments only. */
+  persistSync(): void {
+    for (const entityId of this.unpersisted) {
+      try {
+        const filePath = this.filePath(entityId);
+        const tmpPath = `${filePath}.${process.pid}.tmp`;
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(tmpPath, JSON.stringify(this.historyFor(entityId)), "utf8");
+        fs.renameSync(tmpPath, filePath);
+      } catch {
+        // The process is ending; there is nowhere left to report this.
+      }
+    }
+    this.unpersisted.clear();
+    storesWithPendingHistory.delete(this);
+  }
+
+  private async write(entityId: string, history: PersistedRuntimeDiagnostics): Promise<void> {
     const filePath = this.filePath(entityId);
     const tmpPath = `${filePath}.${process.pid}.tmp`;
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(tmpPath, JSON.stringify(history), "utf8");
-    fs.renameSync(tmpPath, filePath);
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.promises.writeFile(tmpPath, JSON.stringify(history), "utf8");
+    await fs.promises.rename(tmpPath, filePath);
   }
 
   private filePath(entityId: string): string {
