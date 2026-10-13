@@ -17,6 +17,7 @@ import {
   composeDeclaredTemplateLayers,
   resolveDeclaredTemplateLayerPlan,
   composeResolvedTemplateLayerPlan,
+  readTemplateLayerMetadata,
   type ResolvedTemplateLayerPlan,
   enumerateRootTemplateRepositories,
 } from "./workspaceRootTemplateBootstrap.js";
@@ -208,7 +209,7 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     });
     const layerPlan = await resolveDeclaredTemplateLayerPlan({
       pin: producer.pin,
-      root: source,
+      root: await readTemplateLayerMetadata(source),
       expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
       acquire: async () => {
         throw new Error("Standalone template has no dependency acquisition");
@@ -649,11 +650,12 @@ describe("composeDeclaredTemplateLayers", () => {
       if (file !== "meta/vibestudio.yml") throw new Error(`Metadata loaded source bytes: ${file}`);
       return source.readFile(file);
     });
-    const metadata = (source: ExactGitSnapshot) => ({
-      commit: source.commit,
-      files: source.files.map(({ path }) => ({ path })),
-      readFile: (file: string) => metadataReads(source, file),
-    });
+    const metadata = (source: ExactGitSnapshot) =>
+      readTemplateLayerMetadata({
+        commit: source.commit,
+        files: source.files.map(({ path }) => ({ path })),
+        readFile: (file: string) => metadataReads(source, file),
+      });
     const sources = new Map([
       [baseCommit, base],
       [leafCommit, leaf],
@@ -668,7 +670,7 @@ describe("composeDeclaredTemplateLayers", () => {
     );
     const plan = await resolveDeclaredTemplateLayerPlan({
       pin,
-      root: metadata(root),
+      root: await metadata(root),
       expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
       acquire: acquireMetadata,
       resolveTrack,
@@ -716,11 +718,11 @@ describe("composeDeclaredTemplateLayers", () => {
       ref: "refs/tags/v1",
       commit: root.commit,
     };
-    const acquire = vi.fn(async () => baseLayer());
+    const acquire = vi.fn(async () => readTemplateLayerMetadata(baseLayer()));
     await expect(
       resolveDeclaredTemplateLayerPlan({
         pin: { ...pin, commit: "f".repeat(40) },
-        root,
+        root: await readTemplateLayerMetadata(root),
         expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
         acquire,
       })
@@ -741,7 +743,7 @@ describe("composeDeclaredTemplateLayers", () => {
     await expect(
       resolveDeclaredTemplateLayerPlan({
         pin,
-        root: conflicting,
+        root: await readTemplateLayerMetadata(conflicting),
         expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
         acquire,
         resolveTrack: async () => ({ ref: "refs/tags/v1", commit: baseCommit }),
@@ -760,9 +762,9 @@ describe("composeDeclaredTemplateLayers", () => {
       };
       const plan = await resolveDeclaredTemplateLayerPlan({
         pin,
-        root,
+        root: await readTemplateLayerMetadata(root),
         expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
-        acquire: async () => baseLayer(),
+        acquire: async () => readTemplateLayerMetadata(baseLayer()),
         resolveTrack: async () => ({ ref: "refs/tags/v1", commit: baseCommit }),
       });
       const changed = {

@@ -19,7 +19,7 @@ import {
   canonicalTemplateYaml,
   templateManifestDocument,
   templateRepositories,
-  readTemplateManifest,
+  parseTemplateManifestContent,
   type ParsedTemplateManifest,
 } from "@vibestudio/workspace/templateManifest";
 import {
@@ -85,13 +85,27 @@ export interface ComposeDeclaredTemplateLayersInput {
   }): Promise<{ ref: string; commit: string }>;
 }
 
-/** An exact admitted Git tree can resolve composition from its manifest and
- * path inventory without loading every source blob. Full snapshots implement
- * this same boundary; indexed Git trees may read the manifest asynchronously. */
+/** Exact source facts survive the supervisor/preparation boundary without
+ * carrying a tree reader or manufacturing a path snapshot. */
 export interface TemplateLayerMetadata {
+  readonly commit: string;
+  readonly manifestText: string;
+  readonly repositories: readonly string[];
+}
+
+/** Full snapshots and lazy admitted Git indexes expose the same source facts. */
+export async function readTemplateLayerMetadata(source: {
   readonly commit: string;
   readonly files: readonly { readonly path: string }[];
   readFile(filePath: string): Uint8Array | null | Promise<Uint8Array | null>;
+}): Promise<TemplateLayerMetadata> {
+  const bytes = await source.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
+  if (!bytes) throw new Error(`missing required ${TEMPLATE_SOURCE_MANIFEST_PATH}`);
+  return {
+    commit: source.commit,
+    manifestText: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    repositories: templateRepositories(source.files.map((file) => file.path)),
+  };
 }
 
 export interface ResolvedTemplateLayerPlan {
@@ -134,23 +148,18 @@ export async function resolveDeclaredTemplateLayerPlan(
   input: ResolveDeclaredTemplateLayerPlanInput
 ): Promise<ResolvedTemplateLayerPlan> {
   const { pin, root, purpose = "use" } = input;
-  const readLayer = async (layerPin: WorkspaceTemplatePin, metadata: TemplateLayerMetadata) => {
+  const readLayer = (layerPin: WorkspaceTemplatePin, metadata: TemplateLayerMetadata) => {
     if (metadata.commit !== layerPin.commit)
       throw new Error(`Template ${layerPin.url} acquired a different commit`);
-    const bytes = await metadata.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
-    const manifest = readTemplateManifest({
-      readFile: (filePath) => (filePath === TEMPLATE_SOURCE_MANIFEST_PATH ? bytes : null),
-      expectedSystemEpoch: input.expectedSystemEpoch,
-    });
-    if (!bytes) throw new Error(`Template ${layerPin.url} has no manifest bytes`);
+    const manifest = parseTemplateManifestContent(metadata.manifestText, input.expectedSystemEpoch);
     return {
       pin: layerPin,
       manifest,
-      manifestText: new TextDecoder().decode(bytes),
-      repositories: templateRepositories(metadata.files.map((file) => file.path)),
+      manifestText: metadata.manifestText,
+      repositories: metadata.repositories,
     };
   };
-  const rootLayer = await readLayer(pin, root);
+  const rootLayer = readLayer(pin, root);
   const resolveTrack =
     input.resolveTrack ??
     (async () => {
@@ -158,7 +167,7 @@ export async function resolveDeclaredTemplateLayerPlan(
         `Root template ${pin.url} declares dependencies, but this host cannot resolve their tracks`
       );
     });
-  const acquired = new Map<string, Awaited<ReturnType<typeof readLayer>>>();
+  const acquired = new Map<string, ReturnType<typeof readLayer>>();
   const acquireLayer = async (layer: ResolvedTemplateDependency) => {
     const existing = acquired.get(layer.url);
     if (existing) return existing;
@@ -168,7 +177,7 @@ export async function resolveDeclaredTemplateLayerPlan(
       commit: layer.commit,
       ...(layer.credential ? { credential: layer.credential } : {}),
     } as WorkspaceTemplatePin;
-    const entry = await readLayer(layerPin, await input.acquire(layerPin));
+    const entry = readLayer(layerPin, await input.acquire(layerPin));
     acquired.set(layer.url, entry);
     return entry;
   };
@@ -321,10 +330,11 @@ export async function composeDeclaredTemplateLayers(
   snapshots.set(key(input.pin), input.root);
   const plan = await resolveDeclaredTemplateLayerPlan({
     ...input,
+    root: await readTemplateLayerMetadata(input.root),
     acquire: async (pin) => {
       const snapshot = await input.acquire(pin);
       snapshots.set(key(pin), snapshot);
-      return snapshot;
+      return readTemplateLayerMetadata(snapshot);
     },
   });
   return composeResolvedTemplateLayerPlan({
