@@ -87,6 +87,10 @@ interface StoredSession {
   icon?: string;
   /** The session's own context (kept across relaunches); its folder is the cwd. */
   contextId?: string;
+  /** Shells: what to run instead of the login shell (kept for relaunch). */
+  program?: { command: string; args: string[] };
+  /** Shells: the working directory inside the context's folder (kept for relaunch). */
+  cwd?: string;
   /**
    * App sessions: the latest runtime incarnation. It is active while the
    * program runs and retired afterwards; its stateArgs carry over to the next.
@@ -370,6 +374,10 @@ export function createTerminalAppsService(
       session.contextId ??= await deps.createContext(
         createHostCaller(HOST_CALLER_ID, "server", subject)
       );
+      if (session.program) {
+        command = session.program.command;
+        args = session.program.args;
+      }
     }
     try {
       const opened = (await shellAs(subject, "open", [
@@ -379,6 +387,7 @@ export function createTerminalAppsService(
           cols: size.cols,
           rows: size.rows,
           label: session.title,
+          ...(session.cwd ? { cwd: session.cwd } : {}),
           ...(session.contextId ? { contextId: session.contextId } : {}),
         },
       ])) as { sessionId: string };
@@ -395,7 +404,12 @@ export function createTerminalAppsService(
   }
 
   async function prepareRun(ctx: ServiceContext, args: unknown[]) {
-    const input = (args[0] ?? {}) as { source?: string; sessionId?: string };
+    const input = (args[0] ?? {}) as {
+      source?: string;
+      sessionId?: string;
+      command?: string;
+      args?: string[];
+    };
     const userId = verifiedInitiatingUserId(ctx);
     const source =
       input.source ??
@@ -406,7 +420,20 @@ export function createTerminalAppsService(
         : undefined);
     const unit = source ? await deps.resolveUnit(source) : null;
     if (source && !unit) throw new Error(`There is no terminal app at ${source}`);
-    const what = unit ? `${unit.title} ${unit.effectiveVersion.slice(0, 12)}` : "a shell";
+    const stored =
+      !source && input.sessionId
+        ? registryFile().sessions.find((s) => s.sessionId === input.sessionId)?.program
+        : undefined;
+    const shellCommand = input.command
+      ? [input.command, ...(input.args ?? [])].join(" ")
+      : stored
+        ? [stored.command, ...stored.args].join(" ")
+        : undefined;
+    const what = unit
+      ? `${unit.title} ${unit.effectiveVersion.slice(0, 12)}`
+      : shellCommand
+        ? `\`${shellCommand.slice(0, 120)}\``
+        : "a shell";
     const resource = {
       type: "terminal-app",
       label: unit ? unit.title : "Shell",
@@ -421,12 +448,17 @@ export function createTerminalAppsService(
             title: `Run ${what} in ${deps.workspaceLabel()}?`,
             description: unit
               ? `${unit.title} runs as you in this workspace's native runtime, with its own connection to the workspace. It can do what its declared authority allows; anything further asks you first.`
-              : "A login shell runs as you in this workspace's native runtime.",
+              : shellCommand
+                ? "This command runs as you in a terminal in this workspace's native runtime."
+                : "A login shell runs as you in this workspace's native runtime.",
             deniedReason: "Running it was not approved",
             resource,
             operation: { kind: "unknown", verb: "Run", object: resource },
             details: [
-              { label: "Program", value: unit ? `${unit.title} (${source})` : "Login shell" },
+              {
+                label: "Program",
+                value: unit ? `${unit.title} (${source})` : (shellCommand ?? "Login shell"),
+              },
               ...(unit ? [{ label: "Version", value: unit.effectiveVersion.slice(0, 12) }] : []),
             ],
           },
@@ -471,13 +503,19 @@ export function createTerminalAppsService(
           unit = await deps.resolveUnit(input.source);
           if (!unit) throw new Error(`There is no terminal app at ${input.source}`);
         }
+        if (unit && (input.command || input.cwd || input.contextId)) {
+          throw new Error("A terminal app takes no command, cwd or context of its own");
+        }
         const now = Date.now();
         const session: StoredSession = {
           sessionId: randomUUID(),
           userId: subject.userId,
           kind: unit ? "app" : "shell",
           ...(unit ? { source: unit.source } : {}),
-          title: cleanTitle(unit ? unit.title : "Shell"),
+          ...(input.contextId ? { contextId: input.contextId } : {}),
+          ...(input.command ? { program: { command: input.command, args: input.args ?? [] } } : {}),
+          ...(input.cwd ? { cwd: input.cwd } : {}),
+          title: cleanTitle(unit ? unit.title : (input.label ?? input.command ?? "Shell")),
           ...(unit?.icon ? { icon: unit.icon } : {}),
           shellSessionId: null,
           running: false,
@@ -505,6 +543,25 @@ export function createTerminalAppsService(
           await retireIncarnation(session);
         }
         if (!session.running) await start(ctx, session, input, input.approvalsKey);
+        session.lastActiveAt = Date.now();
+        changed(subject.userId);
+        return entryOf(session);
+      },
+      restart: async (ctx, [input]) => {
+        const subject = userSubject(ctx);
+        const session = requireSession(subject.userId, input.sessionId);
+        requirePrepared(ctx, session.source);
+        const previous = session.running ? session.shellSessionId : null;
+        // Detach the exit watch first (it ignores a PTY that is no longer the
+        // session's), then end the old PTY and start the program again.
+        session.running = false;
+        session.shellSessionId = null;
+        try {
+          if (previous) await shellAs(subject, "dispose", [previous]);
+        } finally {
+          await retireIncarnation(session);
+        }
+        await start(ctx, session, input, input.approvalsKey);
         session.lastActiveAt = Date.now();
         changed(subject.userId);
         return entryOf(session);
