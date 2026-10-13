@@ -5,6 +5,25 @@ server Endpoint ID is authenticated during the QUIC handshake; the client keeps
 one durable native endpoint identity across reconnects. Loopback clients use the
 existing WebSocket transport and never expose a remote network surface.
 
+The server indexes admitted physical connections by that authenticated client
+Endpoint ID. A completed control handshake is only a readiness receipt: the
+successor remains inactive while ingress synchronously fences and then joins
+the previous attachment's lifetime receipt. That lifetime includes the control
+and stream admission loops, pending stream headers, logical sessions, and their
+drains, writes, resets, and stops as well as physical closure. This per-peer
+join applies even when QUIC reported the predecessor closed before the
+successor arrived. Every handshaken generation occupies the same serialized
+per-peer ownership chain, including an inactive candidate superseded before it
+could dispatch. A force-killed client process therefore cannot leave old native
+stream work eligible beside its replacement.
+
+Native stream operations classify connection loss at the physical adapter,
+including retirement-only reset, stop, and reset-observation calls. Retirement
+settles normally only when every leaf of a nested failure graph is that typed
+connection loss. A mixed graph remains a failure with its original aggregate
+structure, and each logical-session failure enters the physical attachment
+aggregation exactly once.
+
 ## Hub control and workspace reaches
 
 A paired device keeps two logical reaches:
@@ -81,6 +100,9 @@ session leaves `connected`:
 - Keep hub control stable and replace only the selected workspace reach.
 - Never persist direct addresses, relay hints, connection IDs, or session IDs.
 - Never open a second physical connection for a panel or bulk transfer.
+- Do not treat physical closure or handshake readiness as attachment
+  completion. Fence dispatch synchronously, join the predecessor's full
+  lifetime, then activate its same-peer successor.
 - Bound every frame, stream read, queue, timeout, and reconnect attempt.
 - Exact-match the RPC contract version in the physical hello before redeeming a
   one-time pairing credential.

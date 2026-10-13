@@ -1225,7 +1225,7 @@ async function advanceWorkspaceApproval(device, xml, requestedRemaining) {
 }
 
 async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
-  let lastApprovalTap = 0;
+  let nextApprovalInspectionAt = 0;
   const requestedRemaining = new Set();
   while (Date.now() < deadlineMs) {
     if (logcat.hasPhase(phase)) return;
@@ -1244,10 +1244,11 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
     if (logcat.hasPhase("embedded-pairing-failed")) {
       await logcat.waitForPhase(phase, deadlineMs);
     }
-    if (Date.now() - lastApprovalTap > 2_000) {
-      lastApprovalTap = Date.now();
+    if (Date.now() >= nextApprovalInspectionAt) {
       const xml = await dumpWindowXml(device);
       const approval = await advanceWorkspaceApproval(device, xml, requestedRemaining);
+      nextApprovalInspectionAt =
+        Date.now() + (approval.surface.visible && !approval.acted ? AGENT_TURN_VISUAL_POLL_MS : 2_000);
       if (approval.acted) continue;
     }
     await sleep(250);
@@ -1277,14 +1278,13 @@ async function settleWorkspaceStartupApprovals(device, deadlineMs, options = {})
     }
     const labels = collectWindowLabels(xml);
     if (approval.surface.visible || hasVisibleApprovalPrompt(labels)) {
-      // Landing one review may require a second queued review. Browse the
-      // existing queue while that action is pending; do not retap its busy
-      // button. The surface itself is the completion contract: a disabled
-      // decision remains owned until its RPC and landing work settle and the
-      // surface advances or retires.
+      // Drain queued reviews in presentation order while the current decision
+      // lands. At the end of the queue, retain ownership and observe at the
+      // established low-impact accessibility cadence: a full uiautomator dump
+      // runs on the app's main thread, so tight polling can prevent the landing
+      // work we are waiting for from completing.
       const advanced = await tapVisibleNodeByResourceId(device, xml, "approval-queue-next");
-      if (!advanced) await tapVisibleNodeByResourceId(device, xml, "approval-queue-prev");
-      await sleep(250);
+      await sleep(advanced ? 250 : AGENT_TURN_VISUAL_POLL_MS);
       continue;
     }
     if (resolved > 0 || Date.now() >= discoveryDeadlineMs) return resolved;
@@ -1717,7 +1717,7 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
     if (approval.surface.visible) {
       // A submitted decision can remain busy while its install landing runs.
       // Durable agent completion does not supersede that live UI owner.
-      await sleep(250);
+      await sleep(AGENT_TURN_VISUAL_POLL_MS);
       continue;
     }
 

@@ -2820,23 +2820,27 @@ async function main() {
 
   // ── RPC-only services (replacing serverServiceRegistry.ts) ──
 
-  const { createBuildService } = await import("./services/buildService.js");
+  const { BUILD_SERVICE_DEPENDENCIES, createBuildService } =
+    await import("./services/buildService.js");
   const { listBuildUnitCatalog } = await import("./services/buildUnitCatalog.js");
   const { createPresenceService, createPresenceTracker } =
     await import("./services/presenceService.js");
   const { createWorkerService } = await import("./services/workerService.js");
 
   {
+    let appHost: import("./appHost.js").AppHost | null = null;
     container.registerManaged({
       name: "build",
-      dependencies: ["buildSystem"],
+      dependencies: [...BUILD_SERVICE_DEPENDENCIES],
       start: async (resolve) => {
         buildSystemInstance = assertPresent(
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
         );
+        appHost = assertPresent(resolve<import("./appHost.js").AppHost>("appHost"));
       },
       getServiceDefinition() {
         const buildSystem = assertPresent(buildSystemInstance);
+        const owningAppHost = assertPresent(appHost);
         return createBuildService({
           buildSystem,
           getCallerContextId: (callerId) => callerRuntimeContextId(entityCache, callerId),
@@ -2862,6 +2866,8 @@ async function main() {
               authorityRows: (requests) =>
                 summarizeAuthorityRequests(requests, [], describeCapability).rows,
             }),
+          mobileUpdateStatus: (installedBuildKey) =>
+            owningAppHost.mobileUpdateStatus(installedBuildKey),
         });
       },
     });

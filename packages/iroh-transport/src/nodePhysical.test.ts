@@ -132,3 +132,66 @@ describe("Node Iroh physical ingress", () => {
     }
   );
 });
+
+describe("Node Iroh physical stream failure classification", () => {
+  it("tags connection loss from every retirement operation at the native edge", async () => {
+    const closedStream = () =>
+      Promise.reject(
+        Object.assign(new Error("ClosedStream { _private: () }"), { code: "GenericFailure" })
+      );
+    const nativeStream = {
+      send: {
+        writeAll: vi.fn(closedStream),
+        finish: vi.fn(closedStream),
+        reset: vi.fn(closedStream),
+        stopped: vi.fn(closedStream),
+      },
+      recv: {
+        read: vi.fn(closedStream),
+        readExact: vi.fn(closedStream),
+        stop: vi.fn(closedStream),
+        receivedReset: vi.fn(closedStream),
+      },
+    };
+    const native = {
+      remoteId: () => ({ toString: () => "peer-endpoint" }),
+      acceptBi: vi.fn(async () => nativeStream),
+    } as unknown as Connection;
+    const stream = await new NodePhysicalConnection(native).acceptBi();
+
+    const results = await Promise.allSettled([
+      stream.send.reset(0x200n),
+      stream.send.stopped(),
+      stream.recv.stop(0x200n),
+      stream.recv.receivedReset(),
+    ]);
+
+    expect(results).toHaveLength(4);
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        expect(result.reason).toMatchObject({
+          message: "ClosedStream { _private: () }",
+          code: "CONNECTION_LOST",
+          errorKind: "transport",
+        });
+      }
+    }
+  });
+
+  it("tags a rejected physical closure receipt at the native edge", async () => {
+    const nativeFailure = Object.assign(new Error("ClosedStream { _private: () }"), {
+      code: "GenericFailure",
+    });
+    const connection = new NodePhysicalConnection({
+      remoteId: () => ({ toString: () => "peer-endpoint" }),
+      closed: () => Promise.reject(nativeFailure),
+    } as unknown as Connection);
+
+    await expect(connection.closed()).rejects.toMatchObject({
+      message: nativeFailure.message,
+      code: "CONNECTION_LOST",
+      errorKind: "transport",
+    });
+  });
+});

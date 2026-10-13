@@ -3435,6 +3435,18 @@ describe("AppHost", () => {
         }),
       ],
     });
+    expect(host.mobileUpdateStatus("rn-android-only-key")).toBeNull();
+    expect(host.mobileUpdateStatus("rn-previous-key")).toMatchObject({
+      type: "update-available",
+      appId: graphNode.name,
+      source: "apps/mobile",
+      target: "react-native",
+      buildKey: "rn-android-only-key",
+      effectiveVersion: "ev-mobile",
+      previousBuildKey: "rn-previous-key",
+      adoptionPolicy: "prompt",
+      selectedForHost: true,
+    });
   });
 
   it("does not produce React Native bootstrap without provider identity", async () => {

@@ -14,6 +14,7 @@ import {
   encodeRpcJson,
   responseEnvelopeFor,
   formatRpcFailure,
+  isRpcConnectionLost,
   type RpcEnvelope,
   type RpcMessage,
   type RpcRequest,
@@ -88,12 +89,21 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
   private readonly errorHandlers = new Set<(error: unknown) => void>();
   private readonly requests = new Map<string, RequestRoute>();
   private readonly inboundBodies = new Map<string, ReadableStream<Uint8Array>>();
+  private readonly ownedWork = new Set<Promise<void>>();
+  private readonly ownedFailures: unknown[] = [];
+  private readonly lifetimePromise: Promise<void>;
+  private resolveLifetime!: () => void;
+  private rejectLifetime!: (error: unknown) => void;
   private pendingBytes = 0;
 
   readonly transportBinding: RpcSessionTransportBinding;
 
   constructor(private readonly options: IrohRpcSessionChannelOptions) {
     this.transportBinding = { kind: "iroh", endpointId: options.connection.peerEndpointId };
+    this.lifetimePromise = new Promise<void>((resolve, reject) => {
+      this.resolveLifetime = resolve;
+      this.rejectLifetime = reject;
+    });
   }
 
   get peerEndpointId(): string {
@@ -125,7 +135,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
 
   sendMessage(message: WsServerMessage): void {
     if (this.state !== OPEN) return;
-    void this.translateOutbound(message).catch((error) => {
+    this.own(this.translateOutbound(message), (error) => {
       this.options.log?.(
         `Iroh session ${this.options.sid} outbound failure: ${
           error instanceof Error ? error.message : String(error)
@@ -134,32 +144,36 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     });
   }
 
-  close(code?: number, reason?: string): void {
-    if (this.state !== OPEN) return;
-    void this.options
-      .writeControl({
-        t: IROH_SESSION_CLOSED,
-        sid: this.options.sid,
-        ...(code === undefined ? {} : { code }),
-        ...(reason === undefined ? {} : { reason }),
-        terminal: code !== undefined && code >= 4000,
-      })
-      .catch((error) => this.logControlFailure("close notification", error))
-      .finally(() => this.fireClosed(code, reason));
+  close(code?: number, reason?: string): Promise<void> {
+    if (this.state !== OPEN) return this.lifetime();
+    const notification = this.options.writeControl({
+      t: IROH_SESSION_CLOSED,
+      sid: this.options.sid,
+      ...(code === undefined ? {} : { code }),
+      ...(reason === undefined ? {} : { reason }),
+      terminal: code !== undefined && code >= 4000,
+    });
+    const joinedNotification = notification.catch((error) => {
+      this.logControlFailure("close notification", error);
+      if (!isRpcConnectionLost(error)) throw error;
+    });
+    return this.fireClosed(code, reason, [joinedNotification]);
   }
 
-  terminate(): void {
-    if (this.state !== OPEN) return;
-    void this.options
-      .writeControl({
-        t: IROH_SESSION_CLOSED,
-        sid: this.options.sid,
-        code: 1006,
-        reason: "terminated",
-        terminal: true,
-      })
-      .catch((error) => this.logControlFailure("termination notification", error));
-    this.fireClosed(1006, "terminated");
+  terminate(): Promise<void> {
+    if (this.state !== OPEN) return this.lifetime();
+    const notification = this.options.writeControl({
+      t: IROH_SESSION_CLOSED,
+      sid: this.options.sid,
+      code: 1006,
+      reason: "terminated",
+      terminal: true,
+    });
+    const joinedNotification = notification.catch((error) => {
+      this.logControlFailure("termination notification", error);
+      if (!isRpcConnectionLost(error)) throw error;
+    });
+    return this.fireClosed(1006, "terminated", [joinedNotification]);
   }
 
   deliverAuth(message: WsClientMessage): void {
@@ -193,7 +207,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       });
       if (body) this.inboundBodies.set(requestId, body);
       if (!body) {
-        void this.watchCancellation(requestId, envelope.message.type, stream).catch((error) => {
+        this.own(this.watchCancellation(requestId, envelope.message.type, stream), (error) => {
           this.logControlFailure(`request ${requestId} cancellation observation`, error);
           for (const handler of [...this.errorHandlers]) handler(error);
         });
@@ -204,16 +218,18 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       // boundary, so consume the sender's trailing FIN as well as closing the
       // unused response half. A stream is not retired (and its peer credit is
       // not replenished) until both halves reach a terminal state.
-      void Promise.all([
-        readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES),
-        stream.send.finish(),
-      ]).catch((error) => {
-        this.options.log?.(
-          `Iroh one-way ${envelopeOperation(envelope)} stream close failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      });
+      this.own(
+        Promise.all([readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES), stream.send.finish()]).then(
+          () => undefined
+        ),
+        (error) => {
+          this.options.log?.(
+            `Iroh one-way ${envelopeOperation(envelope)} stream close failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      );
     }
     this.deliver(
       envelope.target === "main" || envelope.target === "server"
@@ -240,7 +256,9 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     }
     if (frame.kind === "head") {
       if (route.headSent) {
-        void route.stream.send.reset(STREAM_CANCEL_CODE).catch(() => undefined);
+        this.own(route.stream.send.reset(STREAM_CANCEL_CODE), (error) =>
+          this.logControlFailure(`response stream ${requestId} duplicate-head reset`, error)
+        );
         throw new Error(`Iroh response stream ${requestId} already sent its head`);
       }
       route.headSent = true;
@@ -252,7 +270,9 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
           finalUrl: frame.finalUrl,
         })
       );
-      return written;
+      return this.own(written, (error) =>
+        this.logControlFailure(`response stream ${requestId} head write`, error)
+      );
     }
     if (frame.kind === "error") {
       const written = route.stream.send
@@ -266,24 +286,35 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       route.settled = true;
       this.requests.delete(requestId);
       this.inboundBodies.delete(requestId);
-      return written;
+      return this.own(written, (error) =>
+        this.logControlFailure(`response stream ${requestId} error write`, error)
+      );
     }
     if (frame.kind === "end") {
       route.settled = true;
       this.requests.delete(requestId);
       this.inboundBodies.delete(requestId);
-      return route.stream.send
-        .writeAll(encodeEndFrame({ bytesIn: frame.bytesIn }))
-        .then(() => route.stream.send.finish());
+      return this.own(
+        route.stream.send
+          .writeAll(encodeEndFrame({ bytesIn: frame.bytesIn }))
+          .then(() => route.stream.send.finish()),
+        (error) => this.logControlFailure(`response stream ${requestId} end write`, error)
+      );
     }
     if (!route.headSent) {
       throw new Error(`Iroh response stream ${requestId} received body data before its head`);
     }
-    return this.writeMetered(route.stream, encodeDataFrame(frame.bytes));
+    return this.own(this.writeMetered(route.stream, encodeDataFrame(frame.bytes)), (error) =>
+      this.logControlFailure(`response stream ${requestId} body write`, error)
+    );
   }
 
-  remoteClosed(code?: number, reason?: string): void {
-    this.fireClosed(code, reason);
+  remoteClosed(code?: number, reason?: string): Promise<void> {
+    return this.fireClosed(code, reason);
+  }
+
+  lifetime(): Promise<void> {
+    return this.lifetimePromise;
   }
 
   private deliver(message: WsClientMessage): void {
@@ -382,7 +413,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       typeof requestId === "string" &&
       (envelope.message.type === "request" || envelope.message.type === "stream-request");
     if (expectsResponse) {
-      void this.readOutboundResponse(stream, routed).catch((error) => {
+      this.own(this.readOutboundResponse(stream, routed), (error) => {
         this.options.log?.(
           `Iroh server-originated request ${requestId} failed: ${
             error instanceof Error ? error.message : String(error)
@@ -425,12 +456,14 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       // The client closes its unused send half when it accepts this one-way
       // message. Consume that FIN so the native QUIC implementation can retire
       // the full bidirectional stream and replenish peer stream credit.
-      void readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES).catch((error) =>
-        this.options.log?.(
-          `Iroh one-way ${envelopeOperation(envelope)} request-half drain failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        )
+      this.own(
+        readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES).then(() => undefined),
+        (error) =>
+          this.options.log?.(
+            `Iroh one-way ${envelopeOperation(envelope)} request-half drain failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          )
       );
     }
   }
@@ -519,16 +552,63 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     );
   }
 
-  private fireClosed(code?: number, reason?: string): void {
-    if (this.state === CLOSED) return;
+  private own(operation: Promise<void>, onFailure: (error: unknown) => void): Promise<void> {
+    let owned!: Promise<void>;
+    owned = operation
+      .catch((error) => {
+        const connectionRetirement = isRpcConnectionLost(error);
+        if (!connectionRetirement) this.ownedFailures.push(error);
+        // An operation that observes connection loss before the session's
+        // terminal event still has to notify the live RPC owner. Once the
+        // terminal fence is installed, the same observation is only the owned
+        // native work acknowledging that fence; surfacing it as a new session
+        // error would turn orderly retirement back into a product failure.
+        if (!connectionRetirement || this.state !== CLOSED) onFailure(error);
+      })
+      .finally(() => this.ownedWork.delete(owned));
+    this.ownedWork.add(owned);
+    return operation;
+  }
+
+  private fireClosed(
+    code?: number,
+    reason?: string,
+    initial: readonly Promise<void>[] = []
+  ): Promise<void> {
+    if (this.state === CLOSED) return this.lifetime();
     this.state = CLOSED;
+    // Closing is a synchronous dispatch fence. No later envelope or outbound
+    // response can enter this session after the predecessor is retired.
+    const terminal: Promise<unknown>[] = [...initial];
     for (const route of this.requests.values()) {
-      void route.stream.send.reset(STREAM_CANCEL_CODE).catch(() => undefined);
-      void route.stream.recv.stop(STREAM_CANCEL_CODE).catch(() => undefined);
+      terminal.push(route.stream.send.reset(STREAM_CANCEL_CODE));
+      terminal.push(route.stream.recv.stop(STREAM_CANCEL_CODE));
     }
     this.requests.clear();
     this.inboundBodies.clear();
     for (const handler of [...this.closeHandlers]) handler(code ?? 1006, reason ?? "");
     this.options.onClosed(this.options.sid);
+    void (async () => {
+      const terminalResults = await Promise.allSettled(terminal);
+      while (this.ownedWork.size > 0) {
+        await Promise.allSettled([...this.ownedWork]);
+      }
+      const failures = [
+        ...this.ownedFailures,
+        ...terminalResults.flatMap((result) =>
+          result.status === "rejected" && !isRpcConnectionLost(result.reason) ? [result.reason] : []
+        ),
+      ];
+      if (failures.length > 0) {
+        this.rejectLifetime(
+          new AggregateError(failures, `Iroh session ${this.options.sid} retirement failed`, {
+            cause: failures[0],
+          })
+        );
+        return;
+      }
+      this.resolveLifetime();
+    })();
+    return this.lifetimePromise;
   }
 }

@@ -3,7 +3,12 @@ import {
   type WorkerExecutableAdmission,
 } from "./workerExecutableDispatch.js";
 import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
-import { formatRpcFailure, rpcCallerAbortedError, serializeRpcFailure } from "@vibestudio/rpc";
+import {
+  formatRpcFailure,
+  isRpcConnectionLost,
+  rpcCallerAbortedError,
+  serializeRpcFailure,
+} from "@vibestudio/rpc";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { attachRpcDiagnosticId, decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
@@ -87,6 +92,8 @@ import {
   type IrohSessionControlFrame,
 } from "@vibestudio/rpc/protocol/irohSession";
 import { irohReceiveStreamBody } from "@vibestudio/rpc/transports/irohClient";
+import type { IrohIngressAttachment } from "./irohIngress.js";
+import { beginIrohLogicalRetirement, settleIrohPhysicalClosure } from "./irohAttachmentLifetime.js";
 import { IrohRpcSessionChannel } from "./irohRpcSessionChannel.js";
 import { WebSocketSessionChannel, type RpcSessionChannel } from "./rpcServer/sessionChannel.js";
 import { ProcessSessionChannel } from "./rpcServer/processSessionChannel.js";
@@ -5723,7 +5730,7 @@ export class RpcServer {
    * QUIC stream and enters the same handleConnection/auth/dispatch machinery as
    * loopback WebSocket.
    */
-  async attachIrohConnection(connection: IrohPhysicalConnection): Promise<void> {
+  async attachIrohConnection(connection: IrohPhysicalConnection): Promise<IrohIngressAttachment> {
     if (this.isShuttingDown()) {
       throw new Error("RpcServer has stopped and cannot attach an Iroh connection");
     }
@@ -5775,12 +5782,37 @@ export class RpcServer {
     // handleConnection's shared RPC_MAX_PENDING_AUTHENTICATIONS budget bounds
     // the expensive unauthenticated phase regardless of transport.
     const sessions = new Map<string, IrohRpcSessionChannel>();
+    const sessionRetirements = new Set<Promise<void>>();
+    const sessionFailures: unknown[] = [];
+    const loopFailures: unknown[] = [];
     let stopped = false;
-    const closeAll = (reason: string): void => {
-      if (stopped) return;
+    let activated = false;
+    let retirement: Promise<void> | null = null;
+    let controlTask: Promise<void> | null = null;
+    let streamTask: Promise<void> | null = null;
+    const closeAll = (reason: string): Promise<void> => {
+      if (retirement) return retirement;
       stopped = true;
-      for (const session of sessions.values()) session.remoteClosed(1006, reason);
+      const closing = [...sessions.values()].map((session) => session.remoteClosed(1006, reason));
       sessions.clear();
+      retirement = (async () => {
+        // Each session lifetime already has one receipt in sessionRetirements.
+        // Trigger every active close, then join the receipts to quiescence so a
+        // lifetime that was already removed from `sessions` is included too.
+        // Reading failures only from sessionFailures preserves each graph once
+        // instead of nesting the same lifetime under both this aggregation and
+        // the attachment aggregation.
+        await Promise.allSettled(closing);
+        while (sessionRetirements.size > 0) {
+          await Promise.allSettled([...sessionRetirements]);
+        }
+        if (sessionFailures.length) {
+          throw new AggregateError(sessionFailures, "Iroh logical-session retirement failed", {
+            cause: sessionFailures[0],
+          });
+        }
+      })();
+      return retirement;
     };
     const refuseUnknownSession = async (sid: string): Promise<void> => {
       await writeControl({
@@ -5797,6 +5829,7 @@ export class RpcServer {
         const frame = decodeIrohSessionControlFrame(
           await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
         );
+        if (stopped) return;
         switch (frame.t) {
           case IROH_SESSION_OPEN: {
             if (
@@ -5812,7 +5845,7 @@ export class RpcServer {
               });
               break;
             }
-            sessions.get(frame.sid)?.remoteClosed(4000, "superseded by re-open");
+            void sessions.get(frame.sid)?.remoteClosed(4000, "superseded by re-open");
             const session = new IrohRpcSessionChannel({
               sid: frame.sid,
               connection,
@@ -5821,6 +5854,14 @@ export class RpcServer {
               log: (message) => log.warn(message),
             });
             sessions.set(frame.sid, session);
+            let sessionRetirement!: Promise<void>;
+            sessionRetirement = session
+              .lifetime()
+              .catch((error) => {
+                sessionFailures.push(error);
+              })
+              .finally(() => sessionRetirements.delete(sessionRetirement));
+            sessionRetirements.add(sessionRetirement);
             this.handleConnection(session);
             session.deliverAuth({
               type: "ws:auth",
@@ -5835,7 +5876,7 @@ export class RpcServer {
             break;
           }
           case IROH_SESSION_CLOSE:
-            sessions.get(frame.sid)?.remoteClosed(frame.code, frame.reason);
+            void sessions.get(frame.sid)?.remoteClosed(frame.code, frame.reason);
             sessions.delete(frame.sid);
             break;
           case IROH_SESSION_HELLO:
@@ -5854,11 +5895,15 @@ export class RpcServer {
       // ConnectionLost(LocallyClosed) from inside this detached catch handler.
       if (stopped) return;
       const reason = error instanceof Error ? error.message : String(error);
-      closeAll(reason);
+      beginIrohLogicalRetirement(closeAll, reason);
       connection.close(0x200n, new TextEncoder().encode(reason));
     };
     const handleStream = async (stream: IrohPhysicalBiStream): Promise<void> => {
       const streamPreamble = await readIrohStreamPreamble(stream.recv);
+      if (stopped) {
+        await Promise.allSettled([stream.recv.stop(0x200n), stream.send.reset(0x200n)]);
+        return;
+      }
       if (streamPreamble.k === "control") {
         throw new Error("Duplicate Iroh control stream");
       }
@@ -5879,6 +5924,10 @@ export class RpcServer {
           await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES)
         )
       ) as RpcEnvelope;
+      if (stopped) {
+        await Promise.allSettled([stream.recv.stop(0x200n), stream.send.reset(0x200n)]);
+        return;
+      }
       const body =
         streamPreamble.k === "stream" && streamPreamble.body
           ? irohReceiveStreamBody(stream.recv)
@@ -5887,38 +5936,91 @@ export class RpcServer {
     };
     const streamLoop = async (): Promise<void> => {
       const pendingHeaders = new Set<Promise<void>>();
-      while (!stopped) {
-        if (pendingHeaders.size >= IROH_CATASTROPHIC_PENDING_STREAM_HEADER_CEILING) {
-          await Promise.race(pendingHeaders);
-          continue;
+      try {
+        while (!stopped) {
+          if (pendingHeaders.size >= IROH_CATASTROPHIC_PENDING_STREAM_HEADER_CEILING) {
+            await Promise.race(pendingHeaders);
+            continue;
+          }
+          const stream = await connection.acceptBi();
+          if (stopped) {
+            await Promise.allSettled([stream.recv.stop(0x200n), stream.send.reset(0x200n)]);
+            break;
+          }
+          // Reading one stream's bounded preamble/envelope must not block
+          // admission of independent later streams. The replenishing native
+          // stream window is the finite resource boundary; a second pending-
+          // header ceiling would reject valid startup work merely because an
+          // unrelated stream is waiting on a busy JS scheduler.
+          const work = handleStream(stream)
+            .catch((error) => {
+              // QUIC request streams are independent failure domains. A bad or
+              // partial stream is reset without discarding healthy logical
+              // sessions on the physical connection.
+              return Promise.allSettled([stream.recv.stop(0x200n), stream.send.reset(0x200n)]).then(
+                () => {
+                  log.warn("Rejected Iroh RPC stream", {
+                    cause: error instanceof Error ? error.message : String(error),
+                  });
+                }
+              );
+            })
+            .finally(() => pendingHeaders.delete(work));
+          pendingHeaders.add(work);
         }
-        const stream = await connection.acceptBi();
-        // Reading one stream's bounded preamble/envelope must not block
-        // admission of independent later streams. The replenishing native
-        // stream window is the finite resource boundary; a second pending-
-        // header ceiling would reject valid startup work merely because an
-        // unrelated stream is waiting on a busy JS scheduler.
-        const work = handleStream(stream)
-          .catch((error) => {
-            // QUIC request streams are independent failure domains. A bad or
-            // partial stream is reset without discarding healthy logical
-            // sessions on the physical connection.
-            void stream.recv.stop(0x200n).catch(() => undefined);
-            void stream.send.reset(0x200n).catch(() => undefined);
-            log.warn("Rejected Iroh RPC stream", {
-              cause: error instanceof Error ? error.message : String(error),
-            });
-          })
-          .finally(() => pendingHeaders.delete(work));
-        pendingHeaders.add(work);
+      } finally {
+        await Promise.allSettled([...pendingHeaders]);
       }
     };
 
-    void controlLoop().catch(fail);
-    void streamLoop().catch(fail);
-    void connection
-      .closed()
-      .then(closeAll, (error) => closeAll(error instanceof Error ? error.message : String(error)));
+    const physicalClosure = settleIrohPhysicalClosure(connection.closed(), closeAll);
+    const currentLoopTasks = (): Promise<void>[] => {
+      const tasks: Promise<void>[] = [];
+      if (controlTask) tasks.push(controlTask);
+      if (streamTask) tasks.push(streamTask);
+      return tasks;
+    };
+    const lifetime = (async () => {
+      const results: PromiseSettledResult<unknown>[] = await Promise.allSettled([physicalClosure]);
+      results.push(...(await Promise.allSettled(currentLoopTasks())));
+      while (sessionRetirements.size > 0) {
+        results.push(...(await Promise.allSettled([...sessionRetirements])));
+      }
+      const failures = [
+        ...loopFailures,
+        ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+      ];
+      if (failures.length) {
+        throw new AggregateError(failures, "Iroh RPC attachment retirement failed", {
+          cause: failures[0],
+        });
+      }
+    })();
+
+    return {
+      activate: () => {
+        if (activated || stopped) return;
+        activated = true;
+        controlTask = controlLoop().catch((error) => {
+          if (stopped) return;
+          if (!isRpcConnectionLost(error)) loopFailures.push(error);
+          fail(error);
+        });
+        streamTask = streamLoop().catch((error) => {
+          if (stopped) return;
+          if (!isRpcConnectionLost(error)) loopFailures.push(error);
+          fail(error);
+        });
+      },
+      retire: (code, reason) => {
+        if (stopped) return;
+        // `closeAll` fences every logical session synchronously before native
+        // close lets ingress expose a successor for this authenticated peer.
+        beginIrohLogicalRetirement(closeAll, new TextDecoder().decode(reason));
+        connection.close(code, reason);
+      },
+      lifetime,
+    };
   }
 
   /** Handle an HTTP POST /rpc from the gateway (in-process dispatch). */

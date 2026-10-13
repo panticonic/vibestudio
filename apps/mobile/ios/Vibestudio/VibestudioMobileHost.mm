@@ -115,7 +115,11 @@ static uint32_t VibestudioReadLE32(const uint8_t *bytes) {
 - (NSDictionary *)constantsToExport
 {
   BOOL firebaseConfigured = [[NSBundle mainBundle] pathForResource:@"GoogleService-Info" ofType:@"plist"] != nil;
-  return @{ @"firebaseConfigured": @(firebaseConfigured) };
+  NSString *activeBundleBuildKey = [[NSUserDefaults standardUserDefaults] stringForKey:VibestudioActiveBundleBuildKey] ?: @"";
+  return @{
+    @"firebaseConfigured": @(firebaseConfigured),
+    @"activeBundleBuildKey": activeBundleBuildKey,
+  };
 }
 
 RCT_EXPORT_METHOD(openSafariBrowserDataExport:(RCTPromiseResolveBlock)resolve

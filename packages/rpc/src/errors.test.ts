@@ -85,6 +85,38 @@ describe("isRpcConnectionLost", () => {
     ).toBe(false);
     expect(isRpcConnectionLost(null)).toBe(false);
   });
+
+  it("classifies only pure connection-loss aggregates as routine loss", () => {
+    const lost = () =>
+      new RemoteRpcError("offline", "transport", "CONNECTION_LOST");
+    expect(isRpcConnectionLost(new AggregateError([lost(), lost()], "retirement failed"))).toBe(
+      true,
+    );
+    expect(
+      isRpcConnectionLost(
+        new AggregateError([lost(), new Error("write invariant failed")], "retirement failed"),
+      ),
+    ).toBe(false);
+    expect(isRpcConnectionLost(new AggregateError([], "empty"))).toBe(false);
+
+    const repeated = lost();
+    expect(
+      isRpcConnectionLost(new AggregateError([repeated, repeated], "admission and retirement")),
+    ).toBe(true);
+
+    expect(
+      isRpcConnectionLost(
+        new AggregateError([lost()], "retirement failed", { cause: lost() }),
+      ),
+    ).toBe(true);
+    expect(
+      isRpcConnectionLost(
+        new AggregateError([lost()], "retirement failed", {
+          cause: new Error("original invariant failed"),
+        }),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("RpcBoundaryError", () => {

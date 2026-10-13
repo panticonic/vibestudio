@@ -26,22 +26,40 @@ export function isTerminalAuthorityFailure(error: unknown): boolean {
 
 /** Routine logical-session loss; callers still own recovery and mutation policy. */
 export function isRpcConnectionLost(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  if (
-    "code" in error &&
-    error.code === SESSION_CONNECTION_LOST_CODE &&
-    (!("errorKind" in error) || error.errorKind === "transport")
-  ) {
-    return true;
-  }
-  // Domain wrappers such as PubSubError keep their own category in `code`,
-  // preserve the lower RPC code in `errorCode`, and retain the typed cause.
-  return (
-    "errorCode" in error &&
-    error.errorCode === SESSION_CONNECTION_LOST_CODE &&
-    "cause" in error &&
-    isRpcConnectionLost(error.cause)
-  );
+  const active = new Set<object>();
+  const classified = new Map<object, boolean>();
+  const visit = (value: unknown): boolean => {
+    if (!value || typeof value !== "object") return false;
+    const known = classified.get(value);
+    if (known !== undefined) return known;
+    if (active.has(value)) return false;
+    active.add(value);
+    let result: boolean;
+    if (value instanceof AggregateError) {
+      result =
+        value.errors.length > 0 &&
+        value.errors.every(visit) &&
+        (!("cause" in value) || value.cause === undefined || visit(value.cause));
+    } else if (
+      "code" in value &&
+      value.code === SESSION_CONNECTION_LOST_CODE &&
+      (!("errorKind" in value) || value.errorKind === "transport")
+    ) {
+      result = true;
+    } else {
+      // Domain wrappers such as PubSubError keep their own category in `code`,
+      // preserve the lower RPC code in `errorCode`, and retain the typed cause.
+      result =
+        "errorCode" in value &&
+        value.errorCode === SESSION_CONNECTION_LOST_CODE &&
+        "cause" in value &&
+        visit(value.cause);
+    }
+    active.delete(value);
+    classified.set(value, result);
+    return result;
+  };
+  return visit(error);
 }
 
 /** A caller cancelled its own call; nothing failed and nothing needs recovery. */

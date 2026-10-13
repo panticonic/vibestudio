@@ -31,8 +31,10 @@ export interface ApprovalStateControllerDeps {
 }
 
 export interface ApprovalStateController {
-  start(): void;
-  stop(): void;
+  /** Installs observation, admits the remote subscription, and reads the first authoritative snapshot. */
+  start(): Promise<PendingApproval[]>;
+  /** Retires local observation, the remote subscription, and every owned read. */
+  stop(): Promise<void>;
   refresh(reason?: ApprovalStateRefreshReason): Promise<PendingApproval[]>;
 }
 
@@ -42,33 +44,50 @@ export function createApprovalStateController(
   let disposed = false;
   let refreshSeq = 0;
   let unsubscribe: (() => void) | null = null;
+  let admission: Promise<void> | null = null;
+  let admissionFailure: unknown;
+  let starting: Promise<PendingApproval[]> | null = null;
+  let stopping: Promise<void> | null = null;
+  let current: PendingApproval[] = [];
+  const reads = new Set<Promise<PendingApproval[]>>();
   const filter = deps.filter ?? ((pending: PendingApproval[]) => pending);
 
   const apply = (pending: PendingApproval[], source: ApprovalStateSource): PendingApproval[] => {
     const filtered = filter(pending);
+    current = filtered;
     deps.onChange(filtered, source);
     return filtered;
   };
 
-  const refresh = async (
-    reason: ApprovalStateRefreshReason = "manual"
-  ): Promise<PendingApproval[]> => {
+  const refresh = (reason: ApprovalStateRefreshReason = "manual"): Promise<PendingApproval[]> => {
+    if (disposed) return Promise.reject(new Error("Approval state controller is stopped"));
+    if (admissionFailure !== undefined) return Promise.reject(admissionFailure);
     const seq = ++refreshSeq;
-    try {
-      const pending = await deps.listPending();
-      if (!disposed && seq === refreshSeq) {
-        return apply(pending, "refresh");
+    let read!: Promise<PendingApproval[]>;
+    read = (async () => {
+      try {
+        const pending = await deps.listPending();
+        if (disposed) throw new Error("Approval state controller is stopped");
+        if (!disposed && seq === refreshSeq) {
+          return apply(pending, "refresh");
+        }
+        return current;
+      } catch (error) {
+        if (!disposed && seq === refreshSeq) deps.onError?.(error, `refresh:${reason}`);
+        if (!disposed && seq !== refreshSeq) return current;
+        throw error;
+      } finally {
+        reads.delete(read);
       }
-      return filter(pending);
-    } catch (error) {
-      if (!disposed && seq === refreshSeq) deps.onError?.(error, `refresh:${reason}`);
-      return [];
-    }
+    })();
+    reads.add(read);
+    return read;
   };
 
-  return {
+  const controller: ApprovalStateController = {
     start() {
-      if (unsubscribe || disposed) return;
+      if (disposed) return Promise.reject(new Error("Approval state controller is stopped"));
+      if (starting) return starting;
       unsubscribe = deps.onPendingChanged((payload) => {
         const pending = pendingApprovalsFromEventPayload(payload);
         if (pending) {
@@ -76,24 +95,59 @@ export function createApprovalStateController(
           apply(pending, "event");
           return;
         }
-        void refresh("event-fallback");
+        void refresh("event-fallback").catch(() => undefined);
       });
-      void deps
-        .subscribePendingChanged()
-        .catch((error) => deps.onError?.(error, "subscribe"))
-        .finally(() => {
-          if (!disposed) void refresh("initial");
-        });
+      admission = deps.subscribePendingChanged().then(
+        () => undefined,
+        (error: unknown) => {
+          admissionFailure = error;
+          if (!disposed) deps.onError?.(error, "subscribe");
+          throw error;
+        }
+      );
+      starting = admission.then(() => refresh("initial"));
+      // Startup remains controller-owned while a caller is initiating stop or
+      // otherwise has not attached its readiness observer yet. The returned
+      // promise still rejects with the original failure.
+      void starting.catch(() => undefined);
+      return starting;
     },
     stop() {
+      if (stopping) return stopping;
       disposed = true;
       refreshSeq++;
       unsubscribe?.();
       unsubscribe = null;
-      void deps
-        .unsubscribePendingChanged?.()
-        .catch((error) => deps.onError?.(error, "unsubscribe"));
+      stopping = (async () => {
+        let admissionFailure: unknown;
+        try {
+          await admission;
+        } catch (error) {
+          admissionFailure = error;
+        }
+        let unsubscribeFailure: unknown;
+        if (admission && deps.unsubscribePendingChanged) {
+          try {
+            await deps.unsubscribePendingChanged();
+          } catch (error) {
+            unsubscribeFailure = error;
+            deps.onError?.(error, "unsubscribe");
+          }
+        }
+        await Promise.allSettled([...reads]);
+        if (admissionFailure !== undefined && unsubscribeFailure !== undefined) {
+          throw new AggregateError(
+            [admissionFailure, unsubscribeFailure],
+            "Approval observation admission and retirement failed",
+            { cause: admissionFailure }
+          );
+        }
+        if (unsubscribeFailure !== undefined) throw unsubscribeFailure;
+        if (admissionFailure !== undefined) throw admissionFailure;
+      })();
+      return stopping;
     },
     refresh,
   };
+  return controller;
 }

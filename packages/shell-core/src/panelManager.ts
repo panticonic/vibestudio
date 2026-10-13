@@ -41,6 +41,7 @@ import {
   mintHistoryEntryKey,
 } from "@vibestudio/shared/panel/idValues";
 import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/idValues";
 import type {
   PanelMetadataClient,
@@ -206,6 +207,13 @@ export class PanelManager {
     { icon?: string; iconVersion?: string; iconState?: string } | null
   >();
   private readonly panelMetadataFlights = new Map<string, Promise<void>>();
+  /**
+   * Durable panel detail reads mutate the resident projection. Keep those
+   * read-and-apply transactions ordered per slot so independent event streams
+   * cannot apply an older response after a newer one. Different slots remain
+   * independent.
+   */
+  private readonly panelDetailTransactions = new Map<PanelSlotId, Promise<unknown>>();
   private readonly panelMetadata?: PanelMetadataClient;
   private readonly activationClient?: ActivationClient;
   private readonly viewState?: LocalPanelViewStateStore;
@@ -1614,13 +1622,25 @@ export class PanelManager {
 
   private async readStoredPanel(slotId: PanelSlotId, forceRefresh = false): Promise<Panel | null> {
     let panel = this.registry.getPanel(slotId) ?? null;
-    if (!panel || forceRefresh) {
+    if (panel && !forceRefresh) {
+      this.touchRuntimePanel(slotId);
+      this.refreshPanelDecoration(slotId);
+      return panel;
+    }
+
+    return serializeByKey(this.panelDetailTransactions, slotId, async () => {
+      // A preceding first read may have populated the slot while this request
+      // waited. Ordinary reads consume that projection; explicit refreshes
+      // retain their authoritative read in admission order.
+      panel = this.registry.getPanel(slotId) ?? null;
+      if (panel && !forceRefresh) {
+        this.touchRuntimePanel(slotId);
+        this.refreshPanelDecoration(slotId);
+        return panel;
+      }
+
       const detail = await this.workspaceState.getPanelDetail(slotId);
       if (!detail) return null;
-      // Another bounded refresh may have projected this slot while the
-      // durable detail read was in flight. Reconcile against the registry
-      // again before insertion so concurrent first reads cannot prepend the
-      // same root twice.
       panel = this.registry.getPanel(slotId) ?? panel;
       const snapshot = this.snapshotFromHistoryRow(detail.currentHistory);
       const entity = detail.entity;
@@ -1669,11 +1689,10 @@ export class PanelManager {
       }
       this.currentEntityBySlot.set(slotId, detail.entity.id as PanelEntityId);
       this.currentEntitySourceBySlot.set(slotId, detail.entity.source);
-    }
-    if (!panel) return null;
-    this.touchRuntimePanel(slotId);
-    this.refreshPanelDecoration(slotId);
-    return panel;
+      this.touchRuntimePanel(slotId);
+      this.refreshPanelDecoration(slotId);
+      return panel;
+    });
   }
 
   private touchRuntimePanel(slotId: PanelSlotId): void {

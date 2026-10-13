@@ -35,6 +35,12 @@ object VibestudioBundleStore {
         return activeBundlePath(context)
     }
 
+    fun activeBuildKey(context: Context): String? {
+        if (activeBundlePath(context) == null) return null
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(ACTIVE_BUILD_KEY, null)
+    }
+
     fun activate(context: Context, localPath: String, buildKey: String, integrity: String): Boolean {
         val file = File(localPath)
         if (!isUnderBundleCache(context, file) || !file.isFile) {

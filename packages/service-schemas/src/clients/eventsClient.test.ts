@@ -104,6 +104,20 @@ describe("EventsClient", () => {
     await events.unsubscribeAll();
   });
 
+  it("keeps a replacement owner admitted while the previous owner retires", async () => {
+    const first = client.subscribe("panel-tree-invalidated");
+    const replacement = client.subscribe("panel-tree-invalidated");
+    await Promise.all([first, replacement]);
+
+    expect(fixture.stream).toHaveBeenCalledTimes(1);
+    await client.unsubscribe("panel-tree-invalidated");
+    expect(fixture.signals[0]!.aborted).toBe(false);
+    expect(fixture.stream).toHaveBeenCalledTimes(1);
+
+    await client.unsubscribe("panel-tree-invalidated");
+    expect(fixture.signals[0]!.aborted).toBe(true);
+  });
+
   it("cancels and joins a watch that is still waiting for its acknowledgement", async () => {
     let signal!: AbortSignal;
     let response!: ReadableStreamDefaultController<Uint8Array>;
