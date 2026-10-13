@@ -14,7 +14,10 @@ import { launchManagedServerApp } from "../setup/managedServerApp";
 import {
   approvePendingStartupUnits,
   approvePendingWorkspaceCreationReview,
+  clickPanelSelector,
+  clickPanelText,
   createBrowserPanel,
+  executePanelScript,
   getFocusedPanelId,
   reloadPanel,
   type TestApp,
@@ -29,40 +32,95 @@ import type { RpcCaller } from "@vibestudio/rpc";
 const CHANNEL_READS_SYMBOL = "vibestudio.e2e.channelRpcReads.v1";
 const TEST_MODEL_REF = "vibestudio-test:deterministic";
 
-async function selectDeterministicTestModel(app: TestApp, workspaceId: string) {
-  const selection = await app.app.evaluate(async (_electron, id) => {
-    const api = await globalThis.__testApi!.forWorkspace(id);
-    const service = (await api.rpcCall("workers", "resolveService", ["vibestudio.models.v1"])) as {
-      kind?: unknown;
-      targetId?: unknown;
-    };
-    if (service.kind !== "durable-object" || typeof service.targetId !== "string") {
-      throw new Error("Workspace model-settings service did not resolve to a durable object");
-    }
-    const settings = (await api.rpcCallTarget(service.targetId, "getSettings")) as {
-      defaultAgentConfig?: Record<string, unknown>;
-      catalog?: { models?: Array<{ ref?: string; availability?: { state?: string } }> };
-    };
-    const model = settings.catalog?.models?.find(
-      (entry) => entry.ref === "vibestudio-test:deterministic"
-    );
-    if (model?.availability?.state !== "ready") {
-      throw new Error("The deterministic test model is unavailable in this workspace");
-    }
-    const updated = (await api.rpcCallTarget(service.targetId, "setDefaultAgentConfig", [
-      { ...settings.defaultAgentConfig, model: "vibestudio-test:deterministic" },
-    ])) as { defaultModel?: unknown; defaultAgentConfig?: { model?: unknown } };
-    return {
-      before: settings.defaultAgentConfig?.["model"] ?? null,
-      selected: updated.defaultModel ?? updated.defaultAgentConfig?.model ?? null,
-      targetId: service.targetId,
-    };
-  }, workspaceId);
-  if (selection.selected !== TEST_MODEL_REF) {
-    throw new Error(
-      `Model settings selected ${String(selection.selected)}, expected ${TEST_MODEL_REF}`
-    );
+async function settleWorkspaceCreationReviews(app: TestApp) {
+  const workspaces = await app.app.evaluate(() => globalThis.__testApi!.listWorkspaces());
+  for (const workspace of workspaces) {
+    await approvePendingWorkspaceCreationReview({
+      app: app.app,
+      workspaceId: workspace.workspaceId,
+    });
   }
+}
+
+async function selectDeterministicTestModel(app: TestApp, workspaceId: string) {
+  const launcherPanelId = await getFocusedPanelId(app);
+  if (!launcherPanelId) throw new Error("System workspace has no focused New Panel launcher");
+  let launcherRow = "";
+  await expect
+    .poll(async () => {
+      launcherRow = await executePanelScript<string>(
+        app,
+        launcherPanelId,
+        `Array.from(document.querySelectorAll('[role="option"]')).map((item) => item.innerText.trim()).find((text) => text.includes("Agentic Chat") && text.includes("panels/chat")) ?? ""`
+      );
+      return launcherRow;
+    })
+    .not.toBe("");
+  if (!(await clickPanelText(app, launcherPanelId, '[role="option"]', launcherRow))) {
+    throw new Error("Could not open Agentic Chat from the System New Panel launcher");
+  }
+  await expect
+    .poll(() =>
+      executePanelScript<boolean>(
+        app,
+        launcherPanelId,
+        `!!document.querySelector('.agent-setup-card [aria-label="Provider"]')`
+      )
+    )
+    .toBe(true);
+  const chatPanelId = launcherPanelId;
+  const clickText = async (selector: string, text: string) => {
+    if (!(await clickPanelText(app, chatPanelId, selector, text))) {
+      throw new Error("Could not click " + JSON.stringify(text) + " in the System chat panel");
+    }
+  };
+  const clickSelector = async (selector: string) => {
+    if (!(await clickPanelSelector(app, chatPanelId, selector))) {
+      throw new Error("Could not click " + JSON.stringify(selector) + " in the System chat panel");
+    }
+  };
+  const selectedText = (label: "Provider" | "Model") =>
+    executePanelScript<string>(
+      app,
+      chatPanelId,
+      `document.querySelector('.agent-setup-card [aria-label="${label}"]')?.textContent?.trim() ?? ""`
+    );
+  const selectOptionIfNeeded = async (
+    label: "Provider" | "Model",
+    expected: string
+  ): Promise<string> => {
+    const current = await selectedText(label);
+    if (current.includes(expected)) return current;
+    await clickSelector(`[aria-label="${label}"]`);
+    const option = await executePanelScript<string>(
+      app,
+      chatPanelId,
+      `Array.from(document.querySelectorAll('[role="option"]')).map((item) => item.textContent?.trim() ?? "").find((text) => text.includes(${JSON.stringify(expected)})) ?? ""`
+    );
+    if (!option)
+      throw new Error(`${expected} is not available in the ${label.toLowerCase()} picker`);
+    await clickText('[role="option"]', option);
+    return option;
+  };
+  const provider = await selectOptionIfNeeded("Provider", "Deterministic test provider");
+  const model = await selectOptionIfNeeded("Model", "Deterministic test model");
+  await clickText("button", "Save defaults");
+  await expect
+    .poll(() =>
+      executePanelScript<boolean>(
+        app,
+        chatPanelId,
+        `(() => {
+          const setup = document.querySelector(".agent-setup-card");
+          if (!setup) return false;
+          const saved = Array.from(setup.querySelectorAll("*")).some((item) => item.textContent?.trim() === "Workspace defaults");
+          const saveButton = Array.from(setup.querySelectorAll("button")).some((button) => button.innerText.trim() === "Save defaults");
+          return saved && !saveButton;
+        })()`
+      )
+    )
+    .toBe(true);
+  const selection = { workspaceId, model: TEST_MODEL_REF, provider, pickerModel: model };
   await test.info().attach("test-model-routing.json", {
     body: JSON.stringify(selection, null, 2),
     contentType: "application/json",
@@ -177,13 +235,8 @@ export async function websiteInventionScenario(environment: Record<string, strin
     app = await launchManagedServerApp(environment);
     await declineFirstRunReporting(app);
     await approvePendingStartupUnits(app);
+    await settleWorkspaceCreationReviews(app);
     const workspaces = await app.app.evaluate(() => globalThis.__testApi!.listWorkspaces());
-    for (const workspace of workspaces) {
-      await approvePendingWorkspaceCreationReview({
-        app: app.app,
-        workspaceId: workspace.workspaceId,
-      });
-    }
     const shell = await findWorkspaceShellPage(app);
     await shell.getByRole("button", { name: "Open System", exact: true }).click();
     await expect(shell.getByRole("button", { name: "Open System", exact: true })).toHaveAttribute(
@@ -191,6 +244,11 @@ export async function websiteInventionScenario(environment: Record<string, strin
       "location"
     );
     await expect.poll(() => getFocusedPanelId(app!)).toBeTruthy();
+    if (expectsDeterministicModel) {
+      // Personal's extension review can arrive after the initial workspace pass.
+      await settleWorkspaceCreationReviews(app);
+      await selectDeterministicTestModel(app, app.workspaceId);
+    }
     const parentId = await getFocusedPanelId(app);
     const panel = await createBrowserPanel(app, parentId!, url, { focus: true });
     await expect
@@ -329,9 +387,6 @@ export async function websiteInventionScenario(environment: Record<string, strin
     await expect(page.locator("#workspace-connect-button")).toBeEnabled();
     await page.locator("#workspace-connect-button").click();
     await untilReady("connection", () => page.locator("#image-lab").isVisible(), 60_000);
-    if (expectsDeterministicModel) {
-      await selectDeterministicTestModel(app, app.workspaceId);
-    }
     await page
       .locator("#lab-prompt")
       .fill(

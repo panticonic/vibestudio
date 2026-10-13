@@ -711,11 +711,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return this.serverClient.call(service, method, args);
   }
 
-  /** Call a resolved runtime target through the same workspace session. */
-  callServerTarget(targetId: string, method: string, args: unknown[]): Promise<unknown> {
-    return this.serverClient.callTarget(targetId, method, args);
-  }
-
   // =========================================================================
   // Focus
   // =========================================================================
