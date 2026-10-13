@@ -7,6 +7,7 @@ import {
 import type { HostTarget } from "@vibestudio/shared/hostTargets";
 import {
   HostLaunchClient,
+  type HostLaunchProgress,
   type HostLaunchResult,
 } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import {
@@ -26,6 +27,32 @@ export interface TerminalLaunchGateOptions {
   output?: NodeJS.WriteStream;
   /** Concise progress lines (build/activation status) for the user. */
   onProgress?(line: string): void;
+  /**
+   * The owner's termination request. It ends an open approval prompt and the
+   * wait for activation, so a hang-up or SIGTERM never leaves the prompt
+   * holding the terminal after the server it asks about is gone.
+   */
+  signal?: AbortSignal;
+}
+
+/** What the server is doing to bring the app up, in the person's words. */
+function describeLaunchProgress(progress: HostLaunchProgress): string | null {
+  if (progress.state === "complete") return null;
+  const detail = progress.detail ? `: ${progress.detail}` : "";
+  switch (progress.phase) {
+    case "resolve-target":
+      return progress.state === "failed" ? `Could not find the app to start${detail}` : null;
+    case "start-units":
+      return progress.state === "blocked"
+        ? "Waiting for your approval of the extensions it needs"
+        : `Starting the extensions it needs${detail}`;
+    case "prepare-app":
+      return progress.state === "blocked"
+        ? "Waiting for your approval of the app"
+        : progress.state === "failed"
+          ? `The app could not be prepared${detail}`
+          : `Building and starting the app${detail}`;
+  }
 }
 
 export interface TerminalLaunchGateResult {
@@ -55,13 +82,20 @@ export async function runTerminalLaunchGate(
 ): Promise<TerminalLaunchGateResult> {
   const target = options.target ?? "terminal";
   const output = options.output ?? process.stdout;
-  const launchClient = new HostLaunchClient((service, method, args) =>
-    rpc.call(qualifyServiceMethod(service, method), args)
+  let lastLaunchProgress = "";
+  const launchClient = new HostLaunchClient(
+    (service, method, args) => rpc.call(qualifyServiceMethod(service, method), args),
+    (progress) => {
+      const line = describeLaunchProgress(progress);
+      if (line && line !== lastLaunchProgress) options.onProgress?.(line);
+      lastLaunchProgress = line ?? "";
+    }
   );
   let approvalsResolved = 0;
   let lastProgress = "";
 
   for (;;) {
+    options.signal?.throwIfAborted();
     const launch = await launchClient.launch(target);
     if (launch.status === "ready" || launch.status === "unavailable") {
       return { target, status: launch.status, approvalsResolved, launch };
@@ -100,8 +134,13 @@ async function getDecision(
   }
   const rl = readline.createInterface({ input, output });
   // Ctrl-C at the prompt ends startup; without a listener readline only pauses.
+  // So does the owner's termination request.
   const interrupted = new AbortController();
   rl.on("SIGINT", () => interrupted.abort());
+  const ownerSignal = options.signal;
+  const stopOnOwner = () => interrupted.abort();
+  if (ownerSignal?.aborted) interrupted.abort();
+  else ownerSignal?.addEventListener("abort", stopOnOwner, { once: true });
   try {
     for (;;) {
       const answer = (await rl.question("Trust and start? [y/N] ", { signal: interrupted.signal }))
@@ -118,6 +157,7 @@ async function getDecision(
     }
     throw error;
   } finally {
+    ownerSignal?.removeEventListener("abort", stopOnOwner);
     rl.close();
   }
 }

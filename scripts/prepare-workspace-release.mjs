@@ -49,9 +49,13 @@ function joinedFailure(failures, message) {
  * start only after completed so they observe one immutable, complete artifact
  * set. Every caller must stop and join the producer before retiring its source
  * or output directories.
- * @param {{ appRoot: string, output: string, scratch: string, env: NodeJS.ProcessEnv, executable: string, entry: string }} input
+ * `scope: "sources"` publishes only the sealed template sources, for a source
+ * supervisor whose server compiles runtimes on demand; the default publishes
+ * the complete release a packager ships.
+ * @param {{ appRoot: string, output: string, scratch: string, env: NodeJS.ProcessEnv, executable: string, entry: string, scope?: "sources" | "release", onProgress?: (progress: object) => void }} input
  */
 export function prepareWorkspaceRelease(input) {
+  const scope = input.scope ?? "release";
   const declaredOutput = input.env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"];
   const output = path.resolve(declaredOutput ?? input.output);
   // A supplied release is a required input. Missing or partial artifacts must
@@ -63,7 +67,17 @@ export function prepareWorkspaceRelease(input) {
   }
   const child = spawn(
     input.executable,
-    [input.entry, "--app-root", input.appRoot, "--output", output, "--scratch", input.scratch],
+    [
+      input.entry,
+      "--app-root",
+      input.appRoot,
+      "--output",
+      output,
+      "--scratch",
+      input.scratch,
+      "--scope",
+      scope,
+    ],
     {
       cwd: path.dirname(input.entry),
       env: { ...input.env, VIBESTUDIO_WORKSPACE_RELEASE_ROOT: output },
@@ -87,7 +101,9 @@ export function prepareWorkspaceRelease(input) {
     });
   }
   child.on("message", (message) => {
-    if (message?.kind === "completed") {
+    if (message?.kind === "progress") {
+      input.onProgress?.(message.progress);
+    } else if (message?.kind === "completed") {
       if (completedReceipt || failure) {
         const invalidReceipt = new Error(
           "Workspace release producer sent an invalid completion receipt"

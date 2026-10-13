@@ -4,6 +4,7 @@ import type { GraphNode } from "./buildV2/packageGraph.js";
 type RuntimeBuild = Awaited<ReturnType<BuildSystemV2["getBuild"]>>;
 
 export type WorkspaceRuntimeProgressEvent =
+  | { type: "planned"; count: number }
   | { type: "started"; source: string }
   | { type: "completed"; source: string; durationMs: number }
   | {
@@ -29,6 +30,7 @@ export async function prepareWorkspaceRuntimeBuilds(
       node.kind !== "template" &&
       !(node.kind === "app" && node.manifest.app?.target === "react-native")
   );
+  reportProgress?.({ type: "planned", count: runtimes.length });
   const outcomes = await Promise.allSettled(
     runtimes.map(async (node) => {
       signal?.throwIfAborted();

@@ -14,6 +14,7 @@ import {
 } from "../remoteClient.js";
 import { RpcClient, type DeviceCredential } from "../rpcClient.js";
 import { runTerminalLaunchGate } from "../terminalLaunchGate.js";
+import type { LaunchProgress } from "./launchProgress.js";
 import {
   loadTerminalBrowserModule,
   requestTerminalAppGrant,
@@ -34,10 +35,12 @@ export interface TerminalSessionsOptions {
   serverExited?: Promise<string>;
   /** Approve startup approvals once without prompting. */
   yes: boolean;
+  /** The owner's termination request; it ends a startup prompt that is still open. */
+  signal?: AbortSignal;
   stdin: NodeJS.ReadStream;
   stdout: NodeJS.WriteStream;
-  /** One concise progress line for the user (before the browser takes over). */
-  progress(line: string): void;
+  /** What is happening while the browser is made ready, before it takes the terminal. */
+  progress: LaunchProgress;
   /** Test seams. */
   dependencies?: Partial<TerminalSessionDependencies>;
 }
@@ -87,7 +90,7 @@ export async function runTerminalSessions(
     const shown = await deps.route(options.credentials, selector);
     const result = await runOnce(system, shown, options, deps);
     if (result.kind === "app-updated") {
-      options.progress("The terminal app was updated; loading the new version…");
+      options.progress.note("The terminal app was updated; loading the new version…");
       continue;
     }
     if (result.exit.kind === "switch-workspace") {
@@ -127,31 +130,49 @@ async function runOnce(
     };
     const system = routed(systemRoute);
     const workspace = routed(shownRoute);
-    options.progress(`Preparing the terminal browser in ${system.name}…`);
-    const gate = await deps.runGate(device, {
-      target: "terminal",
-      yes: options.yes,
-      input: options.stdin,
-      output: options.stdout,
-      onProgress: (line) => options.progress(line),
-    });
+    const prepare = options.progress.step(`Preparing the terminal browser in ${system.name}`);
+    let gate: Awaited<ReturnType<typeof deps.runGate>>;
+    try {
+      gate = await deps.runGate(device, {
+        target: "terminal",
+        yes: options.yes,
+        input: options.stdin,
+        output: options.stdout,
+        onProgress: (line) => prepare.note(line),
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+    } catch (error) {
+      prepare.fail();
+      throw error;
+    }
     if (gate.status === "denied") {
+      prepare.fail();
       throw new CliError("Terminal startup was declined; nothing was started.");
     }
     if (gate.launch?.status !== "ready") {
       const reason = gate.launch && "reason" in gate.launch ? gate.launch.reason : gate.status;
+      prepare.fail();
       throw new CliError(
         `The terminal browser is not available in ${system.name}: ${reason}. ` +
           "The System workspace must declare it under hostTargets.terminal.app in meta/vibestudio.yml."
       );
     }
-    const grant = await deps.requestGrant(device, gate.launch.entity.source || null);
-    options.progress("Loading the terminal browser…");
-    const module = await deps.loadModule(device, grant.app);
-    // The workspace the browser shows is reached as this device, exactly as
-    // the desktop shell reaches the workspace it shows.
-    workspaceDevice =
-      workspace.id === system.id ? device : await device.openWorkspaceConnection(shownRoute);
+    prepare.done();
+    const load = options.progress.step("Loading the terminal browser");
+    let grant: Awaited<ReturnType<typeof deps.requestGrant>>;
+    let module: Awaited<ReturnType<typeof deps.loadModule>>;
+    try {
+      grant = await deps.requestGrant(device, gate.launch.entity.source || null);
+      module = await deps.loadModule(device, grant.app);
+      // The workspace the browser shows is reached as this device, exactly as
+      // the desktop shell reaches the workspace it shows.
+      workspaceDevice =
+        workspace.id === system.id ? device : await device.openWorkspaceConnection(shownRoute);
+    } catch (error) {
+      load.fail();
+      throw error;
+    }
+    load.done();
     return await deps.runBrowser({
       device,
       workspaceDevice,

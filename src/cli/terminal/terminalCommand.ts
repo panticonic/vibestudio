@@ -29,6 +29,7 @@ import {
 import { pairRemoteServer, serverEndpoint } from "../remoteClient.js";
 import { refreshShell } from "../rpcClient.js";
 import { EXIT_INTERRUPTED } from "../terminalLaunchGate.js";
+import { createLaunchProgress, runStep } from "./launchProgress.js";
 import { localServerPaths, startLocalServer, type LocalServer } from "./localServer.js";
 import { runTerminalSessions } from "./terminalSessions.js";
 import { routeProcessWarnings, tolerateTerminalHangup } from "./ttyRestore.js";
@@ -101,7 +102,7 @@ async function runTerminalCommand(
   // warnings — including those raised while the CLI loaded, which Node emits
   // on the next tick — go to its log.
   const releaseWarnings = routeProcessWarnings(appendTerminalLog);
-  const progress = (line: string) => process.stdout.write(`${line}\n`);
+  const out = (line: string) => process.stdout.write(`${line}\n`);
   // A hang-up stops the server this command owns (the supervisor forwards
   // SIGHUP); the dead terminal must not crash the command while it joins it.
   tolerateTerminalHangup();
@@ -117,26 +118,40 @@ async function runTerminalCommand(
       );
     }
     const options = parseOptions(inv);
-    let credentials = await pairFromLink(options, progress);
-    if (!credentials || (await needsLocalServer(credentials))) {
+    const existing = await pairFromLink(options, out);
+    const reusable = existing && !(await needsLocalServer(existing)) ? existing : null;
+    // Starting a local server adds two steps to the two that every launch has.
+    const progress = createLaunchProgress({ write: out, total: reusable ? 2 : 4 });
+    let credentials: CliDeviceCredentials;
+    if (reusable) {
+      credentials = reusable;
+    } else {
       const paths = localServerPaths();
-      progress(
-        credentials
-          ? "Starting the local Vibestudio server…"
-          : "Not paired with a server yet: starting a local Vibestudio server…"
-      );
-      progress(`  state: ${cliConfigRoot()}`);
-      progress(`  log:   ${paths.logFile}`);
+      const reconnecting = existing !== null;
+      out(`  state: ${cliConfigRoot()}`);
+      out(`  log:   ${paths.logFile}`);
       // Ctrl-C before the browser starts stops the server we own and ends startup.
       process.on("SIGINT", onInterrupt);
-      server = await startLocalServer({
-        hostArtifactRoot:
-          process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] ?? path.join(context.appRoot, "dist"),
-        appRoot: process.env["VIBESTUDIO_APP_ROOT"] ?? context.appRoot,
-        env: process.env,
-        retain: options.keepServer,
-      });
-      credentials = await pairWithLocalServer(server, credentials, progress);
+      const started = await runStep(
+        progress,
+        reconnecting
+          ? "Starting the local Vibestudio server"
+          : "Not paired with a server yet: starting a local Vibestudio server",
+        () =>
+          startLocalServer({
+            hostArtifactRoot:
+              process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] ?? path.join(context.appRoot, "dist"),
+            appRoot: process.env["VIBESTUDIO_APP_ROOT"] ?? context.appRoot,
+            env: process.env,
+            retain: options.keepServer,
+          })
+      );
+      server = started;
+      credentials = await runStep(
+        progress,
+        reconnecting ? "Reconnecting to the local server" : "Pairing this terminal",
+        () => pairWithLocalServer(started)
+      );
     }
     const serverInfo = describeServer(credentials, server);
     const exit = await runTerminalSessions({
@@ -158,7 +173,7 @@ async function runTerminalCommand(
     return printTerminalError(error, server?.logFile);
   } finally {
     process.off("SIGINT", onInterrupt);
-    if (server) await retireServer(server, progress);
+    if (server) await retireServer(server, out);
     releaseWarnings();
   }
 }
@@ -245,12 +260,7 @@ async function needsLocalServer(credentials: CliDeviceCredentials): Promise<bool
   }
 }
 
-async function pairWithLocalServer(
-  server: LocalServer,
-  existing: CliDeviceCredentials | null,
-  progress: (line: string) => void
-): Promise<CliDeviceCredentials> {
-  progress(existing ? "Reconnecting to the local server…" : "Pairing this terminal…");
+async function pairWithLocalServer(server: LocalServer): Promise<CliDeviceCredentials> {
   const paired = await pairLocalCli(server.ready, { label: `Terminal on ${os.hostname()}` });
   if (paired.status === "invite-required") {
     throw new AuthError(
@@ -317,6 +327,8 @@ async function retireServer(server: LocalServer, progress: (line: string) => voi
 }
 
 function withServerLog(error: unknown, logFile: string | undefined): unknown {
+  // An interruption is the person's own choice, not a failure with a log to read.
+  if (error instanceof CliError && error.exitCode === EXIT_INTERRUPTED) return error;
   if (!logFile || (error instanceof Error && error.message.includes(logFile))) return error;
   return new CliError(
     `${formatRpcFailure(error)}\nServer log: ${logFile}`,
