@@ -5177,7 +5177,11 @@ async function main() {
           connectionGrants.grant(principalId, issuedBy, { subject }).token,
         holdLease: (input) => panelRuntimeCoordinator.holdEntityForHost(input),
         dispatch: (ctx, service, method, args) => dispatcher.dispatch(ctx, service, method, args),
-        emitToUser: (userId, event, payload) => eventService.emitToUser(userId, event, payload),
+        // Watched delivery (events.watch), projected to the person's own watches.
+        emitToUser: (userId, event, payload) =>
+          eventService.emitProjected(event, (owner) =>
+            owner.userId === userId ? payload : undefined
+          ),
         log: (level, message, fields) => console[level](`[TerminalApps] ${message}`, fields ?? ""),
       });
     },
