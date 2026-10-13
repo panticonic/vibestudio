@@ -15,8 +15,34 @@ import {
   type ExecutionPublicationPort,
 } from "@vibestudio/shared/execution/retention";
 
-import type { UnitKind, UnitRegistryEntryBase, UnitRegistryStatus, UnitSource } from "./types.js";
-export type { UnitKind, UnitRegistryEntryBase, UnitRegistryStatus, UnitSource } from "./types.js";
+import {
+  UNIT_ROLLBACK_HISTORY_LIMIT,
+  type UnitKind,
+  type UnitRegistryEntryBase,
+  type UnitRegistryStatus,
+  type UnitSource,
+  type UnitVersionRecord,
+} from "./types.js";
+export {
+  UNIT_ROLLBACK_HISTORY_LIMIT,
+  type UnitKind,
+  type UnitRegistryEntryBase,
+  type UnitRegistryStatus,
+  type UnitSource,
+  type UnitVersionRecord,
+} from "./types.js";
+
+function dedupeVersions<Version extends UnitVersionRecord>(versions: Version[]): Version[] {
+  const seen = new Set<string>();
+  const history: Version[] = [];
+  for (const version of versions) {
+    if (seen.has(version.activeBundleKey)) continue;
+    seen.add(version.activeBundleKey);
+    history.push(version);
+    if (history.length >= UNIT_ROLLBACK_HISTORY_LIMIT) break;
+  }
+  return history;
+}
 
 function unitErrorMessage(error: unknown): string {
   return formatRpcFailure(error);
@@ -47,6 +73,11 @@ export interface UnitDescriptor<Kind extends UnitKind = UnitKind> {
     nativeCode: boolean;
   };
   seedTrustEligible: boolean;
+  /**
+   * Entry fields recorded with each retained version and restored when it is
+   * selected again, because they describe how that build runs.
+   */
+  versionedFields?: readonly string[];
 }
 
 export interface UnitBuildIdentity<Kind extends UnitKind = UnitKind> {
@@ -791,8 +822,23 @@ export class UnitHost<
     }
   }
 
+  /**
+   * Adopt a build. The build it supersedes joins the rollback history here, so
+   * every unit kind that adopts builds gets retention and rollback from the one
+   * place that changes what is adopted.
+   */
   activateBuild(opts: UnitBuildActivationOptions<Entry>): Entry {
+    const activeBundleKey = path.basename(opts.buildDir);
+    const previous = this.opts.registry.get(opts.name);
+    const retained = (previous?.previousVersions ?? []).filter(
+      (version) => version.activeBundleKey !== activeBundleKey
+    );
+    const history =
+      previous?.activeBundleKey && previous.activeBundleKey !== activeBundleKey
+        ? [this.currentVersion(previous), ...retained]
+        : retained;
     return this.opts.registry.patch(opts.name, {
+      previousVersions: dedupeVersions(history),
       ...opts.extra,
       source: {
         kind: "workspace-repo",
@@ -802,13 +848,78 @@ export class UnitHost<
       version: opts.version,
       activeEv: opts.effectiveVersion,
       activeSourceHash: opts.activeSourceHash,
-      activeBundleKey: path.basename(opts.buildDir),
+      activeBundleKey,
       activeDependencyEvs: opts.dependencyEvs,
       activeExternalDeps: opts.externalDeps,
       activeRuntimeDepsKey: opts.runtimeDepsKey ?? null,
       status: opts.status ?? "running",
       lastError: null,
     } as Partial<Entry>);
+  }
+
+  /**
+   * Make a retained version the adopted build again. The build it replaces
+   * becomes the newest retained version, so selecting is reversible.
+   */
+  selectVersion(
+    name: string,
+    selected: UnitVersionRecord,
+    patch: { status: UnitRegistryStatus } & Partial<Entry>
+  ): Entry {
+    const entry = this.opts.registry.get(name);
+    if (!entry) throw new Error(`Unit is not installed: ${name}`);
+    const remaining = entry.previousVersions.filter(
+      (candidate) => candidate.activeBundleKey !== selected.activeBundleKey
+    );
+    const current = entry.activeBundleKey ? [this.currentVersion(entry)] : [];
+    const versioned = Object.fromEntries(
+      (this.opts.descriptor.versionedFields ?? []).map((field) => [
+        field,
+        (selected as unknown as Record<string, unknown>)[field],
+      ])
+    );
+    return this.opts.registry.patch(name, {
+      ...versioned,
+      version: selected.version,
+      activeEv: selected.activeEv,
+      activeSourceHash: selected.activeSourceHash,
+      activeBundleKey: selected.activeBundleKey,
+      activeExecutionDigest: selected.executionDigest,
+      activeDependencyEvs: selected.activeDependencyEvs,
+      activeExternalDeps: selected.activeExternalDeps,
+      activeRuntimeDepsKey: selected.activeRuntimeDepsKey,
+      lastError: null,
+      previousVersions: dedupeVersions([...current, ...remaining]),
+      ...patch,
+    } as Partial<Entry>);
+  }
+
+  /** The adopted build, as a record of the same shape as the retained versions. */
+  currentVersion(entry: Entry): Entry["previousVersions"][number] {
+    if (!entry.activeBundleKey) throw new Error(`Unit ${entry.name} has no adopted build`);
+    if (!entry.activeExecutionDigest) {
+      throw new Error(
+        `Unit ${entry.name} has no verified execution identity for ${entry.activeBundleKey}`
+      );
+    }
+    const entryFields = entry as unknown as Record<string, unknown>;
+    return {
+      version: entry.version,
+      activeEv: entry.activeEv,
+      activeSourceHash: entry.activeSourceHash,
+      activeBundleKey: entry.activeBundleKey,
+      executionDigest: entry.activeExecutionDigest,
+      activeDependencyEvs: { ...entry.activeDependencyEvs },
+      activeExternalDeps: { ...entry.activeExternalDeps },
+      activeRuntimeDepsKey: entry.activeRuntimeDepsKey ?? null,
+      activatedAt: Date.now(),
+      ...Object.fromEntries(
+        (this.opts.descriptor.versionedFields ?? []).map((field) => {
+          const value = entryFields[field];
+          return [field, Array.isArray(value) ? [...value] : value];
+        })
+      ),
+    };
   }
 
   activeSourceMatches(entry: Entry, sourceRepo: string, ref: string): boolean {
@@ -1247,6 +1358,8 @@ export function createPendingUnitRegistryEntry<Kind extends UnitKind>(opts: {
     activeDependencyEvs: {},
     activeExternalDeps: {},
     activeRuntimeDepsKey: null,
+    activeExecutionDigest: null,
+    previousVersions: [],
     status: opts.building ? "building" : "pending-approval",
     lastError: null,
   };
@@ -1278,10 +1391,11 @@ export interface UnitRegistryOptions<Entry extends UnitRegistryEntryBase> {
   unitKind: Entry["unitKind"];
   isEntry?: (value: unknown) => value is Entry;
   normalizeEntry?: (entry: Entry) => Entry;
+  /**
+   * Retains the adopted build and every retained version of each entry, so a
+   * rollback target is never collected out from under its history.
+   */
   publicationPort?: ExecutionPublicationPort;
-  publicationForEntry?: (entry: Entry) => ExecutionPublication | null;
-  /** Cheap durable-pointer fingerprint; avoids artifact I/O on status-only patches. */
-  publicationKeyForEntry?: (entry: Entry) => string;
 }
 
 export interface UnitIdentityApprovalStore {
@@ -1413,18 +1527,17 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   private readonly isEntry: (value: unknown) => value is Entry;
   private readonly normalizeEntry: (entry: Entry) => Entry;
   private readonly publicationPort: ExecutionPublicationPort | undefined;
-  private readonly publicationForEntry: ((entry: Entry) => ExecutionPublication | null) | undefined;
-  private readonly publicationKeyForEntry: ((entry: Entry) => string) | undefined;
 
   constructor(opts: UnitRegistryOptions<Entry>) {
     this.unitKind = opts.unitKind;
     this.filePath = path.join(opts.statePath, "units", this.unitKind, "registry.json");
     this.isEntry =
       opts.isEntry ?? ((value): value is Entry => isUnitRegistryEntry(value, this.unitKind));
-    this.normalizeEntry = opts.normalizeEntry ?? ((entry) => normalizeUnitRegistryEntry(entry));
+    this.normalizeEntry = (entry) => {
+      const normalized = normalizeUnitRegistryEntry(entry);
+      return opts.normalizeEntry ? opts.normalizeEntry(normalized) : normalized;
+    };
     this.publicationPort = opts.publicationPort;
-    this.publicationForEntry = opts.publicationForEntry;
-    this.publicationKeyForEntry = opts.publicationKeyForEntry;
     this.load();
   }
 
@@ -1518,24 +1631,49 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   }
 
   private writeEntry(previous: Entry | null, entry: Entry, mutate: () => void): void {
-    const changed = this.publicationKeyForEntry
-      ? this.publicationKeyForEntry(entry) !==
-        (previous ? this.publicationKeyForEntry(previous) : "")
-      : true;
-    const publication =
-      changed && this.publicationPort ? (this.publicationForEntry?.(entry) ?? null) : null;
+    // Status-only patches leave the durable pointers alone and skip artifact I/O.
+    const changed = this.retainedBuilds(entry) !== (previous ? this.retainedBuilds(previous) : "");
     publishExecutionOwner(
       changed ? this.publicationPort : undefined,
-      publication ?? {
+      {
         owner: this.unitKind === "app" ? "app-generation" : "extension-generation",
         ownerId: entry.name,
-        artifacts: [],
+        artifacts: changed && this.publicationPort ? this.publishedArtifacts(entry) : [],
       },
       () => {
         mutate();
         this.save();
       }
     );
+  }
+
+  private retainedBuilds(entry: Entry): string {
+    return JSON.stringify([
+      entry.activeBundleKey,
+      entry.activeExecutionDigest,
+      ...entry.previousVersions.flatMap((version) => [
+        version.activeBundleKey,
+        version.executionDigest,
+      ]),
+    ]);
+  }
+
+  private publishedArtifacts(entry: Entry): ExecutionPublication["artifacts"] {
+    const builds = [
+      ...(entry.activeBundleKey
+        ? [{ buildKey: entry.activeBundleKey, executionDigest: entry.activeExecutionDigest }]
+        : []),
+      ...entry.previousVersions.map((version) => ({
+        buildKey: version.activeBundleKey,
+        executionDigest: version.executionDigest,
+      })),
+    ];
+    return builds.map(({ buildKey, executionDigest }) => {
+      if (!executionDigest) {
+        throw new Error(`${this.unitKind} ${entry.name} references unverifiable build ${buildKey}`);
+      }
+      return { buildKey, executionDigest };
+    });
   }
 
   private assertUnitKind(entry: Entry): void {
@@ -1552,6 +1690,8 @@ export function normalizeUnitRegistryEntry<Entry extends UnitRegistryEntryBase>(
     ...entry,
     activeDependencyEvs: entry.activeDependencyEvs ?? {},
     activeExternalDeps: entry.activeExternalDeps ?? {},
+    activeExecutionDigest: entry.activeExecutionDigest ?? null,
+    previousVersions: entry.previousVersions ?? [],
   };
 }
 

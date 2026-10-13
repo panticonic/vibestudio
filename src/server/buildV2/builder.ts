@@ -4293,6 +4293,51 @@ function appTargetOf(node: GraphNode): "electron" | "react-native" | "terminal" 
   return target;
 }
 
+/** Everything a target adapter needs to turn one app unit into stored artifacts. */
+interface AppBuildInput {
+  session: BuilderSession;
+  node: GraphNode;
+  ev: string;
+  buildKey: string;
+  graph: PackageGraph;
+  workspaceRoot: string;
+  sourcemap: boolean;
+  sourceRoot: string;
+  sourceStateHash: string;
+  authority: UnitAuthorityManifest;
+  provider: BuildProvider | null;
+  signal: AbortSignal;
+  /** The unit's validated `vibestudio` manifest and its `app` section. */
+  manifest: Record<string, unknown>;
+  appManifest: Record<string, unknown>;
+}
+
+/**
+ * One adapter per app target. Each owns how its artifacts are produced; the
+ * artifact contract every adapter must satisfy is `validateAppBuildContract`,
+ * enforced where builds leave the builder.
+ */
+const APP_TARGET_ADAPTERS: Record<
+  "electron" | "react-native" | "terminal",
+  (input: AppBuildInput) => Promise<StoredBuildResult>
+> = {
+  electron: (input) =>
+    buildPanel(
+      input.session,
+      input.node,
+      input.ev,
+      input.buildKey,
+      input.graph,
+      input.workspaceRoot,
+      input.sourcemap,
+      input.sourceRoot,
+      input.sourceStateHash,
+      input.authority
+    ),
+  terminal: buildTerminalApp,
+  "react-native": buildReactNativeApp,
+};
+
 async function buildApp(
   session: BuilderSession,
   node: GraphNode,
@@ -4308,113 +4353,12 @@ async function buildApp(
   signal: AbortSignal
 ): Promise<StoredBuildResult> {
   const appSourcePath = path.join(sourceRoot, node.relativePath);
-  const extractedPkgPath = path.join(appSourcePath, "package.json");
-  const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8")) as {
-    vibestudio?: Record<string, unknown>;
-  };
-  const extractedManifest = extractedPkg.vibestudio ?? {};
-  validateUnitManifest(appUnitManifestDescriptor, extractedManifest, { unitName: node.name });
-
-  const appManifest = extractedManifest["app"] as Record<string, unknown>;
-  if (appManifest["target"] === "terminal") {
-    return buildTerminalApp(
-      session,
-      node,
-      ev,
-      buildKey,
-      graph,
-      workspaceRoot,
-      sourcemap,
-      sourceRoot,
-      appManifest,
-      sourceStateHash,
-      authority,
-      signal
-    );
-  }
-  if (appManifest["target"] === "react-native") {
-    if (!provider) throw new Error("React Native build identity has no resolved provider");
-    const env = await prepareBuildEnv(
-      session,
-      node,
-      buildKey,
-      graph,
-      workspaceRoot,
-      sourceRoot,
-      "runtime-root",
-      signal
-    );
-    let dependencies: Awaited<ReturnType<typeof acquireExternalDeps>> | undefined;
-    let resources: Awaited<ReturnType<typeof prepareBuildProviderResources>> | undefined;
-    try {
-      // A provider executes in the workspace native domain. Its npm input must
-      // be the exact declared closure, never the host-wide resolution fallback.
-      dependencies = await acquireExternalDeps(env.externalDeps, env.dependencyOverrides, {
-        appRoot: session.processOwner.appRoot,
-        patches: env.dependencyPatches,
-        signal,
-      });
-      const input: BuildProviderInput = {
-        target: "react-native",
-        unitName: node.name,
-        sourcePath: appSourcePath,
-        dependencyProjection: {
-          nodeModulesPath: dependencies.nodeModulesDir || null,
-          modules: collectBuildProviderModules(session, node, graph, sourceRoot, env.outdir),
-        },
-        effectiveVersion: ev,
-        manifest: extractedManifest,
-      };
-      const worker = session.processOwner.immutableTreeWorker;
-      resources = await prepareBuildProviderResources({
-        inputsRoot: stateLayout(session.store.stateRoot).buildProviderInputsDir,
-        sourceRoot,
-        input,
-        materialize: (source, destination) => worker.materialize(source, destination),
-      });
-      const providerInput = resources.input;
-      const output = await provider.build(providerInput);
-      const entries = await materializeBuildProviderArtifacts(
-        provider,
-        providerInput,
-        output.artifacts
-      );
-      const metadata: BuildMetadata = {
-        kind: "app",
-        name: node.name,
-        buildKey,
-        sourcePath: node.relativePath,
-        ev,
-        sourceStateHash,
-        sourcemap,
-        authority,
-        details: {
-          kind: "app",
-          target: "react-native",
-          platform: output.metadata?.platform,
-          integrity: null,
-          rnHostAbi: output.metadata?.rnHostAbi ?? null,
-          provider: {
-            name: provider.name,
-            activeEv: provider.activeEv,
-            activeBuildKey: provider.activeBuildKey,
-            contractVersion: provider.contractVersion,
-          },
-        },
-        builtAt: new Date().toISOString(),
-      };
-      return session.store.putStored(buildKey, { entries }, metadata);
-    } finally {
-      try {
-        await resources?.dispose();
-      } finally {
-        dependencies?.release();
-        await env.cleanup();
-      }
-    }
-  }
-
-  return buildPanel(
+  const extractedPkg = JSON.parse(
+    fs.readFileSync(path.join(appSourcePath, "package.json"), "utf-8")
+  ) as { vibestudio?: Record<string, unknown> };
+  const manifest = extractedPkg.vibestudio ?? {};
+  validateUnitManifest(appUnitManifestDescriptor, manifest, { unitName: node.name });
+  return APP_TARGET_ADAPTERS[appTargetOf(node)]({
     session,
     node,
     ev,
@@ -4424,8 +4368,110 @@ async function buildApp(
     sourcemap,
     sourceRoot,
     sourceStateHash,
-    authority
+    authority,
+    provider,
+    signal,
+    manifest,
+    appManifest: manifest["app"] as Record<string, unknown>,
+  });
+}
+
+async function buildReactNativeApp(input: AppBuildInput): Promise<StoredBuildResult> {
+  const {
+    session,
+    node,
+    ev,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourcemap,
+    sourceRoot,
+    sourceStateHash,
+    authority,
+    provider,
+    signal,
+    manifest: extractedManifest,
+  } = input;
+  const appSourcePath = path.join(sourceRoot, node.relativePath);
+  if (!provider) throw new Error("React Native build identity has no resolved provider");
+  const env = await prepareBuildEnv(
+    session,
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root",
+    signal
   );
+  let dependencies: Awaited<ReturnType<typeof acquireExternalDeps>> | undefined;
+  let resources: Awaited<ReturnType<typeof prepareBuildProviderResources>> | undefined;
+  try {
+    // A provider executes in the workspace native domain. Its npm input must
+    // be the exact declared closure, never the host-wide resolution fallback.
+    dependencies = await acquireExternalDeps(env.externalDeps, env.dependencyOverrides, {
+      appRoot: session.processOwner.appRoot,
+      patches: env.dependencyPatches,
+      signal,
+    });
+    const request: BuildProviderInput = {
+      target: "react-native",
+      unitName: node.name,
+      sourcePath: appSourcePath,
+      dependencyProjection: {
+        nodeModulesPath: dependencies.nodeModulesDir || null,
+        modules: collectBuildProviderModules(session, node, graph, sourceRoot, env.outdir),
+      },
+      effectiveVersion: ev,
+      manifest: extractedManifest,
+    };
+    const worker = session.processOwner.immutableTreeWorker;
+    resources = await prepareBuildProviderResources({
+      inputsRoot: stateLayout(session.store.stateRoot).buildProviderInputsDir,
+      sourceRoot,
+      input: request,
+      materialize: (source, destination) => worker.materialize(source, destination),
+    });
+    const providerInput = resources.input;
+    const output = await provider.build(providerInput);
+    const entries = await materializeBuildProviderArtifacts(
+      provider,
+      providerInput,
+      output.artifacts
+    );
+    const metadata: BuildMetadata = {
+      kind: "app",
+      name: node.name,
+      buildKey,
+      sourcePath: node.relativePath,
+      ev,
+      sourceStateHash,
+      sourcemap,
+      authority,
+      details: {
+        kind: "app",
+        target: "react-native",
+        platform: output.metadata?.platform,
+        integrity: null,
+        rnHostAbi: output.metadata?.rnHostAbi ?? null,
+        provider: {
+          name: provider.name,
+          activeEv: provider.activeEv,
+          activeBuildKey: provider.activeBuildKey,
+          contractVersion: provider.contractVersion,
+        },
+      },
+      builtAt: new Date().toISOString(),
+    };
+    return session.store.putStored(buildKey, { entries }, metadata);
+  } finally {
+    try {
+      await resources?.dispose();
+    } finally {
+      dependencies?.release();
+      await env.cleanup();
+    }
+  }
 }
 
 function collectBuildProviderModules(
@@ -4499,20 +4545,21 @@ function collectBuildProviderModules(
   );
 }
 
-async function buildTerminalApp(
-  session: BuilderSession,
-  node: GraphNode,
-  ev: string,
-  buildKey: string,
-  graph: PackageGraph,
-  workspaceRoot: string,
-  sourcemap: boolean,
-  sourceRoot: string,
-  appManifest: Record<string, unknown>,
-  sourceStateHash: string,
-  authority: UnitAuthorityManifest,
-  signal: AbortSignal
-): Promise<StoredBuildResult> {
+async function buildTerminalApp(input: AppBuildInput): Promise<StoredBuildResult> {
+  const {
+    session,
+    node,
+    ev,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourcemap,
+    sourceRoot,
+    appManifest,
+    sourceStateHash,
+    authority,
+    signal,
+  } = input;
   const env = await prepareBuildEnv(
     session,
     node,

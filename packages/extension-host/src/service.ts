@@ -67,6 +67,7 @@ import {
   normalizeUnitRef as normalizeRef,
   requestUnitInstallReview,
   requireExactUnitAdmission,
+  UNIT_ROLLBACK_HISTORY_LIMIT,
   unitAuthorityManifestFromPackageJson,
   unitBuildIdentityFromRegistryEntry,
   type UnitDeclaration,
@@ -374,28 +375,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       statePath: deps.statePath,
       unitKind: EXTENSION_UNIT_DESCRIPTOR.kind,
       publicationPort: deps.executionPublicationPort,
-      normalizeEntry: (entry) => ({
-        ...entry,
-        activeExecutionDigest: entry.activeExecutionDigest ?? null,
-      }),
-      publicationKeyForEntry: (entry) =>
-        `${entry.activeBundleKey ?? ""}\0${entry.activeExecutionDigest ?? ""}`,
-      publicationForEntry: (entry) => {
-        if (!entry.activeBundleKey) {
-          return { owner: "extension-generation", ownerId: entry.name, artifacts: [] };
-        }
-        const executionDigest = entry.activeExecutionDigest;
-        if (!executionDigest) {
-          throw new Error(
-            `Extension ${entry.name} references unverifiable build ${entry.activeBundleKey}`
-          );
-        }
-        return {
-          owner: "extension-generation",
-          ownerId: entry.name,
-          artifacts: [{ buildKey: entry.activeBundleKey, executionDigest }],
-        };
-      },
     });
     this.extensionTrustResolver = new UnitTrustResolver<RegistryEntry>({
       entryIdentity: (entry) => this.registryEntryBuildIdentity(entry),
@@ -2745,19 +2724,28 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       extra: { activeExecutionDigest: executionDigest },
     });
     if (!shouldRun) return;
+    await this.activateOrRestore(node.name, previous);
+  }
+
+  /**
+   * Start the adopted build. If it fails, the build it replaced is put back and
+   * started again, so a bad update never leaves the extension down while a
+   * working build exists; the failure stays recorded as an update not adopted.
+   */
+  private async activateOrRestore(name: string, previous: RegistryEntry | null): Promise<void> {
     try {
-      await this.activateOnce(node.name);
+      await this.activateOnce(name);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (previous?.activeBundleKey) {
-        this.unitHost.rejectUpdate(node.name, previous, message);
+        this.unitHost.rejectUpdate(name, previous, message);
         try {
-          await this.activateOnce(node.name);
+          await this.activateOnce(name);
           // The previous build runs again; the status callback cleared the
           // error, so record that the update was not adopted.
-          this.unitHost.markUpdateRejected(node.name, message);
+          this.unitHost.markUpdateRejected(name, message);
         } catch (rollbackErr) {
-          this.registry.patch(node.name, {
+          this.registry.patch(name, {
             status: "error",
             lastError: `Activation failed: ${message}; rollback failed: ${
               rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)
@@ -2765,13 +2753,58 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           });
         }
       } else {
-        this.registry.patch(node.name, {
-          status: "error",
-          lastError: message,
-        });
+        this.registry.patch(name, { status: "error", lastError: message });
       }
       throw err;
     }
+  }
+
+  /** Retained builds of an extension, newest first. */
+  listVersions(name: string): {
+    current: RegistryEntry["previousVersions"][number] | null;
+    previous: RegistryEntry["previousVersions"];
+    retentionLimit: number;
+  } {
+    const entry = this.registry.get(this.findExtensionNode(name).name);
+    return {
+      current: entry?.activeBundleKey ? this.unitHost.currentVersion(entry) : null,
+      previous: entry?.previousVersions ?? [],
+      retentionLimit: UNIT_ROLLBACK_HISTORY_LIMIT,
+    };
+  }
+
+  /** Select a retained build again (the newest by default) and run it. */
+  async rollback(name: string, buildKey?: string): Promise<RegistryEntry> {
+    await this.initialize();
+    this.shutdownSignal.signal.throwIfAborted();
+    const node = this.findExtensionNode(name);
+    await this.runActivationExclusive(node.name, async () => {
+      const previous = this.registry.get(node.name);
+      if (!previous) throw new Error(`Unknown extension: ${name}`);
+      const selected = buildKey
+        ? previous.previousVersions.find((version) => version.activeBundleKey === buildKey)
+        : previous.previousVersions[0];
+      if (!selected) {
+        throw new Error(
+          buildKey
+            ? `No rollback version ${buildKey} is available for extension ${node.name}`
+            : `No rollback version is available for extension ${node.name}`
+        );
+      }
+      if (!(await this.deps.buildSystem.getBuildByKey(selected.activeBundleKey))) {
+        throw new Error(
+          `Rollback extension build is missing from the build store: ${selected.activeBundleKey}`
+        );
+      }
+      const shouldRun = this.activatesEagerly(node) || this.processes.isRunning(node.name);
+      this.unitHost.selectVersion(node.name, selected, {
+        status: shouldRun ? "building" : "available",
+      });
+      if (shouldRun) await this.activateOrRestore(node.name, previous);
+    });
+    const adopted = this.registry.get(node.name);
+    if (!adopted) throw new Error(`Extension ${node.name} disappeared during rollback`);
+    return adopted;
   }
 
   private async prepareBuild(

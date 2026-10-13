@@ -21,6 +21,7 @@ import {
   normalizeUnitRef as normalizeRef,
   requestUnitInstallReview,
   requireExactUnitAdmission,
+  UNIT_ROLLBACK_HISTORY_LIMIT,
   unitBuildIdentityFromRegistryEntry,
   canonicalUnitBuildIdentity,
   unitAuthorityManifestFromPackageJson,
@@ -31,6 +32,7 @@ import {
   type UnitReconcileOptions,
   type UnitReconcileTrigger,
   type UnitRegistryEntryBase,
+  type UnitVersionRecord,
   type ExactUnitAdmissionReview,
 } from "@vibestudio/unit-host";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
@@ -112,8 +114,8 @@ const APP_UNIT_DESCRIPTOR: UnitDescriptor<"app"> = {
     nativeCode: false,
   },
   seedTrustEligible: true,
+  versionedFields: ["target", "capabilities"],
 };
-const APP_ROLLBACK_HISTORY_LIMIT = 5;
 
 export interface AppUpdateErrorDiagnostic {
   phase: "build" | "target-validation" | "activation";
@@ -131,24 +133,14 @@ export interface AppRegistryEntry extends UnitRegistryEntryBase {
   unitKind: "app";
   target: WorkspaceAppTarget;
   capabilities: AppCapability[];
-  activeExecutionDigest: string | null;
   previousVersions: AppVersionRecord[];
   lastErrorDetails?: AppUpdateErrorDiagnostic | null;
   activationTrust?: AppActivationTrustRecord | null;
 }
 
-export interface AppVersionRecord {
-  version: string;
+export interface AppVersionRecord extends UnitVersionRecord {
   target: WorkspaceAppTarget;
   capabilities: AppCapability[];
-  activeEv: string | null;
-  activeSourceHash: string | null;
-  activeBundleKey: string;
-  executionDigest: string;
-  activeDependencyEvs: Record<string, string>;
-  activeExternalDeps: Record<string, string>;
-  activeRuntimeDepsKey: string | null;
-  activatedAt: number;
 }
 
 export interface AppActivationTrustRecord {
@@ -410,45 +402,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       unitKind: "app",
       normalizeEntry: (entry) => ({
         ...entry,
-        activeDependencyEvs: entry.activeDependencyEvs ?? {},
-        activeExternalDeps: entry.activeExternalDeps ?? {},
-        activeExecutionDigest: entry.activeExecutionDigest ?? null,
         capabilities: entry.capabilities ?? [],
-        previousVersions: entry.previousVersions ?? [],
         lastErrorDetails: entry.lastErrorDetails ?? null,
         activationTrust: entry.activationTrust ?? null,
       }),
       publicationPort: deps.executionPublicationPort,
-      publicationKeyForEntry: (entry) =>
-        JSON.stringify([
-          entry.activeBundleKey,
-          entry.activeExecutionDigest,
-          ...entry.previousVersions.flatMap((version) => [
-            version.activeBundleKey,
-            version.executionDigest,
-          ]),
-        ]),
-      publicationForEntry: (entry) => {
-        const builds = [
-          ...(entry.activeBundleKey
-            ? [{ buildKey: entry.activeBundleKey, executionDigest: entry.activeExecutionDigest }]
-            : []),
-          ...entry.previousVersions.map((version) => ({
-            buildKey: version.activeBundleKey,
-            executionDigest: version.executionDigest,
-          })),
-        ];
-        return {
-          owner: "app-generation",
-          ownerId: entry.name,
-          artifacts: builds.map(({ buildKey, executionDigest }) => {
-            if (!executionDigest) {
-              throw new Error(`App ${entry.name} references unverifiable build ${buildKey}`);
-            }
-            return { buildKey, executionDigest };
-          }),
-        };
-      },
     });
     this.trustResolver = new UnitTrustResolver<AppRegistryEntry>({
       entryIdentity: (entry) => this.registryEntryIdentity(entry),
@@ -991,7 +949,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         ...row,
         target: entry?.target ?? "electron",
         canRollback: !!entry?.previousVersions?.length,
-        rollbackRetentionLimit: APP_ROLLBACK_HISTORY_LIMIT,
+        rollbackRetentionLimit: UNIT_ROLLBACK_HISTORY_LIMIT,
         lastErrorDetails: entry?.lastErrorDetails ?? null,
         previousVersions: entry?.previousVersions ?? [],
       };
@@ -1005,11 +963,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   } {
     this.assertInitialized();
     const entry = this.findRegistryEntry(sourceOrName);
-    if (!entry) return { current: null, previous: [], retentionLimit: APP_ROLLBACK_HISTORY_LIMIT };
+    if (!entry) return { current: null, previous: [], retentionLimit: UNIT_ROLLBACK_HISTORY_LIMIT };
     return {
-      current: appVersionRecordFromEntry(entry),
+      current: this.unitHost.currentVersion(entry),
       previous: [...entry.previousVersions],
-      retentionLimit: APP_ROLLBACK_HISTORY_LIMIT,
+      retentionLimit: UNIT_ROLLBACK_HISTORY_LIMIT,
     };
   }
 
@@ -1065,7 +1023,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         source: candidate.source,
       };
     }
-    const activeSourceHash = requireBuildSourceStateHash(node.name, build);
     const externalDeps = this.externalDepsForBuild(node, build.metadata, decl);
     const dependencyEvs = this.currentDependencyEvs(node);
     const trust = this.hostPinnedRefTrustRecord(
@@ -1081,41 +1038,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       })
     );
     if (!previous) this.registry.upsert(this.pendingEntryFor(node, decl, true));
-    let entry = this.unitHost.activateBuild({
-      name: node.name,
-      version: readPackageVersion(node.path),
-      sourceRepo: node.relativePath,
-      ref,
-      buildDir: build.dir,
-      effectiveVersion: build.metadata.ev,
-      activeSourceHash,
-      dependencyEvs,
-      externalDeps,
-      runtimeDepsKey: null,
-      status: appRegistryStatusForTarget(),
-      extra: {
-        target,
-        capabilities: this.appCapabilities(node),
-        activeExecutionDigest: build.metadata.execution?.executionDigest ?? null,
-        activationTrust: trust,
-      },
-    });
-    const previousRecord =
-      previous && previous.activeBundleKey && previous.activeBundleKey !== entry.activeBundleKey
-        ? appVersionRecordFromEntry(previous)
-        : null;
-    if (previousRecord) {
-      entry = this.registry.patch(entry.name, {
-        previousVersions: appVersionHistory([
-          previousRecord,
-          ...(previous?.previousVersions ?? []),
-        ]),
-        lastErrorDetails: null,
-        activationTrust: trust,
-      });
-    } else {
-      entry = this.registry.patch(entry.name, { lastErrorDetails: null, activationTrust: trust });
-    }
+    this.adoptBuild(node, target, ref, build, { dependencyEvs, externalDeps }, trust);
     return {
       buildKey: path.basename(build.dir),
       effectiveVersion: build.metadata.ev,
@@ -1159,7 +1082,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       );
     this.validateBuildForTarget(entry.name, selected.target, build);
 
-    const updated = this.selectAppVersion(entry, selected, "running", null);
+    const updated = this.unitHost.selectVersion(entry.name, selected, {
+      status: "running",
+      lastErrorDetails: null,
+      activationTrust: null,
+    });
     await this.activateAppEntity(updated, build);
     const activated = this.registry.get(updated.name) ?? updated;
     await this.emitAvailable(
@@ -1278,37 +1205,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.retireAppEntity(entry.name);
     this.registry.patch(entry.name, { status: "stopped", lastError: null });
     this.emitStatus(entry.name, "stopped", null);
-  }
-
-  private selectAppVersion(
-    entry: AppRegistryEntry,
-    selected: AppVersionRecord,
-    status: AppRegistryEntry["status"],
-    lastError: string | null
-  ): AppRegistryEntry {
-    const current = appVersionRecordFromEntry(entry);
-    const remaining = entry.previousVersions.filter(
-      (candidate) => candidate.activeBundleKey !== selected.activeBundleKey
-    );
-    return this.registry.patch(entry.name, {
-      version: selected.version,
-      target: selected.target,
-      capabilities: selected.capabilities,
-      activeEv: selected.activeEv,
-      activeSourceHash: selected.activeSourceHash,
-      activeBundleKey: selected.activeBundleKey,
-      activeExecutionDigest: selected.executionDigest,
-      activeDependencyEvs: selected.activeDependencyEvs,
-      activeExternalDeps: selected.activeExternalDeps,
-      activeRuntimeDepsKey: selected.activeRuntimeDepsKey,
-      status,
-      lastError,
-      lastErrorDetails: null,
-      activationTrust: null,
-      previousVersions: current
-        ? appVersionHistory([current, ...remaining])
-        : appVersionHistory(remaining),
-    });
   }
 
   listWorkspaceUnitLogs(name: string): Array<{
@@ -1837,44 +1733,18 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       diagnostic.target = target;
       this.validateBuildForTarget(node.name, target, build);
       this.requireAdmission(node.name, node.relativePath, build.metadata.ev);
-      const activeSourceHash = requireBuildSourceStateHash(node.name, build);
       diagnostic.phase = "activation";
-      const capabilities = this.appCapabilities(node);
-      let entry = this.unitHost.activateBuild({
-        name: node.name,
-        version: readPackageVersion(node.path),
-        sourceRepo: node.relativePath,
-        ref: decl.ref,
-        buildDir: build.dir,
-        effectiveVersion: build.metadata.ev,
-        activeSourceHash,
-        dependencyEvs: this.currentDependencyEvs(node),
-        externalDeps: this.externalDepsForBuild(node, build.metadata, decl),
-        runtimeDepsKey: null,
-        status: appRegistryStatusForTarget(),
-        extra: {
-          target,
-          capabilities,
-          activeExecutionDigest: build.metadata.execution?.executionDigest ?? null,
-          activationTrust: null,
+      const entry = this.adoptBuild(
+        node,
+        target,
+        decl.ref,
+        build,
+        {
+          dependencyEvs: this.currentDependencyEvs(node),
+          externalDeps: this.externalDepsForBuild(node, build.metadata, decl),
         },
-      });
-      const previousRecord =
-        previous && previous.activeBundleKey && previous.activeBundleKey !== entry.activeBundleKey
-          ? appVersionRecordFromEntry(previous)
-          : null;
-      if (previousRecord) {
-        entry = this.registry.patch(entry.name, {
-          previousVersions: appVersionHistory([
-            previousRecord,
-            ...(previous?.previousVersions ?? []),
-          ]),
-          lastErrorDetails: null,
-          activationTrust: null,
-        });
-      } else {
-        entry = this.registry.patch(entry.name, { lastErrorDetails: null, activationTrust: null });
-      }
+        null
+      );
       this.emitStatus(entry.name, entry.status, null);
     } catch (err) {
       if (err && typeof err === "object") {
@@ -1996,6 +1866,36 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!build)
       throw new Error(`Active app build is missing from the build store: ${entry.activeBundleKey}`);
     this.validateBuildForTarget(entry.name, entry.target, build);
+  }
+
+  /** Adopt a proven build; the unit host records what it supersedes for rollback. */
+  private adoptBuild(
+    node: AppGraphNode,
+    target: WorkspaceAppTarget,
+    ref: string,
+    build: AppBuildResultLike,
+    deps: { dependencyEvs: Record<string, string>; externalDeps: Record<string, string> },
+    trust: AppActivationTrustRecord | null
+  ): AppRegistryEntry {
+    return this.unitHost.activateBuild({
+      name: node.name,
+      version: readPackageVersion(node.path),
+      sourceRepo: node.relativePath,
+      ref,
+      buildDir: build.dir,
+      effectiveVersion: build.metadata.ev,
+      activeSourceHash: requireBuildSourceStateHash(node.name, build),
+      ...deps,
+      runtimeDepsKey: null,
+      status: "available",
+      extra: {
+        target,
+        capabilities: this.appCapabilities(node),
+        activeExecutionDigest: build.metadata.execution?.executionDigest ?? null,
+        activationTrust: trust,
+        lastErrorDetails: null,
+      },
+    });
   }
 
   /** Every app target runs only an exact build the user has accepted to run. */
@@ -2349,7 +2249,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       }),
       target: this.appTarget(node, decl),
       capabilities: this.appCapabilities(node),
-      activeExecutionDigest: null,
       previousVersions: [],
     };
   }
@@ -2815,10 +2714,6 @@ function appLaunchMode(target: WorkspaceAppTarget): AppLaunchMode {
   return "client-module";
 }
 
-function appRegistryStatusForTarget(): AppRegistryEntry["status"] {
-  return "available";
-}
-
 function requireBuildSourceStateHash(unitName: string, build: AppBuildResultLike): string {
   if (build.sourceStateHash) return build.sourceStateHash;
   if (build.metadata.sourceStateHash) return build.metadata.sourceStateHash;
@@ -2923,43 +2818,6 @@ function normalizeArtifactPath(remainderPath: string): string {
   const clean = decodeURIComponent(remainderPath.replace(/^\/+/, "")) || "index.html";
   if (path.isAbsolute(clean) || clean.split(/[\\/]/).includes("..")) return "__invalid__";
   return clean.replace(/\\/g, "/");
-}
-
-function appVersionRecordFromEntry(entry: AppRegistryEntry): AppVersionRecord | null {
-  if (!entry.activeBundleKey) return null;
-  if (!entry.activeExecutionDigest) {
-    throw new Error(
-      `App ${entry.name} has no verified execution identity for ${entry.activeBundleKey}`
-    );
-  }
-  return {
-    version: entry.version,
-    target: entry.target,
-    capabilities: [...entry.capabilities],
-    activeEv: entry.activeEv,
-    activeSourceHash: entry.activeSourceHash,
-    activeBundleKey: entry.activeBundleKey,
-    executionDigest: entry.activeExecutionDigest,
-    activeDependencyEvs: { ...(entry.activeDependencyEvs ?? {}) },
-    activeExternalDeps: { ...(entry.activeExternalDeps ?? {}) },
-    activeRuntimeDepsKey: entry.activeRuntimeDepsKey ?? null,
-    activatedAt: Date.now(),
-  };
-}
-
-function appVersionHistory(
-  records: Array<AppVersionRecord | null | undefined>,
-  limit = 5
-): AppVersionRecord[] {
-  const history: AppVersionRecord[] = [];
-  const seen = new Set<string>();
-  for (const record of records) {
-    if (!record || seen.has(record.activeBundleKey)) continue;
-    seen.add(record.activeBundleKey);
-    history.push(record);
-    if (history.length >= limit) break;
-  }
-  return history;
 }
 
 function appAdoptionPolicy(

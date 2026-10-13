@@ -403,6 +403,7 @@ async function makeHost(
             : ACTIVE_BUILD_KEY
           : overrides.activeBundleKey,
       activeExecutionDigest: null,
+      previousVersions: [],
       activeDependencyEvs: {
         "@workspace/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime",
       },
@@ -1613,6 +1614,46 @@ describe("ExtensionHost reconcileDeclared", () => {
     });
   });
 
+  it("rolls an extension back to its retained build and keeps the replaced one selectable", async () => {
+    const { host, extensionNode, buildSystem } = await makeHost();
+    const current = host.registry.get(extensionNode.name)!;
+    const active = (await buildSystem.getBuildByKey(ACTIVE_BUILD_KEY))!;
+    const older = (await buildSystem.getBuildByKey(CANDIDATE_BUILD_KEY))!;
+    const retained = {
+      version: "0.9.0",
+      activeEv: older.metadata.ev,
+      activeSourceHash: "old",
+      activeBundleKey: CANDIDATE_BUILD_KEY,
+      executionDigest: older.metadata.execution!.executionDigest,
+      activeDependencyEvs: {},
+      activeExternalDeps: {},
+      activeRuntimeDepsKey: null,
+      activatedAt: 1,
+    };
+    host.registry.patch(extensionNode.name, {
+      activeExecutionDigest: active.metadata.execution!.executionDigest,
+      previousVersions: [retained],
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    vi.spyOn(host.processes, "start").mockImplementation(async (input: { name: string }) => {
+      host.registry.patch(input.name, { status: "running", lastError: null });
+    });
+
+    const rolledBack = await host.rollback(extensionNode.name);
+
+    expect(rolledBack).toMatchObject({
+      activeBundleKey: CANDIDATE_BUILD_KEY,
+      activeEv: older.metadata.ev,
+      status: "running",
+    });
+    expect(host.listVersions(extensionNode.name).previous.map((v) => v.activeBundleKey)).toEqual([
+      current.activeBundleKey,
+    ]);
+    await expect(host.rollback(extensionNode.name, "f".repeat(64))).rejects.toThrow(
+      /No rollback version/u
+    );
+  });
+
   it("rebuilds a declared ref change and persists the trusted ref", async () => {
     const { host, approvalQueue, buildSystem, extensionNode } = await makeHost();
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
@@ -2380,6 +2421,7 @@ describe("ExtensionHost activation", () => {
       activeSourceHash: null,
       activeBundleKey: null,
       activeExecutionDigest: null,
+      previousVersions: [],
       activeDependencyEvs: {},
       activeExternalDeps: {},
       activeRuntimeDepsKey: null,

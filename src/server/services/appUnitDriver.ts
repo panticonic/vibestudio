@@ -33,7 +33,9 @@ export function createAppUnitDriver(input: {
       release: { kind: "app", releaseId: entityId },
       source: record.source.repoPath,
       ...(row?.displayName ? { displayName: row.displayName } : {}),
-      status: row?.lastError ? "error" : "running",
+      // An app with a recorded error still runs its adopted build; the error
+      // belongs to a newer build that was not adopted.
+      status: "running",
       lastError: row?.lastError ?? record.error ?? null,
       artifact: {
         effectiveVersion: record.source.effectiveVersion,
@@ -86,7 +88,7 @@ export function createAppUnitDriver(input: {
       );
       return {
         entity,
-        state: entity.lastError ? "unhealthy" : "healthy",
+        state: entity.lastError ? "degraded" : "healthy",
         summary: entity.lastError,
         logs: snapshot.logs,
         errors: snapshot.errors,
