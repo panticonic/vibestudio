@@ -445,13 +445,11 @@ When host `main` contains 99e0a0497, merge the rest of each template's
 
 ### System test `terminal-chat-approval-fork-resume` (status 2026-10-13)
 
-Not passing. The scenario reaches its agent turn (launch, attach, `/model`,
-`/approval ask`, the question), then stalls: it answers the person's approval
-queue with `shellApproval.resolve` from test code, and that surface requires a
-durable code identity, which test code running in the eval sandbox does not
-have (`The reviewed shellApproval.resolve surface requires a durable code
-identity`). The agent's model-credential request (kind `credential`, no
-capability, so no rule matches) then waits for a decision nobody can give. The
-fix is a harness-level design change: answer approvals from the system-test
-runner Durable Object (which declares `approvals.decide`), exposed to the
-scenario as a runner method, and extend the rule table to credential approvals.
+Passing (run `st_5c337951097e4d40b33fc96ab1c036dc` on the integrated branch).
+The scenario no longer answers the person's approval queue. Like every other
+system test, its approvals are decided by the runner's test policy. The launch
+service now creates the session context with a caller that carries the
+launching call's policy.
+
+See [terminal-handover.md](terminal-handover.md) for the full state at handover
+and the open work.
