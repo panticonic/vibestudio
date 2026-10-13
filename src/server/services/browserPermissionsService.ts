@@ -201,15 +201,34 @@ export function createBrowserPermissionsService(deps: {
     methods: browserPermissionsMethods,
     handler: defineServiceHandler("browserPermissions", browserPermissionsMethods, {
       snapshot: async (ctx, [{ sessionEpoch }]) => {
+        const requestId = ctx.requestId;
+        const logSnapshot = (phase: string, durationMs?: number): void => {
+          console.info("[RpcPerf] browserPermissions.snapshot", {
+            requestId,
+            phase,
+            ...(durationMs === undefined ? {} : { durationMs }),
+          });
+        };
+        logSnapshot("handler-start");
         const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
+        const cleanupStartedAt = performance.now();
         deps.grantStore.cleanupPreviousSessions(
           identity.environmentKey,
           identity.ownerUserId,
           sessionEpoch
         );
+        logSnapshot("cleanup-complete", performance.now() - cleanupStartedAt);
+        const listStartedAt = performance.now();
+        const grants = deps.grantStore.list(
+          identity.environmentKey,
+          identity.ownerUserId,
+          sessionEpoch
+        );
+        logSnapshot("list-complete", performance.now() - listStartedAt);
+        logSnapshot("handler-complete");
         return {
           environmentKey: identity.environmentKey,
-          grants: deps.grantStore.list(identity.environmentKey, identity.ownerUserId, sessionEpoch),
+          grants,
         };
       },
       request: async (ctx, [request]) => {

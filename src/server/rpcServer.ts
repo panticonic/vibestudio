@@ -2573,6 +2573,18 @@ export class RpcServer {
 
   private async handleMessage(client: WsClientState, msg: WsClientMessage): Promise<void> {
     if (!this.connections.isActiveClient(client)) return;
+    const snapshotRequest =
+      msg.type === "ws:rpc" &&
+      (msg.envelope.message.type === "request" || msg.envelope.message.type === "stream-request") &&
+      msg.envelope.message.method === "browserPermissions.snapshot"
+        ? msg.envelope.message
+        : null;
+    if (snapshotRequest) {
+      log.info("browserPermissions.snapshot ingress", {
+        phase: "admission-start",
+        requestId: snapshotRequest.requestId,
+      });
+    }
 
     // Authentication is admission, not a lifetime grant. Account/device/agent
     // revocation and workspace membership changes are read from their live
@@ -2605,6 +2617,12 @@ export class RpcServer {
     ) {
       client.ws.close(4403, "Caller identity or workspace membership is no longer active");
       return;
+    }
+    if (snapshotRequest) {
+      log.info("browserPermissions.snapshot ingress", {
+        phase: "admission-complete",
+        requestId: snapshotRequest.requestId,
+      });
     }
     // Identity resolution may read the immutable stored build descriptor. A
     // socket that closes while that read is pending must not admit its frame.
@@ -2851,7 +2869,20 @@ export class RpcServer {
     const abort = new AbortController();
     this.beginInboundRequest(client, request.requestId, abort);
     try {
+      const isBrowserPermissionsSnapshot = request.method === "browserPermissions.snapshot";
+      if (isBrowserPermissionsSnapshot) {
+        log.info("browserPermissions.snapshot ingress", {
+          phase: "invocation-attribution-start",
+          requestId: request.requestId,
+        });
+      }
       const causal = await this.resolveCausalInvocation(client.caller, request);
+      if (isBrowserPermissionsSnapshot) {
+        log.info("browserPermissions.snapshot ingress", {
+          phase: "invocation-attribution-complete",
+          requestId: request.requestId,
+        });
+      }
       const ctx = this.serviceContextForRpcMessage(
         client,
         request,
@@ -2864,7 +2895,19 @@ export class RpcServer {
         },
         this.callerWithInvocationAttribution(client.caller, request, causal)
       );
+      if (isBrowserPermissionsSnapshot) {
+        log.info("browserPermissions.snapshot ingress", {
+          phase: "dispatcher-start",
+          requestId: request.requestId,
+        });
+      }
       const result = await dispatcher.dispatch(ctx, service, method, request.args);
+      if (isBrowserPermissionsSnapshot) {
+        log.info("browserPermissions.snapshot ingress", {
+          phase: "dispatcher-complete",
+          requestId: request.requestId,
+        });
+      }
       this.sendToSession(client.ws, {
         type: "ws:rpc",
         envelope: responseEnvelopeFor(
@@ -2877,7 +2920,19 @@ export class RpcServer {
           }
         ),
       });
+      if (isBrowserPermissionsSnapshot) {
+        log.info("browserPermissions.snapshot ingress", {
+          phase: "response-queued",
+          requestId: request.requestId,
+        });
+      }
     } catch (error) {
+      if (request.method === "browserPermissions.snapshot") {
+        log.info("browserPermissions.snapshot ingress", {
+          phase: "dispatch-failed",
+          requestId: request.requestId,
+        });
+      }
       this.sendToSession(client.ws, {
         type: "ws:rpc",
         envelope: responseEnvelopeFor(
@@ -2890,6 +2945,12 @@ export class RpcServer {
           }
         ),
       });
+      if (request.method === "browserPermissions.snapshot") {
+        log.info("browserPermissions.snapshot ingress", {
+          phase: "error-response-queued",
+          requestId: request.requestId,
+        });
+      }
     } finally {
       // `sendToSession` above synchronously queues the response. A concurrent token
       // revocation may close this connection only after that ordering point.
@@ -5874,6 +5935,17 @@ export class RpcServer {
           await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES)
         )
       ) as RpcEnvelope;
+      const receivedMessage = envelope.message;
+      if (
+        (receivedMessage.type === "request" || receivedMessage.type === "stream-request") &&
+        receivedMessage.method === "browserPermissions.snapshot"
+      ) {
+        log.info("browserPermissions.snapshot ingress", {
+          phase: "envelope-received",
+          requestId: receivedMessage.requestId,
+          sid: streamPreamble.sid,
+        });
+      }
       const body =
         streamPreamble.k === "stream" && streamPreamble.body
           ? irohReceiveStreamBody(stream.recv)
