@@ -4,15 +4,19 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { preparedWorkspaceTemplatePath } from "./preparedWorkspaceTemplate.js";
-import { preparedWorkspaceReleaseManifestSchema } from "./preparedWorkspaceRelease.js";
+import {
+  preparedWorkspaceReleaseManifestSchema,
+  type WorkspaceReleaseIdentity,
+} from "./preparedWorkspaceRelease.js";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
+import { prepareBuildRootConfig } from "./buildV2/effectiveVersion.js";
 
 vi.mock("./buildV2/effectiveVersion.js", () => ({
   buildCompilerProtocolIdentity: () => ({
     cacheVersion: "test-cache",
     panelEntryProtocolFingerprint: "b".repeat(64),
   }),
-  prepareBuildRootConfig: async () => ({ value: "a".repeat(64) }),
+  prepareBuildRootConfig: vi.fn(async () => ({ value: "a".repeat(64) })),
 }));
 const roots: string[] = [];
 const basePin = {
@@ -36,6 +40,7 @@ afterEach(async () => {
   await closeDerivedCacheCoordinators();
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
   vi.unstubAllEnvs();
+  vi.clearAllMocks();
 });
 
 async function fixture() {
@@ -119,6 +124,55 @@ async function fixture() {
 }
 
 describe("prepared workspace release admission", () => {
+  it("captures one identity per cold or warm operation without skipping integrity validation", async () => {
+    const { root, output, builds } = await fixture();
+    vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
+    const { prepareCachedWorkspaceRelease } = await import("./preparedWorkspaceReleaseCache.js");
+    const { publishPreparedWorkspaceRelease } = await import("./preparedWorkspaceRelease.js");
+    const cold = path.join(root, "cold", "release");
+    const producer = vi.fn(async (identity: WorkspaceReleaseIdentity) => {
+      await fs.cp(output, cold, { recursive: true });
+      // Publication uses the same operation capture; it does not re-fingerprint.
+      await publishPreparedWorkspaceRelease(
+        { appRoot: root, output: cold, templates },
+        builds,
+        identity
+      );
+    });
+    await prepareCachedWorkspaceRelease({ appRoot: root, output: cold, templates }, producer);
+    expect(prepareBuildRootConfig).toHaveBeenCalledTimes(1);
+    expect(producer).toHaveBeenCalledWith(
+      expect.objectContaining({ appDependencyFingerprint: "a".repeat(64) })
+    );
+    const warm = path.join(root, "warm", "release");
+    await prepareCachedWorkspaceRelease({ appRoot: root, output: warm, templates }, producer);
+    expect(prepareBuildRootConfig).toHaveBeenCalledTimes(2);
+    expect(producer).toHaveBeenCalledTimes(1);
+    // The warm private projection is a hardlink tree. Corrupt one payload at
+    // its sealed length and ensure the next reuse still hashes every artifact.
+    const artifactPath = path.join(warm, "userland-builds", builds[1]!.buildKey, "runtime.js");
+    const bytes = await fs.readFile(artifactPath);
+    await fs.writeFile(artifactPath, Buffer.alloc(bytes.length, "X"));
+    await expect(
+      prepareCachedWorkspaceRelease(
+        { appRoot: root, output: path.join(root, "invalid", "release"), templates },
+        producer
+      )
+    ).rejects.toThrow(/integrity mismatch/);
+    expect(prepareBuildRootConfig).toHaveBeenCalledTimes(3);
+    expect(producer).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures an identity once when the requested complete release is already present", async () => {
+    const { root, output } = await fixture();
+    const { prepareCachedWorkspaceRelease } = await import("./preparedWorkspaceReleaseCache.js");
+    const producer = vi.fn(async () => {
+      throw new Error("Complete output must not be rebuilt");
+    });
+    await prepareCachedWorkspaceRelease({ appRoot: root, output, templates }, producer);
+    expect(prepareBuildRootConfig).toHaveBeenCalledTimes(1);
+    expect(producer).not.toHaveBeenCalled();
+  });
   it("reuses a validated complete release after the first ephemeral projection is discarded", async () => {
     const { root, output } = await fixture();
     vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));

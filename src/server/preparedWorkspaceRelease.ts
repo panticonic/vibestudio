@@ -89,6 +89,8 @@ export async function workspaceReleaseIdentity(appRoot: string) {
   };
 }
 
+export type WorkspaceReleaseIdentity = Awaited<ReturnType<typeof workspaceReleaseIdentity>>;
+
 export function workspaceReleaseManifestPath(output: string): string {
   return path.join(output, "userland-builds/release.json");
 }
@@ -131,7 +133,8 @@ export async function createPreparedWorkspaceReleaseManifest(
  * artifact area or any mismatch is an error and must not fall through to build.
  */
 export async function validateExistingPreparedWorkspaceRelease(
-  input: PreparedWorkspaceReleaseInput
+  input: PreparedWorkspaceReleaseInput,
+  identity?: WorkspaceReleaseIdentity
 ): Promise<boolean> {
   const outputStat = await lstatOrNull(input.output);
   if (!outputStat) return false;
@@ -170,13 +173,13 @@ export async function validateExistingPreparedWorkspaceRelease(
   } catch (error) {
     throw new Error("Prepared workspace release manifest is invalid", { cause: error });
   }
-  const identity = await workspaceReleaseIdentity(input.appRoot);
+  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot));
   if (
     manifest.platform !== process.platform ||
     manifest.arch !== process.arch ||
-    manifest.appDependencyFingerprint !== identity.appDependencyFingerprint ||
-    canonicalJson(manifest.hostBuild) !== canonicalJson(identity.hostBuild) ||
-    canonicalJson(manifest.compilerProtocol) !== canonicalJson(identity.compilerProtocol) ||
+    manifest.appDependencyFingerprint !== resolvedIdentity.appDependencyFingerprint ||
+    canonicalJson(manifest.hostBuild) !== canonicalJson(resolvedIdentity.hostBuild) ||
+    canonicalJson(manifest.compilerProtocol) !== canonicalJson(resolvedIdentity.compilerProtocol) ||
     canonicalJson(manifest.templates) !== canonicalJson(input.templates)
   ) {
     throw new Error(

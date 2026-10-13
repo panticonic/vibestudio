@@ -42,7 +42,7 @@ import { hasOwnershipFailure } from "../../scripts/lib/owned-cleanup.mjs";
 import {
   publishPreparedWorkspaceRelease,
   validateExistingPreparedWorkspaceRelease,
-  workspaceReleaseIdentity,
+  type WorkspaceReleaseIdentity,
   type PreparedWorkspaceReleaseBuild,
   type PreparedWorkspaceReleaseInput,
 } from "./preparedWorkspaceRelease.js";
@@ -67,18 +67,21 @@ export async function prepareWorkspaceTemplates(input: {
       signal: input.signal,
       onSourcesPrepared: input.onSourcesPrepared,
     },
-    () => produceWorkspaceTemplates(input)
+    (identity) => produceWorkspaceTemplates(input, identity)
   );
 }
 
-async function produceWorkspaceTemplates(input: {
-  appRoot: string;
-  output: string;
-  sourceOutput?: string;
-  scratch: string;
-  signal?: AbortSignal;
-  onSourcesPrepared?: (root: string) => void | Promise<void>;
-}): Promise<void> {
+async function produceWorkspaceTemplates(
+  input: {
+    appRoot: string;
+    output: string;
+    sourceOutput?: string;
+    scratch: string;
+    signal?: AbortSignal;
+    onSourcesPrepared?: (root: string) => void | Promise<void>;
+  },
+  releaseIdentity: WorkspaceReleaseIdentity
+): Promise<void> {
   const pins = readDefaultWorkspaceTemplates(input.appRoot);
   const releaseInput: PreparedWorkspaceReleaseInput = {
     appRoot: input.appRoot,
@@ -86,12 +89,11 @@ async function produceWorkspaceTemplates(input: {
     templates: pins,
   };
   input.signal?.throwIfAborted();
-  if (await validateExistingPreparedWorkspaceRelease(releaseInput)) {
+  if (await validateExistingPreparedWorkspaceRelease(releaseInput, releaseIdentity)) {
     input.signal?.throwIfAborted();
     await input.onSourcesPrepared?.(input.output);
     return;
   }
-  const releaseIdentity = await workspaceReleaseIdentity(input.appRoot);
   const sources = JSON.parse(process.env["VIBESTUDIO_WORKSPACE_SOURCES"] ?? "[]") as Array<{
     pin: WorkspaceTemplatePin;
     checkout: string;

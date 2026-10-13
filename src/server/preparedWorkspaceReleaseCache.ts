@@ -16,6 +16,7 @@ import {
   validateExistingPreparedWorkspaceRelease,
   workspaceReleaseIdentity,
   type PreparedWorkspaceReleaseInput,
+  type WorkspaceReleaseIdentity,
 } from "./preparedWorkspaceRelease.js";
 
 /** Complete release resources are immutable derived data. A consumer owns a
@@ -57,14 +58,16 @@ export async function prepareCachedWorkspaceRelease(
     signal?: AbortSignal;
     onSourcesPrepared?: (root: string) => void | Promise<void>;
   },
-  produce: () => Promise<void>
+  produce: (identity: WorkspaceReleaseIdentity) => Promise<void>
 ): Promise<void> {
   input.signal?.throwIfAborted();
-  if (await validateExistingPreparedWorkspaceRelease(input)) {
+  // The exact host/dependency inputs belong to this operation, not to each
+  // validation or publication boundary. Never retain this capture globally.
+  const identity = await workspaceReleaseIdentity(input.appRoot);
+  if (await validateExistingPreparedWorkspaceRelease(input, identity)) {
     await input.onSourcesPrepared?.(input.output);
     return;
   }
-  const identity = await workspaceReleaseIdentity(input.appRoot);
   const key = createHash("sha256")
     .update(
       canonicalJson({
@@ -96,17 +99,20 @@ export async function prepareCachedWorkspaceRelease(
         new BuildPriorityOwner("speculative"),
         input.signal ?? new AbortController().signal,
         async () => {
-          if (await validateExistingPreparedWorkspaceRelease(cachedInput)) {
+          if (await validateExistingPreparedWorkspaceRelease(cachedInput, identity)) {
             await reuse();
             return;
           }
-          await produce();
+          await produce(identity);
           input.signal?.throwIfAborted();
           const staging = `${cached}.tmp.${randomUUID()}`;
           await runWithOwnedCleanup(
             async () => {
               await projectRelease(input.output, staging);
-              await validateExistingPreparedWorkspaceRelease({ ...cachedInput, output: staging });
+              await validateExistingPreparedWorkspaceRelease(
+                { ...cachedInput, output: staging },
+                identity
+              );
               await fs.rename(staging, cached);
             },
             () => fs.rm(staging, { recursive: true, force: true }),
@@ -115,7 +121,7 @@ export async function prepareCachedWorkspaceRelease(
         }
       );
       if (!outcome.produced) {
-        if (!(await validateExistingPreparedWorkspaceRelease(cachedInput)))
+        if (!(await validateExistingPreparedWorkspaceRelease(cachedInput, identity)))
           throw new Error(`Shared workspace release ${key} has no completed publication`);
         await reuse();
       }
