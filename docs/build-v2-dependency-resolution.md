@@ -45,22 +45,21 @@ interactive requests, required startup work, and speculative preparation to
 make progress. Some internal stages share owners and serialize; increasing
 admission helps only when those dependency edges permit independent work.
 The scheduler prioritizes interactive requests over background preparation.
-`VIBESTUDIO_MAX_CONCURRENT_BUILDS` is an existing process-local operator override
-for throughput-oriented batch work. Operators can raise it when the runner has
-CPU and memory capacity for more independent builds; it does not create duplicate
-work for identical in-flight build keys, which Build V2 coalesces. Choose a batch
-limit for the runner’s aggregate resources rather than treating one value as a
-universal optimum.
+Exhaustive template release preparation is throughput-oriented batch work. Its
+owning orchestrator assigns that single producer a budget from the process CPU
+allowance and host memory, reserves capacity for the supervisor and native
+executors, and caps automatic admission at eight lanes. This does not increase
+the separate three-lane budgets of live interactive workspaces.
+`VIBESTUDIO_MAX_CONCURRENT_BUILDS` remains the authoritative process-local
+override for a runner with a measured resource envelope. More admission does not
+duplicate identical in-flight build keys, which Build V2 coalesces.
 
-Installed template preparation already submits independent runtime units
-concurrently and joins every outcome before retiring their builder. Template
-roles remain sequential because they currently share process-global user-data
-selection, builder configuration, source providers, and worker ownership.
-Increasing unit admission does not remove that dependency. Overlapping roles
-requires isolating those owners first and admitting the isolated work against
-one host-wide resource budget; simply running the role loop concurrently would
-overwrite another role's inputs and multiply native executors. Keep this
-ownership edge explicit when changing the release critical path.
+Installed template preparation submits independent roles and runtime units
+concurrently through one operation-owned `BuildProcessOwner`, then joins every
+outcome before retiring the builder and the three role-specific native
+executors. The producer's one admission budget is therefore the resource edge
+for the complete batch; adding another role loop or builder path would duplicate
+work and escape that budget.
 
 Fresh-install verification overlaps six independent source requests within each
 selected workspace through one installed CLI client connection, preserving the

@@ -138,6 +138,11 @@ uses its exported release artifacts and does not depend on the producer's cache.
 Cold verification and profiling select a private cache through the existing
 `VIBESTUDIO_SHARED_DERIVED_CACHE_DIR` input; their owner retires that cache after
 joining all work. Ordinary launch never deletes the inherited shared cache.
+The release orchestrator assigns its one exhaustive producer a bounded batch
+build budget from the runner's CPU and memory allocation. Interactive workspace
+owners keep their smaller independent budget. Consumers reuse the complete
+immutable release keyed by its exact host and template inputs instead of
+starting a second producer.
 
 The CI graph in `.github/workflows/ci.yml` expresses per-platform artifact
 dependencies, rather than broad verification barriers. Native producer jobs
