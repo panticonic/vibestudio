@@ -17,6 +17,7 @@ import {
   clickPanelSelector,
   clickPanelText,
   createBrowserPanel,
+  ensureHostedShellReady,
   executePanelScript,
   getFocusedPanelId,
   reloadPanel,
@@ -43,8 +44,7 @@ async function settleWorkspaceCreationReviews(app: TestApp) {
 }
 
 async function selectDeterministicTestModel(app: TestApp, workspaceId: string) {
-  const launcherPanelId = await getFocusedPanelId(app);
-  if (!launcherPanelId) throw new Error("System workspace has no focused New Panel launcher");
+  const launcherPanelId = (await ensureHostedShellReady(app, { panelSource: "about/new" })).panelId;
   let launcherRow = "";
   await expect
     .poll(async () => {
@@ -58,6 +58,10 @@ async function selectDeterministicTestModel(app: TestApp, workspaceId: string) {
     .not.toBe("");
   if (!(await clickPanelText(app, launcherPanelId, '[role="option"]', launcherRow))) {
     throw new Error("Could not open Agentic Chat from the System New Panel launcher");
+  }
+  const chatReadiness = await ensureHostedShellReady(app, { panelSource: "panels/chat" });
+  if (chatReadiness.panelId !== launcherPanelId) {
+    throw new Error("Agentic Chat replaced the launcher with a different panel identity");
   }
   await expect
     .poll(() =>
