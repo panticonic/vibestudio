@@ -67,6 +67,47 @@ afterEach(() => {
 });
 
 describe("development template selection", () => {
+  it("reviews exact repository evidence while loading only the canonical manifest blob", async () => {
+    const fx = fixture();
+    const read = GitClient.prototype.readCommitTreeIndex;
+    const paths: string[] = [];
+    vi.spyOn(GitClient.prototype, "readCommitTreeIndex").mockImplementation(async function (
+      this: GitClient,
+      dir,
+      commit
+    ) {
+      const index = await read.call(this, dir, commit);
+      return {
+        ...index,
+        readFile: async (filePath) => {
+          paths.push(filePath);
+          return index.readFile(filePath);
+        },
+      };
+    });
+    const fullRead = vi.spyOn(GitClient.prototype, "readCommitTree");
+    const [selection] = await inspectWorkspaceSources({
+      sources: [fx.checkout].map(workspaceSourceFromCheckout),
+      checkpointRoot: fx.checkpointRoot,
+    });
+    expect(selection!.review.repositories).toEqual(["meta", "panels/example"]);
+    expect(paths).toEqual(["meta/vibestudio.yml"]);
+    expect(fullRead).not.toHaveBeenCalled();
+  });
+
+  it("rejects a symlink in the exact tree even when review does not read that leaf", async () => {
+    const fx = fixture();
+    fs.symlinkSync("index.ts", path.join(fx.checkout, "panels/example/link.ts"));
+    git(fx.checkout, "add", "panels/example/link.ts");
+    git(fx.checkout, "commit", "-m", "unsupported semantic leaf");
+    await expect(
+      inspectWorkspaceSources({
+        sources: [fx.checkout].map(workspaceSourceFromCheckout),
+        checkpointRoot: fx.checkpointRoot,
+      })
+    ).rejects.toThrow(/entries the semantic workspace cannot represent/);
+  });
+
   it("preserves selection order when independent checkpoints finish out of order", async () => {
     const first = fixture();
     const second = fixture();

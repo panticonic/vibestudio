@@ -6,6 +6,7 @@ import {
   discoverExactGitSnapshot,
   discoverTrackedGitSnapshot,
   readExactGitSnapshot,
+  readExactGitSnapshotIndex,
 } from "./exact-snapshot.js";
 
 const COMMIT = "a".repeat(40);
@@ -25,6 +26,18 @@ function fakeGit(entries: GitCommitTreeEntry[], matrix?: Array<[string, number, 
         matrix ?? entries.map((entry) => [entry.path, 1, 1, 1] as [string, number, number, number])
     ),
     readCommitTree: vi.fn(async () => entries),
+    readCommitTreeIndex: vi.fn(async () => ({
+      entries: entries.map((entry) => ({
+        path: entry.path,
+        type: entry.type,
+        mode: entry.mode,
+        oid: entry.oid,
+      })),
+      readFile: vi.fn(async (path: string) => {
+        const entry = entries.find((entry) => entry.path === path);
+        return entry?.type === "blob" ? entry.bytes : null;
+      }),
+    })),
   } as unknown as GitClient;
 }
 
@@ -115,6 +128,84 @@ describe("readExactGitSnapshot", () => {
       },
     });
     expect(snapshot.files.map((file) => file.path)).toEqual(["index.ts"]);
+  });
+});
+
+describe("readExactGitSnapshotIndex", () => {
+  it("admits exact paths without loading blobs that review does not consume", async () => {
+    const git = fakeGit([
+      blob("meta/vibestudio.yml", "manifest"),
+      blob("panels/example/large.ts", "unneeded"),
+    ]);
+    const snapshot = await readExactGitSnapshotIndex({
+      git,
+      dir: "/checkout",
+      commit: COMMIT,
+      label: "review",
+    });
+    const index = await vi.mocked(git.readCommitTreeIndex).mock.results[0]!.value;
+    expect(index.readFile).not.toHaveBeenCalled();
+    expect(snapshot.files.map(({ path }) => path)).toEqual([
+      "meta/vibestudio.yml",
+      "panels/example/large.ts",
+    ]);
+    expect(new TextDecoder().decode((await snapshot.readFile("meta/vibestudio.yml"))!)).toBe(
+      "manifest"
+    );
+    expect(index.readFile).toHaveBeenCalledTimes(1);
+    expect(git.readCommitTree).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    blob("panels/example/link", "target", 0o120000),
+    { path: "panels/example/submodule", type: "commit" as const, mode: 0o160000, oid: COMMIT },
+    blob("panels/example/../bad", "bad"),
+  ])("rejects unsupported evidence before a review can read a manifest ($path)", async (entry) => {
+    const git = fakeGit([blob("meta/vibestudio.yml", "manifest"), entry]);
+    await expect(
+      readExactGitSnapshotIndex({ git, dir: "/checkout", commit: COMMIT, label: "review" })
+    ).rejects.toThrow(/entries the semantic workspace cannot represent/);
+    const index = await vi.mocked(git.readCommitTreeIndex).mock.results[0]!.value;
+    expect(index.readFile).not.toHaveBeenCalled();
+  });
+
+  it("shares reserved-path admission and subtree names with full snapshots", async () => {
+    const git = fakeGit([
+      blob("selected/.env", "secret"),
+      blob("selected/meta/vibestudio.yml", "manifest"),
+      blob("other.txt", "outside"),
+    ]);
+    await expect(
+      readExactGitSnapshotIndex({
+        git,
+        dir: "/checkout",
+        commit: COMMIT,
+        label: "review",
+        subdir: "selected",
+      })
+    ).rejects.toThrow(/paths excluded/);
+    const snapshot = await readExactGitSnapshotIndex({
+      git,
+      dir: "/checkout",
+      commit: COMMIT,
+      label: "review",
+      subdir: "selected",
+      reservedPaths: "exclude",
+    });
+    expect(snapshot.files.map(({ path }) => path)).toEqual(["meta/vibestudio.yml"]);
+    expect(await snapshot.readFile(".env")).toBeNull();
+    expect(new TextDecoder().decode((await snapshot.readFile("meta/vibestudio.yml"))!)).toBe(
+      "manifest"
+    );
+  });
+
+  it("rejects a moved HEAD through the same exact-commit gate", async () => {
+    const git = fakeGit([blob("meta/vibestudio.yml", "manifest")]);
+    vi.mocked(git.getCurrentCommit).mockResolvedValue("b".repeat(40));
+    await expect(
+      readExactGitSnapshotIndex({ git, dir: "/checkout", commit: COMMIT, label: "review" })
+    ).rejects.toThrow(/HEAD advanced/);
+    expect(git.readCommitTreeIndex).not.toHaveBeenCalled();
   });
 });
 

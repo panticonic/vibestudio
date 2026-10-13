@@ -5,7 +5,7 @@
  * so we focus on the exported GitAuthError class which is cleanly testable.
  */
 
-import type { HttpClient, StatusRow } from "isomorphic-git";
+import type { HttpClient, StatusRow, WalkerEntry } from "isomorphic-git";
 import git from "isomorphic-git";
 import * as nodeFs from "node:fs";
 import * as fsp from "node:fs/promises";
@@ -186,6 +186,78 @@ describe("GitClient", () => {
     await expect(client.readCommitTree("/repo", "HEAD")).rejects.toThrow(
       /requires a full commit object id/
     );
+  });
+
+  it("indexes immutable metadata without eager blob reads and coalesces lazy readers", async () => {
+    const content = vi.fn(async () => new TextEncoder().encode("manifest"));
+    const unneeded = vi.fn(async () => new TextEncoder().encode("large module"));
+    const entry = (read: typeof content): WalkerEntry => ({
+      type: async () => "blob",
+      mode: async () => 0o100644,
+      oid: async () => "b".repeat(40),
+      content: read,
+      stat: async () => {
+        throw new Error("Immutable indexing does not inspect worktree stat");
+      },
+    });
+    vi.spyOn(git, "walk").mockImplementationOnce(async ({ map }) =>
+      Promise.all([
+        map!("meta/vibestudio.yml", [entry(content)]),
+        map!("panels/example/large.ts", [entry(unneeded)]),
+      ])
+    );
+    const client = new GitClient(fs, { http });
+    const index = await client.readCommitTreeIndex("/repo", "a".repeat(40));
+    expect(index.entries.map(({ path }) => path)).toEqual([
+      "meta/vibestudio.yml",
+      "panels/example/large.ts",
+    ]);
+    expect(content).not.toHaveBeenCalled();
+    expect(unneeded).not.toHaveBeenCalled();
+    const [first, second] = await Promise.all([
+      index.readFile("meta/vibestudio.yml"),
+      index.readFile("meta/vibestudio.yml"),
+    ]);
+    expect(first).toEqual(second);
+    expect(content).toHaveBeenCalledTimes(1);
+    expect(unneeded).not.toHaveBeenCalled();
+    expect(await index.readFile("missing.ts")).toBeNull();
+  });
+
+  it("stops admitting blob reads on failure while joining all already admitted readers", async () => {
+    const client = new GitClient(fs, { http });
+    const failures = [new Error("first missing blob"), new Error("second missing blob")];
+    const pending = new Map<
+      string,
+      { resolve(value: Uint8Array): void; reject(error: unknown): void }
+    >();
+    const readFile = vi.fn((filePath: string): Promise<Uint8Array> => {
+      if (filePath === "file:0") return Promise.reject(failures[0]);
+      return new Promise((resolve, reject) => {
+        pending.set(filePath, { resolve, reject });
+      });
+    });
+    vi.spyOn(client, "readCommitTreeIndex").mockResolvedValue({
+      entries: Array.from({ length: 9 }, (_, index) => ({
+        path: `file:${index}`,
+        type: "blob",
+        mode: 0o100644,
+        oid: "a".repeat(40),
+      })),
+      readFile,
+    });
+    let settled = false;
+    const result = client.readCommitTree("/repo", "a".repeat(40)).catch((error: unknown) => {
+      settled = true;
+      return error;
+    });
+    await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(8));
+    expect(settled).toBe(false);
+    pending.get("file:1")!.reject(failures[1]);
+    for (let index = 2; index < 8; index++)
+      pending.get(`file:${index}`)!.resolve(new Uint8Array([index]));
+    expect(await result).toMatchObject({ errors: failures });
+    expect(readFile).not.toHaveBeenCalledWith("file:8");
   });
 
   it("resolves bounded per-path history against an exact revision", async () => {

@@ -38,6 +38,8 @@ export {
   type FsPromisesLike,
   type GitAuthorIdentity,
   type GitCommitTreeEntry,
+  type GitCommitTreeIndex,
+  type GitCommitTreeIndexEntry,
   type GitLogEntry,
 } from "./client.js";
 export { initAndPush, type InitAndPushOptions } from "./convenience.js";
@@ -47,9 +49,11 @@ export {
   discoverExactGitSnapshot,
   discoverTrackedGitSnapshot,
   readExactGitSnapshot,
+  readExactGitSnapshotIndex,
   type SnapshotContentSink,
   type ExactSnapshotFile,
   type ExactGitSnapshot,
+  type ExactGitSnapshotIndex,
   type ReservedPathPolicy,
   type AcquireExactGitSnapshotOptions,
   type DiscoverDefaultGitSnapshotOptions,

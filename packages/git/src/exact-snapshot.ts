@@ -5,7 +5,7 @@ import {
   type CanonicalSnapshotDigest,
 } from "@vibestudio/content-addressing";
 import { semanticVcsPathAdmission } from "@vibestudio/vcs-path-policy";
-import { GitClient, type GitCommitTreeEntry } from "./client.js";
+import { GitClient, type GitCommitTreeEntry, type GitCommitTreeIndexEntry } from "./client.js";
 
 export interface SnapshotContentSink {
   put(bytes: Uint8Array): Promise<{ digest: string; size: number }>;
@@ -24,6 +24,12 @@ export interface ExactGitSnapshot {
   snapshot: CanonicalSnapshotDigest;
   files: ExactSnapshotFile[];
   readFile(path: string): Uint8Array | null;
+}
+
+export interface ExactGitSnapshotIndex {
+  commit: string;
+  files: readonly GitCommitTreeIndexEntry[];
+  readFile(path: string): Promise<Uint8Array | null>;
 }
 
 /**
@@ -147,10 +153,10 @@ function naturalPartsCompare(left: string, right: string): number {
   return compareUtf16CodeUnits(left, right);
 }
 
-function selectSubtree(
-  entries: readonly GitCommitTreeEntry[],
+function selectSubtree<T extends GitCommitTreeIndexEntry>(
+  entries: readonly T[],
   subdir: string | undefined
-): GitCommitTreeEntry[] {
+): T[] {
   if (!subdir) return [...entries];
   const normalized = subdir.replace(/^\/+|\/+$/g, "");
   const admission = semanticVcsPathAdmission(`${normalized}/placeholder`);
@@ -160,22 +166,19 @@ function selectSubtree(
   const prefix = `${normalized}/`;
   return entries
     .filter((entry) => entry.path.startsWith(prefix))
-    .map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) }) as GitCommitTreeEntry);
+    .map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) }) as T);
 }
 
-async function admitAndStore(
+/** Metadata admission is shared by review and full content import. Irregular
+ * leaves are rejected before either consumer can use a partially valid tree. */
+function admitSnapshotEntries<T extends GitCommitTreeIndexEntry>(
   label: string,
-  entries: readonly GitCommitTreeEntry[],
-  sink: SnapshotContentSink,
+  entries: readonly T[],
   reservedPaths: ReservedPathPolicy
-): Promise<{
-  files: ExactSnapshotFile[];
-  bytesByPath: Map<string, Uint8Array>;
-  snapshot: CanonicalSnapshotDigest;
-}> {
+): Array<T & { type: "blob"; mode: 0o100644 | 0o100755 }> {
   const excluded: string[] = [];
   const inadmissible: string[] = [];
-  const admitted: Array<ExactSnapshotFile & { bytes: Uint8Array; snapshotMode: number }> = [];
+  const admitted: Array<T & { type: "blob"; mode: 0o100644 | 0o100755 }> = [];
   for (const entry of entries) {
     const admission = semanticVcsPathAdmission(entry.path);
     if (!admission.admissible && admission.reason === "platform-reserved") {
@@ -190,15 +193,7 @@ async function admitAndStore(
       inadmissible.push(`${entry.path} (${entry.type}, mode ${entry.mode.toString(8)})`);
       continue;
     }
-    const bytes = new Uint8Array(entry.bytes);
-    admitted.push({
-      path: entry.path,
-      bytes,
-      contentHash: sha256Hex(bytes),
-      size: bytes.byteLength,
-      mode: entry.mode === 0o100755 ? 0o755 : 0o644,
-      snapshotMode: entry.mode,
-    });
+    admitted.push(entry as T & { type: "blob"; mode: 0o100644 | 0o100755 });
   }
   if (reservedPaths === "reject" && excluded.length > 0) {
     throw new Error(
@@ -212,7 +207,68 @@ async function admitAndStore(
         `(${inadmissible.sort(compareUtf16CodeUnits).join(", ")}); only regular files and executable files are importable`
     );
   }
-  admitted.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+  return admitted.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+}
+
+async function assertExactSnapshotCommit(
+  options: Pick<ReadExactGitSnapshotOptions, "git" | "dir" | "commit" | "label">
+): Promise<void> {
+  if (!FULL_OID.test(options.commit)) {
+    throw new Error(`Exact Git snapshot commit must be a full 40-character object id`);
+  }
+  const observedHead = await options.git.getCurrentCommit(options.dir);
+  if (observedHead?.toLowerCase() !== options.commit.toLowerCase()) {
+    throw new Error(
+      `Cannot import ${options.label}: Git HEAD advanced while resolving the snapshot ` +
+        `(expected ${options.commit}, observed ${observedHead ?? "no commit"}); retry`
+    );
+  }
+}
+
+/** Review uses the exact same tree and semantic admission as content import,
+ * but loads only the immutable blobs its validation actually consumes. */
+export async function readExactGitSnapshotIndex(
+  options: Omit<ReadExactGitSnapshotOptions, "sink" | "expectedSnapshot">
+): Promise<ExactGitSnapshotIndex> {
+  await assertExactSnapshotCommit(options);
+  const index = await options.git.readCommitTreeIndex(options.dir, options.commit);
+  const files = admitSnapshotEntries(
+    options.label,
+    selectSubtree(index.entries, options.subdir),
+    options.reservedPaths ?? "reject"
+  );
+  const paths = new Set(files.map((file) => file.path));
+  const prefix = options.subdir ? `${options.subdir.replace(/^\/+|\/+$/g, "")}/` : "";
+  return {
+    commit: options.commit.toLowerCase(),
+    files,
+    readFile: (filePath) =>
+      paths.has(filePath) ? index.readFile(`${prefix}${filePath}`) : Promise.resolve(null),
+  };
+}
+
+async function admitAndStore(
+  label: string,
+  entries: readonly GitCommitTreeEntry[],
+  sink: SnapshotContentSink,
+  reservedPaths: ReservedPathPolicy
+): Promise<{
+  files: ExactSnapshotFile[];
+  bytesByPath: Map<string, Uint8Array>;
+  snapshot: CanonicalSnapshotDigest;
+}> {
+  const admitted: Array<ExactSnapshotFile & { bytes: Uint8Array; snapshotMode: number }> = [];
+  for (const entry of admitSnapshotEntries(label, entries, reservedPaths)) {
+    const bytes = new Uint8Array(entry.bytes);
+    admitted.push({
+      path: entry.path,
+      bytes,
+      contentHash: sha256Hex(bytes),
+      size: bytes.byteLength,
+      mode: entry.mode === 0o100755 ? 0o755 : 0o644,
+      snapshotMode: entry.mode,
+    });
+  }
   const distinct = [...new Map(admitted.map((file) => [file.contentHash, file])).values()];
   let cursor = 0;
   await Promise.all(
@@ -256,18 +312,9 @@ async function admitAndStore(
 export async function readExactGitSnapshot(
   options: ReadExactGitSnapshotOptions
 ): Promise<ExactGitSnapshot> {
-  if (!FULL_OID.test(options.commit)) {
-    throw new Error(`Exact Git snapshot commit must be a full 40-character object id`);
-  }
   const startedAt = performance.now();
-  const observedHead = await options.git.getCurrentCommit(options.dir);
+  await assertExactSnapshotCommit(options);
   const headReadAt = performance.now();
-  if (observedHead?.toLowerCase() !== options.commit.toLowerCase()) {
-    throw new Error(
-      `Cannot import ${options.label}: Git HEAD advanced while resolving the snapshot ` +
-        `(expected ${options.commit}, observed ${observedHead ?? "no commit"}); retry`
-    );
-  }
   // The immutable commit tree, rather than the checkout's worktree, is the
   // snapshot source. Verifying every worktree path here is both redundant and
   // prohibitively expensive for a large template: local worktree changes
