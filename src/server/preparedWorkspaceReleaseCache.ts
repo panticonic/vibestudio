@@ -68,13 +68,15 @@ export async function prepareCachedWorkspaceRelease(
   input: PreparedWorkspaceReleaseInput & {
     signal?: AbortSignal;
     onSourcesPrepared?: (root: string) => void | Promise<void>;
+    operation?: WorkspaceReleaseOperation;
+    prepareSources?: (operation: WorkspaceReleaseOperation) => Promise<void>;
   },
   produce: (operation: WorkspaceReleaseOperation) => Promise<void>
 ): Promise<void> {
   input.signal?.throwIfAborted();
   // The exact host/dependency inputs belong to this operation, not to each
   // validation or publication boundary. Never retain this capture globally.
-  const operation = await workspaceReleaseIdentity(input.appRoot);
+  const operation = input.operation ?? (await workspaceReleaseIdentity(input.appRoot));
   const identity = operation.identity;
   if (await validateExistingPreparedWorkspaceRelease(input, identity)) {
     await input.onSourcesPrepared?.(input.output);
@@ -83,11 +85,12 @@ export async function prepareCachedWorkspaceRelease(
   const key = createHash("sha256")
     .update(
       canonicalJson({
-        format: "vibestudio-workspace-runtime-release/2",
+        format: "vibestudio-workspace-runtime-release/3",
         platform: process.platform,
         arch: process.arch,
         ...identity,
         templates: input.templates,
+        layers: input.layers,
       })
     )
     .digest("hex");
@@ -97,6 +100,7 @@ export async function prepareCachedWorkspaceRelease(
   const cacheOwner = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
   let lease: ReturnType<DerivedCacheCoordinator["acquire"]> | undefined;
   let coordinator: SharedBuildCoordinator | undefined;
+  let sourcesPrepared = false;
   const reuse = async () => {
     await projectRelease(cached, input.output);
     // Reconstruction inherits the already-proved immutable inventory only
@@ -120,11 +124,24 @@ export async function prepareCachedWorkspaceRelease(
       "Release projection completion and retirement failed"
     );
     console.log(`[workspace-release] Reusing verified complete release ${key.slice(0, 12)}`);
-    await input.onSourcesPrepared?.(input.output);
+    if (!sourcesPrepared) {
+      sourcesPrepared = true;
+      await input.onSourcesPrepared?.(input.output);
+    }
   };
   await runWithOwnedCleanup(
     async () => {
       lease = cacheOwner.acquire(root, key);
+      // A waiter for the complete background batch must not wait for that batch
+      // to obtain its independently published immutable source phase.
+      if (await validateExistingPreparedWorkspaceRelease(cachedInput, identity)) {
+        await reuse();
+        return;
+      }
+      if (input.prepareSources) {
+        await input.prepareSources(operation);
+        sourcesPrepared = true;
+      }
       coordinator = new SharedBuildCoordinator(root, 1);
       const outcome = await coordinator.run(
         key,

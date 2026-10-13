@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   HOST_BRAND_RUNTIME_ARTIFACTS,
   NATIVE_WORKSPACE_ENTRIES,
@@ -36,6 +36,78 @@ const REQUIRED = {
   ],
 };
 const COMPLETION_RECEIPT = "host-build-fingerprint.json";
+export const HOST_PREPARATION_RECIPES = "host-preparation-recipes.json";
+const PREPARATION_ENTRIES = ["prepare-workspace-templates.mjs", "prepare-workspace-templates.cjs"];
+
+/** Capture executable recipe bytes at publication, never at consumer startup. */
+function preparationRecipes(root) {
+  const entries = {};
+  for (const entry of PREPARATION_ENTRIES) {
+    const file = path.join(root, entry);
+    if (fs.existsSync(file))
+      entries[entry] = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  }
+  if (!entries[PREPARATION_ENTRIES[0]])
+    throw new Error("Host preparation publication is missing its standalone entry");
+  return { format: "vibestudio-host-preparation-recipes/1", entries };
+}
+
+function writePreparationRecipes(root, record) {
+  const destination = path.join(root, HOST_PREPARATION_RECIPES);
+  const temporary = `${destination}.${randomUUID()}.publishing`;
+  let handle;
+  let owned = false;
+  const failures = [];
+  try {
+    handle = fs.openSync(temporary, "wx", 0o600);
+    owned = true;
+    fs.writeFileSync(handle, `${JSON.stringify(record)}\n`);
+    fs.closeSync(handle);
+    handle = undefined;
+    fs.renameSync(temporary, destination);
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    for (const cleanup of [
+      () => {
+        if (handle !== undefined) fs.closeSync(handle);
+      },
+      () => {
+        if (owned) fs.rmSync(temporary, { force: true });
+      },
+    ]) {
+      try {
+        cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length)
+    throw new AggregateError(failures, "Preparation recipe publication and retirement failed", {
+      cause: failures[0],
+    });
+}
+
+export function readHostPreparationRecipe(root, entry) {
+  if (!PREPARATION_ENTRIES.includes(entry))
+    throw new Error(`Unknown host preparation entry: ${entry}`);
+  const record = JSON.parse(fs.readFileSync(path.join(root, HOST_PREPARATION_RECIPES), "utf8"));
+  if (
+    record?.format !== "vibestudio-host-preparation-recipes/1" ||
+    !record.entries ||
+    typeof record.entries !== "object" ||
+    Array.isArray(record.entries) ||
+    Object.keys(record.entries).some((name) => !PREPARATION_ENTRIES.includes(name)) ||
+    Object.values(record.entries).some(
+      (value) => typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)
+    ) ||
+    !record.entries[entry]
+  )
+    throw new Error("Published host preparation recipe record is invalid");
+  return record.entries[entry];
+}
 
 const heldGenerations = new Map();
 let exitCleanupInstalled = false;
@@ -230,6 +302,8 @@ export function publishHostBuildGeneration(cwd, build) {
       `Cannot publish incomplete ${build.kind} host generation: missing ${COMPLETION_RECEIPT}`
     );
   }
+  const recipes = preparationRecipes(dist);
+  writePreparationRecipes(dist, recipes);
   return withGenerationLock(generations, () => {
     const target = hostBuildGenerationRoot(cwd, build.kind, build.fingerprint);
     if (!fs.existsSync(target)) {
@@ -259,6 +333,14 @@ export function publishHostBuildGeneration(cwd, build) {
           path.join(staging, "node_modules"),
           "dir"
         );
+        writePreparationRecipes(staging, {
+          ...recipes,
+          entries: Object.fromEntries(
+            Object.entries(recipes.entries).filter(([entry]) =>
+              fs.existsSync(path.join(staging, entry))
+            )
+          ),
+        });
         fs.renameSync(staging, target);
       } finally {
         fs.rmSync(staging, { recursive: true, force: true });

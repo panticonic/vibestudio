@@ -9,6 +9,8 @@ import {
   publishHostBuildGeneration,
   readCurrentHostBuildGeneration,
   releaseHostBuildGeneration,
+  readHostPreparationRecipe,
+  HOST_PREPARATION_RECIPES,
 } from "./host-build-generations.mjs";
 import {
   HOST_BRAND_RUNTIME_ARTIFACTS,
@@ -112,6 +114,18 @@ test("publishes immutable complete generations and leaves the prior one readable
     });
     assert.equal(readCurrentHostBuildGeneration(root, "desktop"), first);
     assert.equal(readCurrentHostBuildGeneration(root, "source"), source);
+    const recipe = readHostPreparationRecipe(first, "prepare-workspace-templates.mjs");
+    assert.equal(readHostPreparationRecipe(source, "prepare-workspace-templates.mjs"), recipe);
+    // Consumers read the sealed publication record, not the executable payload.
+    fs.renameSync(
+      path.join(source, "prepare-workspace-templates.mjs"),
+      path.join(source, "recipe-hidden")
+    );
+    assert.equal(readHostPreparationRecipe(source, "prepare-workspace-templates.mjs"), recipe);
+    fs.renameSync(
+      path.join(source, "recipe-hidden"),
+      path.join(source, "prepare-workspace-templates.mjs")
+    );
     assert.equal(fs.existsSync(path.join(source, "main.cjs")), false);
     for (const artifact of HOST_BRAND_RUNTIME_ARTIFACTS) {
       const relative = artifact.slice("dist/".length);
@@ -144,6 +158,11 @@ test("publishes immutable complete generations and leaves the prior one readable
       fs.writeFileSync(path.join(root, "dist", entry), entry);
     for (const entry of ["headless-host", "assets"]) fs.mkdirSync(path.join(root, "dist", entry));
     writeHostBrandRuntimeArtifacts(root, "b");
+    writeSourcePrerequisites(root, "a");
+    fs.copyFileSync(
+      path.join(first, "prepare-workspace-templates.mjs"),
+      path.join(root, "dist/prepare-workspace-templates.mjs")
+    );
     fs.writeFileSync(path.join(root, "dist/main.cjs"), "main-b");
     fs.writeFileSync(path.join(root, "dist/panelPreload.cjs"), "preload-b");
     fs.writeFileSync(path.join(root, "dist/workerd-programs/router.mjs"), "router-b");
@@ -155,6 +174,7 @@ test("publishes immutable complete generations and leaves the prior one readable
     });
 
     assert.notEqual(first, second);
+    assert.equal(readHostPreparationRecipe(second, "prepare-workspace-templates.mjs"), recipe);
     assert.equal(fs.readFileSync(path.join(first, "panelPreload.cjs"), "utf8"), "preload-a");
     for (const entry of Object.values(NATIVE_WORKSPACE_ENTRIES)) {
       assert.equal(fs.readFileSync(path.join(first, entry), "utf8"), entry);
@@ -169,6 +189,32 @@ test("publishes immutable complete generations and leaves the prior one readable
     releaseHostBuildGeneration(first);
     assert.equal(fs.existsSync(first), false);
     assert.equal(fs.existsSync(second), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects missing, malformed and unavailable preparation recipe records", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-preparation-recipes-"));
+  try {
+    assert.throws(
+      () => readHostPreparationRecipe(root, "prepare-workspace-templates.mjs"),
+      /ENOENT/u
+    );
+    for (const entries of [
+      {},
+      { "prepare-workspace-templates.mjs": "bad" },
+      { "unowned.js": "a".repeat(64) },
+    ]) {
+      fs.writeFileSync(
+        path.join(root, HOST_PREPARATION_RECIPES),
+        JSON.stringify({ format: "vibestudio-host-preparation-recipes/1", entries })
+      );
+      assert.throws(
+        () => readHostPreparationRecipe(root, "prepare-workspace-templates.mjs"),
+        /invalid/u
+      );
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

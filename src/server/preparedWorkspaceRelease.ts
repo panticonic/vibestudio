@@ -45,8 +45,8 @@ const runtimeBuildSchema = z
 
 export const preparedWorkspaceReleaseManifestSchema = z
   .object({
-    format: z.literal("vibestudio-workspace-runtime-release/2"),
-    version: z.literal(2),
+    format: z.literal("vibestudio-workspace-runtime-release/3"),
+    version: z.literal(3),
     platform: z.string().min(1),
     arch: z.string().min(1),
     appDependencyFingerprint: digestSchema,
@@ -58,6 +58,10 @@ export const preparedWorkspaceReleaseManifestSchema = z
       })
       .strict(),
     templates: z.record(z.enum(["base", "personal", "system"]), WorkspaceTemplatePinSchema),
+    layers: z.record(
+      z.enum(["base", "personal", "system"]),
+      z.array(WorkspaceTemplatePinSchema).min(1)
+    ),
     preparedTemplates: z
       .array(
         z
@@ -81,6 +85,9 @@ export interface PreparedWorkspaceReleaseInput {
   readonly appRoot: string;
   readonly output: string;
   readonly templates: Readonly<Record<"base" | "personal" | "system", WorkspaceTemplatePin>>;
+  readonly layers: Readonly<
+    Record<"base" | "personal" | "system", readonly WorkspaceTemplatePin[]>
+  >;
 }
 
 export async function workspaceReleaseIdentity(appRoot: string) {
@@ -128,12 +135,13 @@ export async function createPreparedWorkspaceReleaseManifest(
     });
   }
   return preparedWorkspaceReleaseManifestSchema.parse({
-    format: "vibestudio-workspace-runtime-release/2",
-    version: 2,
+    format: "vibestudio-workspace-runtime-release/3",
+    version: 3,
     platform: process.platform,
     arch: process.arch,
     ...resolvedIdentity,
     templates: input.templates,
+    layers: input.layers,
     preparedTemplates,
     builds,
   });
@@ -209,7 +217,8 @@ async function inspectPreparedWorkspaceRelease(
     manifest.appDependencyFingerprint !== resolvedIdentity.appDependencyFingerprint ||
     canonicalJson(manifest.hostBuild) !== canonicalJson(resolvedIdentity.hostBuild) ||
     canonicalJson(manifest.compilerProtocol) !== canonicalJson(resolvedIdentity.compilerProtocol) ||
-    canonicalJson(manifest.templates) !== canonicalJson(input.templates)
+    canonicalJson(manifest.templates) !== canonicalJson(input.templates) ||
+    canonicalJson(manifest.layers) !== canonicalJson(input.layers)
   ) {
     throw new Error(
       "Prepared workspace release does not match the current host and template inputs"
@@ -267,6 +276,7 @@ async function inspectPreparedWorkspaceRelease(
     if (
       record.purpose !== "use" ||
       canonicalJson(record.pin) !== canonicalJson(pin) ||
+      canonicalJson(record.layers) !== canonicalJson(input.layers[workspace]) ||
       new Set(record.builds.map((build) => build.source)).size !== record.builds.length ||
       new Set(roleBuildInventory.map((build) => build.source)).size !== roleBuildInventory.length ||
       recordBuilds.length !== roleBuilds.length ||
@@ -329,13 +339,7 @@ export async function publishPreparedWorkspaceRelease(
     inventory.artifactKeys
   );
   for (const { directory, record } of inventory.preparedTemplates) {
-    await forEachOwnedConcurrent(record.blobs, 8, async (blob) => {
-      const actual = await streamedFileDigest(
-        blobCasPath(path.join(directory, "blobs"), blob.digest)
-      );
-      if (actual.size !== blob.size || actual.digest !== blob.digest)
-        throw new Error(`Prepared template blob ${blob.digest} failed integrity verification`);
-    });
+    await provePreparedTemplateFiles(directory, record);
   }
   await forEachOwnedConcurrent([...inventory.artifactKeys], 4, async (buildKey) => {
     await verifyReleaseBuildDirectory(
@@ -364,7 +368,7 @@ export async function publishPreparedWorkspaceRelease(
   );
 }
 
-async function inspectPreparedTemplateFiles(
+export async function inspectPreparedTemplateFiles(
   directory: string,
   record: z.infer<typeof preparedWorkspaceTemplateSchema>
 ): Promise<void> {
@@ -391,6 +395,20 @@ async function inspectPreparedTemplateFiles(
   ) {
     throw new Error("Prepared template directory does not match its sealed blob closure");
   }
+}
+
+/** Payload integrity belongs to the publisher, not each trusted cache read. */
+export async function provePreparedTemplateFiles(
+  directory: string,
+  record: z.infer<typeof preparedWorkspaceTemplateSchema>
+): Promise<void> {
+  await forEachOwnedConcurrent(record.blobs, 8, async (blob) => {
+    const actual = await streamedFileDigest(
+      blobCasPath(path.join(directory, "blobs"), blob.digest)
+    );
+    if (actual.size !== blob.size || actual.digest !== blob.digest)
+      throw new Error(`Prepared template blob ${blob.digest} failed integrity verification`);
+  });
 }
 
 async function collectRegularFiles(
