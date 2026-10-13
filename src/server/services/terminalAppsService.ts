@@ -267,6 +267,17 @@ export function createTerminalAppsService(
     if (session.entityId) await deps.retireEntity(session.entityId);
   }
 
+  /** Whether the shell extension still runs this PTY (its authoritative state). */
+  async function ptyAlive(subject: UserSubject, shellSessionId: string): Promise<boolean> {
+    try {
+      const info = (await shellAs(subject, "get", [shellSessionId])) as { alive: boolean };
+      return info.alive;
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
   /** Follow the PTY to its exit (the shell extension's authoritative lifecycle). */
   function watchExit(session: StoredSession, subject: UserSubject, shellSessionId: string): void {
     const watch = (async () => {
@@ -482,6 +493,17 @@ export function createTerminalAppsService(
         const subject = userSubject(ctx);
         const session = requireSession(subject.userId, input.sessionId);
         requirePrepared(ctx, session.source);
+        // Ask the PTY's owner, not this service's exit watch: the program may
+        // have exited a moment before the watch reported it.
+        if (
+          session.running &&
+          session.shellSessionId &&
+          !(await ptyAlive(subject, session.shellSessionId))
+        ) {
+          session.running = false;
+          session.shellSessionId = null;
+          await retireIncarnation(session);
+        }
         if (!session.running) await start(ctx, session, input, input.approvalsKey);
         session.lastActiveAt = Date.now();
         changed(subject.userId);

@@ -30,6 +30,7 @@ async function harness(registryPath?: string) {
   const exits = new Map<string, (value: { exitCode: number | null; signal?: string }) => void>();
   const shellCalls: Array<{ method: string; args: unknown[]; ctx: ServiceContext }> = [];
   let pty = 0;
+  const deadPtys = new Set<string>();
   let entity = 0;
   const retired: string[] = [];
   const events: Array<{ userId: string; sessions: unknown[] }> = [];
@@ -65,6 +66,7 @@ async function harness(registryPath?: string) {
       expect(name).toBe(SHELL_EXTENSION);
       shellCalls.push({ method: shellMethod, args: shellArgs, ctx });
       if (shellMethod === "open") return { sessionId: `pty-${++pty}` };
+      if (shellMethod === "get") return { alive: !deadPtys.has(shellArgs[0] as string) };
       if (shellMethod === "awaitExit") {
         return new Promise((resolve, reject) => {
           exits.set(shellArgs[0] as string, resolve);
@@ -78,7 +80,7 @@ async function harness(registryPath?: string) {
   const service = createTerminalAppsService(deps);
   const call = (method: string, ctx: ServiceContext, ...args: unknown[]) =>
     service.handler(ctx, method, args) as Promise<unknown>;
-  return { root, deps, service, call, shellCalls, exits, retired, events };
+  return { root, deps, service, call, shellCalls, exits, retired, events, deadPtys };
 }
 
 describe("terminalApps launch service", () => {
@@ -157,6 +159,23 @@ describe("terminalApps launch service", () => {
     };
     expect(spec.contextId).toBe("ctx-1");
     expect(spec.stateArgs).toEqual({ channelName: "kept" });
+    await h.service.stop();
+  });
+
+  it("relaunches on resume when the PTY exited before the exit watch reported it", async () => {
+    const h = await harness();
+    const first = (await call(h, "launch", personCtx("terminal-apps/chat"), {
+      source: "terminal-apps/chat",
+      cols: 80,
+      rows: 24,
+    })) as { sessionId: string };
+    h.deadPtys.add("pty-1");
+    const resumed = (await call(h, "resume", personCtx("terminal-apps/chat"), {
+      sessionId: first.sessionId,
+      cols: 80,
+      rows: 24,
+    })) as { shellSessionId: string };
+    expect(resumed.shellSessionId).toBe("pty-2");
     await h.service.stop();
   });
 

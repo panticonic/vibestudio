@@ -5111,6 +5111,7 @@ async function main() {
     },
   });
   // ── Terminal apps: panels hosted by terminals, run in workspace PTYs ──
+  let terminalAppsForShutdown: { stop(): Promise<void> } | null = null;
   container.registerManaged({
     name: "terminalApps",
     dependencies: ["buildSystem", "nativeWorkspace"],
@@ -5130,7 +5131,7 @@ async function main() {
         if (!runtimeServiceInternal) throw new Error("Runtime service is not available");
         return runtimeServiceInternal;
       };
-      return createTerminalAppsService({
+      const service = createTerminalAppsService({
         workspaceLabel: () => {
           // The account's private pair is named by role; stored names are ids.
           const role = identityDb.getPrivateWorkspaceOwner(workspaceId)?.role;
@@ -5184,6 +5185,8 @@ async function main() {
           ),
         log: (level, message, fields) => console[level](`[TerminalApps] ${message}`, fields ?? ""),
       });
+      terminalAppsForShutdown = service;
+      return service;
     },
     stop: (service: { stop(): Promise<void> }) => service.stop(),
     getServiceDefinition(
@@ -8221,6 +8224,16 @@ async function main() {
         .catch((err) => console.warn("[Server] Iroh ingress close failed:", err));
       irohIngress = null;
     }
+
+    // The terminal launch service waits on the shell extension for each PTY's
+    // exit. It owns those invocations, so it releases them before the
+    // extension host drains its in-flight work.
+    await shutdownStage("terminal-apps-release", async () => {
+      await terminalAppsForShutdown?.stop();
+    }).catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] Terminal launch service shutdown failed:", error);
+    });
 
     // Extension child cancellation and drain use the authenticated process RPC
     // route. Close that owner before global quiescence retires its route; the
