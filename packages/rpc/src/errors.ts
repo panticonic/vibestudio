@@ -26,28 +26,35 @@ export function isTerminalAuthorityFailure(error: unknown): boolean {
 
 /** Routine logical-session loss; callers still own recovery and mutation policy. */
 export function isRpcConnectionLost(error: unknown): boolean {
-  const visited = new Set<object>();
+  const active = new Set<object>();
+  const classified = new Map<object, boolean>();
   const visit = (value: unknown): boolean => {
-    if (!value || typeof value !== "object" || visited.has(value)) return false;
-    visited.add(value);
+    if (!value || typeof value !== "object") return false;
+    const known = classified.get(value);
+    if (known !== undefined) return known;
+    if (active.has(value)) return false;
+    active.add(value);
+    let result: boolean;
     if (value instanceof AggregateError) {
-      return value.errors.length > 0 && value.errors.every(visit);
-    }
-    if (
+      result = value.errors.length > 0 && value.errors.every(visit);
+    } else if (
       "code" in value &&
       value.code === SESSION_CONNECTION_LOST_CODE &&
       (!("errorKind" in value) || value.errorKind === "transport")
     ) {
-      return true;
+      result = true;
+    } else {
+      // Domain wrappers such as PubSubError keep their own category in `code`,
+      // preserve the lower RPC code in `errorCode`, and retain the typed cause.
+      result =
+        "errorCode" in value &&
+        value.errorCode === SESSION_CONNECTION_LOST_CODE &&
+        "cause" in value &&
+        visit(value.cause);
     }
-    // Domain wrappers such as PubSubError keep their own category in `code`,
-    // preserve the lower RPC code in `errorCode`, and retain the typed cause.
-    return (
-      "errorCode" in value &&
-      value.errorCode === SESSION_CONNECTION_LOST_CODE &&
-      "cause" in value &&
-      visit(value.cause)
-    );
+    active.delete(value);
+    classified.set(value, result);
+    return result;
   };
   return visit(error);
 }

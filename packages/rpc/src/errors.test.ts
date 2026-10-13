@@ -98,6 +98,11 @@ describe("isRpcConnectionLost", () => {
       ),
     ).toBe(false);
     expect(isRpcConnectionLost(new AggregateError([], "empty"))).toBe(false);
+
+    const repeated = lost();
+    expect(
+      isRpcConnectionLost(new AggregateError([repeated, repeated], "admission and retirement")),
+    ).toBe(true);
   });
 });
 
