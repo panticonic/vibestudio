@@ -125,6 +125,21 @@ export function randomRequestId(prefix = "mobile-shell"): string {
   return `${prefix}-${secureRandomUuid()}`;
 }
 
+/**
+ * Identify the one live mobile shell incarnation for an installed endpoint and
+ * server reach. A cold process restart must present the same identity so normal
+ * RPC admission atomically replaces the dead process before it can receive
+ * server-initiated work. The value is derived rather than persisted: replacing
+ * either the native endpoint identity or the authenticated server reach creates
+ * a distinct connection owner.
+ */
+function mobileReachConnectionId(
+  endpointIdentityId: string,
+  peerEndpointId: string
+): string {
+  return `mobile-shell:${endpointIdentityId.length}:${endpointIdentityId}:${peerEndpointId}`;
+}
+
 export function makeFreshShellTokenProvider(pairing: FreshShellPairing): ShellTokenProvider {
   let credential: ShellCredential | null = null;
   return {
@@ -294,7 +309,7 @@ export async function establishIrohConnection(
   let terminalRetirement: Promise<void> | null = null;
   let removeLifecycle = () => {};
   console.log("[mobile-iroh] reconnect owner created");
-  const connectionId = randomRequestId();
+  const connectionId = mobileReachConnectionId(endpointIdentityId, pairing.endpointId);
   console.log("[mobile-iroh] logical session identity created");
   const session = transport.openSession({
     connectionId,
