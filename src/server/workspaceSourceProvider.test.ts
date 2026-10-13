@@ -383,6 +383,9 @@ describe("native original human authority", () => {
       purpose: "generation",
       attempt: 0,
       cutoff: 4,
+      providerId: "openai",
+      modelId: "gpt-test",
+      endpoint: "https://api.example.test/v1",
       requestDigest: "b".repeat(64),
     });
     await expect(state.resolve()).rejects.toThrow("does not belong to the invoking task");

@@ -19,7 +19,10 @@ import type {
   UrlAudience,
 } from "@vibestudio/credential-client/types";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  selectedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
 import { rpcFailureSchema } from "./rpcFailure.js";
@@ -838,6 +841,19 @@ export const ResolveCredentialParamsSchema = z
   .refine((value) => !!value.url || !!value.providerId, {
     message: "resolveCredential requires url or providerId",
   });
+
+export const ResolveNativeModelCredentialParamsSchema = z
+  .object({
+    providerId: IdentifierSchema,
+    modelId: z.string().min(1).max(512),
+    endpoint: z.string().min(1).max(2048).nullable(),
+  })
+  .strict();
+export type ResolveNativeModelCredentialParams = z.infer<
+  typeof ResolveNativeModelCredentialParamsSchema
+>;
+export const RESOLVE_NATIVE_MODEL_AUTHORITY_RESOLVER =
+  "credentials.resolveNativeModel.modelAccount" as const;
 
 export const ProxyFetchParamsSchema = z
   .object({
@@ -1669,6 +1685,57 @@ export const credentialsMethods = defineServiceMethods({
     returns: z.union([StoredCredentialSummarySchema, z.null()]),
     access: RESOLVE_CREDENTIAL_ACCESS,
     examples: [{ args: [{ url: "https://api.example.test/v1" }] }],
+  },
+  resolveNativeModel: {
+    website: {
+      kind: "eligible",
+      rationale:
+        "Admits inference for the exact authenticated native invocation and server-selected account; returns only a secret-free credential summary while credential use and destination authorization stay on the existing egress path.",
+    } as const,
+    capability: "credentials.resolveNativeModel",
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale:
+        "Credential selection stays host-side; one prepared exact model/account model.use decision precedes existing credential.use and destination checks",
+    },
+    description:
+      "Resolve the server-selected credential for one authenticated native model invocation. Provider, model, and endpoint must match the host-retained active model task when present. Return only a secret-free summary after model.use and credential.use authorization.",
+    args: z.tuple([ResolveNativeModelCredentialParamsSchema]),
+    returns: z.union([StoredCredentialSummarySchema, z.null()]),
+    authority: {
+      requirement: { kind: "relationship", name: "workspace-member" },
+      resource: { kind: "literal", key: "native-model" },
+      prepared: {
+        resolver: RESOLVE_NATIVE_MODEL_AUTHORITY_RESOLVER,
+        leaves: [
+          {
+            capability: "model.use",
+            requirement: selectedPreparedAuthorityRequirement([
+              "website",
+              "user",
+              "host",
+              "code",
+            ]),
+            tier: "gated",
+          },
+        ],
+      },
+    },
+    access: RESOLVE_CREDENTIAL_ACCESS,
+    examples: [
+      {
+        args: [
+          {
+            providerId: "openai",
+            modelId: "gpt-6.1-sol",
+            endpoint: "https://api.openai.com/v1",
+          },
+        ],
+      },
+    ],
   },
   deriveCredential: {
     website: {

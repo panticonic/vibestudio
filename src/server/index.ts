@@ -3544,6 +3544,32 @@ async function main() {
       rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
     hasAppCapability: (callerId, capability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+    resolveNativeInvocation: async (caller) => {
+      const parent = caller.causalParent;
+      if (!parent || !caller.nativeInvocation) return null;
+      const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+      const { resolveExactCausalInvocation } = await import("./workspaceSourceProvider.js");
+      const fact = await resolveExactCausalInvocation(parent, {
+        binding: caller.agentBinding ?? null,
+        entities: entityCache,
+        inspect: (locator, invocationId) => {
+          const owner = entityCache.resolveActive(locator.owner.runtimeId);
+          if (!owner?.className) throw new Error("Native task owner is not active");
+          return doDispatch.dispatch(
+            {
+              source: owner.source.repoPath,
+              className: owner.className,
+              objectKey: owner.key,
+            },
+            "inspectNativeInvocationSource",
+            { taskId: locator.task.taskId, invocationId }
+          );
+        },
+        getEnvelope: (ref, envelopeId) => doDispatch.dispatch(ref, "getEnvelope", envelopeId),
+      });
+      if (!fact) return null;
+      return { nativeInvocation: fact.nativeInvocation, active: fact.active };
+    },
   });
 
   // Durable and session permission grants are owned by the workspace server.

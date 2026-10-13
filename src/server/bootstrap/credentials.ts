@@ -38,6 +38,7 @@ export interface CredentialBootstrapDeps {
     CredentialServiceDeps["connectionLookup"]
   >["getAuthorizingShell"];
   hasAppCapability: NonNullable<CredentialServiceDeps["hasAppCapability"]>;
+  resolveNativeInvocation?: CredentialServiceDeps["resolveNativeInvocation"];
 }
 
 export type BootstrappedCredentialService = ReturnType<typeof createCredentialService> & {
@@ -102,6 +103,7 @@ export function wireCredentialService(
     credentialUseGrantStore: deps.credentialUseGrantStore,
     credentialLifecycle: deps.credentialLifecycle,
     hasAppCapability: deps.hasAppCapability,
+    resolveNativeInvocation: deps.resolveNativeInvocation,
     runtimeInspector: {
       listActiveEntities: () => deps.entityCache.listActive(),
       resolvePanelSlotByEntity: async (entityId: string) =>

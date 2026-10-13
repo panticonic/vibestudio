@@ -89,3 +89,56 @@ describe("nested native invocation identity", () => {
       ).not.toBe(original);
   });
 });
+
+describe("native model invocation identity", () => {
+  const source = {
+    owner: {
+      runtimeId: "agent:one",
+      authoritySessionId: "lifetime:one",
+      contextId: "ctx:one",
+      incarnation: "storage:one",
+      channelId: "channel:one",
+      source: "workers/agent-worker",
+      effectiveVersion: "version:one",
+      className: "AiChatWorker",
+      objectKey: "agent:one",
+      executionDigest: "a".repeat(64),
+    },
+    task: { conversationId: 4, taskId: 23, kind: "pi.model", version: 2 },
+    operation: {
+      kind: "model" as const,
+      purpose: "generation" as const,
+      attempt: 1,
+      cutoff: 13,
+      providerId: "openai",
+      modelId: "gpt-test",
+      endpoint: "https://api.example.test/v1",
+      requestDigest: "b".repeat(64),
+    },
+  };
+
+  it("verifies the exact provider, model, and configured endpoint in the native locator", () => {
+    expect(nativeInvocationSourceSchema.parse(source)).toEqual(source);
+    expect(nativeInvocationIdentity(source).operation).toEqual({
+      kind: "model",
+      purpose: "generation",
+      attempt: 1,
+      cutoff: 13,
+      providerId: "openai",
+      modelId: "gpt-test",
+      endpoint: "https://api.example.test/v1",
+    });
+    const original = nativeInvocationId(nativeInvocationIdentity(source));
+    for (const change of [
+      { providerId: "other-provider" },
+      { modelId: "other-model" },
+      { endpoint: "https://other.example.test/v1" },
+    ]) {
+      expect(
+        nativeInvocationId(
+          nativeInvocationIdentity({ ...source, operation: { ...source.operation, ...change } })
+        )
+      ).not.toBe(original);
+    }
+  });
+});

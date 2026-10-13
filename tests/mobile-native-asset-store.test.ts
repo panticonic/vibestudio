@@ -145,6 +145,18 @@ describe("native mobile asset store contract", () => {
     expect(tcpPatch).toContain("socketToClose = socket;");
     expect(tcpPatch).toContain("socket = null;");
     expect(tcpPatch).not.toContain("+            if (socket != null && !socket.isClosed())");
+
+    const androidWriter = tcpPatch.slice(
+      tcpPatch.indexOf("+    public void writeFile"),
+      tcpPatch.indexOf("+    public ReadableMap getPeerCertificate")
+    );
+    expect(androidWriter).toContain("final Socket socketToWrite;");
+    expect(androidWriter).toContain("synchronized (TcpSocketClient.this)");
+    expect(androidWriter).toContain("socketToWrite = socket;");
+    expect(androidWriter).toContain(
+      "final OutputStream output = socketToWrite.getOutputStream();"
+    );
+    expect(androidWriter).not.toContain("socket.getOutputStream()");
   });
 
   it("emits credential-safe request telemetry needed to prove warm hits", () => {

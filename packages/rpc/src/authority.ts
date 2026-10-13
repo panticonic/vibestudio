@@ -490,6 +490,9 @@ export interface NativeInvocationIdentity {
         readonly purpose: "generation" | "compaction";
         readonly attempt: number;
         readonly cutoff: number;
+        readonly providerId: string;
+        readonly modelId: string;
+        readonly endpoint: string | null;
       };
 }
 

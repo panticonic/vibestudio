@@ -27,7 +27,7 @@ describe("invocation snapshot", () => {
     const nativeInvocation = {
       owner: { runtimeId: "agent:one", authoritySessionId: "lifetime:one" },
       task: { taskId: 12, conversationId: 0 },
-      operation: { kind: "model" as const, purpose: "generation" as const, attempt: 0, cutoff: 9 },
+      operation: { kind: "model" as const, purpose: "generation" as const, attempt: 0, cutoff: 9, providerId: "openai", modelId: "gpt-test", endpoint: "https://api.example.test/v1" },
     };
     const snapshot = createInvocationSnapshot({ ...base(), args: [], nativeInvocation });
     const digest = invocationSnapshotDigest(snapshot);
@@ -37,7 +37,7 @@ describe("invocation snapshot", () => {
     expect(snapshot.nativeInvocation).toEqual({
       owner: { runtimeId: "agent:one", authoritySessionId: "lifetime:one" },
       task: { taskId: 12, conversationId: 0 },
-      operation: { kind: "model", purpose: "generation", attempt: 0, cutoff: 9 },
+      operation: { kind: "model", purpose: "generation", attempt: 0, cutoff: 9, providerId: "openai", modelId: "gpt-test", endpoint: "https://api.example.test/v1" },
     });
     for (const changed of [
       undefined,

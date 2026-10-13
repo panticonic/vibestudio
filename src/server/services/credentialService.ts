@@ -41,7 +41,14 @@ import {
 import {
   verifiedInitiatingUserId,
   type ServiceContext,
+  type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
+import {
+  preparedAuthorityPayload,
+  selectedPreparedAuthoritySelection,
+} from "@vibestudio/shared/serviceDefinition";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+import type { NativeInvocationIdentity } from "@vibestudio/rpc";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -58,7 +65,9 @@ import {
   type ProxyGitHttpParams,
   type RequestClientConfigParams,
   type RequestCredentialInputParams,
+  type ResolveNativeModelCredentialParams,
   type ResolveCredentialParams,
+  RESOLVE_NATIVE_MODEL_AUTHORITY_RESOLVER,
   type StoreUrlBoundCredentialParams,
   type WebsitePublicationIntentParams,
 } from "@vibestudio/service-schemas/credentials";
@@ -85,6 +94,8 @@ import { credentialGrantAgentId } from "./credentialGrantIdentity.js";
 import { createGitHttpResponse } from "./gitHttpRpc.js";
 import type { LocalGitMirrorTransport } from "./localGitMirrors.js";
 import { normalizeRemoteUrl } from "@vibestudio/workspace/remotes";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 import { throwIfAborted } from "./credentialMechanisms/async.js";
 import { OAuthConnectionError } from "./credentialMechanisms/errors.js";
 import { basicAuthHeader } from "./credentialMechanisms/oauth2.js";
@@ -184,6 +195,10 @@ export interface CredentialServiceDeps {
   ) => void;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   runtimeInspector?: CredentialRuntimeInspector;
+  /** Revalidates native task ownership with the canonical host resolver. */
+  resolveNativeInvocation?: (
+    caller: VerifiedCaller
+  ) => Promise<{ nativeInvocation: NativeInvocationIdentity; active: boolean } | null>;
   /**
    * Announce a pending relay-routed OAuth transaction to the apex relay over the
    * backhaul so the callback can be handed back to this server (§7). `desktop`
@@ -874,6 +889,85 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       return summarizeUrlBoundCredential(credential);
     }
 
+    await authorizeCredentialUse(ctx, credential, usage, ctx.signal);
+    return summarizeUrlBoundCredential(credential);
+  }
+
+  type NativeModelPreparation = {
+    request: ResolveNativeModelCredentialParams;
+    credentialId: string | null;
+    resourceKey: string | null;
+  };
+
+  async function prepareNativeModel(
+    ctx: ServiceContext,
+    params: ResolveNativeModelCredentialParams
+  ): Promise<NativeModelPreparation> {
+    const fact = await deps.resolveNativeInvocation?.(ctx.caller);
+    const locator = ctx.caller.nativeInvocation;
+    if (
+      !locator ||
+      !fact?.active ||
+      canonicalJson(fact.nativeInvocation) !== canonicalJson(locator)
+    ) {
+      throw new Error(
+        "Native model credential resolution requires its active authenticated invocation"
+      );
+    }
+    if (
+      locator.operation.kind !== "model" ||
+      locator.operation.providerId !== params.providerId ||
+      locator.operation.modelId !== params.modelId ||
+      locator.operation.endpoint !== params.endpoint
+    ) {
+      throw new Error("Requested model target does not match the active native model task");
+    }
+
+    const endpointIsTemplated = params.endpoint !== null && /\{[^}]+\}/u.test(params.endpoint);
+    const candidate =
+      params.endpoint && !endpointIsTemplated
+        ? await findUrlBoundCredentialForUrl(new URL(params.endpoint), "fetch")
+        : await findUrlBoundCredentialForProvider(params.providerId, "fetch");
+    if (!candidate || !candidate.credential.id) {
+      return { request: params, credentialId: null, resourceKey: null };
+    }
+    const resourceKey = nativeModelAccountResourceKey(params, candidate.credential);
+    return { request: params, credentialId: candidate.credential.id, resourceKey };
+  }
+
+  function nativeModelAccountResourceKey(
+    params: ResolveNativeModelCredentialParams,
+    credential: Credential & { id?: string }
+  ): string {
+    const account = credential.accountIdentity?.providerUserId
+      ? `${params.providerId}:${credential.accountIdentity.providerUserId}`
+      : `credential:${credential.id ?? params.providerId}`;
+    return `model:${encodeURIComponent(params.providerId)}/${encodeURIComponent(params.modelId)}@${encodeURIComponent(account)}`;
+  }
+
+  async function resolveNativeModelCredential(
+    ctx: ServiceContext,
+    params: ResolveNativeModelCredentialParams
+  ): Promise<StoredCredentialSummary | null> {
+    const prepared = preparedAuthorityPayload<NativeModelPreparation>(
+      ctx,
+      RESOLVE_NATIVE_MODEL_AUTHORITY_RESOLVER
+    );
+    if (canonicalJson(prepared.request) !== canonicalJson(params)) {
+      throw new Error("Prepared model target does not match the admitted request");
+    }
+    if (!prepared.credentialId) return null;
+    const credential = await loadActiveCredential(prepared.credentialId);
+    if (nativeModelAccountResourceKey(prepared.request, credential) !== prepared.resourceKey) {
+      throw new Error("Selected model account changed during authority admission");
+    }
+    const endpointIsTemplated =
+      prepared.request.endpoint !== null && /\{[^}]+\}/u.test(prepared.request.endpoint);
+    const usage =
+      prepared.request.endpoint && !endpointIsTemplated
+        ? credentialUseContext(credential, new URL(prepared.request.endpoint), "fetch")
+        : providerCredentialUseContext(credential, prepared.request.providerId, "fetch");
+    if (!usage) throw new Error("Selected credential no longer matches the model endpoint");
     await authorizeCredentialUse(ctx, credential, usage, ctx.signal);
     return summarizeUrlBoundCredential(credential);
   }
@@ -1649,6 +1743,70 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     description: "URL-bound userland credential storage and egress",
     authority: { principals: ["user", "code", "host", "website"] },
     methods: credentialsMethods,
+    authorityPreparation: {
+      [RESOLVE_NATIVE_MODEL_AUTHORITY_RESOLVER]: async (ctx, [rawParams]) => {
+        const params = rawParams as ResolveNativeModelCredentialParams;
+        const prepared = await prepareNativeModel(ctx, params);
+        if (!prepared.credentialId || !prepared.resourceKey) {
+          return { selections: [], payload: prepared };
+        }
+        const credential = await loadActiveCredential(prepared.credentialId);
+        const resource = {
+          kind: "exact" as const,
+          key: prepared.resourceKey,
+        };
+        const accountLabel =
+          credential.accountIdentity?.email ??
+          credential.accountIdentity?.username ??
+          credential.accountIdentity?.providerUserId ??
+          credential.label ??
+          credential.id;
+        const modelLabel = `${params.providerId}/${params.modelId}`;
+        const endpoint = params.endpoint ?? "Provider default endpoint";
+        const copy = describeCapability("model.use");
+        return {
+          selections: [
+            selectedPreparedAuthoritySelection({
+              capability: "model.use",
+              resourceKey: prepared.resourceKey,
+              resource,
+              requirement: requirementForPrincipals(
+                ["website", "user", "host", "code"],
+                "model.use"
+              ),
+              tier: "gated",
+              challenge: {
+                title: copy.title,
+                description: "Allow this exact model to run with the selected connected account.",
+                deniedReason: "Using this model account was not allowed",
+                dedupKey: `native-model:${ctx.caller.runtime.id}:${prepared.resourceKey}`,
+                resource: {
+                  type: "model-account",
+                  label: "Model and account",
+                  value: `${modelLabel} · ${accountLabel}`,
+                },
+                operation: {
+                  kind: "credential",
+                  verb: copy.action,
+                  object: {
+                    type: "model-account",
+                    label: "Model and account",
+                    value: `${modelLabel} · ${accountLabel}`,
+                  },
+                  groupKey: `native-model:${ctx.caller.runtime.id}:${prepared.resourceKey}`,
+                },
+                details: [
+                  { label: "Model", value: modelLabel },
+                  { label: "Account", value: accountLabel },
+                  { label: "Endpoint", value: endpoint },
+                ],
+              },
+            }),
+          ],
+          payload: prepared,
+        };
+      },
+    },
     handler: defineServiceHandler("credentials", credentialsMethods, {
       observeChanges: (ctx, [input]) => observeChanges(ctx, input.afterVersion),
       storeCredential: (ctx, [input]) => storeCredential(ctx, input),
@@ -1665,6 +1823,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       inspectStoredCredentials: () => inspectStoredCredentials(),
       revokeCredential: (ctx, [input]) => revokeCredential(ctx, input),
       resolveCredential: (ctx, [input]) => resolveCredential(ctx, input),
+      resolveNativeModel: (ctx, [input]) => resolveNativeModelCredential(ctx, input),
       beginWebsitePublication: (ctx, [publication]) => {
         const receipt = publicationJournal.begin(publication);
         if (!isTerminalWebsitePublication(receipt)) {

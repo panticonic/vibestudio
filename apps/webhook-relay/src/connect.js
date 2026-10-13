@@ -9,6 +9,7 @@ import {
   contextId,
   createConversationClient,
   launchAgentIntoChannel,
+  formatRpcFailure,
 } from "/runtime.js";
 
 // Embedded inventions share this page's authenticated SDK instance. This is
@@ -30,6 +31,7 @@ let busy = false;
 let progressTimer;
 let progressStarted;
 const activeTools = new Map();
+const turnFailures = new Map();
 function showActivity(text) {
   $("lab-activity").textContent = text;
 }
@@ -168,6 +170,22 @@ async function record(value) {
     : value?.payload;
   if (!event) return;
   trackActivity(event);
+  const fromInventor =
+    Boolean(invention?.participantId) &&
+    (event.actor?.participantId === invention.participantId ||
+      event.actor?.id === invention.participantId);
+  if (fromInventor && event.turnId && event.kind === "invocation.failed") {
+    turnFailures.set(event.turnId, event.payload?.reason ?? event.payload?.failure?.message);
+  }
+  if (event.kind === "turn.closed") {
+    const failure = turnFailures.get(event.turnId);
+    turnFailures.delete(event.turnId);
+    if (fromInventor && event.payload?.reason === "work_failed") {
+      setBusy(false);
+      message(failure ?? "The inventor's turn failed before completing the invention.", true);
+    }
+    return;
+  }
   if (event.kind !== "message.completed") return;
   const id = event.causality?.messageId;
   if (id && seen.has(id)) return;
@@ -204,8 +222,10 @@ async function observe(expected) {
       { signal: controller.signal }
     )
     .catch((error) => {
-      if (!controller.signal.aborted)
-        message(`Live updates stopped: ${error.message}. Reconnect to resume.`, true);
+      if (!controller.signal.aborted) {
+        setBusy(false);
+        message(`Live updates stopped: ${formatRpcFailure(error)}. Reconnect to resume.`, true);
+      }
     });
   const history = await conversation.history(expected.channelTarget);
   if (expected !== invention || controller.signal.aborted) return;
@@ -226,11 +246,12 @@ async function restore() {
   setBusy(false);
   message("Reopening your saved invention…");
   await observe(candidate);
-  message(
-    artifact
-      ? "Your invention is back. Keep exploring."
-      : "Conversation restored. Accepted work can continue while this page is away."
-  );
+  if (status.dataset.error !== "true")
+    message(
+      artifact
+        ? "Your invention is back. Keep exploring."
+        : "Conversation restored. Accepted work can continue while this page is away."
+    );
 }
 function renderConnection() {
   const connection = workspaceConnection;
@@ -264,7 +285,7 @@ workspaceConnection.subscribe(() => {
   renderConnection();
   const connected = workspaceConnection.connected;
   if (connected && !observedConnection)
-    void restore().catch((error) => message(error.message, true));
+    void restore().catch((error) => message(formatRpcFailure(error), true));
   observedConnection = connected;
 });
 connectionButton.addEventListener("click", async () => {
@@ -275,7 +296,7 @@ connectionButton.addEventListener("click", async () => {
       studio.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   } catch (error) {
-    connectionStatus.textContent = error.message;
+    connectionStatus.textContent = formatRpcFailure(error);
   }
 });
 for (const idea of document.querySelectorAll("[data-idea]")) {
@@ -311,6 +332,7 @@ make.addEventListener("click", async () => {
       save();
       artifact = "";
       seen.clear();
+      turnFailures.clear();
       $("lab-transcript").replaceChildren();
       preview.hidden = true;
       preview.srcdoc = "";
@@ -357,11 +379,12 @@ Verification: this deliverable is a static HTML document embedded by the website
         to: [{ kind: "participant", participantId: work.participantId }],
       }
     );
-    message(
-      "The inventor is at work. You can leave this page; accepted work keeps its scoped permissions."
-    );
+    if (busy)
+      message(
+        "The inventor is at work. You can leave this page; accepted work keeps its scoped permissions."
+      );
   } catch (error) {
-    message(error.message, true);
+    message(formatRpcFailure(error), true);
     setBusy(false);
   }
 });
@@ -386,7 +409,7 @@ async function revise(text) {
     $("lab-revision").value = "";
     message("The inventor is reshaping your invention…");
   } catch (error) {
-    message(error.message, true);
+    message(formatRpcFailure(error), true);
     setBusy(false);
   }
 }
@@ -403,7 +426,7 @@ $("lab-weirder").addEventListener(
 );
 $("lab-refresh").addEventListener(
   "click",
-  () => void refreshArtifact().catch((error) => message(error.message, true))
+  () => void refreshArtifact().catch((error) => message(formatRpcFailure(error), true))
 );
 window.addEventListener("pagehide", () => {
   subscription?.abort();
@@ -411,4 +434,5 @@ window.addEventListener("pagehide", () => {
   if (downloadUrl) URL.revokeObjectURL(downloadUrl);
 });
 renderConnection();
-if (workspaceConnection.connected) void restore().catch((error) => message(error.message, true));
+if (workspaceConnection.connected)
+  void restore().catch((error) => message(formatRpcFailure(error), true));
