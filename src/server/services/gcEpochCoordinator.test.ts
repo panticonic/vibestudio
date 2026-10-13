@@ -308,6 +308,49 @@ describe("GcEpochCoordinator", () => {
     expect(prepareGc).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(20);
     expect(buildSystem.prepareGc).toHaveBeenCalledTimes(2);
-    coordinator.stop();
+    releaseBuildSnapshot?.();
+    await coordinator.stop();
+  });
+
+  it("joins an active epoch on stop and never schedules another epoch", async () => {
+    let releaseBuildSnapshot: (() => void) | undefined;
+    const buildSystem = {
+      prepareGc: vi.fn(
+        () =>
+          new Promise<ReturnType<typeof preparedBuild>>((resolve) => {
+            releaseBuildSnapshot = () => resolve(preparedBuild(retention([])));
+          })
+      ),
+      peekBuildByKey: vi.fn(),
+    };
+    const prepareGc = vi.fn(async () => preparedContent());
+    const coordinator = new GcEpochCoordinator({
+      buildSystem: buildSystem as never,
+      workspaceVcs: { attached: true, prepareGc } as never,
+      publicationJournal: publicationJournal(),
+      initialDelayMs: 5,
+      intervalMs: 20,
+    });
+
+    coordinator.start();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(buildSystem.prepareGc).toHaveBeenCalledOnce();
+
+    let stopped = false;
+    const stop = coordinator.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    expect(coordinator.stop()).toBe(coordinator.stop());
+
+    releaseBuildSnapshot?.();
+    await stop;
+    expect(stopped).toBe(true);
+    expect(prepareGc).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(buildSystem.prepareGc).toHaveBeenCalledOnce();
+    await expect(coordinator.runOnce()).resolves.toBe(false);
   });
 });

@@ -25,7 +25,9 @@ export const DEFAULT_VCS_GC_INITIAL_DELAY_MS = 5 * 60_000;
  */
 export class GcEpochCoordinator {
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private running = false;
+  private activeEpoch: Promise<boolean> | null = null;
+  private stopped = false;
+  private stopReceipt: Promise<void> | null = null;
 
   constructor(
     private readonly deps: {
@@ -43,18 +45,38 @@ export class GcEpochCoordinator {
   ) {}
 
   start(): void {
-    if (this.timer) return;
+    if (this.stopped || this.timer || this.activeEpoch) return;
     this.schedule(this.deps.initialDelayMs ?? DEFAULT_VCS_GC_INITIAL_DELAY_MS);
   }
 
-  stop(): void {
+  stop(): Promise<void> {
+    if (this.stopReceipt) return this.stopReceipt;
+    this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    const activeEpoch = this.activeEpoch;
+    this.stopReceipt = activeEpoch?.then(() => undefined) ?? Promise.resolve();
+    return this.stopReceipt;
   }
 
-  async runOnce(): Promise<boolean> {
-    if (this.running || !this.deps.workspaceVcs.attached) return false;
-    this.running = true;
+  runOnce(): Promise<boolean> {
+    if (this.stopped || this.activeEpoch || !this.deps.workspaceVcs.attached) {
+      return Promise.resolve(false);
+    }
+    const epoch = this.executeEpoch();
+    this.activeEpoch = epoch;
+    void epoch.then(
+      () => {
+        if (this.activeEpoch === epoch) this.activeEpoch = null;
+      },
+      () => {
+        if (this.activeEpoch === epoch) this.activeEpoch = null;
+      }
+    );
+    return epoch;
+  }
+
+  private async executeEpoch(): Promise<boolean> {
     const epoch = this.deps.publicationJournal.beginEpoch();
     try {
       // This snapshot is read-only. In particular, no artifact can be renamed
@@ -120,8 +142,6 @@ export class GcEpochCoordinator {
     } catch (error) {
       (this.deps.logger ?? console).warn("[GcEpochCoordinator] GC run failed", error);
       return false;
-    } finally {
-      this.running = false;
     }
   }
 
@@ -171,11 +191,14 @@ export class GcEpochCoordinator {
   }
 
   private schedule(delay: number): void {
+    if (this.stopped) return;
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.runOnce().finally(() =>
-        this.schedule(this.deps.intervalMs ?? DEFAULT_VCS_GC_INTERVAL_MS)
-      );
+      void this.runOnce().then(() => {
+        if (!this.stopped) {
+          this.schedule(this.deps.intervalMs ?? DEFAULT_VCS_GC_INTERVAL_MS);
+        }
+      });
     }, delay);
     this.timer.unref?.();
   }
