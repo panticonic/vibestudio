@@ -1,6 +1,21 @@
 import { isRpcConnectionLost } from "@vibestudio/rpc";
 
 /**
+ * Start logical retirement without detaching its rejection.
+ *
+ * Physical closure joins the same cached retirement promise later. The eager
+ * observer only covers the interval before that join, when a fast cleanup
+ * failure would otherwise be reported as an unhandled rejection.
+ */
+export function beginIrohLogicalRetirement(
+  retireLogical: (reason: string) => Promise<void>,
+  reason: string
+): void {
+  const retirement = retireLogical(reason);
+  void retirement.catch(() => undefined);
+}
+
+/**
  * Join the physical terminal receipt with the logical work it owns.
  *
  * A connection-loss rejection is another form of normal physical closure, but

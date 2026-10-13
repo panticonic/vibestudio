@@ -93,7 +93,7 @@ import {
 } from "@vibestudio/rpc/protocol/irohSession";
 import { irohReceiveStreamBody } from "@vibestudio/rpc/transports/irohClient";
 import type { IrohIngressAttachment } from "./irohIngress.js";
-import { settleIrohPhysicalClosure } from "./irohAttachmentLifetime.js";
+import { beginIrohLogicalRetirement, settleIrohPhysicalClosure } from "./irohAttachmentLifetime.js";
 import { IrohRpcSessionChannel } from "./irohRpcSessionChannel.js";
 import { WebSocketSessionChannel, type RpcSessionChannel } from "./rpcServer/sessionChannel.js";
 import { ProcessSessionChannel } from "./rpcServer/processSessionChannel.js";
@@ -5890,7 +5890,7 @@ export class RpcServer {
       // ConnectionLost(LocallyClosed) from inside this detached catch handler.
       if (stopped) return;
       const reason = error instanceof Error ? error.message : String(error);
-      void closeAll(reason);
+      beginIrohLogicalRetirement(closeAll, reason);
       connection.close(0x200n, new TextEncoder().encode(reason));
     };
     const handleStream = async (stream: IrohPhysicalBiStream): Promise<void> => {
@@ -6011,7 +6011,7 @@ export class RpcServer {
         if (stopped) return;
         // `closeAll` fences every logical session synchronously before native
         // close lets ingress expose a successor for this authenticated peer.
-        void closeAll(new TextDecoder().decode(reason));
+        beginIrohLogicalRetirement(closeAll, new TextDecoder().decode(reason));
         connection.close(code, reason);
       },
       lifetime,
