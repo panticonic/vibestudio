@@ -5,7 +5,7 @@ import type { HostTargetCandidate } from "@vibestudio/shared/hostTargets";
 import { appArtifactRoute, appArtifactUrl } from "@vibestudio/shared/appArtifacts";
 import type { ActiveExecutionIdentity } from "./runtimeExecutionIdentity.js";
 import {
-  isBuildProviderDetailsLike,
+  validateAppBuildContract,
   type AppBuildProviderDetails,
 } from "./buildV2/appBuildContract.js";
 import type { AppBuildResultLike, AppRegistryEntry, WorkspaceAppDeclaration } from "./appHost.js";
@@ -105,42 +105,19 @@ export class ReactNativeAppAdapter {
     if (!entry?.activeBundleKey) return null;
     const activeBuild = await this.deps.resolveActiveBuild(entry);
     const build = activeBuild.build;
-    const details =
-      build?.metadata.details &&
-      build.metadata.details.kind === "app" &&
-      "rnHostAbi" in build.metadata.details
-        ? build.metadata.details
-        : null;
-    const rnHostAbi = details?.rnHostAbi;
-    const integrity = details?.integrity;
-    if (
-      !build ||
-      !details ||
-      typeof rnHostAbi !== "string" ||
-      rnHostAbi.length === 0 ||
-      typeof integrity !== "string" ||
-      integrity.length === 0 ||
-      !isBuildProviderDetailsLike(details.provider)
-    ) {
+    try {
+      validateAppBuildContract(entry.name, "react-native", build);
+    } catch {
       return null;
     }
-    const primaryArtifacts = (build.artifacts ?? []).filter(
-      (artifact) => artifact.role === "primary"
-    );
-    if (!hasMobilePrimaryArtifacts(primaryArtifacts)) return null;
+    const details = build.metadata.details;
+    if (details.kind !== "app" || !details.rnHostAbi || !details.integrity || !details.provider) {
+      return null;
+    }
+    const { rnHostAbi, integrity } = details;
     const platformArtifacts = (build.artifacts ?? []).filter(
       (artifact) => artifact.role === "primary" || artifact.role === "asset"
     );
-    if (
-      platformArtifacts.some(
-        (artifact) =>
-          typeof artifact.integrity !== "string" ||
-          artifact.integrity.length === 0 ||
-          (artifact.platform !== "android" && artifact.platform !== "ios")
-      )
-    ) {
-      return null;
-    }
     const buildKey = entry.activeBundleKey;
     const artifacts = platformArtifacts.map((artifact) => ({
       path: artifact.path,
@@ -374,14 +351,4 @@ function sameBuildProvider(
     left.activeBuildKey === right.activeBuildKey &&
     left.contractVersion === right.contractVersion
   );
-}
-
-function hasMobilePrimaryArtifacts(artifacts: Array<{ platform?: string }>): boolean {
-  const seenPlatforms = new Set<string>();
-  for (const artifact of artifacts) {
-    if (artifact.platform !== "android" && artifact.platform !== "ios") return false;
-    if (seenPlatforms.has(artifact.platform)) return false;
-    seenPlatforms.add(artifact.platform);
-  }
-  return seenPlatforms.size > 0;
 }

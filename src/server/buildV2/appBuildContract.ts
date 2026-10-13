@@ -10,7 +10,7 @@ export interface AppBuildProviderDetails {
 
 export type AppBuildTarget = "electron" | "react-native" | "terminal";
 
-export function isBuildProviderDetailsLike(value: unknown): value is AppBuildProviderDetails {
+function isBuildProviderDetailsLike(value: unknown): value is AppBuildProviderDetails {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<AppBuildProviderDetails>;
   return (
@@ -77,15 +77,20 @@ export function validateAppBuildContract(
     throw new Error(`${label} build has no primary mobile artifact`);
   }
   const seenPlatforms = new Set<"android" | "ios">();
-  for (const artifact of primaries) {
+  for (const artifact of (build.artifacts ?? []).filter(
+    (candidate) => candidate.role === "primary" || candidate.role === "asset"
+  )) {
     if (artifact.platform !== "android" && artifact.platform !== "ios") {
-      throw new Error(`${label} primary artifact ${artifact.path} is missing a mobile platform`);
-    }
-    if (seenPlatforms.has(artifact.platform)) {
-      throw new Error(`${label} has multiple primary artifacts for ${artifact.platform}`);
+      throw new Error(
+        `${label} ${artifact.role} artifact ${artifact.path} is missing a mobile platform`
+      );
     }
     if (typeof artifact.integrity !== "string" || artifact.integrity.length === 0) {
-      throw new Error(`${label} primary artifact ${artifact.path} is missing integrity`);
+      throw new Error(`${label} ${artifact.role} artifact ${artifact.path} is missing integrity`);
+    }
+    if (artifact.role !== "primary") continue;
+    if (seenPlatforms.has(artifact.platform)) {
+      throw new Error(`${label} has multiple primary artifacts for ${artifact.platform}`);
     }
     seenPlatforms.add(artifact.platform);
   }
