@@ -119,7 +119,6 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
       VIBESTUDIO_EXTENSION_VERSION: "0.0.0",
       VIBESTUDIO_EXTENSION_BUNDLE_PATH: bundlePath,
       VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
-      VIBESTUDIO_EXTENSION_RPC_TOKEN: "test-token",
     };
     if (mode === "native-workspace") {
       const appRoot = fs.realpathSync.native(fileURLToPath(new URL("../../../", import.meta.url)));
@@ -398,7 +397,6 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
       VIBESTUDIO_EXTENSION_VERSION: "0.0.0",
       VIBESTUDIO_EXTENSION_BUNDLE_PATH: bundlePath,
       VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
-      VIBESTUDIO_EXTENSION_RPC_TOKEN: "test-token",
     };
     if (mode === "native-workspace") {
       const appRoot = fs.realpathSync.native(fileURLToPath(new URL("../../../", import.meta.url)));
@@ -463,7 +461,8 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
           try {
             const message = JSON.parse(String(raw)) as WsClientMessage;
             if (message.type === "ws:auth") {
-              expect(message.token).toBe("test-token");
+              // The launcher authenticated the IPC channel; no bearer is presented.
+              expect(message.token).toBeUndefined();
               ws.send(
                 JSON.stringify({
                   type: "ws:auth-result",

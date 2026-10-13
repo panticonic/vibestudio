@@ -6189,14 +6189,11 @@ async function main() {
   // ── Extension host RPC service ──
   container.registerManaged({
     name: "extensionHost",
-    dependencies: ["buildSystem", "tokenManager", "nativeWorkspace"],
+    dependencies: ["buildSystem", "nativeWorkspace"],
     async start(resolve) {
       const { ExtensionHost } = await import("@vibestudio/extension-host");
       const buildSystemInst = assertPresent(
         resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-      );
-      const tokenManagerInst = assertPresent(
-        resolve<import("@vibestudio/shared/tokenManager").TokenManager>("tokenManager")
       );
       const nativeWorkspace = assertPresent(
         resolve<
@@ -6214,7 +6211,6 @@ async function main() {
         workspaceId,
         buildSystem: buildSystemInst,
         executionPublicationPort: executionPublicationJournal,
-        tokenManager: tokenManagerInst,
         eventService,
         approvalQueue,
         openUnitReviewFor: unitReviewLookup.forUnavailableCode,
@@ -6253,10 +6249,10 @@ async function main() {
           gitInterop: ["cloneRepo", "remoteDefaultBranch", "reconcileUpstreams"],
         },
         extensionTransport: {
-          attachProcess(proc, credential) {
+          attachProcess(proc, name) {
             const rpcServer = rpcServerForGateway;
             if (!rpcServer) throw new Error("RPC server is not initialized");
-            return rpcServer.attachNativeProcess(proc, credential);
+            return rpcServer.attachNativeProcess(proc, { callerId: name, callerKind: "extension" });
           },
           call(name, method, args, options) {
             const rpcServer = rpcServerForGateway;

@@ -25,7 +25,6 @@ import {
   type VerifiedCodeIdentity,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
-import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { EventName } from "@vibestudio/shared/events";
 import type { NotificationPayload } from "@vibestudio/shared/events";
 import type { EventService } from "@vibestudio/shared/eventsService";
@@ -228,10 +227,8 @@ interface ExtensionReadyState {
 }
 
 interface ExtensionTransportLike {
-  attachProcess(
-    proc: import("@vibestudio/process-adapter").ProcessAdapter,
-    credential: string
-  ): () => void;
+  /** Attach a launched extension process's IPC channel as extension `name`'s RPC session. */
+  attachProcess(proc: import("@vibestudio/process-adapter").ProcessAdapter, name: string): () => void;
   call(
     name: string,
     method: string,
@@ -291,7 +288,6 @@ export interface ExtensionHostDeps {
   describeCapability?: CapabilityPresentationResolver;
   buildSystem: BuildSystemLike;
   executionPublicationPort?: ExecutionPublicationPort;
-  tokenManager: TokenManager;
   eventService: EventService;
   approvalQueue: ApprovalQueueLike;
   openUnitReviewFor(code: { repoPath: string; effectiveVersion: string }): {
@@ -403,8 +399,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     });
     this.processes = new ExtensionProcessManager({
       launch: this.deps.launchNativeExtension,
-      attachProcess: (proc, credential) =>
-        this.deps.extensionTransport.attachProcess(proc, credential),
+      attachProcess: (proc, name) => this.deps.extensionTransport.attachProcess(proc, name),
       onStatus: (name, status, error) => {
         if (status === "running") {
           this.extensionErrorHistory.delete(name);
@@ -2681,15 +2676,12 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       isAdmitted: this.deps.isAdmitted,
       openReviewFor: this.deps.openUnitReviewFor,
     });
-    const token = this.deps.tokenManager.ensureToken(name, "extension");
     this.registry.patch(name, { status: "building", lastError: null });
     await this.processes.start({
       name,
       version: entry.version,
       bundlePath: extensionPrimaryArtifactPath(build),
       storageDir: this.storageDirFor(name),
-      gatewayUrl: this.deps.getGatewayUrl(),
-      rpcToken: token,
     });
     this.registerBuildProvidersFor(entry);
   }

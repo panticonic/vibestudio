@@ -59,8 +59,6 @@ describe("ExtensionProcessManager runtime resolution", () => {
       version: "1.0.0",
       bundlePath: "/build/bundle.js",
       storageDir: "/state",
-      gatewayUrl: "http://localhost",
-      rpcToken: "token",
     };
     const makeGeneration = () => ({
       state,
@@ -113,8 +111,6 @@ describe("ExtensionProcessManager session retirement", () => {
       version: "1",
       bundlePath: "/fixture.js",
       storageDir: "/state",
-      gatewayUrl: "http://localhost",
-      rpcToken: "fixture-token",
     });
     return { manager, proc, retire, name, starting };
   }
@@ -218,8 +214,6 @@ describe("ExtensionProcessManager session retirement", () => {
       version: "2",
       bundlePath: "/replacement.js",
       storageDir: "/state",
-      gatewayUrl: "http://localhost",
-      rpcToken: "replacement-token",
     });
     const readinessResult = value.manager.whenRunning(value.name).catch((error) => error);
     const sent = request(value.proc);

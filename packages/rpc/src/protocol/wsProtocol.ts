@@ -41,7 +41,11 @@ export interface WsAuthMessage {
   type: "ws:auth";
   /** End-to-end RPC contract required by the server. */
   contractVersion: number;
-  token: string;
+  /**
+   * The admission grant. Absent only on a launch-authenticated native process
+   * channel, whose identity the launcher bound when it created the process.
+   */
+  token?: string;
   connectionId?: string;
   clientSessionId?: string;
   clientLabel?: string;

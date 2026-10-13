@@ -6960,18 +6960,16 @@ describe("RpcServer native process sessions", () => {
     return proc;
   }
 
-  it("binds authentication to the launch and revokes the session even if the process ignores shutdown", async () => {
-    const { server, tokenManager } = createServer();
+  it("binds the session to the launch identity and retires it even if the process ignores shutdown", async () => {
+    const { server } = createServer();
     const callerId = "@workspace-extensions/shell";
-    const token = tokenManager.ensureToken(callerId, "extension");
     const proc = processFixture();
     try {
-      server.attachNativeProcess(proc, token);
+      const retire = server.attachNativeProcess(proc, { callerId, callerKind: "extension" });
       proc.emit(
         "message",
         JSON.stringify({
           type: "ws:auth",
-          token,
           contractVersion: RPC_CONTRACT_VERSION,
           connectionId: "extension:shell",
         })
@@ -6982,7 +6980,7 @@ describe("RpcServer native process sessions", () => {
           ([raw]) => typeof raw === "string" && JSON.parse(raw).success === true
         )
       ).toBe(true);
-      tokenManager.revokeToken(callerId);
+      retire();
       await vi.waitFor(() => expect(server.getConnectionForPrincipal(callerId)).toBeNull());
       expect(proc.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "shutdown" }));
       expect(proc.listenerCount("message")).toBe(0);
@@ -6992,25 +6990,41 @@ describe("RpcServer native process sessions", () => {
     }
   });
 
-  it("rejects a valid credential belonging to a different launch", async () => {
+  it("authenticates only as the launched identity, whatever the process presents", async () => {
     const { server, tokenManager } = createServer();
-    const expected = tokenManager.ensureToken("@workspace-extensions/shell", "extension");
     const other = tokenManager.ensureToken("@workspace-extensions/other", "extension");
     const proc = processFixture();
     try {
-      server.attachNativeProcess(proc, expected);
+      server.attachNativeProcess(proc, {
+        callerId: "@workspace-extensions/shell",
+        callerKind: "extension",
+      });
       proc.emit(
         "message",
         JSON.stringify({ type: "ws:auth", token: other, contractVersion: RPC_CONTRACT_VERSION })
       );
-      expect(server.getConnectionForPrincipal("@workspace-extensions/other")).toBeNull();
-      expect(proc.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "shutdown",
-          reason: "RPC process credential does not match launch",
-        })
+      await vi.waitFor(() =>
+        expect(server.getConnectionForPrincipal("@workspace-extensions/shell")).not.toBeNull()
       );
-      expect(proc.listenerCount("message")).toBe(0);
+      expect(server.getConnectionForPrincipal("@workspace-extensions/other")).toBeNull();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("closes a process channel whose first frame is not authentication", async () => {
+    const { server } = createServer();
+    const proc = processFixture();
+    try {
+      server.attachNativeProcess(proc, {
+        callerId: "@workspace-extensions/shell",
+        callerKind: "extension",
+      });
+      proc.emit("message", JSON.stringify({ type: "ws:rpc", envelope: {} }));
+      expect(proc.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "shutdown", reason: "Expected ws:auth as first message" })
+      );
+      expect(server.getConnectionForPrincipal("@workspace-extensions/shell")).toBeNull();
     } finally {
       await server.stop();
     }

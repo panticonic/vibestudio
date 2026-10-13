@@ -348,7 +348,6 @@ async function makeHost(
     workspacePath: path.join(statePath, "source"),
     workspaceId: "workspace-test",
     buildSystem,
-    tokenManager: { ensureToken: vi.fn() } as any,
     eventService: eventService as any,
     approvalQueue,
     openUnitReviewFor: overrides.openUnitReviewFor ?? (() => null),

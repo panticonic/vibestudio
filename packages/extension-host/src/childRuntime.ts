@@ -580,7 +580,6 @@ function getRuntimeBridge(): RpcWireClient {
 }
 
 async function connectRuntimeBridge(): Promise<RpcWireClient> {
-  const token = requiredEnv("VIBESTUDIO_EXTENSION_RPC_TOKEN");
   const extensionName = requiredEnv("VIBESTUDIO_EXTENSION_NAME");
   if (!process.send || !process.connected)
     throw new Error("Extension requires its launcher's IPC channel");
@@ -709,10 +708,11 @@ async function connectRuntimeBridge(): Promise<RpcWireClient> {
     );
   });
   try {
+    // The launcher authenticated this IPC channel when it started the process;
+    // the auth frame only negotiates the contract and names the connection.
     await send({
       type: "ws:auth",
       contractVersion: RPC_CONTRACT_VERSION,
-      token,
       connectionId: `extension:${extensionName}`,
     });
     await authenticated;
