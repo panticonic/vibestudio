@@ -91,6 +91,9 @@ describe("development template selection", () => {
       checkpointRoot: fx.checkpointRoot,
     });
     expect(selection?.review?.repositories).toEqual(["meta", "panels/example"]);
+    expect(selection?.review?.manifestText).toBe(
+      fs.readFileSync(path.join(selection!.checkout, "meta/vibestudio.yml"), "utf8")
+    );
     expect(paths).toEqual(["meta/vibestudio.yml"]);
     expect(fullRead).not.toHaveBeenCalled();
   });
@@ -214,7 +217,9 @@ describe("development template selection", () => {
     ]);
     const response = hubControlMethods.registerLocalTemplateSource.returns.parse({
       pin: registered.pin,
-      ...registered.review,
+      presentation: registered.review?.presentation,
+      repositories: registered.review?.repositories,
+      dependencies: registered.review?.dependencies,
     });
     expect(response.dependencies).toEqual(dependencies);
     expect(

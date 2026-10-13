@@ -815,7 +815,11 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
         commit: "a".repeat(40),
       },
       checkout: "/instance/workspace-source-inspections/one/0",
-      review: { repositories: ["panels/example"], dependencies: [] },
+      review: {
+        manifestText: "systemEpoch: 0\ntemplate:\n  name: Local\n",
+        repositories: ["panels/example"],
+        dependencies: [],
+      },
     };
     const env = buildWorkspaceChildEnv({
       ...base,
@@ -1616,7 +1620,11 @@ describe("hub RPC pairing surfacing (§5)", () => {
         commit: "a".repeat(40),
       },
       checkout,
-      review: { repositories: ["panels/example"], dependencies: [] },
+      review: {
+        manifestText: "systemEpoch: 0\ntemplate:\n  name: Local\n",
+        repositories: ["panels/example"],
+        dependencies: [],
+      },
     };
     vi.stubEnv("VIBESTUDIO_INSTANCE_ROOT", instanceRoot);
     try {
@@ -1633,8 +1641,13 @@ describe("hub RPC pairing surfacing (§5)", () => {
         );
         return hubControlMethods.registerLocalTemplateSource.returns.parse(result);
       };
-      expect(await register(source)).toEqual({ pin: source.pin, ...source.review });
-      expect(await register(source)).toEqual({ pin: source.pin, ...source.review });
+      const inspection = {
+        pin: source.pin,
+        repositories: source.review.repositories,
+        dependencies: source.review.dependencies,
+      };
+      expect(await register(source)).toEqual(inspection);
+      expect(await register(source)).toEqual(inspection);
       expect(state.workspaceSources).toEqual([source]);
       await expect(register({ ...source, checkout: path.dirname(instanceRoot) })).rejects.toThrow(
         "outside the host-owned inspection root"

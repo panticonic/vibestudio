@@ -11,6 +11,10 @@ export interface DevelopmentTemplateEnvironmentSelection {
   pins: DefaultWorkspaceTemplates;
   checkouts: Record<string, string> & Record<keyof DefaultWorkspaceTemplates, string>;
   sourcePins?: Record<string, import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin>;
+  reviews?: Record<
+    string,
+    NonNullable<import("@vibestudio/workspace/workspaceSources").WorkspaceSource["review"]>
+  >;
   sources?: ReadonlyArray<{ id: string }>;
 }
 
@@ -36,6 +40,7 @@ export function developmentInstanceEnvironment(input: {
       ? selectedTemplates.sources.map(({ id }) => ({
           pin: selectedTemplates.sourcePins![id]!,
           checkout: selectedTemplates.checkouts[id],
+          ...(selectedTemplates.reviews?.[id] ? { review: selectedTemplates.reviews[id] } : {}),
         }))
       : (Object.keys(selectedTemplates.pins) as Array<keyof DefaultWorkspaceTemplates>).map(
           (name) => ({

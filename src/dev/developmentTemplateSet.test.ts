@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import {
   developmentTemplateSetEnv,
   developmentTemplateSetSources,
@@ -198,6 +199,7 @@ describe("resolveDevelopmentTemplateSet", () => {
       selection.sources.map((source) => ({
         pin: selection.sourcePins[source.id],
         checkout: selection.checkouts[source.id],
+        review: selection.reviews[source.id],
       }))
     );
     const env = developmentTemplateSetEnv(selection);
@@ -210,6 +212,15 @@ describe("resolveDevelopmentTemplateSet", () => {
     expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"] ?? "null")).toEqual(
       developmentTemplateSetSources(selection)
     );
+    const transported = readWorkspaceSources(env);
+    for (const source of transported) {
+      expect(source.review?.manifestText).toBe(
+        fs.readFileSync(path.join(source.checkout, "meta/vibestudio.yml"), "utf8")
+      );
+      expect(source.review?.repositories).toContain("meta");
+    }
+    const personal = transported.find((source) => source.pin.url === selection.pins.personal.url);
+    expect(personal?.review?.manifestText).toContain("git+https://example.test/system-testing.git");
   });
 
   it("does not inspect or inject development dependencies in a production launch", async () => {

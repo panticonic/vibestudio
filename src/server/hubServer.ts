@@ -1897,7 +1897,12 @@ export async function executeHubControl(
       throw new Error("Local workspace source coordinate is already registered differently");
     }
     if (!existing) state.workspaceSources.push({ ...source, checkout });
-    respond({ pin: source.pin, ...source.review });
+    respond({
+      pin: source.pin,
+      ...(source.review.presentation ? { presentation: source.review.presentation } : {}),
+      repositories: source.review.repositories,
+      dependencies: source.review.dependencies,
+    });
     return;
   }
   if (method === "listWorkspaces") {

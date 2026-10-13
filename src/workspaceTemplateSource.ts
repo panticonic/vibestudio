@@ -155,6 +155,7 @@ export async function inspectWorkspaceSources(input: {
       ...checkpoint,
       pin,
       review: {
+        manifestText: new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes!),
         ...(manifest.presentation
           ? {
               presentation: {

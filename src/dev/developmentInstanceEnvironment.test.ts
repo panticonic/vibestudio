@@ -51,6 +51,13 @@ describe("development instance environment", () => {
       sourcePins: { ...defaultTemplates.pins, examples: pin("examples") },
       sources: [{ id: "base" }, { id: "personal" }, { id: "system" }, { id: "examples" }],
       checkouts: { ...defaultTemplates.checkouts, examples: "/private/examples" },
+      reviews: {
+        examples: {
+          manifestText: "systemEpoch: 0\ntemplate:\n  name: Examples\n",
+          repositories: ["meta", "panels/example"],
+          dependencies: [],
+        },
+      },
     };
     const env = developmentInstanceEnvironment({
       parent: {},
@@ -65,7 +72,11 @@ describe("development instance environment", () => {
       { pin: complete.sourcePins.base, checkout: "/private/base" },
       { pin: complete.sourcePins.personal, checkout: "/private/personal" },
       { pin: complete.sourcePins.system, checkout: "/private/system" },
-      { pin: complete.sourcePins.examples, checkout: "/private/examples" },
+      {
+        pin: complete.sourcePins.examples,
+        checkout: "/private/examples",
+        review: complete.reviews.examples,
+      },
     ]);
   });
 

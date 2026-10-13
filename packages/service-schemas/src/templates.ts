@@ -107,9 +107,11 @@ export const templateSourceDeclarationSchema = z
     credential: z.string().trim().min(1).optional(),
   })
   .strict();
-export const templateInspectionSchema = WorkspaceSourceReviewSchema.extend({
-  pin: WorkspaceTemplatePinSchema,
-}).strict();
+export const templateInspectionSchema = WorkspaceSourceReviewSchema.omit({ manifestText: true })
+  .extend({
+    pin: WorkspaceTemplatePinSchema,
+  })
+  .strict();
 const authoringIntentSchema = z
   .object({
     name: z.string().trim().min(1),

@@ -30,13 +30,28 @@ const defaultTemplates = {
     personal: { ...systemPin, url: "git+https://example.test/personal.git" },
     system: systemPin,
   },
+  reviews: {
+    base: { repositories: ["meta"], dependencies: [] },
+    personal: { repositories: ["meta"], dependencies: [] },
+    system: { repositories: ["meta"], dependencies: [] },
+  },
   sources: [
     { id: "base", role: "base" as const, url: "git+https://example.test/base.git" },
     { id: "personal", role: "personal" as const, url: "git+https://example.test/personal.git" },
     { id: "system", role: "system" as const, url: "git+https://example.test/system.git" },
   ],
 };
-const templates = [{ pin: { commit: "template" }, checkout: "/private/template" }];
+const templates = [
+  {
+    pin: { commit: "template" },
+    checkout: "/private/template",
+    review: {
+      manifestText: "template:\n  name: Example\n",
+      repositories: ["meta"],
+      dependencies: [],
+    },
+  },
+];
 
 describe("product desktop source launch", () => {
   it.each([
@@ -79,6 +94,13 @@ describe("product desktop source launch", () => {
     expect(env["VIBESTUDIO_INSTANCE_ROOT"]).toBeUndefined();
     expect(env["VIBESTUDIO_INSTANCE"]).toBeUndefined();
     expect(env["VIBESTUDIO_SOURCE_INSTANCE"]).toBeUndefined();
+    expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"]!)).toEqual(
+      defaultTemplates.sources.map(({ id }) => ({
+        pin: defaultTemplates.sourcePins[id as keyof typeof defaultTemplates.sourcePins],
+        checkout: defaultTemplates.checkouts[id as keyof typeof defaultTemplates.checkouts],
+        review: defaultTemplates.reviews[id as keyof typeof defaultTemplates.reviews],
+      }))
+    );
   });
 
   it("clears ambient selectors when no development templates are provided", () => {

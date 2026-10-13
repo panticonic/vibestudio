@@ -1,4 +1,6 @@
 import type { DevelopmentTemplateSet } from "./developmentTemplateSet.js";
+import { developmentTemplateSetSources } from "../../scripts/lib/development-template-set.mjs";
+import type { WorkspaceSource } from "@vibestudio/workspace/workspaceSources";
 import {
   DEFAULT_WORKSPACE_TEMPLATES_ENV,
   INITIAL_WORKSPACE_TEMPLATE_ENV,
@@ -38,16 +40,11 @@ export function productDesktopEnvironment(input: {
   repoRoot: string;
   defaultTemplates?: DevelopmentTemplateSet;
   bootstrapSystem?: boolean;
-  templates?: ReadonlyArray<{ pin: unknown; checkout: string }>;
+  templates?: ReadonlyArray<{ pin: unknown; checkout: string; review?: WorkspaceSource["review"] }>;
 }): NodeJS.ProcessEnv {
   const env = { ...input.parent };
   const defaultTemplates = input.defaultTemplates;
-  const defaultSources = defaultTemplates
-    ? defaultTemplates.sources.map(({ id }) => ({
-        pin: defaultTemplates.sourcePins[id]!,
-        checkout: defaultTemplates.checkouts[id],
-      }))
-    : [];
+  const defaultSources = defaultTemplates ? developmentTemplateSetSources(defaultTemplates) : [];
   for (const key of [
     "VIBESTUDIO_INSTANCE_ROOT",
     "VIBESTUDIO_INSTANCE",
@@ -68,9 +65,10 @@ export function productDesktopEnvironment(input: {
     ...(defaultTemplates || input.templates?.length
       ? {
           [WORKSPACE_SOURCES_ENV]: JSON.stringify(
-            [...defaultSources, ...(input.templates ?? [])].map(({ pin, checkout }) => ({
+            [...defaultSources, ...(input.templates ?? [])].map(({ pin, checkout, review }) => ({
               pin,
               checkout,
+              ...(review ? { review } : {}),
             }))
           ),
         }
