@@ -39,11 +39,11 @@ class NodeSendStream implements IrohPhysicalSendStream {
   }
 
   reset(errorCode: bigint): Promise<void> {
-    return this.native.reset(errorCode);
+    return withIrohConnectionLossTag(() => this.native.reset(errorCode));
   }
 
   stopped(): Promise<number | null> {
-    return this.native.stopped();
+    return withIrohConnectionLossTag(() => this.native.stopped());
   }
 }
 
@@ -63,11 +63,11 @@ class NodeReceiveStream implements IrohPhysicalReceiveStream {
   }
 
   stop(errorCode: bigint): Promise<void> {
-    return this.native.stop(errorCode);
+    return withIrohConnectionLossTag(() => this.native.stop(errorCode));
   }
 
   receivedReset(): Promise<number | null> {
-    return this.native.receivedReset();
+    return withIrohConnectionLossTag(() => this.native.receivedReset());
   }
 }
 

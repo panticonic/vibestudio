@@ -17,6 +17,13 @@ per-peer ownership chain, including an inactive candidate superseded before it
 could dispatch. A force-killed client process therefore cannot leave old native
 stream work eligible beside its replacement.
 
+Native stream operations classify connection loss at the physical adapter,
+including retirement-only reset, stop, and reset-observation calls. Retirement
+settles normally only when every leaf of a nested failure graph is that typed
+connection loss. A mixed graph remains a failure with its original aggregate
+structure, and each logical-session failure enters the physical attachment
+aggregation exactly once.
+
 ## Hub control and workspace reaches
 
 A paired device keeps two logical reaches:

@@ -62,6 +62,24 @@ function envelopeOperation(envelope: RpcEnvelope): string {
   }
 }
 
+/** True only when every failure in a retirement graph is the lost connection. */
+function isConnectionRetirement(error: unknown, visiting = new Set<object>()): boolean {
+  if (isRpcConnectionLost(error)) return true;
+  if (!error || typeof error !== "object" || visiting.has(error)) return false;
+  const nested = (error as { errors?: unknown }).errors;
+  if (!Array.isArray(nested) || nested.length === 0) return false;
+  visiting.add(error);
+  try {
+    const cause = (error as { cause?: unknown }).cause;
+    return (
+      nested.every((failure) => isConnectionRetirement(failure, visiting)) &&
+      (cause === undefined || isConnectionRetirement(cause, visiting))
+    );
+  } finally {
+    visiting.delete(error);
+  }
+}
+
 export interface IrohRpcSessionChannelOptions {
   sid: string;
   connection: IrohPhysicalConnection;
@@ -153,9 +171,10 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       ...(reason === undefined ? {} : { reason }),
       terminal: code !== undefined && code >= 4000,
     });
-    const joinedNotification = notification.catch((error) =>
-      this.logControlFailure("close notification", error)
-    );
+    const joinedNotification = notification.catch((error) => {
+      this.logControlFailure("close notification", error);
+      if (!isConnectionRetirement(error)) throw error;
+    });
     return this.fireClosed(code, reason, [joinedNotification]);
   }
 
@@ -168,9 +187,10 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       reason: "terminated",
       terminal: true,
     });
-    const joinedNotification = notification.catch((error) =>
-      this.logControlFailure("termination notification", error)
-    );
+    const joinedNotification = notification.catch((error) => {
+      this.logControlFailure("termination notification", error);
+      if (!isConnectionRetirement(error)) throw error;
+    });
     return this.fireClosed(1006, "terminated", [joinedNotification]);
   }
 
@@ -554,8 +574,14 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     let owned!: Promise<void>;
     owned = operation
       .catch((error) => {
-        if (!isRpcConnectionLost(error)) this.ownedFailures.push(error);
-        onFailure(error);
+        const connectionRetirement = isConnectionRetirement(error);
+        if (!connectionRetirement) this.ownedFailures.push(error);
+        // An operation that observes connection loss before the session's
+        // terminal event still has to notify the live RPC owner. Once the
+        // terminal fence is installed, the same observation is only the owned
+        // native work acknowledging that fence; surfacing it as a new session
+        // error would turn orderly retirement back into a product failure.
+        if (!connectionRetirement || this.state !== CLOSED) onFailure(error);
       })
       .finally(() => this.ownedWork.delete(owned));
     this.ownedWork.add(owned);
@@ -588,12 +614,16 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       const failures = [
         ...this.ownedFailures,
         ...terminalResults.flatMap((result) =>
-          result.status === "rejected" && !isRpcConnectionLost(result.reason) ? [result.reason] : []
+          result.status === "rejected" && !isConnectionRetirement(result.reason)
+            ? [result.reason]
+            : []
         ),
       ];
       if (failures.length > 0) {
         this.rejectLifetime(
-          new AggregateError(failures, `Iroh session ${this.options.sid} retirement failed`)
+          new AggregateError(failures, `Iroh session ${this.options.sid} retirement failed`, {
+            cause: failures[0],
+          })
         );
         return;
       }

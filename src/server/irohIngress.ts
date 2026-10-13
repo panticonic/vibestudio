@@ -447,7 +447,9 @@ export function startIrohIngress<
             ? undefined
             : failures.length === 1
               ? failures[0]
-              : new AggregateError(failures, "Iroh ingress generation terminated with failures");
+              : new AggregateError(failures, "Iroh ingress generation terminated with failures", {
+                  cause: failures[0],
+                });
         if (retiringGeneration && hasTerminalFailure) {
           retiringGeneration.hasFailure = true;
           retiringGeneration.failure = terminalFailure;
@@ -472,7 +474,9 @@ export function startIrohIngress<
       if (closeFailed) {
         throw (
           terminalFailure ??
-          new AggregateError([closeError], "Iroh ingress generation failed to close cleanly")
+          new AggregateError([closeError], "Iroh ingress generation failed to close cleanly", {
+            cause: closeError,
+          })
         );
       }
       if (!stopped) await waitForRebind(rebindAttempt++);
@@ -553,7 +557,9 @@ export function startIrohIngress<
       const uniqueErrors = errors.filter((error, index) => errors.indexOf(error) === index);
       if (uniqueErrors.length === 1) throw uniqueErrors[0];
       if (uniqueErrors.length > 1) {
-        throw new AggregateError(uniqueErrors, "Iroh ingress stop failed");
+        throw new AggregateError(uniqueErrors, "Iroh ingress stop failed", {
+          cause: uniqueErrors[0],
+        });
       }
     },
   };

@@ -255,7 +255,7 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
     expect(retired).toBe(true);
   });
 
-  it("owns a cancellation observer when connection closure also rejects reset observation", async () => {
+  it("settles a nested cancellation-observer aggregate caused entirely by physical closure", async () => {
     const log = vi.fn();
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
@@ -265,8 +265,14 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
       log,
     });
     const stream = fakeStream();
-    const readFailure = new Error("ConnectionLost(ApplicationClosed)");
-    const resetFailure = new Error("ConnectionLost(LocallyClosed)");
+    const readFailure = Object.assign(new Error("ConnectionLost(ApplicationClosed)"), {
+      code: "CONNECTION_LOST",
+      errorKind: "transport",
+    });
+    const resetFailure = Object.assign(new Error("ClosedStream { _private: () }"), {
+      code: "CONNECTION_LOST",
+      errorKind: "transport",
+    });
     stream.recv.read.mockRejectedValueOnce(readFailure);
     vi.mocked(stream.recv.receivedReset).mockRejectedValueOnce(resetFailure);
     const onError = vi.fn();
@@ -276,18 +282,40 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
 
     channel.deliverEnvelope(requestEnvelope(), stream);
     const retirement = channel.remoteClosed(1006, "physical connection closed");
-    const retirementFailure = retirement.catch((error: unknown) => error);
 
-    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
-    const failure = onError.mock.calls[0]![0] as AggregateError;
-    expect(failure.errors).toEqual([readFailure, resetFailure]);
-    expect(failure.cause).toBe(readFailure);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining(resetFailure.message));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining(readFailure.message));
+    await vi.waitFor(() => expect(stream.recv.receivedReset).toHaveBeenCalledOnce());
+    expect(onError).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
     expect(removedHandler).not.toHaveBeenCalled();
-    const lifetimeFailure = await retirementFailure;
-    expect(lifetimeFailure).toBeInstanceOf(AggregateError);
-    expect((lifetimeFailure as AggregateError).errors).toEqual([failure]);
+    await expect(retirement).resolves.toBeUndefined();
+  });
+
+  it("preserves a non-closure failure nested beside connection retirement", async () => {
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+      writeControl: vi.fn(async () => undefined),
+      onClosed: vi.fn(),
+    });
+    const stream = fakeStream();
+    const connectionLoss = Object.assign(new Error("ClosedStream { _private: () }"), {
+      code: "CONNECTION_LOST",
+      errorKind: "transport",
+    });
+    const original = new Error("reset observer invariant failed");
+    stream.recv.read.mockRejectedValueOnce(connectionLoss);
+    vi.mocked(stream.recv.receivedReset).mockRejectedValueOnce(original);
+
+    channel.deliverEnvelope(requestEnvelope(), stream);
+    const failure = await channel
+      .remoteClosed(1006, "physical connection closed")
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const observerFailure = (failure as AggregateError).errors[0] as AggregateError;
+    expect((failure as AggregateError).cause).toBe(observerFailure);
+    expect(observerFailure.errors).toEqual([connectionLoss, original]);
+    expect(observerFailure.cause).toBe(connectionLoss);
   });
 
   it("closes locally when the peer is already gone before the close notification", async () => {
@@ -297,7 +325,10 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
       sid: "shell",
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => {
-        throw new Error("connection closed");
+        throw Object.assign(new Error("ConnectionLost(LocallyClosed)"), {
+          code: "CONNECTION_LOST",
+          errorKind: "transport",
+        });
       }),
       onClosed,
       log,
@@ -310,7 +341,7 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
     expect(channel.readyState).toBe(channel.CLOSED);
     await completedRetirement;
     expect(log).toHaveBeenCalledWith(
-      "Iroh session shell close notification failed: connection closed"
+      "Iroh session shell close notification failed: ConnectionLost(LocallyClosed)"
     );
   });
 
@@ -321,7 +352,10 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
       sid: "shell",
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => {
-        throw new Error("connection closed");
+        throw Object.assign(new Error("ConnectionLost(LocallyClosed)"), {
+          code: "CONNECTION_LOST",
+          errorKind: "transport",
+        });
       }),
       onClosed,
       log,
@@ -334,10 +368,28 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
     expect(channel.readyState).toBe(channel.CLOSED);
     await vi.waitFor(() =>
       expect(log).toHaveBeenCalledWith(
-        "Iroh session shell termination notification failed: connection closed"
+        "Iroh session shell termination notification failed: ConnectionLost(LocallyClosed)"
       )
     );
     await completedRetirement;
+  });
+
+  it("preserves a non-connection close-notification failure", async () => {
+    const original = new Error("control frame encoding failed");
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+      writeControl: vi.fn(async () => {
+        throw original;
+      }),
+      onClosed: vi.fn(),
+    });
+
+    const failure = await channel.close(4001, "authentication rejected").catch((error) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([original]);
+    expect((failure as AggregateError).cause).toBe(original);
   });
 });
 
@@ -364,7 +416,12 @@ describe("IrohRpcSessionChannel close notification ownership", () => {
         operation === "close" ? channel.close(4001, "pairing rejected") : channel.terminate();
       const completedRetirement = expect(retirement).resolves.toBeUndefined();
       expect(onClosed).toHaveBeenCalledOnce();
-      rejectWrite(new Error("ConnectionLost(ApplicationClosed)"));
+      rejectWrite(
+        Object.assign(new Error("ConnectionLost(ApplicationClosed)"), {
+          code: "CONNECTION_LOST",
+          errorKind: "transport",
+        })
+      );
       await vi.waitFor(() =>
         expect(log).toHaveBeenCalledWith(
           `Iroh session replay ${operation === "close" ? "close" : "termination"} notification failed: ConnectionLost(ApplicationClosed)`

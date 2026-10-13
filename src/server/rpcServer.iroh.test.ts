@@ -300,6 +300,7 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
     expect((failure as AggregateError).errors).toEqual([
       expect.objectContaining({ message: "Duplicate Iroh session hello" }),
     ]);
+    expect((failure as AggregateError).cause).toBe((failure as AggregateError).errors[0]);
     await server.stop();
   });
 });

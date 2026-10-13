@@ -5784,14 +5784,23 @@ export class RpcServer {
       stopped = true;
       const closing = [...sessions.values()].map((session) => session.remoteClosed(1006, reason));
       sessions.clear();
-      retirement = Promise.allSettled(closing).then((results) => {
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : []
-        );
-        if (failures.length) {
-          throw new AggregateError(failures, "Iroh logical-session retirement failed");
+      retirement = (async () => {
+        // Each session lifetime already has one receipt in sessionRetirements.
+        // Trigger every active close, then join the receipts to quiescence so a
+        // lifetime that was already removed from `sessions` is included too.
+        // Reading failures only from sessionFailures preserves each graph once
+        // instead of nesting the same lifetime under both this aggregation and
+        // the attachment aggregation.
+        await Promise.allSettled(closing);
+        while (sessionRetirements.size > 0) {
+          await Promise.allSettled([...sessionRetirements]);
         }
-      });
+        if (sessionFailures.length) {
+          throw new AggregateError(sessionFailures, "Iroh logical-session retirement failed", {
+            cause: sessionFailures[0],
+          });
+        }
+      })();
       return retirement;
     };
     const refuseUnknownSession = async (sid: string): Promise<void> => {
@@ -5971,11 +5980,12 @@ export class RpcServer {
       }
       const failures = [
         ...loopFailures,
-        ...sessionFailures,
         ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
       ];
       if (failures.length) {
-        throw new AggregateError(failures, "Iroh RPC attachment retirement failed");
+        throw new AggregateError(failures, "Iroh RPC attachment retirement failed", {
+          cause: failures[0],
+        });
       }
     })();
 
