@@ -30,6 +30,7 @@ import { refreshShell } from "../rpcClient.js";
 import { EXIT_INTERRUPTED } from "../terminalLaunchGate.js";
 import { localServerPaths, startLocalServer, type LocalServer } from "./localServer.js";
 import { runTerminalSessions } from "./terminalSessions.js";
+import { tolerateTerminalHangup } from "./ttyRestore.js";
 
 export interface TerminalCommandContext {
   /** Exact application root of this installation (contains `dist/server.mjs`). */
@@ -93,6 +94,9 @@ async function runTerminalCommand(
   context: TerminalCommandContext
 ): Promise<number> {
   const progress = (line: string) => process.stdout.write(`${line}\n`);
+  // A hang-up stops the server this command owns (the supervisor forwards
+  // SIGHUP); the dead terminal must not crash the command while it joins it.
+  tolerateTerminalHangup();
   let server: LocalServer | null = null;
   let interrupted = false;
   const onInterrupt = () => {

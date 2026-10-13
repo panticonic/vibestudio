@@ -34,8 +34,10 @@ runs this checkout's server under the same instance supervisor as
 `pnpm server:live` and then opens the terminal browser through the same code
 path as `vibestudio terminal`. Build, template, and server output go to
 `<instanceRoot>/logs/server.log`, so the terminal stays free for the browser.
-Quitting the browser stops and joins the server this command started. When the
-selected instance is already running, it attaches to it instead (through
+Quitting the browser, closing the
+terminal (a hang-up), SIGTERM, or Ctrl-C during startup stops and joins what
+this command started and removes an `--ephemeral` instance. When the selected
+instance is already running, it attaches to it instead (through
 `vibestudio terminal`) and leaves that server alone.
 
 `pnpm dev` and `pnpm server:live` use the same instance supervisor. A developer
@@ -140,7 +142,8 @@ How it connects:
   conversations survive restarts. On first use it pairs this CLI by redeeming
   the server's local root invite. Server output goes to
   `<stateDir>/logs/server.log`, never to the terminal. When you quit the
-  browser, the command stops the server it started and waits for it to exit.
+  browser or close the terminal, the command stops the server it started and
+  waits for it to exit.
 - **With a pairing link argument:** it pairs first, exactly like
   `vibestudio remote pair "<link>"`, then attaches. `--label` names that device
   (default `Terminal on <host>`).

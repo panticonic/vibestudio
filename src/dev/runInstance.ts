@@ -8,8 +8,11 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 import { CLI_WORKSPACE_ENV, isCliWorkspaceSelection } from "./cliWorkspaceSelection.js";
-import { spawn, type StdioOptions } from "node:child_process";
+import type { StdioOptions } from "node:child_process";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
+import { LaunchTermination, joinProducer, runOwnedChild } from "./launchTermination.js";
+import { tolerateTerminalHangup } from "../cli/terminal/ttyRestore.js";
+import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 import {
   clearDevInstanceReady,
@@ -181,33 +184,6 @@ function optionValue(argv: readonly string[], name: string): string | undefined 
   return undefined;
 }
 
-function run(
-  command: string,
-  args: string[],
-  options: { env: NodeJS.ProcessEnv; allowFailure?: boolean; stdio?: StdioOptions }
-): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: process.cwd(),
-      env: options.env,
-      stdio: options.stdio ?? "inherit",
-    });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (signal) {
-        reject(new Error(`${path.basename(command)} exited on ${signal}`));
-        return;
-      }
-      const exitCode = code ?? 1;
-      if (exitCode !== 0 && !options.allowFailure) {
-        reject(new Error(`${path.basename(command)} exited with code ${exitCode}`));
-        return;
-      }
-      resolve(exitCode);
-    });
-  });
-}
-
 /** Source launches publish the same resources an installed product ships.
  * Preparation owns its native domains and scratch; the supervisor owns the
  * resulting immutable resources for the entire instance generation. */
@@ -229,11 +205,52 @@ function prepareLaunchTemplates(
   });
 }
 
+interface LaunchResources {
+  preparation?: WorkspaceReleasePreparation;
+  supervisor?: DevInstanceSupervisor;
+}
+
+/**
+ * Prepare templates as an owned resource: a termination request stops the
+ * producer, and its `completed` then settles with the cancellation.
+ */
+async function prepareOwnedTemplates(
+  termination: LaunchTermination,
+  resources: LaunchResources,
+  start: () => WorkspaceReleasePreparation
+): Promise<void> {
+  termination.signal.throwIfAborted();
+  const preparation = start();
+  resources.preparation = preparation;
+  // The launcher's cleanup joins the same stop and reports its failure.
+  termination.onRequest(() => void preparation.stop().catch(() => {}));
+  await preparation.completed;
+}
+
+/**
+ * Start a supervisor as an owned resource. The launcher's termination, not
+ * the supervisor's own signal forwarding, requests its stop, so one request
+ * reaches every phase of the launch exactly once.
+ */
+async function startOwnedSupervisor(
+  termination: LaunchTermination,
+  resources: LaunchResources,
+  supervisor: DevInstanceSupervisor
+): Promise<DevInstanceSupervisor> {
+  termination.signal.throwIfAborted();
+  resources.supervisor = supervisor;
+  // The launcher's cleanup joins the same retirement and reports its failure.
+  termination.onRequest((signal) => void supervisor.stop(signal).catch(() => {}));
+  await supervisor.start();
+  return supervisor;
+}
+
 async function runServer(
   forwarded: string[],
   env: NodeJS.ProcessEnv,
   instance: DevInstanceRecord,
-  resources: { preparation?: WorkspaceReleasePreparation; supervisor?: DevInstanceSupervisor },
+  resources: LaunchResources,
+  termination: LaunchTermination,
   terminal?: TerminalLaunch
 ): Promise<DevInstanceSupervisor> {
   // credentialStore/environment paths are resolved at module evaluation time.
@@ -243,17 +260,21 @@ async function runServer(
   const { pairLocalCli } = await import("../cli/localPairing.js");
   const stdio: StdioOptions = terminal ? ["ignore", terminal.logFd, terminal.logFd] : "inherit";
   if (terminal) console.log("Building Vibestudio from this checkout…");
-  await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env, stdio });
-  await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env, stdio });
+  await runOwnedChild(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], {
+    env,
+    stdio,
+    termination,
+  });
+  await runOwnedChild(process.execPath, ["build.mjs", "--source-server-prereqs"], {
+    env,
+    stdio,
+    termination,
+  });
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
   if (terminal) console.log("Preparing workspace templates…");
-  resources.preparation = prepareLaunchTemplates(
-    env,
-    instance.root,
-    instance.generationId,
-    terminal?.log
+  await prepareOwnedTemplates(termination, resources, () =>
+    prepareLaunchTemplates(env, instance.root, instance.generationId, terminal?.log)
   );
-  await resources.preparation.completed;
   if (terminal) console.log("Starting the server…");
   const configuredReadyFile = optionValue(forwarded, "--ready-file");
   const readyFile =
@@ -266,7 +287,6 @@ async function runServer(
     args: [path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "server.mjs"), ...serverArgs],
     env,
     stdio,
-    forwardParentSignals: true,
     readiness: {
       file: readyFile,
       async onReady(ready) {
@@ -307,37 +327,40 @@ async function runServer(
       },
     },
   });
-  resources.supervisor = supervisor;
-  await supervisor.start();
-  return supervisor;
+  return await startOwnedSupervisor(termination, resources, supervisor);
 }
 
 async function runDesktop(
   forwarded: string[],
   env: NodeJS.ProcessEnv,
   instance: DevInstanceRecord,
-  resources: { preparation?: WorkspaceReleasePreparation; supervisor?: DevInstanceSupervisor }
+  resources: LaunchResources,
+  termination: LaunchTermination
 ): Promise<DevInstanceSupervisor> {
-  await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
+  await runOwnedChild(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], {
+    env,
+    termination,
+  });
   // Desktop launches share the repository host artifacts with parallel
   // developer instances. The coordinator waits for an in-flight build and
   // reuses its verified output; invoking build.mjs directly would clean the
   // shared dist/ while another instance is starting its workspace runtime.
-  await run(process.execPath, ["scripts/ensure-host-build.mjs"], { env });
+  await runOwnedChild(process.execPath, ["scripts/ensure-host-build.mjs"], { env, termination });
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "desktop");
-  resources.preparation = prepareLaunchTemplates(env, instance.root, instance.generationId);
-  await resources.preparation.completed;
-  const supervisor = new DevInstanceSupervisor({
-    sourceRoot: fs.realpathSync(process.cwd()),
-    command: process.execPath,
-    args: ["scripts/run-electron.mjs", ...forwarded],
-    env,
-    stdio: "inherit",
-    forwardParentSignals: true,
-  });
-  resources.supervisor = supervisor;
-  await supervisor.start();
-  return supervisor;
+  await prepareOwnedTemplates(termination, resources, () =>
+    prepareLaunchTemplates(env, instance.root, instance.generationId)
+  );
+  return await startOwnedSupervisor(
+    termination,
+    resources,
+    new DevInstanceSupervisor({
+      sourceRoot: fs.realpathSync(process.cwd()),
+      command: process.execPath,
+      args: ["scripts/run-electron.mjs", ...forwarded],
+      env,
+      stdio: "inherit",
+    })
+  );
 }
 
 const TERMINAL_HELP = `pnpm terminal — run this checkout's server and open the terminal browser
@@ -528,9 +551,9 @@ async function main(): Promise<void> {
   --production-templates Ignore configured checkouts and boot the pinned releases
 `);
     const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "development" };
-    await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
+    await runOwnedChild(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
     env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
-    process.exitCode = await run(
+    process.exitCode = await runOwnedChild(
       process.execPath,
       [path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "server.mjs"), ...parsed.forwarded],
       { env }
@@ -543,6 +566,12 @@ async function main(): Promise<void> {
   // into the same word.
   const forwarded = withoutFlag(parsed.forwarded, "--ephemeral");
   const id = parsed.instanceId ?? (disposable ? generatedInstanceId(mode) : "source");
+  // From here this launcher owns state; a termination request (Ctrl-C,
+  // SIGTERM, a terminal hang-up) must reach the cleanup below, not end the
+  // process before it.
+  const termination = new LaunchTermination();
+  // A hung-up terminal fails every write with EIO; the cleanup still runs.
+  if (terminalOptions) tolerateTerminalHangup();
   const root = disposable ? createEphemeralInstanceRoot(id) : persistentInstanceRoot(repoRoot, id);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const instance = registerDevInstance({
@@ -574,10 +603,7 @@ async function main(): Promise<void> {
   let launchFailure: unknown;
   let retirementFailure: unknown;
   let supervisor: DevInstanceSupervisor | undefined;
-  const resources: {
-    preparation?: WorkspaceReleasePreparation;
-    supervisor?: DevInstanceSupervisor;
-  } = {};
+  const resources: LaunchResources = {};
   try {
     const defaultTemplates =
       (await resolveDevelopmentTemplateSet({
@@ -694,18 +720,20 @@ async function main(): Promise<void> {
       await prunePersistentInstanceBuildCache(root, id);
     }
     if (terminal) {
-      supervisor = await runServer(launchArgs, env, instance, resources, terminal);
+      supervisor = await runServer(launchArgs, env, instance, resources, termination, terminal);
       const browser = runOwnedTerminal(terminal, supervisor);
       process.exitCode = await Promise.race([
         browser,
         resources.preparation!.completed.then(() => browser),
       ]);
+      // A hang-up or SIGTERM ended the browser by stopping its server.
+      if (termination.requested) process.exitCode = signalExitCode(termination.requested);
       console.log("Stopping the server…");
     } else {
       supervisor =
         mode === "server"
-          ? await runServer(launchArgs, env, instance, resources)
-          : await runDesktop(launchArgs, env, instance, resources);
+          ? await runServer(launchArgs, env, instance, resources, termination)
+          : await runDesktop(launchArgs, env, instance, resources, termination);
       const foreground = supervisor.wait();
       process.exitCode = await Promise.race([
         foreground,
@@ -714,9 +742,17 @@ async function main(): Promise<void> {
     }
   } catch (error) {
     retirementFailed = (error as NodeJS.ErrnoException)?.code === "EOWNERSHIP";
-    launchFailure = error;
-    // The log is inside the instance root, which an ephemeral launch removes.
-    if (terminal) reportTerminalStartupFailure(error, terminal);
+    if (termination.requested && !retirementFailed) {
+      // A requested stop is not a launch failure: every phase it cut short
+      // settles with the cancellation, and the cleanup below still runs.
+      detail(`[instance:${id}] ${error instanceof Error ? error.message : String(error)}`);
+      console.error("Interrupted.");
+      process.exitCode = signalExitCode(termination.requested);
+    } else {
+      launchFailure = error;
+      // The log is inside the instance root, which an ephemeral launch removes.
+      if (terminal) reportTerminalStartupFailure(error, terminal);
+    }
   } finally {
     try {
       // Storage belongs to the full process lifetime, including failed
@@ -724,7 +760,7 @@ async function main(): Promise<void> {
       // every acknowledged native owner.
       const retirement = await Promise.allSettled([
         resources.supervisor?.stop(),
-        resources.preparation?.stop(),
+        joinProducer(resources.preparation),
       ]);
       const failure = retirement.find((result) => result.status === "rejected");
       retirementFailed ||= !!failure;
@@ -772,6 +808,7 @@ async function main(): Promise<void> {
         fs.closeSync(terminal.logFd);
         if (!retirementFailure) console.log("Server stopped.");
       }
+      termination.dispose();
     }
   }
   if (terminal && launchFailure && !retirementFailure) {

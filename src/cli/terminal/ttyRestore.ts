@@ -65,3 +65,38 @@ export function guardTerminal(
     restoreTerminal(input, output);
   };
 }
+
+/**
+ * Whether `error` on `stream` is a read or write on a terminal that has hung
+ * up. On anything but a TTY (a redirected file), EIO is a real I/O failure.
+ */
+export function isTerminalHangup(stream: { isTTY?: boolean }, error: unknown): boolean {
+  return stream.isTTY === true && (error as NodeJS.ErrnoException | null)?.code === "EIO";
+}
+
+/**
+ * Treat a hung-up terminal as gone, not as a crash. Once the terminal window
+ * closes (or its SSH link drops), every read and write on it fails with EIO.
+ * Without a listener Node throws that `error` event and ends the command in
+ * the middle of stopping and joining what it owns; with this one the command
+ * keeps running its cleanup and later output is simply dropped. Any other
+ * stream error still fails the process as before. Returns a release function.
+ */
+export function tolerateTerminalHangup(
+  streams: readonly (Pick<NodeJS.EventEmitter, "on" | "off"> & { isTTY?: boolean })[] = [
+    process.stdin,
+    process.stdout,
+    process.stderr,
+  ]
+): () => void {
+  const listeners = streams.map((stream) => {
+    const onError = (error: NodeJS.ErrnoException) => {
+      if (!isTerminalHangup(stream, error)) throw error;
+    };
+    stream.on("error", onError);
+    return () => stream.off("error", onError);
+  });
+  return () => {
+    for (const release of listeners) release();
+  };
+}

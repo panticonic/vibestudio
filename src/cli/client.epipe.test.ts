@@ -23,4 +23,16 @@ describe("CLI broken-pipe handling", () => {
     ).toThrow("disk failure");
     uninstall();
   });
+
+  it("lets a command outlive a hung-up terminal", () => {
+    const stream = Object.assign(new EventEmitter(), { isTTY: true });
+    const terminate = vi.fn();
+    const uninstall = installBrokenPipeHandler(stream, terminate);
+
+    expect(() =>
+      stream.emit("error", Object.assign(new Error("write EIO"), { code: "EIO" }))
+    ).not.toThrow();
+    expect(terminate).not.toHaveBeenCalled();
+    uninstall();
+  });
 });

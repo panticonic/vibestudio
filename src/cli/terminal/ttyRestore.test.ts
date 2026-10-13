@@ -1,6 +1,11 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { TERMINAL_RESET_SEQUENCE, guardTerminal, restoreTerminal } from "./ttyRestore.js";
+import {
+  TERMINAL_RESET_SEQUENCE,
+  guardTerminal,
+  restoreTerminal,
+  tolerateTerminalHangup,
+} from "./ttyRestore.js";
 
 function fakeTty(raw = true) {
   const input = {
@@ -54,5 +59,31 @@ describe("guardTerminal", () => {
     expect((processLike as unknown as EventEmitter).listenerCount("exit")).toBe(0);
     expect(output.write).toHaveBeenCalledTimes(2);
     expect(input.isRaw).toBe(false);
+  });
+});
+
+describe("tolerateTerminalHangup", () => {
+  it("treats EIO from a hung-up terminal as the terminal going away", () => {
+    const stdout = Object.assign(new EventEmitter(), { isTTY: true });
+    const release = tolerateTerminalHangup([stdout]);
+    expect(() =>
+      stdout.emit("error", Object.assign(new Error("write EIO"), { code: "EIO" }))
+    ).not.toThrow();
+    release();
+    expect(stdout.listenerCount("error")).toBe(0);
+  });
+
+  it("still fails on any other stream error", () => {
+    const stdout = Object.assign(new EventEmitter(), { isTTY: true });
+    tolerateTerminalHangup([stdout]);
+    const failure = Object.assign(new Error("write EBADF"), { code: "EBADF" });
+    expect(() => stdout.emit("error", failure)).toThrow(failure);
+  });
+
+  it("still fails on EIO from a redirected file", () => {
+    const stdout = new EventEmitter();
+    tolerateTerminalHangup([stdout]);
+    const failure = Object.assign(new Error("write EIO"), { code: "EIO" });
+    expect(() => stdout.emit("error", failure)).toThrow(failure);
   });
 });

@@ -33,6 +33,7 @@ import {
 } from "./remoteClient.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { createTerminalCommand } from "./terminal/terminalCommand.js";
+import { isTerminalHangup } from "./terminal/ttyRestore.js";
 import { agentCommands, createSelectedWorkspaceClient } from "./agent/index.js";
 import { fsCommands } from "./agent/fsCommands.js";
 import { vcsCommands } from "./agent/vcsCommands.js";
@@ -1006,7 +1007,7 @@ function packageVersion(): string {
 }
 
 export function installBrokenPipeHandler(
-  stream: NodeJS.EventEmitter,
+  stream: NodeJS.EventEmitter & { isTTY?: boolean },
   terminate: () => void = () => process.exit(0)
 ): () => void {
   const onError = (error: NodeJS.ErrnoException) => {
@@ -1014,6 +1015,10 @@ export function installBrokenPipeHandler(
       terminate();
       return;
     }
+    // A hung-up terminal: its SIGHUP already ended any command that does not
+    // own state, and one that does (`vibestudio terminal` with its local
+    // server) must finish stopping and joining it. Output has nowhere to go.
+    if (isTerminalHangup(stream, error)) return;
     throw error;
   };
   stream.on("error", onError);
