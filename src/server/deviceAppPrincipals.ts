@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
 import { normalizeUnitRepoPath as normalizeRepoPath } from "@vibestudio/unit-host";
 import { appArtifactRoute } from "@vibestudio/shared/appArtifacts";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
@@ -122,9 +122,11 @@ export class DeviceAppPrincipals {
     const sourceRepo = normalizeRepoPath(entry.source.repo);
     const principalId = deviceAppPrincipalId(sourceRepo, deviceId);
     const existing = entityCache.resolve(principalId);
-    const contextId = createHash("sha256")
-      .update(`${this.deps.workspaceId}\x00app-device\x00${sourceRepo}\x00${deviceId}`)
-      .digest("hex");
+    // The canonical derived-context format (`ctx-<32 hex>`): a valid context
+    // folder and build ref, unlike a bare 64-hex digest.
+    const contextId = contextIdForTargetKey(
+      `${this.deps.workspaceId}\x00app-device\x00${sourceRepo}\x00${deviceId}`
+    );
     const record: EntityRecord = {
       id: principalId,
       kind: "app",

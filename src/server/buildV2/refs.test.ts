@@ -39,3 +39,13 @@ describe("validateBuildRef", () => {
     );
   });
 });
+
+describe("derived context ids", () => {
+  it("are valid context build refs (app principals list workers in their own context)", async () => {
+    const { contextIdForTargetKey } = await import("@vibestudio/shared/runtime/contextIdentity");
+    const contextId = contextIdForTargetKey(
+      "ws\x00app-device\x00apps/terminal-browser\x00device-1"
+    );
+    expect(validateBuildRef(`ctx:${contextId}`)).toBe(`ctx:${contextId}`);
+  });
+});

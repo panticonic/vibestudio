@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHostBuildUnitGate } from "@vibestudio/shared/hostBuildUnits";
 import { createHash } from "node:crypto";
+import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { gzip } from "node:zlib";
 import { promisify } from "node:util";
@@ -2336,9 +2337,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     // selection) lives per session/runtime — in the panel's per-slot context
     // (`generateContextId(slotId)`) or the device-scoped principal below — not
     // in this shared durable context, so two sessions never clobber.
-    const contextId = createHash("sha256")
-      .update(`${this.deps.workspaceId}\x00app\x00${entry.name}\x00${sourceRepo}`)
-      .digest("hex");
+    // The canonical derived-context format (`ctx-<32 hex>`): a valid context
+    // folder and build ref, unlike a bare 64-hex digest.
+    const contextId = contextIdForTargetKey(
+      `${this.deps.workspaceId}\x00app\x00${entry.name}\x00${sourceRepo}`
+    );
     const record: EntityRecord = {
       id: entry.name,
       kind: "app",
