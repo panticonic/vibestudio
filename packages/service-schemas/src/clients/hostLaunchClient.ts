@@ -8,6 +8,7 @@ import { runtimeMethods } from "../runtime.js";
 import { shellApprovalMethods } from "../shellApproval.js";
 import { workspaceMethods } from "../workspace.js";
 import type { BuildUnitCatalogEntry } from "../build.js";
+import type { MobileAppUpdateStatus } from "../build.js";
 import type {
   RuntimeSupervisionActivationResult,
   RuntimeSupervisionDescription,
@@ -87,6 +88,12 @@ export class HostLaunchClient {
     return (
       candidates.find((unit) => unit.name === configured || unit.source === configured) ?? null
     );
+  }
+
+  async mobileUpdateStatus(
+    installedBuildKey: string | null
+  ): Promise<MobileAppUpdateStatus | null> {
+    return this.build.mobileUpdateStatus(installedBuildKey);
   }
 
   async configuredSelection(target: HostTarget): Promise<HostLaunchSelection | null> {

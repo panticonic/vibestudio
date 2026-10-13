@@ -885,6 +885,24 @@ export const buildUnitCatalogEntrySchema = z
   .strict();
 export type BuildUnitCatalogEntry = z.infer<typeof buildUnitCatalogEntrySchema>;
 
+export const mobileAppUpdateStatusSchema = z
+  .object({
+    type: z.literal("update-available"),
+    appId: z.string(),
+    source: z.string(),
+    target: z.literal("react-native"),
+    buildKey: z.string(),
+    effectiveVersion: z.string().nullable(),
+    previousBuildKey: z.string().nullable(),
+    previousEffectiveVersion: z.string().nullable(),
+    canRollback: z.boolean(),
+    requiresReload: z.literal(true),
+    adoptionPolicy: z.literal("prompt"),
+    selectedForHost: z.literal(true),
+  })
+  .strict();
+export type MobileAppUpdateStatus = z.infer<typeof mobileAppUpdateStatusSchema>;
+
 /**
  * Which execution environment will run a library bundle — selects the module
  * resolution conditions. `worker` covers any workerd isolate, including the eval
@@ -993,6 +1011,26 @@ export const buildMethods = defineServiceMethods({
       "List declared workspace panels, workers, extensions and apps with their source identity and build readiness. Use this catalog to discover available extensions before invoking one. For exact live processes, use runtime.supervision.list.",
     args: z.tuple([]),
     returns: z.array(buildUnitCatalogEntrySchema),
+    access: READ_ACCESS,
+  },
+  mobileUpdateStatus: {
+    website: {
+      kind: "closed",
+      reason:
+        "The native host compares its installed bundle identity; websites do not own a native installation.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "build.read",
+      rationale:
+        "Read-only comparison of caller-supplied native bundle identity with the selected workspace app build",
+    },
+    description:
+      "Return the selected React Native app update relative to this installation's active build key, or null when it is current.",
+    args: z.tuple([z.string().nullable()]),
+    returns: mobileAppUpdateStatusSchema.nullable(),
     access: READ_ACCESS,
   },
   getBuild: {

@@ -88,6 +88,31 @@ function unitInstallApproval(
 }
 
 describe("HostLaunchClient", () => {
+  it("queries mobile update state relative to the native installed build", async () => {
+    const update = {
+      type: "update-available",
+      appId: "@workspace-apps/mobile",
+      source: "apps/mobile",
+      target: "react-native",
+      buildKey: "mobile-build-2",
+      effectiveVersion: "2",
+      previousBuildKey: "mobile-build-1",
+      previousEffectiveVersion: "1",
+      canRollback: true,
+      requiresReload: true,
+      adoptionPolicy: "prompt",
+      selectedForHost: true,
+    };
+    const call = vi.fn(async (service: string, method: string, args: unknown[]) => {
+      expect([service, method, args]).toEqual(["build", "mobileUpdateStatus", ["mobile-build-1"]]);
+      return update;
+    });
+
+    await expect(new HostLaunchClient(call).mobileUpdateStatus("mobile-build-1")).resolves.toEqual(
+      update
+    );
+  });
+
   it("resolves the configured app to its catalog candidate", async () => {
     const call = vi.fn(async (service: string, method: string) => {
       if (service === "workspace" && method === "getConfig") {

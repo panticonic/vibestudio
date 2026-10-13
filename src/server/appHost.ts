@@ -35,6 +35,7 @@ import {
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName, NotificationPayload } from "@vibestudio/shared/events";
+import type { MobileAppUpdateStatus } from "@vibestudio/service-schemas/build";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
@@ -1008,6 +1009,37 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         previousVersions: entry?.previousVersions ?? [],
       };
     });
+  }
+
+  mobileUpdateStatus(installedBuildKey: string | null): MobileAppUpdateStatus | null {
+    const selected = this.deps.getHostTargetDecl?.("react-native")?.appSource;
+    if (!selected) return null;
+    const normalized = normalizeRepoPath(selected);
+    const entry = this.registry
+      .list()
+      .find(
+        (candidate) =>
+          candidate.target === "react-native" &&
+          (candidate.name === selected || normalizeRepoPath(candidate.source.repo) === normalized)
+      );
+    if (!entry?.activeBundleKey || entry.activeBundleKey === installedBuildKey) return null;
+    const installed = installedBuildKey
+      ? entry.previousVersions.find((version) => version.activeBundleKey === installedBuildKey)
+      : null;
+    return {
+      type: "update-available",
+      appId: entry.name,
+      source: normalizeRepoPath(entry.source.repo),
+      target: "react-native",
+      buildKey: entry.activeBundleKey,
+      effectiveVersion: entry.activeEv,
+      previousBuildKey: installedBuildKey,
+      previousEffectiveVersion: installed?.activeEv ?? null,
+      canRollback: entry.previousVersions.length > 0,
+      requiresReload: true,
+      adoptionPolicy: "prompt",
+      selectedForHost: true,
+    };
   }
 
   listAppVersions(sourceOrName: string): {

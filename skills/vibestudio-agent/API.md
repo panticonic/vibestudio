@@ -117,6 +117,7 @@ Authority principals: `code`, `host`, `user`, `website`
 | Method | Description |
 |--------|-------------|
 | `build.listUnits` | List declared workspace panels, workers, extensions and apps with their source identity and build readiness. Use this catalog to discover available extensions before invoking one. For exact live processes, use runtime.supervision.list. |
+| `build.mobileUpdateStatus` | Return the selected React Native app update relative to this installation's active build key, or null when it is current. |
 | `build.getBuild` | Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache. |
 | `build.getBuildArtifacts` | Return the content-free artifact manifest for an immutable cached build, or null when the build is unavailable. |
 | `build.buildWebsite` | Build a panel package's manifest-declared portable website entry at an exact workspace ref and return a content-free immutable artifact handle. |

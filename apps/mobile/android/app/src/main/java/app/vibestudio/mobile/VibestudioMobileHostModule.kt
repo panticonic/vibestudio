@@ -86,7 +86,8 @@ class VibestudioMobileHostModule(
     }
 
     override fun getConstants(): MutableMap<String, Any> = hashMapOf(
-        "firebaseConfigured" to BuildConfig.VIBESTUDIO_HAS_FIREBASE
+        "firebaseConfigured" to BuildConfig.VIBESTUDIO_HAS_FIREBASE,
+        "activeBundleBuildKey" to (VibestudioBundleStore.activeBuildKey(reactApplicationContext) ?: "")
     )
 
     @ReactMethod

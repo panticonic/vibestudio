@@ -105,4 +105,21 @@ describe("mobile Metro native capability boundary", () => {
     expect(entrypoint).not.toContain("workspace/apps/mobile");
     expect(entrypoint).not.toContain("../../workspace/apps");
   });
+
+  it("exposes the persisted active bundle identity on both native hosts", () => {
+    const android = fs.readFileSync(
+      path.resolve(
+        "apps/mobile/android/app/src/main/java/app/vibestudio/mobile/VibestudioMobileHostModule.kt"
+      ),
+      "utf-8"
+    );
+    const ios = fs.readFileSync(
+      path.resolve("apps/mobile/ios/Vibestudio/VibestudioMobileHost.mm"),
+      "utf-8"
+    );
+    expect(android).toContain('"activeBundleBuildKey"');
+    expect(android).toContain("VibestudioBundleStore.activeBuildKey");
+    expect(ios).toContain('@"activeBundleBuildKey"');
+    expect(ios).toContain("VibestudioActiveBundleBuildKey");
+  });
 });
