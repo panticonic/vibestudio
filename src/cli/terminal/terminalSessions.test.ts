@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TerminalBrowserExit } from "@vibestudio/shell-core/terminal/terminalBrowserHost";
 import type { AppPrincipalGrantResponse } from "@vibestudio/service-schemas/auth";
 import type { DeviceCredential, RpcClient } from "../rpcClient.js";
-import type { RemoteWorkspaceSelector } from "../remoteClient.js";
+import type { RemoteWorkspaceEntry, RemoteWorkspaceSelector } from "../remoteClient.js";
 import { runTerminalSessions, type TerminalSessionDependencies } from "./terminalSessions.js";
 
 const credentials = {
@@ -25,6 +25,14 @@ function routed(workspaceId: string, workspaceName: string): DeviceCredential {
     workspaceId,
     workspaceName,
   } as DeviceCredential;
+}
+
+function entry(
+  workspaceId: string,
+  name: string,
+  extra: Partial<RemoteWorkspaceEntry> = {}
+): RemoteWorkspaceEntry {
+  return { workspaceId, name, lastOpened: 0, running: true, pendingApprovalCount: 0, ...extra };
 }
 
 function grant(buildKey = "build-1"): AppPrincipalGrantResponse {
@@ -70,6 +78,12 @@ function harness(results: Array<Awaited<ReturnType<TerminalSessionDependencies["
         ? routed(selector.workspaceId, selector.workspaceId.replace(/^ws_/, ""))
         : routed(`ws_${selector.privateRole}`, selector.privateRole);
     }),
+    listWorkspaces: vi.fn(async () => [
+      entry("ws_system", "system-ws_S1", { privateRole: "system" }),
+      entry("ws_personal", "personal-ws_P1", { privateRole: "personal" }),
+      entry("ws_lab", "lab", { displayName: "Research lab" }),
+      entry("ws_other", "other"),
+    ]),
     createDevice: vi.fn((device: DeviceCredential) => {
       const release = vi.fn(async () => undefined);
       const close = vi.fn(async () => undefined);
@@ -126,9 +140,10 @@ describe("runTerminalSessions", () => {
     expect(routes).toEqual([{ privateRole: "system" }, { privateRole: "personal" }]);
     expect(deps.requestGrant).toHaveBeenCalledWith(expect.anything(), "apps/terminal-browser");
     expect(deps.loadModule).toHaveBeenCalledWith(expect.anything(), grant().app);
+    // The private pair is shown by role, never by its internal name.
     expect(vi.mocked(deps.runBrowser).mock.calls[0]![0]).toMatchObject({
-      system: { id: "ws_system", name: "system" },
-      workspace: { id: "ws_personal", name: "personal" },
+      system: { id: "ws_system", name: "System" },
+      workspace: { id: "ws_personal", name: "Personal" },
       server: { kind: "owned", logFile: "/tmp/x.log" },
     });
     // The gate, grant and module use the System connection; the shown
@@ -142,7 +157,14 @@ describe("runTerminalSessions", () => {
     expect(devices[0]!.workspaces[0]!.close).toHaveBeenCalled();
     expect(devices[0]!.release).toHaveBeenCalled();
     expect(devices[0]!.close).toHaveBeenCalled();
-    expect(progress.some((line) => line.includes("system"))).toBe(true);
+    expect(progress).toContain("Preparing the terminal browser in System…");
+    expect(progress.join("\n")).not.toMatch(/-ws_/);
+    await expect(vi.mocked(deps.runBrowser).mock.calls[0]![0].listWorkspaces()).resolves.toEqual([
+      { id: "ws_system", name: "System" },
+      { id: "ws_personal", name: "Personal" },
+      { id: "ws_lab", name: "Research lab" },
+      { id: "ws_other", name: "other" },
+    ]);
   });
 
   it("shows System through the System connection itself", async () => {
@@ -168,7 +190,7 @@ describe("runTerminalSessions", () => {
     ]);
     expect(deps.runGate).toHaveBeenCalledTimes(2);
     expect(vi.mocked(deps.runBrowser).mock.calls[1]![0]).toMatchObject({
-      system: { id: "ws_system", name: "system" },
+      system: { id: "ws_system", name: "System" },
       workspace: { id: "ws_other", name: "other" },
     });
   });
@@ -190,6 +212,10 @@ describe("runTerminalSessions", () => {
     const { deps, routes, progress } = harness([{ kind: "exit", exit: { kind: "quit" } }]);
     await runTerminalSessions({ ...options(deps, progress), workspace: "lab" });
     expect(routes).toEqual([{ privateRole: "system" }, "lab"]);
+    expect(vi.mocked(deps.runBrowser).mock.calls[0]![0].workspace).toEqual({
+      id: "ws_lab",
+      name: "Research lab",
+    });
   });
 
   it("reports a declined launch gate without starting the browser", async () => {
@@ -220,7 +246,7 @@ describe("runTerminalSessions", () => {
       },
     });
     await expect(runTerminalSessions(options(deps, progress))).rejects.toThrow(
-      /terminal browser is not available in system: No terminal app is configured.*hostTargets\.terminal\.app/
+      /terminal browser is not available in System: No terminal app is configured.*hostTargets\.terminal\.app/
     );
   });
 });

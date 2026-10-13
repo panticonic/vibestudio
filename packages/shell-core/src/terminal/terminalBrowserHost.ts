@@ -36,6 +36,11 @@ export interface TerminalBrowserServerInfo {
 
 export interface TerminalBrowserWorkspace {
   id: string;
+  /**
+   * What the person sees: "Personal" and "System" for the account's private
+   * pair, otherwise the workspace's display name or name. Never the private
+   * pair's internal names; `id` identifies the workspace.
+   */
   name: string;
 }
 

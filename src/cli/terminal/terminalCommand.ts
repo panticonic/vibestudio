@@ -26,7 +26,7 @@ import {
   printError,
   redactCliSecrets,
 } from "../output.js";
-import { pairRemoteServer } from "../remoteClient.js";
+import { pairRemoteServer, serverEndpoint } from "../remoteClient.js";
 import { refreshShell } from "../rpcClient.js";
 import { EXIT_INTERRUPTED } from "../terminalLaunchGate.js";
 import { localServerPaths, startLocalServer, type LocalServer } from "./localServer.js";
@@ -268,10 +268,7 @@ function describeServer(
   credentials: CliDeviceCredentials,
   server: LocalServer | null
 ): TerminalBrowserServerInfo {
-  const endpoint =
-    credentials.transport === "local"
-      ? new URL(credentials.url).origin
-      : `iroh:${credentials.workspacePairing.endpointId.slice(0, 12)}`;
+  const endpoint = serverEndpoint(credentials);
   if (!server) return { kind: "attached", endpoint };
   return {
     kind: server.retained ? "attached" : "owned",

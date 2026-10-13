@@ -4,10 +4,12 @@ import type {
   TerminalBrowserWorkspace,
 } from "@vibestudio/shell-core/terminal/terminalBrowserHost";
 import { openExternalBrowser } from "../../node/openExternalBrowser.js";
+import { workspaceLabel } from "../../node/workspaceLabel.js";
 import { CliError } from "../output.js";
 import {
   listWorkspacesVia,
   selectRemoteWorkspace,
+  type RemoteWorkspaceEntry,
   type RemoteWorkspaceSelector,
 } from "../remoteClient.js";
 import { RpcClient, type DeviceCredential } from "../rpcClient.js";
@@ -46,6 +48,7 @@ export interface TerminalSessionDependencies {
     selector: RemoteWorkspaceSelector
   ): Promise<DeviceCredential>;
   createDevice(credentials: DeviceCredential): RpcClient;
+  listWorkspaces(control: RpcClient): Promise<RemoteWorkspaceEntry[]>;
   runGate: typeof runTerminalLaunchGate;
   requestGrant: typeof requestTerminalAppGrant;
   loadModule: typeof loadTerminalBrowserModule;
@@ -56,6 +59,7 @@ export interface TerminalSessionDependencies {
 const DEFAULT_DEPENDENCIES: TerminalSessionDependencies = {
   route: selectRemoteWorkspace,
   createDevice: (credentials) => new RpcClient(credentials),
+  listWorkspaces: listWorkspacesVia,
   runGate: runTerminalLaunchGate,
   requestGrant: requestTerminalAppGrant,
   loadModule: loadTerminalBrowserModule,
@@ -100,21 +104,29 @@ async function runOnce(
   options: TerminalSessionsOptions,
   deps: TerminalSessionDependencies
 ): Promise<Awaited<ReturnType<typeof runTerminalBrowser>>> {
-  const system: TerminalBrowserWorkspace = {
-    id: systemRoute.workspaceId,
-    name: systemRoute.workspaceName,
-  };
-  const workspace: TerminalBrowserWorkspace = {
-    id: shownRoute.workspaceId,
-    name: shownRoute.workspaceName,
-  };
   const device = deps.createDevice(systemRoute);
   // One System connection carries the gate, the grant, the module download and
   // the app principal's session (a second session on the same Iroh connection).
   const releaseDevice = device.retainConnection();
   let control: RpcClient | null = null;
   let workspaceDevice: RpcClient | null = null;
+  // Workspaces as the person sees them: by label, never by internal name.
+  const listWorkspaces = async (): Promise<TerminalBrowserWorkspace[]> => {
+    control ??= await device.openControlConnection();
+    return (await deps.listWorkspaces(control)).map((entry) => ({
+      id: entry.workspaceId,
+      name: workspaceLabel(entry),
+    }));
+  };
   try {
+    const visible = await listWorkspaces();
+    const routed = (route: DeviceCredential): TerminalBrowserWorkspace => {
+      const entry = visible.find((candidate) => candidate.id === route.workspaceId);
+      if (!entry) throw new CliError("The selected workspace is not visible to this account.");
+      return entry;
+    };
+    const system = routed(systemRoute);
+    const workspace = routed(shownRoute);
     options.progress(`Preparing the terminal browser in ${system.name}…`);
     const gate = await deps.runGate(device, {
       target: "terminal",
@@ -149,13 +161,7 @@ async function runOnce(
       workspace,
       server: options.server,
       ...(options.serverExited ? { serverExited: options.serverExited } : {}),
-      listWorkspaces: async () => {
-        control ??= await device.openControlConnection();
-        return (await listWorkspacesVia(control)).map((entry) => ({
-          id: entry.workspaceId,
-          name: entry.name,
-        }));
-      },
+      listWorkspaces,
       openExternal: deps.openExternal,
       stdin: options.stdin,
       stdout: options.stdout,

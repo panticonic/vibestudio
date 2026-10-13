@@ -69,7 +69,7 @@ vi.mock("../node/iroh/irohRpcClient.js", () => ({
   },
 }));
 
-import { pairRemoteServer } from "./remoteClient.js";
+import { findWorkspace, pairRemoteServer } from "./remoteClient.js";
 
 describe("pairRemoteServer", () => {
   beforeEach(() => {
@@ -92,5 +92,34 @@ describe("pairRemoteServer", () => {
       { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_personal" }] },
     ]);
     expect(credential.workspaceId).toBe("ws_personal");
+  });
+});
+
+describe("findWorkspace", () => {
+  const entry = (workspaceId: string, name: string, extra = {}) => ({
+    workspaceId,
+    name,
+    lastOpened: 0,
+    running: true,
+    pendingApprovalCount: 0,
+    ...extra,
+  });
+  const entries = [
+    entry("ws_personal", "personal-ws_P1", { privateRole: "personal" as const }),
+    entry("ws_system", "system-ws_S1", { privateRole: "system" as const }),
+    entry("ws_lab", "lab", { displayName: "Research lab" }),
+  ];
+
+  it("finds a workspace by the label the CLI shows or by its name", () => {
+    expect(findWorkspace(entries, "Personal").workspaceId).toBe("ws_personal");
+    expect(findWorkspace(entries, "System").workspaceId).toBe("ws_system");
+    expect(findWorkspace(entries, "Research lab").workspaceId).toBe("ws_lab");
+    expect(findWorkspace(entries, "lab").workspaceId).toBe("ws_lab");
+  });
+
+  it("rejects a workspace the account cannot see, and an ambiguous label", () => {
+    expect(() => findWorkspace(entries, "elsewhere")).toThrow("is not visible");
+    const twins = [...entries, entry("ws_lab2", "lab-2", { displayName: "Research lab" })];
+    expect(() => findWorkspace(twins, "Research lab")).toThrow("2 workspaces are called");
   });
 });

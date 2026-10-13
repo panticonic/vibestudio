@@ -324,7 +324,7 @@ async function runServer(
           );
         } else if (!terminal) {
           console.log(
-            `[instance:${instance.id}] CLI ${bootstrap.status}; workspace=${bootstrap.workspaceName}`
+            `[instance:${instance.id}] CLI ${bootstrap.status}; workspace id=${bootstrap.workspaceId}`
           );
         }
       },

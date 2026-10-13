@@ -18,6 +18,7 @@ import { AuthError, UsageError } from "./output.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { resolveLocalHubControlTransport } from "./localHubTransport.js";
 import { typedClient } from "./typedClients.js";
+import { workspaceLabel } from "../node/workspaceLabel.js";
 
 export type { DeviceCredential } from "./rpcClient.js";
 export { refreshShell, type RefreshShellResponse } from "./rpcClient.js";
@@ -214,15 +215,41 @@ export type RemoteWorkspaceSelector =
   | { workspaceId: string }
   | { privateRole: "personal" | "system" };
 
+/** Where a credential's server is, as people see it: never a workspace path. */
+export function serverEndpoint(credentials: DeviceCredential): string {
+  return credentials.transport === "local"
+    ? new URL(credentials.url).origin
+    : `iroh:${credentials.workspacePairing.endpointId.slice(0, 12)}`;
+}
+
+/**
+ * The workspace a person names: by its name, or by the label the CLI shows
+ * for it ("Personal", "System", a display name).
+ */
+export function findWorkspace(
+  entries: readonly RemoteWorkspaceEntry[],
+  selector: string
+): RemoteWorkspaceEntry {
+  const named = entries.find((workspace) => workspace.name === selector);
+  if (named) return named;
+  const labelled = entries.filter((workspace) => workspaceLabel(workspace) === selector);
+  const [only] = labelled;
+  if (only && labelled.length === 1) return only;
+  if (labelled.length > 1) {
+    throw new UsageError(
+      `${labelled.length} workspaces are called "${selector}"; choose one by its workspace name`
+    );
+  }
+  throw new AuthError(`workspace "${selector}" is not visible to this account`);
+}
+
 export async function selectRemoteWorkspace(
   creds: DeviceCredential,
   selector: RemoteWorkspaceSelector
 ): Promise<DeviceCredential> {
   const route: HubWorkspaceRoute = await withControl(creds, async (client) => {
     if (typeof selector === "string") {
-      const entries = await client.listWorkspaces();
-      const entry = entries.find((workspace) => workspace.name === selector);
-      if (!entry) throw new AuthError(`workspace "${selector}" is not visible to this account`);
+      const entry = findWorkspace(await client.listWorkspaces(), selector);
       return await client.routeWorkspace({ workspaceId: entry.workspaceId });
     }
     if ("workspaceId" in selector) {

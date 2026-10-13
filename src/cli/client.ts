@@ -30,10 +30,12 @@ import {
   removeRemoteWorkspaceMember,
   revokeRemoteDevice,
   selectRemoteWorkspace,
+  serverEndpoint,
 } from "./remoteClient.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { createTerminalCommand } from "./terminal/terminalCommand.js";
 import { isTerminalHangup } from "./terminal/ttyRestore.js";
+import { workspaceLabel } from "../node/workspaceLabel.js";
 import { agentCommands, createSelectedWorkspaceClient } from "./agent/index.js";
 import { fsCommands } from "./agent/fsCommands.js";
 import { vcsCommands } from "./agent/vcsCommands.js";
@@ -128,7 +130,7 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
       printResult(result, {
         json,
         human: () => {
-          console.log(`connected: ${result.url}`);
+          console.log(`connected: ${serverEndpoint(creds)}`);
           if (result.workspaceId) console.log(`workspace: ${result.workspaceId}`);
           console.log(`server: ${result.serverId}`);
         },
@@ -324,7 +326,7 @@ async function remoteWorkspaceList(inv: ParsedInvocation): Promise<number> {
         json,
         human: () => {
           for (const workspace of workspaces) {
-            console.log(`${workspace.name}${workspace.running ? " (running)" : ""}`);
+            console.log(`${workspaceLabel(workspace)}${workspace.running ? " (running)" : ""}`);
           }
         },
       }
@@ -343,8 +345,7 @@ async function remoteEnsureUserWorkspaces(inv: ParsedInvocation): Promise<number
     printResult(pair, {
       json,
       human: () => {
-        console.log(`Personal: ${pair.personal.name}`);
-        console.log(`System: ${pair.system.name}`);
+        console.log("Your Personal and System workspaces are ready.");
       },
     });
     return 0;
@@ -438,8 +439,8 @@ async function remoteWorkspaceSelect(inv: ParsedInvocation): Promise<number> {
       {
         json,
         human: () => {
-          console.log(`workspace: ${selected.workspaceName}`);
-          console.log(`server: ${selected.url}`);
+          console.log(`workspace: ${name}`);
+          console.log(`server: ${serverEndpoint(selected)}`);
         },
       }
     );
