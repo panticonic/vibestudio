@@ -1023,7 +1023,7 @@ export const buildMethods = defineServiceMethods({
       tier: "open",
       session: "family",
       residency: "native-effect",
-      family: "build.read",
+      family: "build.native-installation",
       rationale:
         "Read-only comparison of caller-supplied native bundle identity with the selected workspace app build",
     },

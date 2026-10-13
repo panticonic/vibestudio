@@ -2241,6 +2241,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "build.mobileUpdateStatus": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "build.native-installation",
+      rationale:
+        "Read-only comparison of caller-supplied native bundle identity with the selected workspace app build",
+    },
+    capability: null,
+    presentation: null,
+  },
   "build.prepareTypecheck": {
     tier: {
       tier: "open",

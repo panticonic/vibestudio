@@ -12897,6 +12897,53 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:build.mobileUpdateStatus",
+      "rpcPlane": "host-service",
+      "owner": "build",
+      "method": "mobileUpdateStatus",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "build.native-installation",
+      "reviewRationale": "Read-only comparison of caller-supplied native bundle identity with the selected workspace app build",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:build.mobileUpdateStatus"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:build.mobileUpdateStatus),allOf(capability(user,service:build.mobileUpdateStatus),workspace-member),allOf(capability(code,service:build.mobileUpdateStatus),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:build.mobileUpdateStatus",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:build.prepareTypecheck",
       "rpcPlane": "host-service",
       "owner": "build",
