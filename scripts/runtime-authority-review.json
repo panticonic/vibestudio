@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:07d0b83d78f21a0152f7e8967f14dd4bb1c4c94a788652fff75da1a7b4065b01",
+  "censusDigest": "sha256:3a14fcf1a22b9de72f4af54e386f20c92b660659f95bb3f2030c072f753272ed",
   "decisions": {
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
@@ -964,6 +964,14 @@
     "host:hubControl.workspaceCreationReceipt": {
       "review": "durable-owner-scoped-workspace-creation",
       "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace."
+    },
+    "host:localModelRuntime.prepareNativeModel": {
+      "review": "exact-active-local-model-preparation",
+      "change": "Adds one website-eligible typed mediation operation for the exact active authenticated native local-model task. The host revalidates provider, model, original endpoint, owner, and liveness before using the ordinary ExtensionHost lifecycle to start that model, returns only its loopback endpoint, and retains all bearer material in host egress."
+    },
+    "host:localModelRuntime.prepareNativeModel#capability:model.use": {
+      "review": "exact-local-model-use-selection",
+      "change": "Selects one gated model.use leaf derived by the host from the active native task model id. Caller arguments must equal the retained task and cannot choose another model, endpoint, account, or runtime secret."
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",

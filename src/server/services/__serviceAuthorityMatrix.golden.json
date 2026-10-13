@@ -9087,6 +9087,126 @@
       }
     }
   },
+  "localModelRuntime": {
+    "service": {
+      "principals": [
+        "user",
+        "code",
+        "host",
+        "website"
+      ]
+    },
+    "methods": {
+      "prepareNativeModel": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "website",
+                    "capability": "service:localModelRuntime.prepareNativeModel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:localModelRuntime.prepareNativeModel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:localModelRuntime.prepareNativeModel"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:localModelRuntime.prepareNativeModel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:localModelRuntime.prepareNativeModel"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:localModelRuntime.prepareNativeModel"
+          },
+          "prepared": {
+            "resolver": "localModelRuntime.prepareNativeModel.model",
+            "leaves": [
+              {
+                "capability": "model.use",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": [
+                    "website",
+                    "user",
+                    "host",
+                    "code"
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": [
+                    "gated"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "secret",
+          "family": "credentials.read",
+          "rationale": "The host validates the retained native invocation and returns only its current secret-free endpoint."
+        },
+        "capability": "localModelRuntime.prepareNativeModel",
+        "presentation": null
+      }
+    }
+  },
   "mirror": {
     "service": {
       "principals": [

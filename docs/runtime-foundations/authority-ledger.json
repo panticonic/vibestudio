@@ -21777,6 +21777,99 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:localModelRuntime.prepareNativeModel",
+      "rpcPlane": "host-service",
+      "owner": "localModelRuntime",
+      "method": "prepareNativeModel",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "secret",
+      "mechanismFamily": "credentials.read",
+      "reviewRationale": "The host validates the retained native invocation and returns only its current secret-free endpoint.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:localModelRuntime.prepareNativeModel"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:localModelRuntime.prepareNativeModel\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:localModelRuntime.prepareNativeModel\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:localModelRuntime.prepareNativeModel\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:localModelRuntime.prepareNativeModel\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:localModelRuntime.prepareNativeModel\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "exact-active-local-model-preparation",
+        "change": "Adds one website-eligible typed mediation operation for the exact active authenticated native local-model task. The host revalidates provider, model, original endpoint, owner, and liveness before using the ordinary ExtensionHost lifecycle to start that model, returns only its loopback endpoint, and retains all bearer material in host egress."
+      },
+      "capability": "service:localModelRuntime.prepareNativeModel",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:localModelRuntime.prepareNativeModel#capability:model.use",
+      "rpcPlane": "host-service",
+      "owner": "localModelRuntime",
+      "method": "prepareNativeModel",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "secret",
+      "mechanismFamily": "credentials.read",
+      "reviewRationale": "The host validates the retained native invocation and returns only its current secret-free endpoint.",
+      "capability": "model.use",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "localModelRuntime.prepareNativeModel.model"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"website\",\"user\",\"host\",\"code\"]}",
+      "r3b": {
+        "review": "exact-local-model-use-selection",
+        "change": "Selects one gated model.use leaf derived by the host from the active native task model id. Caller arguments must equal the retained task and cannot choose another model, endpoint, account, or runtime secret."
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:menu.showContext",
       "rpcPlane": "host-service",
       "owner": "menu",

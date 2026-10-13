@@ -4818,6 +4818,18 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "localModelRuntime.prepareNativeModel": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale:
+        "The host validates the retained native invocation and returns only its current secret-free endpoint.",
+    },
+    capability: "localModelRuntime.prepareNativeModel",
+    presentation: null,
+  },
   "menu.showContext": {
     tier: {
       tier: "open",
@@ -9405,6 +9417,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "externalOpen.openExternal": ["external.open"],
   "hostTerminal.open": ["host-terminal.open"],
   "hubControl.createWorkspace": ["workspaces.create"],
+  "localModelRuntime.prepareNativeModel": ["model.use"],
   "panelCdp.browserOperation": ["context.boundary"],
   "panelCdp.consoleHistory": ["context.boundary"],
   "panelCdp.evaluate": ["context.boundary"],

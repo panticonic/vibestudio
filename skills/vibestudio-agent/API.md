@@ -347,6 +347,16 @@ Authority principals: `code`, `host`, `user`, `website`
 | `hubControl.workspaceCreationReceipt` | Reconcile one previously submitted workspace creation without creating or opening anything. |
 | `hubControl.observeDevices` | Observe changes to the caller-visible paired device set. Cancellation releases the observation. |
 
+## `localModelRuntime`
+
+Host-owned preparation and secret injection for native local-model inference
+
+Authority principals: `code`, `host`, `user`, `website`
+
+| Method | Description |
+|--------|-------------|
+| `localModelRuntime.prepareNativeModel` | Prepare the exact local model selected by an active native model invocation and return its current endpoint. The host injects loopback authorization at egress time. |
+
 ## `mirror`
 
 Read-side of the context projector: `targets` returns a context's per-repo content-addressed states, `objects` streams the CAS tree content for a state in size-bounded pages. Powers `vibestudio context mirror`.

@@ -30,6 +30,7 @@ import { channelMethods } from "./channel.js";
 import { chromiumFetchMethods } from "./chromiumFetch.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
+import { localModelRuntimeMethods } from "./localModelRuntime.js";
 import { docsMethods } from "./docs.js";
 import { desktopEventsMethods } from "./desktopEvents.js";
 import { developmentMethods } from "./development.js";
@@ -138,6 +139,11 @@ const serviceTables: ServiceTable[] = [
   { service: "channel", file: "channel.ts", methods: channelMethods },
   { service: "corsApproval", file: "corsApproval.ts", methods: corsApprovalMethods },
   { service: "credentials", file: "credentials.ts", methods: credentialsMethods },
+  {
+    service: "localModelRuntime",
+    file: "localModelRuntime.ts",
+    methods: localModelRuntimeMethods,
+  },
   { service: "docs", file: "docs.ts", methods: docsMethods },
   { service: "desktopEvents", file: "desktopEvents.ts", methods: desktopEventsMethods },
   { service: "development", file: "development.ts", methods: developmentMethods },

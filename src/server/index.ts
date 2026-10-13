@@ -1308,15 +1308,44 @@ async function main() {
     credentialStore,
     clientConfigStore,
   });
+  const resolveNativeInvocation = async (
+    caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller
+  ) => {
+    const parent = caller.causalParent;
+    if (!parent || !caller.nativeInvocation) return null;
+    const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+    const { resolveExactCausalInvocation } = await import("./workspaceSourceProvider.js");
+    const fact = await resolveExactCausalInvocation(parent, {
+      binding: caller.agentBinding ?? null,
+      entities: entityCache,
+      inspect: (locator, invocationId) => {
+        const owner = entityCache.resolveActive(locator.owner.runtimeId);
+        if (!owner?.className) throw new Error("Native task owner is not active");
+        return doDispatch.dispatch(
+          {
+            source: owner.source.repoPath,
+            className: owner.className,
+            objectKey: owner.key,
+          },
+          "inspectNativeInvocationSource",
+          { taskId: locator.task.taskId, invocationId }
+        );
+      },
+      getEnvelope: (ref, envelopeId) => doDispatch.dispatch(ref, "getEnvelope", envelopeId),
+    });
+    if (!fact) return null;
+    return { nativeInvocation: fact.nativeInvocation, active: fact.active };
+  };
   const { LocalModelLoopbackAuthority } = await import("./services/localModelLoopbackAuthority.js");
   const localModelLoopbackAuthority = new LocalModelLoopbackAuthority({
-    readRuntimeAuth: async (caller) => {
+    resolveNativeInvocation,
+    readRuntimeAuth: async (_caller, modelId) => {
       const host = assertPresent(extensionHostForGateway);
       return await host.invoke(
-        { caller },
+        { caller: createHostCaller("server") },
         "@workspace-extensions/local-models",
-        "getLoopbackAuth",
-        []
+        "attestRuntime",
+        [modelId]
       );
     },
   });
@@ -1331,7 +1360,8 @@ async function main() {
     credentialUseGrantStore,
     credentialLifecycle,
     authorizeInternalRequest: async (input) => {
-      if (await localModelLoopbackAuthority.authorize(input)) return {};
+      const localModelAuthorization = await localModelLoopbackAuthority.authorize(input);
+      if (localModelAuthorization) return localModelAuthorization;
       let gatewayOrigin: string;
       try {
         gatewayOrigin = new URL(getLocalGatewayUrl("CDP transport")).origin;
@@ -3544,32 +3574,7 @@ async function main() {
       rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
     hasAppCapability: (callerId, capability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-    resolveNativeInvocation: async (caller) => {
-      const parent = caller.causalParent;
-      if (!parent || !caller.nativeInvocation) return null;
-      const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-      const { resolveExactCausalInvocation } = await import("./workspaceSourceProvider.js");
-      const fact = await resolveExactCausalInvocation(parent, {
-        binding: caller.agentBinding ?? null,
-        entities: entityCache,
-        inspect: (locator, invocationId) => {
-          const owner = entityCache.resolveActive(locator.owner.runtimeId);
-          if (!owner?.className) throw new Error("Native task owner is not active");
-          return doDispatch.dispatch(
-            {
-              source: owner.source.repoPath,
-              className: owner.className,
-              objectKey: owner.key,
-            },
-            "inspectNativeInvocationSource",
-            { taskId: locator.task.taskId, invocationId }
-          );
-        },
-        getEnvelope: (ref, envelopeId) => doDispatch.dispatch(ref, "getEnvelope", envelopeId),
-      });
-      if (!fact) return null;
-      return { nativeInvocation: fact.nativeInvocation, active: fact.active };
-    },
+    resolveNativeInvocation,
   });
 
   // Durable and session permission grants are owned by the workspace server.
@@ -6311,6 +6316,38 @@ async function main() {
           container.get<import("@vibestudio/extension-host").ExtensionHost>("extensionHost");
       }
       return instance.createServiceDefinition();
+    },
+  });
+
+  container.registerManaged({
+    name: "localModelRuntime",
+    dependencies: ["extensionHost"],
+    async start(resolve) {
+      const extensionHost = assertPresent(
+        resolve<import("@vibestudio/extension-host").ExtensionHost>("extensionHost")
+      );
+      const { createLocalModelRuntimeService } =
+        await import("./services/localModelRuntimeService.js");
+      return createLocalModelRuntimeService({
+        resolveNativeInvocation,
+        ensureLoaded: (modelId, signal) =>
+          extensionHost.invoke(
+            { caller: createHostCaller("server"), signal },
+            "@workspace-extensions/local-models",
+            "ensureLoaded",
+            [modelId]
+          ),
+      });
+    },
+    getServiceDefinition(
+      instance?: import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+    ) {
+      return (
+        instance ??
+        container.get<import("@vibestudio/shared/serviceDefinition").ServiceDefinition>(
+          "localModelRuntime"
+        )
+      );
     },
   });
 
