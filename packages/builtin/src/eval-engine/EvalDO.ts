@@ -959,6 +959,7 @@ export class EvalDO extends DurableObjectBase {
         status: base.status.bind(base),
         ready: base.ready.bind(base),
         onStatusChange: base.onStatusChange.bind(base),
+        onRecovery: base.onRecovery.bind(base),
       })
     );
     const callMainService = (service: string, method: string, args: unknown[]) =>
@@ -4062,6 +4063,7 @@ export class EvalDO extends DurableObjectBase {
         status: this.rpc.status.bind(this.rpc),
         ready: this.rpc.ready.bind(this.rpc),
         onStatusChange: this.rpc.onStatusChange.bind(this.rpc),
+        onRecovery: this.rpc.onRecovery.bind(this.rpc),
       })
     );
     const rpc = Object.assign(schemaRpcClient(wire), {

@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RemoteRpcError } from "@vibestudio/rpc";
 import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import {
   encodeEventWatchRecord,
@@ -319,6 +318,31 @@ describe("EventsClient", () => {
     await client.unsubscribeAll();
   });
 
+  it("owns RpcClient recovery observation only while topics are subscribed", async () => {
+    const recoveries = new Set<(kind: "resubscribe" | "cold-recover") => void>();
+    const events = new EventsClient({
+      ...fixture.rpc,
+      onRecovery(listener) {
+        recoveries.add(listener);
+        return () => recoveries.delete(listener);
+      },
+    });
+
+    expect(recoveries.size).toBe(0);
+    await events.subscribe("panel-tree-invalidated");
+    expect(recoveries.size).toBe(1);
+
+    for (const listener of recoveries) listener("resubscribe");
+    await vi.waitFor(() => expect(fixture.stream).toHaveBeenCalledTimes(2));
+    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
+      ["panel-tree-invalidated"],
+      expect.any(String),
+    ]);
+
+    await events.unsubscribeAll();
+    expect(recoveries.size).toBe(0);
+  });
+
   it("keeps desired topics discoverable after an opening failure", async () => {
     fixture.stream.mockRejectedValueOnce(new Error("transport unavailable"));
     await expect(client.subscribe("panel-tree-invalidated")).rejects.toThrow(
@@ -334,67 +358,106 @@ describe("EventsClient", () => {
     await client.unsubscribeAll();
   });
 
-  it.each(["transport", "access"] as const)(
-    "keeps desired topics while reporting a %s retry appropriately",
-    async (kind) => {
-      vi.useFakeTimers();
-      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const failure = new RemoteRpcError("temporarily unavailable", kind, "CONNECTION_LOST");
-      fixture.stream.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
-      try {
-        await expect(client.subscribe("panel-tree-invalidated")).rejects.toBe(failure);
-        await vi.advanceTimersByTimeAsync(250);
-        if (kind === "transport") expect(warning).not.toHaveBeenCalled();
-        else
-          expect(warning).toHaveBeenCalledWith(
-            "[EventsClient] event watch recovery failed:",
-            failure
-          );
-        await vi.advanceTimersByTimeAsync(500);
-        expect(fixture.stream).toHaveBeenCalledTimes(3);
-        expect(fixture.stream.mock.calls[2]?.[2]?.[0]).toEqual(["panel-tree-invalidated"]);
-      } finally {
-        await client.unsubscribeAll();
-        warning.mockRestore();
-        vi.useRealTimers();
-      }
-    }
-  );
-
-  it("recovers quietly while a panel runtime lease moves between connections", async () => {
-    // A reconnect re-leases the panel, and the holder's next attempt succeeds.
-    // Warning here reported a broken panel for a transition that healed itself.
-    vi.useFakeTimers();
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const failure = new RemoteRpcError(
-      "Panel runtime is leased by Desktop",
-      "transport",
-      "panel_runtime_leased"
-    );
-    fixture.stream.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
-    try {
-      await expect(client.subscribe("panel-tree-invalidated")).rejects.toBe(failure);
-      await vi.advanceTimersByTimeAsync(250);
-      expect(warning).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(500);
-      expect(fixture.stream).toHaveBeenCalledTimes(3);
-    } finally {
-      await client.unsubscribeAll();
-      warning.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it("reopens desired topics after an unexpected terminal close", async () => {
+  it("waits for authoritative recovery after an unexpected terminal close", async () => {
     await client.subscribe("panel-tree-invalidated");
     fixture.close(0);
 
-    await vi.waitFor(() => expect(fixture.stream).toHaveBeenCalledTimes(2));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(fixture.stream).toHaveBeenCalledTimes(1);
+
+    await client.recover();
     expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
       ["panel-tree-invalidated"],
       expect.any(String),
     ]);
     await client.unsubscribeAll();
+  });
+
+  it("preserves terminal and replacement failures across recovery", async () => {
+    const replacementFailure = new Error("replacement admission failed");
+    await client.subscribe("panel-tree-invalidated");
+    fixture.stream.mockRejectedValueOnce(replacementFailure);
+    fixture.close(0);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const failure = await client.recover().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: "Event watch closed unexpectedly" }),
+      replacementFailure,
+    ]);
+    await client.unsubscribeAll();
+  });
+
+  it("preserves an active watch failure when its pending replacement also fails", async () => {
+    const activeFailure = new Error("active watch failed");
+    const replacementFailure = new Error("replacement admission failed");
+    let rejectReplacement!: (error: Error) => void;
+    const replacement = new Promise<Response>((_resolve, reject) => {
+      rejectReplacement = reject;
+    });
+    await client.subscribe("panel-tree-invalidated");
+    fixture.stream.mockImplementationOnce(() => replacement);
+
+    const replacing = client.subscribe("system-theme-changed");
+    await vi.waitFor(() => expect(fixture.stream).toHaveBeenCalledTimes(2));
+    fixture.controllers[0]!.error(activeFailure);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    rejectReplacement(replacementFailure);
+
+    const failure = await replacing.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([activeFailure, replacementFailure]);
+    await client.unsubscribeAll();
+  });
+
+  it("runs every recovery disposer and preserves all cleanup failures", async () => {
+    const first = new Error("resubscribe disposer failed");
+    const second = new Error("cold recovery disposer failed");
+    const releases = [
+      vi.fn(() => {
+        throw first;
+      }),
+      vi.fn(() => {
+        throw second;
+      }),
+    ];
+    const coordinator = {
+      registerResubscribeHandler: vi.fn(() => releases[0]!),
+      registerColdRecoverHandler: vi.fn(() => releases[1]!),
+    };
+    const events = new EventsClient(fixture.rpc, coordinator);
+    await events.subscribe("panel-tree-invalidated");
+
+    const failure = await events.unsubscribeAll().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([first, second]);
+    expect(releases[0]).toHaveBeenCalledOnce();
+    expect(releases[1]).toHaveBeenCalledOnce();
+  });
+
+  it("retires an admitted recovery registration when later registration fails", async () => {
+    const registrationFailure = new Error("cold recovery registration failed");
+    const cleanupFailure = new Error("resubscribe disposer failed");
+    const release = vi.fn(() => {
+      throw cleanupFailure;
+    });
+    const coordinator = {
+      registerResubscribeHandler: vi.fn(() => release),
+      registerColdRecoverHandler: vi.fn(() => {
+        throw registrationFailure;
+      }),
+    };
+    const events = new EventsClient(fixture.rpc, coordinator);
+
+    const failure = await events
+      .subscribe("panel-tree-invalidated")
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([registrationFailure, cleanupFailure]);
+    expect(release).toHaveBeenCalledOnce();
+    expect(fixture.stream).not.toHaveBeenCalled();
+    await events.unsubscribeAll();
   });
 
   it("isolates listener failures without terminating the watch", async () => {

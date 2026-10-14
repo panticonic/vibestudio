@@ -54,6 +54,20 @@ await rpc.peer("panel:other").emit("notes.changed", { id: "n1" });
 - `rpc.on(event, handler)` receives `RpcEventContext` with caller, origin, event, and payload.
 - `rpc.peer(id)` returns target-scoped typed call, emit, and event helpers.
 
+Long-lived calls own their observation generation. Subscribe with
+`rpc.onRecovery(handler)` when the call must be reopened after the physical or
+server session changes: a local IPC client can remain logically `connected`
+while its remote server generation is replaced. The client settles calls and
+republishes exposures before invoking recovery observers in registration order.
+Observers are isolated, and their returned promises are observed for failures
+but do not delay transport recovery. Retire and join the old generation, then
+schedule serialized replacement from the callback and return promptly; the
+reconciler joins the retired work before opening its replacement. Use typed
+connection-loss errors to distinguish an expected retired generation; do not
+infer recovery from error text, elapsed time, or retry polling. Transports
+without a recovery-generation signal expose the same subscription as an inert
+lifecycle hook.
+
 ## Transports
 
 Transport implementations live under `@vibestudio/rpc/transports/*`:

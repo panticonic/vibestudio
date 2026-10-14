@@ -2263,6 +2263,55 @@ describe("createRpcClient — pending-call policy (§3.4)", () => {
 
     expect(routedState.settled).toBe(false);
   });
+
+  it("notifies isolated recovery observers after internal recovery policy", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: fake.transport,
+      onRecovery: fake.onRecovery,
+      publishExposures: true,
+    });
+    rpc.expose("panel.ping", async () => "pong", {
+      kind: "closed",
+      reason: "Recovery ordering fixture",
+    });
+    fake.sent.length = 0;
+    const order: string[] = [];
+    const failure = new Error("broken observer");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const first = vi.fn(() => {
+      expect(fake.sent.some((envelope) => envelope.message.type === "exposure")).toBe(true);
+      order.push("first");
+      throw failure;
+    });
+    const second = vi.fn();
+    const asynchronousFailure = new Error("broken asynchronous observer");
+    const asynchronous = vi.fn(async () => {
+      order.push("asynchronous");
+      throw asynchronousFailure;
+    });
+    second.mockImplementation(() => order.push("second"));
+    rpc.onRecovery(first);
+    rpc.onRecovery(asynchronous);
+    const unsubscribe = rpc.onRecovery(second);
+
+    fake.emitRecovery("resubscribe");
+    await flushMicrotasks();
+
+    expect(first).toHaveBeenCalledWith("resubscribe");
+    expect(second).toHaveBeenCalledWith("resubscribe");
+    expect(order).toEqual(["first", "asynchronous", "second"]);
+    expect(logged).toHaveBeenCalledWith("RPC recovery observer failed:", failure);
+    expect(logged).toHaveBeenCalledWith("RPC recovery observer failed:", asynchronousFailure);
+    unsubscribe();
+    fake.emitRecovery("cold-recover");
+    await flushMicrotasks();
+    expect(first).toHaveBeenCalledTimes(2);
+    expect(second).toHaveBeenCalledTimes(1);
+    logged.mockRestore();
+  });
 });
 
 describe("createRpcClient — explicit call deadlines", () => {

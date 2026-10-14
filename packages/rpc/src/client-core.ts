@@ -307,6 +307,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     handler: (status: RpcConnectionStatus) => void;
     unsubscribe: () => void;
   }>();
+  const recoverySubscriptions = new Set<(kind: RecoveryKind) => void | Promise<void>>();
   const settleHeadWithinLifetime = <T>(
     operation: Promise<T>,
     disposeLate?: (value: T) => void
@@ -1627,6 +1628,11 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         unsubscribe();
       };
     },
+    onRecovery(handler): () => void {
+      requireActive();
+      recoverySubscriptions.add(handler);
+      return () => recoverySubscriptions.delete(handler);
+    },
   };
 
   const unsubscribeMessage = config.transport.onMessage(handleEnvelope);
@@ -1669,6 +1675,18 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         makeConnectionLostError()
       );
     }
+    for (const handler of [...recoverySubscriptions]) {
+      try {
+        const completion = handler(kind);
+        if (completion) {
+          void completion.catch((error) => {
+            console.error("RPC recovery observer failed:", error);
+          });
+        }
+      } catch (error) {
+        console.error("RPC recovery observer failed:", error);
+      }
+    }
   });
 
   const retire = (): void => {
@@ -1683,6 +1701,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       subscription.unsubscribe();
     }
     statusSubscriptions.clear();
+    recoverySubscriptions.clear();
     for (const [requestId, pending] of pendingRequests) {
       void deliverEnvelope(
         makeEnvelope(
@@ -1762,6 +1781,7 @@ function withCallOptions(
     status: base.status.bind(base),
     ready: base.ready.bind(base),
     onStatusChange: base.onStatusChange.bind(base),
+    onRecovery: base.onRecovery.bind(base),
   };
   return registerRpcWireClient(Object.freeze(view), (operation) =>
     enter(() => ownRpcOperation(base, operation))

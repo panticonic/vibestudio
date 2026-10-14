@@ -111,6 +111,7 @@ function ownedRpc(
     status: vi.fn((): "connected" => "connected"),
     ready: vi.fn(async () => undefined),
     onStatusChange: vi.fn(() => () => undefined),
+    onRecovery: vi.fn(() => () => undefined),
   });
 }
 

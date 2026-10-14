@@ -66,6 +66,7 @@ export function schemaRpcClientMock(
     status: () => "connected",
     ready: async () => {},
     onStatusChange: () => () => {},
+    onRecovery: () => () => {},
   };
   return schemaRpcClient(registerRpcWireClient(client));
 }

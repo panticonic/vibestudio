@@ -64,6 +64,16 @@ it("inherits the receiver invocation cancellation before admitting a child call"
 });
 
 describe("createConnectionlessRpcClient", () => {
+  it("exposes an inert recovery subscription for transports without generations", () => {
+    const { client } = makeClient(vi.fn() as unknown as typeof fetch);
+    const observer = vi.fn();
+
+    const unsubscribe = client.onRecovery(observer);
+    unsubscribe();
+
+    expect(observer).not.toHaveBeenCalled();
+  });
+
   it("carries the current invocation authority parent on unary and streaming calls", async () => {
     const seen: RpcEnvelope[] = [];
     const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
