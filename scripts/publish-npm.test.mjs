@@ -2,14 +2,83 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Readable } from "node:stream";
 import { test } from "node:test";
+import { gzipSync } from "node:zlib";
 import {
+  npmArchivePayloadSha256,
   publishArgs,
+  parseArgs,
+  publicNpmEnvironment,
   runWithOwnedCleanup,
   spawnResultFailure,
   validateNpmPackageManifest,
   validateStagedPackage,
 } from "./publish-npm.mjs";
+
+void test("candidate validation and smoke commands cannot inherit the npm publish token", () => {
+  const clean = publicNpmEnvironment({
+    PATH: "/bin",
+    NPM_TOKEN: "secret",
+    NODE_AUTH_TOKEN: "secret",
+    NPM_CONFIG_USERCONFIG: "/secret/npmrc",
+    npm_config_userconfig: "/secret/npmrc",
+  });
+  assert.equal(clean.PATH, "/bin");
+  assert.equal(clean.NPM_CONFIG_REGISTRY, "https://registry.npmjs.org/");
+  assert.equal(clean.npm_config_registry, "https://registry.npmjs.org/");
+  for (const key of [
+    "NPM_TOKEN",
+    "NODE_AUTH_TOKEN",
+    "NPM_CONFIG_USERCONFIG",
+    "npm_config_userconfig",
+  ]) {
+    assert.equal(clean[key], undefined);
+  }
+});
+
+void test("candidate identity ignores gzip encoding while retaining payload differences", async () => {
+  const payload = Buffer.from("the exact npm archive payload");
+  const fast = await npmArchivePayloadSha256(
+    Readable.from(gzipSync(payload, { level: 1, mtime: 0 }))
+  );
+  const compact = await npmArchivePayloadSha256(
+    Readable.from(gzipSync(payload, { level: 9, mtime: 0 }))
+  );
+  const different = await npmArchivePayloadSha256(
+    Readable.from(gzipSync(Buffer.from("different archive payload"), { level: 9, mtime: 0 }))
+  );
+  assert.equal(fast, compact);
+  assert.notEqual(fast, different);
+});
+
+void test("reused candidates require an explicit immutable release identity", () => {
+  assert.deepEqual(
+    parseArgs([
+      "--candidate-receipt",
+      "/release/candidate-receipt.json",
+      "--candidate-source-sha",
+      "a".repeat(40),
+      "--candidate-version",
+      "1.2.3",
+    ]),
+    {
+      dryRunOnly: false,
+      candidateOutput: null,
+      candidateReceipt: "/release/candidate-receipt.json",
+      candidateSourceSha: "a".repeat(40),
+      candidateVersion: "1.2.3",
+      help: false,
+      skipBuild: false,
+      skipStage: false,
+      tag: "latest",
+    }
+  );
+  assert.throws(
+    () => parseArgs(["--candidate-version", "not-a-version"]),
+    /valid semantic version/u
+  );
+});
 
 void test("real publication retains errors without buffering the package file manifest", () => {
   assert.deepEqual(publishArgs({ packagePath: "/candidate.tgz", dryRun: false, tag: "latest" }), [

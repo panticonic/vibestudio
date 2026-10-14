@@ -50,6 +50,7 @@ test("release dispatch accepts only a completed protected-main candidate and its
   const enabled = { linux: true, mac: true, windows: true };
   const names = [
     `vibestudio-release-gate-${sourceSha}`,
+    `vibestudio-server-npm-${sourceSha}-${run.run_attempt}`,
     `vibestudio-linux-release-${sourceSha}`,
     `vibestudio-macos-${sourceSha}`,
     `darwin-process-observers-release-${sourceSha}`,
@@ -105,7 +106,7 @@ test("release dispatch accepts only a completed protected-main candidate and its
     () =>
       validateReleaseCiRun({
         ...args,
-        artifacts: { total_count: 5, artifacts: artifacts.artifacts.slice(1) },
+        artifacts: { total_count: names.length, artifacts: artifacts.artifacts.slice(1) },
       }),
     /truncated/u
   );
@@ -114,8 +115,8 @@ test("release dispatch accepts only a completed protected-main candidate and its
       validateReleaseCiRun({
         ...args,
         artifacts: {
-          total_count: 4,
-          artifacts: artifacts.artifacts.filter((item) => item.name !== names[1]),
+          total_count: names.length - 1,
+          artifacts: artifacts.artifacts.filter((item) => !item.name.includes("linux-release")),
         },
       }),
     /linux-release/u
@@ -124,7 +125,21 @@ test("release dispatch accepts only a completed protected-main candidate and its
     () =>
       validateReleaseCiRun({
         ...args,
-        artifacts: { total_count: 6, artifacts: [...artifacts.artifacts, artifacts.artifacts[0]] },
+        artifacts: {
+          total_count: names.length - 1,
+          artifacts: artifacts.artifacts.filter((item) => !item.name.includes("server-npm")),
+        },
+      }),
+    /server-npm/u
+  );
+  assert.throws(
+    () =>
+      validateReleaseCiRun({
+        ...args,
+        artifacts: {
+          total_count: names.length + 1,
+          artifacts: [...artifacts.artifacts, artifacts.artifacts[0]],
+        },
       }),
     /gate/u
   );

@@ -63,17 +63,23 @@ Nothing is merged into main or pushed. The integration branch is
 
 | Repo           | Worktree                                          | Tip                                  | Ahead of main |
 | -------------- | ------------------------------------------------- | ------------------------------------ | ------------- |
-| host           | `/home/werg/vibestudio-worktrees/apps/vibestudio` | local-main integration (this commit) | 75            |
-| base           | `…/apps/templates/base`                           | `9959532`                            | 51            |
+| host           | `/home/werg/vibestudio-worktrees/apps/vibestudio` | local-main integration (this commit) | 76            |
+| base           | `…/apps/templates/base`                           | `942c70f`                            | 52            |
 | system         | `…/apps/templates/system`                         | `94d36c5`                            | 38            |
 | system-testing | `…/apps/templates/system-testing`                 | `7df786e`                            | 18            |
 | personal       | `…/apps/templates/personal`                       | `40693ce`                            | 4             |
 
-On 2026-10-14, merged local host main `8ff2c20cc`, Base main `a64dca1`,
+On 2026-10-14, merged local host main `3c68a098a`, Base main `a64dca1`,
 System main `ca3ab80`, and Personal main `87cd767` into these branches.
 System-testing main `8dd93f3` was already included. This is integration **from**
 main, not publication or integration **into** main. Earlier verification receipts
 below describe the pre-merge implementation, unless explicitly labelled otherwise.
+
+Post-merge verification: the host build, focused RPC/pairing/terminal-host and
+build-preparation tests pass. Base replay/recovery, shared chat host and terminal
+runtime tests pass, as does the Base semantic-projection composition typecheck.
+Both chat connection contracts forward the real RPC recovery-generation event;
+recovery does not require a visible disconnect/reconnect status transition.
 
 The catalog worktrees have no terminal-specific changes. Examples (`c351a87`),
 Google Workspace (`ca8c0b4`), and News (`4f8885e`) were fast-forwarded to local

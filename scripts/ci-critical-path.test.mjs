@@ -53,6 +53,7 @@ test("release workflow shell steps never interpolate workflow inputs into script
     "linux-installer.yml",
     "windows-installer.yml",
     "macos-release-candidate.yml",
+    "npm-server-publish.yml",
   ];
   for (const fileName of files) {
     const workflow = await readWorkflow(fileName);
@@ -67,6 +68,35 @@ test("release workflow shell steps never interpolate workflow inputs into script
       }
     }
   }
+});
+
+test("npm publication resumes from the exact protected-main CI artifact", async () => {
+  const workflow = await readWorkflow("npm-server-publish.yml");
+  assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs).sort(), [
+    "candidate-run-id",
+    "release-tag",
+    "source-sha",
+  ]);
+  assert.deepEqual(workflow.permissions, {});
+  assert.equal(workflow.concurrency["cancel-in-progress"], false);
+  assert.deepEqual(dependenciesOf(workflow.jobs.publish), ["validate"]);
+  assert.deepEqual(workflow.jobs.validate.permissions, { actions: "read", contents: "read" });
+  assert.deepEqual(workflow.jobs.publish.permissions, { actions: "read", contents: "read" });
+  const validation = workflow.jobs.validate.steps.find(
+    (step) => step.name === "Validate protected-main candidate and exact artifact"
+  );
+  assert.match(validation.run, /verify-release-ci-run\.mjs/u);
+  const download = workflow.jobs.publish.steps.find(
+    (step) => step.name === "Download exact CI candidate artifact"
+  );
+  assert.match(download.run, /download-release-artifact\.mjs/u);
+  const publish = workflow.jobs.publish.steps.find(
+    (step) => step.name === "Publish exact candidate and verify the public registry install"
+  );
+  assert.equal(publish.env.NODE_AUTH_TOKEN, "${{ secrets.NPM_TOKEN }}");
+  assert.match(publish.run, /--candidate-receipt/u);
+  assert.match(publish.run, /--candidate-source-sha/u);
+  assert.match(publish.run, /--candidate-version/u);
 });
 
 test("Windows reusable workflows declare the shell for multi-line or environment-dependent scripts", async () => {
