@@ -1506,9 +1506,11 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
               const initialPrompt = "I just opened this workspace for the first time, help me get onboarded.";
               const args = window.__vibestudioStateArgs ?? {};
               const setup = document.querySelector('.agent-setup-card');
+              const text = document.body.innerText;
+              const setupOverview = document.querySelector('[aria-label="Refresh setup overview"]');
               return {
                 source: window.__vibestudioSourceRepo,
-                text: document.body.innerText,
+                text,
                 configuredPrompt: args.seed?.openingRequest === initialPrompt,
                 configuredSystemPrompt: typeof args.systemPrompt === "string" &&
                   args.systemPrompt.includes("Vibestudio onboarding assistant"),
@@ -1519,7 +1521,12 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
                 modelChoiceReady: Boolean(
                   setup?.querySelector('[role="combobox"][aria-label="Provider"]:not([disabled])') &&
                   setup?.querySelector('[role="combobox"][aria-label="Model"]:not([disabled])')
-                )
+                ),
+                setupOverviewReady: Boolean(setupOverview) &&
+                  text.includes("Your Vibestudio") &&
+                  !text.includes("Setup status is unavailable.") &&
+                  !text.includes("Live setup updates paused:") &&
+                  !text.includes("Couldn't refresh setup status:")
               };
             })()`);
             },
@@ -1544,6 +1551,7 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
           openingRequestReady: rendered.openingRequestReady,
           introductoryVideoReady: rendered.introductoryVideoReady,
           modelChoiceReady: rendered.modelChoiceReady,
+          setupOverviewReady: rendered.setupOverviewReady,
         };
         if (JSON.stringify(observed) !== JSON.stringify(latestObservation)) {
           latestObservation = observed;
@@ -1559,12 +1567,15 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
             throw new Error(`Initial chat delivery failed: ${rendered.deliveryError}`);
           if (!rendered.configuredPrompt || !rendered.configuredSystemPrompt)
             throw new Error("Personal initial chat lost its configured onboarding prompt options");
-          // A fresh account has no selected model. Its explicit model choice
-          // must be visible without requiring an AI turn to complete first.
+          // A profile without a launchable model must expose the explicit model
+          // choice. A configured profile runs the opening turn and replaces that
+          // preflight with the authoritative onboarding overview. Requiring both
+          // surfaces would wait forever because they are successive lifecycle
+          // states; either terminal branch must be healthy and actionable.
           if (
             !rendered.openingRequestReady ||
             !rendered.introductoryVideoReady ||
-            !rendered.modelChoiceReady
+            (!rendered.modelChoiceReady && !rendered.setupOverviewReady)
           ) {
             await sleep(500);
             continue;
@@ -1619,6 +1630,7 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
                 openingRequestReady: rendered.openingRequestReady,
                 introductoryVideoReady: rendered.introductoryVideoReady,
                 modelChoiceReady: rendered.modelChoiceReady,
+                setupOverviewReady: rendered.setupOverviewReady,
               }),
           screenshotPath,
         };
