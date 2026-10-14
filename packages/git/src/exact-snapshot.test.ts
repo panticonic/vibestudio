@@ -434,8 +434,6 @@ describe("discoverTrackedGitSnapshot", () => {
       clone: vi.fn(async () => undefined),
       listTags: vi.fn(async () => ["v1", "v10", "v2", "preview"]),
       checkout: vi.fn(async () => undefined),
-      getCurrentCommit: vi.fn(async () => COMMIT),
-      statusMatrix: vi.fn(async () => [["index.ts", 1, 1, 1]]),
       ...fakeGitFixture([blob("index.ts", "tracked")]),
     } as unknown as GitClient;
 
@@ -460,8 +458,6 @@ describe("discoverTrackedGitSnapshot", () => {
       clone: vi.fn(async () => undefined),
       listTags: vi.fn(async () => ["v1.0.0-rc1", "v1.0.0-rc2", "v1.0.0", "v0.9.0"]),
       checkout: vi.fn(async () => undefined),
-      getCurrentCommit: vi.fn(async () => COMMIT),
-      statusMatrix: vi.fn(async () => [["index.ts", 1, 1, 1]]),
       ...fakeGitFixture([blob("index.ts", "tracked")]),
     } as unknown as GitClient;
 
@@ -485,8 +481,6 @@ describe("discoverTrackedGitSnapshot", () => {
       clone: vi.fn(async () => undefined),
       listTags: vi.fn(async () => ["v2.0.0-rc2", "v2.0.0-rc10", "v2.0.0-rc1"]),
       checkout: vi.fn(async () => undefined),
-      getCurrentCommit: vi.fn(async () => COMMIT),
-      statusMatrix: vi.fn(async () => [["index.ts", 1, 1, 1]]),
       ...fakeGitFixture([blob("index.ts", "tracked")]),
     } as unknown as GitClient;
 
@@ -506,8 +500,6 @@ describe("discoverTrackedGitSnapshot", () => {
     const git = {
       clone: vi.fn(async () => undefined),
       resolveCommit: vi.fn(async () => COMMIT),
-      getCurrentCommit: vi.fn(async () => COMMIT),
-      statusMatrix: vi.fn(async () => [["index.ts", 1, 1, 1]]),
       ...fakeGitFixture([blob("index.ts", "tracked")]),
       listTags: vi.fn(),
       resolveUrl: vi.fn(),
