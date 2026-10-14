@@ -675,6 +675,18 @@ test("native artifact consumers wait for their exact producers without unrelated
     npmIndex("Pin every official template to the tested input") <
       npmIndex("Build, stage, verify, and retain the npm candidate")
   );
+  const npmHelperTests = npmPreflightSteps.find(
+    (step) => step.name === "Test npm package and publication helpers"
+  );
+  assert.match(
+    npmHelperTests?.run ?? "",
+    /scripts\/lib\/npm-package-candidate\.test\.mjs/u,
+    "the npm candidate job must test its archive boundary before staging the release"
+  );
+  assert.ok(
+    npmPreflightSteps.indexOf(npmHelperTests) <
+      npmIndex("Build, stage, verify, and retain the npm candidate")
+  );
   const candidateStepIndex = npmPreflightSteps.findIndex(
     (step) => step.name === "Build, stage, verify, and retain the npm candidate"
   );

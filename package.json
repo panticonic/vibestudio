@@ -214,6 +214,7 @@
     "oxlint-tsgolint": "7.0.2001",
     "plist": "3.1.0",
     "prettier": "^3.6.2",
+    "tar": "7.5.22",
     "vitest": "^3.2.7"
   },
   "dependencies": {

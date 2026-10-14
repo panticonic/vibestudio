@@ -452,6 +452,9 @@ importers:
       prettier:
         specifier: ^3.6.2
         version: 3.8.1
+      tar:
+        specifier: 7.5.22
+        version: 7.5.22
       vitest:
         specifier: ^3.2.7
         version: 3.2.7(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.7)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
