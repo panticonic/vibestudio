@@ -475,6 +475,79 @@ describe("WorkerdManager", () => {
       }
     });
 
+    it.each([false, true])(
+      "cancels active probe HTTP and joins facet retirement before shutdown (retirement failure: %s)",
+      async (failRetirement) => {
+        const manager = new WorkerdManager(createMockDeps());
+        const internals = manager as unknown as { stopWorkerd(): Promise<void> };
+        const stop = vi.spyOn(internals, "stopWorkerd");
+        const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+        let entered!: () => void;
+        const probeEntered = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        let retiring!: () => void;
+        const retirementEntered = new Promise<void>((resolve) => {
+          retiring = resolve;
+        });
+        let release!: () => void;
+        const retirement = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        vi.mocked(fetch).mockImplementation(async (input, init) => {
+          const url = String(input);
+          if (url.endsWith("/__vibestudio_schema_descriptor")) {
+            const signal = init!.signal!;
+            entered();
+            return new Promise<Response>((_resolve, reject) => {
+              if (signal.aborted) reject(signal.reason);
+              else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            });
+          }
+          if (url.endsWith("/__vibestudio_retire")) {
+            retiring();
+            await retirement;
+            return new Response(failRetirement ? "independent retirement failure" : null, {
+              status: failRetirement ? 500 : 204,
+            });
+          }
+          return ordinaryFetch(input, init);
+        });
+        const admission = manager.ensureDurableObjectEntity({
+          source: "workers/board",
+          className: "BoardDO",
+          key: "a",
+          contextId: "a",
+        });
+        const observedAdmission = admission.catch((error: unknown) => error);
+        await probeEntered;
+        const shutdown = manager.shutdown();
+        const observedShutdown = shutdown.catch((error: unknown) => error);
+        await retirementEntered;
+        expect(stop).not.toHaveBeenCalled();
+        release();
+        const cancellation = await observedAdmission;
+        const outcome = await observedShutdown;
+        expect(stop).toHaveBeenCalledOnce();
+        if (failRetirement) {
+          expect(cancellation).toBeInstanceOf(AggregateError);
+          expect(outcome).toBeInstanceOf(AggregateError);
+          const messages = (error: unknown): string[] =>
+            error instanceof AggregateError
+              ? error.errors.flatMap(messages)
+              : error instanceof Error
+                ? [error.message]
+                : [String(error)];
+          expect(
+            messages(outcome).some((message) => message.includes("independent retirement failure"))
+          ).toBe(true);
+        } else {
+          expect(cancellation).toMatchObject({ code: "ECANCELLED" });
+          expect(outcome).toBeUndefined();
+        }
+      }
+    );
+
     it("joins admitted schema work before stopping native workerd and retains independent failures", async () => {
       const manager = new WorkerdManager(createMockDeps());
       const internals = manager as unknown as {
