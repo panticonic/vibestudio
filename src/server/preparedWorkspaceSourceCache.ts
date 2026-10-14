@@ -81,7 +81,6 @@ async function inspectSources(
     ) {
       throw new Error(`Prepared ${role} source record does not match its pure source phase`);
     }
-    await inspectPreparedTemplateFiles(directory, record);
     inspected.push({ role, directory, record, recordDigest });
   }
   return inspected;
@@ -114,8 +113,10 @@ async function publishSources(
   identity: PreparedWorkspaceSourceIdentity
 ): Promise<void> {
   const inspected = await inspectSources(root, identity);
-  for (const { directory, record } of inspected)
+  for (const { directory, record } of inspected) {
+    await inspectPreparedTemplateFiles(directory, record);
     await provePreparedTemplateFiles(directory, record);
+  }
   const marker = markerSchema.parse({
     format: "vibestudio-workspace-sources/1",
     identity,
@@ -186,8 +187,9 @@ export async function acquirePreparedWorkspaceSources(
           );
         }
       );
-      // Publication proves bytes once. Joining consumers inspect descriptors,
-      // lengths and presence, never read/hash each source payload again.
+      // Publication proves the complete closure once. Consumers admit the
+      // sealed descriptors under their retained lease; projection/read owns
+      // any missing-file error, without rescanning every immutable blob.
       if (!outcome.produced) {
         if (!(await admitSources(cached, identity)))
           throw new Error("Source producer returned without a completed publication");

@@ -160,6 +160,12 @@ The shared derived cache has two distinct immutable publication phases:
   protected publication/history, provider credentials or credential stores,
   runtime grants, or compiler state.
 
+Source publication proves the exact blob closure and payload integrity before
+its atomic completion marker. Cache admission checks the sealed records and
+identity under a retained lease, not each immutable blob's metadata again.
+Projection and actual reads propagate missing-file errors at their owning
+boundary; admission never silently rebuilds a damaged publication.
+
 Dependency metadata resolution and the operation's one current host SDK capture
 run independently and join before either cache lookup. The metadata resolver
 admits manifest epochs, repository ownership, overrides, and exact transitive

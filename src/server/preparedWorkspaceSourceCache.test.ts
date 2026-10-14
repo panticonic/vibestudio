@@ -94,11 +94,13 @@ describe("immutable workspace source phase", () => {
     expect(first.root).toBe(second.root);
     expect(producer).toHaveBeenCalledTimes(1);
   });
-  it("reads only sealed descriptors and file metadata on a trusted cache hit", async () => {
+  it("admits sealed descriptors without revisiting immutable blob metadata on a cache hit", async () => {
     await fixture();
     const first = await acquire();
     await first.close();
     const read = vi.spyOn(fs, "readFile");
+    const stat = vi.spyOn(fs, "lstat");
+    const directory = vi.spyOn(fs, "readdir");
     const stream = vi.spyOn(fsNative, "createReadStream").mockImplementation(() => {
       throw new Error("Consumer must not stream payload bytes");
     });
@@ -111,6 +113,12 @@ describe("immutable workspace source phase", () => {
       read.mock.calls.every(([file]) => !String(file).includes(`${path.sep}blobs${path.sep}`))
     ).toBe(true);
     expect(stream).not.toHaveBeenCalled();
+    expect(stat.mock.calls.every(([file]) => !String(file).includes(`${path.sep}blobs`))).toBe(
+      true
+    );
+    expect(directory.mock.calls.every(([file]) => !String(file).includes(`${path.sep}blobs`))).toBe(
+      true
+    );
   });
   it("proves bytes before publication and retires failed staging without hiding the failure", async () => {
     const root = await fixture();
@@ -131,6 +139,31 @@ describe("immutable workspace source phase", () => {
         (entry) => !entry.startsWith(".")
       )
     ).toEqual([]);
+  });
+  it("rejects undeclared files before sealing the source closure", async () => {
+    await fixture();
+    await expect(
+      acquire(async (output) => {
+        await produce(output);
+        await fs.writeFile(
+          path.join(preparedWorkspaceTemplatePath(output, templates.base, "use"), "undeclared"),
+          "not in the publication"
+        );
+      })
+    ).rejects.toThrow(/sealed blob closure/);
+  });
+  it("propagates a changed sealed descriptor instead of reproducing over it", async () => {
+    await fixture();
+    const first = await acquire();
+    await first.close();
+    const record = path.join(
+      preparedWorkspaceTemplatePath(first.root, templates.base, "use"),
+      "template.json"
+    );
+    await fs.appendFile(record, "\n");
+    const producer = vi.fn(produce);
+    await expect(acquire(producer)).rejects.toThrow(/differs from its publication/);
+    expect(producer).not.toHaveBeenCalled();
   });
   it("keys the admitted dependency closure, not just the three root pins", async () => {
     await fixture();
