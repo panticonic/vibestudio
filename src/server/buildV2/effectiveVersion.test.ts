@@ -684,7 +684,10 @@ describe("effectiveVersion", () => {
       rootFingerprint = await prepareBuildRootConfig({ appRoot, workspaceRoot });
       const before = computeBuildKey(rootFingerprint, "unit-a", "ev1", true);
       const beforeInfo = rootFingerprint;
-      expect(beforeInfo.files.map((f) => f.file)).toContain("workspace/package.json");
+      expect(beforeInfo.files.map((f) => f.file)).toContain("workspace:package.json");
+      expect(beforeInfo.files.find((f) => f.file === "workspace:package.json")?.path).toBe(
+        path.join(workspaceRoot, "package.json")
+      );
 
       fs.writeFileSync(
         path.join(workspaceRoot, "package.json"),
