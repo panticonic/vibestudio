@@ -2,6 +2,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { performance } from "node:perf_hooks";
 import type { PanelViewLike } from "@vibestudio/shared/panelInterfaces";
 import {
   APP_CAPABILITIES_BY_NATIVE_HOST,
@@ -171,14 +172,30 @@ export class AppOrchestrator {
     if (!createViewForApp) throw new Error("App view runtime is unavailable");
     log.verbose(`Loading app view ${event.appId}: ${event.url}`);
     const identity = sealedAppCodeIdentity(event);
-    await createViewForApp.call(
-      panelView,
-      event.appId,
-      event.url,
-      event.contextId ?? undefined,
-      event.capabilities,
-      identity
-    );
+    const startedAt = performance.now();
+    let mounted = false;
+    try {
+      await createViewForApp.call(
+        panelView,
+        event.appId,
+        event.url,
+        event.contextId ?? undefined,
+        event.capabilities,
+        identity
+      );
+      mounted = true;
+    } finally {
+      if (event.capabilities?.includes("panel-hosting")) {
+        // Navigation completion is not workspace/layout readiness. Keep this
+        // owning phase distinct, and retain only its latest incarnation.
+        performance.clearMeasures("desktop:hosted-app-navigation");
+        performance.measure("desktop:hosted-app-navigation", {
+          start: startedAt,
+          end: performance.now(),
+          detail: { appId: event.appId, outcome: mounted ? "mounted" : "failed" },
+        });
+      }
+    }
     panelView.setViewVisible?.(event.appId, true);
     this.adopted.set(event.appId, event);
   }

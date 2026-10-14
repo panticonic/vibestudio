@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { performance } from "node:perf_hooks";
 import type { PanelViewLike } from "@vibestudio/shared/panelInterfaces";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import { canonicalJson } from "@vibestudio/content-addressing";
@@ -85,6 +86,34 @@ function createPanelView(): PanelViewLike {
 }
 
 describe("AppOrchestrator", () => {
+  it("records a bounded navigation phase without conflating it with shell readiness", async () => {
+    const panelView = createPanelView();
+    const orchestrator = new AppOrchestrator({ getPanelView: () => panelView });
+    const event = {
+      appId: "@workspace-apps/shell",
+      source: "apps/shell",
+      target: "electron" as const,
+      url: "http://localhost/app",
+      capabilities: APP_CAPABILITIES_BY_NATIVE_HOST.electron,
+      effectiveVersion: "ev-shell",
+      ...sealedAuthority(),
+    };
+    performance.clearMeasures("desktop:hosted-app-navigation");
+    await orchestrator.applyAppAvailable(event);
+    expect(performance.getEntriesByName("desktop:hosted-app-navigation")).toHaveLength(1);
+    expect(performance.getEntriesByName("desktop:hosted-app-navigation")[0]).toMatchObject({
+      detail: { appId: event.appId, outcome: "mounted" },
+    });
+    const failure = new Error("navigation failed");
+    vi.mocked(panelView.createViewForApp!).mockRejectedValueOnce(failure);
+    await expect(orchestrator.applyAppAvailable(event)).rejects.toBe(failure);
+    expect(performance.getEntriesByName("desktop:hosted-app-navigation")).toHaveLength(1);
+    expect(performance.getEntriesByName("desktop:hosted-app-navigation")[0]).toMatchObject({
+      detail: { appId: event.appId, outcome: "failed" },
+    });
+    performance.clearMeasures("desktop:hosted-app-navigation");
+  });
+
   it("rejects Electron apps that declare capabilities unsupported by this host", async () => {
     const panelView = createPanelView();
     const orchestrator = new AppOrchestrator({ getPanelView: () => panelView });
