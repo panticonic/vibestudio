@@ -6695,6 +6695,11 @@ async function main() {
   const { wireWorkerdCore } = await import("./bootstrap/workerd.js");
   const { resolveLiveExecutionCaller } = await import("./services/liveExecutionCaller.js");
   wireWorkerdCore({
+    schemaProbeEnvironment: {
+      hostBuild: preparedInput.hostBuild,
+      compilerProtocol: preparedInput.compilerProtocol,
+      appDependencyFingerprint: preparedInput.fingerprint.value,
+    },
     container,
     tokenManager,
     workspacePath,

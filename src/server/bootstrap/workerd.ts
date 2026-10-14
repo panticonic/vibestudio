@@ -14,6 +14,7 @@ import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
 import type { RouteRegistry } from "../routeRegistry.js";
 import { attestDirectRpc, attestWorkspaceDoRpc } from "../services/authorityRuntime.js";
 import type { WorkerdManager, WorkerdWorkspaceProvider } from "../workerdManager.js";
+import type { WorkspaceReleaseIdentity } from "../preparedWorkspaceRelease.js";
 import type { DORef } from "../workerdRpcRelay.js";
 import type { LifecycleCloneInput } from "@vibestudio/shared/doDispatcher";
 import type { RpcServer } from "../rpcServer.js";
@@ -28,6 +29,7 @@ export interface WorkerdGatewayBootstrapConfig {
 }
 
 export interface WorkerdBootstrapDeps {
+  readonly schemaProbeEnvironment: WorkspaceReleaseIdentity;
   container: Pick<ServiceContainer, "registerManaged">;
   tokenManager: TokenManager;
   workspacePath: string;
@@ -271,6 +273,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       const fsService = assertPresent(resolve<FsService>("fsService"));
       const egressSecret = randomBytes(32).toString("hex");
       const manager: WorkerdManager = new WorkerdManager({
+        schemaProbeEnvironment: deps.schemaProbeEnvironment,
         tokenManager: deps.tokenManager,
         fsService,
         getServerUrl: () => {

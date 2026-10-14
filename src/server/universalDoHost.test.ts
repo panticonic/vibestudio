@@ -20,6 +20,11 @@ import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import {
+  schemaProbeEnvironmentForFixture,
+  useSchemaProbeFixtureCache,
+} from "../../tests/fixtures/schemaProbeEnvironment.js";
+useSchemaProbeFixtureCache();
+import {
   WorkerdManager,
   type WorkerdManagerDeps,
   type WorkerdWorkspaceProvider,
@@ -254,6 +259,7 @@ async function createHarness(
   const portHolder = { value: 0 };
 
   const deps: WorkerdManagerDeps = {
+    schemaProbeEnvironment: schemaProbeEnvironmentForFixture(compiledWorkerdPrograms),
     tokenManager,
     fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,

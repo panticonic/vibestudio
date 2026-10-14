@@ -10,6 +10,8 @@
  */
 
 import type { WorkerExecutableAdmission } from "./workerExecutableDispatch.js";
+import type { WorkspaceReleaseIdentity } from "./preparedWorkspaceRelease.js";
+import { acquireSchemaProbeEvidence } from "./services/schemaProbeEvidence.js";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { spawn, type ChildProcess } from "child_process";
 import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
@@ -462,6 +464,8 @@ export interface WorkerInstance {
 }
 
 export interface WorkerdManagerDeps {
+  /** Existing admitted host/SDK installation capture; never rescan at admission. */
+  readonly schemaProbeEnvironment: WorkspaceReleaseIdentity;
   tokenManager: TokenManager;
   fsService: FsService;
   /**
@@ -763,6 +767,7 @@ export class WorkerdManager {
   private readonly doSchemaDescriptorDb: DatabaseSync;
   private readonly sqliteIntegrityWorker: SqliteIntegrityWorkerClient;
   private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
+  private readonly schemaAdmissionLifetime = new AbortController();
   private readonly schemaAdmissions = new Map<string, Promise<void>>();
   private readonly doMaintenanceChains = new Map<string, Promise<unknown>>();
   private readonly doMaintenanceRecovery: Promise<void>;
@@ -4151,7 +4156,22 @@ export class WorkerdManager {
           `Durable Object ${image.source}:${className} schema executable failed sealed identity verification`
         );
       }
-      const descriptor = await this.probeDurableObjectSchema(image.source, className, build);
+      const descriptor = await acquireSchemaProbeEvidence(
+        {
+          identity: {
+            installation: this.deps.schemaProbeEnvironment,
+            artifactDigest: image.artifact.artifactDigest,
+            source: image.source,
+            className,
+            protocol: SCHEMA_PROBE_CACHE_VERSION,
+            platform: process.platform,
+            arch: process.arch,
+            compatibility: USER_CODE_COMPATIBILITY,
+          },
+          signal: this.schemaAdmissionLifetime.signal,
+        },
+        () => this.probeDurableObjectSchema(image.source, className, build)
+      );
       this.recordDurableObjectSchema({
         source: image.source,
         effectiveVersion: image.artifact.sourceState.effectiveVersion,
@@ -4330,6 +4350,7 @@ export class WorkerdManager {
               this.getDoAdmission(target.source, target.className, target.objectKey)
             ),
           },
+          signal: this.schemaAdmissionLifetime.signal,
           dispatcher: getWorkerdConnectionDispatcher(
             `http://127.0.0.1:${assertPresent(this.port)}`
           ),
@@ -5137,6 +5158,9 @@ export class WorkerdManager {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    this.schemaAdmissionLifetime.abort(
+      new Error("WorkerdManager schema admission is shutting down")
+    );
     const failures: unknown[] = [];
     const attempt = async (operation: () => Promise<unknown>): Promise<void> => {
       try {
@@ -5167,12 +5191,12 @@ export class WorkerdManager {
         reason: "shutdown",
       });
     }
-    await attempt(() => this.stopWorkerd("shutdown", "force"));
-    await attempt(() => this.storageClones.join());
     const schemaResults = await Promise.allSettled([...this.schemaAdmissions.values()]);
     for (const result of schemaResults) {
       if (result.status === "rejected") failures.push(result.reason);
     }
+    await attempt(() => this.stopWorkerd("shutdown", "force"));
+    await attempt(() => this.storageClones.join());
     // stopWorkerd collected retirement journals after reaping the process.
     // Clean up the remaining schema probe bookkeeping without recovering
     // failed retirement through a second maintenance owner.

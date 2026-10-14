@@ -16,6 +16,11 @@ import { DODispatch } from "./doDispatch.js";
 import { INTERNAL_DO_SOURCE, type InternalDOBundle } from "./internalDOs/internalDoLoader.js";
 import { postToDurableObject, type DORef } from "./workerdRpcRelay.js";
 import {
+  schemaProbeEnvironmentForFixture,
+  useSchemaProbeFixtureCache,
+} from "../../tests/fixtures/schemaProbeEnvironment.js";
+useSchemaProbeFixtureCache();
+import {
   WorkerdManager,
   type WorkerdManagerDeps,
   type WorkerdWorkspaceProvider,
@@ -140,6 +145,7 @@ async function createWorkerdHarness(
   const statePath = mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-"));
   activeFixtureRoots.push(workspacePath, statePath);
   const manager = new WorkerdManager({
+    schemaProbeEnvironment: schemaProbeEnvironmentForFixture(compiledWorkerdPrograms),
     tokenManager,
     fsService: {
       closeHandlesForCaller: () => {},

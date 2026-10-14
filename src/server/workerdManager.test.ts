@@ -19,6 +19,8 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { stateLayout } from "./stateLayout.js";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { schemaProbeEnvironmentForFixture } from "../../tests/fixtures/schemaProbeEnvironment.js";
+import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
@@ -96,14 +98,18 @@ vi.mock("./hostCore/portUtils.js", () => ({
   releaseServicePort: vi.fn(),
 }));
 
-function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
+function runtimeArtifact(
+  source: string,
+  ref = "main",
+  workspaceId = "workspace:test"
+): ExecutionArtifactRefV1 {
   const stateHash = `state:${sha256(`state:${source}:${ref}`)}`;
   const contentRoots = [{ repoPath: source, stateHash }];
   const unsigned = {
     version: 1 as const,
     sourceState: {
       kind: "workspace" as const,
-      workspaceId: "workspace:test",
+      workspaceId,
       effectiveVersion: sha256(`ev:${source}:${ref}`),
       state: { kind: "event" as const, eventId: `event:${source}:${ref}` },
       contentRoots,
@@ -193,6 +199,7 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
   const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-manager-test-"));
   testStatePaths.add(statePath);
   return {
+    schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-mocked-workerd-programs"),
     tokenManager: {
       ensureToken: vi.fn().mockReturnValue("mock-token-123"),
       revokeToken: vi.fn(),
@@ -202,7 +209,11 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
     } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => "http://127.0.0.1:9999",
     bindRuntimeImage: vi.fn(async (unitPath: string, ref?: string) => {
-      const artifact = runtimeArtifact(unitPath, ref ?? "main");
+      const artifact = runtimeArtifact(
+        unitPath,
+        ref ?? "main",
+        overrides.workspaceId ?? "workspace:test"
+      );
       boundBuilds.set(artifact.buildKey, mockWorkerBuildFor(unitPath, artifact));
       return {
         source: unitPath,
@@ -277,6 +288,9 @@ function statusOf(mgr: WorkerdManager, name: string) {
 }
 
 beforeEach(() => {
+  const derived = fs.mkdtempSync(path.join(os.tmpdir(), "workerd-schema-derived-"));
+  testStatePaths.add(derived);
+  vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", derived);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request) => {
@@ -299,7 +313,9 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeDerivedCacheCoordinators();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.mocked(findServicePort).mockImplementation(
     async (service: Parameters<typeof findServicePort>[0]) =>
@@ -408,6 +424,84 @@ describe("WorkerdManager", () => {
       );
       expect(code?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(descriptor(1, "fresh-shape"));
       await reopened.shutdown();
+    });
+
+    it("replays immutable probe evidence into the current workspace execution only", async () => {
+      const source = "workers/board";
+      const first = new WorkerdManager(createMockDeps({ workspaceId: "workspace:first" }));
+      const second = new WorkerdManager(createMockDeps({ workspaceId: "workspace:second" }));
+      const firstProbe = vi
+        .spyOn(first, "probeDurableObjectSchema")
+        .mockResolvedValue(descriptor(1, "shared-shape"));
+      const secondProbe = vi
+        .spyOn(second, "probeDurableObjectSchema")
+        .mockResolvedValue(descriptor(1, "shared-shape"));
+      try {
+        const a = await first.ensureDurableObjectEntity({
+          source,
+          className: "BoardDO",
+          key: "a",
+          ref: "main",
+          contextId: "a",
+        });
+        const b = await second.ensureDurableObjectEntity({
+          source,
+          className: "BoardDO",
+          key: "b",
+          ref: "main",
+          contextId: "b",
+        });
+        expect(a.executionDigest).not.toBe(b.executionDigest);
+        expect(a.buildKey).toBe(b.buildKey);
+        expect(firstProbe).toHaveBeenCalledOnce();
+        expect(secondProbe).not.toHaveBeenCalled();
+        expect(second.getDurableWorkQueues(source, "BoardDO", b.executionDigest)).toEqual([]);
+        expect(() => second.getDurableWorkQueues(source, "BoardDO", a.executionDigest)).toThrow(
+          /no admitted/
+        );
+        expect(() =>
+          second.validateAndStageDurableObjectSchemas("drift", [
+            {
+              source,
+              effectiveVersion: b.effectiveVersion,
+              executionDigest: b.executionDigest,
+              descriptor: descriptor(1, "changed-shape"),
+            },
+          ])
+        ).toThrow(/same immutable execution artifact/);
+      } finally {
+        const results = await Promise.allSettled([first.shutdown(), second.shutdown()]);
+        expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+      }
+    });
+
+    it("joins admitted schema work before stopping native workerd and retains independent failures", async () => {
+      const manager = new WorkerdManager(createMockDeps());
+      const internals = manager as unknown as {
+        schemaAdmissions: Map<string, Promise<void>>;
+        stopWorkerd(): Promise<void>;
+      };
+      const probeFailure = new Error("owned probe retirement failed");
+      const nativeFailure = new Error("native stop failed");
+      let release!: () => void;
+      const admission = new Promise<void>((resolve) => {
+        release = resolve;
+      }).then(() => {
+        throw probeFailure;
+      });
+      internals.schemaAdmissions.set("owned-probe", admission);
+      const stop = vi.spyOn(internals, "stopWorkerd").mockRejectedValue(nativeFailure);
+      const shutdown = manager.shutdown();
+      const observed = shutdown.catch((error: unknown) => error);
+      await Promise.resolve();
+      expect(stop).not.toHaveBeenCalled();
+      release();
+      const failure = await observed;
+      expect(stop).toHaveBeenCalledOnce();
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toEqual(
+        expect.arrayContaining([probeFailure, nativeFailure])
+      );
     });
 
     it("uses exact executable queue evidence without probing each activated entity", async () => {
@@ -703,6 +797,7 @@ describe("WorkerdManager", () => {
         ...unsigned,
         recipeDigest: sha256("different recipe"),
         buildKey: sha256("different build"),
+        artifactDigest: sha256("different built schema payload"),
       };
       const second = verifyExecutionArtifactRef({
         ...changed,
