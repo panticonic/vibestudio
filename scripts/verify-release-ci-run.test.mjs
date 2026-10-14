@@ -146,6 +146,10 @@ test("release dispatch accepts only a completed protected-main candidate and its
   assert.doesNotThrow(() =>
     validateReleaseCiRun({ ...args, enabled: { linux: false, mac: false, windows: false } })
   );
+  assert.deepEqual(
+    Object.keys(validateReleaseCiRun({ ...args, includePlatformArtifacts: false })).sort(),
+    [names[0], names[1]].sort()
+  );
 });
 
 test("candidate gate receipt binds version, source, and platform configuration", () => {
@@ -191,6 +195,7 @@ test("candidate gate receipt binds version, source, and platform configuration",
     /complete/u
   );
   assert.doesNotThrow(() => validateGateReceipt(receipt, expected));
+  assert.doesNotThrow(() => validateGateReceipt(receipt, { ...expected, enabled: null }));
   assert.throws(
     () => validateGateReceipt({ ...receipt, sourceSha: "b".repeat(40) }, expected),
     /source/u

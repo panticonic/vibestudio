@@ -86,6 +86,7 @@ test("npm publication resumes from the exact protected-main CI artifact", async 
     (step) => step.name === "Validate protected-main candidate and exact artifact"
   );
   assert.match(validation.run, /verify-release-ci-run\.mjs/u);
+  assert.equal(validation.env.RELEASE_ARTIFACT_SCOPE, "npm");
   const download = workflow.jobs.publish.steps.find(
     (step) => step.name === "Download exact CI candidate artifact"
   );

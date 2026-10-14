@@ -13,6 +13,7 @@ export function validateReleaseCiRun({
   sourceSha,
   releaseTag,
   enabled,
+  includePlatformArtifacts = true,
 }) {
   const failures = [];
   if (run.workflow_id !== workflow.id) failures.push("run is not the CI workflow");
@@ -36,12 +37,14 @@ export function validateReleaseCiRun({
     `vibestudio-release-gate-${sourceSha}`,
     `vibestudio-server-npm-${sourceSha}-${run.run_attempt}`,
   ];
-  if (enabled.linux) required.push(`vibestudio-linux-release-${sourceSha}`);
-  if (enabled.mac) {
-    required.push(`vibestudio-macos-${sourceSha}`);
-    required.push(`darwin-process-observers-release-${sourceSha}`);
+  if (includePlatformArtifacts) {
+    if (enabled.linux) required.push(`vibestudio-linux-release-${sourceSha}`);
+    if (enabled.mac) {
+      required.push(`vibestudio-macos-${sourceSha}`);
+      required.push(`darwin-process-observers-release-${sourceSha}`);
+    }
+    if (enabled.windows) required.push(`vibestudio-windows-${sourceSha}`);
   }
-  if (enabled.windows) required.push(`vibestudio-windows-${sourceSha}`);
   const selected = {};
   for (const name of required) {
     const matches =
@@ -72,7 +75,10 @@ export function validateGateReceipt(
     throw new Error("Candidate gate receipt does not match the exact CI run attempt");
   }
   for (const platform of ["linux", "mac", "windows"]) {
-    if (receipt.enabled?.[platform] !== enabled[platform]) {
+    if (typeof receipt.enabled?.[platform] !== "boolean") {
+      throw new Error(`Candidate gate receipt has invalid ${platform} release configuration`);
+    }
+    if (enabled && receipt.enabled[platform] !== enabled[platform]) {
       throw new Error(`Candidate gate receipt disagrees on ${platform} release configuration`);
     }
   }
@@ -119,6 +125,11 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
       mac: process.env.RELEASE_MAC === "true",
       windows: process.env.RELEASE_WINDOWS === "true",
     };
+    const artifactScope = process.env.RELEASE_ARTIFACT_SCOPE ?? "application";
+    if (!["application", "npm"].includes(artifactScope)) {
+      throw new Error("Release artifact scope must be application or npm");
+    }
+    const includePlatformArtifacts = artifactScope === "application";
     const workflow = ghJson(`repos/${repository}/actions/workflows/ci.yml`);
     const latestRun = ghJson(`repos/${repository}/actions/runs/${runId}`);
     if (!Number.isSafeInteger(latestRun.run_attempt) || latestRun.run_attempt < 1) {
@@ -134,6 +145,7 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
       sourceSha,
       releaseTag,
       enabled,
+      includePlatformArtifacts,
     });
     const scratch = fs.mkdtempSync(
       path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), "vibestudio-release-gate-")
@@ -156,7 +168,7 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
         sourceSha,
         releaseTag,
         attempt: run.run_attempt,
-        enabled,
+        enabled: includePlatformArtifacts ? enabled : null,
         templateIds: registry.templates.map((template) => template.id),
       });
     } finally {
