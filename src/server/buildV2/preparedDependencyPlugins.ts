@@ -35,23 +35,14 @@ export function composePreparedDependencyPlugins(
     externals.some((item) =>
       item.endsWith("/*") ? specifier.startsWith(item.slice(0, -1)) : specifier === item
     );
-  const optionalFor = (directory: string, name: string): boolean => {
+  const owningPackage = (directory: string): string | undefined => {
     for (;;) {
       const identity = prepared
         ? preparedDependencyDirectoryIdentity(prepared, directory)
         : undefined;
-      const optional = identity ? prepared?.absentOptionalImports.get(identity) : undefined;
-      if (optional) return optional.has(name);
+      if (identity) return identity;
       const parent = path.dirname(directory);
-      if (parent === directory) return false;
-      directory = parent;
-    }
-  };
-  const installedPackage = (directory: string): boolean => {
-    for (;;) {
-      if (prepared && preparedDependencyDirectoryIdentity(prepared, directory)) return true;
-      const parent = path.dirname(directory);
-      if (parent === directory) return false;
+      if (parent === directory) return undefined;
       directory = parent;
     }
   };
@@ -68,12 +59,24 @@ export function composePreparedDependencyPlugins(
           const name = args.path.startsWith("@")
             ? args.path.split("/", 2).join("/")
             : args.path.split("/", 1)[0]!;
-          if (args.resolveDir && optionalFor(args.resolveDir, name))
-            return { path: args.path, external: true };
+          const owner = args.resolveDir ? owningPackage(args.resolveDir) : undefined;
+          if (owner) {
+            if (prepared?.absentOptionalImports.get(owner)?.has(name))
+              return { path: args.path, external: true };
+            const dependencyResolveDir = prepared?.dependencyResolveDirectories
+              .get(owner)
+              ?.get(name);
+            if (!dependencyResolveDir) return null;
+            return build.resolve(args.path, {
+              kind: args.kind,
+              resolveDir: dependencyResolveDir,
+              pluginData: { [SELECTED_INSTALLATION]: true },
+              with: args.with,
+            });
+          }
           if (
             !resolveDir ||
             !args.resolveDir ||
-            installedPackage(args.resolveDir) ||
             (roots.length > 0 && !roots.some((root) => beneath(root, args.resolveDir)))
           )
             return null;

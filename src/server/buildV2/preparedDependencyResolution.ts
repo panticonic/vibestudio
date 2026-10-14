@@ -8,6 +8,8 @@ export interface PreparedDependencyResolution {
   packageDirectories: ReadonlySet<string>;
   /** Every observed logical or physical package location mapped to one physical identity. */
   packageDirectoryIdentities: ReadonlyMap<string, string>;
+  /** The exact installation search directory selected for each importer dependency edge. */
+  dependencyResolveDirectories: ReadonlyMap<string, ReadonlyMap<string, string>>;
 }
 
 type PackageManifest = {
@@ -32,6 +34,7 @@ export function prepareDependencyResolution(
   const manifests = new Map<string, PackageManifest>();
   const packagesByLocation = new Map<string, string>();
   const locationsByPackage = new Map<string, Set<string>>();
+  const dependencyResolveDirectories = new Map<string, Map<string, string>>();
   const missingLocations = new Set<string>();
   const installationRoots = normalizedNodePaths.map((root) => fs.realpathSync.native(root));
   const resolvedPackages = new Map<string, string>();
@@ -39,14 +42,59 @@ export function prepareDependencyResolution(
     const normalized = path.resolve(directory);
     return process.platform === "win32" ? normalized.toLowerCase() : normalized;
   };
+  const filesystemPrefixAliases: Array<readonly [string, string]> = [];
+  for (const root of normalizedNodePaths) {
+    let ancestor = root;
+    for (;;) {
+      try {
+        const physicalAncestor = fs.realpathSync.native(ancestor);
+        filesystemPrefixAliases.push([ancestor, physicalAncestor]);
+      } catch (error) {
+        if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""))
+          throw error;
+      }
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
+    }
+  }
+  const expandLocationAliases = (directory: string): Set<string> => {
+    const aliases = new Set<string>([path.resolve(directory)]);
+    const aliasKeys = new Set<string>([locationKey(path.resolve(directory))]);
+    const pending = [...aliases];
+    for (let index = 0; index < pending.length; index++) {
+      const location = pending[index]!;
+      for (const [logical, physical] of filesystemPrefixAliases) {
+        for (const [fromPrefix, toPrefix] of [
+          [logical, physical],
+          [physical, logical],
+        ] as const) {
+          const relative = path.relative(fromPrefix, location);
+          if (
+            relative !== "" &&
+            (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+          )
+            continue;
+          const alias = path.resolve(toPrefix, relative);
+          const key = locationKey(alias);
+          if (aliasKeys.has(key)) continue;
+          aliases.add(alias);
+          aliasKeys.add(key);
+          pending.push(alias);
+        }
+      }
+    }
+    return aliases;
+  };
   const recordLocation = (physical: string, candidate: string, from?: string): void => {
     const locations = locationsByPackage.get(physical) ?? new Set<string>();
-    locations.add(physical);
-    locations.add(path.resolve(candidate));
+    for (const location of expandLocationAliases(physical)) locations.add(location);
+    for (const location of expandLocationAliases(candidate)) locations.add(location);
     if (from) {
       const relative = path.relative(from, candidate);
       for (const alias of locationsByPackage.get(from) ?? []) {
-        locations.add(path.resolve(alias, relative));
+        for (const location of expandLocationAliases(path.resolve(alias, relative)))
+          locations.add(location);
       }
     }
     locationsByPackage.set(physical, locations);
@@ -89,6 +137,11 @@ export function prepareDependencyResolution(
       const candidateKey = locationKey(candidate);
       const known = packagesByLocation.get(candidateKey);
       if (known) {
+        if (from) {
+          const dependencies = dependencyResolveDirectories.get(from) ?? new Map<string, string>();
+          dependencies.set(name, path.dirname(root));
+          dependencyResolveDirectories.set(from, dependencies);
+        }
         resolvedPackages.set(key, known);
         return known;
       }
@@ -100,6 +153,11 @@ export function prepareDependencyResolution(
         const physical = fs.realpathSync.native(candidate);
         if (!manifests.has(physical)) manifests.set(physical, manifest);
         recordLocation(physical, candidate, from);
+        if (from) {
+          const dependencies = dependencyResolveDirectories.get(from) ?? new Map<string, string>();
+          dependencies.set(name, path.dirname(root));
+          dependencyResolveDirectories.set(from, dependencies);
+        }
         resolvedPackages.set(key, physical);
         return physical;
       } catch (error) {
@@ -152,6 +210,7 @@ export function prepareDependencyResolution(
     absentOptionalImports,
     packageDirectories: visited,
     packageDirectoryIdentities,
+    dependencyResolveDirectories,
   };
 }
 

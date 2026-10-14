@@ -360,6 +360,13 @@ describe("dependency-environment resolver", () => {
         );
         const entry = path.join(root, "entry.js");
         fs.writeFileSync(entry, 'export { run } from "owner";');
+        const prepared = prepareDependencyResolution([path.join(alias, "node_modules")], ["owner"]);
+        expect(preparedDependencyDirectoryIdentity(prepared, owner)).toBe(
+          fs.realpathSync.native(owner)
+        );
+        expect(
+          preparedDependencyDirectoryIdentity(prepared, path.join(alias, "node_modules", "owner"))
+        ).toBe(fs.realpathSync.native(owner));
         const build = esbuild.build({
           entryPoints: [entry],
           bundle: true,
@@ -367,7 +374,7 @@ describe("dependency-environment resolver", () => {
           platform: "node",
           write: false,
           logLevel: "silent",
-          plugins: composePreparedDependencyPlugins([], [path.join(alias, "node_modules")], []),
+          plugins: composePlugins([], [path.join(alias, "node_modules")], [], [], prepared),
         });
         if (guarded) {
           const output = (await build).outputFiles[0]!.text;
@@ -385,6 +392,30 @@ describe("dependency-environment resolver", () => {
       }
     }
   );
+
+  it("recognizes a package path composed from logical and physical alias prefixes", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-composed-alias-"));
+    try {
+      const physicalPrefix = path.join(root, "physical-prefix");
+      const logicalPrefix = path.join(root, "logical-prefix");
+      const physicalTarget = path.join(physicalPrefix, "physical-target");
+      const logicalTarget = path.join(logicalPrefix, "logical-target");
+      fs.mkdirSync(physicalTarget, { recursive: true });
+      fs.symlinkSync(physicalPrefix, logicalPrefix, "junction");
+      fs.symlinkSync(physicalTarget, logicalTarget, "junction");
+      const logicalModules = path.join(logicalTarget, "node_modules");
+      writePackage(logicalModules, "owner", "owned");
+
+      const prepared = prepareDependencyResolution([logicalModules], ["owner"]);
+      const physicalOwner = path.join(physicalTarget, "node_modules", "owner");
+      const composedOwner = path.join(logicalPrefix, "physical-target", "node_modules", "owner");
+      expect(preparedDependencyDirectoryIdentity(prepared, composedOwner)).toBe(
+        fs.realpathSync.native(physicalOwner)
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it.each([true, false])(
     "preserves guarded missing requires in owned dependencies (guarded=%s)",
@@ -475,6 +506,9 @@ describe("dependency-environment resolver", () => {
       fs.symlinkSync(owner, path.join(modules, "owner"), "junction");
       const entry = path.join(root, "entry.js");
       fs.writeFileSync(entry, 'export { marker } from "owner";');
+      const prepared = prepareDependencyResolution([modules], ["owner"]);
+      const ownerIdentity = preparedDependencyDirectoryIdentity(prepared, owner)!;
+      expect(prepared.dependencyResolveDirectories.get(ownerIdentity)?.get("child")).toBe(owner);
 
       const result = await esbuild.build({
         entryPoints: [entry],
@@ -484,7 +518,7 @@ describe("dependency-environment resolver", () => {
         write: false,
         logLevel: "silent",
         nodePaths: [modules],
-        plugins: composePreparedDependencyPlugins([], [modules], [workspace]),
+        plugins: composePlugins([], [modules], [workspace], [], prepared),
       });
       expect(result.outputFiles[0]?.text).toContain('var marker = "importer-local"');
       expect(result.outputFiles[0]?.text).not.toContain('var marker = "app-level"');
