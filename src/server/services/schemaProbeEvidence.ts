@@ -142,7 +142,7 @@ export async function acquireSchemaProbeEvidence(
         async (priority) => {
           const published = await read();
           if (published) return published;
-          const descriptor = await activeCoordinator.acquire(priority, input.signal, async () => {
+          const descriptor = await activeCoordinator.withSlot(priority, input.signal, async () => {
             input.signal.throwIfAborted();
             const result = descriptorSchema.parse(await probe());
             if (result.className !== identity.className)

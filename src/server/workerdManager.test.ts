@@ -521,11 +521,17 @@ describe("WorkerdManager", () => {
         });
         const observedAdmission = admission.catch((error: unknown) => error);
         await probeEntered;
+        // Initial DO registration may replace the initial native generation.
+        // Measure shutdown ordering from this admitted HTTP operation onward.
+        stop.mockClear();
         const shutdown = manager.shutdown();
         const observedShutdown = shutdown.catch((error: unknown) => error);
         await retirementEntered;
-        expect(stop).not.toHaveBeenCalled();
-        release();
+        try {
+          expect(stop).not.toHaveBeenCalled();
+        } finally {
+          release();
+        }
         const cancellation = await observedAdmission;
         const outcome = await observedShutdown;
         expect(stop).toHaveBeenCalledOnce();
