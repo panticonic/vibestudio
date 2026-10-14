@@ -182,8 +182,12 @@ export async function inspectWorkspaceSources(input: {
   );
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1)
-    throw new AggregateError(failures, "Workspace source inspections failed", {
-      cause: failures[0],
-    });
+    throw new AggregateError(
+      failures,
+      `Workspace source inspections failed:\n${failures.map((error) => (error instanceof Error ? error.message : String(error))).join("\n")}`,
+      {
+        cause: failures[0],
+      }
+    );
   return selections;
 }

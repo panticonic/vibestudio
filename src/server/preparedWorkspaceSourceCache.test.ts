@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import fsNative from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
@@ -97,20 +98,19 @@ describe("immutable workspace source phase", () => {
     await fixture();
     const first = await acquire();
     await first.close();
-    const read = fs.readFile.bind(fs);
-    vi.spyOn(fs, "readFile").mockImplementation((async (
-      file: Parameters<typeof fs.readFile>[0],
-      ...args: unknown[]
-    ) => {
-      if (String(file).includes(`${path.sep}blobs${path.sep}`))
-        throw new Error("Consumer must not read payload bytes");
-      return (read as (...arguments_: unknown[]) => Promise<unknown>)(file, ...args);
-    }) as typeof fs.readFile);
+    const read = vi.spyOn(fs, "readFile");
+    const stream = vi.spyOn(fsNative, "createReadStream").mockImplementation(() => {
+      throw new Error("Consumer must not stream payload bytes");
+    });
     await expect(
       acquire(async () => {
         throw new Error("Must not reproduce");
       })
     ).resolves.toMatchObject({ root: first.root });
+    expect(
+      read.mock.calls.every(([file]) => !String(file).includes(`${path.sep}blobs${path.sep}`))
+    ).toBe(true);
+    expect(stream).not.toHaveBeenCalled();
   });
   it("proves bytes before publication and retires failed staging without hiding the failure", async () => {
     const root = await fixture();

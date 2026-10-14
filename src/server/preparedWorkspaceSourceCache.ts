@@ -29,15 +29,27 @@ const identitySchema = z
     recipe: digest,
     appDependencyFingerprint: digest,
     systemEpoch: z.number().int().nonnegative(),
-    templates: z.record(z.enum(roles), WorkspaceTemplatePinSchema),
-    layers: z.record(z.enum(roles), z.array(WorkspaceTemplatePinSchema).min(1)),
+    templates: z
+      .object({
+        base: WorkspaceTemplatePinSchema,
+        personal: WorkspaceTemplatePinSchema,
+        system: WorkspaceTemplatePinSchema,
+      })
+      .strict(),
+    layers: z
+      .object({
+        base: z.array(WorkspaceTemplatePinSchema).min(1),
+        personal: z.array(WorkspaceTemplatePinSchema).min(1),
+        system: z.array(WorkspaceTemplatePinSchema).min(1),
+      })
+      .strict(),
   })
   .strict();
 const markerSchema = z
   .object({
     format: z.literal("vibestudio-workspace-sources/1"),
     identity: identitySchema,
-    records: z.record(z.enum(roles), digest),
+    records: z.object({ base: digest, personal: digest, system: digest }).strict(),
   })
   .strict();
 export type PreparedWorkspaceSourceIdentity = z.infer<typeof identitySchema>;
