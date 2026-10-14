@@ -734,9 +734,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     if (bytes.byteLength !== entry.byteLength) {
       throw new Error(`Build artifact length mismatch: ${entry.path}`);
     }
-    const digest = Buffer.from(await crypto.webcrypto.subtle.digest("SHA-256", bytes)).toString(
-      "hex"
-    );
+    const digest = crypto.createHash("sha256").update(bytes).digest("hex");
     if (entry.integrity !== `sha256-${digest}`) {
       throw new Error(`Build artifact integrity mismatch: ${entry.path}`);
     }
